@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# Build / packaging
+build/
+dist/
+*.spec
+*.manifest
+*.toc
+
+# Local database
+*.db
+*.sqlite
+*.sqlite3
+data/
+worktrace.db
+
+# Logs
+logs/
+*.log
+
+# User exports
+exports/
+*.xlsx
+*.csv
+*.md.tmp
+
+# Environment / secrets
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Wrong-root backup
+_wrong_subdir_git_backup/
+.git_backup_before_fix_*/
