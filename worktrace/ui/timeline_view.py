@@ -43,8 +43,25 @@ class TimelineView(ctk.CTkFrame):
         self._build()
 
     def _build(self) -> None:
-        top = ctk.CTkFrame(self)
-        top.pack(fill="x", padx=12, pady=12)
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=0)
+        self.grid_columnconfigure(0, weight=1)
+
+        self.toolbar_frame = ctk.CTkFrame(self)
+        self.toolbar_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=12)
+        self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.content_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        self.content_frame.grid_rowconfigure(0, weight=1)
+        self.content_frame.grid_rowconfigure(1, weight=0)
+        self.content_frame.grid_rowconfigure(2, weight=1)
+        self.content_frame.grid_columnconfigure(0, weight=1)
+        self.editor_scroll_frame = ctk.CTkScrollableFrame(self, height=220)
+        self.editor_panel = self.editor_scroll_frame
+        self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self.editor_scroll_frame.grid_columnconfigure(0, weight=1)
+
+        top = self.toolbar_frame
         self.status_label = ctk.CTkLabel(top, text="采集器未运行")
         self.status_label.pack(side="left", padx=6)
         self.pause_button = ctk.CTkButton(top, text="暂停", width=90, command=self.toggle_pause)
@@ -64,8 +81,8 @@ class TimelineView(ctk.CTkFrame):
         self._show_activity_editor(False)
 
     def _build_session_table(self) -> None:
-        frame = ctk.CTkFrame(self)
-        frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        frame = ctk.CTkFrame(self.content_frame)
+        frame.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
         frame.grid_rowconfigure(0, weight=1)
         frame.grid_columnconfigure(0, weight=1)
         self._configure_tree_style()
@@ -83,8 +100,8 @@ class TimelineView(ctk.CTkFrame):
         self.session_tree.bind("<<TreeviewSelect>>", self._on_session_select)
 
     def _build_detail_area(self) -> None:
-        header = ctk.CTkFrame(self)
-        header.pack(fill="x", padx=12, pady=(0, 6))
+        header = ctk.CTkFrame(self.content_frame)
+        header.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         self.detail_label = ctk.CTkLabel(header, text="请选择项目会话")
         self.detail_label.pack(side="left", padx=6, pady=6)
         self.toggle_detail_button = ctk.CTkButton(
@@ -95,8 +112,8 @@ class TimelineView(ctk.CTkFrame):
         )
         self.toggle_detail_button.pack(side="right", padx=6, pady=6)
 
-        self.detail_container = ctk.CTkFrame(self)
-        self.detail_container.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self.detail_container = ctk.CTkFrame(self.content_frame)
+        self.detail_container.grid(row=2, column=0, sticky="nsew")
         self.detail_container.grid_rowconfigure(0, weight=1)
         self.detail_container.grid_columnconfigure(0, weight=1)
 
@@ -145,7 +162,8 @@ class TimelineView(ctk.CTkFrame):
         self.detail_tree.grid_remove()
 
     def _build_resource_editor(self) -> None:
-        self.resource_editor = ctk.CTkFrame(self)
+        self.resource_editor = ctk.CTkFrame(self.editor_panel)
+        self.resource_editor.grid_columnconfigure(3, weight=1)
         self.resource_label = ctk.CTkLabel(self.resource_editor, text="未选择资源")
         self.resource_label.grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 4))
         ctk.CTkLabel(self.resource_editor, text="改归类到").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=6)
@@ -199,7 +217,7 @@ class TimelineView(ctk.CTkFrame):
             widget.bind("<FocusIn>", self._on_control_activity, add="+")
 
     def _build_activity_editor(self) -> None:
-        self.activity_editor = ctk.CTkFrame(self)
+        self.activity_editor = ctk.CTkFrame(self.editor_panel)
         self.activity_editor.grid_columnconfigure(7, weight=1)
         self.activity_editor_label = ctk.CTkLabel(self.activity_editor, text="未选择明细")
         self.activity_editor_label.grid(row=0, column=0, columnspan=8, sticky="w", padx=8, pady=(8, 4))
@@ -567,17 +585,29 @@ class TimelineView(ctk.CTkFrame):
 
     def _show_resource_editor(self, show: bool) -> None:
         if show:
-            self.activity_editor.pack_forget()
-            self.resource_editor.pack(fill="x", padx=12, pady=(0, 12))
+            self._show_editor_panel(True)
+            self.activity_editor.grid_remove()
+            self.resource_editor.grid(row=0, column=0, sticky="ew")
         else:
-            self.resource_editor.pack_forget()
+            self.resource_editor.grid_remove()
+            if not self._activity_editor_visible():
+                self._show_editor_panel(False)
 
     def _show_activity_editor(self, show: bool) -> None:
         if show:
-            self.resource_editor.pack_forget()
-            self.activity_editor.pack(fill="x", padx=12, pady=(0, 12))
+            self._show_editor_panel(True)
+            self.resource_editor.grid_remove()
+            self.activity_editor.grid(row=0, column=0, sticky="ew")
         else:
-            self.activity_editor.pack_forget()
+            self.activity_editor.grid_remove()
+            if not self._resource_editor_visible():
+                self._show_editor_panel(False)
+
+    def _show_editor_panel(self, show: bool) -> None:
+        if show:
+            self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
+        else:
+            self.editor_scroll_frame.grid_remove()
 
     def _select_tree_item(self, tree: ttk.Treeview, iid: str | None) -> None:
         if iid is None or not tree.exists(iid):
@@ -630,6 +660,12 @@ class TimelineView(ctk.CTkFrame):
     def _resource_editor_visible(self) -> bool:
         try:
             return bool(self.resource_editor.winfo_ismapped())
+        except Exception:
+            return False
+
+    def _activity_editor_visible(self) -> bool:
+        try:
+            return bool(self.activity_editor.winfo_ismapped())
         except Exception:
             return False
 

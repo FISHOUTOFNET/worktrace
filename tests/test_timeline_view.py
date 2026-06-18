@@ -21,6 +21,9 @@ class FakeWidget:
         self.master = master
         self.config = {}
         self.bindings = []
+        self.grid_calls = []
+        self.grid_removed = False
+        self.destroyed = False
 
     def bind(self, *args, **kwargs):
         self.bindings.append((args, kwargs))
@@ -28,8 +31,29 @@ class FakeWidget:
     def configure(self, **kwargs):
         self.config.update(kwargs)
 
+    def grid(self, *args, **kwargs):
+        self.mapped = True
+        self.grid_removed = False
+        self.grid_calls.append((args, kwargs))
+
+    def grid_remove(self):
+        self.mapped = False
+        self.grid_removed = True
+
+    def grid_columnconfigure(self, *_args, **_kwargs):
+        pass
+
+    def grid_rowconfigure(self, *_args, **_kwargs):
+        pass
+
+    def pack(self, *args, **kwargs):
+        self.mapped = True
+
     def winfo_ismapped(self):
         return self.mapped
+
+    def destroy(self):
+        self.destroyed = True
 
 
 class FakeTree:
@@ -54,6 +78,15 @@ def _view_stub(project_name="Client"):
     return view
 
 
+def _editor_view_stub():
+    view = object.__new__(TimelineView)
+    view.editor_scroll_frame = FakeWidget(mapped=True)
+    view.editor_panel = view.editor_scroll_frame
+    view.resource_editor = FakeWidget(mapped=False, master=view.editor_panel)
+    view.activity_editor = FakeWidget(mapped=False, master=view.editor_panel)
+    return view
+
+
 def test_resource_editor_widgets_are_part_of_interaction_guard():
     view = object.__new__(TimelineView)
     resource_control = FakeWidget()
@@ -68,7 +101,106 @@ def test_resource_editor_widgets_are_part_of_interaction_guard():
 
     assert view.is_user_interacting()
 
-    view.focus_get = lambda: None
+
+def test_editor_panel_is_explicit_scrollable_container(monkeypatch):
+    created = []
+
+    def fake_scrollable(master, **kwargs):
+        widget = FakeWidget(master=master)
+        widget.config.update(kwargs)
+        created.append(widget)
+        return widget
+
+    view = object.__new__(TimelineView)
+    view.grid_rowconfigure = lambda *_args, **_kwargs: None
+    view.grid_columnconfigure = lambda *_args, **_kwargs: None
+    view._build_session_table = lambda: None
+    view._build_detail_area = lambda: None
+    view._build_resource_editor = lambda: None
+    view._build_activity_editor = lambda: None
+    view._show_resource_editor = lambda _show: None
+    view._show_activity_editor = lambda _show: None
+    view.date_var = FakeVar("2026-06-18")
+    view.only_unconfirmed = FakeVar(False)
+    view.only_uncategorized = FakeVar(False)
+
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkFrame", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkScrollableFrame", fake_scrollable)
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkLabel", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkButton", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkEntry", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkCheckBox", lambda master, **_kwargs: FakeWidget(master=master))
+
+    TimelineView._build(view)
+
+    assert view.editor_panel is view.editor_scroll_frame
+    assert created
+    assert view.editor_scroll_frame.config["height"] == 220
+    assert view.editor_scroll_frame.master is view
+
+
+def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch):
+    view = object.__new__(TimelineView)
+    view.editor_panel = FakeWidget()
+    view.resource_project_var = FakeVar()
+    view.new_project_var = FakeVar()
+    view.activity_project_var = FakeVar()
+    view.billable_var = FakeVar(False)
+    view.confirmed_var = FakeVar(False)
+
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkFrame", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkLabel", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkOptionMenu", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkButton", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkEntry", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkCheckBox", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkTextbox", lambda master, **_kwargs: FakeWidget(master=master))
+
+    TimelineView._build_resource_editor(view)
+    TimelineView._build_activity_editor(view)
+
+    assert view.resource_editor.master is view.editor_panel
+    assert view.activity_editor.master is view.editor_panel
+    assert view.new_project_entry in view._resource_editor_widgets
+    assert view.create_project_button in view._resource_editor_widgets
+
+
+def test_editor_switching_uses_editor_panel_without_destroying_widgets():
+    view = _editor_view_stub()
+
+    TimelineView._show_resource_editor(view, True)
+
+    assert view.editor_scroll_frame.mapped
+    assert view.resource_editor.mapped
+    assert view.activity_editor.grid_removed
+    assert view.resource_editor.master is view.editor_panel
+
+    TimelineView._show_activity_editor(view, True)
+
+    assert view.editor_scroll_frame.mapped
+    assert view.activity_editor.mapped
+    assert view.resource_editor.grid_removed
+    assert not view.resource_editor.destroyed
+    assert not view.activity_editor.destroyed
+
+    TimelineView._show_activity_editor(view, False)
+
+    assert not view.editor_scroll_frame.mapped
+    assert not view.activity_editor.destroyed
+
+
+def test_new_project_entry_focus_marks_user_interacting():
+    view = object.__new__(TimelineView)
+    view._control_active = False
+    view._editor_dirty = False
+    view._editor_widgets = []
+    view.new_project_entry = FakeWidget()
+    view._resource_editor_widgets = [view.new_project_entry]
+    view.resource_editor = FakeWidget(mapped=True)
+    view._selected_resource_id = None
+    view._resource_selected_at = 0.0
+    view.focus_get = lambda: view.new_project_entry
+
     assert view.is_user_interacting()
 
 
@@ -87,6 +219,9 @@ def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists(
     view._load_resource_editor = lambda resource_id: loaded.append(resource_id) or True
     view._show_resource_editor = lambda show: hidden.append(show)
 
+    view._selected_session_id = "session-1"
+    view.new_project_var = FakeVar("Typing Project")
+
     view._sync_resources(
         [
             {
@@ -102,13 +237,34 @@ def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists(
     )
 
     assert view._selected_resource_id == 7
+    assert view._selected_session_id == "session-1"
+    assert view.new_project_var.get() == "Typing Project"
     assert selected == ["7"]
     assert loaded == [7]
     assert hidden == []
 
 
+def test_sync_resources_hides_editor_only_when_selected_resource_disappears():
+    view = object.__new__(TimelineView)
+    view._selected_resource_id = 7
+    view._resource_selected_at = time.monotonic()
+    view.resource_editor = FakeWidget(mapped=True)
+    view.resource_tree = FakeTree()
+    view._resources_by_id = {}
+    hidden = []
+    view._sync_tree = lambda *_args, **_kwargs: None
+    view._show_resource_editor = lambda show: hidden.append(show)
+
+    view._sync_resources([])
+
+    assert view._selected_resource_id is None
+    assert hidden == [False]
+
+
 def test_timeline_resource_editor_can_create_project_and_select_it(temp_db):
     view = _view_stub("Client")
+    view._selected_session_id = "session-1"
+    view._selected_resource_id = 7
 
     view._create_project_from_timeline()
 
@@ -116,6 +272,8 @@ def test_timeline_resource_editor_can_create_project_and_select_it(temp_db):
     assert "Client" in view._project_by_name
     assert view.new_project_var.get() == ""
     assert view.resource_hint_label.config["text"] == "已创建项目：Client"
+    assert view._selected_session_id == "session-1"
+    assert view._selected_resource_id == 7
 
 
 def test_timeline_project_create_requires_name(temp_db):
