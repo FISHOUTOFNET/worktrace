@@ -7,6 +7,7 @@ class ActiveWindow:
     app_name: str
     process_name: str
     window_title: str
+    file_path_hint: str | None = None
 
 
 class PlatformAdapter(Protocol):

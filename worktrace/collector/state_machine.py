@@ -13,6 +13,7 @@ from ..constants import (
     STATUS_PAUSED,
 )
 from ..db import now_str
+from ..path_utils import normalize_path_key
 from ..platforms.base import ActiveWindow
 from ..services import activity_service, privacy_service
 
@@ -45,7 +46,7 @@ class CollectorStateMachine:
         status = STATE_TO_STATUS[state]
         signature = self._signature(status, active_window)
         open_activity = activity_service.get_open_activity()
-        if open_activity and self._open_matches(open_activity, signature):
+        if open_activity and self._open_matches(open_activity, signature, active_window):
             self.state = state
             self.active_signature = signature
             return
@@ -80,13 +81,29 @@ class CollectorStateMachine:
             return (status, "", "", "")
         return (status, active_window.app_name, active_window.process_name, active_window.window_title)
 
-    def _open_matches(self, open_activity: dict, signature: tuple[str, str, str, str]) -> bool:
-        return (
+    def _open_matches(
+        self,
+        open_activity: dict,
+        signature: tuple[str, str, str, str],
+        active_window: ActiveWindow | None = None,
+    ) -> bool:
+        base_matches = (
             open_activity["status"],
             open_activity["app_name"],
             open_activity["process_name"],
             open_activity["window_title"],
         ) == signature
+        if not base_matches:
+            return False
+
+        old_path = (open_activity.get("file_path_hint") or "").strip()
+        new_path = (active_window.file_path_hint or "").strip() if active_window else ""
+        if not old_path and new_path:
+            activity_service.update_activity_file_path_hint(int(open_activity["id"]), new_path)
+            return True
+        if old_path and new_path:
+            return normalize_path_key(old_path) == normalize_path_key(new_path)
+        return True
 
     def _payload_for(self, status: str, active_window: ActiveWindow | None) -> dict:
         if status == STATUS_EXCLUDED:
@@ -121,5 +138,6 @@ class CollectorStateMachine:
             "app_name": active_window.app_name or "unknown",
             "process_name": active_window.process_name or "unknown",
             "window_title": active_window.window_title or "",
+            "file_path_hint": active_window.file_path_hint,
             "status": STATUS_NORMAL,
         }

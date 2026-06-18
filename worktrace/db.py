@@ -55,7 +55,7 @@ def initialize_database(path: str | Path | None = None) -> None:
     with get_connection() as conn:
         conn.executescript(schema_path.read_text(encoding="utf-8"))
         seed_defaults(conn)
-    logging.info("database initialized at %s", db_path)
+    logging.info("database initialized")
 
 
 def seed_defaults(conn: sqlite3.Connection) -> None:
@@ -96,14 +96,21 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
 
 def reset_database() -> None:
     with get_connection() as conn:
-        conn.executescript(
-            """
-            DELETE FROM activity_project_assignment;
-            DELETE FROM activity_log;
-            DELETE FROM project_rule;
-            DELETE FROM resource;
-            DELETE FROM project;
-            DELETE FROM settings;
-            """
-        )
+        drop_all_tables(conn)
+        schema_path = Path(__file__).with_name("schema.sql")
+        conn.executescript(schema_path.read_text(encoding="utf-8"))
         seed_defaults(conn)
+
+
+def drop_all_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS activity_project_assignment;
+        DROP TABLE IF EXISTS activity_log;
+        DROP TABLE IF EXISTS folder_project_rule;
+        DROP TABLE IF EXISTS project_rule;
+        DROP TABLE IF EXISTS resource;
+        DROP TABLE IF EXISTS project;
+        DROP TABLE IF EXISTS settings;
+        """
+    )

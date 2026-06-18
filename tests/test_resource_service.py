@@ -1,4 +1,5 @@
 from worktrace.resource_patterns import infer_resource_identity
+from worktrace.db import get_connection, now_str
 from worktrace.services import activity_service, resource_service, timeline_service
 
 
@@ -12,6 +13,57 @@ def test_anchor_file_resources_are_stable(temp_db):
     assert excel.resource_role == "anchor"
     assert ppt.resource_role == "anchor"
     assert word.canonical_key == "file:合同.docx"
+
+
+def test_infer_resource_identity_prefers_file_path_hint(temp_db):
+    resource = infer_resource_identity(
+        "Word",
+        "winword.exe",
+        "另一个.docx - Word",
+        "D:\\CaseA\\Spec.docx",
+    )
+    assert resource.canonical_key == "file_path:d:\\casea\\spec.docx"
+    assert resource.display_name == "Spec.docx"
+    assert resource.full_path == "D:\\CaseA\\Spec.docx"
+    assert resource.parent_dir == "D:\\CaseA"
+    assert resource.file_stem == "Spec"
+
+
+def test_title_full_path_populates_resource_path_fields(temp_db):
+    aid = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "D:\\CaseA\\合同.docx - Word",
+        start_time="2026-06-18 09:00:00",
+    )
+    resource = resource_service.ensure_activity_resource(aid)
+    assert resource["canonical_key"] == "file_path:d:\\casea\\合同.docx"
+    assert resource["full_path"] == "D:\\CaseA\\合同.docx"
+    assert resource["parent_dir"] == "D:\\CaseA"
+    assert resource["file_stem"] == "合同"
+
+
+def test_file_name_fallback_still_works_without_full_path(temp_db):
+    resource = infer_resource_identity("Word", "winword.exe", "合同.docx - Word")
+    assert resource.canonical_key == "file:合同.docx"
+    assert resource.full_path is None
+    assert resource.file_stem == "合同"
+
+
+def test_existing_resource_path_is_not_overwritten_by_none(temp_db):
+    resource = resource_service.infer_or_create_resource(
+        {"app_name": "Edge", "process_name": "msedge.exe", "window_title": "Search"}
+    )
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE resource SET full_path = ?, parent_dir = ?, file_stem = ?, updated_at = ? WHERE id = ?",
+            ("D:\\CaseA\\Spec.docx", "D:\\CaseA", "Spec", now_str(), resource["id"]),
+        )
+    updated = resource_service.infer_or_create_resource(
+        {"app_name": "Chrome", "process_name": "chrome.exe", "window_title": "Search"}
+    )
+    assert updated["canonical_key"] == "web:browser"
+    assert updated["full_path"] == "D:\\CaseA\\Spec.docx"
 
 
 def test_browsers_share_one_auxiliary_resource(temp_db):

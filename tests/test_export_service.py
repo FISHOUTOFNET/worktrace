@@ -57,6 +57,8 @@ def test_markdown_export_content(temp_db, tmp_path):
 def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):
     path = export_service.export_all_local_data(str(tmp_path / "all.xlsx"))
     assert Path(path).exists()
+    wb = load_workbook(path)
+    assert "folder_project_rule" in wb.sheetnames
     try:
         export_service.clear_all_local_data(confirm=False)
     except ValueError:

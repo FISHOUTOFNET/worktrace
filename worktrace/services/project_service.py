@@ -20,6 +20,25 @@ def create_project(name: str, description: str = "", default_billable: bool = Tr
         return int(cur.lastrowid)
 
 
+def get_project(project_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM project WHERE id = ?", (project_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_project_by_name(name: str) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM project WHERE name = ?", (name.strip(),)).fetchone()
+    return dict(row) if row else None
+
+
+def get_or_create_project(name: str) -> int:
+    existing = get_project_by_name(name)
+    if existing:
+        return int(existing["id"])
+    return create_project(name)
+
+
 def list_active_projects() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS activity_log (
     app_name TEXT NOT NULL,
     process_name TEXT NOT NULL,
     window_title TEXT NOT NULL,
+    file_path_hint TEXT,
     status TEXT NOT NULL CHECK (
         status IN ('normal', 'idle', 'paused', 'excluded', 'error')
     ),
@@ -56,10 +57,25 @@ CREATE TABLE IF NOT EXISTS resource (
     app_name TEXT,
     process_name TEXT,
     title_hint TEXT,
+    full_path TEXT,
+    parent_dir TEXT,
+    file_stem TEXT,
     default_project_id INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (default_project_id) REFERENCES project(id)
+);
+
+CREATE TABLE IF NOT EXISTS folder_project_rule (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_path TEXT NOT NULL,
+    normalized_folder_key TEXT NOT NULL UNIQUE,
+    project_id INTEGER NOT NULL,
+    recursive INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES project(id)
 );
 
 CREATE TABLE IF NOT EXISTS project_rule (
@@ -88,6 +104,7 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
             'anchor_resource_default',
             'anchor_keyword',
             'anchor_context',
+            'folder_rule',
             'uncategorized'
         )
     ),
@@ -118,6 +135,15 @@ ON resource(resource_role, resource_type);
 
 CREATE INDEX IF NOT EXISTS idx_resource_default_project
 ON resource(default_project_id);
+
+CREATE INDEX IF NOT EXISTS idx_resource_path
+ON resource(full_path, parent_dir);
+
+CREATE INDEX IF NOT EXISTS idx_folder_project_rule_key
+ON folder_project_rule(normalized_folder_key);
+
+CREATE INDEX IF NOT EXISTS idx_folder_project_rule_project
+ON folder_project_rule(project_id);
 
 CREATE INDEX IF NOT EXISTS idx_assignment_project
 ON activity_project_assignment(project_id);

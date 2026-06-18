@@ -20,7 +20,12 @@ def set_exclude_keywords(keywords: list[str]) -> None:
 
 def is_excluded(active_window: ActiveWindow) -> bool:
     haystack = " ".join(
-        [active_window.app_name, active_window.process_name, active_window.window_title]
+        [
+            active_window.app_name,
+            active_window.process_name,
+            active_window.window_title,
+            active_window.file_path_hint or "",
+        ]
     ).lower()
     return any(keyword.lower() in haystack for keyword in get_exclude_keywords() if keyword.strip())
 
@@ -33,4 +38,5 @@ def make_excluded_activity_payload() -> dict:
         "status": STATUS_EXCLUDED,
         "is_billable": False,
         "is_confirmed": False,
+        "file_path_hint": None,
     }

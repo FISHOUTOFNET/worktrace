@@ -9,12 +9,16 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
         activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
+        resource_columns = {row["name"] for row in conn.execute("PRAGMA table_info(resource)").fetchall()}
         setting = conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()
         uncategorized = conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
 
     assert "resource_id" in activity_columns
+    assert "file_path_hint" in activity_columns
+    assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
     assert "resource" in tables
     assert "project_rule" in tables
+    assert "folder_project_rule" in tables
     assert "activity_project_assignment" in tables
     assert setting["value"] == "15"
     assert uncategorized is not None
@@ -32,6 +36,11 @@ def test_reset_database_clears_current_schema_tables(temp_db):
     with db.get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM resource").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 0
+        activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
+        resource_columns = {row["name"] for row in conn.execute("PRAGMA table_info(resource)").fetchall()}
+        assert "file_path_hint" in activity_columns
+        assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
         assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
         assert conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone() is not None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..constants import STATUS_NORMAL
 from ..db import get_connection, now_str
+from . import folder_rule_service
 from .resource_service import ensure_activity_resource
 
 
@@ -38,7 +39,12 @@ def assign_project_for_activity(activity_id: int) -> dict:
             confidence = 0
 
         _upsert_assignment(conn, activity_id, project_id, source, confidence, False)
-        _sync_activity_project(conn, activity_id, project_id, auto_classified=source in {"anchor_resource_default", "anchor_keyword"})
+        _sync_activity_project(
+            conn,
+            activity_id,
+            project_id,
+            auto_classified=source in {"anchor_resource_default", "anchor_keyword", "folder_rule"},
+        )
         return _assignment_dict(conn, activity_id)
 
 
@@ -67,6 +73,17 @@ def process_new_activity(activity_id: int) -> dict:
 def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, str, int]:
     if resource.get("default_project_id"):
         return int(resource["default_project_id"]), "anchor_resource_default", 90
+
+    if (
+        resource.get("resource_role") == "anchor"
+        and resource.get("resource_type") == "file"
+        and (resource.get("full_path") or resource.get("parent_dir"))
+    ):
+        rule = folder_rule_service.find_matching_folder_rule(
+            resource.get("full_path") or resource.get("parent_dir") or ""
+        )
+        if rule:
+            return int(rule["project_id"]), "folder_rule", 85
 
     text = " ".join(
         [

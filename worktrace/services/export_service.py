@@ -13,7 +13,7 @@ from ..exports.markdown_exporter import export_markdown_file
 def export_excel(start_date: str, end_date: str, path: str) -> str:
     try:
         result = export_excel_file(start_date, end_date, path)
-        logging.info("excel export success path=%s", result)
+        logging.info("excel export success")
         return result
     except Exception:
         logging.exception("excel export error")
@@ -23,7 +23,7 @@ def export_excel(start_date: str, end_date: str, path: str) -> str:
 def export_markdown(start_date: str, end_date: str, path: str) -> str:
     try:
         result = export_markdown_file(start_date, end_date, path)
-        logging.info("markdown export success path=%s", result)
+        logging.info("markdown export success")
         return result
     except Exception:
         logging.exception("markdown export error")
@@ -42,6 +42,7 @@ def export_all_local_data(path: str) -> str:
             "activity_project_assignment",
             "project",
             "resource",
+            "folder_project_rule",
             "project_rule",
             "settings",
         ]:
@@ -52,7 +53,7 @@ def export_all_local_data(path: str) -> str:
             for row in rows:
                 ws.append([row[col] for col in columns])
     wb.save(out)
-    logging.info("all local data export success path=%s", out)
+    logging.info("all local data export success")
     return str(out)
 
 
