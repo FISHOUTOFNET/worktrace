@@ -5,7 +5,7 @@ def test_rule_auto_classification(temp_db):
     pid = project_service.create_project("Writing")
     rule_service.create_rule("Spec", pid)
     aid = activity_service.create_activity(
-        "Word", "winword.exe", "Architecture Spec", start_time="2026-06-18 09:00:00"
+        "Word", "winword.exe", "Architecture Spec.docx", start_time="2026-06-18 09:00:00"
     )
     rule_service.apply_rules_to_activity(aid)
     row = activity_service.get_activity(aid)

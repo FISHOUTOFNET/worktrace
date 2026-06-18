@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED
 from ..db import dict_rows, get_connection
+from .context_service import recompute_context_assignments_for_date
 from .project_service import get_or_create_uncategorized_project
 
 
@@ -19,6 +22,7 @@ def _sum_duration(where: str, params: tuple = ()) -> int:
 
 
 def get_summary(start_date: str, end_date: str) -> dict:
+    _ensure_context_range(start_date, end_date)
     start, end = _range_bounds(start_date, end_date)
     base = "is_deleted = 0 AND is_hidden = 0 AND start_time BETWEEN ? AND ?"
     params = (start, end)
@@ -42,6 +46,7 @@ def get_summary(start_date: str, end_date: str) -> dict:
 
 
 def get_project_stats(start_date: str, end_date: str) -> list[dict]:
+    _ensure_context_range(start_date, end_date)
     start, end = _range_bounds(start_date, end_date)
     with get_connection() as conn:
         rows = conn.execute(
@@ -69,6 +74,7 @@ def get_project_stats(start_date: str, end_date: str) -> list[dict]:
 
 
 def get_unconfirmed_count(start_date: str, end_date: str) -> int:
+    _ensure_context_range(start_date, end_date)
     start, end = _range_bounds(start_date, end_date)
     with get_connection() as conn:
         row = conn.execute(
@@ -84,9 +90,18 @@ def get_unconfirmed_count(start_date: str, end_date: str) -> int:
 
 
 def get_uncategorized_duration(start_date: str, end_date: str) -> int:
+    _ensure_context_range(start_date, end_date)
     start, end = _range_bounds(start_date, end_date)
     uncategorized = get_or_create_uncategorized_project()
     return _sum_duration(
         "is_deleted = 0 AND is_hidden = 0 AND status = ? AND project_id = ? AND start_time BETWEEN ? AND ?",
         (STATUS_NORMAL, uncategorized, start, end),
     )
+
+
+def _ensure_context_range(start_date: str, end_date: str) -> None:
+    current = date.fromisoformat(start_date)
+    final = date.fromisoformat(end_date)
+    while current <= final:
+        recompute_context_assignments_for_date(current.isoformat())
+        current += timedelta(days=1)

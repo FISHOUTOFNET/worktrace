@@ -37,7 +37,15 @@ def export_all_local_data(path: str) -> str:
     default = wb.active
     wb.remove(default)
     with get_connection() as conn:
-        for table in ["activity_log", "project", "rule", "settings"]:
+        for table in [
+            "activity_log",
+            "activity_project_assignment",
+            "project",
+            "resource",
+            "rule",
+            "project_rule",
+            "settings",
+        ]:
             ws = wb.create_sheet(table)
             rows = conn.execute(f"SELECT * FROM {table}").fetchall()
             columns = [item["name"] for item in conn.execute(f"PRAGMA table_info({table})").fetchall()]

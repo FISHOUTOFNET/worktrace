@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from ..constants import (
+    STATUS_ERROR,
+    STATUS_EXCLUDED,
+    STATUS_IDLE,
+    STATUS_NORMAL,
+    STATUS_PAUSED,
+    TIME_FORMAT,
+)
+from ..db import dict_rows, get_connection, now_str
+from .project_inference_service import assign_project_for_activity
+from .resource_service import ensure_activity_resource
+from .settings_service import get_int_setting
+
+INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
+
+
+def recompute_context_assignments_for_date(date: str) -> None:
+    start = f"{date} 00:00:00"
+    end = f"{date} 23:59:59"
+    carry_minutes = max(0, get_int_setting("context_carry_minutes", 15))
+    uncategorized_id = _get_uncategorized_project_id()
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                a.*,
+                r.resource_role,
+                r.resource_type,
+                r.display_name AS resource_display_name,
+                apa.project_id AS assignment_project_id,
+                apa.source AS assignment_source,
+                apa.is_manual AS assignment_is_manual
+            FROM activity_log a
+            LEFT JOIN resource r ON r.id = a.resource_id
+            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            WHERE a.is_deleted = 0
+              AND a.start_time BETWEEN ? AND ?
+            ORDER BY a.start_time ASC, a.id ASC
+            """,
+            (start, end),
+        ).fetchall()
+
+    for row in rows:
+        if row["resource_id"] is None:
+            ensure_activity_resource(int(row["id"]))
+        if row["assignment_project_id"] is None:
+            assign_project_for_activity(int(row["id"]))
+
+    rows = _load_rows(start, end)
+    _recompute_anchor_rows(rows)
+    rows = _load_rows(start, end)
+
+    for index, row in enumerate(rows):
+        if row["status"] != STATUS_NORMAL:
+            continue
+        if row["resource_role"] != "auxiliary":
+            continue
+        if int(row["manual_override"] or 0) or int(row["assignment_is_manual"] or 0):
+            continue
+
+        target_project_id = _infer_context_project(rows, index, carry_minutes, uncategorized_id)
+        source = "anchor_context" if target_project_id != uncategorized_id else "uncategorized"
+        confidence = 60 if source == "anchor_context" else 0
+        _sync_assignment_and_activity(
+            int(row["id"]),
+            target_project_id,
+            source,
+            confidence,
+            is_manual=False,
+            auto_classified=False,
+        )
+
+
+def _load_rows(start: str, end: str) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                a.*,
+                r.resource_role,
+                r.resource_type,
+                r.display_name AS resource_display_name,
+                apa.project_id AS assignment_project_id,
+                apa.source AS assignment_source,
+                apa.is_manual AS assignment_is_manual
+            FROM activity_log a
+            LEFT JOIN resource r ON r.id = a.resource_id
+            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            WHERE a.is_deleted = 0
+              AND a.start_time BETWEEN ? AND ?
+            ORDER BY a.start_time ASC, a.id ASC
+            """,
+            (start, end),
+        ).fetchall()
+    return dict_rows(rows)
+
+
+def _recompute_anchor_rows(rows: list[dict]) -> None:
+    for row in rows:
+        if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
+            if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
+                continue
+            assign_project_for_activity(int(row["id"]))
+
+
+def _infer_context_project(rows: list[dict], index: int, carry_minutes: int, uncategorized_id: int) -> int:
+    row = rows[index]
+    previous_anchor = _find_previous_anchor(rows, index, uncategorized_id)
+    next_anchor = _find_next_anchor(rows, index, uncategorized_id)
+
+    if previous_anchor and next_anchor:
+        previous_project = _row_project_id(previous_anchor)
+        next_project = _row_project_id(next_anchor)
+        if previous_project == next_project:
+            return previous_project
+        return uncategorized_id
+
+    if previous_anchor and not next_anchor:
+        if _minutes_between(_anchor_context_time(previous_anchor), row["start_time"]) <= carry_minutes:
+            return _row_project_id(previous_anchor)
+
+    return uncategorized_id
+
+
+def _find_previous_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
+    for pos in range(index - 1, -1, -1):
+        row = rows[pos]
+        if row["status"] in INTERRUPT_STATUSES:
+            return None
+        if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
+            project_id = _row_project_id(row)
+            if project_id != uncategorized_id:
+                return row
+    return None
+
+
+def _find_next_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
+    for pos in range(index + 1, len(rows)):
+        row = rows[pos]
+        if row["status"] in INTERRUPT_STATUSES:
+            return None
+        if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
+            project_id = _row_project_id(row)
+            if project_id != uncategorized_id:
+                return row
+    return None
+
+
+def _row_project_id(row: dict) -> int:
+    return int(row.get("assignment_project_id") or row.get("project_id") or 0)
+
+
+def _anchor_context_time(row: dict) -> str:
+    return row.get("end_time") or row.get("start_time")
+
+
+def _minutes_between(start: str, end: str) -> float:
+    start_dt = datetime.strptime(start, TIME_FORMAT)
+    end_dt = datetime.strptime(end, TIME_FORMAT)
+    return max(0.0, (end_dt - start_dt).total_seconds() / 60)
+
+
+def _sync_assignment_and_activity(
+    activity_id: int,
+    project_id: int,
+    source: str,
+    confidence: int,
+    is_manual: bool,
+    auto_classified: bool,
+) -> None:
+    ts = now_str()
+    with get_connection() as conn:
+        assignment = conn.execute(
+            """
+            SELECT project_id, source, confidence, is_manual
+            FROM activity_project_assignment
+            WHERE activity_id = ?
+            """,
+            (activity_id,),
+        ).fetchone()
+        activity = conn.execute(
+            "SELECT project_id, auto_classified FROM activity_log WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        assignment_changed = not assignment or not (
+            assignment["project_id"] == project_id
+            and assignment["source"] == source
+            and int(assignment["confidence"]) == confidence
+            and int(assignment["is_manual"]) == int(is_manual)
+        )
+        activity_changed = bool(activity) and not (
+            activity["project_id"] == project_id
+            and int(activity["auto_classified"] or 0) == int(auto_classified)
+        )
+        if not assignment_changed and not activity_changed:
+            return
+        if assignment_changed:
+            conn.execute(
+                """
+                INSERT INTO activity_project_assignment(
+                    activity_id, project_id, confidence, source, is_manual, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(activity_id) DO UPDATE SET
+                    project_id = excluded.project_id,
+                    confidence = excluded.confidence,
+                    source = excluded.source,
+                    is_manual = excluded.is_manual,
+                    updated_at = excluded.updated_at
+                """,
+                (activity_id, project_id, confidence, source, int(is_manual), ts, ts),
+            )
+        if activity_changed:
+            conn.execute(
+                """
+                UPDATE activity_log
+                SET project_id = ?, auto_classified = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (project_id, int(auto_classified), ts, activity_id),
+            )
+
+
+def _get_uncategorized_project_id() -> int:
+    from .project_service import get_or_create_uncategorized_project
+
+    return get_or_create_uncategorized_project()

@@ -14,7 +14,7 @@ from ..constants import (
 )
 from ..db import now_str
 from ..platforms.base import ActiveWindow
-from ..services import activity_service, privacy_service, rule_service
+from ..services import activity_service, privacy_service
 
 STATE_TO_STATUS = {
     "recording": STATUS_NORMAL,
@@ -60,8 +60,7 @@ class CollectorStateMachine:
             source=SOURCE_AUTO if status == STATUS_NORMAL else SOURCE_SYSTEM,
             **payload,
         )
-        if status == STATUS_NORMAL:
-            rule_service.apply_rules_to_activity(activity_id)
+        activity_service.finalize_created_activity(activity_id)
         self.state = state
         self.active_signature = signature
         if status == STATUS_EXCLUDED:

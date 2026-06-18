@@ -7,6 +7,7 @@ from typing import Iterable
 
 from . import config
 from .constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
+from .migrations import backfill_legacy_data, ensure_schema
 
 _db_path: Path | None = None
 
@@ -54,7 +55,10 @@ def initialize_database(path: str | Path | None = None) -> None:
     schema_path = Path(__file__).with_name("schema.sql")
     with get_connection() as conn:
         conn.executescript(schema_path.read_text(encoding="utf-8"))
+        ts = now_str()
+        ensure_schema(conn, ts)
         seed_defaults(conn)
+        backfill_legacy_data(conn, ts)
     logging.info("database initialized at %s", db_path)
 
 
@@ -73,6 +77,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "export_path": str(config.get_default_export_dir().resolve()),
         "ui_refresh_seconds": "5",
         "user_paused": "false",
+        "context_carry_minutes": "15",
     }
     for key, value in defaults.items():
         conn.execute(
@@ -97,8 +102,11 @@ def reset_database() -> None:
     with get_connection() as conn:
         conn.executescript(
             """
+            DELETE FROM activity_project_assignment;
             DELETE FROM activity_log;
+            DELETE FROM project_rule;
             DELETE FROM rule;
+            DELETE FROM resource;
             DELETE FROM project;
             DELETE FROM settings;
             """
