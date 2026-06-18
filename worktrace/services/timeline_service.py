@@ -42,7 +42,7 @@ def get_project_sessions_by_date(date: str) -> list[dict]:
             current = [row]
     if current:
         sessions.append(_build_session(current))
-    return sessions
+    return sorted(sessions, key=_session_sort_key, reverse=True)
 
 
 def get_session_resource_summary(activity_ids: list[int]) -> list[dict]:
@@ -190,6 +190,15 @@ def _build_session(rows: list[dict]) -> dict:
         "is_uncategorized": project_name == UNCATEGORIZED_PROJECT,
         "has_unconfirmed": any(not int(row.get("is_confirmed") or 0) for row in rows),
     }
+
+
+def _session_sort_key(session: dict) -> tuple[str, int]:
+    first_id = str(session.get("session_id") or "0").split("-", 1)[0]
+    try:
+        start_id = int(first_id)
+    except ValueError:
+        start_id = 0
+    return (str(session.get("start_time") or ""), start_id)
 
 
 def _status_summary(rows: list[dict]) -> str:

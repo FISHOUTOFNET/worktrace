@@ -37,16 +37,6 @@ CREATE TABLE IF NOT EXISTS activity_log (
     FOREIGN KEY (resource_id) REFERENCES resource(id)
 );
 
-CREATE TABLE IF NOT EXISTS rule (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    keyword TEXT NOT NULL,
-    project_id INTEGER NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES project(id)
-);
-
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,

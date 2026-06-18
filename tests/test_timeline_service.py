@@ -20,16 +20,18 @@ def test_sessions_merge_same_project_and_split_a_b_a(temp_db):
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")
     _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
-    _activity("Word", "winword.exe", "A2.docx", "09:10:00", project_a)
-    _activity("Word", "winword.exe", "B1.docx", "09:20:00", project_b)
-    _activity("Word", "winword.exe", "A3.docx", "09:30:00", project_a)
-    activity_service.close_current_open_record("2026-06-18 09:40:00")
+    _activity("Word", "winword.exe", "B1.docx", "09:30:00", project_b)
+    _activity("Word", "winword.exe", "A2.docx", "10:00:00", project_a)
+    _activity("Word", "winword.exe", "A3.docx", "10:05:00", project_a)
+    activity_service.close_current_open_record("2026-06-18 10:10:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+    latest_details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
 
     assert [session["project_name"] for session in sessions] == ["A", "B", "A"]
+    assert [session["start_time"][11:16] for session in sessions] == ["10:00", "09:30", "09:00"]
     assert sessions[0]["event_count"] == 2
-    assert sessions[0]["duration_seconds"] == 1200
+    assert [row["start_time"][11:16] for row in latest_details] == ["10:00", "10:05"]
 
 
 def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):

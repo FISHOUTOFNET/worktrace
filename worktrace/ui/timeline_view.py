@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import date
 from tkinter import ttk
 from typing import Any
@@ -19,6 +20,7 @@ class TimelineView(ctk.CTkFrame):
         self.only_unconfirmed = ctk.BooleanVar(value=False)
         self.only_uncategorized = ctk.BooleanVar(value=False)
         self.resource_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
+        self.new_project_var = ctk.StringVar(value="")
         self.activity_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
         self.billable_var = ctk.BooleanVar(value=False)
         self.confirmed_var = ctk.BooleanVar(value=False)
@@ -36,6 +38,7 @@ class TimelineView(ctk.CTkFrame):
         self._control_active = False
         self._control_idle_after_id: str | None = None
         self._loading_editor = False
+        self._resource_selected_at = 0.0
 
         self._build()
 
@@ -151,6 +154,7 @@ class TimelineView(ctk.CTkFrame):
             values=[UNCATEGORIZED_PROJECT],
             variable=self.resource_project_var,
             width=180,
+            command=lambda _name: self._on_resource_control_change(),
         )
         self.resource_project_menu.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=6)
         self.current_session_button = ctk.CTkButton(
@@ -167,8 +171,32 @@ class TimelineView(ctk.CTkFrame):
             command=lambda: self._save_resource_project(True),
         )
         self.remember_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=6)
+        ctk.CTkLabel(self.resource_editor, text="新建项目").grid(row=2, column=0, sticky="w", padx=(8, 4), pady=(0, 6))
+        self.new_project_entry = ctk.CTkEntry(
+            self.resource_editor,
+            textvariable=self.new_project_var,
+            width=180,
+        )
+        self.new_project_entry.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 6))
+        self.create_project_button = ctk.CTkButton(
+            self.resource_editor,
+            text="创建",
+            width=72,
+            command=self._create_project_from_timeline,
+        )
+        self.create_project_button.grid(row=2, column=2, sticky="w", padx=(0, 8), pady=(0, 6))
         self.resource_hint_label = ctk.CTkLabel(self.resource_editor, text="")
-        self.resource_hint_label.grid(row=2, column=0, columnspan=4, sticky="w", padx=8, pady=(0, 8))
+        self.resource_hint_label.grid(row=3, column=0, columnspan=4, sticky="w", padx=8, pady=(0, 8))
+        self._resource_editor_widgets = [
+            self.resource_project_menu,
+            self.current_session_button,
+            self.remember_button,
+            self.new_project_entry,
+            self.create_project_button,
+        ]
+        for widget in self._resource_editor_widgets:
+            widget.bind("<ButtonPress-1>", self._on_control_activity, add="+")
+            widget.bind("<FocusIn>", self._on_control_activity, add="+")
 
     def _build_activity_editor(self) -> None:
         self.activity_editor = ctk.CTkFrame(self)
@@ -215,7 +243,15 @@ class TimelineView(ctk.CTkFrame):
         self._refresh_selected_session()
 
     def is_user_interacting(self) -> bool:
-        return self._control_active or self._editor_dirty or any(self._widget_has_focus(widget) for widget in getattr(self, "_editor_widgets", []))
+        activity_focus = any(self._widget_has_focus(widget) for widget in getattr(self, "_editor_widgets", []))
+        resource_focus = any(self._widget_has_focus(widget) for widget in getattr(self, "_resource_editor_widgets", []))
+        return (
+            self._control_active
+            or self._editor_dirty
+            or activity_focus
+            or resource_focus
+            or (self._resource_editor_visible() and self._resource_editor_recently_selected())
+        )
 
     def _sync_sessions(self, sessions: list[dict]) -> None:
         previous = self._selected_session_id
@@ -246,10 +282,13 @@ class TimelineView(ctk.CTkFrame):
 
     def _sync_resources(self, resources: list[dict]) -> None:
         previous = self._selected_resource_id
+        keep_editor_open = self._resource_editor_visible() or self._resource_editor_recently_selected()
         self._resources_by_id = {int(row["resource_id"]): row for row in resources}
         self._sync_tree(self.resource_tree, [(str(row["resource_id"]), self._resource_values(row)) for row in resources])
         if previous in self._resources_by_id:
             self._select_tree_item(self.resource_tree, str(previous))
+            if keep_editor_open:
+                self._load_resource_editor(previous)
         else:
             self._selected_resource_id = None
             self.resource_tree.selection_remove(self.resource_tree.selection())
@@ -301,10 +340,15 @@ class TimelineView(ctk.CTkFrame):
             self._show_resource_editor(False)
             return
         self._selected_resource_id = int(selection[0])
-        resource = self._resources_by_id.get(self._selected_resource_id)
-        if not resource:
+        self._touch_resource_editor()
+        if not self._load_resource_editor(self._selected_resource_id):
             self._show_resource_editor(False)
             return
+
+    def _load_resource_editor(self, resource_id: int) -> bool:
+        resource = self._resources_by_id.get(resource_id)
+        if not resource:
+            return False
         self._show_resource_editor(True)
         role_text = "锚点文件" if resource["resource_role"] == "anchor" else "辅助活动"
         self.resource_label.configure(
@@ -317,6 +361,7 @@ class TimelineView(ctk.CTkFrame):
         else:
             self.remember_button.configure(state="disabled", text="以后该资源都归入该项目")
             self.resource_hint_label.configure(text="辅助活动不能作为项目长期判定依据，只能纠正当前会话。")
+        return True
 
     def _on_activity_select(self, _event=None) -> None:
         selection = self.detail_tree.selection()
@@ -350,6 +395,7 @@ class TimelineView(ctk.CTkFrame):
         self._refresh_selected_session()
 
     def _save_resource_project(self, remember: bool) -> None:
+        self._touch_resource_editor()
         session = self._sessions_by_id.get(self._selected_session_id or "")
         resource = self._resources_by_id.get(self._selected_resource_id or 0)
         if not session or not resource:
@@ -369,6 +415,32 @@ class TimelineView(ctk.CTkFrame):
             self.resource_hint_label.configure(text=str(exc))
             return
         self.refresh()
+
+    def _create_project_from_timeline(self) -> None:
+        self._touch_resource_editor()
+        name = self.new_project_var.get().strip()
+        if not name:
+            self.resource_hint_label.configure(text="请输入项目名称")
+            return
+        self._refresh_projects()
+        if name in self._project_by_name:
+            self.resource_project_var.set(name)
+            self.resource_hint_label.configure(text=f"项目已存在，已选中：{name}")
+            return
+        try:
+            project_service.create_project(name)
+        except Exception as exc:
+            self._refresh_projects()
+            if name in self._project_by_name:
+                self.resource_project_var.set(name)
+                self.resource_hint_label.configure(text=f"项目已存在，已选中：{name}")
+                return
+            self.resource_hint_label.configure(text=f"创建失败：{exc}")
+            return
+        self._refresh_projects()
+        self.resource_project_var.set(name)
+        self.new_project_var.set("")
+        self.resource_hint_label.configure(text=f"已创建项目：{name}")
 
     def _load_activity_editor(self, activity_id: int) -> None:
         row = self._details_by_id.get(activity_id)
@@ -527,6 +599,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _on_control_activity(self, _event=None) -> None:
         self._control_active = True
+        self._touch_resource_editor()
         if self._control_idle_after_id is not None:
             self.after_cancel(self._control_idle_after_id)
         self._control_idle_after_id = self.after(800, self._clear_control_activity)
@@ -542,6 +615,23 @@ class TimelineView(ctk.CTkFrame):
                 return True
             focused = getattr(focused, "master", None)
         return False
+
+    def _on_resource_control_change(self) -> None:
+        self._touch_resource_editor()
+        self._on_control_activity()
+
+    def _touch_resource_editor(self) -> None:
+        if self._selected_resource_id is not None or self._resource_editor_visible():
+            self._resource_selected_at = time.monotonic()
+
+    def _resource_editor_recently_selected(self) -> bool:
+        return self._selected_resource_id is not None and time.monotonic() - self._resource_selected_at <= 5.0
+
+    def _resource_editor_visible(self) -> bool:
+        try:
+            return bool(self.resource_editor.winfo_ismapped())
+        except Exception:
+            return False
 
     def toggle_pause(self) -> None:
         set_setting("user_paused", "false" if get_bool_setting("user_paused", False) else "true")

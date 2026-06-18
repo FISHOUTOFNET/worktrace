@@ -42,7 +42,6 @@ def export_all_local_data(path: str) -> str:
             "activity_project_assignment",
             "project",
             "resource",
-            "rule",
             "project_rule",
             "settings",
         ]:

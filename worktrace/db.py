@@ -7,7 +7,6 @@ from typing import Iterable
 
 from . import config
 from .constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
-from .migrations import backfill_legacy_data, ensure_schema
 
 _db_path: Path | None = None
 
@@ -55,10 +54,7 @@ def initialize_database(path: str | Path | None = None) -> None:
     schema_path = Path(__file__).with_name("schema.sql")
     with get_connection() as conn:
         conn.executescript(schema_path.read_text(encoding="utf-8"))
-        ts = now_str()
-        ensure_schema(conn, ts)
         seed_defaults(conn)
-        backfill_legacy_data(conn, ts)
     logging.info("database initialized at %s", db_path)
 
 
@@ -105,7 +101,6 @@ def reset_database() -> None:
             DELETE FROM activity_project_assignment;
             DELETE FROM activity_log;
             DELETE FROM project_rule;
-            DELETE FROM rule;
             DELETE FROM resource;
             DELETE FROM project;
             DELETE FROM settings;

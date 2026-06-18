@@ -1,9 +1,19 @@
 from worktrace.services import activity_service, project_service, rule_service
+from worktrace.db import get_connection
 
 
 def test_rule_auto_classification(temp_db):
     pid = project_service.create_project("Writing")
-    rule_service.create_rule("Spec", pid)
+    rule_id = rule_service.create_rule("Spec", pid)
+    assert rule_id > 0
+    assert rule_service.list_rules()[0]["keyword"] == "Spec"
+    with get_connection() as conn:
+        tables = {
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+        assert "rule" not in tables
+        assert conn.execute("SELECT COUNT(*) AS c FROM project_rule WHERE pattern = 'Spec'").fetchone()["c"] == 1
     aid = activity_service.create_activity(
         "Word", "winword.exe", "Architecture Spec.docx", start_time="2026-06-18 09:00:00"
     )

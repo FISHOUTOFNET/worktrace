@@ -12,13 +12,6 @@ def create_rule(keyword: str, project_id: int) -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO rule(keyword, project_id, enabled, created_at, updated_at)
-            VALUES (?, ?, 1, ?, ?)
-            """,
-            (keyword, project_id, ts, ts),
-        )
-        conn.execute(
-            """
             INSERT INTO project_rule(project_id, rule_type, pattern, enabled, created_by, created_at, updated_at)
             VALUES (?, 'keyword', ?, 1, 'user', ?, ?)
             """,

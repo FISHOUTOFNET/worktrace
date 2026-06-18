@@ -488,16 +488,6 @@ CREATE TABLE IF NOT EXISTS activity_log (
     FOREIGN KEY (project_id) REFERENCES project(id)
 );
 
-CREATE TABLE IF NOT EXISTS rule (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    keyword TEXT NOT NULL,
-    project_id INTEGER NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES project(id)
-);
-
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -1323,8 +1313,10 @@ Export all relevant tables to Excel or CSV:
 
 ```text
 activity_log
+activity_project_assignment
 project
-rule
+resource
+project_rule
 settings
 ```
 

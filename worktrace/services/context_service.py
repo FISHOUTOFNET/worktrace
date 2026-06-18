@@ -117,7 +117,10 @@ def _infer_context_project(rows: list[dict], index: int, carry_minutes: int, unc
         previous_project = _row_project_id(previous_anchor)
         next_project = _row_project_id(next_anchor)
         if previous_project == next_project:
-            return previous_project
+            previous_gap = _minutes_between(previous_anchor["start_time"], row["start_time"])
+            next_gap = _minutes_between(row["start_time"], next_anchor["start_time"])
+            if previous_gap <= carry_minutes or next_gap <= carry_minutes:
+                return previous_project
         return uncategorized_id
 
     if previous_anchor and not next_anchor:

@@ -73,7 +73,7 @@ WorkTrace prevents multiple collectors from writing to the same database. On Win
 
 ## Data Export And Clearing
 
-The Settings page can export all local tables (`activity_log`, `project`, `rule`, `settings`) to Excel.
+The Settings page can export all local tables (`activity_log`, `activity_project_assignment`, `project`, `resource`, `project_rule`, `settings`) to Excel.
 
 The Settings page can clear all local data after this confirmation text:
 
