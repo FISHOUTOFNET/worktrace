@@ -57,6 +57,63 @@ class FakeWidget:
 
 
 class FakeTree:
+    def __init__(self, columns=()):
+        self.columns = tuple(columns)
+        self.widths = {column: 100 for column in self.columns}
+        self.bindings = []
+        self.children = []
+        self.items = {}
+        self.moves = []
+        self.deleted = []
+        self.yview_position = 0.0
+
+    def __getitem__(self, key):
+        if key == "columns":
+            return self.columns
+        raise KeyError(key)
+
+    def column(self, column, option=None, **kwargs):
+        if "width" in kwargs:
+            self.widths[column] = kwargs["width"]
+        if option == "width":
+            return self.widths[column]
+        return {"width": self.widths[column]}
+
+    def bind(self, *args, **kwargs):
+        self.bindings.append((args, kwargs))
+
+    def get_children(self):
+        return tuple(self.children)
+
+    def yview(self):
+        return (self.yview_position, 1.0)
+
+    def yview_moveto(self, position):
+        self.yview_position = position
+
+    def exists(self, iid):
+        return iid in self.children
+
+    def insert(self, _parent, index, iid, values):
+        self.children.insert(index, iid)
+        self.items[iid] = tuple(values)
+
+    def item(self, iid, **kwargs):
+        if "values" in kwargs:
+            self.items[iid] = tuple(kwargs["values"])
+        return {"values": self.items.get(iid)}
+
+    def move(self, iid, _parent, index):
+        self.children.remove(iid)
+        self.children.insert(index, iid)
+        self.moves.append((iid, index))
+
+    def delete(self, iid):
+        if iid in self.children:
+            self.children.remove(iid)
+        self.items.pop(iid, None)
+        self.deleted.append(iid)
+
     def selection(self):
         return []
 
@@ -84,7 +141,50 @@ def _editor_view_stub():
     view.editor_panel = view.editor_scroll_frame
     view.resource_editor = FakeWidget(mapped=False, master=view.editor_panel)
     view.activity_editor = FakeWidget(mapped=False, master=view.editor_panel)
+    view.resource_tree_frame = FakeWidget(mapped=True)
+    view.detail_tree_frame = FakeWidget(mapped=False)
     return view
+
+
+def test_visible_resource_editor_blocks_auto_refresh_even_after_recent_selection_window():
+    view = object.__new__(TimelineView)
+    view._control_active = False
+    view._editor_dirty = False
+    view._editor_widgets = []
+    view._resource_editor_widgets = []
+    view.resource_editor = FakeWidget(mapped=True)
+    view.activity_editor = FakeWidget(mapped=False)
+    view._selected_resource_id = 42
+    view._resource_selected_at = time.monotonic() - 60
+    view.focus_get = lambda: None
+
+    assert view.is_user_interacting()
+
+
+def test_visible_activity_editor_blocks_auto_refresh():
+    view = object.__new__(TimelineView)
+    view._control_active = False
+    view._editor_dirty = False
+    view._editor_widgets = []
+    view._resource_editor_widgets = []
+    view.resource_editor = FakeWidget(mapped=False)
+    view.activity_editor = FakeWidget(mapped=True)
+    view.focus_get = lambda: None
+
+    assert view.is_user_interacting()
+
+
+def test_no_visible_editor_or_focus_is_not_user_interacting():
+    view = object.__new__(TimelineView)
+    view._control_active = False
+    view._editor_dirty = False
+    view._editor_widgets = []
+    view._resource_editor_widgets = []
+    view.resource_editor = FakeWidget(mapped=False)
+    view.activity_editor = FakeWidget(mapped=False)
+    view.focus_get = lambda: None
+
+    assert not view.is_user_interacting()
 
 
 def test_resource_editor_widgets_are_part_of_interaction_guard():
@@ -95,6 +195,7 @@ def test_resource_editor_widgets_are_part_of_interaction_guard():
     view._editor_widgets = []
     view._resource_editor_widgets = [resource_control]
     view.resource_editor = FakeWidget(mapped=True)
+    view.activity_editor = FakeWidget(mapped=False)
     view._selected_resource_id = 42
     view._resource_selected_at = time.monotonic()
     view.focus_get = lambda: resource_control
@@ -135,7 +236,7 @@ def test_editor_panel_is_explicit_scrollable_container(monkeypatch):
 
     assert view.editor_panel is view.editor_scroll_frame
     assert created
-    assert view.editor_scroll_frame.config["height"] == 220
+    assert view.editor_scroll_frame.config["height"] == 260
     assert view.editor_scroll_frame.master is view
 
 
@@ -189,6 +290,32 @@ def test_editor_switching_uses_editor_panel_without_destroying_widgets():
     assert not view.activity_editor.destroyed
 
 
+def test_toggle_detail_mode_switches_tree_frames():
+    view = _editor_view_stub()
+    view._detail_mode = "resources"
+    view.resource_tree = FakeTree(columns=("resource",))
+    view.detail_tree = FakeTree(columns=("time",))
+    view.toggle_detail_button = FakeWidget()
+    view._tree_keys = {id(view.resource_tree): "resources", id(view.detail_tree): "details"}
+    view._tree_column_widths = {}
+    view._editor_dirty = False
+    view._show_resource_editor = lambda _show: None
+    view._show_activity_editor = lambda _show: None
+    view._refresh_selected_session = lambda: None
+
+    TimelineView._toggle_detail_mode(view)
+
+    assert view._detail_mode == "details"
+    assert view.resource_tree_frame.grid_removed
+    assert view.detail_tree_frame.mapped
+
+    TimelineView._toggle_detail_mode(view)
+
+    assert view._detail_mode == "resources"
+    assert view.detail_tree_frame.grid_removed
+    assert view.resource_tree_frame.mapped
+
+
 def test_new_project_entry_focus_marks_user_interacting():
     view = object.__new__(TimelineView)
     view._control_active = False
@@ -197,11 +324,43 @@ def test_new_project_entry_focus_marks_user_interacting():
     view.new_project_entry = FakeWidget()
     view._resource_editor_widgets = [view.new_project_entry]
     view.resource_editor = FakeWidget(mapped=True)
+    view.activity_editor = FakeWidget(mapped=False)
     view._selected_resource_id = None
     view._resource_selected_at = 0.0
     view.focus_get = lambda: view.new_project_entry
 
     assert view.is_user_interacting()
+
+
+def test_tree_column_widths_are_saved_and_restored():
+    view = object.__new__(TimelineView)
+    tree = FakeTree(columns=("resource", "type"))
+    tree.widths["resource"] = 240
+    tree.widths["type"] = 90
+    view._tree_keys = {id(tree): "resources"}
+    view._tree_column_widths = {}
+
+    TimelineView._save_tree_column_widths(view, tree)
+    tree.widths["resource"] = 120
+    tree.widths["type"] = 60
+    TimelineView._apply_tree_column_widths(view, tree)
+
+    assert tree.widths["resource"] == 240
+    assert tree.widths["type"] == 90
+
+
+def test_sync_tree_keeps_saved_column_widths():
+    view = object.__new__(TimelineView)
+    tree = FakeTree(columns=("resource", "type"))
+    view._tree_values = {}
+    view._tree_keys = {id(tree): "resources"}
+    view._tree_column_widths = {"resources": {"resource": 280, "type": 80}}
+    view.after_idle = lambda callback: callback()
+
+    TimelineView._sync_tree(view, tree, [("1", ("Spec.docx", "file"))])
+
+    assert tree.widths["resource"] == 280
+    assert tree.widths["type"] == 80
 
 
 def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists():

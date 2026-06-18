@@ -13,6 +13,13 @@ from ..services import activity_service, project_service, timeline_service
 from ..services.settings_service import get_bool_setting, get_setting, set_setting
 
 
+UI_FONT = ("Microsoft YaHei UI", 13)
+UI_FONT_BOLD = ("Microsoft YaHei UI", 13, "bold")
+TREE_FONT = ("Microsoft YaHei UI", 12)
+TREE_HEADING_FONT = ("Microsoft YaHei UI", 12, "bold")
+TREE_ROWHEIGHT = 36
+
+
 class TimelineView(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master)
@@ -39,6 +46,8 @@ class TimelineView(ctk.CTkFrame):
         self._control_idle_after_id: str | None = None
         self._loading_editor = False
         self._resource_selected_at = 0.0
+        self._tree_column_widths: dict[str, dict[str, int]] = {}
+        self._tree_keys: dict[int, str] = {}
 
         self._build()
 
@@ -56,22 +65,23 @@ class TimelineView(ctk.CTkFrame):
         self.content_frame.grid_rowconfigure(1, weight=0)
         self.content_frame.grid_rowconfigure(2, weight=1)
         self.content_frame.grid_columnconfigure(0, weight=1)
-        self.editor_scroll_frame = ctk.CTkScrollableFrame(self, height=220)
+        self.editor_scroll_frame = ctk.CTkScrollableFrame(self, height=260)
         self.editor_panel = self.editor_scroll_frame
         self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
         self.editor_scroll_frame.grid_columnconfigure(0, weight=1)
 
         top = self.toolbar_frame
-        self.status_label = ctk.CTkLabel(top, text="采集器未运行")
+        self.status_label = self._label(top, text="采集器未运行")
         self.status_label.pack(side="left", padx=6)
-        self.pause_button = ctk.CTkButton(top, text="暂停", width=90, command=self.toggle_pause)
+        self.pause_button = self._button(top, text="暂停", width=90, command=self.toggle_pause)
         self.pause_button.pack(side="left", padx=6)
-        ctk.CTkLabel(top, text="日期").pack(side="left", padx=(16, 4))
-        self.date_entry = ctk.CTkEntry(top, textvariable=self.date_var, width=120)
+        self._label(top, text="日期").pack(side="left", padx=(16, 4))
+        self.date_entry = self._entry(top, textvariable=self.date_var, width=120)
         self.date_entry.pack(side="left")
-        ctk.CTkButton(top, text="刷新", width=70, command=self.refresh).pack(side="left", padx=6)
-        ctk.CTkCheckBox(top, text="仅未确认", variable=self.only_unconfirmed, command=self.refresh).pack(side="left", padx=6)
-        ctk.CTkCheckBox(top, text="仅未归类", variable=self.only_uncategorized, command=self.refresh).pack(side="left", padx=6)
+        self.refresh_button = self._button(top, text="刷新", width=70, command=self.refresh)
+        self.refresh_button.pack(side="left", padx=6)
+        self._checkbox(top, text="仅未确认", variable=self.only_unconfirmed, command=self.refresh).pack(side="left", padx=6)
+        self._checkbox(top, text="仅未归类", variable=self.only_uncategorized, command=self.refresh).pack(side="left", padx=6)
 
         self._build_session_table()
         self._build_detail_area()
@@ -81,30 +91,21 @@ class TimelineView(ctk.CTkFrame):
         self._show_activity_editor(False)
 
     def _build_session_table(self) -> None:
-        frame = ctk.CTkFrame(self.content_frame)
-        frame.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
         self._configure_tree_style()
         columns = ("time", "project", "duration", "count", "summary")
-        self.session_tree = ttk.Treeview(frame, columns=columns, show="headings", style="WorkTrace.Treeview", height=8)
         headings = {"time": "时间", "project": "项目/状态", "duration": "时长", "count": "活动数", "summary": "摘要"}
         widths = {"time": 128, "project": 180, "duration": 100, "count": 72, "summary": 420}
-        for column in columns:
-            self.session_tree.heading(column, text=headings[column])
-            self.session_tree.column(column, width=widths[column], minwidth=56, anchor="w", stretch=column == "summary")
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.session_tree.yview)
-        self.session_tree.configure(yscrollcommand=scrollbar.set)
-        self.session_tree.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.session_tree_frame = self._make_tree_frame(self.content_frame)
+        self.session_tree_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
+        self.session_tree = self._make_tree(self.session_tree_frame, "sessions", columns, headings, widths, height=8)
         self.session_tree.bind("<<TreeviewSelect>>", self._on_session_select)
 
     def _build_detail_area(self) -> None:
         header = ctk.CTkFrame(self.content_frame)
         header.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-        self.detail_label = ctk.CTkLabel(header, text="请选择项目会话")
+        self.detail_label = self._label(header, text="请选择项目会话")
         self.detail_label.pack(side="left", padx=6, pady=6)
-        self.toggle_detail_button = ctk.CTkButton(
+        self.toggle_detail_button = self._button(
             header,
             text="查看时间顺序明细",
             width=150,
@@ -117,8 +118,11 @@ class TimelineView(ctk.CTkFrame):
         self.detail_container.grid_rowconfigure(0, weight=1)
         self.detail_container.grid_columnconfigure(0, weight=1)
 
+        self.resource_tree_frame = self._make_tree_frame(self.detail_container)
+        self.resource_tree_frame.grid(row=0, column=0, sticky="nsew")
         self.resource_tree = self._make_tree(
-            self.detail_container,
+            self.resource_tree_frame,
+            "resources",
             ("resource", "type", "duration", "count", "project", "unconfirmed"),
             {
                 "resource": "资源",
@@ -132,8 +136,10 @@ class TimelineView(ctk.CTkFrame):
         )
         self.resource_tree.bind("<<TreeviewSelect>>", self._on_resource_select)
 
+        self.detail_tree_frame = self._make_tree_frame(self.detail_container)
         self.detail_tree = self._make_tree(
-            self.detail_container,
+            self.detail_tree_frame,
+            "details",
             ("time", "app", "window", "resource", "duration", "project", "billable", "confirmed", "note"),
             {
                 "time": "时间",
@@ -159,15 +165,15 @@ class TimelineView(ctk.CTkFrame):
             },
         )
         self.detail_tree.bind("<<TreeviewSelect>>", self._on_activity_select)
-        self.detail_tree.grid_remove()
+        self.detail_tree_frame.grid_remove()
 
     def _build_resource_editor(self) -> None:
         self.resource_editor = ctk.CTkFrame(self.editor_panel)
         self.resource_editor.grid_columnconfigure(3, weight=1)
-        self.resource_label = ctk.CTkLabel(self.resource_editor, text="未选择资源")
+        self.resource_label = self._label(self.resource_editor, text="未选择资源", font=UI_FONT_BOLD)
         self.resource_label.grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 4))
-        ctk.CTkLabel(self.resource_editor, text="改归类到").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=6)
-        self.resource_project_menu = ctk.CTkOptionMenu(
+        self._label(self.resource_editor, text="改归类到").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=6)
+        self.resource_project_menu = self._option_menu(
             self.resource_editor,
             values=[UNCATEGORIZED_PROJECT],
             variable=self.resource_project_var,
@@ -175,35 +181,35 @@ class TimelineView(ctk.CTkFrame):
             command=lambda _name: self._on_resource_control_change(),
         )
         self.resource_project_menu.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=6)
-        self.current_session_button = ctk.CTkButton(
+        self.current_session_button = self._button(
             self.resource_editor,
             text="仅改当前会话该资源",
             width=160,
             command=lambda: self._save_resource_project(False),
         )
         self.current_session_button.grid(row=1, column=2, sticky="w", padx=(0, 8), pady=6)
-        self.remember_button = ctk.CTkButton(
+        self.remember_button = self._button(
             self.resource_editor,
             text="以后该文件都归入该项目",
             width=180,
             command=lambda: self._save_resource_project(True),
         )
         self.remember_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=6)
-        ctk.CTkLabel(self.resource_editor, text="新建项目").grid(row=2, column=0, sticky="w", padx=(8, 4), pady=(0, 6))
-        self.new_project_entry = ctk.CTkEntry(
+        self._label(self.resource_editor, text="新建项目").grid(row=2, column=0, sticky="w", padx=(8, 4), pady=(0, 6))
+        self.new_project_entry = self._entry(
             self.resource_editor,
             textvariable=self.new_project_var,
             width=180,
         )
         self.new_project_entry.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 6))
-        self.create_project_button = ctk.CTkButton(
+        self.create_project_button = self._button(
             self.resource_editor,
             text="创建",
             width=72,
             command=self._create_project_from_timeline,
         )
         self.create_project_button.grid(row=2, column=2, sticky="w", padx=(0, 8), pady=(0, 6))
-        self.resource_hint_label = ctk.CTkLabel(self.resource_editor, text="")
+        self.resource_hint_label = self._label(self.resource_editor, text="")
         self.resource_hint_label.grid(row=3, column=0, columnspan=4, sticky="w", padx=8, pady=(0, 8))
         self._resource_editor_widgets = [
             self.resource_project_menu,
@@ -219,10 +225,10 @@ class TimelineView(ctk.CTkFrame):
     def _build_activity_editor(self) -> None:
         self.activity_editor = ctk.CTkFrame(self.editor_panel)
         self.activity_editor.grid_columnconfigure(7, weight=1)
-        self.activity_editor_label = ctk.CTkLabel(self.activity_editor, text="未选择明细")
+        self.activity_editor_label = self._label(self.activity_editor, text="未选择明细", font=UI_FONT_BOLD)
         self.activity_editor_label.grid(row=0, column=0, columnspan=8, sticky="w", padx=8, pady=(8, 4))
-        ctk.CTkLabel(self.activity_editor, text="项目").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=4)
-        self.activity_project_menu = ctk.CTkOptionMenu(
+        self._label(self.activity_editor, text="项目").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=4)
+        self.activity_project_menu = self._option_menu(
             self.activity_editor,
             values=[UNCATEGORIZED_PROJECT],
             variable=self.activity_project_var,
@@ -230,17 +236,26 @@ class TimelineView(ctk.CTkFrame):
             command=lambda _name: self._mark_editor_dirty(),
         )
         self.activity_project_menu.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=4)
-        self.billable_box = ctk.CTkCheckBox(self.activity_editor, text="计费", variable=self.billable_var, command=self._mark_editor_dirty, width=70)
+        self.billable_box = self._checkbox(self.activity_editor, text="计费", variable=self.billable_var, command=self._mark_editor_dirty, width=70)
         self.billable_box.grid(row=1, column=2, sticky="w", padx=(0, 12), pady=4)
-        self.confirmed_box = ctk.CTkCheckBox(self.activity_editor, text="确认", variable=self.confirmed_var, command=self._mark_editor_dirty, width=70)
+        self.confirmed_box = self._checkbox(self.activity_editor, text="确认", variable=self.confirmed_var, command=self._mark_editor_dirty, width=70)
         self.confirmed_box.grid(row=1, column=3, sticky="w", padx=(0, 12), pady=4)
-        ctk.CTkButton(self.activity_editor, text="保存", width=72, command=self._save_activity).grid(row=1, column=4, sticky="w", padx=(0, 8), pady=4)
-        ctk.CTkButton(self.activity_editor, text="删除", width=72, fg_color="#a33", command=self._delete_activity).grid(row=1, column=5, sticky="w", padx=(0, 8), pady=4)
-        ctk.CTkLabel(self.activity_editor, text="备注").grid(row=2, column=0, sticky="nw", padx=(8, 4), pady=(6, 8))
-        self.note_text = ctk.CTkTextbox(self.activity_editor, height=64)
+        self.save_activity_button = self._button(self.activity_editor, text="保存", width=72, command=self._save_activity)
+        self.save_activity_button.grid(row=1, column=4, sticky="w", padx=(0, 8), pady=4)
+        self.delete_activity_button = self._button(self.activity_editor, text="删除", width=72, fg_color="#a33", command=self._delete_activity)
+        self.delete_activity_button.grid(row=1, column=5, sticky="w", padx=(0, 8), pady=4)
+        self._label(self.activity_editor, text="备注").grid(row=2, column=0, sticky="nw", padx=(8, 4), pady=(6, 8))
+        self.note_text = ctk.CTkTextbox(self.activity_editor, height=64, font=UI_FONT)
         self.note_text.grid(row=2, column=1, columnspan=7, sticky="ew", padx=(0, 8), pady=(6, 8))
         self.note_text.bind("<KeyRelease>", lambda _event: self._mark_editor_dirty(), add="+")
-        self._editor_widgets = [self.activity_project_menu, self.billable_box, self.confirmed_box, self.note_text]
+        self._editor_widgets = [
+            self.activity_project_menu,
+            self.billable_box,
+            self.confirmed_box,
+            self.save_activity_button,
+            self.delete_activity_button,
+            self.note_text,
+        ]
         for widget in self._editor_widgets:
             widget.bind("<ButtonPress-1>", self._on_control_activity, add="+")
             widget.bind("<FocusIn>", self._on_control_activity, add="+")
@@ -266,9 +281,10 @@ class TimelineView(ctk.CTkFrame):
         return (
             self._control_active
             or self._editor_dirty
+            or self._resource_editor_visible()
+            or self._activity_editor_visible()
             or activity_focus
             or resource_focus
-            or (self._resource_editor_visible() and self._resource_editor_recently_selected())
         )
 
     def _sync_sessions(self, sessions: list[dict]) -> None:
@@ -300,7 +316,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _sync_resources(self, resources: list[dict]) -> None:
         previous = self._selected_resource_id
-        keep_editor_open = self._resource_editor_visible() or self._resource_editor_recently_selected()
+        keep_editor_open = self._resource_editor_visible()
         self._resources_by_id = {int(row["resource_id"]): row for row in resources}
         self._sync_tree(self.resource_tree, [(str(row["resource_id"]), self._resource_values(row)) for row in resources])
         if previous in self._resources_by_id:
@@ -314,10 +330,13 @@ class TimelineView(ctk.CTkFrame):
 
     def _sync_details(self, details: list[dict]) -> None:
         previous = self._selected_activity_id
+        keep_editor_open = self._activity_editor_visible()
         self._details_by_id = {int(row["id"]): row for row in details}
         self._sync_tree(self.detail_tree, [(str(row["id"]), self._detail_values(row)) for row in details])
         if previous in self._details_by_id:
             self._select_tree_item(self.detail_tree, str(previous))
+            if keep_editor_open:
+                self._load_activity_editor(previous)
         elif not self._editor_dirty:
             self._selected_activity_id = None
             self._show_activity_editor(False)
@@ -339,7 +358,12 @@ class TimelineView(ctk.CTkFrame):
                     tree.item(iid, values=values)
                 tree.move(iid, "", index)
             self._tree_values[key] = values
-        self.after_idle(lambda position=yview[0], target=tree: target.yview_moveto(position))
+        self._apply_tree_column_widths(tree)
+        restore = lambda position=yview[0], target=tree: target.yview_moveto(position)
+        if hasattr(self, "after_idle"):
+            self.after_idle(restore)
+        else:
+            restore()
 
     def _on_session_select(self, _event=None) -> None:
         selection = self.session_tree.selection()
@@ -399,14 +423,16 @@ class TimelineView(ctk.CTkFrame):
     def _toggle_detail_mode(self) -> None:
         if self._detail_mode == "resources":
             self._detail_mode = "details"
-            self.resource_tree.grid_remove()
-            self.detail_tree.grid(row=0, column=0, sticky="nsew")
+            self.resource_tree_frame.grid_remove()
+            self.detail_tree_frame.grid(row=0, column=0, sticky="nsew")
+            self._apply_tree_column_widths(self.detail_tree)
             self.toggle_detail_button.configure(text="返回资源汇总")
             self._show_resource_editor(False)
         else:
             self._detail_mode = "resources"
-            self.detail_tree.grid_remove()
-            self.resource_tree.grid(row=0, column=0, sticky="nsew")
+            self.detail_tree_frame.grid_remove()
+            self.resource_tree_frame.grid(row=0, column=0, sticky="nsew")
+            self._apply_tree_column_widths(self.resource_tree)
             self.toggle_detail_button.configure(text="查看时间顺序明细")
             self._show_activity_editor(False)
         self._editor_dirty = False
@@ -567,21 +593,77 @@ class TimelineView(ctk.CTkFrame):
         end = session.get("end_time") or ""
         return f"{start[11:16] if len(start) >= 16 else start}-{end[11:16] if len(end) >= 16 else ''}"
 
-    def _make_tree(self, master, columns, headings, widths) -> ttk.Treeview:
-        tree = ttk.Treeview(master, columns=columns, show="headings", style="WorkTrace.Treeview")
+    def _label(self, master, **kwargs):
+        kwargs.setdefault("font", UI_FONT)
+        return ctk.CTkLabel(master, **kwargs)
+
+    def _button(self, master, **kwargs):
+        kwargs.setdefault("font", UI_FONT)
+        return ctk.CTkButton(master, **kwargs)
+
+    def _checkbox(self, master, **kwargs):
+        kwargs.setdefault("font", UI_FONT)
+        return ctk.CTkCheckBox(master, **kwargs)
+
+    def _entry(self, master, **kwargs):
+        kwargs.setdefault("font", UI_FONT)
+        return ctk.CTkEntry(master, **kwargs)
+
+    def _option_menu(self, master, **kwargs):
+        kwargs.setdefault("font", UI_FONT)
+        kwargs.setdefault("dropdown_font", UI_FONT)
+        return ctk.CTkOptionMenu(master, **kwargs)
+
+    def _make_tree_frame(self, parent):
+        frame = ctk.CTkFrame(parent)
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+        return frame
+
+    def _make_tree(self, master, tree_key, columns, headings, widths, height=None) -> ttk.Treeview:
+        kwargs = {"columns": columns, "show": "headings", "style": "WorkTrace.Treeview"}
+        if height is not None:
+            kwargs["height"] = height
+        tree = ttk.Treeview(master, **kwargs)
+        self._tree_keys[id(tree)] = tree_key
         for column in columns:
+            width = widths[column]
+            minwidth = max(60, min(width, 120))
+            if column in {"summary", "resource", "window", "note"}:
+                minwidth = max(minwidth, 120)
             tree.heading(column, text=headings[column])
-            tree.column(column, width=widths[column], minwidth=48, anchor="w", stretch=column in {"window", "resource", "note"})
-        scrollbar = ttk.Scrollbar(master, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
+            tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=False)
+        vertical_scrollbar = ttk.Scrollbar(master, orient="vertical", command=tree.yview)
+        horizontal_scrollbar = ttk.Scrollbar(master, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vertical_scrollbar.set, xscrollcommand=horizontal_scrollbar.set)
         tree.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        vertical_scrollbar.grid(row=0, column=1, sticky="ns")
+        horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
+        tree.bind("<ButtonRelease-1>", lambda _event, target=tree: self._save_tree_column_widths(target), add="+")
+        self._apply_tree_column_widths(tree)
         return tree
 
     def _configure_tree_style(self) -> None:
         style = ttk.Style(self)
-        style.configure("WorkTrace.Treeview", rowheight=28)
-        style.configure("WorkTrace.Treeview.Heading", font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("WorkTrace.Treeview", font=TREE_FONT, rowheight=TREE_ROWHEIGHT)
+        style.configure("WorkTrace.Treeview.Heading", font=TREE_HEADING_FONT)
+
+    def _save_tree_column_widths(self, tree: ttk.Treeview) -> None:
+        tree_key = self._tree_keys.get(id(tree))
+        if tree_key is None:
+            return
+        self._tree_column_widths[tree_key] = {
+            column: int(tree.column(column, "width"))
+            for column in tree["columns"]
+        }
+
+    def _apply_tree_column_widths(self, tree: ttk.Treeview) -> None:
+        tree_key = self._tree_keys.get(id(tree))
+        if tree_key is None:
+            return
+        for column, width in self._tree_column_widths.get(tree_key, {}).items():
+            if column in tree["columns"]:
+                tree.column(column, width=width)
 
     def _show_resource_editor(self, show: bool) -> None:
         if show:
