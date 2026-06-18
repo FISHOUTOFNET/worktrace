@@ -54,8 +54,9 @@ class WorkTraceApp(ctk.CTk):
 
     def refresh_current_tab(self) -> None:
         if self.tabs.get() == "时间线":
-            self.timeline.refresh()
-        refresh_ms = max(1, get_int_setting("ui_refresh_seconds", 2)) * 1000
+            if not self.timeline.is_user_interacting():
+                self.timeline.refresh()
+        refresh_ms = max(5, get_int_setting("ui_refresh_seconds", 5)) * 1000
         self.after(refresh_ms, self.refresh_current_tab)
 
     def _on_tab_changed(self) -> None:

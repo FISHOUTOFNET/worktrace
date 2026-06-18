@@ -71,7 +71,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "last_shutdown_at": "",
         "first_run_notice_accepted": "false",
         "export_path": str(config.get_default_export_dir().resolve()),
-        "ui_refresh_seconds": "2",
+        "ui_refresh_seconds": "5",
         "user_paused": "false",
     }
     for key, value in defaults.items():
