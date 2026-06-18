@@ -153,7 +153,6 @@ SQLite
 CustomTkinter
 pywin32
 psutil
-pandas
 openpyxl
 PyInstaller
 pytest

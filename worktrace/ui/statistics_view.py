@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -35,6 +36,8 @@ class StatisticsView(ctk.CTkFrame):
         self.table.pack(fill="both", expand=True, padx=12, pady=12)
 
     def refresh(self) -> None:
+        if not self._validate_dates():
+            return
         summary = statistics_service.get_summary(self.start_var.get(), self.end_var.get())
         self.summary_label.configure(
             text=(
@@ -72,16 +75,32 @@ class StatisticsView(ctk.CTkFrame):
         export_dir = Path(get_setting("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
         return export_dir / f"worktrace_{self.start_var.get()}_{self.end_var.get()}.{suffix}"
 
+    def _validate_dates(self) -> bool:
+        try:
+            start = date.fromisoformat(self.start_var.get())
+            end = date.fromisoformat(self.end_var.get())
+        except ValueError:
+            messagebox.showerror("日期格式错误", "日期格式必须为 YYYY-MM-DD")
+            return False
+        if start > end:
+            messagebox.showerror("日期范围错误", "开始日期不能晚于结束日期")
+            return False
+        return True
+
     def export_excel(self) -> None:
         try:
             path = export_service.export_excel(self.start_var.get(), self.end_var.get(), str(self._export_path("xlsx")))
             messagebox.showinfo("导出完成", path)
+            self.refresh()
         except Exception as exc:
+            logging.exception("excel export failed")
             messagebox.showerror("导出失败", str(exc))
 
     def export_markdown(self) -> None:
         try:
             path = export_service.export_markdown(self.start_var.get(), self.end_var.get(), str(self._export_path("md")))
             messagebox.showinfo("导出完成", path)
+            self.refresh()
         except Exception as exc:
+            logging.exception("markdown export failed")
             messagebox.showerror("导出失败", str(exc))

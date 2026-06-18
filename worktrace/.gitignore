@@ -28,8 +28,7 @@ worktrace.db
 logs/
 *.log
 
-# User exports
-exports/
+# User exports are ignored by the repository root .gitignore.
 *.xlsx
 *.csv
 *.md.tmp

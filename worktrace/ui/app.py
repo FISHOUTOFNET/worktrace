@@ -22,7 +22,7 @@ class WorkTraceApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         ctk.set_appearance_mode("System")
 
-        self.tabs = ctk.CTkTabview(self)
+        self.tabs = ctk.CTkTabview(self, command=self._on_tab_changed)
         self.tabs.pack(fill="both", expand=True, padx=10, pady=10)
         timeline_tab = self.tabs.add("时间线")
         stats_tab = self.tabs.add("统计与导出")
@@ -35,7 +35,7 @@ class WorkTraceApp(ctk.CTk):
         self.settings.pack(fill="both", expand=True)
 
         self.after(200, self._startup_privacy_gate)
-        self.after(500, self.refresh_all)
+        self.after(500, self.refresh_current_tab)
 
     def _startup_privacy_gate(self) -> None:
         if get_bool_setting("first_run_notice_accepted", False):
@@ -52,12 +52,20 @@ class WorkTraceApp(ctk.CTk):
             self.collector_started = True
             self.start_collector_callback()
 
-    def refresh_all(self) -> None:
-        self.timeline.refresh()
-        self.statistics.refresh()
-        self.settings.refresh()
+    def refresh_current_tab(self) -> None:
+        if self.tabs.get() == "时间线":
+            self.timeline.refresh()
         refresh_ms = max(1, get_int_setting("ui_refresh_seconds", 2)) * 1000
-        self.after(refresh_ms, self.refresh_all)
+        self.after(refresh_ms, self.refresh_current_tab)
+
+    def _on_tab_changed(self) -> None:
+        current = self.tabs.get()
+        if current == "统计与导出":
+            self.statistics.refresh()
+        elif current == "设置与隐私":
+            self.settings.refresh()
+        elif current == "时间线":
+            self.timeline.refresh()
 
     def on_close(self) -> None:
         self.stop_event.set()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import customtkinter as ctk
@@ -64,6 +65,7 @@ class SettingsView(ctk.CTkFrame):
         for key, entry in self.entries.items():
             set_setting(key, entry.get())
         privacy_service.set_exclude_keywords(self.entries["exclude_keywords"].get().split(","))
+        self.refresh()
         messagebox.showinfo("已保存", "设置已保存")
 
     def create_project(self) -> None:
@@ -84,6 +86,7 @@ class SettingsView(ctk.CTkFrame):
             path = export_service.export_all_local_data(str(export_dir / "worktrace_all_local_data.xlsx"))
             messagebox.showinfo("导出完成", path)
         except Exception as exc:
+            logging.exception("all local data export failed")
             messagebox.showerror("导出失败", str(exc))
 
     def clear_all(self) -> None:
