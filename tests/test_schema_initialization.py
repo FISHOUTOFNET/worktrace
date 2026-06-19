@@ -16,6 +16,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
         }
         setting = conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()
         idle_threshold = conn.execute("SELECT value FROM settings WHERE key = 'idle_threshold_seconds'").fetchone()
+        ui_refresh = conn.execute("SELECT value FROM settings WHERE key = 'ui_refresh_seconds'").fetchone()
         removed_setting = conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone()
         min_history = conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone()
         min_idle = conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone()
@@ -38,6 +39,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "activity_project_assignment" in tables
     assert setting["value"] == "15"
     assert idle_threshold["value"] == "300"
+    assert ui_refresh["value"] == "10"
     assert removed_setting is None
     assert min_history is None
     assert min_idle is None
@@ -79,6 +81,7 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
         assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
         assert conn.execute("SELECT value FROM settings WHERE key = 'idle_threshold_seconds'").fetchone()["value"] == "300"
+        assert conn.execute("SELECT value FROM settings WHERE key = 'ui_refresh_seconds'").fetchone()["value"] == "10"
         assert conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone() is None
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone() is None
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone() is None

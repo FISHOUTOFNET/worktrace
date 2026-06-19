@@ -3,10 +3,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from openpyxl import Workbook
-
+from ..formatters import format_duration
 from ..services import activity_service, statistics_service
-from .markdown_exporter import format_duration
 
 
 def _validate_date_range(start_date: str, end_date: str) -> None:
@@ -20,6 +18,8 @@ def _validate_date_range(start_date: str, end_date: str) -> None:
 
 
 def export_excel_file(start_date: str, end_date: str, path: str) -> str:
+    from openpyxl import Workbook
+
     _validate_date_range(start_date, end_date)
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)

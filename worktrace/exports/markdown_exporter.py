@@ -3,18 +3,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+from ..formatters import format_current_duration, format_duration
 from ..services import activity_service, statistics_service
-
-
-def format_duration(seconds: int | None) -> str:
-    seconds = max(0, int(seconds or 0))
-    hours, rem = divmod(seconds, 3600)
-    minutes, seconds = divmod(rem, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-def format_current_duration(seconds: int | None) -> str:
-    return format_duration(seconds)
 
 
 def _validate_date_range(start_date: str, end_date: str) -> None:

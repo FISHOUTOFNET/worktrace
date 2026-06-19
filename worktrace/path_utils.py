@@ -6,6 +6,7 @@ import re
 from .constants import ANCHOR_FILE_EXTENSIONS
 
 _ANCHOR_EXT_RE = "|".join(re.escape(ext.lstrip(".")) for ext in ANCHOR_FILE_EXTENSIONS)
+_ANCHOR_EXT_SET = {item.casefold() for item in ANCHOR_FILE_EXTENSIONS}
 _DRIVE_PATH_RE = re.compile(
     rf"(?P<path>[A-Za-z]:[\\/][^\r\n<>|?*]+?\.({_ANCHOR_EXT_RE}))(?=$|[\s\"'）)\]】。；;，,]| - )",
     re.IGNORECASE,
@@ -74,7 +75,7 @@ def looks_like_anchor_file_path(path: str | None) -> bool:
     if not (_is_drive_path(candidate) or _is_unc_path(candidate)):
         return False
     _, ext = ntpath.splitext(candidate)
-    return ext.casefold() in {item.casefold() for item in ANCHOR_FILE_EXTENSIONS}
+    return ext.casefold() in _ANCHOR_EXT_SET
 
 
 def _clean_path(path: str) -> str:

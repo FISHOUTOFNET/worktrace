@@ -54,6 +54,14 @@ The first launch shows the privacy notice. The collector starts only after the n
 
 The app writes to user-local folders and does not require administrator privileges.
 
+## Performance And Memory
+
+WorkTrace keeps the startup path small by creating only the Overview page at launch. Time Details, Statistics/Export, Project Rules, and Settings/Privacy are created on first use and then kept mounted for smooth switching.
+
+Heavy optional dependencies are loaded only when needed: `openpyxl` is imported during Excel export, and Windows process inspection dependencies are imported only when the real Windows adapter reads the foreground window. Shared duration formatting lives in `worktrace.formatters` so UI modules do not load export modules just to format `hh:mm:ss` values.
+
+The default full-page data refresh interval is 10 seconds. The current-activity label uses a lightweight 2-second refresh from the app shell, while collector data remains local and offline.
+
 ## Project Classification
 
 Folder project rules require a recognizable full local file path. File rules bind one specific file to a project. On Windows, WorkTrace tries Office/WPS COM first and then falls back to the foreground process open-file list, using only a unique exact file-name match.

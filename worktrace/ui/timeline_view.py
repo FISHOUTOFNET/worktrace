@@ -9,7 +9,7 @@ from typing import Any
 import customtkinter as ctk
 
 from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
-from ..exports.markdown_exporter import format_current_duration, format_duration
+from ..formatters import format_current_duration, format_duration
 from ..services import activity_service, project_service, timeline_service
 from ..services.settings_service import get_bool_setting, get_setting
 from . import design
@@ -50,11 +50,9 @@ class TimelineView(ctk.CTkFrame):
         self._resource_selected_at = 0.0
         self._tree_column_widths: dict[str, dict[str, int]] = {}
         self._tree_keys: dict[int, str] = {}
-        self._current_activity_after_id: str | None = None
         self._pending_session_id: str | None = None
 
         self._build()
-        self._schedule_current_activity_tick()
 
     def _build(self) -> None:
         self.grid_rowconfigure(0, weight=0)
@@ -711,9 +709,8 @@ class TimelineView(ctk.CTkFrame):
         self.status_label.configure(text=label)
         self.current_activity_label.configure(text=self._current_activity_text())
 
-    def _schedule_current_activity_tick(self) -> None:
+    def refresh_current_activity(self) -> None:
         self.current_activity_label.configure(text=self._current_activity_text())
-        self._current_activity_after_id = self.after(1000, self._schedule_current_activity_tick)
 
     def _current_activity_text(self) -> str:
         raw = get_setting("current_activity_snapshot", "") or ""
@@ -730,15 +727,6 @@ class TimelineView(ctk.CTkFrame):
         if snapshot.get("status") == "idle":
             name = "空闲中"
         return f"当前活动：{name}｜{project}｜{elapsed}｜{state}"
-
-    def destroy(self) -> None:
-        if self._current_activity_after_id is not None:
-            try:
-                self.after_cancel(self._current_activity_after_id)
-            except Exception:
-                pass
-            self._current_activity_after_id = None
-        super().destroy()
 
     def _session_values(self, session: dict) -> tuple[str, ...]:
         return (

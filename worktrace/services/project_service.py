@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from ..constants import UNCATEGORIZED_PROJECT
-from ..db import dict_rows, get_connection, now_str
+from ..db import dict_rows, get_connection, get_db_path, now_str
+
+_UNCATEGORIZED_PROJECT_IDS: dict[str, int] = {}
+
+
+def invalidate_uncategorized_project_cache() -> None:
+    _UNCATEGORIZED_PROJECT_IDS.pop(str(get_db_path().resolve()), None)
 
 
 def create_project(name: str, description: str = "") -> int:
@@ -152,14 +158,25 @@ def delete_project(project_id: int) -> None:
         conn.execute("DELETE FROM folder_project_rule WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM project_rule WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM project WHERE id = ?", (project_id,))
+    from .folder_rule_service import invalidate_folder_rule_cache
+    from .project_inference_service import invalidate_keyword_rule_cache
+
+    invalidate_folder_rule_cache()
+    invalidate_keyword_rule_cache()
 
 
 def get_or_create_uncategorized_project() -> int:
+    cache_key = str(get_db_path().resolve())
+    cached = _UNCATEGORIZED_PROJECT_IDS.get(cache_key)
+    if cached is not None:
+        return cached
     ts = now_str()
     with get_connection() as conn:
         row = conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
         if row:
-            return int(row["id"])
+            project_id = int(row["id"])
+            _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
+            return project_id
         cur = conn.execute(
             """
             INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
@@ -167,4 +184,6 @@ def get_or_create_uncategorized_project() -> int:
             """,
             (UNCATEGORIZED_PROJECT, ts, ts),
         )
-        return int(cur.lastrowid)
+        project_id = int(cur.lastrowid)
+        _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
+        return project_id

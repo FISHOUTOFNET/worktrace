@@ -30,6 +30,31 @@ def test_longest_child_folder_rule_wins(temp_db):
     assert rule["project_id"] == child_project
 
 
+def test_folder_rule_lookup_cache_reuses_reads_and_invalidates_on_update(temp_db, monkeypatch):
+    parent_project = project_service.create_project("Parent")
+    folder_rule_service.create_or_update_folder_rule("D:\\CaseA", parent_project)
+    folder_rule_service.invalidate_folder_rule_cache()
+    original = folder_rule_service.get_connection
+    calls = {"count": 0}
+
+    def counted_connection():
+        calls["count"] += 1
+        return original()
+
+    monkeypatch.setattr(folder_rule_service, "get_connection", counted_connection)
+
+    assert folder_rule_service.find_matching_folder_rule("D:\\CaseA\\Spec.docx")["project_id"] == parent_project
+    assert folder_rule_service.find_matching_folder_rule("D:\\CaseA\\Other.docx")["project_id"] == parent_project
+    assert calls["count"] == 1
+
+    child_project = project_service.create_project("Child")
+    folder_rule_service.create_or_update_folder_rule("D:\\CaseA\\Sub", child_project)
+    calls_after_update = calls["count"]
+
+    assert folder_rule_service.find_matching_folder_rule("D:\\CaseA\\Sub\\Spec.docx")["project_id"] == child_project
+    assert calls["count"] == calls_after_update + 1
+
+
 def test_file_default_project_wins_over_folder_rule(temp_db):
     folder_project = project_service.create_project("Folder")
     file_project = project_service.create_project("File")

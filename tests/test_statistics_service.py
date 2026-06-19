@@ -19,6 +19,30 @@ def test_statistics_aggregation(temp_db):
     assert stats[0]["total_duration"] == 3600
 
 
+def test_summary_ensures_context_once_and_reuses_it_for_project_stats(temp_db, monkeypatch):
+    context_calls = []
+    session_calls = []
+
+    def fake_recompute(day):
+        context_calls.append(day)
+
+    def fake_sessions(day, include_hidden=True, ensure_context=True):
+        session_calls.append((day, include_hidden, ensure_context))
+        return []
+
+    monkeypatch.setattr(statistics_service, "recompute_context_assignments_for_date", fake_recompute)
+    monkeypatch.setattr(statistics_service.timeline_service, "get_project_sessions_by_date", fake_sessions)
+
+    summary = statistics_service.get_summary("2026-06-18", "2026-06-19")
+
+    assert summary["total_duration"] == 0
+    assert context_calls == ["2026-06-18", "2026-06-19"]
+    assert session_calls == [
+        ("2026-06-18", False, False),
+        ("2026-06-19", False, False),
+    ]
+
+
 def test_project_stats_use_short_context_merge_without_changing_raw_project(temp_db):
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")

@@ -2,17 +2,13 @@ from __future__ import annotations
 
 from datetime import date
 import threading
+from typing import Any, Callable
 
 import customtkinter as ctk
 
 from ..services.settings_service import get_bool_setting, get_int_setting, get_setting, set_setting
 from . import design
 from .first_run_dialog import FirstRunDialog
-from .overview_view import OverviewView
-from .project_rules_view import ProjectRulesView
-from .settings_view import SettingsView
-from .statistics_view import StatisticsView
-from .timeline_view import TimelineView
 
 
 class WorkTraceApp(ctk.CTk):
@@ -23,6 +19,8 @@ class WorkTraceApp(ctk.CTk):
         self.collector_started = False
         self.active_page = "overview"
         self.nav_buttons: dict[str, ctk.CTkButton] = {}
+        self.pages: dict[str, Any] = {}
+        self._page_factories: dict[str, Callable[[], Any]] = {}
 
         self.title("有迹 WorkTrace")
         self.geometry("1240x780")
@@ -38,6 +36,7 @@ class WorkTraceApp(ctk.CTk):
         self.after(200, self._startup_privacy_gate)
         self.after(500, self.refresh_current_tab)
         self.after(1000, self._refresh_sidebar_status)
+        self.after(2000, self._refresh_current_activity_status)
 
     def _build_shell(self) -> None:
         self.sidebar = ctk.CTkFrame(self, fg_color=design.SIDEBAR_BG, corner_radius=0, width=228)
@@ -110,25 +109,66 @@ class WorkTraceApp(ctk.CTk):
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
-        self.overview = OverviewView(
+        self._page_factories = {
+            "overview": self._create_overview_page,
+            "timeline": self._create_timeline_page,
+            "statistics": self._create_statistics_page,
+            "rules": self._create_rules_page,
+            "settings": self._create_settings_page,
+        }
+        self._ensure_page("overview")
+        self.show_page("overview")
+
+    def _create_overview_page(self):
+        from .overview_view import OverviewView
+
+        page = OverviewView(
             self.content,
             open_timeline_callback=self.open_timeline,
             open_statistics_callback=lambda: self.show_page("statistics"),
         )
-        self.timeline = TimelineView(self.content)
-        self.statistics = StatisticsView(self.content)
-        self.rules = ProjectRulesView(self.content)
-        self.settings = SettingsView(self.content)
-        self.pages = {
-            "overview": self.overview,
-            "timeline": self.timeline,
-            "statistics": self.statistics,
-            "rules": self.rules,
-            "settings": self.settings,
-        }
-        for page in self.pages.values():
-            page.grid(row=0, column=0, sticky="nsew")
-        self.show_page("overview")
+        self.overview = page
+        return page
+
+    def _create_timeline_page(self):
+        from .timeline_view import TimelineView
+
+        page = TimelineView(self.content)
+        self.timeline = page
+        return page
+
+    def _create_statistics_page(self):
+        from .statistics_view import StatisticsView
+
+        page = StatisticsView(self.content)
+        self.statistics = page
+        return page
+
+    def _create_rules_page(self):
+        from .project_rules_view import ProjectRulesView
+
+        page = ProjectRulesView(self.content)
+        self.rules = page
+        return page
+
+    def _create_settings_page(self):
+        from .settings_view import SettingsView
+
+        page = SettingsView(self.content)
+        self.settings = page
+        return page
+
+    def _ensure_page(self, key: str):
+        page = self.pages.get(key)
+        if page is not None:
+            return page
+        factory = getattr(self, "_page_factories", {}).get(key)
+        if factory is None:
+            return None
+        page = factory()
+        page.grid(row=0, column=0, sticky="nsew")
+        self.pages[key] = page
+        return page
 
     def _startup_privacy_gate(self) -> None:
         if get_bool_setting("first_run_notice_accepted", False):
@@ -146,7 +186,10 @@ class WorkTraceApp(ctk.CTk):
             self.start_collector_callback()
 
     def show_page(self, key: str) -> None:
-        if key not in self.pages:
+        if key not in self.pages and key not in getattr(self, "_page_factories", {}):
+            return
+        page = self._ensure_page(key)
+        if page is None:
             return
         self.pages[key].tkraise()
         self.active_page = key
@@ -160,26 +203,36 @@ class WorkTraceApp(ctk.CTk):
         target_date: str | None = None,
     ) -> None:
         target = target_date or date.today().isoformat()
-        if hasattr(self.timeline, "open_context"):
-            self.timeline.open_context(target, only_uncategorized=only_uncategorized, selected_session_id=session_id)
+        timeline = getattr(self, "timeline", None) or self._ensure_page("timeline")
+        if timeline is None:
+            return
+        if hasattr(timeline, "open_context"):
+            timeline.open_context(target, only_uncategorized=only_uncategorized, selected_session_id=session_id)
         else:
-            self.timeline.date_var.set(target)
-            self.timeline.only_uncategorized.set(only_uncategorized)
+            timeline.date_var.set(target)
+            timeline.only_uncategorized.set(only_uncategorized)
         self.show_page("timeline")
 
     def refresh_current_tab(self) -> None:
-        if self.active_page == "timeline":
-            if not self.timeline.is_user_interacting():
-                self.timeline.refresh()
+        page = self.pages.get(self.active_page)
+        if self.active_page == "timeline" and page is not None:
+            if not page.is_user_interacting():
+                page.refresh()
         else:
             self._refresh_page(self.active_page)
-        refresh_ms = max(5, get_int_setting("ui_refresh_seconds", 5)) * 1000
+        refresh_ms = max(5, get_int_setting("ui_refresh_seconds", 10)) * 1000
         self.after(refresh_ms, self.refresh_current_tab)
 
     def _refresh_page(self, key: str) -> None:
         page = self.pages.get(key)
         if page is not None and hasattr(page, "refresh"):
             page.refresh()
+
+    def _refresh_current_activity_status(self) -> None:
+        page = self.pages.get(self.active_page)
+        if page is not None and hasattr(page, "refresh_current_activity"):
+            page.refresh_current_activity()
+        self.after(2000, self._refresh_current_activity_status)
 
     def _sync_nav_buttons(self) -> None:
         for key, button in self.nav_buttons.items():
@@ -237,7 +290,9 @@ class WorkTraceApp(ctk.CTk):
             set_setting("user_paused", "true")
         self._sync_sidebar_status()
         if self.active_page == "timeline":
-            self.timeline.refresh()
+            timeline = getattr(self, "timeline", None) or self.pages.get("timeline")
+            if timeline is not None:
+                timeline.refresh()
 
     def on_close(self) -> None:
         self.stop_event.set()

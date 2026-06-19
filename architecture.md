@@ -214,7 +214,8 @@ UI must refresh by polling database and collector status using Tkinter `after()`
 Default UI refresh interval:
 
 ```text
-2 seconds
+10 seconds for full page data refresh
+2 seconds for current-activity label refresh
 ```
 
 Collector thread communicates state through:
@@ -363,6 +364,7 @@ worktrace/
 ├── config.py
 ├── constants.py
 ├── db.py
+├── formatters.py
 ├── schema.sql
 ├── requirements.txt
 ├── README.md
@@ -514,7 +516,7 @@ last_collector_heartbeat =
 last_shutdown_at =
 first_run_notice_accepted = false
 export_path = Documents\WorkTrace Exports
-ui_refresh_seconds = 5
+ui_refresh_seconds = 10
 user_paused = false
 context_carry_minutes = 15
 ```
@@ -550,6 +552,7 @@ Timestamps: local time string in "YYYY-MM-DD HH:MM:SS"
 Required settings helpers:
 
 ```python
+clear_settings_cache(key: str | None = None) -> None
 get_setting(key: str, default: str | None = None) -> str | None
 set_setting(key: str, value: str) -> None
 get_bool_setting(key: str, default: bool = False) -> bool
@@ -1090,11 +1093,14 @@ apply_rules_to_activity(activity_id: int) -> None
 apply_rules_to_unclassified() -> None
 ```
 
+Folder-rule and keyword-rule lookup paths may keep short TTL caches keyed by the active database path. Creating, deleting, enabling, or disabling a rule must invalidate the relevant cache.
+
 ### 23.5 settings_service.py
 
 Required functions:
 
 ```python
+clear_settings_cache(key: str | None = None) -> None
 get_setting(key: str, default: str | None = None) -> str | None
 set_setting(key: str, value: str) -> None
 get_bool_setting(key: str, default: bool = False) -> bool
@@ -1103,17 +1109,21 @@ get_list_setting(key: str, default: list[str] | None = None) -> list[str]
 set_list_setting(key: str, values: list[str]) -> None
 ```
 
+`settings_service` may keep a short TTL in-memory cache, but cache keys must include the active database path. `set_setting` must update the cache for the written key.
+Privacy exclusion keywords may cache the parsed list by database path; `set_exclude_keywords` must update or invalidate that cache.
+
 ### 23.6 statistics_service.py
 
 Required functions:
 
 ```python
 get_summary(start_date: str, end_date: str) -> dict
-get_project_stats(start_date: str, end_date: str) -> list[dict]
+get_project_stats(start_date: str, end_date: str, ensure_context: bool = True) -> list[dict]
 get_uncategorized_duration(start_date: str, end_date: str) -> int
 ```
 
 `get_summary` returns `classified_duration` in addition to total, effective, idle, paused, excluded, and uncategorized durations.
+`get_summary` should ensure context assignments once for the requested range, then compute status totals with SQL aggregation and call project stats without repeating context recomputation.
 
 ### 23.7 recovery_service.py
 
@@ -1160,12 +1170,12 @@ Use 5 pages:
 5. Settings and Privacy
 
 The collector thread must not directly update UI widgets. UI must refresh via Tkinter `after()` polling.
-Pages stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels may update every second without rebuilding page content.
+Pages are created lazily on first visit, then stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels are refreshed by the app shell every 2 seconds without rebuilding page content.
 
 Default refresh interval:
 
 ```text
-2 seconds
+10 seconds
 ```
 
 ### 24.1 Overview Page
@@ -1257,7 +1267,7 @@ Must show:
 
 ### 25.1 Excel Export
 
-Use `openpyxl`.
+Use `openpyxl`. Import it lazily inside export functions so startup and non-export UI paths do not load the workbook stack.
 
 Export two sheets.
 
@@ -1272,6 +1282,7 @@ Record Count
 ```
 
 Summary durations are formatted as `hh:mm:ss` and use project statistics after reporting context merge.
+Shared duration formatting must live in `worktrace.formatters`; UI modules must not import `markdown_exporter` just to format durations. `markdown_exporter` may re-export the formatter functions for compatibility.
 
 Sheet 2: `Activity Logs`
 
@@ -1403,7 +1414,7 @@ Rules:
 4. If system sleep or large time jump is detected, close the previous record and keep the next relevant record available for user review.
 5. Persist normal, idle, paused, excluded, and error segments once they reach 30 seconds.
 6. Display all stored durations as exact `hh:mm:ss` without minute rounding.
-7. Display the current activity counter as `hh:mm:ss` and refresh it every second without requiring a full Time Details refresh.
+7. Display the current activity counter as `hh:mm:ss` and refresh it every 2 seconds without requiring a full Time Details refresh.
 
 ---
 

@@ -1,12 +1,41 @@
 from __future__ import annotations
 
-from ..db import dict_rows, get_connection, now_str
+import time
+
+from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import (
     is_path_under_folder,
     looks_like_anchor_file_path,
     normalize_folder_key,
     normalize_path_key,
 )
+
+_FOLDER_RULE_CACHE_TTL_SECONDS = 5.0
+_FOLDER_RULE_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+
+def invalidate_folder_rule_cache() -> None:
+    _FOLDER_RULE_CACHE.pop(str(get_db_path().resolve()), None)
+
+
+def _enabled_folder_rules() -> list[dict]:
+    cache_key = str(get_db_path().resolve())
+    now = time.monotonic()
+    cached = _FOLDER_RULE_CACHE.get(cache_key)
+    if cached is not None and cached[0] >= now:
+        return [dict(row) for row in cached[1]]
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT fpr.*, p.name AS project_name
+            FROM folder_project_rule fpr
+            LEFT JOIN project p ON p.id = fpr.project_id
+            WHERE fpr.enabled = 1
+            """
+        ).fetchall()
+    rules = dict_rows(rows)
+    _FOLDER_RULE_CACHE[cache_key] = (now + _FOLDER_RULE_CACHE_TTL_SECONDS, rules)
+    return [dict(row) for row in rules]
 
 
 def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: bool = True) -> int:
@@ -37,12 +66,14 @@ def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: b
             "SELECT id FROM folder_project_rule WHERE normalized_folder_key = ?",
             (key,),
         ).fetchone()
+    invalidate_folder_rule_cache()
     return int(row["id"] if row else cur.lastrowid)
 
 
 def delete_folder_rule(rule_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))
+    invalidate_folder_rule_cache()
 
 
 def set_folder_rule_enabled(rule_id: int, enabled: bool) -> None:
@@ -51,6 +82,7 @@ def set_folder_rule_enabled(rule_id: int, enabled: bool) -> None:
             "UPDATE folder_project_rule SET enabled = ?, updated_at = ? WHERE id = ?",
             (int(enabled), now_str(), rule_id),
         )
+    invalidate_folder_rule_cache()
 
 
 def list_folder_rules() -> list[dict]:
@@ -70,19 +102,10 @@ def find_matching_folder_rule(path_or_parent_dir: str) -> dict | None:
     target = (path_or_parent_dir or "").strip()
     if not target:
         return None
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT fpr.*, p.name AS project_name
-            FROM folder_project_rule fpr
-            LEFT JOIN project p ON p.id = fpr.project_id
-            WHERE fpr.enabled = 1
-            """
-        ).fetchall()
-    matches = [dict(row) for row in rows if _target_matches_rule(target, dict(row))]
+    matches = [row for row in _enabled_folder_rules() if _target_matches_rule(target, row)]
     if not matches:
         return None
-    return max(matches, key=lambda row: len(row["normalized_folder_key"] or ""))
+    return dict(max(matches, key=lambda row: len(row["normalized_folder_key"] or "")))
 
 
 def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:

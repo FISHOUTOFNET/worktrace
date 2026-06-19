@@ -14,8 +14,9 @@ from .settings_service import get_int_setting
 SHORT_CONTEXT_MERGE_SECONDS = 5 * 60
 
 
-def get_project_sessions_by_date(date: str, include_hidden: bool = True) -> list[dict]:
-    recompute_context_assignments_for_date(date)
+def get_project_sessions_by_date(date: str, include_hidden: bool = True, ensure_context: bool = True) -> list[dict]:
+    if ensure_context:
+        recompute_context_assignments_for_date(date)
     start = f"{date} 00:00:00"
     end = f"{date} 23:59:59"
     uncategorized_id = get_or_create_uncategorized_project()
@@ -51,10 +52,10 @@ def get_project_sessions_by_date(date: str, include_hidden: bool = True) -> list
         if _can_merge(current[-1], row):
             current.append(row)
         else:
-            sessions.append(_build_session(current))
+            sessions.append(_build_session(current, uncategorized_id))
             current = [row]
     if current:
-        sessions.append(_build_session(current))
+        sessions.append(_build_session(current, uncategorized_id))
     return sorted(sessions, key=_session_sort_key, reverse=True)
 
 
@@ -277,10 +278,10 @@ def _can_merge(previous: dict, current: dict) -> bool:
     return str(previous.get("report_project_key") or "") == str(current.get("report_project_key") or "")
 
 
-def _build_session(rows: list[dict]) -> dict:
+def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     first = rows[0]
     last = rows[-1]
-    project_id = int(first.get("report_project_id") or first.get("effective_project_id") or get_or_create_uncategorized_project())
+    project_id = int(first.get("report_project_id") or first.get("effective_project_id") or uncategorized_id)
     project_name = first.get("report_project_name") or first.get("display_project_name") or UNCATEGORIZED_PROJECT
     duration = sum(_display_duration(row) for row in rows)
     activity_ids = [int(row["id"]) for row in rows]
@@ -296,7 +297,7 @@ def _build_session(rows: list[dict]) -> dict:
         "event_count": len(rows),
         "status": first.get("status") if len({row.get("status") for row in rows}) == 1 else "mixed",
         "status_summary": status_summary,
-        "is_uncategorized": project_id == int(get_or_create_uncategorized_project()),
+        "is_uncategorized": project_id == int(uncategorized_id),
         "is_suggested_project": bool(first.get("report_is_suggested_project", first.get("is_suggested_project"))),
     }
 

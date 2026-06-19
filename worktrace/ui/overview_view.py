@@ -10,7 +10,7 @@ from typing import Callable, Any
 import customtkinter as ctk
 
 from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
-from ..exports.markdown_exporter import format_current_duration, format_duration
+from ..formatters import format_current_duration, format_duration
 from ..services import export_service, statistics_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
@@ -30,12 +30,10 @@ class OverviewView(ctk.CTkFrame):
         self.open_timeline_callback = open_timeline_callback
         self.open_statistics_callback = open_statistics_callback
         self.scope_var = ctk.StringVar(value=TODAY_SCOPE)
-        self._current_activity_after_id: str | None = None
         self.kpi_value_labels: dict[str, ctk.CTkLabel] = {}
         self._recent_rows: dict[str, dict[str, Any]] = {}
         self._recent_empty = None
         self._build()
-        self._schedule_current_activity_tick()
 
     def _build(self) -> None:
         self.grid_columnconfigure(0, weight=1)
@@ -268,6 +266,9 @@ class OverviewView(ctk.CTkFrame):
         if self.open_statistics_callback is not None:
             self.open_statistics_callback()
 
+    def refresh_current_activity(self) -> None:
+        self.current_activity_label.configure(text=current_activity_text())
+
     def export_current_excel(self) -> None:
         start, end = self._scope_dates()
         export_dir = Path(get_setting("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
@@ -292,25 +293,12 @@ class OverviewView(ctk.CTkFrame):
             logging.exception("weekly markdown export failed")
             messagebox.showerror("导出失败", str(exc))
 
-    def _schedule_current_activity_tick(self) -> None:
-        self.current_activity_label.configure(text=current_activity_text())
-        self._current_activity_after_id = self.after(1000, self._schedule_current_activity_tick)
-
     def _bind_click(self, widget, command: Callable[[], None]) -> None:
         widget.bind("<Button-1>", lambda _event: command(), add="+")
         try:
             widget.configure(cursor="hand2")
         except Exception:
             pass
-
-    def destroy(self) -> None:
-        if self._current_activity_after_id is not None:
-            try:
-                self.after_cancel(self._current_activity_after_id)
-            except Exception:
-                pass
-            self._current_activity_after_id = None
-        super().destroy()
 
 
 def current_activity_text() -> str:

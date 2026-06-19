@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import ntpath
 import re
+import time
 
 from ..constants import STATUS_NORMAL
-from ..db import get_connection, now_str
+from ..db import get_connection, get_db_path, now_str
 from . import folder_rule_service
 from .resource_service import ensure_activity_resource
 
@@ -20,6 +21,42 @@ GENERIC_FILE_PROJECT_NAMES = {
     "桌面",
     "文档",
 }
+_KEYWORD_RULE_CACHE_TTL_SECONDS = 5.0
+_KEYWORD_RULE_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+
+def invalidate_keyword_rule_cache() -> None:
+    _KEYWORD_RULE_CACHE.pop(str(get_db_path().resolve()), None)
+
+
+def _enabled_keyword_rules(conn=None) -> list[dict]:
+    cache_key = str(get_db_path().resolve())
+    now = time.monotonic()
+    cached = _KEYWORD_RULE_CACHE.get(cache_key)
+    if cached is not None and cached[0] >= now:
+        return [dict(row) for row in cached[1]]
+    if conn is None:
+        with get_connection() as read_conn:
+            rows = read_conn.execute(
+                """
+                SELECT project_id, pattern
+                FROM project_rule
+                WHERE enabled = 1 AND rule_type = 'keyword'
+                ORDER BY created_at, id
+                """
+            ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT project_id, pattern
+            FROM project_rule
+            WHERE enabled = 1 AND rule_type = 'keyword'
+            ORDER BY created_at, id
+            """
+        ).fetchall()
+    rules = [{"project_id": int(row["project_id"]), "pattern": (row["pattern"] or "").strip().casefold()} for row in rows]
+    _KEYWORD_RULE_CACHE[cache_key] = (now + _KEYWORD_RULE_CACHE_TTL_SECONDS, rules)
+    return [dict(row) for row in rules]
 
 
 def assign_project_for_activity(activity_id: int) -> dict:
@@ -109,16 +146,8 @@ def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, st
             str(activity.get("window_title") or ""),
         ]
     ).casefold()
-    rows = conn.execute(
-        """
-        SELECT project_id, pattern
-        FROM project_rule
-        WHERE enabled = 1 AND rule_type = 'keyword'
-        ORDER BY created_at, id
-        """
-    ).fetchall()
-    for row in rows:
-        pattern = (row["pattern"] or "").strip().casefold()
+    for row in _enabled_keyword_rules(conn):
+        pattern = row["pattern"]
         if pattern and pattern in text:
             return int(row["project_id"]), "anchor_keyword", 80, None
 

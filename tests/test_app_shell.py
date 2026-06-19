@@ -23,6 +23,15 @@ class FakePage:
         self.refreshed += 1
 
 
+class FakeLivePage(FakePage):
+    def __init__(self):
+        super().__init__()
+        self.live_refreshed = 0
+
+    def refresh_current_activity(self):
+        self.live_refreshed += 1
+
+
 class FakeButton:
     def __init__(self):
         self.config = {}
@@ -62,6 +71,46 @@ def test_shell_show_page_raises_target_and_refreshes_once():
     assert not app.pages["overview"].grid_removed
     assert app.pages["timeline"].raised == 1
     assert app.pages["timeline"].refreshed == 1
+
+
+def test_shell_show_page_lazily_creates_and_reuses_target():
+    app = object.__new__(WorkTraceApp)
+    app.pages = {}
+    app.nav_buttons = {"overview": FakeButton(), "timeline": FakeButton()}
+    app.active_page = "overview"
+    created = []
+
+    def make_page():
+        created.append("timeline")
+        return FakePage()
+
+    app._page_factories = {"timeline": make_page}
+
+    WorkTraceApp.show_page(app, "timeline")
+    first_page = app.pages["timeline"]
+    WorkTraceApp.show_page(app, "timeline")
+
+    assert created == ["timeline"]
+    assert first_page.visible is True
+    assert first_page.raised == 2
+    assert first_page.refreshed == 2
+
+
+def test_shell_current_activity_tick_updates_only_active_page():
+    app = object.__new__(WorkTraceApp)
+    overview = FakeLivePage()
+    timeline = FakeLivePage()
+    app.pages = {"overview": overview, "timeline": timeline}
+    app.active_page = "overview"
+    scheduled = []
+    app.after = lambda delay, callback: scheduled.append((delay, callback))
+
+    WorkTraceApp._refresh_current_activity_status(app)
+
+    assert overview.live_refreshed == 1
+    assert timeline.live_refreshed == 0
+    assert scheduled[0][0] == 2000
+    assert scheduled[0][1].__func__ is WorkTraceApp._refresh_current_activity_status
 
 
 def test_shell_toggle_pause_updates_setting(temp_db):

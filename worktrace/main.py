@@ -7,8 +7,6 @@ import threading
 from . import config, db
 from .collector.collector import run_collector
 from .collector.single_instance import acquire_single_instance, release_single_instance
-from .platforms.fake_adapter import FakeAdapter
-from .platforms.windows_adapter import WindowsAdapter
 from .services import activity_service, recovery_service
 from .services.settings_service import set_setting
 from .ui.app import WorkTraceApp
@@ -25,7 +23,11 @@ def setup_logging(log_path) -> None:
 
 def choose_adapter():
     if sys.platform.startswith("win"):
+        from .platforms.windows_adapter import WindowsAdapter
+
         return WindowsAdapter()
+    from .platforms.fake_adapter import FakeAdapter
+
     return FakeAdapter()
 
 

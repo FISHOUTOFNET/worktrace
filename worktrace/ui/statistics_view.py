@@ -8,7 +8,7 @@ from typing import Any
 
 import customtkinter as ctk
 
-from ..exports.markdown_exporter import format_duration
+from ..formatters import format_duration
 from ..services import export_service, statistics_service
 from ..services.settings_service import get_setting
 from . import design

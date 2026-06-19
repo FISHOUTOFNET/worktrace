@@ -24,36 +24,11 @@ def recompute_context_assignments_for_date(date: str) -> None:
     carry_minutes = max(0, get_int_setting("context_carry_minutes", 15))
     uncategorized_id = _get_uncategorized_project_id()
 
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                a.*,
-                r.resource_role,
-                r.resource_type,
-                r.display_name AS resource_display_name,
-                apa.project_id AS assignment_project_id,
-                apa.source AS assignment_source,
-                apa.is_manual AS assignment_is_manual
-            FROM activity_log a
-            LEFT JOIN resource r ON r.id = a.resource_id
-            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            WHERE a.is_deleted = 0
-              AND a.start_time BETWEEN ? AND ?
-            ORDER BY a.start_time ASC, a.id ASC
-            """,
-            (start, end),
-        ).fetchall()
-
-    for row in rows:
-        if row["resource_id"] is None:
-            ensure_activity_resource(int(row["id"]))
-        if row["assignment_project_id"] is None:
-            assign_project_for_activity(int(row["id"]))
-
     rows = _load_rows(start, end)
-    _recompute_anchor_rows(rows)
-    rows = _load_rows(start, end)
+    if _ensure_resources_and_assignments(rows):
+        rows = _load_rows(start, end)
+    if _recompute_anchor_rows(rows):
+        rows = _load_rows(start, end)
 
     for index, row in enumerate(rows):
         if row["status"] != STATUS_NORMAL:
@@ -100,12 +75,38 @@ def _load_rows(start: str, end: str) -> list[dict]:
     return dict_rows(rows)
 
 
-def _recompute_anchor_rows(rows: list[dict]) -> None:
+def _ensure_resources_and_assignments(rows: list[dict]) -> bool:
+    changed = False
+    for row in rows:
+        if row["resource_id"] is None:
+            ensure_activity_resource(int(row["id"]))
+            changed = True
+        if row["assignment_project_id"] is None:
+            assign_project_for_activity(int(row["id"]))
+            changed = True
+    return changed
+
+
+def _recompute_anchor_rows(rows: list[dict]) -> bool:
+    changed = False
     for row in rows:
         if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
             if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
                 continue
-            assign_project_for_activity(int(row["id"]))
+            assignment = assign_project_for_activity(int(row["id"]))
+            if _assignment_changed(row, assignment):
+                changed = True
+    return changed
+
+
+def _assignment_changed(row: dict, assignment: dict) -> bool:
+    if not assignment:
+        return True
+    return not (
+        int(row.get("assignment_project_id") or 0) == int(assignment.get("project_id") or 0)
+        and str(row.get("assignment_source") or "") == str(assignment.get("source") or "")
+        and int(row.get("assignment_is_manual") or 0) == int(assignment.get("is_manual") or 0)
+    )
 
 
 def _infer_context_project(rows: list[dict], index: int, carry_minutes: int, uncategorized_id: int) -> int:

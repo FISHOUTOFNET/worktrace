@@ -5,8 +5,6 @@ import logging
 import ntpath
 from ctypes import wintypes
 
-import psutil
-
 from ..path_utils import (
     extract_file_path_from_title,
     looks_like_anchor_file_path,
@@ -27,6 +25,8 @@ class WindowsAdapter:
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
         process_name = ""
         app_name = ""
+        import psutil
+
         try:
             process = psutil.Process(pid)
             process_name = process.name()
@@ -146,6 +146,8 @@ def _resolve_open_file_path(pid: int | None, window_title: str | None) -> str | 
     title_file = extract_anchor_file_name(window_title)
     if not title_file:
         return None
+    import psutil
+
     try:
         paths = [item.path for item in psutil.Process(pid).open_files()]
     except (OSError, psutil.Error):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..db import dict_rows, get_connection, now_str
-from .project_inference_service import assign_project_for_activity
+from .project_inference_service import assign_project_for_activity, invalidate_keyword_rule_cache
 
 
 def create_rule(keyword: str, project_id: int) -> int:
@@ -17,7 +17,9 @@ def create_rule(keyword: str, project_id: int) -> int:
             """,
             (project_id, keyword, ts, ts),
         )
-        return int(cur.lastrowid)
+        rule_id = int(cur.lastrowid)
+    invalidate_keyword_rule_cache()
+    return rule_id
 
 
 def list_rules() -> list[dict]:
@@ -47,11 +49,13 @@ def set_rule_enabled(rule_id: int, enabled: bool) -> None:
             "UPDATE project_rule SET enabled = ?, updated_at = ? WHERE id = ?",
             (int(enabled), now_str(), rule_id),
         )
+    invalidate_keyword_rule_cache()
 
 
 def delete_rule(rule_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM project_rule WHERE id = ?", (rule_id,))
+    invalidate_keyword_rule_cache()
 
 
 def apply_rules_to_activity(activity_id: int) -> None:

@@ -2,6 +2,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+from worktrace.formatters import format_current_duration as new_format_current_duration
+from worktrace.formatters import format_duration as new_format_duration
 from worktrace.exports.markdown_exporter import format_current_duration, format_duration
 from worktrace.services import activity_service, export_service
 
@@ -17,6 +19,11 @@ def test_format_duration_hhmmss_output():
 def test_format_current_duration_keeps_seconds():
     assert format_current_duration(0) == "00:00:00"
     assert format_current_duration(65) == "00:01:05"
+
+
+def test_markdown_exporter_reexports_lightweight_formatters():
+    assert format_duration is new_format_duration
+    assert format_current_duration is new_format_current_duration
 
 
 def test_excel_export_file_creation(temp_db, tmp_path):

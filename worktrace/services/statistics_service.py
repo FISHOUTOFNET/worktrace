@@ -12,26 +12,35 @@ def _range_bounds(start_date: str, end_date: str) -> tuple[str, str]:
     return f"{start_date} 00:00:00", f"{end_date} 23:59:59"
 
 
-def _sum_duration(where: str, params: tuple = ()) -> int:
-    with get_connection() as conn:
-        row = conn.execute(
-            f"SELECT COALESCE(SUM(duration_seconds), 0) AS total FROM activity_log WHERE {where}",
-            params,
-        ).fetchone()
-    return int(row["total"] or 0)
-
-
 def get_summary(start_date: str, end_date: str) -> dict:
     _ensure_context_range(start_date, end_date)
     start, end = _range_bounds(start_date, end_date)
-    base = "is_deleted = 0 AND is_hidden = 0 AND start_time BETWEEN ? AND ?"
-    params = (start, end)
-    total = _sum_duration(base, params)
-    effective = _sum_duration(base + " AND status = ?", params + (STATUS_NORMAL,))
-    idle = _sum_duration(base + " AND status = ?", params + (STATUS_IDLE,))
-    paused = _sum_duration(base + " AND status = ?", params + (STATUS_PAUSED,))
-    excluded = _sum_duration(base + " AND status = ?", params + (STATUS_EXCLUDED,))
-    project_stats = get_project_stats(start_date, end_date)
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(COALESCE(duration_seconds, 0)), 0) AS total_duration,
+                COALESCE(SUM(CASE WHEN status = ? THEN COALESCE(duration_seconds, 0) ELSE 0 END), 0)
+                    AS effective_duration,
+                COALESCE(SUM(CASE WHEN status = ? THEN COALESCE(duration_seconds, 0) ELSE 0 END), 0)
+                    AS idle_duration,
+                COALESCE(SUM(CASE WHEN status = ? THEN COALESCE(duration_seconds, 0) ELSE 0 END), 0)
+                    AS paused_duration,
+                COALESCE(SUM(CASE WHEN status = ? THEN COALESCE(duration_seconds, 0) ELSE 0 END), 0)
+                    AS excluded_duration
+            FROM activity_log
+            WHERE is_deleted = 0
+              AND is_hidden = 0
+              AND start_time BETWEEN ? AND ?
+            """,
+            (STATUS_NORMAL, STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, start, end),
+        ).fetchone()
+    total = int(row["total_duration"] or 0)
+    effective = int(row["effective_duration"] or 0)
+    idle = int(row["idle_duration"] or 0)
+    paused = int(row["paused_duration"] or 0)
+    excluded = int(row["excluded_duration"] or 0)
+    project_stats = get_project_stats(start_date, end_date, ensure_context=False)
     uncategorized = sum(
         int(row["total_duration"])
         for row in project_stats
@@ -53,12 +62,18 @@ def get_summary(start_date: str, end_date: str) -> dict:
     }
 
 
-def get_project_stats(start_date: str, end_date: str) -> list[dict]:
+def get_project_stats(start_date: str, end_date: str, ensure_context: bool = True) -> list[dict]:
+    if ensure_context:
+        _ensure_context_range(start_date, end_date)
     groups: dict[str, dict] = {}
     current = date.fromisoformat(start_date)
     final = date.fromisoformat(end_date)
     while current <= final:
-        for session in timeline_service.get_project_sessions_by_date(current.isoformat(), include_hidden=False):
+        for session in timeline_service.get_project_sessions_by_date(
+            current.isoformat(),
+            include_hidden=False,
+            ensure_context=False,
+        ):
             if session["status"] not in {STATUS_NORMAL, "mixed"}:
                 continue
             project = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
