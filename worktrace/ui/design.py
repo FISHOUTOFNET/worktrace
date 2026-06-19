@@ -121,13 +121,37 @@ def option_menu(master, **kwargs) -> ctk.CTkOptionMenu:
     kwargs.setdefault("dropdown_font", FONT_BODY)
     kwargs.setdefault("height", 34)
     kwargs.setdefault("corner_radius", RADIUS_SM)
+    kwargs.setdefault("fg_color", CARD_SUBTLE_BG)
+    kwargs.setdefault("button_color", NEUTRAL_SOFT)
+    kwargs.setdefault("button_hover_color", ("#cbd5e1", "#475569"))
+    kwargs.setdefault("dropdown_fg_color", CARD_BG)
+    kwargs.setdefault("dropdown_hover_color", ACCENT_SOFT)
+    kwargs.setdefault("dropdown_text_color", TEXT)
+    kwargs.setdefault("text_color", TEXT)
     return ctk.CTkOptionMenu(master, **kwargs)
 
 
 def checkbox(master, **kwargs) -> ctk.CTkCheckBox:
     kwargs.setdefault("font", FONT_BODY)
     kwargs.setdefault("text_color", TEXT)
+    kwargs.setdefault("fg_color", ACCENT)
+    kwargs.setdefault("hover_color", ACCENT_HOVER)
+    kwargs.setdefault("border_color", BORDER)
     return ctk.CTkCheckBox(master, **kwargs)
+
+
+def segmented_button(master, **kwargs) -> ctk.CTkSegmentedButton:
+    kwargs.setdefault("font", FONT_BODY_STRONG)
+    kwargs.setdefault("height", 34)
+    kwargs.setdefault("corner_radius", RADIUS_SM)
+    kwargs.setdefault("fg_color", NEUTRAL_SOFT)
+    kwargs.setdefault("selected_color", ACCENT)
+    kwargs.setdefault("selected_hover_color", ACCENT_HOVER)
+    kwargs.setdefault("unselected_color", NEUTRAL_SOFT)
+    kwargs.setdefault("unselected_hover_color", ("#cbd5e1", "#475569"))
+    kwargs.setdefault("text_color", "#ffffff")
+    kwargs.setdefault("text_color_disabled", MUTED_TEXT)
+    return ctk.CTkSegmentedButton(master, **kwargs)
 
 
 def color(value) -> str:

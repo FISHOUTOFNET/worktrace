@@ -24,8 +24,8 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
     while not stop_event.is_set():
         try:
             now = now_str()
-            idle_threshold_minutes = get_int_setting("idle_threshold_minutes", 5)
-            if last_loop_time and recovery_service.detect_time_jump(last_loop_time, now, idle_threshold_minutes):
+            idle_threshold_seconds = get_int_setting("idle_threshold_seconds", 300)
+            if last_loop_time and recovery_service.detect_time_jump(last_loop_time, now, idle_threshold_seconds):
                 machine.reset_for_time_jump(last_loop_time)
 
             heartbeat_counter += 1
@@ -48,7 +48,7 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
 
             active_window = adapter.get_active_window()
             idle_seconds = adapter.get_idle_seconds()
-            idle_threshold = idle_threshold_minutes * 60
+            idle_threshold = max(1, idle_threshold_seconds)
 
             if idle_seconds >= idle_threshold:
                 machine.transition_to("idle", at_time=now)

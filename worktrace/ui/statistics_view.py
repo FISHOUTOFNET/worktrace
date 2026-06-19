@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 from datetime import date
 from pathlib import Path
+from tkinter import messagebox
+from typing import Any
 
 import customtkinter as ctk
-from tkinter import messagebox
 
 from ..exports.markdown_exporter import format_duration
 from ..services import export_service, statistics_service
@@ -19,6 +20,9 @@ class StatisticsView(ctk.CTkFrame):
         today = date.today().isoformat()
         self.start_var = ctk.StringVar(value=today)
         self.end_var = ctk.StringVar(value=today)
+        self._summary_labels: dict[str, ctk.CTkLabel] = {}
+        self._row_widgets: dict[str, dict[str, Any]] = {}
+        self.empty_label = None
         self._build()
 
     def _build(self) -> None:
@@ -44,7 +48,7 @@ class StatisticsView(ctk.CTkFrame):
         design.button(controls, text="Excel", variant="subtle", width=76, command=self.export_excel).pack(
             side="left", padx=(0, 6)
         )
-        design.button(controls, text="Markdown", variant="ghost", width=104, command=self.export_markdown).pack(side="left")
+        design.button(controls, text="Markdown", variant="subtle", width=104, command=self.export_markdown).pack(side="left")
 
         self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.body.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
@@ -54,65 +58,103 @@ class StatisticsView(ctk.CTkFrame):
         self.summary_frame.grid(row=0, column=0, sticky="ew")
         for col in range(5):
             self.summary_frame.grid_columnconfigure(col, weight=1, uniform="summary")
+        self._build_summary_cards()
 
         self.table = design.card(self.body)
         self.table.grid(row=1, column=0, sticky="ew", pady=(14, 0))
         self.table.grid_columnconfigure(0, weight=1)
+        header_row = ctk.CTkFrame(self.table, fg_color="transparent")
+        header_row.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
+        header_row.grid_columnconfigure(0, weight=1)
+        design.label(header_row, text="项目统计", variant="section").grid(row=0, column=0, sticky="w")
+        self.rows_frame = ctk.CTkFrame(self.table, fg_color="transparent")
+        self.rows_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self.rows_frame.grid_columnconfigure(0, weight=1)
+
+    def _build_summary_cards(self) -> None:
+        for index, key in enumerate(["total", "effective", "idle", "excluded", "uncategorized"]):
+            titles = {
+                "total": "总时长",
+                "effective": "有效",
+                "idle": "空闲",
+                "excluded": "排除",
+                "uncategorized": "未归类",
+            }
+            card = design.card(self.summary_frame)
+            card.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 10, 0))
+            design.label(card, text=titles[key], variant="caption_strong").pack(anchor="w", padx=16, pady=(14, 2))
+            value = design.label(card, text="00:00:00", variant="subtitle")
+            value.pack(anchor="w", padx=16, pady=(0, 14))
+            self._summary_labels[key] = value
 
     def refresh(self) -> None:
         if not self._validate_dates():
             return
         summary = statistics_service.get_summary(self.start_var.get(), self.end_var.get())
-        _clear_children(self.summary_frame)
-        items = [
-            ("总时长", summary["total_duration"]),
-            ("有效", summary["effective_duration"]),
-            ("空闲", summary["idle_duration"]),
-            ("排除", summary["excluded_duration"]),
-            ("未归类", summary["uncategorized_duration"]),
-        ]
-        for index, (title, seconds) in enumerate(items):
-            card = design.card(self.summary_frame)
-            card.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 10, 0))
-            design.label(card, text=title, variant="caption_strong").pack(anchor="w", padx=16, pady=(14, 2))
-            design.label(card, text=format_duration(seconds), variant="subtitle").pack(anchor="w", padx=16, pady=(0, 14))
+        values = {
+            "total": summary["total_duration"],
+            "effective": summary["effective_duration"],
+            "idle": summary["idle_duration"],
+            "excluded": summary["excluded_duration"],
+            "uncategorized": summary["uncategorized_duration"],
+        }
+        for key, seconds in values.items():
+            self._summary_labels[key].configure(text=format_duration(seconds))
 
-        _clear_children(self.table)
-        header = ctk.CTkFrame(self.table, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
-        header.grid_columnconfigure(0, weight=1)
-        design.label(header, text="项目统计", variant="section").grid(row=0, column=0, sticky="w")
         total = max(1, int(summary["effective_duration"] or summary["total_duration"] or 1))
         rows = statistics_service.get_project_stats(self.start_var.get(), self.end_var.get())
-        if not rows:
-            design.label(self.table, text="当前范围暂无记录", variant="caption").grid(
-                row=1, column=0, sticky="w", padx=18, pady=(0, 18)
-            )
-            return
-        rows_frame = ctk.CTkFrame(self.table, fg_color="transparent")
-        rows_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
-        rows_frame.grid_columnconfigure(0, weight=1)
-        for row_index, row in enumerate(rows):
-            self._project_stat_row(rows_frame, row_index, row, total)
+        self._sync_project_rows(rows, total)
 
-    def _project_stat_row(self, parent, row_index: int, row: dict, total: int) -> None:
-        frame = ctk.CTkFrame(parent, fg_color=design.CARD_SUBTLE_BG, corner_radius=design.RADIUS_MD)
-        frame.grid(row=row_index, column=0, sticky="ew", padx=6, pady=5)
+    def _sync_project_rows(self, rows: list[dict], total: int) -> None:
+        active_keys = {str(row["project"]) for row in rows}
+        for key in list(self._row_widgets):
+            if key not in active_keys:
+                self._row_widgets[key]["frame"].destroy()
+                del self._row_widgets[key]
+        if not rows:
+            self._show_empty()
+            return
+        self._hide_empty()
+        for row_index, row in enumerate(rows):
+            key = str(row["project"])
+            widgets = self._row_widgets.get(key)
+            if widgets is None:
+                widgets = self._create_project_stat_row()
+                self._row_widgets[key] = widgets
+            widgets["frame"].grid(row=row_index, column=0, sticky="ew", padx=6, pady=5)
+            self._update_project_stat_row(widgets, row, total)
+
+    def _create_project_stat_row(self) -> dict[str, Any]:
+        frame = ctk.CTkFrame(self.rows_frame, fg_color=design.CARD_SUBTLE_BG, corner_radius=design.RADIUS_MD)
         frame.grid_columnconfigure(1, weight=1)
-        duration = int(row["total_duration"] or 0)
-        percent = min(1.0, max(0.0, duration / total))
-        design.label(frame, text=str(row["project"]), variant="strong", anchor="w").grid(
-            row=0, column=0, sticky="w", padx=14, pady=(10, 2)
-        )
-        design.label(frame, text=f"{row['record_count']} 条记录", variant="caption").grid(
-            row=1, column=0, sticky="w", padx=14, pady=(0, 10)
-        )
+        name = design.label(frame, text="", variant="strong", anchor="w")
+        name.grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
+        count = design.label(frame, text="", variant="caption")
+        count.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
         bar = ctk.CTkProgressBar(frame, height=8, progress_color=design.ACCENT)
         bar.grid(row=0, column=1, rowspan=2, sticky="ew", padx=14)
-        bar.set(percent)
-        design.label(frame, text=format_duration(duration), variant="strong", width=72).grid(
-            row=0, column=2, rowspan=2, sticky="e", padx=(0, 14)
-        )
+        duration = design.label(frame, text="", variant="strong", width=72)
+        duration.grid(row=0, column=2, rowspan=2, sticky="e", padx=(0, 14))
+        return {"frame": frame, "name": name, "count": count, "bar": bar, "duration": duration}
+
+    def _update_project_stat_row(self, widgets: dict[str, Any], row: dict, total: int) -> None:
+        duration = int(row["total_duration"] or 0)
+        percent = min(1.0, max(0.0, duration / total))
+        widgets["name"].configure(text=str(row["project"]))
+        widgets["count"].configure(text=f"{row['record_count']} 条记录")
+        widgets["bar"].set(percent)
+        widgets["duration"].configure(text=format_duration(duration))
+
+    def _show_empty(self) -> None:
+        for widgets in self._row_widgets.values():
+            widgets["frame"].grid_remove()
+        if self.empty_label is None:
+            self.empty_label = design.label(self.rows_frame, text="当前范围暂无记录", variant="caption")
+        self.empty_label.grid(row=0, column=0, sticky="w", padx=6, pady=(0, 10))
+
+    def _hide_empty(self) -> None:
+        if self.empty_label is not None:
+            self.empty_label.grid_remove()
 
     def _export_path(self, suffix: str) -> Path:
         export_dir = Path(get_setting("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
@@ -147,8 +189,3 @@ class StatisticsView(ctk.CTkFrame):
         except Exception as exc:
             logging.exception("markdown export failed")
             messagebox.showerror("导出失败", str(exc))
-
-
-def _clear_children(widget) -> None:
-    for child in widget.winfo_children():
-        child.destroy()

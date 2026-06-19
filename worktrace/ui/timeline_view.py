@@ -3,16 +3,17 @@ from __future__ import annotations
 import json
 import time
 from datetime import date, datetime
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 from typing import Any
 
 import customtkinter as ctk
 
 from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
 from ..exports.markdown_exporter import format_current_duration, format_duration
-from ..services import activity_service, folder_rule_service, project_service, timeline_service
-from ..services.settings_service import get_bool_setting, get_setting, set_setting
+from ..services import activity_service, project_service, timeline_service
+from ..services.settings_service import get_bool_setting, get_setting
 from . import design
+from .project_rule_dialog import open_project_rule_dialog
 
 
 UI_FONT = design.FONT_BODY
@@ -66,7 +67,7 @@ class TimelineView(ctk.CTkFrame):
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.content_frame.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
         self.content_frame.grid_rowconfigure(0, weight=1)
-        self.content_frame.grid_columnconfigure(0, weight=0, minsize=410)
+        self.content_frame.grid_columnconfigure(0, weight=0, minsize=360)
         self.content_frame.grid_columnconfigure(1, weight=1)
 
         top = self.toolbar_frame
@@ -86,8 +87,6 @@ class TimelineView(ctk.CTkFrame):
         controls.grid(row=0, column=1, sticky="e")
         self.status_label = self._label(controls, text="采集器未运行", text_color=design.MUTED_TEXT)
         self.status_label.pack(side="left", padx=(0, 8))
-        self.pause_button = self._button(controls, text="暂停", width=78, command=self.toggle_pause, fg_color=design.NEUTRAL_SOFT, text_color=design.TEXT)
-        self.pause_button.pack(side="left", padx=(0, 8))
         self._label(controls, text="日期", text_color=design.MUTED_TEXT).pack(side="left", padx=(4, 4))
         self.date_entry = self._entry(controls, textvariable=self.date_var, width=120)
         self.date_entry.pack(side="left")
@@ -152,16 +151,16 @@ class TimelineView(ctk.CTkFrame):
         self.detail_hint_label.pack(anchor="w", pady=(2, 0))
 
         actions = ctk.CTkFrame(header, fg_color="transparent")
-        actions.grid(row=0, column=1, sticky="e")
-        self.folder_rule_button = self._button(
+        actions.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        self.project_rule_button = self._button(
             actions,
-            text="新建文件夹规则",
-            width=130,
-            command=self._open_folder_rule_dialog,
+            text="新建项目/规则",
+            width=132,
+            command=self._open_project_rule_dialog,
             fg_color=design.NEUTRAL_SOFT,
             text_color=design.TEXT,
         )
-        self.folder_rule_button.pack(side="left", padx=(0, 8))
+        self.project_rule_button.pack(side="left", padx=(0, 10))
         self._label(actions, text="整体项目", text_color=design.MUTED_TEXT).pack(side="left", padx=(0, 4))
         self.session_project_menu = self._option_menu(
             actions,
@@ -177,15 +176,6 @@ class TimelineView(ctk.CTkFrame):
             command=self._save_session_project,
         )
         self.save_session_project_button.pack(side="left", padx=(0, 6))
-        self.create_session_project_button = self._button(
-            actions,
-            text="新建项目",
-            width=86,
-            command=self._create_project_for_session,
-            fg_color=design.NEUTRAL_SOFT,
-            text_color=design.TEXT,
-        )
-        self.create_session_project_button.pack(side="left", padx=(0, 6))
         self.toggle_detail_button = self._button(
             actions,
             text="时间顺序",
@@ -194,7 +184,7 @@ class TimelineView(ctk.CTkFrame):
             fg_color=design.NEUTRAL_SOFT,
             text_color=design.TEXT,
         )
-        self.toggle_detail_button.pack(side="left")
+        self.toggle_detail_button.pack(side="right")
 
         self.detail_container = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
         self.detail_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -292,28 +282,23 @@ class TimelineView(ctk.CTkFrame):
             command=lambda: self._save_resource_project(True),
         )
         self.remember_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=6)
-        self._label(self.resource_editor, text="新建项目", text_color=design.MUTED_TEXT).grid(row=2, column=0, sticky="w", padx=(14, 4), pady=(0, 8))
-        self.new_project_entry = self._entry(
+        self._label(self.resource_editor, text="新建项目/规则", text_color=design.MUTED_TEXT).grid(row=2, column=0, sticky="w", padx=(14, 4), pady=(0, 8))
+        self.resource_rule_button = self._button(
             self.resource_editor,
-            textvariable=self.new_project_var,
-            width=180,
+            text="新建项目/规则",
+            width=132,
+            command=self._open_resource_project_rule_dialog,
+            fg_color=design.NEUTRAL_SOFT,
+            text_color=design.TEXT,
         )
-        self.new_project_entry.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
-        self.create_project_button = self._button(
-            self.resource_editor,
-            text="创建",
-            width=72,
-            command=self._create_project_from_timeline,
-        )
-        self.create_project_button.grid(row=2, column=2, sticky="w", padx=(0, 8), pady=(0, 8))
+        self.resource_rule_button.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
         self.resource_hint_label = self._label(self.resource_editor, text="", text_color=design.MUTED_TEXT)
         self.resource_hint_label.grid(row=3, column=0, columnspan=5, sticky="w", padx=14, pady=(0, 14))
         self._resource_editor_widgets = [
             self.resource_project_menu,
             self.current_session_button,
             self.remember_button,
-            self.new_project_entry,
-            self.create_project_button,
+            self.resource_rule_button,
             self.close_resource_button,
         ]
         for widget in self._resource_editor_widgets:
@@ -619,106 +604,44 @@ class TimelineView(ctk.CTkFrame):
             lines.append(f"- 另有 {len(rows) - limit} 个文件未显示")
         return lines
 
-    def _create_project_from_timeline(self) -> None:
-        self._touch_resource_editor()
-        name = self.new_project_var.get().strip()
-        if not name:
-            self.resource_hint_label.configure(text="请输入项目名称")
-            return
-        self._refresh_projects()
-        if name in self._project_by_name:
-            self.resource_project_var.set(name)
-            self.resource_hint_label.configure(text=f"项目已存在，已选中：{name}")
-            return
-        try:
-            project_service.create_project(name)
-        except Exception as exc:
-            self._refresh_projects()
-            if name in self._project_by_name:
-                self.resource_project_var.set(name)
-                self.resource_hint_label.configure(text=f"项目已存在，已选中：{name}")
-                return
-            self.resource_hint_label.configure(text=f"创建失败：{exc}")
-            return
-        self._refresh_projects()
-        self.resource_project_var.set(name)
-        self.new_project_var.set("")
-        self.resource_hint_label.configure(text=f"已创建项目：{name}")
-
-    def _create_project_for_session(self) -> None:
-        name = ctk.CTkInputDialog(text="项目名称", title="新建项目").get_input()
-        if not name:
-            return
-        name = name.strip()
-        if not name:
-            return
-        self._refresh_projects()
-        if name not in self._project_by_name:
-            try:
-                project_service.create_project(name)
-            except Exception as exc:
-                self._refresh_projects()
-                if name not in self._project_by_name:
-                    messagebox.showerror("创建失败", str(exc))
-                    return
-        self._refresh_projects()
-        self.session_project_var.set(name)
-
-    def _open_folder_rule_dialog(self) -> None:
-        projects = project_service.list_user_projects()
-        if not projects:
-            messagebox.showerror("无法新增", "请先创建项目")
-            return
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("新建文件夹规则")
-        dialog.geometry("620x330")
-        dialog.transient(self)
-        dialog.grab_set()
-        dialog.configure(fg_color=design.WINDOW_BG)
-        folder_var = ctk.StringVar(value=self._default_session_folder())
-        selected_name = ctk.StringVar(value=projects[0]["name"])
-        recursive_var = ctk.BooleanVar(value=True)
-
-        content = design.card(dialog)
-        content.pack(fill="both", expand=True, padx=16, pady=16)
-        content.grid_columnconfigure(0, weight=1)
-        design.label(content, text="新建文件夹规则", variant="section").grid(
-            row=0, column=0, sticky="w", padx=16, pady=(16, 8)
+    def _open_project_rule_dialog(self) -> None:
+        project_name = self.session_project_var.get()
+        if project_name == UNCATEGORIZED_PROJECT:
+            project_name = None
+        open_project_rule_dialog(
+            self,
+            initial_type="folder",
+            initial_target=self._default_session_folder(),
+            initial_project_name=project_name,
+            on_saved=self._after_project_rule_saved,
         )
-        design.label(content, text="文件夹", variant="strong").grid(row=1, column=0, sticky="w", padx=16, pady=(0, 4))
-        folder_row = ctk.CTkFrame(content, fg_color="transparent")
-        folder_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 10))
-        folder_row.grid_columnconfigure(0, weight=1)
-        folder_entry = design.entry(folder_row, textvariable=folder_var, width=430)
-        folder_entry.pack(side="left", fill="x", expand=True)
 
-        def browse_folder() -> None:
-            folder = filedialog.askdirectory(title="选择要绑定项目的文件夹")
-            if folder:
-                folder_var.set(folder)
+    def _open_resource_project_rule_dialog(self) -> None:
+        self._touch_resource_editor()
+        resource = self._resources_by_id.get(self._selected_resource_id or 0)
+        target = ""
+        if resource:
+            target = str(resource.get("full_path") or resource.get("display_name") or "")
+        project_name = self.resource_project_var.get()
+        if project_name == UNCATEGORIZED_PROJECT:
+            project_name = None
+        open_project_rule_dialog(
+            self,
+            initial_type="file",
+            initial_target=target,
+            initial_project_name=project_name,
+            on_saved=self._after_project_rule_saved,
+        )
 
-        design.button(folder_row, text="浏览", variant="ghost", width=72, command=browse_folder).pack(side="left", padx=(8, 0))
-        design.label(content, text="归属项目", variant="strong").grid(row=3, column=0, sticky="w", padx=16, pady=(0, 4))
-        design.option_menu(content, values=[project["name"] for project in projects], variable=selected_name, width=300).grid(row=4, column=0, sticky="w", padx=16, pady=(0, 10))
-        design.checkbox(content, text="包含子文件夹", variable=recursive_var).grid(row=5, column=0, sticky="w", padx=16, pady=(0, 12))
-
-        actions = ctk.CTkFrame(content, fg_color="transparent")
-        actions.grid(row=6, column=0, sticky="e", padx=16, pady=(0, 16))
-
-        def save_rule() -> None:
-            project = project_service.get_project_by_name(selected_name.get())
-            if not project:
-                messagebox.showerror("保存失败", "请选择有效项目")
-                return
-            folder = folder_var.get().strip()
-            if not folder:
-                messagebox.showerror("保存失败", "请选择文件夹")
-                return
-            dialog.destroy()
-            self._save_folder_rule(folder, int(project["id"]), bool(recursive_var.get()))
-
-        design.button(actions, text="取消", variant="ghost", width=72, command=dialog.destroy).pack(side="right", padx=(8, 0))
-        design.button(actions, text="保存", width=72, command=save_rule).pack(side="right")
+    def _after_project_rule_saved(self, result: dict) -> None:
+        project_name = str(result.get("project_name") or "")
+        self._refresh_projects()
+        if project_name in self._project_by_name:
+            self.session_project_var.set(project_name)
+            self.resource_project_var.set(project_name)
+            self.activity_project_var.set(project_name)
+            self.resource_hint_label.configure(text=f"已保存新建项目/规则：{project_name}")
+        self.refresh()
 
     def _default_session_folder(self) -> str:
         session = self._sessions_by_id.get(self._selected_session_id or "")
@@ -726,25 +649,6 @@ class TimelineView(ctk.CTkFrame):
             return ""
         folders = timeline_service.get_session_anchor_folders(session["activity_ids"])
         return folders[0] if folders else ""
-
-    def _save_folder_rule(self, folder: str, project_id: int, recursive: bool) -> None:
-        preview = folder_rule_service.preview_folder_rule_conflicts(folder, project_id)
-        if any(int(value) for value in preview.values()):
-            message = (
-                f"下级已有不同项目的文件夹规则：{preview['child_folder_rule_conflicts']}\n"
-                f"具体文件已有不同项目：{preview['file_default_project_conflicts']}\n"
-                f"历史 activity 属于其他项目：{preview['other_project_activity_count']}\n"
-                f"手动指定且 safe 回填不会覆盖：{preview['manual_activity_count']}\n\n"
-                "将保留下级独立设置，且默认不自动回填历史。是否继续保存？"
-            )
-            if not messagebox.askyesno("规则冲突预览", message):
-                return
-        rule_id = folder_rule_service.create_or_update_folder_rule(folder, project_id, recursive=recursive)
-        if messagebox.askyesno("已保存", "文件夹规则已保存。是否执行 safe 历史回填？"):
-            result = folder_rule_service.backfill_folder_rule(rule_id, mode="safe")
-            messagebox.showinfo("回填完成", f"已更新 {result['updated_activity_count']} 条记录")
-        self.refresh()
-
     def _load_activity_editor(self, activity_id: int) -> None:
         row = self._details_by_id.get(activity_id)
         if not row:
@@ -805,7 +709,6 @@ class TimelineView(ctk.CTkFrame):
         if status == "error":
             label = "状态异常"
         self.status_label.configure(text=label)
-        self.pause_button.configure(text="继续" if paused else "暂停")
         self.current_activity_label.configure(text=self._current_activity_text())
 
     def _schedule_current_activity_tick(self) -> None:
@@ -891,8 +794,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _checkbox(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
-        kwargs.setdefault("text_color", design.TEXT)
-        return ctk.CTkCheckBox(master, **kwargs)
+        return design.checkbox(master, **kwargs)
 
     def _entry(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
@@ -904,9 +806,7 @@ class TimelineView(ctk.CTkFrame):
     def _option_menu(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
         kwargs.setdefault("dropdown_font", UI_FONT)
-        kwargs.setdefault("height", 34)
-        kwargs.setdefault("corner_radius", design.RADIUS_SM)
-        return ctk.CTkOptionMenu(master, **kwargs)
+        return design.option_menu(master, **kwargs)
 
     def _make_tree_frame(self, parent):
         frame = ctk.CTkFrame(parent, fg_color=design.PANEL_ALT_BG, corner_radius=design.RADIUS_MD)
@@ -926,7 +826,8 @@ class TimelineView(ctk.CTkFrame):
             if column in {"summary", "resource", "window", "note"}:
                 minwidth = max(minwidth, 120)
             tree.heading(column, text=headings[column])
-            tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=False)
+            stretch = column in {"summary", "project", "resource", "window", "note"}
+            tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=stretch)
         vertical_scrollbar = ttk.Scrollbar(master, orient="vertical", command=tree.yview)
         horizontal_scrollbar = ttk.Scrollbar(master, orient="horizontal", command=tree.xview)
         tree.configure(yscrollcommand=vertical_scrollbar.set, xscrollcommand=horizontal_scrollbar.set)
@@ -1057,10 +958,6 @@ class TimelineView(ctk.CTkFrame):
         if hasattr(self, "detail_tree"):
             self.detail_tree.selection_remove(self.detail_tree.selection())
         self._show_activity_editor(False)
-
-    def toggle_pause(self) -> None:
-        set_setting("user_paused", "false" if get_bool_setting("user_paused", False) else "true")
-        self.refresh()
 
 
 def _current_elapsed_seconds(snapshot: dict) -> int:

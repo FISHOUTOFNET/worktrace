@@ -62,7 +62,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     ts = now_str()
     defaults = {
         "poll_interval_seconds": "3",
-        "idle_threshold_minutes": "5",
+        "idle_threshold_seconds": "300",
         "min_activity_seconds": "10",
         "current_activity_snapshot": "",
         "pending_short_seconds": "0",
@@ -86,7 +86,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             (key, value, ts),
         )
     conn.execute(
-        "DELETE FROM settings WHERE key IN ('min_history_seconds', 'min_idle_segment_seconds')"
+        "DELETE FROM settings WHERE key IN ('min_history_seconds', 'min_idle_segment_seconds', 'idle_threshold_minutes')"
     )
     conn.execute(
         """

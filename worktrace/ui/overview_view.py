@@ -15,6 +15,9 @@ from ..services import export_service, statistics_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
 
+TODAY_SCOPE = "今日概览"
+WEEK_SCOPE = "每周概览"
+
 
 class OverviewView(ctk.CTkFrame):
     def __init__(
@@ -26,9 +29,11 @@ class OverviewView(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.open_timeline_callback = open_timeline_callback
         self.open_statistics_callback = open_statistics_callback
+        self.scope_var = ctk.StringVar(value=TODAY_SCOPE)
         self._current_activity_after_id: str | None = None
         self.kpi_value_labels: dict[str, ctk.CTkLabel] = {}
-        self._recent_signature: tuple[tuple[Any, ...], ...] | None = None
+        self._recent_rows: dict[str, dict[str, Any]] = {}
+        self._recent_empty = None
         self._build()
         self._schedule_current_activity_tick()
 
@@ -39,26 +44,35 @@ class OverviewView(ctk.CTkFrame):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=24, pady=(22, 12))
         header.grid_columnconfigure(0, weight=1)
-        design.label(header, text="今日概览", variant="title").grid(row=0, column=0, sticky="w")
-        design.label(
+        self.title_label = design.label(header, text=TODAY_SCOPE, variant="title")
+        self.title_label.grid(row=0, column=0, sticky="w")
+        self.subtitle_label = design.label(
             header,
             text="把今天的工作轨迹整理成可确认、可导出的工作记忆。",
             variant="caption",
-        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        )
+        self.subtitle_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
+
         action_row = ctk.CTkFrame(header, fg_color="transparent")
         action_row.grid(row=0, column=1, rowspan=2, sticky="e")
-        design.button(action_row, text="查看今日时间详情", command=lambda: self._open_timeline(False)).pack(
-            side="left", padx=(0, 8)
+        self.scope_switch = design.segmented_button(
+            action_row,
+            values=[TODAY_SCOPE, WEEK_SCOPE],
+            variable=self.scope_var,
+            command=lambda _value: self._switch_scope(),
+            width=180,
         )
+        self.scope_switch.pack(side="left", padx=(0, 8))
+        self.timeline_button = design.button(action_row, text="查看时间详情", command=lambda: self._open_timeline(False))
+        self.timeline_button.pack(side="left", padx=(0, 8))
         design.button(
             action_row,
             text="只看未归类",
             variant="subtle",
             command=lambda: self._open_timeline(True),
         ).pack(side="left", padx=(0, 8))
-        design.button(action_row, text="导出本周草稿", variant="ghost", command=self.export_weekly_markdown).pack(
-            side="left"
-        )
+        self.export_button = design.button(action_row, text="导出今日", variant="subtle", command=self.export_current_excel)
+        self.export_button.pack(side="left")
 
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
@@ -94,11 +108,12 @@ class OverviewView(ctk.CTkFrame):
         recent_header = ctk.CTkFrame(recent, fg_color="transparent")
         recent_header.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
         recent_header.grid_columnconfigure(0, weight=1)
-        design.label(recent_header, text="最近会话", variant="section").grid(row=0, column=0, sticky="w")
+        self.recent_title_label = design.label(recent_header, text="最近会话", variant="section")
+        self.recent_title_label.grid(row=0, column=0, sticky="w")
         design.button(
             recent_header,
             text="统计与导出",
-            variant="ghost",
+            variant="subtle",
             width=96,
             command=self._open_statistics,
         ).grid(row=0, column=1, sticky="e")
@@ -123,75 +138,118 @@ class OverviewView(ctk.CTkFrame):
             caption_label.pack(anchor="w", padx=16, pady=(2, 14))
             self.kpi_value_labels[key] = value_label
             if command is not None:
-                self._bind_click(card, command)
-                self._bind_click(title_label, command)
-                self._bind_click(value_label, command)
-                self._bind_click(caption_label, command)
+                for widget in (card, title_label, value_label, caption_label):
+                    self._bind_click(widget, command)
 
     def refresh(self) -> None:
-        today = date.today().isoformat()
-        summary = statistics_service.get_summary(today, today)
+        start, end = self._scope_dates()
+        summary = statistics_service.get_summary(start, end)
         self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
         self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
         self.kpi_value_labels["uncategorized"].configure(text=format_duration(summary["uncategorized_duration"]))
         self.current_activity_label.configure(text=current_activity_text())
-        self._refresh_recent_sessions(today)
+        self._sync_scope_labels()
+        self._refresh_recent_sessions(start, end)
 
-    def _refresh_recent_sessions(self, today: str) -> None:
-        sessions = timeline_service.get_project_sessions_by_date(today, include_hidden=False)[:8]
-        signature = tuple(
-            (
-                session.get("session_id"),
-                session.get("start_time"),
-                session.get("end_time"),
-                session.get("project_name"),
-                session.get("status_summary"),
-                session.get("duration_seconds"),
-            )
-            for session in sessions
-        )
-        if signature == self._recent_signature:
-            return
-        self._recent_signature = signature
-        _clear_children(self.recent_frame)
-        if not sessions:
-            empty = design.section(self.recent_frame, fg_color=design.CARD_SUBTLE_BG)
-            empty.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
-            design.label(empty, text="今天还没有可展示的工作会话。", variant="caption").pack(
-                anchor="w", padx=14, pady=12
-            )
+    def _switch_scope(self) -> None:
+        self._sync_scope_labels()
+        self.refresh()
+
+    def _sync_scope_labels(self) -> None:
+        if self.scope_var.get() == WEEK_SCOPE:
+            self.title_label.configure(text=WEEK_SCOPE)
+            self.subtitle_label.configure(text="把本周工作轨迹整理成可确认、可导出的工作记忆。")
+            self.export_button.configure(text="导出本周")
+        else:
+            self.title_label.configure(text=TODAY_SCOPE)
+            self.subtitle_label.configure(text="把今天的工作轨迹整理成可确认、可导出的工作记忆。")
+            self.export_button.configure(text="导出今日")
+
+    def _scope_dates(self) -> tuple[str, str]:
+        today = date.today()
+        if self.scope_var.get() == WEEK_SCOPE:
+            start = today - timedelta(days=today.weekday())
+            return start.isoformat(), today.isoformat()
+        return today.isoformat(), today.isoformat()
+
+    def _refresh_recent_sessions(self, start: str, end: str) -> None:
+        sessions = self._sessions_for_range(start, end)[:8]
+        active_ids = {str(session.get("session_id") or "") for session in sessions}
+        for session_id in list(self._recent_rows):
+            if session_id not in active_ids:
+                self._recent_rows[session_id]["row"].destroy()
+                del self._recent_rows[session_id]
+        if sessions:
+            self._hide_recent_empty()
+        else:
+            self._show_recent_empty()
             return
         for row_index, session in enumerate(sessions):
-            row = ctk.CTkFrame(self.recent_frame, fg_color="transparent")
-            row.grid(row=row_index, column=0, sticky="ew", padx=6, pady=3)
-            row.grid_columnconfigure(1, weight=1)
-            self._bind_click(
-                row,
-                lambda sid=str(session.get("session_id") or ""), target_date=today: self._open_timeline(
-                    False, session_id=sid, target_date=target_date
-                ),
+            session_id = str(session.get("session_id") or "")
+            widgets = self._recent_rows.get(session_id)
+            if widgets is None:
+                widgets = self._create_recent_row(session_id)
+                self._recent_rows[session_id] = widgets
+            widgets["row"].grid(row=row_index, column=0, sticky="ew", padx=6, pady=3)
+            widgets["session_id"] = session_id
+            widgets["target_date"] = str(session.get("start_time") or start)[:10] or start
+            widgets["time"].configure(text=_session_time(session, include_date=start != end))
+            widgets["title"].configure(text=str(session.get("project_name") or UNCATEGORIZED_PROJECT))
+            widgets["subtitle"].configure(text=str(session.get("status_summary") or "正常活动"))
+            widgets["duration"].configure(text=format_duration(session.get("duration_seconds") or 0))
+
+    def _sessions_for_range(self, start: str, end: str) -> list[dict]:
+        start_date = date.fromisoformat(start)
+        end_date = date.fromisoformat(end)
+        sessions: list[dict] = []
+        current = start_date
+        while current <= end_date:
+            sessions.extend(timeline_service.get_project_sessions_by_date(current.isoformat(), include_hidden=False))
+            current += timedelta(days=1)
+        return sorted(sessions, key=lambda session: str(session.get("start_time") or ""), reverse=True)
+
+    def _create_recent_row(self, session_id: str) -> dict[str, Any]:
+        row = ctk.CTkFrame(self.recent_frame, fg_color="transparent")
+        row.grid_columnconfigure(1, weight=1)
+        time_label = design.label(row, text="", variant="mono", width=112, anchor="w")
+        time_label.grid(row=0, column=0, sticky="w", padx=(8, 12), pady=8)
+        title_label = design.label(row, text="", variant="strong", anchor="w")
+        title_label.grid(row=0, column=1, sticky="w")
+        subtitle_label = design.label(row, text="", variant="caption", anchor="w")
+        subtitle_label.grid(row=1, column=1, sticky="w")
+        duration_label = design.label(row, text="", variant="strong")
+        duration_label.grid(row=0, column=2, rowspan=2, sticky="e", padx=(12, 8))
+        widgets = {
+            "row": row,
+            "time": time_label,
+            "title": title_label,
+            "subtitle": subtitle_label,
+            "duration": duration_label,
+            "session_id": session_id,
+            "target_date": date.today().isoformat(),
+        }
+        command = lambda item=widgets: self._open_timeline(
+            False,
+            session_id=str(item.get("session_id") or ""),
+            target_date=str(item.get("target_date") or date.today().isoformat()),
+        )
+        for widget in (row, time_label, title_label, subtitle_label, duration_label):
+            self._bind_click(widget, command)
+        return widgets
+
+    def _show_recent_empty(self) -> None:
+        for widgets in self._recent_rows.values():
+            widgets["row"].grid_remove()
+        if self._recent_empty is None:
+            self._recent_empty = design.section(self.recent_frame, fg_color=design.CARD_SUBTLE_BG)
+            design.label(self._recent_empty, text="当前范围还没有可展示的工作会话。", variant="caption").pack(
+                anchor="w", padx=14, pady=12
             )
-            time_label = design.label(row, text=_session_time(session), variant="mono", width=92, anchor="w")
-            time_label.grid(
-                row=0, column=0, sticky="w", padx=(8, 12), pady=8
-            )
-            title = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
-            subtitle = str(session.get("status_summary") or "正常活动")
-            title_label = design.label(row, text=title, variant="strong", anchor="w")
-            title_label.grid(row=0, column=1, sticky="w")
-            subtitle_label = design.label(row, text=subtitle, variant="caption", anchor="w")
-            subtitle_label.grid(row=1, column=1, sticky="w")
-            duration_label = design.label(row, text=format_duration(session.get("duration_seconds") or 0), variant="strong")
-            duration_label.grid(
-                row=0, column=2, rowspan=2, sticky="e", padx=(12, 8)
-            )
-            for widget in (time_label, title_label, subtitle_label, duration_label):
-                self._bind_click(
-                    widget,
-                    lambda sid=str(session.get("session_id") or ""), target_date=today: self._open_timeline(
-                        False, session_id=sid, target_date=target_date
-                    ),
-                )
+        self._recent_empty.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
+
+    def _hide_recent_empty(self) -> None:
+        if self._recent_empty is not None:
+            self._recent_empty.grid_remove()
 
     def _open_timeline(
         self,
@@ -203,12 +261,24 @@ class OverviewView(ctk.CTkFrame):
             self.open_timeline_callback(
                 only_uncategorized=only_uncategorized,
                 session_id=session_id,
-                target_date=target_date,
+                target_date=target_date or date.today().isoformat(),
             )
 
     def _open_statistics(self) -> None:
         if self.open_statistics_callback is not None:
             self.open_statistics_callback()
+
+    def export_current_excel(self) -> None:
+        start, end = self._scope_dates()
+        export_dir = Path(get_setting("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
+        prefix = "today" if start == end else "weekly"
+        path = export_dir / f"worktrace_{prefix}_{start}_{end}.xlsx"
+        try:
+            exported = export_service.export_excel(start, end, str(path))
+            messagebox.showinfo("导出完成", exported)
+        except Exception as exc:
+            logging.exception("overview excel export failed")
+            messagebox.showerror("导出失败", str(exc))
 
     def export_weekly_markdown(self) -> None:
         today = date.today()
@@ -274,10 +344,11 @@ def _current_elapsed_seconds(snapshot: dict) -> int:
         return 0
 
 
-def _session_time(session: dict) -> str:
+def _session_time(session: dict, include_date: bool = False) -> str:
     start = session.get("start_time") or ""
     end = session.get("end_time") or ""
-    return f"{start[11:16] if len(start) >= 16 else start}-{end[11:16] if len(end) >= 16 else ''}"
+    prefix = f"{start[5:10]} " if include_date and len(start) >= 10 else ""
+    return f"{prefix}{start[11:16] if len(start) >= 16 else start}-{end[11:16] if len(end) >= 16 else ''}"
 
 
 def _clear_children(widget) -> None:

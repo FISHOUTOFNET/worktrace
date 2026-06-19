@@ -41,13 +41,13 @@ def recover_unclosed_records() -> None:
             logging.info("recovered unclosed record id=%s status=%s", row["id"], status)
 
 
-def detect_time_jump(last_loop_time: str, now: str, threshold_minutes: int = 5) -> bool:
+def detect_time_jump(last_loop_time: str, now: str, threshold_seconds: int = 300) -> bool:
     try:
         last_dt = datetime.strptime(last_loop_time, TIME_FORMAT)
         now_dt = datetime.strptime(now, TIME_FORMAT)
     except ValueError:
         return True
-    return (now_dt - last_dt).total_seconds() > max(1, threshold_minutes) * 60
+    return (now_dt - last_dt).total_seconds() > max(1, threshold_seconds)
 
 
 def mark_record_error(activity_id: int, reason: str) -> None:

@@ -137,6 +137,23 @@ def archive_project(project_id: int) -> None:
         )
 
 
+def delete_project(project_id: int) -> None:
+    project = get_project(project_id)
+    if not project:
+        raise ValueError("project not found")
+    if project.get("created_by") == "system" or project.get("name") == UNCATEGORIZED_PROJECT:
+        raise ValueError("system project cannot be deleted")
+    ts = now_str()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE resource SET default_project_id = NULL, updated_at = ? WHERE default_project_id = ?",
+            (ts, project_id),
+        )
+        conn.execute("DELETE FROM folder_project_rule WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM project_rule WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM project WHERE id = ?", (project_id,))
+
+
 def get_or_create_uncategorized_project() -> int:
     ts = now_str()
     with get_connection() as conn:

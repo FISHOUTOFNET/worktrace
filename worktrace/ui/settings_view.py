@@ -46,9 +46,9 @@ class SettingsView(ctk.CTkFrame):
             row=0, column=0, columnspan=3, sticky="w", padx=18, pady=(16, 8)
         )
         fields = [
-            ("poll_interval_seconds", "采集间隔秒", "后台轮询当前窗口的间隔"),
-            ("idle_threshold_minutes", "空闲阈值分钟", "超过该时长判定为空闲"),
-            ("min_activity_seconds", "最小记录秒", "短于该时长的片段不作为正式记录"),
+            ("poll_interval_seconds", "采集间隔（秒）", "后台轮询当前窗口的间隔"),
+            ("idle_threshold_seconds", "空闲阈值（秒）", "超过该时长判定为空闲"),
+            ("min_activity_seconds", "最小记录时间（秒）", "短于该时长的片段不作为正式记录"),
             ("exclude_keywords", "隐私排除关键词", "用英文逗号分隔，命中后匿名记录"),
             ("export_path", "导出目录", "Excel、Markdown 和本地数据导出的默认位置"),
         ]
@@ -113,6 +113,18 @@ class SettingsView(ctk.CTkFrame):
         )
 
     def save(self) -> None:
+        for key in ("poll_interval_seconds", "idle_threshold_seconds", "min_activity_seconds"):
+            raw = self.entries[key].get().strip()
+            try:
+                value = int(raw)
+            except ValueError:
+                messagebox.showerror("保存失败", "采集间隔、空闲阈值和最小记录时间必须是秒数")
+                return
+            if value <= 0:
+                messagebox.showerror("保存失败", "采集间隔、空闲阈值和最小记录时间必须大于 0 秒")
+                return
+            self.entries[key].delete(0, "end")
+            self.entries[key].insert(0, str(value))
         for key, entry in self.entries.items():
             set_setting(key, entry.get())
         privacy_service.set_exclude_keywords(self.entries["exclude_keywords"].get().split(","))

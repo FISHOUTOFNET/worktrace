@@ -47,6 +47,9 @@ def _app_stub():
     app.pages = {"overview": FakePage(), "timeline": FakePage()}
     app.nav_buttons = {"overview": FakeButton(), "timeline": FakeButton()}
     app.active_page = "overview"
+    app.collector_started = True
+    app.start_collector_callback = lambda: None
+    app._sync_sidebar_status = lambda: None
     return app
 
 
@@ -63,8 +66,8 @@ def test_shell_show_page_raises_target_and_refreshes_once():
 
 def test_shell_toggle_pause_updates_setting(temp_db):
     app = _app_stub()
-    app._refresh_sidebar_status = lambda: None
     app.timeline = FakePage()
+    settings_service.set_setting("collector_status", "running")
 
     WorkTraceApp.toggle_pause(app)
 

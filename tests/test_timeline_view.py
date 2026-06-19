@@ -249,8 +249,7 @@ def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch)
 
     assert view.resource_editor.master is view.editor_panel
     assert view.activity_editor.master is view.editor_panel
-    assert view.new_project_entry in view._resource_editor_widgets
-    assert view.create_project_button in view._resource_editor_widgets
+    assert view.resource_rule_button in view._resource_editor_widgets
     assert view.close_resource_button in view._resource_editor_widgets
     assert view.close_activity_button in view._editor_widgets
 
@@ -305,18 +304,18 @@ def test_toggle_detail_mode_switches_tree_frames():
     assert view.resource_tree_frame.mapped
 
 
-def test_new_project_entry_focus_marks_user_interacting():
+def test_resource_rule_button_focus_marks_user_interacting():
     view = object.__new__(TimelineView)
     view._control_active = False
     view._editor_dirty = False
     view._editor_widgets = []
-    view.new_project_entry = FakeWidget()
-    view._resource_editor_widgets = [view.new_project_entry]
+    view.resource_rule_button = FakeWidget()
+    view._resource_editor_widgets = [view.resource_rule_button]
     view.resource_editor = FakeWidget(mapped=True)
     view.activity_editor = FakeWidget(mapped=False)
     view._selected_resource_id = None
     view._resource_selected_at = 0.0
-    view.focus_get = lambda: view.new_project_entry
+    view.focus_get = lambda: view.resource_rule_button
 
     assert view.is_user_interacting()
 
@@ -459,37 +458,42 @@ def test_current_activity_text_uses_second_level_duration(temp_db):
     assert TimelineView._current_activity_text(view) == "当前活动：Spec.docx｜Client｜00:01:05｜已进入历史"
 
 
-def test_timeline_resource_editor_can_create_project_and_select_it(temp_db):
-    view = _view_stub("Client")
-    view._selected_session_id = "session-1"
+def test_timeline_resource_rule_dialog_prefills_selected_resource(monkeypatch):
+    view = object.__new__(TimelineView)
     view._selected_resource_id = 7
+    view._resources_by_id = {
+        7: {"full_path": "D:\\Client\\Spec.docx", "display_name": "Spec.docx"}
+    }
+    view.resource_project_var = FakeVar("Client")
+    view.resource_editor = FakeWidget(mapped=True)
+    view._resource_selected_at = 0.0
+    calls = []
+    monkeypatch.setattr(
+        "worktrace.ui.timeline_view.open_project_rule_dialog",
+        lambda _master, **kwargs: calls.append(kwargs),
+    )
 
-    view._create_project_from_timeline()
+    TimelineView._open_resource_project_rule_dialog(view)
 
-    assert view.resource_project_var.get() == "Client"
-    assert "Client" in view._project_by_name
-    assert view.new_project_var.get() == ""
-    assert view.resource_hint_label.config["text"] == "已创建项目：Client"
-    assert view._selected_session_id == "session-1"
-    assert view._selected_resource_id == 7
+    assert calls[0]["initial_type"] == "file"
+    assert calls[0]["initial_target"] == "D:\\Client\\Spec.docx"
+    assert calls[0]["initial_project_name"] == "Client"
 
 
-def test_timeline_project_create_requires_name(temp_db):
-    view = _view_stub("")
-
-    view._create_project_from_timeline()
-
-    assert view.resource_hint_label.config["text"] == "请输入项目名称"
-
-
-def test_timeline_project_create_reuses_existing_project(temp_db):
+def test_project_rule_saved_selects_project_immediately(temp_db):
     project_service.create_project("Client")
-    view = _view_stub("Client")
+    view = _view_stub("")
+    view.session_project_var = FakeVar("")
+    view.activity_project_var = FakeVar("")
+    view.refresh = lambda: None
 
-    view._create_project_from_timeline()
+    TimelineView._after_project_rule_saved(view, {"project_name": "Client"})
 
+    assert view.session_project_var.get() == "Client"
     assert view.resource_project_var.get() == "Client"
-    assert view.resource_hint_label.config["text"] == "项目已存在，已选中：Client"
+    assert view.activity_project_var.get() == "Client"
+    assert "Client" in view._project_by_name
+    assert view.resource_hint_label.config["text"] == "已保存新建项目/规则：Client"
 
 
 def test_created_project_can_be_used_for_resource_correction_immediately(temp_db):
@@ -497,13 +501,16 @@ def test_created_project_can_be_used_for_resource_correction_immediately(temp_db
     activity_service.close_activity(aid, "2026-06-18 09:30:00")
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
     resource = timeline_service.get_session_resource_summary(session["activity_ids"])[0]
-    view = _view_stub("Client")
-    view._create_project_from_timeline()
+    project_service.create_project("Client")
+    view = _view_stub("")
+    view.session_project_var = FakeVar("")
+    view.activity_project_var = FakeVar("")
+    view.refresh = lambda: None
+    TimelineView._after_project_rule_saved(view, {"project_name": "Client"})
     view._sessions_by_id = {session["session_id"]: session}
     view._selected_session_id = session["session_id"]
     view._resources_by_id = {int(resource["resource_id"]): resource}
     view._selected_resource_id = int(resource["resource_id"])
-    view.refresh = lambda: None
 
     view._save_resource_project(False)
 

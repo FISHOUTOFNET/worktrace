@@ -5,7 +5,7 @@ import threading
 
 import customtkinter as ctk
 
-from ..services.settings_service import get_bool_setting, get_int_setting, set_setting
+from ..services.settings_service import get_bool_setting, get_int_setting, get_setting, set_setting
 from . import design
 from .first_run_dialog import FirstRunDialog
 from .overview_view import OverviewView
@@ -69,18 +69,22 @@ class WorkTraceApp(ctk.CTk):
         self.sidebar_status_label.pack(anchor="w", padx=14, pady=(12, 2))
         self.sidebar_status_hint = design.label(status_card, text="数据仅保存在本机", variant="caption")
         self.sidebar_status_hint.pack(anchor="w", padx=14, pady=(0, 10))
-        self.sidebar_pause_button = design.button(
+        self.sidebar_record_button = design.button(
             status_card,
-            text="暂停记录",
-            variant="subtle",
+            text="开始记录",
+            height=44,
             command=self.toggle_pause,
+            fg_color=design.SUCCESS,
+            hover_color=("#0f766e", "#10b981"),
+            text_color="#ffffff",
         )
-        self.sidebar_pause_button.pack(fill="x", padx=12, pady=(0, 12))
+        self.sidebar_record_button.pack(fill="x", padx=12, pady=(0, 12))
+        self.sidebar_pause_button = self.sidebar_record_button
 
         nav = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         nav.grid(row=2, column=0, sticky="new", padx=10)
         for key, label in [
-            ("overview", "今日概览"),
+            ("overview", "概览"),
             ("timeline", "时间详情"),
             ("statistics", "统计与导出"),
             ("rules", "项目规则"),
@@ -185,15 +189,34 @@ class WorkTraceApp(ctk.CTk):
                 button.configure(fg_color="transparent", text_color=design.TEXT, font=design.FONT_BODY)
 
     def _refresh_sidebar_status(self) -> None:
-        status = self._status_text()
-        paused = get_bool_setting("user_paused", False)
-        self.sidebar_status_label.configure(text=status)
-        self.sidebar_pause_button.configure(text="继续记录" if paused else "暂停记录")
+        self._sync_sidebar_status()
         self.after(1000, self._refresh_sidebar_status)
 
-    def _status_text(self) -> str:
-        from ..services.settings_service import get_setting
+    def _sync_sidebar_status(self) -> None:
+        status = self._status_text()
+        raw_status = get_setting("collector_status", "stopped")
+        paused = get_bool_setting("user_paused", False) or raw_status == "paused"
+        self.sidebar_status_label.configure(text=status)
+        if raw_status == "running" and not paused:
+            self.sidebar_status_label.configure(text_color=design.SUCCESS)
+            self.sidebar_record_button.configure(
+                text="暂停记录",
+                fg_color=design.DANGER,
+                hover_color=design.DANGER_HOVER,
+                text_color="#ffffff",
+            )
+            self.sidebar_status_hint.configure(text="正在记录当前活动")
+        else:
+            self.sidebar_status_label.configure(text_color=design.DANGER if paused else design.MUTED_TEXT)
+            self.sidebar_record_button.configure(
+                text="开始记录",
+                fg_color=design.SUCCESS,
+                hover_color=("#0f766e", "#10b981"),
+                text_color="#ffffff",
+            )
+            self.sidebar_status_hint.configure(text="已暂停" if paused else "数据仅保存在本机")
 
+    def _status_text(self) -> str:
         status = get_setting("collector_status", "stopped")
         paused = get_bool_setting("user_paused", False)
         if paused or status == "paused":
@@ -205,8 +228,14 @@ class WorkTraceApp(ctk.CTk):
         return "采集器未运行"
 
     def toggle_pause(self) -> None:
-        set_setting("user_paused", "false" if get_bool_setting("user_paused", False) else "true")
-        self._refresh_sidebar_status()
+        status = get_setting("collector_status", "stopped")
+        paused = get_bool_setting("user_paused", False) or status == "paused"
+        if paused or status != "running":
+            set_setting("user_paused", "false")
+            self._start_collector_once()
+        else:
+            set_setting("user_paused", "true")
+        self._sync_sidebar_status()
         if self.active_page == "timeline":
             self.timeline.refresh()
 
