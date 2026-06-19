@@ -35,3 +35,14 @@ def test_manual_override_prevents_rule_overwrite(temp_db):
     row = activity_service.get_activity(aid)
     assert row["project_id"] == manual_project
     assert row["manual_override"] == 1
+
+
+def test_keyword_rule_can_be_disabled_and_deleted(temp_db):
+    project = project_service.create_project("Rule")
+    rule_id = rule_service.create_rule("Spec", project)
+
+    rule_service.set_rule_enabled(rule_id, False)
+    assert rule_service.list_rules()[0]["enabled"] == 0
+
+    rule_service.delete_rule(rule_id)
+    assert rule_service.list_rules() == []

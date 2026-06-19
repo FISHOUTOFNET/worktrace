@@ -67,3 +67,44 @@ class FirstRunDialog(ctk.CTkToplevel):
     def _accept(self) -> None:
         self.on_accept()
         self.destroy()
+
+
+class PrivacyNoticeDialog(ctk.CTkToplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("WorkTrace 隐私说明")
+        self.geometry("560x520")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+        self.configure(fg_color=design.WINDOW_BG)
+
+        shell = design.card(self)
+        shell.pack(fill="both", expand=True, padx=18, pady=18)
+        shell.grid_columnconfigure(0, weight=1)
+        shell.grid_rowconfigure(2, weight=1)
+        design.label(shell, text="隐私说明", variant="title").grid(
+            row=0, column=0, sticky="w", padx=18, pady=(18, 6)
+        )
+        design.label(
+            shell,
+            text="WorkTrace 只记录用于本地归类的窗口元数据和时间。",
+            variant="caption",
+            anchor="w",
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 12))
+        box = ctk.CTkTextbox(
+            shell,
+            height=320,
+            wrap="word",
+            font=design.FONT_BODY,
+            corner_radius=design.RADIUS_MD,
+            border_width=1,
+            border_color=design.BORDER,
+        )
+        box.insert("1.0", PRIVACY_NOTICE_TEXT)
+        box.configure(state="disabled")
+        box.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 14))
+        design.button(shell, text="关闭", command=self.destroy).grid(
+            row=3, column=0, sticky="ew", padx=18, pady=(0, 18)
+        )

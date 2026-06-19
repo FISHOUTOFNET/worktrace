@@ -24,7 +24,7 @@ TREE_ROWHEIGHT = 36
 
 class TimelineView(ctk.CTkFrame):
     def __init__(self, master):
-        super().__init__(master)
+        super().__init__(master, fg_color="transparent")
         self.date_var = ctk.StringVar(value=date.today().isoformat())
         self.only_uncategorized = ctk.BooleanVar(value=False)
         self.session_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
@@ -50,6 +50,7 @@ class TimelineView(ctk.CTkFrame):
         self._tree_column_widths: dict[str, dict[str, int]] = {}
         self._tree_keys: dict[int, str] = {}
         self._current_activity_after_id: str | None = None
+        self._pending_session_id: str | None = None
 
         self._build()
         self._schedule_current_activity_tick()
@@ -57,33 +58,21 @@ class TimelineView(ctk.CTkFrame):
     def _build(self) -> None:
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
-        self.grid_rowconfigure(2, weight=0)
         self.grid_columnconfigure(0, weight=1)
 
         self.toolbar_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.toolbar_frame.grid(row=0, column=0, sticky="ew", padx=24, pady=(22, 12))
         self.toolbar_frame.grid_columnconfigure(0, weight=1)
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.content_frame.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 12))
+        self.content_frame.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
         self.content_frame.grid_rowconfigure(0, weight=1)
         self.content_frame.grid_columnconfigure(0, weight=0, minsize=410)
         self.content_frame.grid_columnconfigure(1, weight=1)
-        self.editor_scroll_frame = ctk.CTkScrollableFrame(
-            self,
-            height=260,
-            fg_color=design.CARD_BG,
-            corner_radius=design.RADIUS_LG,
-            border_width=1,
-            border_color=design.BORDER,
-        )
-        self.editor_panel = self.editor_scroll_frame
-        self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 24))
-        self.editor_scroll_frame.grid_columnconfigure(0, weight=1)
 
         top = self.toolbar_frame
         title_box = ctk.CTkFrame(top, fg_color="transparent")
         title_box.grid(row=0, column=0, sticky="w")
-        self._label(title_box, text="时间线", font=design.FONT_TITLE).pack(anchor="w")
+        self._label(title_box, text="时间详情", font=design.FONT_TITLE).pack(anchor="w")
         self.current_activity_label = self._label(
             title_box,
             text="当前活动：无",
@@ -149,6 +138,7 @@ class TimelineView(ctk.CTkFrame):
         )
         self.detail_panel.grid(row=0, column=1, sticky="nsew")
         self.detail_panel.grid_rowconfigure(1, weight=1)
+        self.detail_panel.grid_rowconfigure(2, weight=0)
         self.detail_panel.grid_columnconfigure(0, weight=1)
 
         header = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
@@ -165,7 +155,7 @@ class TimelineView(ctk.CTkFrame):
         actions.grid(row=0, column=1, sticky="e")
         self.folder_rule_button = self._button(
             actions,
-            text="文件夹项目规则",
+            text="新建文件夹规则",
             width=130,
             command=self._open_folder_rule_dialog,
             fg_color=design.NEUTRAL_SOFT,
@@ -254,6 +244,16 @@ class TimelineView(ctk.CTkFrame):
         )
         self.detail_tree.bind("<<TreeviewSelect>>", self._on_activity_select)
         self.detail_tree_frame.grid_remove()
+
+        self.editor_scroll_frame = ctk.CTkFrame(
+            self.detail_panel,
+            fg_color=design.CARD_SUBTLE_BG,
+            corner_radius=design.RADIUS_MD,
+            border_width=1,
+            border_color=design.BORDER,
+        )
+        self.editor_panel = self.editor_scroll_frame
+        self.editor_scroll_frame.grid_columnconfigure(0, weight=1)
 
     def _build_resource_editor(self) -> None:
         self.resource_editor = ctk.CTkFrame(self.editor_panel, fg_color="transparent")
@@ -368,6 +368,16 @@ class TimelineView(ctk.CTkFrame):
         self._sync_sessions(sessions)
         self._refresh_selected_session()
 
+    def open_context(
+        self,
+        target_date: str,
+        only_uncategorized: bool = False,
+        selected_session_id: str | None = None,
+    ) -> None:
+        self.date_var.set(target_date)
+        self.only_uncategorized.set(only_uncategorized)
+        self._pending_session_id = selected_session_id
+
     def is_user_interacting(self) -> bool:
         activity_focus = any(self._widget_has_focus(widget) for widget in getattr(self, "_editor_widgets", []))
         resource_focus = any(self._widget_has_focus(widget) for widget in getattr(self, "_resource_editor_widgets", []))
@@ -381,12 +391,13 @@ class TimelineView(ctk.CTkFrame):
         )
 
     def _sync_sessions(self, sessions: list[dict]) -> None:
-        previous = self._selected_session_id
+        previous = self._pending_session_id or self._selected_session_id
         self._sessions_by_id = {session["session_id"]: session for session in sessions}
         if hasattr(self, "session_count_label"):
             self.session_count_label.configure(text=f"{len(sessions)} 条")
         self._sync_tree(self.session_tree, [(session["session_id"], self._session_values(session)) for session in sessions])
         if previous in self._sessions_by_id:
+            self._selected_session_id = previous
             self._select_tree_item(self.session_tree, previous)
         elif sessions:
             self._selected_session_id = sessions[0]["session_id"]
@@ -399,6 +410,7 @@ class TimelineView(ctk.CTkFrame):
                 self.detail_hint_label.configure(text="调整日期或关闭筛选后再查看")
             self._sync_resources([])
             self._sync_details([])
+        self._pending_session_id = None
 
     def _refresh_selected_session(self) -> None:
         session = self._sessions_by_id.get(self._selected_session_id or "")
@@ -504,7 +516,7 @@ class TimelineView(ctk.CTkFrame):
             self.remember_button.configure(state="normal", text="以后该文件都归入该项目")
             hint = ""
             if resource.get("is_suggested_project"):
-                hint = f"当前时间线显示为建议项目：{resource.get('project_name')}"
+                hint = f"当前时间详情显示为建议项目：{resource.get('project_name')}"
             self.resource_hint_label.configure(text=hint)
         else:
             self.remember_button.configure(state="disabled", text="以后该资源都归入该项目")
@@ -658,16 +670,26 @@ class TimelineView(ctk.CTkFrame):
             messagebox.showerror("无法新增", "请先创建项目")
             return
         dialog = ctk.CTkToplevel(self)
-        dialog.title("文件夹项目规则")
-        dialog.geometry("620x300")
+        dialog.title("新建文件夹规则")
+        dialog.geometry("620x330")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.configure(fg_color=design.WINDOW_BG)
         folder_var = ctk.StringVar(value=self._default_session_folder())
         selected_name = ctk.StringVar(value=projects[0]["name"])
         recursive_var = ctk.BooleanVar(value=True)
 
-        ctk.CTkLabel(dialog, text="文件夹").pack(anchor="w", padx=14, pady=(14, 4))
-        folder_row = ctk.CTkFrame(dialog)
-        folder_row.pack(fill="x", padx=14, pady=(0, 8))
-        folder_entry = ctk.CTkEntry(folder_row, textvariable=folder_var, width=430)
+        content = design.card(dialog)
+        content.pack(fill="both", expand=True, padx=16, pady=16)
+        content.grid_columnconfigure(0, weight=1)
+        design.label(content, text="新建文件夹规则", variant="section").grid(
+            row=0, column=0, sticky="w", padx=16, pady=(16, 8)
+        )
+        design.label(content, text="文件夹", variant="strong").grid(row=1, column=0, sticky="w", padx=16, pady=(0, 4))
+        folder_row = ctk.CTkFrame(content, fg_color="transparent")
+        folder_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 10))
+        folder_row.grid_columnconfigure(0, weight=1)
+        folder_entry = design.entry(folder_row, textvariable=folder_var, width=430)
         folder_entry.pack(side="left", fill="x", expand=True)
 
         def browse_folder() -> None:
@@ -675,13 +697,13 @@ class TimelineView(ctk.CTkFrame):
             if folder:
                 folder_var.set(folder)
 
-        ctk.CTkButton(folder_row, text="浏览", width=72, command=browse_folder).pack(side="left", padx=(8, 0))
-        ctk.CTkLabel(dialog, text="归属项目").pack(anchor="w", padx=14, pady=(4, 4))
-        ctk.CTkOptionMenu(dialog, values=[project["name"] for project in projects], variable=selected_name, width=300).pack(anchor="w", padx=14, pady=(0, 8))
-        ctk.CTkCheckBox(dialog, text="包含子文件夹", variable=recursive_var).pack(anchor="w", padx=14, pady=4)
+        design.button(folder_row, text="浏览", variant="ghost", width=72, command=browse_folder).pack(side="left", padx=(8, 0))
+        design.label(content, text="归属项目", variant="strong").grid(row=3, column=0, sticky="w", padx=16, pady=(0, 4))
+        design.option_menu(content, values=[project["name"] for project in projects], variable=selected_name, width=300).grid(row=4, column=0, sticky="w", padx=16, pady=(0, 10))
+        design.checkbox(content, text="包含子文件夹", variable=recursive_var).grid(row=5, column=0, sticky="w", padx=16, pady=(0, 12))
 
-        actions = ctk.CTkFrame(dialog)
-        actions.pack(fill="x", padx=14, pady=14)
+        actions = ctk.CTkFrame(content, fg_color="transparent")
+        actions.grid(row=6, column=0, sticky="e", padx=16, pady=(0, 16))
 
         def save_rule() -> None:
             project = project_service.get_project_by_name(selected_name.get())
@@ -695,8 +717,8 @@ class TimelineView(ctk.CTkFrame):
             dialog.destroy()
             self._save_folder_rule(folder, int(project["id"]), bool(recursive_var.get()))
 
-        ctk.CTkButton(actions, text="取消", width=72, command=dialog.destroy).pack(side="right", padx=(8, 0))
-        ctk.CTkButton(actions, text="保存", width=72, command=save_rule).pack(side="right")
+        design.button(actions, text="取消", variant="ghost", width=72, command=dialog.destroy).pack(side="right", padx=(8, 0))
+        design.button(actions, text="保存", width=72, command=save_rule).pack(side="right")
 
     def _default_session_folder(self) -> str:
         session = self._sessions_by_id.get(self._selected_session_id or "")
@@ -855,6 +877,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _label(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
+        kwargs.setdefault("text_color", design.TEXT)
         return ctk.CTkLabel(master, **kwargs)
 
     def _button(self, master, **kwargs):
@@ -863,10 +886,12 @@ class TimelineView(ctk.CTkFrame):
         kwargs.setdefault("height", 34)
         kwargs.setdefault("fg_color", design.ACCENT)
         kwargs.setdefault("hover_color", design.ACCENT_HOVER)
+        kwargs.setdefault("text_color", "#ffffff")
         return ctk.CTkButton(master, **kwargs)
 
     def _checkbox(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
+        kwargs.setdefault("text_color", design.TEXT)
         return ctk.CTkCheckBox(master, **kwargs)
 
     def _entry(self, master, **kwargs):
@@ -954,7 +979,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _show_editor_panel(self, show: bool) -> None:
         if show:
-            self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 24))
+            self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
         else:
             self.editor_scroll_frame.grid_remove()
 
@@ -963,6 +988,8 @@ class TimelineView(ctk.CTkFrame):
             return
         tree.selection_set(iid)
         tree.focus(iid)
+        if hasattr(tree, "see"):
+            tree.see(iid)
 
     def _valid_date(self, value: str) -> bool:
         try:

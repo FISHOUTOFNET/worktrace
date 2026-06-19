@@ -12,6 +12,7 @@ def test_statistics_aggregation(temp_db):
     summary = statistics_service.get_summary("2026-06-18", "2026-06-18")
     assert summary["total_duration"] == 4500
     assert summary["effective_duration"] == 3600
+    assert summary["classified_duration"] == 3600
     assert summary["idle_duration"] == 900
     stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
     assert stats[0]["project"] == "Client"

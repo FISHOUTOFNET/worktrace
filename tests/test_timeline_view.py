@@ -205,15 +205,7 @@ def test_resource_editor_widgets_are_part_of_interaction_guard():
     assert view.is_user_interacting()
 
 
-def test_editor_panel_is_explicit_scrollable_container(monkeypatch):
-    created = []
-
-    def fake_scrollable(master, **kwargs):
-        widget = FakeWidget(master=master)
-        widget.config.update(kwargs)
-        created.append(widget)
-        return widget
-
+def test_main_layout_no_longer_creates_global_editor_panel(monkeypatch):
     view = object.__new__(TimelineView)
     view.grid_rowconfigure = lambda *_args, **_kwargs: None
     view.grid_columnconfigure = lambda *_args, **_kwargs: None
@@ -227,7 +219,6 @@ def test_editor_panel_is_explicit_scrollable_container(monkeypatch):
     view.only_uncategorized = FakeVar(False)
 
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkFrame", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkScrollableFrame", fake_scrollable)
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkLabel", lambda master, **_kwargs: FakeWidget(master=master))
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkButton", lambda master, **_kwargs: FakeWidget(master=master))
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkEntry", lambda master, **_kwargs: FakeWidget(master=master))
@@ -235,10 +226,7 @@ def test_editor_panel_is_explicit_scrollable_container(monkeypatch):
 
     TimelineView._build(view)
 
-    assert view.editor_panel is view.editor_scroll_frame
-    assert created
-    assert view.editor_scroll_frame.config["height"] == 260
-    assert view.editor_scroll_frame.master is view
+    assert not hasattr(view, "editor_scroll_frame")
 
 
 def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch):
@@ -362,6 +350,35 @@ def test_sync_tree_keeps_saved_column_widths():
 
     assert tree.widths["resource"] == 280
     assert tree.widths["type"] == 80
+
+
+def test_open_context_selects_requested_session_on_sync():
+    view = object.__new__(TimelineView)
+    view.date_var = FakeVar()
+    view.only_uncategorized = FakeVar(False)
+    view._pending_session_id = None
+    view._selected_session_id = None
+    view._sessions_by_id = {}
+    view.session_count_label = FakeWidget()
+    view.session_tree = FakeTree()
+    selected = []
+    view._sync_tree = lambda *_args, **_kwargs: None
+    view._select_tree_item = lambda _tree, iid: selected.append(iid)
+
+    TimelineView.open_context(view, "2026-06-18", only_uncategorized=True, selected_session_id="9-10")
+    TimelineView._sync_sessions(
+        view,
+        [
+            {"session_id": "1-2", "project_name": "A", "duration_seconds": 60, "status_summary": "A"},
+            {"session_id": "9-10", "project_name": "B", "duration_seconds": 90, "status_summary": "B"},
+        ],
+    )
+
+    assert view.date_var.get() == "2026-06-18"
+    assert view.only_uncategorized.get() is True
+    assert view._selected_session_id == "9-10"
+    assert selected == ["9-10"]
+    assert view._pending_session_id is None
 
 
 def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists():

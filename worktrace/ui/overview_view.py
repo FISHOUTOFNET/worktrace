@@ -5,7 +5,7 @@ import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import messagebox
-from typing import Callable
+from typing import Callable, Any
 
 import customtkinter as ctk
 
@@ -20,13 +20,15 @@ class OverviewView(ctk.CTkFrame):
     def __init__(
         self,
         master,
-        open_timeline_callback: Callable[[bool], None] | None = None,
+        open_timeline_callback: Callable[..., None] | None = None,
         open_statistics_callback: Callable[[], None] | None = None,
     ):
         super().__init__(master, fg_color="transparent")
         self.open_timeline_callback = open_timeline_callback
         self.open_statistics_callback = open_statistics_callback
         self._current_activity_after_id: str | None = None
+        self.kpi_value_labels: dict[str, ctk.CTkLabel] = {}
+        self._recent_signature: tuple[tuple[Any, ...], ...] | None = None
         self._build()
         self._schedule_current_activity_tick()
 
@@ -45,7 +47,7 @@ class OverviewView(ctk.CTkFrame):
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
         action_row = ctk.CTkFrame(header, fg_color="transparent")
         action_row.grid(row=0, column=1, rowspan=2, sticky="e")
-        design.button(action_row, text="查看今日时间线", command=lambda: self._open_timeline(False)).pack(
+        design.button(action_row, text="查看今日时间详情", command=lambda: self._open_timeline(False)).pack(
             side="left", padx=(0, 8)
         )
         design.button(
@@ -58,18 +60,19 @@ class OverviewView(ctk.CTkFrame):
             side="left"
         )
 
-        body = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
-        body.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="kpi")
-        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure((0, 1, 2), weight=1, uniform="kpi")
+        body.grid_rowconfigure(2, weight=1)
 
         self.kpi_frame = ctk.CTkFrame(body, fg_color="transparent")
-        self.kpi_frame.grid(row=0, column=0, columnspan=4, sticky="ew")
-        for col in range(4):
+        self.kpi_frame.grid(row=0, column=0, columnspan=3, sticky="ew")
+        for col in range(3):
             self.kpi_frame.grid_columnconfigure(col, weight=1, uniform="kpi")
+        self._build_kpi_cards()
 
         self.current_card = design.card(body)
-        self.current_card.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(14, 0))
+        self.current_card.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(14, 0))
         self.current_card.grid_columnconfigure(0, weight=1)
         design.label(self.current_card, text="当前活动", variant="section").grid(
             row=0, column=0, sticky="w", padx=18, pady=(16, 4)
@@ -85,7 +88,8 @@ class OverviewView(ctk.CTkFrame):
         self.current_activity_label.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 16))
 
         recent = design.card(body)
-        recent.grid(row=2, column=0, columnspan=4, sticky="nsew", pady=(14, 0))
+        recent.grid(row=2, column=0, columnspan=3, sticky="nsew", pady=(14, 0))
+        recent.grid_rowconfigure(1, weight=1)
         recent.grid_columnconfigure(0, weight=1)
         recent_header = ctk.CTkFrame(recent, fg_color="transparent")
         recent_header.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
@@ -98,34 +102,58 @@ class OverviewView(ctk.CTkFrame):
             width=96,
             command=self._open_statistics,
         ).grid(row=0, column=1, sticky="e")
-        self.recent_frame = ctk.CTkFrame(recent, fg_color="transparent")
-        self.recent_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self.recent_frame = ctk.CTkScrollableFrame(recent, fg_color="transparent")
+        self.recent_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
         self.recent_frame.grid_columnconfigure(0, weight=1)
+
+    def _build_kpi_cards(self) -> None:
+        specs = [
+            ("total", "总时长", "00:00:00", "含有效、空闲和排除状态", None),
+            ("classified", "已归类", "00:00:00", "已进入具体项目的工作时长", None),
+            ("uncategorized", "未归类", "00:00:00", "需要整理的草稿", lambda: self._open_timeline(True)),
+        ]
+        for index, (key, title, value, caption, command) in enumerate(specs):
+            card = design.card(self.kpi_frame)
+            card.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 10, 0))
+            title_label = design.label(card, text=title, variant="caption_strong")
+            title_label.pack(anchor="w", padx=16, pady=(14, 2))
+            value_label = design.label(card, text=value, variant="title")
+            value_label.pack(anchor="w", padx=16)
+            caption_label = design.label(card, text=caption, variant="caption", wraplength=220, justify="left")
+            caption_label.pack(anchor="w", padx=16, pady=(2, 14))
+            self.kpi_value_labels[key] = value_label
+            if command is not None:
+                self._bind_click(card, command)
+                self._bind_click(title_label, command)
+                self._bind_click(value_label, command)
+                self._bind_click(caption_label, command)
 
     def refresh(self) -> None:
         today = date.today().isoformat()
         summary = statistics_service.get_summary(today, today)
-        kpis = [
-            ("总时长", format_duration(summary["total_duration"]), "含有效、空闲和排除状态"),
-            ("有效工作", format_duration(summary["effective_duration"]), "普通活动合计"),
-            ("空闲", format_duration(summary["idle_duration"]), "离开或无操作时间"),
-            ("未归类", format_duration(summary["uncategorized_duration"]), "需要整理的草稿"),
-        ]
-        _clear_children(self.kpi_frame)
-        for index, (title, value, caption) in enumerate(kpis):
-            card = design.card(self.kpi_frame)
-            card.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 10, 0))
-            design.label(card, text=title, variant="caption_strong").pack(anchor="w", padx=16, pady=(14, 2))
-            design.label(card, text=value, variant="title").pack(anchor="w", padx=16)
-            design.label(card, text=caption, variant="caption", wraplength=180, justify="left").pack(
-                anchor="w", padx=16, pady=(2, 14)
-            )
+        self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
+        self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
+        self.kpi_value_labels["uncategorized"].configure(text=format_duration(summary["uncategorized_duration"]))
         self.current_activity_label.configure(text=current_activity_text())
         self._refresh_recent_sessions(today)
 
     def _refresh_recent_sessions(self, today: str) -> None:
-        _clear_children(self.recent_frame)
         sessions = timeline_service.get_project_sessions_by_date(today, include_hidden=False)[:8]
+        signature = tuple(
+            (
+                session.get("session_id"),
+                session.get("start_time"),
+                session.get("end_time"),
+                session.get("project_name"),
+                session.get("status_summary"),
+                session.get("duration_seconds"),
+            )
+            for session in sessions
+        )
+        if signature == self._recent_signature:
+            return
+        self._recent_signature = signature
+        _clear_children(self.recent_frame)
         if not sessions:
             empty = design.section(self.recent_frame, fg_color=design.CARD_SUBTLE_BG)
             empty.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
@@ -137,20 +165,46 @@ class OverviewView(ctk.CTkFrame):
             row = ctk.CTkFrame(self.recent_frame, fg_color="transparent")
             row.grid(row=row_index, column=0, sticky="ew", padx=6, pady=3)
             row.grid_columnconfigure(1, weight=1)
-            design.label(row, text=_session_time(session), variant="mono", width=92, anchor="w").grid(
+            self._bind_click(
+                row,
+                lambda sid=str(session.get("session_id") or ""), target_date=today: self._open_timeline(
+                    False, session_id=sid, target_date=target_date
+                ),
+            )
+            time_label = design.label(row, text=_session_time(session), variant="mono", width=92, anchor="w")
+            time_label.grid(
                 row=0, column=0, sticky="w", padx=(8, 12), pady=8
             )
             title = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
             subtitle = str(session.get("status_summary") or "正常活动")
-            design.label(row, text=title, variant="strong", anchor="w").grid(row=0, column=1, sticky="w")
-            design.label(row, text=subtitle, variant="caption", anchor="w").grid(row=1, column=1, sticky="w")
-            design.label(row, text=format_duration(session.get("duration_seconds") or 0), variant="strong").grid(
+            title_label = design.label(row, text=title, variant="strong", anchor="w")
+            title_label.grid(row=0, column=1, sticky="w")
+            subtitle_label = design.label(row, text=subtitle, variant="caption", anchor="w")
+            subtitle_label.grid(row=1, column=1, sticky="w")
+            duration_label = design.label(row, text=format_duration(session.get("duration_seconds") or 0), variant="strong")
+            duration_label.grid(
                 row=0, column=2, rowspan=2, sticky="e", padx=(12, 8)
             )
+            for widget in (time_label, title_label, subtitle_label, duration_label):
+                self._bind_click(
+                    widget,
+                    lambda sid=str(session.get("session_id") or ""), target_date=today: self._open_timeline(
+                        False, session_id=sid, target_date=target_date
+                    ),
+                )
 
-    def _open_timeline(self, only_uncategorized: bool) -> None:
+    def _open_timeline(
+        self,
+        only_uncategorized: bool,
+        session_id: str | None = None,
+        target_date: str | None = None,
+    ) -> None:
         if self.open_timeline_callback is not None:
-            self.open_timeline_callback(only_uncategorized)
+            self.open_timeline_callback(
+                only_uncategorized=only_uncategorized,
+                session_id=session_id,
+                target_date=target_date,
+            )
 
     def _open_statistics(self) -> None:
         if self.open_statistics_callback is not None:
@@ -171,6 +225,13 @@ class OverviewView(ctk.CTkFrame):
     def _schedule_current_activity_tick(self) -> None:
         self.current_activity_label.configure(text=current_activity_text())
         self._current_activity_after_id = self.after(1000, self._schedule_current_activity_tick)
+
+    def _bind_click(self, widget, command: Callable[[], None]) -> None:
+        widget.bind("<Button-1>", lambda _event: command(), add="+")
+        try:
+            widget.configure(cursor="hand2")
+        except Exception:
+            pass
 
     def destroy(self) -> None:
         if self._current_activity_after_id is not None:

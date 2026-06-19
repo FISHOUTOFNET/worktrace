@@ -81,9 +81,9 @@ class WorkTraceApp(ctk.CTk):
         nav.grid(row=2, column=0, sticky="new", padx=10)
         for key, label in [
             ("overview", "今日概览"),
-            ("timeline", "时间线"),
+            ("timeline", "时间详情"),
             ("statistics", "统计与导出"),
-            ("rules", "项目与规则"),
+            ("rules", "项目规则"),
             ("settings", "设置与隐私"),
         ]:
             button = design.button(
@@ -124,7 +124,6 @@ class WorkTraceApp(ctk.CTk):
         }
         for page in self.pages.values():
             page.grid(row=0, column=0, sticky="nsew")
-            page.grid_remove()
         self.show_page("overview")
 
     def _startup_privacy_gate(self) -> None:
@@ -145,18 +144,23 @@ class WorkTraceApp(ctk.CTk):
     def show_page(self, key: str) -> None:
         if key not in self.pages:
             return
-        for page_key, page in self.pages.items():
-            if page_key == key:
-                page.grid(row=0, column=0, sticky="nsew")
-            else:
-                page.grid_remove()
+        self.pages[key].tkraise()
         self.active_page = key
         self._sync_nav_buttons()
         self._refresh_page(key)
 
-    def open_timeline(self, only_uncategorized: bool = False) -> None:
-        self.timeline.date_var.set(date.today().isoformat())
-        self.timeline.only_uncategorized.set(only_uncategorized)
+    def open_timeline(
+        self,
+        only_uncategorized: bool = False,
+        session_id: str | None = None,
+        target_date: str | None = None,
+    ) -> None:
+        target = target_date or date.today().isoformat()
+        if hasattr(self.timeline, "open_context"):
+            self.timeline.open_context(target, only_uncategorized=only_uncategorized, selected_session_id=session_id)
+        else:
+            self.timeline.date_var.set(target)
+            self.timeline.only_uncategorized.set(only_uncategorized)
         self.show_page("timeline")
 
     def refresh_current_tab(self) -> None:

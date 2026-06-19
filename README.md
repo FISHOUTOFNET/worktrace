@@ -4,13 +4,13 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 
 ## Core Features
 
-- CustomTkinter desktop UI with Timeline, Statistics/Export, and Settings/Privacy pages.
+- CustomTkinter desktop UI with Overview, Time Details, Statistics/Export, Project Rules, and Settings/Privacy pages.
 - SQLite local storage at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
 - Background collector thread using pywin32/psutil on Windows.
 - Idle, paused, excluded, normal, and error activity states.
 - First-run privacy notice before any collection starts.
 - Project creation, manual project assignment, notes, and soft delete.
-- Simple keyword auto-classification rules.
+- File, folder, and keyword project rules.
 - Excel export, Markdown weekly draft export, and export-all-local-data.
 - Collector heartbeat and startup recovery for unclosed records.
 - Single-instance collector protection.
@@ -56,15 +56,17 @@ The app writes to user-local folders and does not require administrator privileg
 
 ## Project Classification
 
-Folder project rules require a recognizable full local file path. On Windows, WorkTrace tries Office/WPS COM first and then falls back to the foreground process open-file list, using only a unique exact file-name match.
+Folder project rules require a recognizable full local file path. File rules bind one specific file to a project. On Windows, WorkTrace tries Office/WPS COM first and then falls back to the foreground process open-file list, using only a unique exact file-name match.
 
-If a file path is known but no rule or file default matches, the Timeline may show the parent folder name as a suggested project. Suggested names are display-only hints and are not inserted into the `project` table.
+If a file path is known but no rule or file default matches, Time Details may show the parent folder name as a suggested project. Suggested names are display-only hints and are not inserted into the `project` table.
 
 Context carry-over applies to all normal non-anchor auxiliary activity between nearby matching anchor files. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same project carry-over rules.
 
-For reporting, a short interruption is also folded into the surrounding anchor project: if two anchors for project A enclose a contiguous block under 5 minutes containing only another normal project or idle time, the Timeline session and project statistics count that block under A. The original activity status and project assignment are preserved in the detailed records.
+For reporting, a short interruption is also folded into the surrounding anchor project: if two anchors for project A enclose a contiguous block under 5 minutes containing only another normal project or idle time, the Time Details session and project statistics count that block under A. The original activity status and project assignment are preserved in the detailed records.
 
-Activity history is persisted after 30 seconds. Duration displays use `hh:mm` everywhere except the current-activity label, which keeps a live `hh:mm:ss` counter.
+Activity history is persisted after 30 seconds. All duration displays use exact `hh:mm:ss`, including exports and the live current-activity counter.
+
+The Overview page shows `总时长`, `已归类`, and `未归类`. `已归类` is normal/mixed session time already assigned to a concrete project; clicking `未归类` opens Time Details filtered to uncategorized sessions, and clicking a recent session opens Time Details with that session selected.
 
 ## Collector Heartbeat
 
@@ -85,7 +87,7 @@ WorkTrace prevents multiple collectors from writing to the same database. On Win
 
 ## Data Export And Clearing
 
-The Settings page can export all local tables (`activity_log`, `activity_project_assignment`, `project`, `resource`, `folder_project_rule`, `project_rule`, `settings`) to Excel.
+The Project Rules page shows project binding summaries and manages file rules, folder rules, and keyword rules. The Settings page can export all local tables (`activity_log`, `activity_project_assignment`, `project`, `resource`, `folder_project_rule`, `project_rule`, `settings`) to Excel.
 
 The Settings page can clear all local data after this confirmation text:
 
@@ -121,4 +123,4 @@ Also remove the project folder or packaged executable if you no longer need it.
 - Windows is the intended production platform; non-Windows runs use the fake adapter.
 - No tray app, installer, service, driver, cloud sync, login, AI, OCR, screenshots, screen recording, or automatic startup.
 - Date inputs are plain `YYYY-MM-DD` text fields in v0.1 Lite.
-- The Timeline UI is intentionally simple for v0.1 Lite and uses plain text date fields in `YYYY-MM-DD` format.
+- Time Details uses plain text date fields in `YYYY-MM-DD` format.

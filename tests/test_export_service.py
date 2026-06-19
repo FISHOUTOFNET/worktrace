@@ -6,12 +6,12 @@ from worktrace.exports.markdown_exporter import format_current_duration, format_
 from worktrace.services import activity_service, export_service
 
 
-def test_format_duration_hhmm_output():
-    assert format_duration(0) == "00:00"
-    assert format_duration(30) == "00:01"
-    assert format_duration(300) == "00:05"
-    assert format_duration(4800) == "01:20"
-    assert format_duration(7380) == "02:03"
+def test_format_duration_hhmmss_output():
+    assert format_duration(0) == "00:00:00"
+    assert format_duration(30) == "00:00:30"
+    assert format_duration(300) == "00:05:00"
+    assert format_duration(4800) == "01:20:00"
+    assert format_duration(7380) == "02:03:00"
 
 
 def test_format_current_duration_keeps_seconds():
@@ -54,7 +54,7 @@ def test_markdown_export_content(temp_db, tmp_path):
     assert "WorkTrace 周报草稿" in text
     assert "日期范围：2026-06-18 至 2026-06-18" in text
     assert "项目维度汇总" in text
-    assert "未归类：总计 00:30" in text
+    assert "未归类：总计 00:30:00" in text
     assert "计费" not in text
     assert "未确认记录提醒" not in text
 

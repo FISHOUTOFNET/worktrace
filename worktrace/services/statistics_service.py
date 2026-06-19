@@ -31,10 +31,21 @@ def get_summary(start_date: str, end_date: str) -> dict:
     idle = _sum_duration(base + " AND status = ?", params + (STATUS_IDLE,))
     paused = _sum_duration(base + " AND status = ?", params + (STATUS_PAUSED,))
     excluded = _sum_duration(base + " AND status = ?", params + (STATUS_EXCLUDED,))
-    uncategorized = get_uncategorized_duration(start_date, end_date)
+    project_stats = get_project_stats(start_date, end_date)
+    uncategorized = sum(
+        int(row["total_duration"])
+        for row in project_stats
+        if row["project"] == UNCATEGORIZED_PROJECT
+    )
+    classified = sum(
+        int(row["total_duration"])
+        for row in project_stats
+        if row["project"] != UNCATEGORIZED_PROJECT
+    )
     return {
         "total_duration": total,
         "effective_duration": effective,
+        "classified_duration": classified,
         "idle_duration": idle,
         "paused_duration": paused,
         "excluded_duration": excluded,

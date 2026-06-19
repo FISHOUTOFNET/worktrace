@@ -6,12 +6,18 @@ class FakePage:
     def __init__(self):
         self.visible = False
         self.refreshed = 0
+        self.raised = 0
+        self.grid_removed = False
 
     def grid(self, *_args, **_kwargs):
         self.visible = True
 
     def grid_remove(self):
         self.visible = False
+        self.grid_removed = True
+
+    def tkraise(self):
+        self.raised += 1
 
     def refresh(self):
         self.refreshed += 1
@@ -44,14 +50,14 @@ def _app_stub():
     return app
 
 
-def test_shell_show_page_hides_previous_and_refreshes_target():
+def test_shell_show_page_raises_target_and_refreshes_once():
     app = _app_stub()
 
     WorkTraceApp.show_page(app, "timeline")
 
     assert app.active_page == "timeline"
-    assert not app.pages["overview"].visible
-    assert app.pages["timeline"].visible
+    assert not app.pages["overview"].grid_removed
+    assert app.pages["timeline"].raised == 1
     assert app.pages["timeline"].refreshed == 1
 
 
@@ -72,4 +78,20 @@ def test_shell_open_timeline_sets_uncategorized_filter():
     WorkTraceApp.open_timeline(app, True)
 
     assert app.timeline.only_uncategorized.get() is True
+    assert app.active_page == "timeline"
+
+
+def test_shell_open_timeline_passes_session_context():
+    app = _app_stub()
+    calls = []
+
+    class TimelineStub:
+        def open_context(self, target_date, only_uncategorized=False, selected_session_id=None):
+            calls.append((target_date, only_uncategorized, selected_session_id))
+
+    app.timeline = TimelineStub()
+
+    WorkTraceApp.open_timeline(app, False, session_id="1-2", target_date="2026-06-18")
+
+    assert calls == [("2026-06-18", False, "1-2")]
     assert app.active_page == "timeline"

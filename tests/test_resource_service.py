@@ -1,6 +1,6 @@
 from worktrace.resource_patterns import infer_resource_identity
 from worktrace.db import get_connection, now_str
-from worktrace.services import activity_service, resource_service, timeline_service
+from worktrace.services import activity_service, project_service, resource_service, timeline_service
 
 
 def test_anchor_file_resources_are_stable(temp_db):
@@ -99,3 +99,18 @@ def test_can_remember_for_future_depends_on_resource_role(temp_db):
     by_id = {row["resource_id"]: row for row in summary}
     assert by_id[anchor["id"]]["can_remember_for_future"] is True
     assert by_id[browser["id"]]["can_remember_for_future"] is False
+
+
+def test_file_default_rule_can_be_created_and_cleared(temp_db):
+    project_id = project_service.create_project("Client")
+
+    resource_id = resource_service.create_or_update_file_default("D:\\Client\\Spec.docx", project_id)
+    rows = resource_service.list_file_defaults()
+
+    assert rows[0]["id"] == resource_id
+    assert rows[0]["project_name"] == "Client"
+    assert rows[0]["full_path"] == "D:\\Client\\Spec.docx"
+
+    resource_service.clear_file_default(resource_id)
+
+    assert resource_service.list_file_defaults() == []

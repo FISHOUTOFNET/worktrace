@@ -98,8 +98,20 @@ def list_project_bindings() -> list[dict]:
                 """
             ).fetchall()
         )
+        keyword_rows = dict_rows(
+            conn.execute(
+                """
+                SELECT pr.id, pr.pattern AS keyword, pr.project_id, pr.enabled,
+                       p.name AS project_name
+                FROM project_rule pr
+                LEFT JOIN project p ON p.id = pr.project_id
+                WHERE pr.rule_type = 'keyword'
+                ORDER BY pr.pattern COLLATE NOCASE, pr.id
+                """
+            ).fetchall()
+        )
     by_project = {
-        int(project["id"]): {**project, "folder_rules": [], "file_defaults": []}
+        int(project["id"]): {**project, "folder_rules": [], "file_defaults": [], "keyword_rules": []}
         for project in projects
     }
     for row in folder_rows:
@@ -110,6 +122,10 @@ def list_project_bindings() -> list[dict]:
         project = by_project.get(int(row["default_project_id"]))
         if project is not None:
             project["file_defaults"].append(row)
+    for row in keyword_rows:
+        project = by_project.get(int(row["project_id"]))
+        if project is not None:
+            project["keyword_rules"].append(row)
     return list(by_project.values())
 
 

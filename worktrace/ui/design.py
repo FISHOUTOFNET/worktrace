@@ -130,6 +130,13 @@ def checkbox(master, **kwargs) -> ctk.CTkCheckBox:
     return ctk.CTkCheckBox(master, **kwargs)
 
 
+def color(value) -> str:
+    if isinstance(value, tuple):
+        mode = ctk.get_appearance_mode().lower()
+        return value[1] if mode == "dark" else value[0]
+    return value
+
+
 def configure_tree_style(owner) -> None:
     style = ttk.Style(owner)
     try:
@@ -138,9 +145,9 @@ def configure_tree_style(owner) -> None:
         pass
     style.configure(
         "WorkTrace.Treeview",
-        background="#ffffff",
-        fieldbackground="#ffffff",
-        foreground="#1f2937",
+        background=color(CARD_BG),
+        fieldbackground=color(CARD_BG),
+        foreground=color(TEXT),
         rowheight=36,
         borderwidth=0,
         relief="flat",
@@ -148,16 +155,16 @@ def configure_tree_style(owner) -> None:
     )
     style.configure(
         "WorkTrace.Treeview.Heading",
-        background="#f1f5f9",
-        foreground="#475569",
+        background=color(PANEL_ALT_BG),
+        foreground=color(MUTED_TEXT),
         borderwidth=0,
         relief="flat",
         font=FONT_CAPTION_STRONG,
     )
     style.map(
         "WorkTrace.Treeview",
-        background=[("selected", "#dbeafe")],
-        foreground=[("selected", "#1e3a8a")],
+        background=[("selected", color(ACCENT_SOFT))],
+        foreground=[("selected", color(ACCENT))],
     )
 
 

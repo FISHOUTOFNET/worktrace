@@ -41,6 +41,19 @@ def list_rules() -> list[dict]:
     return dict_rows(rows)
 
 
+def set_rule_enabled(rule_id: int, enabled: bool) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE project_rule SET enabled = ?, updated_at = ? WHERE id = ?",
+            (int(enabled), now_str(), rule_id),
+        )
+
+
+def delete_rule(rule_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM project_rule WHERE id = ?", (rule_id,))
+
+
 def apply_rules_to_activity(activity_id: int) -> None:
     assign_project_for_activity(activity_id)
 

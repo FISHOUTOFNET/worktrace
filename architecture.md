@@ -94,7 +94,7 @@ Implement:
 5. Excluded/private window anonymization.
 6. Local SQLite storage.
 7. Project creation and selection.
-8. Timeline view.
+8. Time Details view.
 9. Record editing.
 10. User notes.
 11. Simple keyword-based auto-classification.
@@ -587,7 +587,7 @@ system    created by recovery or state transition logic
 ### 14.3 Review And Classification
 
 Auto-created records are drafts. Users can organize records by editing project, note,
-file defaults, and folder project rules.
+file defaults, folder project rules, and keyword project rules.
 
 ### 14.4 Manual Override
 
@@ -1023,13 +1023,13 @@ manual_override = 1
 
 Folder project rules match only anchor file resources with a recognized full path or parent directory. Office/WPS adapters should resolve paths through COM and may fall back to the foreground process open-file list when the window title has a unique exact file-name match.
 
-Suggested project names are display-only Timeline hints. They may be derived from a known non-generic parent folder name, but must not be derived from a bare file name or file stem.
+Suggested project names are display-only Time Details hints. They may be derived from a known non-generic parent folder name, but must not be derived from a bare file name or file stem.
 
 ### 22.5 Reporting Context Merge
 
-Timeline sessions and project statistics use an in-memory reporting project in addition to the raw activity project.
+Time Details sessions and project statistics use an in-memory reporting project in addition to the raw activity project.
 
-If two anchors for project A enclose a contiguous block under 5 minutes containing only a different normal project or idle records, count that block under A for the Timeline session and project statistics.
+If two anchors for project A enclose a contiguous block under 5 minutes containing only a different normal project or idle records, count that block under A for the Time Details session and project statistics.
 
 This reporting merge must not update `activity_log.project_id`, `activity_project_assignment`, the raw status, or the detailed activity rows.
 
@@ -1067,18 +1067,30 @@ archive_project(project_id: int) -> None
 get_or_create_uncategorized_project() -> int
 ```
 
-### 23.3 rule_service.py
+### 23.3 resource_service.py
+
+Required functions:
+
+```python
+list_file_defaults() -> list[dict]
+create_or_update_file_default(file_path: str, project_id: int) -> int
+clear_file_default(resource_id: int) -> None
+```
+
+### 23.4 rule_service.py
 
 Required functions:
 
 ```python
 create_rule(keyword: str, project_id: int) -> int
 list_rules() -> list[dict]
+set_rule_enabled(rule_id: int, enabled: bool) -> None
+delete_rule(rule_id: int) -> None
 apply_rules_to_activity(activity_id: int) -> None
 apply_rules_to_unclassified() -> None
 ```
 
-### 23.4 settings_service.py
+### 23.5 settings_service.py
 
 Required functions:
 
@@ -1091,7 +1103,7 @@ get_list_setting(key: str, default: list[str] | None = None) -> list[str]
 set_list_setting(key: str, values: list[str]) -> None
 ```
 
-### 23.5 statistics_service.py
+### 23.6 statistics_service.py
 
 Required functions:
 
@@ -1101,7 +1113,9 @@ get_project_stats(start_date: str, end_date: str) -> list[dict]
 get_uncategorized_duration(start_date: str, end_date: str) -> int
 ```
 
-### 23.6 recovery_service.py
+`get_summary` returns `classified_duration` in addition to total, effective, idle, paused, excluded, and uncategorized durations.
+
+### 23.7 recovery_service.py
 
 Required functions:
 
@@ -1111,7 +1125,7 @@ detect_time_jump(last_loop_time: str, now: str) -> bool
 mark_record_error(activity_id: int, reason: str) -> None
 ```
 
-### 23.7 privacy_service.py
+### 23.8 privacy_service.py
 
 Required functions:
 
@@ -1122,7 +1136,7 @@ is_excluded(active_window: ActiveWindow) -> bool
 make_excluded_activity_payload() -> dict
 ```
 
-### 23.8 export_service.py
+### 23.9 export_service.py
 
 Required functions:
 
@@ -1137,9 +1151,16 @@ clear_all_local_data(confirm: bool) -> None
 
 ## 24. UI Requirements
 
-Use 3 pages.
+Use 5 pages:
+
+1. Overview
+2. Time Details
+3. Statistics and Export
+4. Project Rules
+5. Settings and Privacy
 
 The collector thread must not directly update UI widgets. UI must refresh via Tkinter `after()` polling.
+Pages stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels may update every second without rebuilding page content.
 
 Default refresh interval:
 
@@ -1147,7 +1168,19 @@ Default refresh interval:
 2 seconds
 ```
 
-### 24.1 Timeline Page
+### 24.1 Overview Page
+
+Must show:
+
+1. total duration
+2. classified duration
+3. uncategorized duration
+4. current activity
+5. recent sessions
+
+Only the recent sessions area should scroll. Clicking uncategorized duration opens Time Details filtered to uncategorized sessions. Clicking a recent session opens Time Details with that session selected.
+
+### 24.2 Time Details Page
 
 Must show:
 
@@ -1160,6 +1193,8 @@ Must show:
 7. delete action
 8. filters for uncategorized records
 9. current activity with a live `hh:mm:ss` counter
+
+The page exposes `open_context(target_date, only_uncategorized=False, selected_session_id=None)` so other pages can open it with a date, filter, and selected session.
 
 Columns:
 
@@ -1174,7 +1209,7 @@ Note
 Actions
 ```
 
-### 24.2 Statistics and Export Page
+### 24.3 Statistics and Export Page
 
 Must show:
 
@@ -1190,7 +1225,17 @@ Must show:
 
 Project stats use the reporting context merge. Total, effective, idle, excluded, and paused summary durations continue to use raw activity status and duration.
 
-### 24.3 Settings and Privacy Page
+### 24.4 Project Rules Page
+
+Must show:
+
+1. project binding overview
+2. project rules list
+3. new rule actions
+
+Project rules include file defaults, folder rules, and keyword rules. File rules clear `resource.default_project_id` when deleted. Folder and keyword rules support enable, disable, and delete.
+
+### 24.5 Settings and Privacy Page
 
 Must show:
 
@@ -1226,7 +1271,7 @@ Total Duration
 Record Count
 ```
 
-Summary durations are formatted as `hh:mm` and use project statistics after reporting context merge.
+Summary durations are formatted as `hh:mm:ss` and use project statistics after reporting context merge.
 
 Sheet 2: `Activity Logs`
 
@@ -1244,7 +1289,7 @@ Project
 Note
 ```
 
-Activity log durations are formatted as `hh:mm`. Activity log rows preserve raw status and project assignment.
+Activity log durations are formatted as `hh:mm:ss`. Activity log rows preserve raw status and project assignment.
 
 Default export filtering:
 
@@ -1357,8 +1402,8 @@ Rules:
 3. If a single normal record exceeds 4 hours, keep it and show it for user review.
 4. If system sleep or large time jump is detected, close the previous record and keep the next relevant record available for user review.
 5. Persist normal, idle, paused, excluded, and error segments once they reach 30 seconds.
-6. Display stored durations as `hh:mm`, rounding any positive sub-minute value up to `00:01`.
-7. Display the current activity counter as `hh:mm:ss` and refresh it every second without requiring a full Timeline refresh.
+6. Display all stored durations as exact `hh:mm:ss` without minute rounding.
+7. Display the current activity counter as `hh:mm:ss` and refresh it every second without requiring a full Time Details refresh.
 
 ---
 
@@ -1414,7 +1459,7 @@ The app is acceptable if:
 8. It records start time, end time, duration.
 9. It detects idle time.
 10. It anonymizes excluded windows.
-11. It shows a daily timeline.
+11. It shows daily Time Details.
 12. It allows project creation.
 13. It allows assigning records to projects.
 14. It allows notes.
@@ -1518,7 +1563,7 @@ v0.1 Lite is done when:
 A user can launch the portable Windows app,
 accept the first-run privacy notice,
 record active window metadata locally,
-see a timeline,
+see Time Details,
 pause and resume recording,
 handle idle and excluded windows correctly,
 classify records into projects,

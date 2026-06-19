@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..db import dict_rows, get_connection, now_str
 from ..resource_patterns import infer_resource_identity
+from ..path_utils import looks_like_anchor_file_path
 
 
 def infer_or_create_resource(activity: dict) -> dict:
@@ -127,3 +128,81 @@ def list_resources() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM resource ORDER BY display_name COLLATE NOCASE").fetchall()
     return dict_rows(rows)
+
+
+def list_file_defaults() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.id, r.display_name, r.full_path, r.parent_dir, r.default_project_id,
+                   p.name AS project_name
+            FROM resource r
+            LEFT JOIN project p ON p.id = r.default_project_id
+            WHERE r.default_project_id IS NOT NULL
+              AND r.resource_role = 'anchor'
+              AND r.resource_type = 'file'
+            ORDER BY r.display_name COLLATE NOCASE, r.id
+            """
+        ).fetchall()
+    return dict_rows(rows)
+
+
+def create_or_update_file_default(file_path: str, project_id: int) -> int:
+    path = (file_path or "").strip()
+    if not looks_like_anchor_file_path(path):
+        raise ValueError("file path must be a supported local file path")
+    identity = infer_resource_identity(None, None, None, file_path_hint=path)
+    if identity.resource_role != "anchor" or identity.resource_type != "file" or not identity.full_path:
+        raise ValueError("file path must be a supported local file path")
+    ts = now_str()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO resource(
+                resource_role, resource_type, display_name, canonical_key,
+                app_name, process_name, title_hint, full_path, parent_dir, file_stem,
+                default_project_id, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(canonical_key) DO UPDATE SET
+                display_name = excluded.display_name,
+                title_hint = excluded.title_hint,
+                full_path = excluded.full_path,
+                parent_dir = excluded.parent_dir,
+                file_stem = excluded.file_stem,
+                default_project_id = excluded.default_project_id,
+                updated_at = excluded.updated_at
+            """,
+            (
+                identity.resource_role,
+                identity.resource_type,
+                identity.display_name,
+                identity.canonical_key,
+                identity.app_name,
+                identity.process_name,
+                identity.title_hint,
+                identity.full_path,
+                identity.parent_dir,
+                identity.file_stem,
+                project_id,
+                ts,
+                ts,
+            ),
+        )
+        row = conn.execute(
+            "SELECT id FROM resource WHERE canonical_key = ?",
+            (identity.canonical_key,),
+        ).fetchone()
+    return int(row["id"] if row else cur.lastrowid)
+
+
+def clear_file_default(resource_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE resource
+            SET default_project_id = NULL, updated_at = ?
+            WHERE id = ? AND resource_role = 'anchor' AND resource_type = 'file'
+            """,
+            (now_str(), resource_id),
+        )

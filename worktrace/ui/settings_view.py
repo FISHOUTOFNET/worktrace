@@ -8,10 +8,10 @@ import customtkinter as ctk
 
 from .. import __version__
 from ..config import resolve_paths
-from ..constants import PRIVACY_NOTICE_TEXT
 from ..services import export_service, privacy_service
 from ..services.settings_service import get_setting, set_setting
 from . import design
+from .first_run_dialog import PrivacyNoticeDialog
 
 
 class SettingsView(ctk.CTkFrame):
@@ -127,7 +127,7 @@ class SettingsView(ctk.CTkFrame):
             entry.insert(0, folder)
 
     def show_notice(self) -> None:
-        messagebox.showinfo("WorkTrace 隐私说明", PRIVACY_NOTICE_TEXT)
+        PrivacyNoticeDialog(self)
 
     def export_all(self) -> None:
         export_dir = Path(get_setting("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
