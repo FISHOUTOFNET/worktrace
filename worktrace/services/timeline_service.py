@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ..constants import STATUS_NORMAL, TIME_FORMAT, UNCATEGORIZED_PROJECT
+from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from ..db import dict_rows, get_connection, now_str
 from ..resource_patterns import extract_anchor_file_name
 from . import folder_rule_service
 from .activity_service import update_activities_project
 from .context_service import recompute_context_assignments_for_date
 from .project_service import get_or_create_uncategorized_project
+from .settings_service import get_int_setting
+
+SHORT_CONTEXT_MERGE_SECONDS = 5 * 60
 
 
-def get_project_sessions_by_date(date: str) -> list[dict]:
+def get_project_sessions_by_date(date: str, include_hidden: bool = True) -> list[dict]:
     recompute_context_assignments_for_date(date)
     start = f"{date} 00:00:00"
     end = f"{date} 23:59:59"
@@ -33,13 +36,15 @@ def get_project_sessions_by_date(date: str) -> list[dict]:
             LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
             WHERE a.is_deleted = 0
               AND a.start_time BETWEEN ? AND ?
+              AND (? = 1 OR a.is_hidden = 0)
             ORDER BY a.start_time ASC, a.id ASC
             """,
-            (start, end),
+            (start, end, int(include_hidden)),
         ).fetchall()
+    rows = _with_reporting_projects(_with_display_projects(dict_rows(rows), uncategorized_id))
     sessions: list[dict] = []
     current: list[dict] = []
-    for row in _with_display_projects(dict_rows(rows), uncategorized_id):
+    for row in rows:
         if not current:
             current = [row]
             continue
@@ -267,16 +272,16 @@ def _load_session_rows(activity_ids: list[int], newest_first: bool = False) -> l
 
 
 def _can_merge(previous: dict, current: dict) -> bool:
-    if previous["status"] != STATUS_NORMAL or current["status"] != STATUS_NORMAL:
+    if not (_can_participate_in_report_session(previous) and _can_participate_in_report_session(current)):
         return False
-    return str(previous.get("display_project_key") or "") == str(current.get("display_project_key") or "")
+    return str(previous.get("report_project_key") or "") == str(current.get("report_project_key") or "")
 
 
 def _build_session(rows: list[dict]) -> dict:
     first = rows[0]
     last = rows[-1]
-    project_id = int(first.get("effective_project_id") or get_or_create_uncategorized_project())
-    project_name = first.get("display_project_name") or UNCATEGORIZED_PROJECT
+    project_id = int(first.get("report_project_id") or first.get("effective_project_id") or get_or_create_uncategorized_project())
+    project_name = first.get("report_project_name") or first.get("display_project_name") or UNCATEGORIZED_PROJECT
     duration = sum(_display_duration(row) for row in rows)
     activity_ids = [int(row["id"]) for row in rows]
     status_summary = _status_summary(rows)
@@ -292,7 +297,7 @@ def _build_session(rows: list[dict]) -> dict:
         "status": first.get("status") if len({row.get("status") for row in rows}) == 1 else "mixed",
         "status_summary": status_summary,
         "is_uncategorized": project_id == int(get_or_create_uncategorized_project()),
-        "is_suggested_project": bool(first.get("is_suggested_project")),
+        "is_suggested_project": bool(first.get("report_is_suggested_project", first.get("is_suggested_project"))),
     }
 
 
@@ -300,6 +305,103 @@ def _with_display_projects(rows: list[dict], uncategorized_id: int) -> list[dict
     for row in rows:
         _attach_display_project(row, uncategorized_id)
     return rows
+
+
+def _with_reporting_projects(rows: list[dict]) -> list[dict]:
+    for row in rows:
+        _attach_original_report_project(row)
+    carry_minutes = max(0, get_int_setting("context_carry_minutes", 15))
+    if carry_minutes <= 0:
+        return rows
+    for anchor_index, anchor in enumerate(rows):
+        if not _is_project_anchor(anchor):
+            continue
+        merge = _find_short_context_merge(rows, anchor_index, carry_minutes)
+        if merge is None:
+            continue
+        for interrupt_index in merge:
+            _attach_merged_report_project(rows[interrupt_index], anchor)
+    return rows
+
+
+def _attach_original_report_project(row: dict) -> None:
+    row["report_project_id"] = row.get("effective_project_id")
+    row["report_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
+    row["report_project_key"] = row.get("display_project_key") or ""
+    row["report_is_suggested_project"] = bool(row.get("is_suggested_project"))
+    row["report_context_merged"] = False
+
+
+def _attach_merged_report_project(row: dict, anchor: dict) -> None:
+    row["report_project_id"] = anchor.get("effective_project_id")
+    row["report_project_name"] = anchor.get("display_project_name") or UNCATEGORIZED_PROJECT
+    row["report_project_key"] = anchor.get("display_project_key") or ""
+    row["report_is_suggested_project"] = bool(anchor.get("is_suggested_project"))
+    row["report_context_merged"] = True
+
+
+def _find_short_context_merge(rows: list[dict], anchor_index: int, carry_minutes: int) -> list[int] | None:
+    anchor = rows[anchor_index]
+    anchor_key = str(anchor.get("display_project_key") or "")
+    interrupt_indices: list[int] = []
+    after_interrupt_block = False
+    for pos in range(anchor_index + 1, len(rows)):
+        row = rows[pos]
+        if _is_project_anchor(row) and str(row.get("display_project_key") or "") == anchor_key:
+            if (
+                interrupt_indices
+                and _seconds_for_rows(rows, interrupt_indices) < SHORT_CONTEXT_MERGE_SECONDS
+                and _minutes_between(_anchor_context_time(anchor), row["start_time"]) <= carry_minutes
+            ):
+                return interrupt_indices
+            return None
+        if _is_same_report_project_normal(row, anchor_key):
+            if interrupt_indices:
+                after_interrupt_block = True
+            continue
+        if _is_short_merge_interrupt(row, anchor_key):
+            if after_interrupt_block:
+                return None
+            interrupt_indices.append(pos)
+            continue
+        return None
+    return None
+
+
+def _is_project_anchor(row: dict) -> bool:
+    return (
+        row.get("status") == STATUS_NORMAL
+        and row.get("resource_role") == "anchor"
+        and (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
+    )
+
+
+def _is_same_report_project_normal(row: dict, anchor_key: str) -> bool:
+    return row.get("status") == STATUS_NORMAL and str(row.get("display_project_key") or "") == anchor_key
+
+
+def _is_short_merge_interrupt(row: dict, anchor_key: str) -> bool:
+    if row.get("status") == STATUS_IDLE:
+        return True
+    return row.get("status") == STATUS_NORMAL and str(row.get("display_project_key") or "") != anchor_key
+
+
+def _seconds_for_rows(rows: list[dict], indexes: list[int]) -> int:
+    return sum(_display_duration(rows[index]) for index in indexes)
+
+
+def _can_participate_in_report_session(row: dict) -> bool:
+    return row.get("status") == STATUS_NORMAL or bool(row.get("report_context_merged"))
+
+
+def _anchor_context_time(row: dict) -> str:
+    return row.get("end_time") or row.get("start_time")
+
+
+def _minutes_between(start: str, end: str) -> float:
+    start_dt = datetime.strptime(start, TIME_FORMAT)
+    end_dt = datetime.strptime(end, TIME_FORMAT)
+    return max(0.0, (end_dt - start_dt).total_seconds() / 60)
 
 
 def _attach_display_project(row: dict, uncategorized_id: int) -> None:
@@ -334,17 +436,27 @@ def _session_sort_key(session: dict) -> tuple[str, int]:
     return (str(session.get("start_time") or ""), start_id)
 
 
+_STATUS_DISPLAY_NAMES = {
+    STATUS_IDLE: "空闲",
+    STATUS_PAUSED: "已暂停",
+    STATUS_EXCLUDED: "已排除",
+    STATUS_ERROR: "异常",
+}
+
+
 def _status_summary(rows: list[dict]) -> str:
-    if all(row.get("status") == STATUS_NORMAL for row in rows):
-        items = []
-        for row in rows:
+    items = []
+    for row in rows:
+        status = row.get("status")
+        if status == STATUS_NORMAL:
             label = _activity_summary_label(row)
-            if label and label not in items:
-                items.append(label)
-            if len(items) >= 3:
-                break
-        return "、".join(items) if items else "正常活动"
-    return "、".join(sorted({str(row.get("status") or "") for row in rows if row.get("status")}))
+        else:
+            label = _STATUS_DISPLAY_NAMES.get(status, str(status or ""))
+        if label and label not in items:
+            items.append(label)
+        if len(items) >= 3:
+            break
+    return "、".join(items) if items else "正常活动"
 
 
 def _activity_summary_label(row: dict) -> str:

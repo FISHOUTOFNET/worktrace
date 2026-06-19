@@ -8,15 +8,16 @@ from ..services import activity_service, statistics_service
 
 def format_duration(seconds: int | None) -> str:
     seconds = max(0, int(seconds or 0))
+    minutes = 0 if seconds == 0 else (seconds + 59) // 60
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def format_current_duration(seconds: int | None) -> str:
+    seconds = max(0, int(seconds or 0))
     hours, rem = divmod(seconds, 3600)
     minutes, seconds = divmod(rem, 60)
-    if hours:
-        if minutes:
-            return f"{hours}小时{minutes}分钟"
-        return f"{hours}小时"
-    if minutes:
-        return f"{minutes}分钟"
-    return f"{seconds}秒"
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def _validate_date_range(start_date: str, end_date: str) -> None:

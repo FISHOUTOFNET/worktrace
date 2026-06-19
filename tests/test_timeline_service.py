@@ -52,6 +52,71 @@ def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):
     assert all(row["event_count"] == 1 for row in app_rows)
 
 
+def test_short_other_project_between_same_project_anchors_reports_inside_anchor_session(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
+    b_activity = _activity("Word", "winword.exe", "B1.docx", "09:05:00", project_b)
+    _activity("Word", "winword.exe", "A2.docx", "09:09:00", project_a)
+    activity_service.close_current_open_record("2026-06-18 09:15:00")
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+    details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
+
+    assert len(sessions) == 1
+    assert sessions[0]["project_name"] == "A"
+    assert sessions[0]["duration_seconds"] == 900
+    assert sessions[0]["event_count"] == 3
+    assert [row["project_name"] for row in details] == ["A", "B", "A"]
+    assert activity_service.get_activity(b_activity)["project_id"] == project_b
+
+
+def test_short_idle_between_same_project_anchors_reports_inside_anchor_session(temp_db):
+    project_a = project_service.create_project("A")
+    _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
+    idle_activity = _activity("空闲", "idle", "用户空闲", "09:05:00", status="idle")
+    _activity("Word", "winword.exe", "A2.docx", "09:08:00", project_a)
+    activity_service.close_current_open_record("2026-06-18 09:12:00")
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+    details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
+    idle_detail = next(row for row in details if row["id"] == idle_activity)
+
+    assert len(sessions) == 1
+    assert sessions[0]["project_name"] == "A"
+    assert sessions[0]["status"] == "mixed"
+    assert sessions[0]["duration_seconds"] == 720
+    assert idle_detail["status"] == "idle"
+    assert idle_detail["project_name"] == UNCATEGORIZED_PROJECT
+
+
+def test_five_minute_other_project_between_anchors_does_not_merge(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
+    _activity("Word", "winword.exe", "B1.docx", "09:05:00", project_b)
+    _activity("Word", "winword.exe", "A2.docx", "09:10:00", project_a)
+    activity_service.close_current_open_record("2026-06-18 09:12:00")
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert [session["project_name"] for session in sessions] == ["A", "B", "A"]
+
+
+def test_short_other_project_does_not_merge_when_anchor_gap_exceeds_context_window(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    first_anchor = _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
+    activity_service.close_activity(first_anchor, "2026-06-18 09:00:30")
+    _activity("Word", "winword.exe", "B1.docx", "09:20:00", project_b)
+    _activity("Word", "winword.exe", "A2.docx", "09:24:00", project_a)
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert [session["project_name"] for session in sessions] == ["A", "B", "A"]
+
+
 def test_resource_level_correction_and_remember_rules(temp_db):
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")

@@ -2,16 +2,21 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from worktrace.exports.markdown_exporter import format_duration
+from worktrace.exports.markdown_exporter import format_current_duration, format_duration
 from worktrace.services import activity_service, export_service
 
 
-def test_format_duration_chinese_output():
-    assert format_duration(0) == "0秒"
-    assert format_duration(30) == "30秒"
-    assert format_duration(300) == "5分钟"
-    assert format_duration(4800) == "1小时20分钟"
-    assert format_duration(7380) == "2小时3分钟"
+def test_format_duration_hhmm_output():
+    assert format_duration(0) == "00:00"
+    assert format_duration(30) == "00:01"
+    assert format_duration(300) == "00:05"
+    assert format_duration(4800) == "01:20"
+    assert format_duration(7380) == "02:03"
+
+
+def test_format_current_duration_keeps_seconds():
+    assert format_current_duration(0) == "00:00:00"
+    assert format_current_duration(65) == "00:01:05"
 
 
 def test_excel_export_file_creation(temp_db, tmp_path):
@@ -49,7 +54,7 @@ def test_markdown_export_content(temp_db, tmp_path):
     assert "WorkTrace 周报草稿" in text
     assert "日期范围：2026-06-18 至 2026-06-18" in text
     assert "项目维度汇总" in text
-    assert "未归类：总计 30分钟" in text
+    assert "未归类：总计 00:30" in text
     assert "计费" not in text
     assert "未确认记录提醒" not in text
 

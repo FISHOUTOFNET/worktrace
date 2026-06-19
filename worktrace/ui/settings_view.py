@@ -2,89 +2,106 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
-from tkinter import BooleanVar, StringVar, filedialog, messagebox
 
 from .. import __version__
 from ..config import resolve_paths
 from ..constants import PRIVACY_NOTICE_TEXT
-from ..services import export_service, folder_rule_service, project_service, privacy_service
+from ..services import export_service, privacy_service
 from ..services.settings_service import get_setting, set_setting
+from . import design
 
 
 class SettingsView(ctk.CTkFrame):
     def __init__(self, master):
-        super().__init__(master)
+        super().__init__(master, fg_color="transparent")
         self._build()
 
     def _build(self) -> None:
-        self.scroll = ctk.CTkScrollableFrame(self)
-        self.scroll.pack(fill="both", expand=True)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
 
-        form = ctk.CTkFrame(self.scroll)
-        form.pack(fill="x", padx=12, pady=12)
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=24, pady=(22, 12))
+        header.grid_columnconfigure(0, weight=1)
+        design.label(header, text="设置与隐私", variant="title").grid(row=0, column=0, sticky="w")
+        design.label(header, text="调整采集频率、隐私排除和本地数据操作。", variant="caption").grid(
+            row=1, column=0, sticky="w", pady=(4, 0)
+        )
+        design.button(header, text="查看隐私说明", variant="subtle", command=self.show_notice).grid(
+            row=0, column=1, rowspan=2, sticky="e"
+        )
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
+        self.scroll.grid_columnconfigure(0, weight=1)
+
         self.entries: dict[str, ctk.CTkEntry] = {}
-        for row, (key, label) in enumerate(
-            [
-                ("poll_interval_seconds", "采集间隔秒"),
-                ("idle_threshold_minutes", "空闲阈值分钟"),
-                ("min_activity_seconds", "最小记录秒"),
-                ("min_history_seconds", "正式历史阈值秒"),
-                ("min_idle_segment_seconds", "空闲入库阈值秒"),
-                ("exclude_keywords", "隐私排除关键词"),
-                ("export_path", "导出目录"),
-            ]
-        ):
-            ctk.CTkLabel(form, text=label).grid(row=row, column=0, padx=8, pady=6, sticky="w")
-            entry = ctk.CTkEntry(form, width=420)
+        form = design.card(self.scroll)
+        form.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        form.grid_columnconfigure(1, weight=1)
+        design.label(form, text="采集与导出", variant="section").grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=18, pady=(16, 8)
+        )
+        fields = [
+            ("poll_interval_seconds", "采集间隔秒", "后台轮询当前窗口的间隔"),
+            ("idle_threshold_minutes", "空闲阈值分钟", "超过该时长判定为空闲"),
+            ("min_activity_seconds", "最小记录秒", "短于该时长的片段不作为正式记录"),
+            ("exclude_keywords", "隐私排除关键词", "用英文逗号分隔，命中后匿名记录"),
+            ("export_path", "导出目录", "Excel、Markdown 和本地数据导出的默认位置"),
+        ]
+        for row_index, (key, label, hint) in enumerate(fields, start=1):
+            design.label(form, text=label, variant="strong").grid(
+                row=row_index, column=0, sticky="w", padx=(18, 14), pady=7
+            )
+            entry = design.entry(form)
             entry.insert(0, get_setting(key, "") or "")
-            entry.grid(row=row, column=1, padx=8, pady=6, sticky="w")
+            entry.grid(row=row_index, column=1, sticky="ew", pady=7)
             self.entries[key] = entry
-        ctk.CTkButton(form, text="保存设置", command=self.save).grid(
-            row=len(self.entries), column=1, padx=8, pady=8, sticky="w"
+            if key == "export_path":
+                design.button(form, text="浏览", variant="ghost", width=72, command=self.choose_export_path).grid(
+                    row=row_index, column=2, sticky="e", padx=(8, 18), pady=7
+                )
+            else:
+                design.label(form, text=hint, variant="caption", wraplength=220, justify="left").grid(
+                    row=row_index, column=2, sticky="w", padx=(10, 18), pady=7
+                )
+        design.button(form, text="保存设置", command=self.save).grid(
+            row=len(fields) + 1, column=1, sticky="w", pady=(10, 18)
         )
 
-        actions = ctk.CTkFrame(self.scroll)
-        actions.pack(fill="x", padx=12, pady=8)
-        ctk.CTkButton(actions, text="新建项目", command=self.create_project).pack(side="left", padx=4)
-        ctk.CTkButton(actions, text="查看隐私说明", command=self.show_notice).pack(side="left", padx=4)
-        ctk.CTkButton(actions, text="导出全部本地数据", command=self.export_all).pack(side="left", padx=4)
-        ctk.CTkButton(actions, text="清空所有本地记录", fg_color="#a33", command=self.clear_all).pack(
-            side="left", padx=4
+        about = design.card(self.scroll)
+        about.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        about.grid_columnconfigure(0, weight=1)
+        design.label(about, text="关于本地数据", variant="section").grid(
+            row=0, column=0, sticky="w", padx=18, pady=(16, 8)
         )
+        self.info = design.label(about, text="", variant="caption", justify="left", anchor="w")
+        self.info.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 16))
 
-        self._build_project_bindings()
-        self._build_folder_rules()
-
-        self.info = ctk.CTkLabel(self.scroll, text="", justify="left")
-        self.info.pack(fill="x", padx=16, pady=12)
-
-    def _build_folder_rules(self) -> None:
-        section = ctk.CTkFrame(self.scroll)
-        section.pack(fill="x", padx=12, pady=8)
-        header = ctk.CTkFrame(section)
-        header.pack(fill="x", padx=8, pady=8)
-        ctk.CTkLabel(header, text="文件夹项目规则", font=ctk.CTkFont(weight="bold")).pack(side="left")
-        ctk.CTkButton(header, text="新增文件夹规则", command=self.add_folder_rule).pack(side="right")
-
-        self.folder_rules_frame = ctk.CTkFrame(section)
-        self.folder_rules_frame.pack(fill="x", padx=8, pady=(0, 8))
-        self.refresh_folder_rules()
-
-    def _build_project_bindings(self) -> None:
-        section = ctk.CTkFrame(self.scroll)
-        section.pack(fill="x", padx=12, pady=8)
-        header = ctk.CTkFrame(section)
-        header.pack(fill="x", padx=8, pady=8)
-        ctk.CTkLabel(header, text="用户项目绑定总览", font=ctk.CTkFont(weight="bold")).pack(side="left")
-        self.project_bindings_frame = ctk.CTkFrame(section)
-        self.project_bindings_frame.pack(fill="x", padx=8, pady=(0, 8))
-        self.refresh_project_bindings()
+        danger = design.card(self.scroll)
+        danger.grid(row=2, column=0, sticky="ew")
+        danger.grid_columnconfigure(0, weight=1)
+        design.label(danger, text="本地数据操作", variant="section").grid(
+            row=0, column=0, sticky="w", padx=18, pady=(16, 4)
+        )
+        design.label(
+            danger,
+            text="导出全部数据会包含本机保存的路径字段；清空后会重建默认设置且无法恢复。",
+            variant="caption",
+            anchor="w",
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 12))
+        actions = ctk.CTkFrame(danger, fg_color="transparent")
+        actions.grid(row=2, column=0, sticky="w", padx=18, pady=(0, 18))
+        design.button(actions, text="导出全部本地数据", variant="subtle", command=self.export_all).pack(
+            side="left", padx=(0, 8)
+        )
+        design.button(actions, text="清空所有本地记录", variant="danger", command=self.clear_all).pack(side="left")
 
     def refresh(self) -> None:
-        self.refresh_project_bindings()
-        self.refresh_folder_rules()
         paths = resolve_paths()
         self.info.configure(
             text=(
@@ -95,71 +112,6 @@ class SettingsView(ctk.CTkFrame):
             )
         )
 
-    def refresh_folder_rules(self) -> None:
-        if not hasattr(self, "folder_rules_frame"):
-            return
-        for child in self.folder_rules_frame.winfo_children():
-            child.destroy()
-        rules = folder_rule_service.list_folder_rules()
-        if not rules:
-            ctk.CTkLabel(self.folder_rules_frame, text="暂无文件夹规则", anchor="w").pack(fill="x", padx=8, pady=6)
-            return
-        for rule in rules:
-            row = ctk.CTkFrame(self.folder_rules_frame)
-            row.pack(fill="x", padx=4, pady=4)
-            text = (
-                f"{rule['folder_path']}  →  {rule.get('project_name') or '未知项目'}"
-                f"｜{'包含子文件夹' if int(rule['recursive']) else '仅直接文件'}"
-                f"｜{'已启用' if int(rule['enabled']) else '已禁用'}"
-            )
-            ctk.CTkLabel(row, text=text, anchor="w", wraplength=760).pack(side="left", fill="x", expand=True, padx=6)
-            action_text = "禁用" if int(rule["enabled"]) else "启用"
-            ctk.CTkButton(
-                row,
-                text=action_text,
-                width=56,
-                command=lambda rid=int(rule["id"]), enabled=not bool(int(rule["enabled"])): self.set_folder_rule_enabled(rid, enabled),
-            ).pack(side="right", padx=3)
-            ctk.CTkButton(
-                row,
-                text="删除",
-                width=56,
-                fg_color="#a33",
-                command=lambda rid=int(rule["id"]): self.delete_folder_rule(rid),
-            ).pack(side="right", padx=3)
-
-    def refresh_project_bindings(self) -> None:
-        if not hasattr(self, "project_bindings_frame"):
-            return
-        for child in self.project_bindings_frame.winfo_children():
-            child.destroy()
-        projects = project_service.list_project_bindings()
-        if not projects:
-            ctk.CTkLabel(self.project_bindings_frame, text="暂无用户项目", anchor="w").pack(fill="x", padx=8, pady=6)
-            return
-        for project in projects:
-            folder_rules = project["folder_rules"]
-            file_defaults = project["file_defaults"]
-            lines = [project["name"]]
-            if folder_rules:
-                lines.append("文件夹：" + "；".join(rule["folder_path"] for rule in folder_rules[:5]))
-                if len(folder_rules) > 5:
-                    lines.append(f"另有 {len(folder_rules) - 5} 条文件夹规则")
-            if file_defaults:
-                file_names = [row.get("full_path") or row.get("display_name") or "未知文件" for row in file_defaults[:5]]
-                lines.append("文件：" + "；".join(file_names))
-                if len(file_defaults) > 5:
-                    lines.append(f"另有 {len(file_defaults) - 5} 个文件")
-            if not folder_rules and not file_defaults:
-                lines.append("暂无绑定")
-            ctk.CTkLabel(
-                self.project_bindings_frame,
-                text="\n".join(lines),
-                anchor="w",
-                justify="left",
-                wraplength=860,
-            ).pack(fill="x", padx=8, pady=6)
-
     def save(self) -> None:
         for key, entry in self.entries.items():
             set_setting(key, entry.get())
@@ -167,84 +119,12 @@ class SettingsView(ctk.CTkFrame):
         self.refresh()
         messagebox.showinfo("已保存", "设置已保存")
 
-    def create_project(self) -> None:
-        name = ctk.CTkInputDialog(text="项目名称", title="新建项目").get_input()
-        if name:
-            try:
-                project_service.create_project(name)
-                messagebox.showinfo("已创建", name)
-                self.refresh_project_bindings()
-                self.refresh_folder_rules()
-            except Exception as exc:
-                messagebox.showerror("创建失败", str(exc))
-
-    def add_folder_rule(self) -> None:
-        folder = filedialog.askdirectory(title="选择要绑定项目的文件夹")
-        if not folder:
-            return
-        projects = project_service.list_user_projects()
-        if not projects:
-            messagebox.showerror("无法新增", "请先创建项目")
-            return
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("新增文件夹规则")
-        dialog.geometry("520x220")
-        dialog.transient(self)
-        dialog.grab_set()
-
-        ctk.CTkLabel(dialog, text=folder, wraplength=480, anchor="w").pack(fill="x", padx=14, pady=(14, 8))
-        names = [project["name"] for project in projects]
-        selected_name = StringVar(value=names[0])
-        ctk.CTkOptionMenu(dialog, values=names, variable=selected_name, width=300).pack(anchor="w", padx=14, pady=8)
-        recursive_var = BooleanVar(value=True)
-        ctk.CTkCheckBox(dialog, text="包含子文件夹", variable=recursive_var).pack(anchor="w", padx=14, pady=8)
-
-        def save_rule() -> None:
-            project = project_service.get_project_by_name(selected_name.get())
-            if not project:
-                messagebox.showerror("保存失败", "请选择有效项目")
-                return
-            dialog.destroy()
-            self._save_folder_rule(folder, int(project["id"]), recursive_var.get())
-
-        actions = ctk.CTkFrame(dialog)
-        actions.pack(fill="x", padx=14, pady=12)
-        ctk.CTkButton(actions, text="取消", width=72, command=dialog.destroy).pack(side="right", padx=(8, 0))
-        ctk.CTkButton(actions, text="保存", width=72, command=save_rule).pack(side="right")
-
-    def _save_folder_rule(self, folder: str, project_id: int, recursive: bool) -> None:
-        preview = folder_rule_service.preview_folder_rule_conflicts(folder, project_id)
-        if any(int(preview[key]) for key in preview):
-            message = (
-                f"下级已有不同项目的文件夹规则：{preview['child_folder_rule_conflicts']}\n"
-                f"具体文件已有不同项目：{preview['file_default_project_conflicts']}\n"
-                f"历史 activity 属于其他项目：{preview['other_project_activity_count']}\n"
-                f"手动指定且 safe 回填不会覆盖：{preview['manual_activity_count']}\n\n"
-                "将保留下级独立设置，且默认不自动回填历史。是否继续保存？"
-            )
-            if not messagebox.askyesno("规则冲突预览", message):
-                return
-        try:
-            rule_id = folder_rule_service.create_or_update_folder_rule(folder, project_id, recursive=recursive)
-            self.refresh_project_bindings()
-            self.refresh_folder_rules()
-            if messagebox.askyesno("已保存", "文件夹规则已保存。是否执行 safe 历史回填？"):
-                result = folder_rule_service.backfill_folder_rule(rule_id, mode="safe")
-                messagebox.showinfo("回填完成", f"已更新 {result['updated_activity_count']} 条记录")
-        except Exception as exc:
-            logging.exception("folder rule save failed")
-            messagebox.showerror("保存失败", str(exc))
-
-    def set_folder_rule_enabled(self, rule_id: int, enabled: bool) -> None:
-        folder_rule_service.set_folder_rule_enabled(rule_id, enabled)
-        self.refresh_project_bindings()
-        self.refresh_folder_rules()
-
-    def delete_folder_rule(self, rule_id: int) -> None:
-        if messagebox.askyesno("删除规则", "只删除规则本身，不会改写历史 activity。是否继续？"):
-            folder_rule_service.delete_folder_rule(rule_id)
-            self.refresh_project_bindings()
-            self.refresh_folder_rules()
+    def choose_export_path(self) -> None:
+        folder = filedialog.askdirectory(title="选择导出目录")
+        if folder:
+            entry = self.entries["export_path"]
+            entry.delete(0, "end")
+            entry.insert(0, folder)
 
     def show_notice(self) -> None:
         messagebox.showinfo("WorkTrace 隐私说明", PRIVACY_NOTICE_TEXT)
@@ -263,3 +143,4 @@ class SettingsView(ctk.CTkFrame):
         if messagebox.askyesno("确认清空", message):
             export_service.clear_all_local_data(confirm=True)
             messagebox.showinfo("已清空", "本地数据已清空并重建默认设置")
+            self.refresh()

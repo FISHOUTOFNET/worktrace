@@ -16,3 +16,26 @@ def test_statistics_aggregation(temp_db):
     stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
     assert stats[0]["project"] == "Client"
     assert stats[0]["total_duration"] == 3600
+
+
+def test_project_stats_use_short_context_merge_without_changing_raw_project(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    a1 = activity_service.create_activity(
+        "Word", "word.exe", "A1.docx", project_id=project_a, start_time="2026-06-18 09:00:00"
+    )
+    activity_service.finalize_created_activity(a1)
+    b = activity_service.create_activity(
+        "Word", "word.exe", "B1.docx", project_id=project_b, start_time="2026-06-18 09:05:00"
+    )
+    activity_service.finalize_created_activity(b)
+    a2 = activity_service.create_activity(
+        "Word", "word.exe", "A2.docx", project_id=project_a, start_time="2026-06-18 09:09:00"
+    )
+    activity_service.finalize_created_activity(a2)
+    activity_service.close_current_open_record("2026-06-18 09:15:00")
+
+    stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
+
+    assert stats == [{"project": "A", "total_duration": 900, "record_count": 3}]
+    assert activity_service.get_activity(b)["project_id"] == project_b

@@ -62,6 +62,10 @@ If a file path is known but no rule or file default matches, the Timeline may sh
 
 Context carry-over applies to all normal non-anchor auxiliary activity between nearby matching anchor files. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same project carry-over rules.
 
+For reporting, a short interruption is also folded into the surrounding anchor project: if two anchors for project A enclose a contiguous block under 5 minutes containing only another normal project or idle time, the Timeline session and project statistics count that block under A. The original activity status and project assignment are preserved in the detailed records.
+
+Activity history is persisted after 30 seconds. Duration displays use `hh:mm` everywhere except the current-activity label, which keeps a live `hh:mm:ss` counter.
+
 ## Collector Heartbeat
 
 The collector writes `collector_status` and `last_collector_heartbeat` into the settings table. The UI displays:

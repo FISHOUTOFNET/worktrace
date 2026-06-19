@@ -16,6 +16,8 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
         }
         setting = conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()
         removed_setting = conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone()
+        min_history = conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone()
+        min_idle = conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone()
         uncategorized = conn.execute("SELECT * FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
         resource_schema = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'resource'"
@@ -35,6 +37,8 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "activity_project_assignment" in tables
     assert setting["value"] == "15"
     assert removed_setting is None
+    assert min_history is None
+    assert min_idle is None
     assert uncategorized is not None
     assert uncategorized["created_by"] == "system"
     assert "'file', 'app'" in resource_schema
@@ -73,4 +77,6 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
         assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
         assert conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone() is None
+        assert conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone() is None
+        assert conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone() is None
         assert conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone() is not None

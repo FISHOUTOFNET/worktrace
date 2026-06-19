@@ -20,10 +20,10 @@ def _normal(title: str) -> ActiveWindow:
     return ActiveWindow(title, f"{title.lower()}.exe", title)
 
 
-def test_single_auto_activity_59_seconds_has_snapshot_but_no_history_stats_or_export(temp_db, tmp_path):
+def test_single_auto_activity_29_seconds_has_snapshot_but_no_history_stats_or_export(temp_db, tmp_path):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:00:00")
-    machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:00:59")
+    machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:00:29")
 
     assert _snapshot()["window_title"] == "Doc"
     assert _snapshot()["is_persisted"] is False
@@ -36,11 +36,11 @@ def test_single_auto_activity_59_seconds_has_snapshot_but_no_history_stats_or_ex
     assert load_workbook(xlsx_path)["Activity Logs"].max_row == 1
 
 
-def test_single_auto_activity_60_seconds_persists_once_with_actual_start(temp_db):
+def test_single_auto_activity_30_seconds_persists_once_with_actual_start(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:00:00")
-    machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:01:00")
-    machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:01:30")
+    machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:00:30")
+    machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:00:45")
 
     rows = _rows()
     assert len(rows) == 1
@@ -65,15 +65,15 @@ def test_short_activity_merges_into_previous_formal_normal_activity(temp_db):
 def test_multiple_short_activities_merge_into_previous_formal_activity(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
-    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:30")
     machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:05:00")
     machine.transition_to("recording", _normal("C"), at_time="2026-06-18 09:05:20")
-    machine.transition_to("recording", _normal("D"), at_time="2026-06-18 09:05:50")
-    machine.transition_to("stopped", at_time="2026-06-18 09:05:59")
+    machine.transition_to("recording", _normal("D"), at_time="2026-06-18 09:05:29")
+    machine.transition_to("stopped", at_time="2026-06-18 09:05:29")
 
     rows = _rows()
     assert len(rows) == 1
-    assert rows[0]["duration_seconds"] == 359
+    assert rows[0]["duration_seconds"] == 329
 
 
 def test_initial_short_activity_merges_into_first_formal_normal_activity(temp_db):
@@ -106,15 +106,15 @@ def test_persisted_current_activity_continues_to_90_seconds_without_duplicate_in
 def test_stop_short_current_activity_merges_or_pends(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:00:00")
-    machine.transition_to("stopped", at_time="2026-06-18 09:00:30")
+    machine.transition_to("stopped", at_time="2026-06-18 09:00:29")
     assert _rows() == []
-    assert settings_service.get_setting("pending_short_seconds") == "30"
+    assert settings_service.get_setting("pending_short_seconds") == "29"
 
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
-    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:02:00")
-    machine.transition_to("stopped", at_time="2026-06-18 09:02:00")
-    assert _rows()[0]["duration_seconds"] == 90
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:30")
+    machine.transition_to("stopped", at_time="2026-06-18 09:01:30")
+    assert _rows()[0]["duration_seconds"] == 59
 
 
 def test_short_idle_polling_does_not_create_history(temp_db):
@@ -125,10 +125,10 @@ def test_short_idle_polling_does_not_create_history(temp_db):
     assert _snapshot()["status"] == "idle"
 
 
-def test_idle_70_seconds_creates_one_idle_record(temp_db):
+def test_idle_30_seconds_creates_one_idle_record(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("idle", at_time="2026-06-18 09:00:00")
-    for second in range(1, 71):
+    for second in range(1, 31):
         machine.transition_to("idle", at_time=f"2026-06-18 09:{second // 60:02d}:{second % 60:02d}")
         assert len(_rows()) <= 1
 
@@ -143,9 +143,9 @@ def test_short_idle_merges_into_previous_normal_when_normal_resumes(temp_db):
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
     machine.transition_to("idle", at_time="2026-06-18 09:05:00")
-    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:05:40")
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:05:29")
 
     rows = _rows()
     assert len(rows) == 1
     assert rows[0]["window_title"] == "A"
-    assert rows[0]["duration_seconds"] == 340
+    assert rows[0]["duration_seconds"] == 329

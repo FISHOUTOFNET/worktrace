@@ -50,7 +50,7 @@ def test_pause_resume_short_segments_do_not_create_history(temp_db):
         ActiveWindow("Word", "word.exe", "Doc"),
         at_time="2026-06-18 09:00:00",
     )
-    machine.transition_to("paused", at_time="2026-06-18 09:00:30")
+    machine.transition_to("paused", at_time="2026-06-18 09:00:29")
     machine.transition_to(
         "recording",
         ActiveWindow("Excel", "excel.exe", "Sheet"),

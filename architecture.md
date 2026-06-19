@@ -506,14 +506,20 @@ Seed default settings:
 poll_interval_seconds = 3
 idle_threshold_minutes = 5
 min_activity_seconds = 10
+current_activity_snapshot =
+pending_short_seconds = 0
 exclude_keywords = 微信,银行,密码,个人
 collector_status = stopped
 last_collector_heartbeat =
 last_shutdown_at =
 first_run_notice_accepted = false
 export_path = Documents\WorkTrace Exports
-ui_refresh_seconds = 2
+ui_refresh_seconds = 5
+user_paused = false
+context_carry_minutes = 15
 ```
+
+The formal activity history threshold is fixed in code at 30 seconds. It is not stored in settings and is not configurable from the Settings page.
 
 Seed default project:
 
@@ -1019,6 +1025,16 @@ Folder project rules match only anchor file resources with a recognized full pat
 
 Suggested project names are display-only Timeline hints. They may be derived from a known non-generic parent folder name, but must not be derived from a bare file name or file stem.
 
+### 22.5 Reporting Context Merge
+
+Timeline sessions and project statistics use an in-memory reporting project in addition to the raw activity project.
+
+If two anchors for project A enclose a contiguous block under 5 minutes containing only a different normal project or idle records, count that block under A for the Timeline session and project statistics.
+
+This reporting merge must not update `activity_log.project_id`, `activity_project_assignment`, the raw status, or the detailed activity rows.
+
+The reporting merge is only a supplement to existing context rules. If the enclosing A anchors exceed `context_carry_minutes`, do not merge the block.
+
 ---
 
 ## 23. Services
@@ -1143,6 +1159,7 @@ Must show:
 6. note editor
 7. delete action
 8. filters for uncategorized records
+9. current activity with a live `hh:mm:ss` counter
 
 Columns:
 
@@ -1170,6 +1187,8 @@ Must show:
 7. project stats table
 8. export Excel button
 9. export Markdown button
+
+Project stats use the reporting context merge. Total, effective, idle, excluded, and paused summary durations continue to use raw activity status and duration.
 
 ### 24.3 Settings and Privacy Page
 
@@ -1207,6 +1226,8 @@ Total Duration
 Record Count
 ```
 
+Summary durations are formatted as `hh:mm` and use project statistics after reporting context merge.
+
 Sheet 2: `Activity Logs`
 
 Columns:
@@ -1222,6 +1243,8 @@ Window Title
 Project
 Note
 ```
+
+Activity log durations are formatted as `hh:mm`. Activity log rows preserve raw status and project assignment.
 
 Default export filtering:
 
@@ -1333,6 +1356,9 @@ Rules:
 2. If negative, set status to `error`.
 3. If a single normal record exceeds 4 hours, keep it and show it for user review.
 4. If system sleep or large time jump is detected, close the previous record and keep the next relevant record available for user review.
+5. Persist normal, idle, paused, excluded, and error segments once they reach 30 seconds.
+6. Display stored durations as `hh:mm`, rounding any positive sub-minute value up to `00:01`.
+7. Display the current activity counter as `hh:mm:ss` and refresh it every second without requiring a full Timeline refresh.
 
 ---
 

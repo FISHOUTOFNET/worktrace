@@ -17,9 +17,10 @@ from ..constants import (
 )
 from ..resource_patterns import infer_resource_identity
 from ..services import activity_service
-from ..services.settings_service import get_int_setting, get_setting, set_setting
+from ..services.settings_service import get_setting, set_setting
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
+HISTORY_PERSIST_THRESHOLD_SECONDS = 30
 
 
 def _parse_time(value: str) -> datetime:
@@ -136,9 +137,7 @@ class AutoActivityRecorder:
         activity_service.set_activity_duration(self.persisted_activity_id, elapsed + self.current_extra_seconds)
 
     def _threshold_for_status(self, status: str) -> int:
-        if status == STATUS_IDLE:
-            return max(1, get_int_setting("min_idle_segment_seconds", 60))
-        return max(1, get_int_setting("min_history_seconds", 60))
+        return HISTORY_PERSIST_THRESHOLD_SECONDS
 
     def _merge_or_pend_short_seconds(self, seconds: int) -> None:
         if seconds <= 0:

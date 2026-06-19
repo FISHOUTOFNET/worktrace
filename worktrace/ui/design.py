@@ -1,0 +1,171 @@
+from __future__ import annotations
+
+from tkinter import ttk
+
+import customtkinter as ctk
+
+
+FONT_FAMILY = "Microsoft YaHei UI"
+FONT_BODY = (FONT_FAMILY, 13)
+FONT_BODY_STRONG = (FONT_FAMILY, 13, "bold")
+FONT_CAPTION = (FONT_FAMILY, 12)
+FONT_CAPTION_STRONG = (FONT_FAMILY, 12, "bold")
+FONT_TITLE = (FONT_FAMILY, 24, "bold")
+FONT_SUBTITLE = (FONT_FAMILY, 16, "bold")
+FONT_SECTION = (FONT_FAMILY, 15, "bold")
+FONT_MONO = ("Consolas", 12)
+
+WINDOW_BG = ("#f5f7fb", "#111827")
+SIDEBAR_BG = ("#eef2f8", "#0f172a")
+PANEL_BG = ("#ffffff", "#182235")
+PANEL_ALT_BG = ("#f8fafc", "#111827")
+CARD_BG = ("#ffffff", "#1f2937")
+CARD_SUBTLE_BG = ("#f8fafc", "#172033")
+BORDER = ("#d9e2ef", "#334155")
+TEXT = ("#1f2937", "#f8fafc")
+MUTED_TEXT = ("#64748b", "#94a3b8")
+SUBTLE_TEXT = ("#7c8da5", "#a1adbd")
+ACCENT = ("#2563eb", "#60a5fa")
+ACCENT_HOVER = ("#1d4ed8", "#3b82f6")
+ACCENT_SOFT = ("#dbeafe", "#1e3a8a")
+SUCCESS = ("#0f8b5f", "#34d399")
+SUCCESS_SOFT = ("#dcfce7", "#064e3b")
+WARNING = ("#b45309", "#fbbf24")
+WARNING_SOFT = ("#fef3c7", "#78350f")
+DANGER = ("#b42318", "#f87171")
+DANGER_HOVER = ("#991b1b", "#ef4444")
+DANGER_SOFT = ("#fee2e2", "#7f1d1d")
+NEUTRAL_SOFT = ("#e2e8f0", "#334155")
+
+RADIUS_SM = 8
+RADIUS_MD = 10
+RADIUS_LG = 14
+PAD_X = 18
+PAD_Y = 16
+
+
+def apply_app_theme() -> None:
+    ctk.set_appearance_mode("System")
+    ctk.set_default_color_theme("blue")
+
+
+def page_frame(master) -> ctk.CTkFrame:
+    return ctk.CTkFrame(master, fg_color="transparent")
+
+
+def card(master, **kwargs) -> ctk.CTkFrame:
+    kwargs.setdefault("fg_color", CARD_BG)
+    kwargs.setdefault("corner_radius", RADIUS_LG)
+    kwargs.setdefault("border_width", 1)
+    kwargs.setdefault("border_color", BORDER)
+    return ctk.CTkFrame(master, **kwargs)
+
+
+def section(master, **kwargs) -> ctk.CTkFrame:
+    kwargs.setdefault("fg_color", PANEL_BG)
+    kwargs.setdefault("corner_radius", RADIUS_LG)
+    kwargs.setdefault("border_width", 1)
+    kwargs.setdefault("border_color", BORDER)
+    return ctk.CTkFrame(master, **kwargs)
+
+
+def label(master, text: str = "", variant: str = "body", **kwargs) -> ctk.CTkLabel:
+    fonts = {
+        "title": FONT_TITLE,
+        "subtitle": FONT_SUBTITLE,
+        "section": FONT_SECTION,
+        "body": FONT_BODY,
+        "strong": FONT_BODY_STRONG,
+        "caption": FONT_CAPTION,
+        "caption_strong": FONT_CAPTION_STRONG,
+        "mono": FONT_MONO,
+    }
+    kwargs.setdefault("font", fonts.get(variant, FONT_BODY))
+    kwargs.setdefault("text_color", TEXT if variant not in {"caption", "mono"} else MUTED_TEXT)
+    return ctk.CTkLabel(master, text=text, **kwargs)
+
+
+def button(master, text: str, variant: str = "primary", **kwargs) -> ctk.CTkButton:
+    kwargs.setdefault("font", FONT_BODY_STRONG if variant == "primary" else FONT_BODY)
+    kwargs.setdefault("corner_radius", RADIUS_SM)
+    kwargs.setdefault("height", 34)
+    if variant == "primary":
+        kwargs.setdefault("fg_color", ACCENT)
+        kwargs.setdefault("hover_color", ACCENT_HOVER)
+        kwargs.setdefault("text_color", "#ffffff")
+    elif variant == "danger":
+        kwargs.setdefault("fg_color", DANGER)
+        kwargs.setdefault("hover_color", DANGER_HOVER)
+        kwargs.setdefault("text_color", "#ffffff")
+    elif variant == "subtle":
+        kwargs.setdefault("fg_color", NEUTRAL_SOFT)
+        kwargs.setdefault("hover_color", ("#cbd5e1", "#475569"))
+        kwargs.setdefault("text_color", TEXT)
+    elif variant == "ghost":
+        kwargs.setdefault("fg_color", "transparent")
+        kwargs.setdefault("hover_color", NEUTRAL_SOFT)
+        kwargs.setdefault("text_color", TEXT)
+    return ctk.CTkButton(master, text=text, **kwargs)
+
+
+def entry(master, **kwargs) -> ctk.CTkEntry:
+    kwargs.setdefault("font", FONT_BODY)
+    kwargs.setdefault("height", 34)
+    kwargs.setdefault("corner_radius", RADIUS_SM)
+    kwargs.setdefault("border_color", BORDER)
+    return ctk.CTkEntry(master, **kwargs)
+
+
+def option_menu(master, **kwargs) -> ctk.CTkOptionMenu:
+    kwargs.setdefault("font", FONT_BODY)
+    kwargs.setdefault("dropdown_font", FONT_BODY)
+    kwargs.setdefault("height", 34)
+    kwargs.setdefault("corner_radius", RADIUS_SM)
+    return ctk.CTkOptionMenu(master, **kwargs)
+
+
+def checkbox(master, **kwargs) -> ctk.CTkCheckBox:
+    kwargs.setdefault("font", FONT_BODY)
+    kwargs.setdefault("text_color", TEXT)
+    return ctk.CTkCheckBox(master, **kwargs)
+
+
+def configure_tree_style(owner) -> None:
+    style = ttk.Style(owner)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    style.configure(
+        "WorkTrace.Treeview",
+        background="#ffffff",
+        fieldbackground="#ffffff",
+        foreground="#1f2937",
+        rowheight=36,
+        borderwidth=0,
+        relief="flat",
+        font=FONT_CAPTION,
+    )
+    style.configure(
+        "WorkTrace.Treeview.Heading",
+        background="#f1f5f9",
+        foreground="#475569",
+        borderwidth=0,
+        relief="flat",
+        font=FONT_CAPTION_STRONG,
+    )
+    style.map(
+        "WorkTrace.Treeview",
+        background=[("selected", "#dbeafe")],
+        foreground=[("selected", "#1e3a8a")],
+    )
+
+
+def status_palette(status: str) -> tuple[tuple[str, str], tuple[str, str]]:
+    if status in {"running", "记录中"}:
+        return SUCCESS_SOFT, SUCCESS
+    if status in {"paused", "已暂停"}:
+        return WARNING_SOFT, WARNING
+    if status in {"error", "状态异常"}:
+        return DANGER_SOFT, DANGER
+    return NEUTRAL_SOFT, MUTED_TEXT

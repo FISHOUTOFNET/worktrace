@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import date
+from datetime import date, datetime
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 import customtkinter as ctk
 
-from ..constants import UNCATEGORIZED_PROJECT
-from ..exports.markdown_exporter import format_duration
+from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
+from ..exports.markdown_exporter import format_current_duration, format_duration
 from ..services import activity_service, folder_rule_service, project_service, timeline_service
 from ..services.settings_service import get_bool_setting, get_setting, set_setting
+from . import design
 
 
-UI_FONT = ("Microsoft YaHei UI", 13)
-UI_FONT_BOLD = ("Microsoft YaHei UI", 13, "bold")
-TREE_FONT = ("Microsoft YaHei UI", 12)
-TREE_HEADING_FONT = ("Microsoft YaHei UI", 12, "bold")
+UI_FONT = design.FONT_BODY
+UI_FONT_BOLD = design.FONT_BODY_STRONG
+TREE_FONT = design.FONT_CAPTION
+TREE_HEADING_FONT = design.FONT_CAPTION_STRONG
 TREE_ROWHEIGHT = 36
 
 
@@ -48,8 +49,10 @@ class TimelineView(ctk.CTkFrame):
         self._resource_selected_at = 0.0
         self._tree_column_widths: dict[str, dict[str, int]] = {}
         self._tree_keys: dict[int, str] = {}
+        self._current_activity_after_id: str | None = None
 
         self._build()
+        self._schedule_current_activity_tick()
 
     def _build(self) -> None:
         self.grid_rowconfigure(0, weight=0)
@@ -57,32 +60,51 @@ class TimelineView(ctk.CTkFrame):
         self.grid_rowconfigure(2, weight=0)
         self.grid_columnconfigure(0, weight=1)
 
-        self.toolbar_frame = ctk.CTkFrame(self)
-        self.toolbar_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=12)
+        self.toolbar_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.toolbar_frame.grid(row=0, column=0, sticky="ew", padx=24, pady=(22, 12))
+        self.toolbar_frame.grid_columnconfigure(0, weight=1)
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.content_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        self.content_frame.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 12))
         self.content_frame.grid_rowconfigure(0, weight=1)
-        self.content_frame.grid_rowconfigure(1, weight=0)
-        self.content_frame.grid_rowconfigure(2, weight=1)
-        self.content_frame.grid_columnconfigure(0, weight=1)
-        self.editor_scroll_frame = ctk.CTkScrollableFrame(self, height=260)
+        self.content_frame.grid_columnconfigure(0, weight=0, minsize=410)
+        self.content_frame.grid_columnconfigure(1, weight=1)
+        self.editor_scroll_frame = ctk.CTkScrollableFrame(
+            self,
+            height=260,
+            fg_color=design.CARD_BG,
+            corner_radius=design.RADIUS_LG,
+            border_width=1,
+            border_color=design.BORDER,
+        )
         self.editor_panel = self.editor_scroll_frame
-        self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 24))
         self.editor_scroll_frame.grid_columnconfigure(0, weight=1)
 
         top = self.toolbar_frame
-        self.status_label = self._label(top, text="采集器未运行")
-        self.status_label.pack(side="left", padx=6)
-        self.pause_button = self._button(top, text="暂停", width=90, command=self.toggle_pause)
-        self.pause_button.pack(side="left", padx=6)
-        self._label(top, text="日期").pack(side="left", padx=(16, 4))
-        self.date_entry = self._entry(top, textvariable=self.date_var, width=120)
+        title_box = ctk.CTkFrame(top, fg_color="transparent")
+        title_box.grid(row=0, column=0, sticky="w")
+        self._label(title_box, text="时间线", font=design.FONT_TITLE).pack(anchor="w")
+        self.current_activity_label = self._label(
+            title_box,
+            text="当前活动：无",
+            text_color=design.MUTED_TEXT,
+            wraplength=640,
+            justify="left",
+        )
+        self.current_activity_label.pack(anchor="w", pady=(4, 0))
+
+        controls = ctk.CTkFrame(top, fg_color="transparent")
+        controls.grid(row=0, column=1, sticky="e")
+        self.status_label = self._label(controls, text="采集器未运行", text_color=design.MUTED_TEXT)
+        self.status_label.pack(side="left", padx=(0, 8))
+        self.pause_button = self._button(controls, text="暂停", width=78, command=self.toggle_pause, fg_color=design.NEUTRAL_SOFT, text_color=design.TEXT)
+        self.pause_button.pack(side="left", padx=(0, 8))
+        self._label(controls, text="日期", text_color=design.MUTED_TEXT).pack(side="left", padx=(4, 4))
+        self.date_entry = self._entry(controls, textvariable=self.date_var, width=120)
         self.date_entry.pack(side="left")
-        self.refresh_button = self._button(top, text="刷新", width=70, command=self.refresh)
-        self.refresh_button.pack(side="left", padx=6)
-        self._checkbox(top, text="仅未归类", variable=self.only_uncategorized, command=self.refresh).pack(side="left", padx=6)
-        self.current_activity_label = self._label(top, text="当前活动：无")
-        self.current_activity_label.pack(side="left", padx=(16, 6))
+        self.refresh_button = self._button(controls, text="刷新", width=70, command=self.refresh)
+        self.refresh_button.pack(side="left", padx=8)
+        self._checkbox(controls, text="仅未归类", variable=self.only_uncategorized, command=self.refresh).pack(side="left")
 
         self._build_session_table()
         self._build_detail_area()
@@ -93,58 +115,99 @@ class TimelineView(ctk.CTkFrame):
 
     def _build_session_table(self) -> None:
         self._configure_tree_style()
-        columns = ("time", "project", "duration", "count", "summary")
-        headings = {"time": "时间", "project": "项目/状态", "duration": "时长", "count": "活动数", "summary": "摘要"}
-        widths = {"time": 128, "project": 180, "duration": 100, "count": 72, "summary": 420}
-        self.session_tree_frame = self._make_tree_frame(self.content_frame)
-        self.session_tree_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
-        self.session_tree = self._make_tree(self.session_tree_frame, "sessions", columns, headings, widths, height=8)
+        self.session_panel = ctk.CTkFrame(
+            self.content_frame,
+            fg_color=design.CARD_BG,
+            corner_radius=design.RADIUS_LG,
+            border_width=1,
+            border_color=design.BORDER,
+        )
+        self.session_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self.session_panel.grid_rowconfigure(1, weight=1)
+        self.session_panel.grid_columnconfigure(0, weight=1)
+        session_header = ctk.CTkFrame(self.session_panel, fg_color="transparent")
+        session_header.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
+        session_header.grid_columnconfigure(0, weight=1)
+        self._label(session_header, text="今日会话", font=design.FONT_SECTION).grid(row=0, column=0, sticky="w")
+        self.session_count_label = self._label(session_header, text="0 条", text_color=design.MUTED_TEXT)
+        self.session_count_label.grid(row=0, column=1, sticky="e")
+        columns = ("time", "project", "duration", "summary")
+        headings = {"time": "时间", "project": "项目/状态", "duration": "时长", "summary": "摘要"}
+        widths = {"time": 88, "project": 130, "duration": 72, "summary": 180}
+        self.session_tree_frame = self._make_tree_frame(self.session_panel)
+        self.session_tree_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.session_tree = self._make_tree(self.session_tree_frame, "sessions", columns, headings, widths, height=14)
         self.session_tree.bind("<<TreeviewSelect>>", self._on_session_select)
 
     def _build_detail_area(self) -> None:
-        header = ctk.CTkFrame(self.content_frame)
-        header.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-        self.detail_label = self._label(header, text="请选择项目会话")
-        self.detail_label.pack(side="left", padx=6, pady=6)
+        self.detail_panel = ctk.CTkFrame(
+            self.content_frame,
+            fg_color=design.CARD_BG,
+            corner_radius=design.RADIUS_LG,
+            border_width=1,
+            border_color=design.BORDER,
+        )
+        self.detail_panel.grid(row=0, column=1, sticky="nsew")
+        self.detail_panel.grid_rowconfigure(1, weight=1)
+        self.detail_panel.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
+        header.grid_columnconfigure(0, weight=1)
+        title_stack = ctk.CTkFrame(header, fg_color="transparent")
+        title_stack.grid(row=0, column=0, sticky="ew")
+        self.detail_label = self._label(title_stack, text="请选择项目会话", font=design.FONT_SECTION)
+        self.detail_label.pack(anchor="w")
+        self.detail_hint_label = self._label(title_stack, text="选择左侧会话后整理资源或查看明细", text_color=design.MUTED_TEXT)
+        self.detail_hint_label.pack(anchor="w", pady=(2, 0))
+
+        actions = ctk.CTkFrame(header, fg_color="transparent")
+        actions.grid(row=0, column=1, sticky="e")
         self.folder_rule_button = self._button(
-            header,
+            actions,
             text="文件夹项目规则",
             width=130,
             command=self._open_folder_rule_dialog,
+            fg_color=design.NEUTRAL_SOFT,
+            text_color=design.TEXT,
         )
-        self.folder_rule_button.pack(side="left", padx=(8, 4), pady=6)
-        self._label(header, text="整体项目").pack(side="left", padx=(8, 4), pady=6)
+        self.folder_rule_button.pack(side="left", padx=(0, 8))
+        self._label(actions, text="整体项目", text_color=design.MUTED_TEXT).pack(side="left", padx=(0, 4))
         self.session_project_menu = self._option_menu(
-            header,
+            actions,
             values=[UNCATEGORIZED_PROJECT],
             variable=self.session_project_var,
             width=160,
         )
-        self.session_project_menu.pack(side="left", padx=(0, 4), pady=6)
+        self.session_project_menu.pack(side="left", padx=(0, 6))
         self.save_session_project_button = self._button(
-            header,
-            text="调整当前会话",
-            width=120,
+            actions,
+            text="调整",
+            width=72,
             command=self._save_session_project,
         )
-        self.save_session_project_button.pack(side="left", padx=4, pady=6)
+        self.save_session_project_button.pack(side="left", padx=(0, 6))
         self.create_session_project_button = self._button(
-            header,
+            actions,
             text="新建项目",
             width=86,
             command=self._create_project_for_session,
+            fg_color=design.NEUTRAL_SOFT,
+            text_color=design.TEXT,
         )
-        self.create_session_project_button.pack(side="left", padx=4, pady=6)
+        self.create_session_project_button.pack(side="left", padx=(0, 6))
         self.toggle_detail_button = self._button(
-            header,
-            text="查看时间顺序明细",
+            actions,
+            text="时间顺序",
             width=150,
             command=self._toggle_detail_mode,
+            fg_color=design.NEUTRAL_SOFT,
+            text_color=design.TEXT,
         )
-        self.toggle_detail_button.pack(side="right", padx=6, pady=6)
+        self.toggle_detail_button.pack(side="left")
 
-        self.detail_container = ctk.CTkFrame(self.content_frame)
-        self.detail_container.grid(row=2, column=0, sticky="nsew")
+        self.detail_container = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
+        self.detail_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.detail_container.grid_rowconfigure(0, weight=1)
         self.detail_container.grid_columnconfigure(0, weight=1)
 
@@ -193,13 +256,20 @@ class TimelineView(ctk.CTkFrame):
         self.detail_tree_frame.grid_remove()
 
     def _build_resource_editor(self) -> None:
-        self.resource_editor = ctk.CTkFrame(self.editor_panel)
+        self.resource_editor = ctk.CTkFrame(self.editor_panel, fg_color="transparent")
         self.resource_editor.grid_columnconfigure(4, weight=1)
         self.resource_label = self._label(self.resource_editor, text="未选择资源", font=UI_FONT_BOLD)
-        self.resource_label.grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 4))
-        self.close_resource_button = self._button(self.resource_editor, text="关闭", width=72, command=self._close_resource_editor)
-        self.close_resource_button.grid(row=0, column=4, sticky="e", padx=8, pady=(8, 4))
-        self._label(self.resource_editor, text="改归类到").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=6)
+        self.resource_label.grid(row=0, column=0, columnspan=4, sticky="w", padx=14, pady=(14, 6))
+        self.close_resource_button = self._button(
+            self.resource_editor,
+            text="关闭",
+            width=72,
+            command=self._close_resource_editor,
+            fg_color=design.NEUTRAL_SOFT,
+            text_color=design.TEXT,
+        )
+        self.close_resource_button.grid(row=0, column=4, sticky="e", padx=14, pady=(14, 6))
+        self._label(self.resource_editor, text="改归类到", text_color=design.MUTED_TEXT).grid(row=1, column=0, sticky="w", padx=(14, 4), pady=6)
         self.resource_project_menu = self._option_menu(
             self.resource_editor,
             values=[UNCATEGORIZED_PROJECT],
@@ -222,22 +292,22 @@ class TimelineView(ctk.CTkFrame):
             command=lambda: self._save_resource_project(True),
         )
         self.remember_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=6)
-        self._label(self.resource_editor, text="新建项目").grid(row=2, column=0, sticky="w", padx=(8, 4), pady=(0, 6))
+        self._label(self.resource_editor, text="新建项目", text_color=design.MUTED_TEXT).grid(row=2, column=0, sticky="w", padx=(14, 4), pady=(0, 8))
         self.new_project_entry = self._entry(
             self.resource_editor,
             textvariable=self.new_project_var,
             width=180,
         )
-        self.new_project_entry.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 6))
+        self.new_project_entry.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
         self.create_project_button = self._button(
             self.resource_editor,
             text="创建",
             width=72,
             command=self._create_project_from_timeline,
         )
-        self.create_project_button.grid(row=2, column=2, sticky="w", padx=(0, 8), pady=(0, 6))
-        self.resource_hint_label = self._label(self.resource_editor, text="")
-        self.resource_hint_label.grid(row=3, column=0, columnspan=5, sticky="w", padx=8, pady=(0, 8))
+        self.create_project_button.grid(row=2, column=2, sticky="w", padx=(0, 8), pady=(0, 8))
+        self.resource_hint_label = self._label(self.resource_editor, text="", text_color=design.MUTED_TEXT)
+        self.resource_hint_label.grid(row=3, column=0, columnspan=5, sticky="w", padx=14, pady=(0, 14))
         self._resource_editor_widgets = [
             self.resource_project_menu,
             self.current_session_button,
@@ -251,11 +321,11 @@ class TimelineView(ctk.CTkFrame):
             widget.bind("<FocusIn>", self._on_control_activity, add="+")
 
     def _build_activity_editor(self) -> None:
-        self.activity_editor = ctk.CTkFrame(self.editor_panel)
+        self.activity_editor = ctk.CTkFrame(self.editor_panel, fg_color="transparent")
         self.activity_editor.grid_columnconfigure(5, weight=1)
         self.activity_editor_label = self._label(self.activity_editor, text="未选择明细", font=UI_FONT_BOLD)
-        self.activity_editor_label.grid(row=0, column=0, columnspan=6, sticky="w", padx=8, pady=(8, 4))
-        self._label(self.activity_editor, text="项目").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=4)
+        self.activity_editor_label.grid(row=0, column=0, columnspan=6, sticky="w", padx=14, pady=(14, 6))
+        self._label(self.activity_editor, text="项目", text_color=design.MUTED_TEXT).grid(row=1, column=0, sticky="w", padx=(14, 4), pady=4)
         self.activity_project_menu = self._option_menu(
             self.activity_editor,
             values=[UNCATEGORIZED_PROJECT],
@@ -266,13 +336,13 @@ class TimelineView(ctk.CTkFrame):
         self.activity_project_menu.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=4)
         self.save_activity_button = self._button(self.activity_editor, text="保存", width=72, command=self._save_activity)
         self.save_activity_button.grid(row=1, column=2, sticky="w", padx=(0, 8), pady=4)
-        self.delete_activity_button = self._button(self.activity_editor, text="删除", width=72, fg_color="#a33", command=self._delete_activity)
+        self.delete_activity_button = self._button(self.activity_editor, text="删除", width=72, fg_color=design.DANGER, hover_color=design.DANGER_HOVER, command=self._delete_activity)
         self.delete_activity_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=4)
-        self.close_activity_button = self._button(self.activity_editor, text="关闭", width=72, command=self._close_activity_editor)
+        self.close_activity_button = self._button(self.activity_editor, text="关闭", width=72, command=self._close_activity_editor, fg_color=design.NEUTRAL_SOFT, text_color=design.TEXT)
         self.close_activity_button.grid(row=1, column=4, sticky="w", padx=(0, 8), pady=4)
-        self._label(self.activity_editor, text="备注").grid(row=2, column=0, sticky="nw", padx=(8, 4), pady=(6, 8))
-        self.note_text = ctk.CTkTextbox(self.activity_editor, height=64, font=UI_FONT)
-        self.note_text.grid(row=2, column=1, columnspan=5, sticky="ew", padx=(0, 8), pady=(6, 8))
+        self._label(self.activity_editor, text="备注", text_color=design.MUTED_TEXT).grid(row=2, column=0, sticky="nw", padx=(14, 4), pady=(8, 14))
+        self.note_text = ctk.CTkTextbox(self.activity_editor, height=72, font=UI_FONT, corner_radius=design.RADIUS_SM, border_width=1, border_color=design.BORDER)
+        self.note_text.grid(row=2, column=1, columnspan=5, sticky="ew", padx=(0, 14), pady=(8, 14))
         self.note_text.bind("<KeyRelease>", lambda _event: self._mark_editor_dirty(), add="+")
         self._editor_widgets = [
             self.activity_project_menu,
@@ -313,6 +383,8 @@ class TimelineView(ctk.CTkFrame):
     def _sync_sessions(self, sessions: list[dict]) -> None:
         previous = self._selected_session_id
         self._sessions_by_id = {session["session_id"]: session for session in sessions}
+        if hasattr(self, "session_count_label"):
+            self.session_count_label.configure(text=f"{len(sessions)} 条")
         self._sync_tree(self.session_tree, [(session["session_id"], self._session_values(session)) for session in sessions])
         if previous in self._sessions_by_id:
             self._select_tree_item(self.session_tree, previous)
@@ -323,6 +395,8 @@ class TimelineView(ctk.CTkFrame):
             self._selected_session_id = None
             self.session_project_var.set(UNCATEGORIZED_PROJECT)
             self.detail_label.configure(text="暂无项目会话")
+            if hasattr(self, "detail_hint_label"):
+                self.detail_hint_label.configure(text="调整日期或关闭筛选后再查看")
             self._sync_resources([])
             self._sync_details([])
 
@@ -331,8 +405,12 @@ class TimelineView(ctk.CTkFrame):
         if not session:
             return
         self.detail_label.configure(
-            text=f"{self._session_time(session)}｜{session['project_name']}｜{format_duration(session['duration_seconds'])}"
+            text=f"{self._session_time(session)} | {session['project_name']}"
         )
+        if hasattr(self, "detail_hint_label"):
+            self.detail_hint_label.configure(
+                text=f"{format_duration(session['duration_seconds'])} | {session['event_count']} 条活动 | {session['status_summary']}"
+            )
         self.session_project_var.set(self._project_name_by_id.get(int(session["project_id"]), UNCATEGORIZED_PROJECT))
         if self._detail_mode == "resources":
             self._sync_resources(timeline_service.get_session_resource_summary(session["activity_ids"]))
@@ -708,6 +786,10 @@ class TimelineView(ctk.CTkFrame):
         self.pause_button.configure(text="继续" if paused else "暂停")
         self.current_activity_label.configure(text=self._current_activity_text())
 
+    def _schedule_current_activity_tick(self) -> None:
+        self.current_activity_label.configure(text=self._current_activity_text())
+        self._current_activity_after_id = self.after(1000, self._schedule_current_activity_tick)
+
     def _current_activity_text(self) -> str:
         raw = get_setting("current_activity_snapshot", "") or ""
         if not raw:
@@ -718,18 +800,26 @@ class TimelineView(ctk.CTkFrame):
             return "当前活动：无"
         name = snapshot.get("resource_display_name") or snapshot.get("app_name") or snapshot.get("process_name") or "未知"
         project = snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT
-        elapsed = format_duration(snapshot.get("elapsed_seconds") or 0)
+        elapsed = format_current_duration(_current_elapsed_seconds(snapshot))
         state = "已进入历史" if snapshot.get("is_persisted") else "暂不入历史"
         if snapshot.get("status") == "idle":
             name = "空闲中"
         return f"当前活动：{name}｜{project}｜{elapsed}｜{state}"
 
+    def destroy(self) -> None:
+        if self._current_activity_after_id is not None:
+            try:
+                self.after_cancel(self._current_activity_after_id)
+            except Exception:
+                pass
+            self._current_activity_after_id = None
+        super().destroy()
+
     def _session_values(self, session: dict) -> tuple[str, ...]:
         return (
             self._session_time(session),
-            str(session["project_name"] if session["status"] == "normal" else session["status_summary"]),
+            str(session["project_name"]),
             format_duration(session["duration_seconds"]),
-            str(session["event_count"]),
             str(session["status_summary"]),
         )
 
@@ -769,6 +859,10 @@ class TimelineView(ctk.CTkFrame):
 
     def _button(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
+        kwargs.setdefault("corner_radius", design.RADIUS_SM)
+        kwargs.setdefault("height", 34)
+        kwargs.setdefault("fg_color", design.ACCENT)
+        kwargs.setdefault("hover_color", design.ACCENT_HOVER)
         return ctk.CTkButton(master, **kwargs)
 
     def _checkbox(self, master, **kwargs):
@@ -777,15 +871,20 @@ class TimelineView(ctk.CTkFrame):
 
     def _entry(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
+        kwargs.setdefault("height", 34)
+        kwargs.setdefault("corner_radius", design.RADIUS_SM)
+        kwargs.setdefault("border_color", design.BORDER)
         return ctk.CTkEntry(master, **kwargs)
 
     def _option_menu(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
         kwargs.setdefault("dropdown_font", UI_FONT)
+        kwargs.setdefault("height", 34)
+        kwargs.setdefault("corner_radius", design.RADIUS_SM)
         return ctk.CTkOptionMenu(master, **kwargs)
 
     def _make_tree_frame(self, parent):
-        frame = ctk.CTkFrame(parent)
+        frame = ctk.CTkFrame(parent, fg_color=design.PANEL_ALT_BG, corner_radius=design.RADIUS_MD)
         frame.grid_rowconfigure(0, weight=1)
         frame.grid_columnconfigure(0, weight=1)
         return frame
@@ -814,9 +913,7 @@ class TimelineView(ctk.CTkFrame):
         return tree
 
     def _configure_tree_style(self) -> None:
-        style = ttk.Style(self)
-        style.configure("WorkTrace.Treeview", font=TREE_FONT, rowheight=TREE_ROWHEIGHT)
-        style.configure("WorkTrace.Treeview.Heading", font=TREE_HEADING_FONT)
+        design.configure_tree_style(self)
 
     def _save_tree_column_widths(self, tree: ttk.Treeview) -> None:
         tree_key = self._tree_keys.get(id(tree))
@@ -857,7 +954,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _show_editor_panel(self, show: bool) -> None:
         if show:
-            self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
+            self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 24))
         else:
             self.editor_scroll_frame.grid_remove()
 
@@ -937,3 +1034,17 @@ class TimelineView(ctk.CTkFrame):
     def toggle_pause(self) -> None:
         set_setting("user_paused", "false" if get_bool_setting("user_paused", False) else "true")
         self.refresh()
+
+
+def _current_elapsed_seconds(snapshot: dict) -> int:
+    start_time = str(snapshot.get("start_time") or "").strip()
+    if start_time:
+        try:
+            start = datetime.strptime(start_time, TIME_FORMAT)
+            return max(0, int((datetime.now() - start).total_seconds()))
+        except ValueError:
+            pass
+    try:
+        return max(0, int(snapshot.get("elapsed_seconds") or 0))
+    except (TypeError, ValueError):
+        return 0

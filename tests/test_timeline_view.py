@@ -1,6 +1,7 @@
+import json
 import time
 
-from worktrace.services import activity_service, project_service, timeline_service
+from worktrace.services import activity_service, project_service, settings_service, timeline_service
 from worktrace.ui.timeline_view import TimelineView
 
 
@@ -417,6 +418,28 @@ def test_sync_resources_hides_editor_only_when_selected_resource_disappears():
 
     assert view._selected_resource_id is None
     assert hidden == [False]
+
+
+def test_current_activity_text_uses_second_level_duration(temp_db):
+    view = object.__new__(TimelineView)
+    settings_service.set_setting(
+        "current_activity_snapshot",
+        json.dumps(
+            {
+                "resource_display_name": "Spec.docx",
+                "app_name": "Word",
+                "process_name": "word.exe",
+                "inferred_project_name": "Client",
+                "status": "normal",
+                "start_time": "",
+                "elapsed_seconds": 65,
+                "is_persisted": True,
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    assert TimelineView._current_activity_text(view) == "当前活动：Spec.docx｜Client｜00:01:05｜已进入历史"
 
 
 def test_timeline_resource_editor_can_create_project_and_select_it(temp_db):

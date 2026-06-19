@@ -64,8 +64,6 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "poll_interval_seconds": "3",
         "idle_threshold_minutes": "5",
         "min_activity_seconds": "10",
-        "min_history_seconds": "60",
-        "min_idle_segment_seconds": "60",
         "current_activity_snapshot": "",
         "pending_short_seconds": "0",
         "exclude_keywords": "微信,银行,密码,个人",
@@ -87,6 +85,9 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             """,
             (key, value, ts),
         )
+    conn.execute(
+        "DELETE FROM settings WHERE key IN ('min_history_seconds', 'min_idle_segment_seconds')"
+    )
     conn.execute(
         """
         INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
