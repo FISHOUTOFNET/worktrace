@@ -4,7 +4,7 @@ from ..constants import UNCATEGORIZED_PROJECT
 from ..db import dict_rows, get_connection, now_str
 
 
-def create_project(name: str, description: str = "", default_billable: bool = True) -> int:
+def create_project(name: str, description: str = "") -> int:
     name = name.strip()
     if not name:
         raise ValueError("project name is required")
@@ -12,10 +12,10 @@ def create_project(name: str, description: str = "", default_billable: bool = Tr
     with get_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO project(name, description, default_billable, is_archived, created_by, created_at, updated_at)
-            VALUES (?, ?, ?, 0, 'user', ?, ?)
+            INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
+            VALUES (?, ?, 0, 'user', ?, ?)
             """,
-            (name, description, int(default_billable), ts, ts),
+            (name, description, ts, ts),
         )
         return int(cur.lastrowid)
 
@@ -129,8 +129,8 @@ def get_or_create_uncategorized_project() -> int:
             return int(row["id"])
         cur = conn.execute(
             """
-            INSERT INTO project(name, description, default_billable, is_archived, created_by, created_at, updated_at)
-            VALUES (?, '', 1, 0, 'system', ?, ?)
+            INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
+            VALUES (?, '', 0, 'system', ?, ?)
             """,
             (UNCATEGORIZED_PROJECT, ts, ts),
         )

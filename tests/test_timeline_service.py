@@ -11,7 +11,6 @@ def _activity(app, process, title, start, project_id=None, status="normal"):
         start_time=f"2026-06-18 {start}",
         project_id=project_id,
         status=status,
-        is_billable=status == "normal",
     )
     activity_service.finalize_created_activity(aid)
     return aid
@@ -45,13 +44,12 @@ def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
     summary = timeline_service.get_session_resource_summary(sessions[0]["activity_ids"])
-    browser_rows = [row for row in summary if row["resource_key"] == "web:browser"]
+    app_rows = [row for row in summary if row["resource_type"] == "app"]
 
     assert len(sessions) == 1
     assert sessions[0]["project_name"] == "A"
-    assert len(browser_rows) == 1
-    assert browser_rows[0]["display_name"] == "浏览器 / 检索网页"
-    assert browser_rows[0]["event_count"] == 2
+    assert {row["display_name"] for row in app_rows} == {"Edge", "Chrome"}
+    assert all(row["event_count"] == 1 for row in app_rows)
 
 
 def test_resource_level_correction_and_remember_rules(temp_db):

@@ -51,8 +51,6 @@ def get_project_stats(start_date: str, end_date: str) -> list[dict]:
             SELECT
                 COALESCE(p.name, '未归类') AS project,
                 COALESCE(SUM(a.duration_seconds), 0) AS total_duration,
-                COALESCE(SUM(CASE WHEN a.is_billable = 1 THEN a.duration_seconds ELSE 0 END), 0) AS billable_duration,
-                COALESCE(SUM(CASE WHEN a.is_billable = 0 THEN a.duration_seconds ELSE 0 END), 0) AS non_billable_duration,
                 COUNT(*) AS record_count
             FROM activity_log a
             LEFT JOIN project p ON p.id = a.project_id

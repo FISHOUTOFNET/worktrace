@@ -50,7 +50,7 @@ class StatisticsView(ctk.CTkFrame):
         )
         for child in self.table.winfo_children():
             child.destroy()
-        headers = ["项目", "总时长", "计费", "非计费", "记录数"]
+        headers = ["项目", "总时长", "记录数"]
         for col, header in enumerate(headers):
             ctk.CTkLabel(self.table, text=header, font=ctk.CTkFont(weight="bold")).grid(
                 row=0, column=col, padx=8, pady=4, sticky="w"
@@ -61,8 +61,6 @@ class StatisticsView(ctk.CTkFrame):
             values = [
                 row["project"],
                 format_duration(row["total_duration"]),
-                format_duration(row["billable_duration"]),
-                format_duration(row["non_billable_duration"]),
                 row["record_count"],
             ]
             for col, value in enumerate(values):

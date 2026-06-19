@@ -9,7 +9,7 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 - Background collector thread using pywin32/psutil on Windows.
 - Idle, paused, excluded, normal, and error activity states.
 - First-run privacy notice before any collection starts.
-- Project creation, manual project assignment, notes, billable flags, confirmation flags, and soft delete.
+- Project creation, manual project assignment, notes, and soft delete.
 - Simple keyword auto-classification rules.
 - Excel export, Markdown weekly draft export, and export-all-local-data.
 - Collector heartbeat and startup recovery for unclosed records.
@@ -26,9 +26,9 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 不读取正文。  
 不上传数据。  
 隐私排除窗口只保存匿名时间块。  
-自动记录需由用户确认后再作为正式工时依据。
+自动记录需由用户整理归类后再作为正式工时依据。
 
-WorkTrace records only the current application name, process name, window title, identifiable local file path, start time, end time, duration, status, project, note, billable flag, and confirmation flag. It does not read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, clipboard data, camera, or microphone data.
+WorkTrace records only the current application name, process name, window title, identifiable local file path, start time, end time, duration, status, project, and note. It does not read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, clipboard data, camera, or microphone data.
 
 ## Portable Usage
 
@@ -60,7 +60,7 @@ Folder project rules require a recognizable full local file path. On Windows, Wo
 
 If a file path is known but no rule or file default matches, the Timeline may show the parent folder name as a suggested project. Suggested names are display-only hints and are not inserted into the `project` table.
 
-Context carry-over applies only to auxiliary web, communication, and meeting activity between nearby matching anchor files. Generic apps such as editors, Python, task manager, or IDE windows stay `未归类` unless the user assigns them manually.
+Context carry-over applies to all normal non-anchor auxiliary activity between nearby matching anchor files. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same project carry-over rules.
 
 ## Collector Heartbeat
 
@@ -81,7 +81,7 @@ WorkTrace prevents multiple collectors from writing to the same database. On Win
 
 ## Data Export And Clearing
 
-The Settings page can export all local tables (`activity_log`, `activity_project_assignment`, `project`, `resource`, `project_rule`, `settings`) to Excel.
+The Settings page can export all local tables (`activity_log`, `activity_project_assignment`, `project`, `resource`, `folder_project_rule`, `project_rule`, `settings`) to Excel.
 
 The Settings page can clear all local data after this confirmation text:
 

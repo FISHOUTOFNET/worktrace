@@ -30,7 +30,6 @@ class TimelineView(ctk.CTkFrame):
         self.resource_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
         self.new_project_var = ctk.StringVar(value="")
         self.activity_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
-        self.billable_var = ctk.BooleanVar(value=False)
 
         self._project_by_name: dict[str, int] = {}
         self._project_name_by_id: dict[int, str] = {}
@@ -170,7 +169,7 @@ class TimelineView(ctk.CTkFrame):
         self.detail_tree = self._make_tree(
             self.detail_tree_frame,
             "details",
-            ("time", "app", "window", "resource", "duration", "project", "billable", "note"),
+            ("time", "app", "window", "resource", "duration", "project", "note"),
             {
                 "time": "时间",
                 "app": "应用",
@@ -178,7 +177,6 @@ class TimelineView(ctk.CTkFrame):
                 "resource": "资源",
                 "duration": "时长",
                 "project": "项目",
-                "billable": "计费",
                 "note": "备注",
             },
             {
@@ -188,7 +186,6 @@ class TimelineView(ctk.CTkFrame):
                 "resource": 160,
                 "duration": 90,
                 "project": 120,
-                "billable": 64,
                 "note": 180,
             },
         )
@@ -255,9 +252,9 @@ class TimelineView(ctk.CTkFrame):
 
     def _build_activity_editor(self) -> None:
         self.activity_editor = ctk.CTkFrame(self.editor_panel)
-        self.activity_editor.grid_columnconfigure(6, weight=1)
+        self.activity_editor.grid_columnconfigure(5, weight=1)
         self.activity_editor_label = self._label(self.activity_editor, text="未选择明细", font=UI_FONT_BOLD)
-        self.activity_editor_label.grid(row=0, column=0, columnspan=7, sticky="w", padx=8, pady=(8, 4))
+        self.activity_editor_label.grid(row=0, column=0, columnspan=6, sticky="w", padx=8, pady=(8, 4))
         self._label(self.activity_editor, text="项目").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=4)
         self.activity_project_menu = self._option_menu(
             self.activity_editor,
@@ -267,21 +264,18 @@ class TimelineView(ctk.CTkFrame):
             command=lambda _name: self._mark_editor_dirty(),
         )
         self.activity_project_menu.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=4)
-        self.billable_box = self._checkbox(self.activity_editor, text="计费", variable=self.billable_var, command=self._mark_editor_dirty, width=70)
-        self.billable_box.grid(row=1, column=2, sticky="w", padx=(0, 12), pady=4)
         self.save_activity_button = self._button(self.activity_editor, text="保存", width=72, command=self._save_activity)
-        self.save_activity_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=4)
+        self.save_activity_button.grid(row=1, column=2, sticky="w", padx=(0, 8), pady=4)
         self.delete_activity_button = self._button(self.activity_editor, text="删除", width=72, fg_color="#a33", command=self._delete_activity)
-        self.delete_activity_button.grid(row=1, column=4, sticky="w", padx=(0, 8), pady=4)
+        self.delete_activity_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=4)
         self.close_activity_button = self._button(self.activity_editor, text="关闭", width=72, command=self._close_activity_editor)
-        self.close_activity_button.grid(row=1, column=5, sticky="w", padx=(0, 8), pady=4)
+        self.close_activity_button.grid(row=1, column=4, sticky="w", padx=(0, 8), pady=4)
         self._label(self.activity_editor, text="备注").grid(row=2, column=0, sticky="nw", padx=(8, 4), pady=(6, 8))
         self.note_text = ctk.CTkTextbox(self.activity_editor, height=64, font=UI_FONT)
-        self.note_text.grid(row=2, column=1, columnspan=6, sticky="ew", padx=(0, 8), pady=(6, 8))
+        self.note_text.grid(row=2, column=1, columnspan=5, sticky="ew", padx=(0, 8), pady=(6, 8))
         self.note_text.bind("<KeyRelease>", lambda _event: self._mark_editor_dirty(), add="+")
         self._editor_widgets = [
             self.activity_project_menu,
-            self.billable_box,
             self.save_activity_button,
             self.delete_activity_button,
             self.close_activity_button,
@@ -659,7 +653,6 @@ class TimelineView(ctk.CTkFrame):
         self._show_activity_editor(True)
         self._loading_editor = True
         self.activity_project_var.set(row.get("official_project_name") or UNCATEGORIZED_PROJECT)
-        self.billable_var.set(bool(row.get("is_billable")))
         self.note_text.delete("1.0", "end")
         self.note_text.insert("1.0", row.get("note") or "")
         self._loading_editor = False
@@ -677,9 +670,6 @@ class TimelineView(ctk.CTkFrame):
             return
         if int(row.get("project_id") or 0) != project_id:
             activity_service.update_activity_project(activity_id, project_id, manual=True)
-        billable = bool(self.billable_var.get())
-        if bool(row.get("is_billable")) != billable:
-            activity_service.set_activity_billable(activity_id, billable)
         note = self.note_text.get("1.0", "end-1c")
         if (row.get("note") or "") != note:
             activity_service.update_activity_note(activity_id, note)
@@ -765,7 +755,6 @@ class TimelineView(ctk.CTkFrame):
             str(row.get("resource_display_name") or ""),
             format_duration(row.get("duration_seconds") or 0),
             str(row.get("project_name") or UNCATEGORIZED_PROJECT),
-            "是" if row.get("is_billable") else "否",
             note,
         )
 

@@ -11,7 +11,6 @@ def _activity(app, process, title, start, project_id=None, status="normal"):
         start_time=f"2026-06-18 {start}",
         project_id=project_id,
         status=status,
-        is_billable=status == "normal",
     )
     activity_service.finalize_created_activity(aid)
     return aid
@@ -29,7 +28,7 @@ def test_same_project_different_anchor_files_classify_auxiliary(temp_db):
     assert activity_service.get_activity(browser)["project_id"] == project
 
 
-def test_generic_app_between_same_project_anchors_remains_uncategorized(temp_db):
+def test_generic_app_between_same_project_anchors_uses_same_context_carry(temp_db):
     project = project_service.create_project("A")
     _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
     trae = _activity("Trae CN.exe", "Trae CN.exe", "db.py - WorkTrace - Trae CN", "09:10:00")
@@ -39,7 +38,7 @@ def test_generic_app_between_same_project_anchors_remains_uncategorized(temp_db)
     recompute_context_assignments_for_date("2026-06-18")
 
     row = activity_service.get_activity(trae)
-    assert row["project_name"] == UNCATEGORIZED_PROJECT
+    assert row["project_id"] == project
 
 
 def test_uncategorized_anchor_stops_context_scan(temp_db):

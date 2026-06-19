@@ -236,8 +236,8 @@ def _get_uncategorized_project_id(conn) -> int:
     ts = now_str()
     cur = conn.execute(
         """
-        INSERT INTO project(name, description, default_billable, is_archived, created_by, created_at, updated_at)
-        VALUES (?, '', 1, 0, 'system', ?, ?)
+        INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
+        VALUES (?, '', 0, 'system', ?, ?)
         """,
         (UNCATEGORIZED_PROJECT, ts, ts),
     )

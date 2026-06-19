@@ -60,22 +60,34 @@ def test_existing_resource_path_is_not_overwritten_by_none(temp_db):
             ("D:\\CaseA\\Spec.docx", "D:\\CaseA", "Spec", now_str(), resource["id"]),
         )
     updated = resource_service.infer_or_create_resource(
-        {"app_name": "Chrome", "process_name": "chrome.exe", "window_title": "Search"}
+        {"app_name": "Edge", "process_name": "msedge.exe", "window_title": "Search"}
     )
-    assert updated["canonical_key"] == "web:browser"
+    assert updated["canonical_key"] == "app:edge-msedge.exe"
     assert updated["full_path"] == "D:\\CaseA\\Spec.docx"
 
 
-def test_browsers_share_one_auxiliary_resource(temp_db):
+def test_auxiliary_apps_keep_own_resource_identity_and_display_name(temp_db):
     keys = {
         infer_resource_identity("Chrome", "chrome.exe", "A").canonical_key,
         infer_resource_identity("Microsoft Edge", "msedge.exe", "B").canonical_key,
         infer_resource_identity("Firefox", "firefox.exe", "C").canonical_key,
     }
-    assert keys == {"web:browser"}
+    assert len(keys) == 3
+    assert all(key.startswith("app:") for key in keys)
     resource = infer_resource_identity("Edge", "msedge.exe", "Search")
-    assert resource.display_name == "浏览器 / 检索网页"
+    assert resource.display_name == "Edge"
+    assert resource.resource_type == "app"
     assert resource.resource_role == "auxiliary"
+
+
+def test_communication_apps_are_general_auxiliary_apps(temp_db):
+    wechat = infer_resource_identity("微信", "WeChat.exe", "聊天")
+    dingtalk = infer_resource_identity("钉钉", "DingTalk.exe", "项目群")
+    assert wechat.display_name == "微信"
+    assert dingtalk.display_name == "钉钉"
+    assert wechat.resource_type == "app"
+    assert dingtalk.resource_type == "app"
+    assert wechat.canonical_key != dingtalk.canonical_key
 
 
 def test_can_remember_for_future_depends_on_resource_role(temp_db):

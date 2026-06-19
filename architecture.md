@@ -15,7 +15,6 @@ It records only:
 * record status
 * user-selected project
 * user note
-* confirmation / billable flags
 
 It must not record:
 
@@ -42,7 +41,7 @@ Start portable Windows app
 → collect active window metadata
 → detect idle time
 → anonymize excluded/private windows
-→ let user confirm and classify records
+→ let user organize and classify records
 → summarize time by project
 → export Excel timesheet and Markdown weekly draft
 ```
@@ -97,22 +96,20 @@ Implement:
 7. Project creation and selection.
 8. Timeline view.
 9. Record editing.
-10. Record confirmation.
-11. Billable / non-billable marking.
-12. User notes.
-13. Simple keyword-based auto-classification.
-14. Project time statistics.
-15. Date-range statistics.
-16. Excel export.
-17. Markdown weekly draft export.
-18. Pause / resume collection.
-19. Collector heartbeat display.
-20. Single-instance protection.
-21. Recovery of unclosed records after abnormal shutdown.
-22. Local data clearing.
-23. Local data export.
-24. First-run privacy notice.
-25. Local logging.
+10. User notes.
+11. Simple keyword-based auto-classification.
+12. Project time statistics.
+13. Date-range statistics.
+14. Excel export.
+15. Markdown weekly draft export.
+16. Pause / resume collection.
+17. Collector heartbeat display.
+18. Single-instance protection.
+19. Recovery of unclosed records after abnormal shutdown.
+20. Local data clearing.
+21. Local data export.
+22. First-run privacy notice.
+23. Local logging.
 
 ### 3.2 Out of Scope
 
@@ -454,7 +451,6 @@ CREATE TABLE IF NOT EXISTS project (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     description TEXT,
-    default_billable INTEGER NOT NULL DEFAULT 1,
     is_archived INTEGER NOT NULL DEFAULT 0,
     created_by TEXT NOT NULL DEFAULT 'user' CHECK (
         created_by IN ('system', 'user')
@@ -477,7 +473,6 @@ CREATE TABLE IF NOT EXISTS activity_log (
     source TEXT NOT NULL CHECK (
         source IN ('auto', 'manual', 'system')
     ),
-    is_billable INTEGER NOT NULL DEFAULT 1,
     is_deleted INTEGER NOT NULL DEFAULT 0,
     is_hidden INTEGER NOT NULL DEFAULT 0,
     auto_classified INTEGER NOT NULL DEFAULT 0,
@@ -511,7 +506,6 @@ Seed default settings:
 poll_interval_seconds = 3
 idle_threshold_minutes = 5
 min_activity_seconds = 10
-default_billable = true
 exclude_keywords = 微信,银行,密码,个人
 collector_status = stopped
 last_collector_heartbeat =
@@ -587,7 +581,7 @@ system    created by recovery or state transition logic
 ### 14.3 Review And Classification
 
 Auto-created records are drafts. Users can organize records by editing project, note,
-billable status, file defaults, and folder project rules.
+file defaults, and folder project rules.
 
 ### 14.4 Manual Override
 
@@ -615,7 +609,7 @@ uncategorized
 
 Folder project rules require a known full file path or parent directory. A file name without a path must not create a suggested project name from the file stem.
 
-Context carry-over may classify only auxiliary `web`, `communication`, and `meeting` resources. It uses the nearest previous and next anchor files only; an uncategorized anchor or an interrupt status stops the scan. Generic `app` and `unknown` resources remain uncategorized unless assigned manually.
+Context carry-over may classify any normal auxiliary non-anchor resource. It uses the nearest previous and next anchor files only; an uncategorized anchor or an interrupt status stops the scan. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same carry-over rules.
 
 ---
 
@@ -771,7 +765,7 @@ now - last_loop_time > idle_threshold_minutes
 then:
 
 1. close current open record at `last_loop_time` if safe;
-2. mark next record as requiring confirmation;
+2. keep the next record available for user review;
 3. if duration cannot be trusted, set `status = error`.
 
 ---
@@ -931,7 +925,6 @@ app_name = 已排除
 process_name = excluded
 window_title = 已排除窗口
 status = excluded
-is_billable = 0
 ```
 
 Excluded records are not exported by default.
@@ -1044,7 +1037,6 @@ get_activities_by_date(date: str) -> list[dict]
 get_activities_by_range(start_date: str, end_date: str) -> list[dict]
 update_activity_project(activity_id: int, project_id: int, manual: bool = True) -> None
 update_activity_note(activity_id: int, note: str) -> None
-set_activity_billable(activity_id: int, is_billable: bool) -> None
 soft_delete_activity(activity_id: int) -> None
 ```
 
@@ -1053,7 +1045,7 @@ soft_delete_activity(activity_id: int) -> None
 Required functions:
 
 ```python
-create_project(name: str, description: str = "", default_billable: bool = True) -> int
+create_project(name: str, description: str = "") -> int
 list_active_projects() -> list[dict]
 archive_project(project_id: int) -> None
 get_or_create_uncategorized_project() -> int
@@ -1148,10 +1140,9 @@ Must show:
 3. date selector
 4. records table
 5. project selector per record
-6. billable checkbox
-7. note editor
-8. delete action
-9. filters for uncategorized records
+6. note editor
+7. delete action
+8. filters for uncategorized records
 
 Columns:
 
@@ -1162,8 +1153,6 @@ App name
 Window title
 Duration
 Project
-Billable
-Confirmed
 Note
 Actions
 ```
@@ -1215,8 +1204,6 @@ Columns:
 ```text
 Project
 Total Duration
-Billable Duration
-Non-billable Duration
 Record Count
 ```
 
@@ -1233,8 +1220,6 @@ Status
 App Name
 Window Title
 Project
-Billable
-Confirmed
 Note
 ```
 
@@ -1407,10 +1392,9 @@ The app is acceptable if:
 12. It allows project creation.
 13. It allows assigning records to projects.
 14. It allows notes.
-15. It allows billable / non-billable marking.
-16. It summarizes time by project.
-17. It exports Excel.
-18. It exports Markdown.
+15. It summarizes time by project.
+16. It exports Excel.
+17. It exports Markdown.
 20. It supports exclude keywords.
 21. It supports pause / resume.
 22. It supports soft delete.
@@ -1452,7 +1436,7 @@ The state machine is acceptable if:
 5. excluded state never saves real window title;
 6. abnormal shutdown is recovered on next startup;
 7. negative duration becomes `error`;
-8. unusually long records require confirmation.
+8. unusually long records remain visible for user review.
 
 ---
 
@@ -1512,7 +1496,7 @@ see a timeline,
 pause and resume recording,
 handle idle and excluded windows correctly,
 classify records into projects,
-confirm records,
+add notes,
 view project statistics,
 export an Excel timesheet,
 export a Markdown weekly draft,

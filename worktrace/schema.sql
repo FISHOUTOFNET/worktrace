@@ -2,7 +2,6 @@ CREATE TABLE IF NOT EXISTS project (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     description TEXT,
-    default_billable INTEGER NOT NULL DEFAULT 1,
     is_archived INTEGER NOT NULL DEFAULT 0,
     created_by TEXT NOT NULL DEFAULT 'user' CHECK (
         created_by IN ('system', 'user')
@@ -26,7 +25,6 @@ CREATE TABLE IF NOT EXISTS activity_log (
     source TEXT NOT NULL CHECK (
         source IN ('auto', 'manual', 'system')
     ),
-    is_billable INTEGER NOT NULL DEFAULT 1,
     is_deleted INTEGER NOT NULL DEFAULT 0,
     is_hidden INTEGER NOT NULL DEFAULT 0,
     auto_classified INTEGER NOT NULL DEFAULT 0,
@@ -52,7 +50,7 @@ CREATE TABLE IF NOT EXISTS resource (
         resource_role IN ('anchor', 'auxiliary')
     ),
     resource_type TEXT NOT NULL CHECK (
-        resource_type IN ('file', 'web', 'communication', 'meeting', 'app', 'unknown')
+        resource_type IN ('file', 'app')
     ),
     display_name TEXT NOT NULL,
     canonical_key TEXT NOT NULL UNIQUE,

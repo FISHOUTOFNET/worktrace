@@ -6,10 +6,6 @@ from dataclasses import dataclass
 from .constants import ANCHOR_FILE_EXTENSIONS
 from .path_utils import extract_file_path_from_title, looks_like_anchor_file_path, normalize_path_key, split_file_path
 
-BROWSER_HINTS = ("chrome", "msedge", "edge", "firefox", "browser")
-COMMUNICATION_HINTS = ("dingding", "dingtalk", "feishu", "lark", "wechat", "weixin", "outlook", "mail")
-MEETING_HINTS = ("teams", "zoom", "meeting", "tencentmeeting", "voov", "腾讯会议", "会议")
-
 _ANCHOR_EXT_RE = "|".join(re.escape(ext.lstrip(".")) for ext in ANCHOR_FILE_EXTENSIONS)
 _FILE_RE = re.compile(
     rf"(?P<name>[^\\/:*?\"<>|\r\n]+?\.({_ANCHOR_EXT_RE}))",
@@ -72,33 +68,14 @@ def infer_resource_identity(
             file_stem=re.sub(r"\.[^.]+$", "", file_name),
         )
 
-    combined = " ".join([app, process]).lower()
-    if any(hint in combined for hint in BROWSER_HINTS):
-        return ResourceIdentity(
-            resource_role="auxiliary",
-            resource_type="web",
-            display_name="浏览器 / 检索网页",
-            canonical_key="web:browser",
-            app_name=None,
-            process_name=None,
-            title_hint=None,
-        )
-
-    resource_type = "app"
-    if any(hint in combined for hint in MEETING_HINTS) or any(hint in app for hint in MEETING_HINTS):
-        resource_type = "meeting"
-    elif any(hint in combined for hint in COMMUNICATION_HINTS) or any(hint in app for hint in COMMUNICATION_HINTS):
-        resource_type = "communication"
-    elif not app and not process:
-        resource_type = "unknown"
-
     display = app or process or "未知应用"
-    key_base = (process or app or "unknown").lower()
+    key_parts = [part for part in (app, process) if part]
+    key_base = "|".join(key_parts) if key_parts else "unknown"
     return ResourceIdentity(
         resource_role="auxiliary",
-        resource_type=resource_type,
+        resource_type="app",
         display_name=display,
-        canonical_key=f"{resource_type}:{_slug(key_base)}",
+        canonical_key=f"app:{_slug(key_base)}",
         app_name=app or None,
         process_name=process or None,
         title_hint=None,

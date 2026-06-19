@@ -30,8 +30,6 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
         [
             "Project",
             "Total Duration",
-            "Billable Duration",
-            "Non-billable Duration",
             "Record Count",
         ]
     )
@@ -40,8 +38,6 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
             [
                 row["project"],
                 format_duration(row["total_duration"]),
-                format_duration(row["billable_duration"]),
-                format_duration(row["non_billable_duration"]),
                 row["record_count"],
             ]
         )
@@ -58,7 +54,6 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
             "资源/文件",
             "窗口标题",
             "项目",
-            "是否计费",
             "备注",
         ]
     )
@@ -76,7 +71,6 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
                 activity_service.activity_display_name(row),
                 row["window_title"],
                 row.get("project_name") or "未归类",
-                "是" if row["is_billable"] else "否",
                 row.get("note") or "",
             ]
         )

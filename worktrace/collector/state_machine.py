@@ -117,7 +117,6 @@ class CollectorStateMachine:
                 "process_name": "idle",
                 "window_title": "用户空闲",
                 "status": STATUS_IDLE,
-                "is_billable": False,
             }
         if status == STATUS_PAUSED:
             return {
@@ -125,7 +124,6 @@ class CollectorStateMachine:
                 "process_name": "paused",
                 "window_title": "采集已暂停",
                 "status": STATUS_PAUSED,
-                "is_billable": False,
             }
         if status == STATUS_ERROR:
             return {
@@ -133,7 +131,6 @@ class CollectorStateMachine:
                 "process_name": "error",
                 "window_title": "采集异常",
                 "status": STATUS_ERROR,
-                "is_billable": False,
             }
         if active_window is None:
             raise ValueError("active_window is required for recording state")

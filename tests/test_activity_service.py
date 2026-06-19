@@ -9,13 +9,11 @@ def test_create_close_and_manual_updates(temp_db):
     activity_service.close_activity(activity_id, "2026-06-18 09:30:00")
     activity_service.update_activity_project(activity_id, pid)
     activity_service.update_activity_note(activity_id, "done")
-    activity_service.set_activity_billable(activity_id, False)
     row = activity_service.get_activity(activity_id)
     assert row["duration_seconds"] == 1800
     assert row["project_id"] == pid
     assert row["manual_override"] == 1
     assert row["note"] == "done"
-    assert row["is_billable"] == 0
 
 
 def test_create_activity_closes_existing_open_record(temp_db):

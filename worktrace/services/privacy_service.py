@@ -36,6 +36,5 @@ def make_excluded_activity_payload() -> dict:
         "process_name": EXCLUDED_PROCESS_NAME,
         "window_title": EXCLUDED_WINDOW_TITLE,
         "status": STATUS_EXCLUDED,
-        "is_billable": False,
         "file_path_hint": None,
     }

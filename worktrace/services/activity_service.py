@@ -33,7 +33,6 @@ def create_activity(
     status: str = STATUS_NORMAL,
     source: str = SOURCE_AUTO,
     start_time: str | None = None,
-    is_billable: bool | None = None,
     project_id: int | None = None,
     resource_id: int | None = None,
     file_path_hint: str | None = None,
@@ -45,9 +44,6 @@ def create_activity(
     start = start_time or ts
     project = project_id if project_id is not None else get_or_create_uncategorized_project()
     manual_assignment = bool(manual_override or project_id is not None)
-    billable = int(is_billable if is_billable is not None else status == STATUS_NORMAL)
-    if status == STATUS_EXCLUDED:
-        billable = 0
     with get_connection() as conn:
         open_rows = conn.execute("SELECT id FROM activity_log WHERE end_time IS NULL").fetchall()
         for row in open_rows:
@@ -56,10 +52,10 @@ def create_activity(
             """
             INSERT INTO activity_log(
                 start_time, end_time, duration_seconds, app_name, process_name, window_title,
-                file_path_hint, status, source, is_billable, is_deleted, is_hidden,
+                file_path_hint, status, source, is_deleted, is_hidden,
                 auto_classified, manual_override, project_id, resource_id, note, created_at, updated_at
             )
-            VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 start,
@@ -69,7 +65,6 @@ def create_activity(
                 file_path_hint,
                 status,
                 source,
-                billable,
                 int(auto_classified),
                 int(manual_assignment),
                 project,
@@ -321,14 +316,6 @@ def update_activity_note(activity_id: int, note: str) -> None:
         )
 
 
-def set_activity_billable(activity_id: int, is_billable: bool) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET is_billable = ?, updated_at = ? WHERE id = ?",
-            (int(is_billable), now_str(), activity_id),
-        )
-
-
 def soft_delete_activity(activity_id: int) -> None:
     with get_connection() as conn:
         conn.execute(
@@ -343,7 +330,6 @@ def update_activity_fields(activity_id: int, **fields: Any) -> None:
     allowed = {
         "status",
         "source",
-        "is_billable",
         "is_hidden",
         "auto_classified",
         "manual_override",

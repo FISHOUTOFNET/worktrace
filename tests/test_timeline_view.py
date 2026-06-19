@@ -246,7 +246,6 @@ def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch)
     view.resource_project_var = FakeVar()
     view.new_project_var = FakeVar()
     view.activity_project_var = FakeVar()
-    view.billable_var = FakeVar(False)
 
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkFrame", lambda master, **_kwargs: FakeWidget(master=master))
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkLabel", lambda master, **_kwargs: FakeWidget(master=master))

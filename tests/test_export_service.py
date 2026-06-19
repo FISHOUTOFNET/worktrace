@@ -35,7 +35,6 @@ def test_excel_export_file_creation(temp_db, tmp_path):
         "资源/文件",
         "窗口标题",
         "项目",
-        "是否计费",
         "备注",
     ]
 
@@ -51,6 +50,7 @@ def test_markdown_export_content(temp_db, tmp_path):
     assert "日期范围：2026-06-18 至 2026-06-18" in text
     assert "项目维度汇总" in text
     assert "未归类：总计 30分钟" in text
+    assert "计费" not in text
     assert "未确认记录提醒" not in text
 
 

@@ -15,12 +15,18 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
             row["name"] for row in conn.execute("PRAGMA table_info(activity_project_assignment)").fetchall()
         }
         setting = conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()
+        removed_setting = conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone()
         uncategorized = conn.execute("SELECT * FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
+        resource_schema = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'resource'"
+        ).fetchone()["sql"]
 
     assert "resource_id" in activity_columns
     assert "file_path_hint" in activity_columns
+    assert "is_billable" not in activity_columns
     assert "is_confirmed" not in activity_columns
     assert "created_by" in project_columns
+    assert "default_billable" not in project_columns
     assert "suggested_project_name" in assignment_columns
     assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
     assert "resource" in tables
@@ -28,8 +34,14 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "folder_project_rule" in tables
     assert "activity_project_assignment" in tables
     assert setting["value"] == "15"
+    assert removed_setting is None
     assert uncategorized is not None
     assert uncategorized["created_by"] == "system"
+    assert "'file', 'app'" in resource_schema
+    assert "web" not in resource_schema
+    assert "communication" not in resource_schema
+    assert "meeting" not in resource_schema
+    assert "unknown" not in resource_schema
     assert "rule" not in tables
 
 
@@ -53,9 +65,12 @@ def test_reset_database_clears_current_schema_tables(temp_db):
             row["name"] for row in conn.execute("PRAGMA table_info(activity_project_assignment)").fetchall()
         }
         assert "file_path_hint" in activity_columns
+        assert "is_billable" not in activity_columns
         assert "is_confirmed" not in activity_columns
         assert "created_by" in project_columns
+        assert "default_billable" not in project_columns
         assert "suggested_project_name" in assignment_columns
         assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
         assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
+        assert conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone() is None
         assert conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone() is not None

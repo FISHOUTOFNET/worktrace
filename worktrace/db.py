@@ -68,7 +68,6 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "min_idle_segment_seconds": "60",
         "current_activity_snapshot": "",
         "pending_short_seconds": "0",
-        "default_billable": "true",
         "exclude_keywords": "微信,银行,密码,个人",
         "collector_status": "stopped",
         "last_collector_heartbeat": "",
@@ -90,8 +89,8 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         )
     conn.execute(
         """
-        INSERT INTO project(name, description, default_billable, is_archived, created_by, created_at, updated_at)
-        VALUES (?, '', 1, 0, 'system', ?, ?)
+        INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
+        VALUES (?, '', 0, 'system', ?, ?)
         ON CONFLICT(name) DO NOTHING
         """,
         (UNCATEGORIZED_PROJECT, ts, ts),
