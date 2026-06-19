@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS project (
     name TEXT NOT NULL UNIQUE,
     description TEXT,
     is_archived INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
     created_by TEXT NOT NULL DEFAULT 'user' CHECK (
         created_by IN ('system', 'user')
     ),

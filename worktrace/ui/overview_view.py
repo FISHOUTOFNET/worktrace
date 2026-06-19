@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import messagebox
@@ -33,6 +34,9 @@ class OverviewView(ctk.CTkFrame):
         self.kpi_value_labels: dict[str, ctk.CTkLabel] = {}
         self._recent_rows: dict[str, dict[str, Any]] = {}
         self._recent_empty = None
+        self._current_snapshot: dict | None = None
+        self._current_signature: tuple | None = None
+        self._last_data_refresh_monotonic = 0.0
         self._build()
 
     def _build(self) -> None:
@@ -140,12 +144,13 @@ class OverviewView(ctk.CTkFrame):
                     self._bind_click(widget, command)
 
     def refresh(self) -> None:
+        self._last_data_refresh_monotonic = time.monotonic()
         start, end = self._scope_dates()
         summary = statistics_service.get_summary(start, end)
         self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
         self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
         self.kpi_value_labels["uncategorized"].configure(text=format_duration(summary["uncategorized_duration"]))
-        self.current_activity_label.configure(text=current_activity_text())
+        self._sync_current_activity_from_store()
         self._sync_scope_labels()
         self._refresh_recent_sessions(start, end)
 
@@ -267,7 +272,22 @@ class OverviewView(ctk.CTkFrame):
             self.open_statistics_callback()
 
     def refresh_current_activity(self) -> None:
-        self.current_activity_label.configure(text=current_activity_text())
+        snapshot = _read_current_activity_snapshot()
+        signature = _snapshot_signature(snapshot)
+        if signature != self._current_signature:
+            self.refresh()
+            return
+        if time.monotonic() - self._last_data_refresh_monotonic >= 300:
+            self.refresh()
+            return
+        if snapshot is not None:
+            self._current_snapshot = snapshot
+        self.current_activity_label.configure(text=current_activity_text_from_snapshot(self._current_snapshot))
+
+    def _sync_current_activity_from_store(self) -> None:
+        self._current_snapshot = _read_current_activity_snapshot()
+        self._current_signature = _snapshot_signature(self._current_snapshot)
+        self.current_activity_label.configure(text=current_activity_text_from_snapshot(self._current_snapshot))
 
     def export_current_excel(self) -> None:
         start, end = self._scope_dates()
@@ -302,12 +322,35 @@ class OverviewView(ctk.CTkFrame):
 
 
 def current_activity_text() -> str:
+    return current_activity_text_from_snapshot(_read_current_activity_snapshot())
+
+
+def _read_current_activity_snapshot() -> dict | None:
     raw = get_setting("current_activity_snapshot", "") or ""
     if not raw:
-        return "当前活动：无"
+        return None
     try:
-        snapshot = json.loads(raw)
+        return json.loads(raw)
     except json.JSONDecodeError:
+        return None
+
+
+def _snapshot_signature(snapshot: dict | None) -> tuple | None:
+    if not snapshot:
+        return None
+    return (
+        snapshot.get("status"),
+        snapshot.get("app_name"),
+        snapshot.get("process_name"),
+        snapshot.get("window_title"),
+        snapshot.get("file_path_hint"),
+        snapshot.get("start_time"),
+        bool(snapshot.get("is_persisted")),
+    )
+
+
+def current_activity_text_from_snapshot(snapshot: dict | None) -> str:
+    if not snapshot:
         return "当前活动：无"
     name = snapshot.get("resource_display_name") or snapshot.get("app_name") or snapshot.get("process_name") or "未知"
     project = snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT

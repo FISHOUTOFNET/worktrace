@@ -249,7 +249,6 @@ def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch)
 
     assert view.resource_editor.master is view.editor_panel
     assert view.activity_editor.master is view.editor_panel
-    assert view.resource_rule_button in view._resource_editor_widgets
     assert view.close_resource_button in view._resource_editor_widgets
     assert view.close_activity_button in view._editor_widgets
 
@@ -493,7 +492,7 @@ def test_project_rule_saved_selects_project_immediately(temp_db):
     assert view.resource_project_var.get() == "Client"
     assert view.activity_project_var.get() == "Client"
     assert "Client" in view._project_by_name
-    assert view.resource_hint_label.config["text"] == "已保存新建项目/规则：Client"
+    assert view.resource_hint_label.config["text"] == "已保存新建项目规则：Client"
 
 
 def test_created_project_can_be_used_for_resource_correction_immediately(temp_db):

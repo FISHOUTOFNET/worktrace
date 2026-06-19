@@ -62,13 +62,14 @@ def clear_all_local_data(confirm: bool) -> None:
         raise ValueError("confirmation is required")
     reset_database()
     from .folder_rule_service import invalidate_folder_rule_cache
-    from .privacy_service import clear_exclude_keywords_cache
+    from .privacy_service import clear_exclude_keywords_cache, clear_exclude_rules_cache
     from .project_inference_service import invalidate_keyword_rule_cache
     from .project_service import invalidate_uncategorized_project_cache
     from .settings_service import clear_settings_cache
 
     clear_settings_cache()
     clear_exclude_keywords_cache()
+    clear_exclude_rules_cache()
     invalidate_uncategorized_project_cache()
     invalidate_folder_rule_cache()
     invalidate_keyword_rule_cache()

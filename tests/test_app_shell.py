@@ -92,8 +92,8 @@ def test_shell_show_page_lazily_creates_and_reuses_target():
 
     assert created == ["timeline"]
     assert first_page.visible is True
-    assert first_page.raised == 2
-    assert first_page.refreshed == 2
+    assert first_page.raised == 1
+    assert first_page.refreshed == 1
 
 
 def test_shell_current_activity_tick_updates_only_active_page():
@@ -109,7 +109,7 @@ def test_shell_current_activity_tick_updates_only_active_page():
 
     assert overview.live_refreshed == 1
     assert timeline.live_refreshed == 0
-    assert scheduled[0][0] == 2000
+    assert scheduled[0][0] == 1000
     assert scheduled[0][1].__func__ is WorkTraceApp._refresh_current_activity_status
 
 

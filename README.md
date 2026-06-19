@@ -10,8 +10,8 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 - Idle, paused, excluded, normal, and error activity states.
 - First-run privacy notice before any collection starts.
 - Project creation, manual project assignment, notes, and soft delete.
-- File, folder, and keyword project rules.
-- Excel export, Markdown weekly draft export, and export-all-local-data.
+- File, folder, and keyword project rules, including the special local `排除规则`.
+- Excel export and Markdown weekly draft export.
 - Collector heartbeat and startup recovery for unclosed records.
 - Single-instance collector protection.
 
@@ -25,7 +25,7 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 不记录键盘。  
 不读取正文。  
 不上传数据。  
-隐私排除窗口只保存匿名时间块。  
+命中排除规则的窗口只保存匿名时间块。  
 自动记录需由用户整理归类后再作为正式工时依据。
 
 WorkTrace records only the current application name, process name, window title, identifiable local file path, start time, end time, duration, status, project, and note. It does not read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, clipboard data, camera, or microphone data.
@@ -60,11 +60,11 @@ WorkTrace keeps the startup path small by creating only the Overview page at lau
 
 Heavy optional dependencies are loaded only when needed: `openpyxl` is imported during Excel export, and Windows process inspection dependencies are imported only when the real Windows adapter reads the foreground window. Shared duration formatting lives in `worktrace.formatters` so UI modules do not load export modules just to format `hh:mm:ss` values.
 
-The default full-page data refresh interval is 10 seconds. The current-activity label uses a lightweight 2-second refresh from the app shell, while collector data remains local and offline.
+The default full-page data refresh interval is 10 seconds. The current-activity label uses a lightweight 1-second tick; if the active item is unchanged, the UI increments the displayed duration locally and refreshes heavier overview data only when the item changes or after roughly 5 minutes.
 
 ## Project Classification
 
-Folder project rules require a recognizable full local file path. File rules bind one specific file to a project. On Windows, WorkTrace tries Office/WPS COM first and then falls back to the foreground process open-file list, using only a unique exact file-name match.
+Folder project rules require a recognizable full local file path. File rules bind one specific file to a project. The special `排除规则` project supports file, folder, and keyword rules; matches are recorded anonymously as `已排除窗口` rather than classified as ordinary project time. Disabled projects remain visible but no longer participate in automatic classification.
 
 If a file path is known but no rule or file default matches, Time Details may show the parent folder name as a suggested project. Suggested names are display-only hints and are not inserted into the `project` table.
 
@@ -95,7 +95,7 @@ WorkTrace prevents multiple collectors from writing to the same database. On Win
 
 ## Data Export And Clearing
 
-The Project Rules page shows project binding summaries and manages file rules, folder rules, and keyword rules. The Settings page can export all local tables (`activity_log`, `activity_project_assignment`, `project`, `resource`, `folder_project_rule`, `project_rule`, `settings`) to Excel.
+The Project Rules page shows project binding summaries and manages file rules, folder rules, keyword rules, project edits, project enable/disable state, and the special `排除规则`.
 
 The Settings page can clear all local data after this confirmation text:
 
@@ -103,7 +103,7 @@ The Settings page can clear all local data after this confirmation text:
 此操作将删除本机保存的所有工作轨迹、项目、规则和设置。删除后无法恢复。是否继续？
 ```
 
-Clearing data recreates the database defaults, including the default project `未归类`.
+Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`.
 
 ## Tests
 

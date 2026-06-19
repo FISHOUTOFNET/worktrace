@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from ..constants import UNCATEGORIZED_PROJECT
+from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from ..db import dict_rows, get_connection, get_db_path, now_str
 
 _UNCATEGORIZED_PROJECT_IDS: dict[str, int] = {}
+_EXCLUDED_PROJECT_IDS: dict[str, int] = {}
 
 
 def invalidate_uncategorized_project_cache() -> None:
     _UNCATEGORIZED_PROJECT_IDS.pop(str(get_db_path().resolve()), None)
+    _EXCLUDED_PROJECT_IDS.pop(str(get_db_path().resolve()), None)
 
 
 def create_project(name: str, description: str = "") -> int:
@@ -18,12 +20,52 @@ def create_project(name: str, description: str = "") -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
-            VALUES (?, ?, 0, 'user', ?, ?)
+            INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
+            VALUES (?, ?, 0, 1, 'user', ?, ?)
             """,
             (name, description, ts, ts),
         )
         return int(cur.lastrowid)
+
+
+def update_project(project_id: int, name: str, description: str = "") -> None:
+    project = get_project(project_id)
+    if not project:
+        raise ValueError("project not found")
+    if project.get("created_by") == "system":
+        raise ValueError("system project cannot be edited")
+    cleaned = name.strip()
+    if not cleaned:
+        raise ValueError("project name is required")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE project
+            SET name = ?, description = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (cleaned, description.strip(), now_str(), project_id),
+        )
+
+
+def set_project_enabled(project_id: int, enabled: bool) -> None:
+    project = get_project(project_id)
+    if not project:
+        raise ValueError("project not found")
+    if project.get("name") == UNCATEGORIZED_PROJECT:
+        raise ValueError("uncategorized project cannot be disabled")
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE project SET enabled = ?, updated_at = ? WHERE id = ?",
+            (int(enabled), now_str(), project_id),
+        )
+    from .folder_rule_service import invalidate_folder_rule_cache
+    from .privacy_service import clear_exclude_rules_cache
+    from .project_inference_service import invalidate_keyword_rule_cache
+
+    invalidate_folder_rule_cache()
+    invalidate_keyword_rule_cache()
+    clear_exclude_rules_cache()
 
 
 def get_project(project_id: int) -> dict | None:
@@ -69,16 +111,48 @@ def list_selectable_projects() -> list[dict]:
             SELECT *
             FROM project
             WHERE is_archived = 0
+              AND enabled = 1
               AND (created_by = 'user' OR name = ?)
+              AND name <> ?
             ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, name COLLATE NOCASE
             """,
-            (UNCATEGORIZED_PROJECT, UNCATEGORIZED_PROJECT),
+            (UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT),
         ).fetchall()
     return dict_rows(rows)
 
 
-def list_project_bindings() -> list[dict]:
-    projects = list_user_projects()
+def list_rule_target_projects() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM project
+            WHERE is_archived = 0
+              AND enabled = 1
+              AND (created_by = 'user' OR name = ?)
+            ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, name COLLATE NOCASE
+            """,
+            (EXCLUDED_PROJECT, EXCLUDED_PROJECT),
+        ).fetchall()
+    return dict_rows(rows)
+
+
+def list_project_bindings(include_system_special: bool = True) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM project
+            WHERE is_archived = 0
+              AND (
+                    created_by = 'user'
+                    OR (? = 1 AND name = ?)
+              )
+            ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, name COLLATE NOCASE
+            """,
+            (int(include_system_special), EXCLUDED_PROJECT, EXCLUDED_PROJECT),
+        ).fetchall()
+    projects = dict_rows(rows)
     with get_connection() as conn:
         folder_rows = dict_rows(
             conn.execute(
@@ -163,6 +237,9 @@ def delete_project(project_id: int) -> None:
 
     invalidate_folder_rule_cache()
     invalidate_keyword_rule_cache()
+    from .privacy_service import clear_exclude_rules_cache
+
+    clear_exclude_rules_cache()
 
 
 def get_or_create_uncategorized_project() -> int:
@@ -179,11 +256,35 @@ def get_or_create_uncategorized_project() -> int:
             return project_id
         cur = conn.execute(
             """
-            INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
-            VALUES (?, '', 0, 'system', ?, ?)
+            INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
+            VALUES (?, '', 0, 1, 'system', ?, ?)
             """,
             (UNCATEGORIZED_PROJECT, ts, ts),
         )
         project_id = int(cur.lastrowid)
         _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
+        return project_id
+
+
+def get_or_create_excluded_project() -> int:
+    cache_key = str(get_db_path().resolve())
+    cached = _EXCLUDED_PROJECT_IDS.get(cache_key)
+    if cached is not None:
+        return cached
+    ts = now_str()
+    with get_connection() as conn:
+        row = conn.execute("SELECT id FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone()
+        if row:
+            project_id = int(row["id"])
+            _EXCLUDED_PROJECT_IDS[cache_key] = project_id
+            return project_id
+        cur = conn.execute(
+            """
+            INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
+            VALUES (?, '命中后匿名记录为已排除窗口', 0, 1, 'system', ?, ?)
+            """,
+            (EXCLUDED_PROJECT, ts, ts),
+        )
+        project_id = int(cur.lastrowid)
+        _EXCLUDED_PROJECT_IDS[cache_key] = project_id
         return project_id

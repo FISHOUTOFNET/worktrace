@@ -11,7 +11,7 @@ import customtkinter as ctk
 from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
 from ..formatters import format_current_duration, format_duration
 from ..services import activity_service, project_service, timeline_service
-from ..services.settings_service import get_bool_setting, get_setting
+from ..services.settings_service import get_setting
 from . import design
 from .project_rule_dialog import open_project_rule_dialog
 
@@ -83,14 +83,10 @@ class TimelineView(ctk.CTkFrame):
 
         controls = ctk.CTkFrame(top, fg_color="transparent")
         controls.grid(row=0, column=1, sticky="e")
-        self.status_label = self._label(controls, text="采集器未运行", text_color=design.MUTED_TEXT)
-        self.status_label.pack(side="left", padx=(0, 8))
         self._label(controls, text="日期", text_color=design.MUTED_TEXT).pack(side="left", padx=(4, 4))
         self.date_entry = self._entry(controls, textvariable=self.date_var, width=120)
         self.date_entry.pack(side="left")
-        self.refresh_button = self._button(controls, text="刷新", width=70, command=self.refresh)
-        self.refresh_button.pack(side="left", padx=8)
-        self._checkbox(controls, text="仅未归类", variable=self.only_uncategorized, command=self.refresh).pack(side="left")
+        self._checkbox(controls, text="仅未归类", variable=self.only_uncategorized, command=self.refresh).pack(side="left", padx=(8, 0))
 
         self._build_session_table()
         self._build_detail_area()
@@ -150,15 +146,6 @@ class TimelineView(ctk.CTkFrame):
 
         actions = ctk.CTkFrame(header, fg_color="transparent")
         actions.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        self.project_rule_button = self._button(
-            actions,
-            text="新建项目/规则",
-            width=132,
-            command=self._open_project_rule_dialog,
-            fg_color=design.NEUTRAL_SOFT,
-            text_color=design.TEXT,
-        )
-        self.project_rule_button.pack(side="left", padx=(0, 10))
         self._label(actions, text="整体项目", text_color=design.MUTED_TEXT).pack(side="left", padx=(0, 4))
         self.session_project_menu = self._option_menu(
             actions,
@@ -280,23 +267,12 @@ class TimelineView(ctk.CTkFrame):
             command=lambda: self._save_resource_project(True),
         )
         self.remember_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=6)
-        self._label(self.resource_editor, text="新建项目/规则", text_color=design.MUTED_TEXT).grid(row=2, column=0, sticky="w", padx=(14, 4), pady=(0, 8))
-        self.resource_rule_button = self._button(
-            self.resource_editor,
-            text="新建项目/规则",
-            width=132,
-            command=self._open_resource_project_rule_dialog,
-            fg_color=design.NEUTRAL_SOFT,
-            text_color=design.TEXT,
-        )
-        self.resource_rule_button.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
         self.resource_hint_label = self._label(self.resource_editor, text="", text_color=design.MUTED_TEXT)
-        self.resource_hint_label.grid(row=3, column=0, columnspan=5, sticky="w", padx=14, pady=(0, 14))
+        self.resource_hint_label.grid(row=2, column=0, columnspan=5, sticky="w", padx=14, pady=(0, 14))
         self._resource_editor_widgets = [
             self.resource_project_menu,
             self.current_session_button,
             self.remember_button,
-            self.resource_rule_button,
             self.close_resource_button,
         ]
         for widget in self._resource_editor_widgets:
@@ -342,7 +318,7 @@ class TimelineView(ctk.CTkFrame):
         self._sync_status()
         date_text = self.date_var.get()
         if not self._valid_date(date_text):
-            self.status_label.configure(text="日期格式错误，请使用 YYYY-MM-DD")
+            self.current_activity_label.configure(text="日期格式错误，请使用 YYYY-MM-DD")
             return
         self._refresh_projects()
         sessions = timeline_service.get_project_sessions_by_date(date_text)
@@ -638,7 +614,7 @@ class TimelineView(ctk.CTkFrame):
             self.session_project_var.set(project_name)
             self.resource_project_var.set(project_name)
             self.activity_project_var.set(project_name)
-            self.resource_hint_label.configure(text=f"已保存新建项目/规则：{project_name}")
+            self.resource_hint_label.configure(text=f"已保存新建项目规则：{project_name}")
         self.refresh()
 
     def _default_session_folder(self) -> str:
@@ -699,14 +675,6 @@ class TimelineView(ctk.CTkFrame):
                 menu.configure(values=names or [UNCATEGORIZED_PROJECT])
 
     def _sync_status(self) -> None:
-        status = get_setting("collector_status", "stopped")
-        paused = get_bool_setting("user_paused", False)
-        label = "记录中" if status == "running" else "采集器未运行"
-        if paused or status == "paused":
-            label = "已暂停"
-        if status == "error":
-            label = "状态异常"
-        self.status_label.configure(text=label)
         self.current_activity_label.configure(text=self._current_activity_text())
 
     def refresh_current_activity(self) -> None:
@@ -816,12 +784,15 @@ class TimelineView(ctk.CTkFrame):
             tree.heading(column, text=headings[column])
             stretch = column in {"summary", "project", "resource", "window", "note"}
             tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=stretch)
-        vertical_scrollbar = ttk.Scrollbar(master, orient="vertical", command=tree.yview)
-        horizontal_scrollbar = ttk.Scrollbar(master, orient="horizontal", command=tree.xview)
-        tree.configure(yscrollcommand=vertical_scrollbar.set, xscrollcommand=horizontal_scrollbar.set)
+        vertical_scrollbar = ttk.Scrollbar(
+            master,
+            orient="vertical",
+            command=tree.yview,
+            style="WorkTrace.Vertical.TScrollbar",
+        )
+        tree.configure(yscrollcommand=vertical_scrollbar.set)
         tree.grid(row=0, column=0, sticky="nsew")
         vertical_scrollbar.grid(row=0, column=1, sticky="ns")
-        horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
         tree.bind("<ButtonRelease-1>", lambda _event, target=tree: self._save_tree_column_widths(target), add="+")
         self._apply_tree_column_widths(tree)
         return tree

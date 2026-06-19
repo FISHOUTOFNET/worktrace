@@ -193,6 +193,9 @@ def create_or_update_file_default(file_path: str, project_id: int) -> int:
             "SELECT id FROM resource WHERE canonical_key = ?",
             (identity.canonical_key,),
         ).fetchone()
+    from .privacy_service import clear_exclude_rules_cache
+
+    clear_exclude_rules_cache()
     return int(row["id"] if row else cur.lastrowid)
 
 
@@ -206,3 +209,6 @@ def clear_file_default(resource_id: int) -> None:
             """,
             (now_str(), resource_id),
         )
+    from .privacy_service import clear_exclude_rules_cache
+
+    clear_exclude_rules_cache()

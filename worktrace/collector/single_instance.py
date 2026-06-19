@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 from pathlib import Path
 
@@ -20,7 +21,7 @@ def acquire_single_instance() -> bool:
         return False
     if os.name == "nt":
         kernel32 = ctypes.windll.kernel32
-        handle = kernel32.CreateMutexW(None, False, "Local\\WorkTrace_v0_1_Lite")
+        handle = kernel32.CreateMutexW(None, False, _windows_mutex_name())
         already_exists = kernel32.GetLastError() == 183
         if already_exists:
             kernel32.CloseHandle(handle)
@@ -38,6 +39,12 @@ def acquire_single_instance() -> bool:
         return True
     except FileExistsError:
         return False
+
+
+def _windows_mutex_name() -> str:
+    base = str(resolve_paths().base_dir.resolve()).casefold()
+    digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+    return f"Local\\WorkTrace_v0_1_Lite_{digest}"
 
 
 def release_single_instance() -> None:

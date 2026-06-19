@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+from ..constants import EXCLUDED_PROJECT
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import (
     is_path_under_folder,
@@ -27,11 +28,14 @@ def _enabled_folder_rules() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT fpr.*, p.name AS project_name
-            FROM folder_project_rule fpr
-            LEFT JOIN project p ON p.id = fpr.project_id
-            WHERE fpr.enabled = 1
-            """
+                SELECT fpr.*, p.name AS project_name
+                FROM folder_project_rule fpr
+                LEFT JOIN project p ON p.id = fpr.project_id
+                WHERE fpr.enabled = 1
+                  AND COALESCE(p.enabled, 1) = 1
+                  AND COALESCE(p.name, '') <> ?
+            """,
+            (EXCLUDED_PROJECT,),
         ).fetchall()
     rules = dict_rows(rows)
     _FOLDER_RULE_CACHE[cache_key] = (now + _FOLDER_RULE_CACHE_TTL_SECONDS, rules)
@@ -67,6 +71,9 @@ def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: b
             (key,),
         ).fetchone()
     invalidate_folder_rule_cache()
+    from .privacy_service import clear_exclude_rules_cache
+
+    clear_exclude_rules_cache()
     return int(row["id"] if row else cur.lastrowid)
 
 
@@ -74,6 +81,9 @@ def delete_folder_rule(rule_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))
     invalidate_folder_rule_cache()
+    from .privacy_service import clear_exclude_rules_cache
+
+    clear_exclude_rules_cache()
 
 
 def set_folder_rule_enabled(rule_id: int, enabled: bool) -> None:
@@ -83,6 +93,9 @@ def set_folder_rule_enabled(rule_id: int, enabled: bool) -> None:
             (int(enabled), now_str(), rule_id),
         )
     invalidate_folder_rule_cache()
+    from .privacy_service import clear_exclude_rules_cache
+
+    clear_exclude_rules_cache()
 
 
 def list_folder_rules() -> list[dict]:

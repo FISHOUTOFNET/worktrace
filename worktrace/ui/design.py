@@ -190,6 +190,15 @@ def configure_tree_style(owner) -> None:
         background=[("selected", color(ACCENT_SOFT))],
         foreground=[("selected", color(ACCENT))],
     )
+    style.configure(
+        "WorkTrace.Vertical.TScrollbar",
+        background=color(NEUTRAL_SOFT),
+        troughcolor=color(PANEL_ALT_BG),
+        bordercolor=color(PANEL_ALT_BG),
+        arrowcolor=color(MUTED_TEXT),
+        relief="flat",
+        width=12,
+    )
 
 
 def status_palette(status: str) -> tuple[tuple[str, str], tuple[str, str]]:

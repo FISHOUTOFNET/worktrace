@@ -4,7 +4,7 @@ import ntpath
 import re
 import time
 
-from ..constants import STATUS_NORMAL
+from ..constants import EXCLUDED_PROJECT, STATUS_NORMAL
 from ..db import get_connection, get_db_path, now_str
 from . import folder_rule_service
 from .resource_service import ensure_activity_resource
@@ -39,20 +39,30 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
         with get_connection() as read_conn:
             rows = read_conn.execute(
                 """
-                SELECT project_id, pattern
-                FROM project_rule
-                WHERE enabled = 1 AND rule_type = 'keyword'
-                ORDER BY created_at, id
-                """
+                SELECT pr.project_id, pr.pattern
+                FROM project_rule pr
+                JOIN project p ON p.id = pr.project_id
+                WHERE pr.enabled = 1
+                  AND pr.rule_type = 'keyword'
+                  AND p.enabled = 1
+                  AND p.name <> ?
+                ORDER BY pr.created_at, pr.id
+                """,
+                (EXCLUDED_PROJECT,),
             ).fetchall()
     else:
         rows = conn.execute(
             """
-            SELECT project_id, pattern
-            FROM project_rule
-            WHERE enabled = 1 AND rule_type = 'keyword'
-            ORDER BY created_at, id
-            """
+            SELECT pr.project_id, pr.pattern
+            FROM project_rule pr
+            JOIN project p ON p.id = pr.project_id
+            WHERE pr.enabled = 1
+              AND pr.rule_type = 'keyword'
+              AND p.enabled = 1
+              AND p.name <> ?
+            ORDER BY pr.created_at, pr.id
+            """,
+            (EXCLUDED_PROJECT,),
         ).fetchall()
     rules = [{"project_id": int(row["project_id"]), "pattern": (row["pattern"] or "").strip().casefold()} for row in rows]
     _KEYWORD_RULE_CACHE[cache_key] = (now + _KEYWORD_RULE_CACHE_TTL_SECONDS, rules)
@@ -125,7 +135,7 @@ def process_new_activity(activity_id: int) -> dict:
 
 
 def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, str, int, str | None]:
-    if resource.get("default_project_id"):
+    if resource.get("default_project_id") and _project_can_auto_classify(conn, int(resource["default_project_id"])):
         return int(resource["default_project_id"]), "anchor_resource_default", 90, None
 
     if (
@@ -156,6 +166,14 @@ def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, st
         return _get_uncategorized_project_id(conn), "suggested_project_name", 40, fallback_name
 
     return _get_uncategorized_project_id(conn), "uncategorized", 0, None
+
+
+def _project_can_auto_classify(conn, project_id: int) -> bool:
+    row = conn.execute(
+        "SELECT name, enabled FROM project WHERE id = ?",
+        (project_id,),
+    ).fetchone()
+    return bool(row and int(row["enabled"] or 0) and row["name"] != EXCLUDED_PROJECT)
 
 
 def candidate_project_name_for_file_resource(resource: dict) -> str | None:
@@ -265,8 +283,8 @@ def _get_uncategorized_project_id(conn) -> int:
     ts = now_str()
     cur = conn.execute(
         """
-        INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
-        VALUES (?, '', 0, 'system', ?, ?)
+        INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
+        VALUES (?, '', 0, 1, 'system', ?, ?)
         """,
         (UNCATEGORIZED_PROJECT, ts, ts),
     )

@@ -1,5 +1,5 @@
 from worktrace import db
-from worktrace.constants import UNCATEGORIZED_PROJECT
+from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 
 
 def test_new_database_has_current_schema_and_defaults(temp_db):
@@ -21,6 +21,16 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
         min_history = conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone()
         min_idle = conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone()
         uncategorized = conn.execute("SELECT * FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
+        excluded = conn.execute("SELECT * FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone()
+        exclude_rule_count = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM project_rule pr
+            JOIN project p ON p.id = pr.project_id
+            WHERE p.name = ?
+            """,
+            (EXCLUDED_PROJECT,),
+        ).fetchone()
         resource_schema = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'resource'"
         ).fetchone()["sql"]
@@ -30,6 +40,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "is_billable" not in activity_columns
     assert "is_confirmed" not in activity_columns
     assert "created_by" in project_columns
+    assert "enabled" in project_columns
     assert "default_billable" not in project_columns
     assert "suggested_project_name" in assignment_columns
     assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
@@ -45,6 +56,10 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert min_idle is None
     assert uncategorized is not None
     assert uncategorized["created_by"] == "system"
+    assert excluded is not None
+    assert excluded["created_by"] == "system"
+    assert excluded["enabled"] == 1
+    assert exclude_rule_count["c"] == 4
     assert "'file', 'app'" in resource_schema
     assert "web" not in resource_schema
     assert "communication" not in resource_schema
@@ -65,7 +80,7 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM resource").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 4
         activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
         resource_columns = {row["name"] for row in conn.execute("PRAGMA table_info(resource)").fetchall()}
         project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project)").fetchall()}
@@ -76,6 +91,7 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert "is_billable" not in activity_columns
         assert "is_confirmed" not in activity_columns
         assert "created_by" in project_columns
+        assert "enabled" in project_columns
         assert "default_billable" not in project_columns
         assert "suggested_project_name" in assignment_columns
         assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
@@ -86,3 +102,4 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone() is None
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone() is None
         assert conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone() is not None
+        assert conn.execute("SELECT id FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone() is not None

@@ -21,11 +21,17 @@ class WorkTraceApp(ctk.CTk):
         self.nav_buttons: dict[str, ctk.CTkButton] = {}
         self.pages: dict[str, Any] = {}
         self._page_factories: dict[str, Callable[[], Any]] = {}
+        self._page_refresh_after_ids: dict[str, str] = {}
+        self._is_resizing = False
+        self._resize_after_id: str | None = None
+        self._last_configure_size: tuple[int, int] | None = None
+        self._refresh_after_resize = False
 
         self.title("有迹 WorkTrace")
         self.geometry("1240x780")
         self.minsize(1024, 720)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.bind("<Configure>", self._on_configure, add="+")
         design.apply_app_theme()
         self.configure(fg_color=design.WINDOW_BG)
 
@@ -36,7 +42,7 @@ class WorkTraceApp(ctk.CTk):
         self.after(200, self._startup_privacy_gate)
         self.after(500, self.refresh_current_tab)
         self.after(1000, self._refresh_sidebar_status)
-        self.after(2000, self._refresh_current_activity_status)
+        self.after(1000, self._refresh_current_activity_status)
 
     def _build_shell(self) -> None:
         self.sidebar = ctk.CTkFrame(self, fg_color=design.SIDEBAR_BG, corner_radius=0, width=228)
@@ -188,13 +194,17 @@ class WorkTraceApp(ctk.CTk):
     def show_page(self, key: str) -> None:
         if key not in self.pages and key not in getattr(self, "_page_factories", {}):
             return
+        if key == self.active_page and key in self.pages:
+            self._sync_nav_buttons()
+            return
+        created = key not in self.pages
         page = self._ensure_page(key)
         if page is None:
             return
         self.pages[key].tkraise()
         self.active_page = key
         self._sync_nav_buttons()
-        self._refresh_page(key)
+        self._schedule_page_refresh(key, delay_ms=80 if created else 0)
 
     def open_timeline(
         self,
@@ -214,25 +224,89 @@ class WorkTraceApp(ctk.CTk):
         self.show_page("timeline")
 
     def refresh_current_tab(self) -> None:
-        page = self.pages.get(self.active_page)
-        if self.active_page == "timeline" and page is not None:
-            if not page.is_user_interacting():
-                page.refresh()
+        if self._can_run_heavy_refresh():
+            page = self.pages.get(self.active_page)
+            if self.active_page == "timeline" and page is not None:
+                if not page.is_user_interacting():
+                    page.refresh()
+            else:
+                self._refresh_page(self.active_page)
         else:
-            self._refresh_page(self.active_page)
+            self._refresh_after_resize = True
         refresh_ms = max(5, get_int_setting("ui_refresh_seconds", 10)) * 1000
         self.after(refresh_ms, self.refresh_current_tab)
 
     def _refresh_page(self, key: str) -> None:
+        if not self._can_run_heavy_refresh():
+            self._refresh_after_resize = True
+            return
         page = self.pages.get(key)
         if page is not None and hasattr(page, "refresh"):
             page.refresh()
+
+    def _schedule_page_refresh(self, key: str, delay_ms: int = 0) -> None:
+        if not self._can_run_heavy_refresh():
+            self._refresh_after_resize = True
+            return
+        if "_page_refresh_after_ids" not in self.__dict__:
+            self._page_refresh_after_ids = {}
+        existing = self._page_refresh_after_ids.pop(key, None)
+        if existing is not None:
+            try:
+                self.after_cancel(existing)
+            except Exception:
+                pass
+
+        def run() -> None:
+            self._page_refresh_after_ids.pop(key, None)
+            if key == self.active_page:
+                self._refresh_page(key)
+
+        has_tk = "tk" in self.__dict__
+        if delay_ms > 0 and has_tk:
+            self._page_refresh_after_ids[key] = self.after(delay_ms, run)
+        elif has_tk:
+            self._page_refresh_after_ids[key] = self.after_idle(run)
+        else:
+            run()
 
     def _refresh_current_activity_status(self) -> None:
         page = self.pages.get(self.active_page)
         if page is not None and hasattr(page, "refresh_current_activity"):
             page.refresh_current_activity()
-        self.after(2000, self._refresh_current_activity_status)
+        self.after(1000, self._refresh_current_activity_status)
+
+    def _on_configure(self, event=None) -> None:
+        if event is not None and getattr(event, "widget", self) is not self:
+            return
+        size = (self.winfo_width(), self.winfo_height())
+        if self._last_configure_size == size:
+            return
+        self._last_configure_size = size
+        self._is_resizing = True
+        if self._resize_after_id is not None:
+            try:
+                self.after_cancel(self._resize_after_id)
+            except Exception:
+                pass
+        self._resize_after_id = self.after(250, self._finish_resize)
+
+    def _finish_resize(self) -> None:
+        self._is_resizing = False
+        self._resize_after_id = None
+        if self._refresh_after_resize:
+            self._refresh_after_resize = False
+            self._schedule_page_refresh(self.active_page, delay_ms=0)
+
+    def _can_run_heavy_refresh(self) -> bool:
+        if self.__dict__.get("_is_resizing", False):
+            return False
+        if "tk" not in self.__dict__:
+            return True
+        try:
+            return self.state() != "iconic"
+        except Exception:
+            return True
 
     def _sync_nav_buttons(self) -> None:
         for key, button in self.nav_buttons.items():

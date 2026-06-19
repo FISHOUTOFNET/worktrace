@@ -1,4 +1,7 @@
-from worktrace.services import folder_rule_service, project_service, resource_service, rule_service
+import pytest
+
+from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
+from worktrace.services import activity_service, folder_rule_service, project_service, resource_service, rule_service
 from worktrace.ui.project_rules_view import ProjectRulesView, _project_binding_text
 
 
@@ -41,3 +44,44 @@ def test_delete_project_deletes_project_and_clears_associated_rules(temp_db):
     assert resource_service.list_file_defaults() == []
     assert folder_rule_service.list_folder_rules() == []
     assert rule_service.list_rules() == []
+
+
+def test_project_can_be_edited_and_disabled(temp_db):
+    project_id = project_service.create_project("Client", "old")
+
+    project_service.update_project(project_id, "Client Renamed", "new")
+    project_service.set_project_enabled(project_id, False)
+
+    project = project_service.get_project(project_id)
+    assert project["name"] == "Client Renamed"
+    assert project["description"] == "new"
+    assert project["enabled"] == 0
+
+
+def test_system_projects_are_protected_from_editing_and_uncategorized_disable(temp_db):
+    uncategorized_id = project_service.get_or_create_uncategorized_project()
+    excluded_id = project_service.get_or_create_excluded_project()
+
+    with pytest.raises(ValueError):
+        project_service.update_project(excluded_id, "Nope")
+    with pytest.raises(ValueError):
+        project_service.set_project_enabled(uncategorized_id, False)
+
+    assert project_service.get_project(excluded_id)["name"] == EXCLUDED_PROJECT
+
+
+def test_disabled_project_does_not_auto_classify_keyword_rule(temp_db):
+    project_id = project_service.create_project("Client")
+    rule_service.create_rule("AcmeOnly", project_id)
+    project_service.set_project_enabled(project_id, False)
+
+    activity_id = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "AcmeOnly Spec.docx - Word",
+        start_time="2026-06-18 09:00:00",
+    )
+    activity_service.finalize_created_activity(activity_id)
+
+    activity = activity_service.get_activity(activity_id)
+    assert activity["project_name"] == UNCATEGORIZED_PROJECT

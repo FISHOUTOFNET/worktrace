@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 from . import config
-from .constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
+from .constants import EXCLUDED_PROJECT, TIME_FORMAT, UNCATEGORIZED_PROJECT
 
 _db_path: Path | None = None
 
@@ -66,7 +66,6 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "min_activity_seconds": "10",
         "current_activity_snapshot": "",
         "pending_short_seconds": "0",
-        "exclude_keywords": "微信,银行,密码,个人",
         "collector_status": "stopped",
         "last_collector_heartbeat": "",
         "last_shutdown_at": "",
@@ -90,12 +89,35 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        INSERT INTO project(name, description, is_archived, created_by, created_at, updated_at)
-        VALUES (?, '', 0, 'system', ?, ?)
+        INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
+        VALUES (?, '', 0, 1, 'system', ?, ?)
         ON CONFLICT(name) DO NOTHING
         """,
         (UNCATEGORIZED_PROJECT, ts, ts),
     )
+    conn.execute(
+        """
+        INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
+        VALUES (?, '命中后匿名记录为已排除窗口', 0, 1, 'system', ?, ?)
+        ON CONFLICT(name) DO NOTHING
+        """,
+        (EXCLUDED_PROJECT, ts, ts),
+    )
+    excluded = conn.execute("SELECT id FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone()
+    if excluded:
+        for keyword in ["微信", "银行", "密码", "个人"]:
+            conn.execute(
+                """
+                INSERT INTO project_rule(project_id, rule_type, pattern, enabled, created_by, created_at, updated_at)
+                SELECT ?, 'keyword', ?, 1, 'system', ?, ?
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM project_rule
+                    WHERE project_id = ? AND rule_type = 'keyword' AND pattern = ?
+                )
+                """,
+                (excluded["id"], keyword, ts, ts, excluded["id"], keyword),
+            )
 
 
 def reset_database() -> None:

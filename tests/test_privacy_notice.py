@@ -10,4 +10,5 @@ def test_active_window_supports_file_path_hint():
 def test_privacy_notice_mentions_local_file_paths_and_exclusion_matching():
     assert "完整本地路径" in PRIVACY_NOTICE_TEXT
     assert "本地文件路径" in PRIVACY_NOTICE_TEXT
-    assert "隐私排除关键词会同时匹配应用名称、进程名称、窗口标题和本地文件路径" in PRIVACY_NOTICE_TEXT
+    assert "排除规则支持文件夹、文件和关键词" in PRIVACY_NOTICE_TEXT
+    assert "关键词会同时匹配应用名称、进程名称、窗口标题和本地文件路径" in PRIVACY_NOTICE_TEXT

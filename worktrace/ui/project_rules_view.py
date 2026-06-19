@@ -4,6 +4,7 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
+from ..constants import EXCLUDED_PROJECT
 from ..services import folder_rule_service, project_service, resource_service, rule_service
 from . import design
 from .project_rule_dialog import RULE_TYPE_LABELS, open_project_rule_dialog
@@ -30,28 +31,14 @@ class ProjectRulesView(ctk.CTkFrame):
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
         actions = ctk.CTkFrame(header, fg_color="transparent")
         actions.grid(row=0, column=1, rowspan=2, sticky="e")
-        design.button(actions, text="新建项目/规则", command=self.open_new_rule_dialog).pack(side="left")
+        design.button(actions, text="新建项目规则", command=self.open_new_rule_dialog).pack(side="left")
 
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
         self.scroll.grid_columnconfigure(0, weight=1)
 
-        self.rules_section = design.card(self.scroll)
-        self.rules_section.grid(row=0, column=0, sticky="ew")
-        self.rules_section.grid_columnconfigure(0, weight=1)
-        rules_header = ctk.CTkFrame(self.rules_section, fg_color="transparent")
-        rules_header.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
-        rules_header.grid_columnconfigure(0, weight=1)
-        design.label(rules_header, text="项目规则", variant="section").grid(row=0, column=0, sticky="w")
-        design.button(
-            rules_header,
-            text="新建项目/规则",
-            variant="subtle",
-            width=128,
-            command=self.open_new_rule_dialog,
-        ).grid(row=0, column=1, sticky="e")
-        self.rules_frame = ctk.CTkFrame(self.rules_section, fg_color="transparent")
-        self.rules_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self.rules_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.rules_frame.grid(row=0, column=0, sticky="ew")
         self.rules_frame.grid_columnconfigure(0, weight=1)
 
     def refresh(self) -> None:
@@ -68,7 +55,7 @@ class ProjectRulesView(ctk.CTkFrame):
         self._rules_signature = signature
         _clear_children(self.rules_frame)
         if not projects:
-            _empty_row(self.rules_frame, "暂无用户项目。请使用“新建项目/规则”创建第一个项目。")
+            _empty_row(self.rules_frame, "暂无用户项目。请使用“新建项目规则”创建第一个项目。")
             return
         for row_index, project in enumerate(projects):
             self._project_group(self.rules_frame, row_index, project)
@@ -81,24 +68,47 @@ class ProjectRulesView(ctk.CTkFrame):
         header = ctk.CTkFrame(group, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 8))
         header.grid_columnconfigure(0, weight=1)
-        design.label(header, text=project["name"], variant="section").grid(row=0, column=0, sticky="w")
+        title = project["name"]
+        if not bool(int(project.get("enabled", 1))):
+            title = f"{title}（已禁用）"
+        design.label(header, text=title, variant="section").grid(row=0, column=0, sticky="w")
         design.label(header, text=_project_rule_summary(project), variant="caption").grid(row=1, column=0, sticky="w", pady=(2, 0))
         actions = ctk.CTkFrame(header, fg_color="transparent")
         actions.grid(row=0, column=1, rowspan=2, sticky="e")
-        design.button(
-            actions,
-            text="新建规则",
-            variant="subtle",
-            width=82,
-            command=lambda name=str(project["name"]): self.open_new_rule_dialog(initial_project_name=name),
-        ).pack(side="left", padx=(0, 8))
-        design.button(
-            actions,
-            text="删除项目",
-            variant="danger",
-            width=82,
-            command=lambda item=project: self.delete_project(item),
-        ).pack(side="left")
+        if project.get("created_by") == "user":
+            design.button(
+                actions,
+                text="编辑项目",
+                variant="subtle",
+                width=82,
+                command=lambda item=project: self.edit_project(item),
+            ).pack(side="left", padx=(0, 8))
+        if project.get("name") != EXCLUDED_PROJECT:
+            action_text = "禁用项目" if bool(int(project.get("enabled", 1))) else "启用项目"
+            design.button(
+                actions,
+                text=action_text,
+                variant="subtle",
+                width=82,
+                command=lambda item=project: self.set_project_enabled(item),
+            ).pack(side="left", padx=(0, 8))
+        else:
+            action_text = "禁用规则" if bool(int(project.get("enabled", 1))) else "启用规则"
+            design.button(
+                actions,
+                text=action_text,
+                variant="subtle",
+                width=82,
+                command=lambda item=project: self.set_project_enabled(item),
+            ).pack(side="left", padx=(0, 8))
+        if project.get("created_by") == "user":
+            design.button(
+                actions,
+                text="删除项目",
+                variant="danger",
+                width=82,
+                command=lambda item=project: self.delete_project(item),
+            ).pack(side="left")
 
         rules = _rules_for_project(project)
         rules_frame = ctk.CTkFrame(group, fg_color="transparent")
@@ -165,7 +175,7 @@ class ProjectRulesView(ctk.CTkFrame):
 
     def open_new_rule_dialog(
         self,
-        initial_type: str = "file",
+        initial_type: str = "folder",
         *,
         initial_project_name: str | None = None,
         initial_target: str = "",
@@ -175,6 +185,13 @@ class ProjectRulesView(ctk.CTkFrame):
             initial_type=initial_type,
             initial_target=initial_target,
             initial_project_name=initial_project_name,
+            on_saved=lambda _result: self._after_project_rule_saved(),
+        )
+
+    def edit_project(self, project: dict) -> None:
+        open_project_rule_dialog(
+            self,
+            edit_project_id=int(project["id"]),
             on_saved=lambda _result: self._after_project_rule_saved(),
         )
 
@@ -213,6 +230,15 @@ class ProjectRulesView(ctk.CTkFrame):
             project_service.delete_project(int(project["id"]))
         except Exception as exc:
             messagebox.showerror("删除失败", str(exc))
+            return
+        self._invalidate()
+        self.refresh()
+
+    def set_project_enabled(self, project: dict) -> None:
+        try:
+            project_service.set_project_enabled(int(project["id"]), not bool(int(project.get("enabled", 1))))
+        except Exception as exc:
+            messagebox.showerror("操作失败", str(exc))
             return
         self._invalidate()
         self.refresh()
@@ -268,6 +294,8 @@ def _project_signature(project: dict) -> tuple:
     return (
         project["id"],
         project["name"],
+        project.get("description") or "",
+        int(project.get("enabled", 1)),
         tuple((row["id"], row.get("full_path") or row.get("display_name")) for row in project.get("file_defaults", [])),
         tuple((rule["id"], rule["folder_path"], rule["enabled"], rule["recursive"]) for rule in project.get("folder_rules", [])),
         tuple((rule["id"], rule["keyword"], rule["enabled"]) for rule in project.get("keyword_rules", [])),
@@ -275,13 +303,16 @@ def _project_signature(project: dict) -> tuple:
 
 
 def _project_rule_summary(project: dict) -> str:
+    prefix = "已禁用 | " if not bool(int(project.get("enabled", 1))) else ""
+    if project.get("name") == EXCLUDED_PROJECT:
+        prefix += "命中后匿名排除 | "
     file_count = len(project.get("file_defaults", []))
     folder_count = len(project.get("folder_rules", []))
     keyword_count = len(project.get("keyword_rules", []))
     total = file_count + folder_count + keyword_count
     if total == 0:
-        return "暂无规则"
-    return f"{total} 条规则：文件 {file_count}，文件夹 {folder_count}，关键词 {keyword_count}"
+        return f"{prefix}暂无规则"
+    return f"{prefix}{total} 条规则：文件 {file_count}，文件夹 {folder_count}，关键词 {keyword_count}"
 
 
 def _rule_detail_text(rule: dict) -> str:

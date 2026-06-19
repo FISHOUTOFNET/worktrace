@@ -510,7 +510,6 @@ idle_threshold_minutes = 5
 min_activity_seconds = 10
 current_activity_snapshot =
 pending_short_seconds = 0
-exclude_keywords = 微信,银行,密码,个人
 collector_status = stopped
 last_collector_heartbeat =
 last_shutdown_at =
@@ -896,21 +895,23 @@ On startup:
 
 ---
 
-## 20. Privacy Exclusion
+## 20. Exclude Rules
 
-### 20.1 Settings-Based Keywords
+### 20.1 Special Project
 
-v0.1 Lite uses a simple comma-separated setting:
+WorkTrace seeds a system project named `排除规则`. It is displayed on the Project Rules page and supports the same three rule kinds as ordinary projects:
 
 ```text
-exclude_keywords = 微信,银行,密码,个人
+folder
+file
+keyword
 ```
 
-No separate privacy-rule table is required.
+When an active window matches this project, the collector records an anonymous `excluded` activity payload instead of storing the real title or path.
 
 ### 20.2 Matching Fields
 
-Check exclude keywords against:
+Check keyword exclude rules against:
 
 ```text
 app_name
@@ -1367,22 +1368,7 @@ Implementation may delete and recreate the SQLite database or clear all tables a
 
 ### 26.2 Export All Local Data
 
-Settings page must include:
-
-```text
-导出全部本地数据
-```
-
-Export all relevant tables to Excel or CSV:
-
-```text
-activity_log
-activity_project_assignment
-project
-resource
-project_rule
-settings
-```
+The UI does not expose export-all-local-data. Settings only supports clearing all local records; range Excel/Markdown exports remain available from reporting views.
 
 ---
 
@@ -1448,7 +1434,7 @@ README must explicitly say:
 不记录键盘。
 不读取正文。
 不上传数据。
-隐私排除窗口只保存匿名时间块。
+命中排除规则的窗口只保存匿名时间块。
 自动记录需由用户整理归类后再作为正式工时依据。
 ```
 
