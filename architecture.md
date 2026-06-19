@@ -600,6 +600,23 @@ Rules:
 3. Auto-rule assignment sets `auto_classified = 1`.
 4. Auto-rules must never overwrite `manual_override = 1`.
 
+### 14.5 Project Inference Priority
+
+Automatic project inference uses this priority:
+
+```text
+manual assignment
+file default project
+folder project rule
+keyword rule
+parent-folder suggested project name
+uncategorized
+```
+
+Folder project rules require a known full file path or parent directory. A file name without a path must not create a suggested project name from the file stem.
+
+Context carry-over may classify only auxiliary `web`, `communication`, and `meeting` resources. It uses the nearest previous and next anchor files only; an uncategorized anchor or an interrupt status stops the scan. Generic `app` and `unknown` resources remain uncategorized unless assigned manually.
+
 ---
 
 ## 15. Platform Adapter Interface
@@ -618,6 +635,7 @@ class ActiveWindow:
     app_name: str
     process_name: str
     window_title: str
+    file_path_hint: str | None = None
 
 
 class PlatformAdapter(Protocol):
@@ -1001,6 +1019,12 @@ If user changes project manually:
 ```text
 manual_override = 1
 ```
+
+### 22.4 Folder Rules And Suggested Names
+
+Folder project rules match only anchor file resources with a recognized full path or parent directory. Office/WPS adapters should resolve paths through COM and may fall back to the foreground process open-file list when the window title has a unique exact file-name match.
+
+Suggested project names are display-only Timeline hints. They may be derived from a known non-generic parent folder name, but must not be derived from a bare file name or file stem.
 
 ---
 

@@ -16,6 +16,7 @@ from .resource_service import ensure_activity_resource
 from .settings_service import get_int_setting
 
 INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
+CONTEXT_AUXILIARY_TYPES = {"web", "communication", "meeting"}
 
 
 def recompute_context_assignments_for_date(date: str) -> None:
@@ -61,6 +62,17 @@ def recompute_context_assignments_for_date(date: str) -> None:
         if row["resource_role"] != "auxiliary":
             continue
         if int(row["manual_override"] or 0) or int(row["assignment_is_manual"] or 0):
+            continue
+        if row.get("resource_type") not in CONTEXT_AUXILIARY_TYPES:
+            target_project_id = uncategorized_id
+            _sync_assignment_and_activity(
+                int(row["id"]),
+                target_project_id,
+                "uncategorized",
+                0,
+                is_manual=False,
+                auto_classified=False,
+            )
             continue
 
         target_project_id = _infer_context_project(rows, index, carry_minutes, uncategorized_id)
@@ -137,8 +149,7 @@ def _find_previous_anchor(rows: list[dict], index: int, uncategorized_id: int) -
             return None
         if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
             project_id = _row_project_id(row)
-            if project_id != uncategorized_id:
-                return row
+            return row if project_id != uncategorized_id else None
     return None
 
 
@@ -149,8 +160,7 @@ def _find_next_anchor(rows: list[dict], index: int, uncategorized_id: int) -> di
             return None
         if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
             project_id = _row_project_id(row)
-            if project_id != uncategorized_id:
-                return row
+            return row if project_id != uncategorized_id else None
     return None
 
 
@@ -218,7 +228,7 @@ def _sync_assignment_and_activity(
                     suggested_project_name = NULL,
                     updated_at = excluded.updated_at
                 """,
-                (activity_id, project_id, confidence, source, int(is_manual), None, ts, ts),
+                (activity_id, project_id, confidence, source, int(is_manual), ts, ts),
             )
         if activity_changed:
             conn.execute(

@@ -294,13 +294,13 @@ def update_activities_project(activity_ids: list[int], project_id: int, manual: 
                 INSERT INTO activity_project_assignment(
                     activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(activity_id) DO UPDATE SET
                     project_id = excluded.project_id,
                     confidence = excluded.confidence,
                     source = excluded.source,
                     is_manual = excluded.is_manual,
-                    suggested_project_name = NULL,
+                    suggested_project_name = excluded.suggested_project_name,
                     updated_at = excluded.updated_at
                 """,
                 (activity_id, project_id, confidence, source, int(manual), None, ts, ts),

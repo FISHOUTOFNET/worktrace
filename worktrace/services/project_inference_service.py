@@ -133,13 +133,13 @@ def candidate_project_name_for_file_resource(resource: dict) -> str | None:
     if resource.get("resource_role") != "anchor" or resource.get("resource_type") != "file":
         return None
     parent_dir = str(resource.get("parent_dir") or "").strip()
-    file_stem = str(resource.get("file_stem") or "").strip()
+    if not parent_dir:
+        return None
     parent_name = ntpath.basename(parent_dir.rstrip("\\/")) if parent_dir else ""
     parent_candidate = _clean_project_candidate(parent_name)
-    file_candidate = _clean_project_candidate(file_stem)
     if parent_candidate and parent_candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
         return parent_candidate
-    return file_candidate
+    return None
 
 
 def _clean_project_candidate(value: str | None) -> str | None:

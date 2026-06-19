@@ -29,6 +29,33 @@ def test_same_project_different_anchor_files_classify_auxiliary(temp_db):
     assert activity_service.get_activity(browser)["project_id"] == project
 
 
+def test_generic_app_between_same_project_anchors_remains_uncategorized(temp_db):
+    project = project_service.create_project("A")
+    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
+    trae = _activity("Trae CN.exe", "Trae CN.exe", "db.py - WorkTrace - Trae CN", "09:10:00")
+    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:20:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    row = activity_service.get_activity(trae)
+    assert row["project_name"] == UNCATEGORIZED_PROJECT
+
+
+def test_uncategorized_anchor_stops_context_scan(temp_db):
+    project = project_service.create_project("A")
+    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
+    unassigned_anchor = _activity("Word", "winword.exe", "Loose_file.docx", "09:05:00")
+    browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
+    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:20:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(unassigned_anchor)["project_name"] == UNCATEGORIZED_PROJECT
+    assert activity_service.get_activity(browser)["project_name"] == UNCATEGORIZED_PROJECT
+
+
 def test_same_project_anchors_do_not_classify_auxiliary_outside_carry_window(temp_db):
     project = project_service.create_project("A")
     _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)

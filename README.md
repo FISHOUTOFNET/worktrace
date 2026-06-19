@@ -28,7 +28,7 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 隐私排除窗口只保存匿名时间块。  
 自动记录需由用户确认后再作为正式工时依据。
 
-WorkTrace records only the current application name, process name, window title, start time, end time, duration, status, project, note, billable flag, and confirmation flag. It does not read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, clipboard data, camera, or microphone data.
+WorkTrace records only the current application name, process name, window title, identifiable local file path, start time, end time, duration, status, project, note, billable flag, and confirmation flag. It does not read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, clipboard data, camera, or microphone data.
 
 ## Portable Usage
 
@@ -53,6 +53,14 @@ The first launch shows the privacy notice. The collector starts only after the n
 - Default exports: `Documents\WorkTrace Exports`
 
 The app writes to user-local folders and does not require administrator privileges.
+
+## Project Classification
+
+Folder project rules require a recognizable full local file path. On Windows, WorkTrace tries Office/WPS COM first and then falls back to the foreground process open-file list, using only a unique exact file-name match.
+
+If a file path is known but no rule or file default matches, the Timeline may show the parent folder name as a suggested project. Suggested names are display-only hints and are not inserted into the `project` table.
+
+Context carry-over applies only to auxiliary web, communication, and meeting activity between nearby matching anchor files. Generic apps such as editors, Python, task manager, or IDE windows stay `未归类` unless the user assigns them manually.
 
 ## Collector Heartbeat
 

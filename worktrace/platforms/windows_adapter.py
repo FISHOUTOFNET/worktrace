@@ -34,7 +34,7 @@ class WindowsAdapter:
         except psutil.Error:
             process_name = "unknown"
             app_name = "unknown"
-        file_path_hint = _resolve_active_file_path(process_name, title)
+        file_path_hint = _resolve_active_file_path(process_name, title, pid)
         return ActiveWindow(
             app_name=app_name,
             process_name=process_name,
@@ -54,7 +54,7 @@ class WindowsAdapter:
         return int((tick_count - last_input.dwTime) / 1000)
 
 
-def _resolve_active_file_path(process_name: str, window_title: str) -> str | None:
+def _resolve_active_file_path(process_name: str, window_title: str, pid: int | None = None) -> str | None:
     try:
         title_path = extract_file_path_from_title(window_title)
         if title_path and looks_like_anchor_file_path(title_path):
@@ -75,6 +75,10 @@ def _resolve_active_file_path(process_name: str, window_title: str) -> str | Non
                 return path
         except Exception:
             logging.debug("active file path com lookup failed", exc_info=True)
+    fallback = _resolve_open_file_path(pid, window_title)
+    if fallback:
+        logging.debug("active file path resolved from process open files")
+        return fallback
     return None
 
 
@@ -91,12 +95,17 @@ def _office_candidates(process_name: str) -> list[tuple[str, str]]:
     # For wps.exe we try all three WPS COM objects so that xlsx/pptx
     # files are resolved correctly even when the process name is wps.exe.
     if "wps" in process_name:
+        candidates.append(("KWps.Application", "ActiveDocument.FullName"))
+        candidates.append(("KET.Application", "ActiveWorkbook.FullName"))
+        candidates.append(("KWPP.Application", "ActivePresentation.FullName"))
         candidates.append(("wps.Application", "ActiveDocument.FullName"))
         candidates.append(("et.Application", "ActiveWorkbook.FullName"))
         candidates.append(("wpp.Application", "ActivePresentation.FullName"))
     if "et" in process_name:
+        candidates.append(("KET.Application", "ActiveWorkbook.FullName"))
         candidates.append(("et.Application", "ActiveWorkbook.FullName"))
     if "wpp" in process_name:
+        candidates.append(("KWPP.Application", "ActivePresentation.FullName"))
         candidates.append(("wpp.Application", "ActivePresentation.FullName"))
     return candidates
 
@@ -129,3 +138,31 @@ def _is_valid_com_path(path: str | None, window_title: str | None) -> bool:
 
     title_file = extract_anchor_file_name(window_title)
     return bool(title_file and title_file.casefold() == file_name.casefold())
+
+
+def _resolve_open_file_path(pid: int | None, window_title: str | None) -> str | None:
+    if pid is None:
+        return None
+    title_file = extract_anchor_file_name(window_title)
+    if not title_file:
+        return None
+    try:
+        paths = [item.path for item in psutil.Process(pid).open_files()]
+    except (OSError, psutil.Error):
+        logging.debug("active file path open-files lookup failed", exc_info=True)
+        return None
+    return _match_open_file_path(title_file, paths)
+
+
+def _match_open_file_path(title_file: str, paths: list[str]) -> str | None:
+    matches: dict[str, str] = {}
+    title_key = title_file.casefold()
+    for path in paths:
+        if not looks_like_anchor_file_path(path):
+            continue
+        full_path, _, _ = split_file_path(path)
+        if ntpath.basename(full_path).casefold() == title_key:
+            matches[normalize_path_key(full_path)] = full_path
+    if len(matches) != 1:
+        return None
+    return next(iter(matches.values()))
