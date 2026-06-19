@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 
 from .constants import ANCHOR_FILE_EXTENSIONS
-from .path_utils import extract_file_path_from_title, normalize_path_key, split_file_path
+from .path_utils import extract_file_path_from_title, looks_like_anchor_file_path, normalize_path_key, split_file_path
 
 BROWSER_HINTS = ("chrome", "msedge", "edge", "firefox", "browser")
 COMMUNICATION_HINTS = ("dingding", "dingtalk", "feishu", "lark", "wechat", "weixin", "outlook", "mail")
@@ -41,7 +41,8 @@ def infer_resource_identity(
     process = (process_name or "").strip()
     title = (window_title or "").strip()
 
-    full_path_candidate = file_path_hint or extract_file_path_from_title(title)
+    full_path_candidate = file_path_hint if looks_like_anchor_file_path(file_path_hint) else None
+    full_path_candidate = full_path_candidate or extract_file_path_from_title(title)
     if full_path_candidate:
         full_path, parent_dir, file_stem = split_file_path(full_path_candidate)
         file_name = full_path.rsplit("\\", 1)[-1]

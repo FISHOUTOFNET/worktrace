@@ -22,5 +22,6 @@ def test_collector_loop_with_fake_adapter(temp_db):
     stop_event.set()
     thread.join(timeout=3)
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
-    assert rows
+    assert rows == []
     assert settings_service.get_setting("collector_status") == "stopped"
+    assert settings_service.get_setting("current_activity_snapshot", "") == ""

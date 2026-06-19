@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..constants import (
-    SOURCE_AUTO,
-    SOURCE_SYSTEM,
     STATUS_ERROR,
     STATUS_EXCLUDED,
     STATUS_IDLE,
@@ -16,6 +14,7 @@ from ..db import now_str
 from ..path_utils import normalize_path_key
 from ..platforms.base import ActiveWindow
 from ..services import activity_service, privacy_service
+from .auto_activity_recorder import AutoActivityRecorder
 
 STATE_TO_STATUS = {
     "recording": STATUS_NORMAL,
@@ -29,7 +28,8 @@ STATE_TO_STATUS = {
 @dataclass
 class CollectorStateMachine:
     state: str = "stopped"
-    active_signature: tuple[str, str, str, str] | None = None
+    active_signature: tuple[str, ...] | None = None
+    recorder: AutoActivityRecorder = field(default_factory=AutoActivityRecorder)
 
     def transition_to(
         self,
@@ -37,31 +37,24 @@ class CollectorStateMachine:
         active_window: ActiveWindow | None = None,
         at_time: str | None = None,
     ) -> None:
+        transition_time = at_time or now_str()
         if state == "stopped":
-            activity_service.close_current_open_record(at_time)
+            self.recorder.stop(transition_time)
+            activity_service.close_current_open_record(transition_time)
             self.state = "stopped"
             self.active_signature = None
             return
 
         status = STATE_TO_STATUS[state]
-        signature = self._signature(status, active_window)
-        open_activity = activity_service.get_open_activity()
-        if open_activity and self._open_matches(open_activity, signature, active_window):
+        payload = self._payload_for(status, active_window)
+        signature = self._signature_for_payload(payload)
+        if self._current_matches(payload, signature):
+            self.recorder.observe(payload, self.recorder.current_signature or signature, transition_time)
             self.state = state
-            self.active_signature = signature
+            self.active_signature = self.recorder.current_signature or signature
             return
 
-        transition_time = at_time or now_str()
-        if open_activity:
-            activity_service.close_activity(int(open_activity["id"]), transition_time)
-
-        payload = self._payload_for(status, active_window)
-        activity_id = activity_service.create_activity(
-            start_time=transition_time,
-            source=SOURCE_AUTO if status == STATUS_NORMAL else SOURCE_SYSTEM,
-            **payload,
-        )
-        activity_service.finalize_created_activity(activity_id)
+        self.recorder.observe(payload, signature, transition_time)
         self.state = state
         self.active_signature = signature
         if status == STATUS_EXCLUDED:
@@ -69,37 +62,47 @@ class CollectorStateMachine:
         else:
             logging.info("collector state transition state=%s", state)
 
-    def _signature(
-        self, status: str, active_window: ActiveWindow | None
-    ) -> tuple[str, str, str, str]:
-        if status == STATUS_EXCLUDED:
-            payload = privacy_service.make_excluded_activity_payload()
-            return (status, payload["app_name"], payload["process_name"], payload["window_title"])
-        if status in {STATUS_IDLE, STATUS_PAUSED, STATUS_ERROR}:
-            return (status, status, status, status)
-        if active_window is None:
-            return (status, "", "", "")
-        return (status, active_window.app_name, active_window.process_name, active_window.window_title)
+    def reset_for_time_jump(self, at_time: str | None = None) -> None:
+        transition_time = at_time or now_str()
+        self.recorder.stop(transition_time, merge_transient=False)
+        activity_service.close_current_open_record(transition_time)
+        self.state = "stopped"
+        self.active_signature = None
 
-    def _open_matches(
+    def _signature_for_payload(self, payload: dict) -> tuple[str, ...]:
+        return (
+            str(payload.get("status") or ""),
+            str(payload.get("app_name") or ""),
+            str(payload.get("process_name") or ""),
+            str(payload.get("window_title") or ""),
+            normalize_path_key(str(payload.get("file_path_hint") or "")),
+        )
+
+    def _current_matches(
         self,
-        open_activity: dict,
-        signature: tuple[str, str, str, str],
-        active_window: ActiveWindow | None = None,
+        payload: dict,
+        signature: tuple[str, ...],
     ) -> bool:
+        current = self.recorder.current_payload
+        current_signature = self.recorder.current_signature
+        if current is None or current_signature is None:
+            return False
         base_matches = (
-            open_activity["status"],
-            open_activity["app_name"],
-            open_activity["process_name"],
-            open_activity["window_title"],
-        ) == signature
+            current.get("status"),
+            current.get("app_name"),
+            current.get("process_name"),
+            current.get("window_title"),
+        ) == signature[:4]
         if not base_matches:
             return False
 
-        old_path = (open_activity.get("file_path_hint") or "").strip()
-        new_path = (active_window.file_path_hint or "").strip() if active_window else ""
+        old_path = (current.get("file_path_hint") or "").strip()
+        new_path = (payload.get("file_path_hint") or "").strip()
         if not old_path and new_path:
-            activity_service.update_activity_file_path_hint(int(open_activity["id"]), new_path)
+            current["file_path_hint"] = new_path
+            self.recorder.current_signature = signature
+            if self.recorder.persisted_activity_id is not None:
+                activity_service.update_activity_file_path_hint(self.recorder.persisted_activity_id, new_path)
             return True
         if old_path and new_path:
             return normalize_path_key(old_path) == normalize_path_key(new_path)

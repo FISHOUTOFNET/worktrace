@@ -30,6 +30,8 @@ class SettingsView(ctk.CTkFrame):
                 ("poll_interval_seconds", "采集间隔秒"),
                 ("idle_threshold_minutes", "空闲阈值分钟"),
                 ("min_activity_seconds", "最小记录秒"),
+                ("min_history_seconds", "正式历史阈值秒"),
+                ("min_idle_segment_seconds", "空闲入库阈值秒"),
                 ("exclude_keywords", "隐私排除关键词"),
                 ("export_path", "导出目录"),
             ]
@@ -39,7 +41,9 @@ class SettingsView(ctk.CTkFrame):
             entry.insert(0, get_setting(key, "") or "")
             entry.grid(row=row, column=1, padx=8, pady=6, sticky="w")
             self.entries[key] = entry
-        ctk.CTkButton(form, text="保存设置", command=self.save).grid(row=5, column=1, padx=8, pady=8, sticky="w")
+        ctk.CTkButton(form, text="保存设置", command=self.save).grid(
+            row=len(self.entries), column=1, padx=8, pady=8, sticky="w"
+        )
 
         actions = ctk.CTkFrame(self.scroll)
         actions.pack(fill="x", padx=12, pady=8)

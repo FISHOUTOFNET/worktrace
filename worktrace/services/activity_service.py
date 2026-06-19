@@ -11,6 +11,7 @@ from ..constants import (
     TIME_FORMAT,
 )
 from ..db import dict_rows, get_connection, now_str
+from ..resource_patterns import extract_anchor_file_name
 from .project_service import get_or_create_uncategorized_project
 
 
@@ -132,6 +133,60 @@ def close_current_open_record(end_time: str | None = None) -> None:
             _close_activity_in_conn(conn, int(row["id"]), end)
 
 
+def increment_activity_duration(activity_id: int, seconds: int) -> None:
+    seconds = max(0, int(seconds or 0))
+    if seconds <= 0:
+        return
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT duration_seconds FROM activity_log WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        if not row:
+            return
+        duration = int(row["duration_seconds"] or 0) + seconds
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET duration_seconds = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (duration, now_str(), activity_id),
+        )
+
+
+def set_activity_duration(activity_id: int, seconds: int) -> None:
+    seconds = max(0, int(seconds or 0))
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET duration_seconds = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (seconds, now_str(), activity_id),
+        )
+
+
+def get_latest_closed_auto_normal_activity() -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM activity_log
+            WHERE is_deleted = 0
+              AND is_hidden = 0
+              AND status = ?
+              AND source = ?
+              AND end_time IS NOT NULL
+            ORDER BY end_time DESC, id DESC
+            LIMIT 1
+            """,
+            (STATUS_NORMAL, SOURCE_AUTO),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def get_open_activity() -> dict | None:
     with get_connection() as conn:
         row = conn.execute(
@@ -142,9 +197,18 @@ def get_open_activity() -> dict | None:
 
 def _activity_select_sql(where: str) -> str:
     return f"""
-        SELECT a.*, p.name AS project_name
+        SELECT
+            a.*,
+            p.name AS project_name,
+            r.display_name AS resource_display_name,
+            r.resource_role,
+            r.resource_type,
+            r.full_path AS resource_full_path,
+            r.parent_dir AS resource_parent_dir,
+            r.file_stem AS resource_file_stem
         FROM activity_log a
         LEFT JOIN project p ON p.id = a.project_id
+        LEFT JOIN resource r ON r.id = a.resource_id
         WHERE {where}
         ORDER BY a.start_time DESC, a.id DESC
     """
@@ -169,6 +233,16 @@ def get_activity(activity_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute(_activity_select_sql("a.id = ?"), (activity_id,)).fetchone()
     return dict(row) if row else None
+
+
+def activity_display_name(activity: dict) -> str:
+    resource_name = str(activity.get("resource_display_name") or "").strip()
+    if activity.get("resource_role") == "anchor" and resource_name:
+        return resource_name
+    title_file = extract_anchor_file_name(activity.get("window_title"))
+    if title_file:
+        return title_file
+    return str(activity.get("app_name") or activity.get("process_name") or "").strip()
 
 
 def update_activity_project(activity_id: int, project_id: int, manual: bool = True) -> None:

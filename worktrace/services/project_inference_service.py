@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import ntpath
+import re
+
 from ..constants import STATUS_NORMAL
 from ..db import get_connection, now_str
 from . import folder_rule_service
 from .resource_service import ensure_activity_resource
+
+GENERIC_FILE_PROJECT_NAMES = {
+    "desktop",
+    "downloads",
+    "documents",
+    "document",
+    "wps cloud files",
+    "my documents",
+    "我的文档",
+    "下载",
+    "桌面",
+    "文档",
+}
 
 
 def assign_project_for_activity(activity_id: int) -> dict:
@@ -105,7 +121,64 @@ def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, st
         if pattern and pattern in text:
             return int(row["project_id"]), "anchor_keyword", 80
 
+    fallback_name = candidate_project_name_for_file_resource(resource)
+    if fallback_name:
+        project_id = _get_or_create_project_in_conn(conn, fallback_name)
+        conn.execute(
+            """
+            UPDATE resource
+            SET default_project_id = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (project_id, now_str(), resource["id"]),
+        )
+        return project_id, "anchor_resource_default", 70
+
     return _get_uncategorized_project_id(conn), "uncategorized", 0
+
+
+def candidate_project_name_for_file_resource(resource: dict) -> str | None:
+    if resource.get("resource_role") != "anchor" or resource.get("resource_type") != "file":
+        return None
+    parent_dir = str(resource.get("parent_dir") or "").strip()
+    file_stem = str(resource.get("file_stem") or "").strip()
+    parent_name = ntpath.basename(parent_dir.rstrip("\\/")) if parent_dir else ""
+    parent_candidate = _clean_project_candidate(parent_name)
+    file_candidate = _clean_project_candidate(file_stem)
+    if parent_candidate and parent_candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
+        return parent_candidate
+    return file_candidate
+
+
+def _clean_project_candidate(value: str | None) -> str | None:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .-_")
+    if len(cleaned) < 2:
+        return None
+    if cleaned.casefold() in {"untitled", "new file", "新建", "临时", "temp", "tmp"}:
+        return None
+    limit = 40 if any("\u4e00" <= ch <= "\u9fff" for ch in cleaned) else 80
+    if len(cleaned) > limit:
+        cleaned = cleaned[:limit].rstrip()
+    return cleaned or None
+
+
+def _get_or_create_project_in_conn(conn, name: str) -> int:
+    row = conn.execute("SELECT id FROM project WHERE name = ?", (name,)).fetchone()
+    if row:
+        return int(row["id"])
+    ts = now_str()
+    cur = conn.execute(
+        """
+        INSERT INTO project(name, description, default_billable, is_archived, created_at, updated_at)
+        VALUES (?, '', 1, 0, ?, ?)
+        """,
+        (name, ts, ts),
+    )
+    return int(cur.lastrowid)
 
 
 def _upsert_assignment(conn, activity_id: int, project_id: int, source: str, confidence: int, is_manual: bool) -> None:

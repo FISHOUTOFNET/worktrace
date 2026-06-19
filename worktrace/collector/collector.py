@@ -7,7 +7,7 @@ from datetime import datetime
 from ..constants import TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
-from ..services import activity_service, privacy_service, recovery_service
+from ..services import privacy_service, recovery_service
 from ..services.settings_service import get_bool_setting, get_int_setting, set_setting
 from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
@@ -26,9 +26,7 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
             now = now_str()
             idle_threshold_minutes = get_int_setting("idle_threshold_minutes", 5)
             if last_loop_time and recovery_service.detect_time_jump(last_loop_time, now, idle_threshold_minutes):
-                activity_service.close_current_open_record(last_loop_time)
-                machine.state = "stopped"
-                machine.active_signature = None
+                machine.reset_for_time_jump(last_loop_time)
 
             heartbeat_counter += 1
             if heartbeat_counter == 1 or heartbeat_counter >= 4:
@@ -69,7 +67,7 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 logging.exception("failed to persist collector error state")
             _sleep_poll(stop_event)
 
-    activity_service.close_current_open_record(now_str())
+    machine.transition_to("stopped", at_time=now_str())
     set_setting("collector_status", "stopped")
     set_setting("last_shutdown_at", now_str())
     logging.info("collector stop")

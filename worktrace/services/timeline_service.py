@@ -4,6 +4,7 @@ from datetime import datetime
 
 from ..constants import STATUS_NORMAL, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from ..db import dict_rows, get_connection, now_str
+from ..resource_patterns import extract_anchor_file_name
 from .activity_service import update_activities_project
 from .context_service import recompute_context_assignments_for_date
 from .project_service import get_or_create_uncategorized_project
@@ -18,9 +19,13 @@ def get_project_sessions_by_date(date: str) -> list[dict]:
             """
             SELECT
                 a.*,
+                r.display_name AS resource_display_name,
+                r.resource_role,
+                r.resource_type,
                 COALESCE(apa.project_id, a.project_id) AS effective_project_id,
                 p.name AS effective_project_name
             FROM activity_log a
+            LEFT JOIN resource r ON r.id = a.resource_id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
             WHERE a.is_deleted = 0
@@ -203,15 +208,25 @@ def _session_sort_key(session: dict) -> tuple[str, int]:
 
 def _status_summary(rows: list[dict]) -> str:
     if all(row.get("status") == STATUS_NORMAL for row in rows):
-        apps = []
+        items = []
         for row in rows:
-            app = row.get("app_name") or ""
-            if app and app not in apps:
-                apps.append(app)
-            if len(apps) >= 3:
+            label = _activity_summary_label(row)
+            if label and label not in items:
+                items.append(label)
+            if len(items) >= 3:
                 break
-        return "、".join(apps) if apps else "正常活动"
+        return "、".join(items) if items else "正常活动"
     return "、".join(sorted({str(row.get("status") or "") for row in rows if row.get("status")}))
+
+
+def _activity_summary_label(row: dict) -> str:
+    resource_name = str(row.get("resource_display_name") or "").strip()
+    if row.get("resource_role") == "anchor" and resource_name:
+        return resource_name
+    title_file = extract_anchor_file_name(row.get("window_title"))
+    if title_file:
+        return title_file
+    return str(row.get("app_name") or row.get("process_name") or "").strip()
 
 
 def _display_duration(row: dict) -> int:

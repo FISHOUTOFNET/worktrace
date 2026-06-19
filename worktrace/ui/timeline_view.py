@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from datetime import date
 from tkinter import ttk
@@ -82,6 +83,8 @@ class TimelineView(ctk.CTkFrame):
         self.refresh_button.pack(side="left", padx=6)
         self._checkbox(top, text="仅未确认", variable=self.only_unconfirmed, command=self.refresh).pack(side="left", padx=6)
         self._checkbox(top, text="仅未归类", variable=self.only_uncategorized, command=self.refresh).pack(side="left", padx=6)
+        self.current_activity_label = self._label(top, text="当前活动：无")
+        self.current_activity_label.pack(side="left", padx=(16, 6))
 
         self._build_session_table()
         self._build_detail_area()
@@ -550,6 +553,23 @@ class TimelineView(ctk.CTkFrame):
             label = "状态异常"
         self.status_label.configure(text=label)
         self.pause_button.configure(text="继续" if paused else "暂停")
+        self.current_activity_label.configure(text=self._current_activity_text())
+
+    def _current_activity_text(self) -> str:
+        raw = get_setting("current_activity_snapshot", "") or ""
+        if not raw:
+            return "当前活动：无"
+        try:
+            snapshot = json.loads(raw)
+        except json.JSONDecodeError:
+            return "当前活动：无"
+        name = snapshot.get("resource_display_name") or snapshot.get("app_name") or snapshot.get("process_name") or "未知"
+        project = snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT
+        elapsed = format_duration(snapshot.get("elapsed_seconds") or 0)
+        state = "已进入历史" if snapshot.get("is_persisted") else "暂不入历史"
+        if snapshot.get("status") == "idle":
+            name = "空闲中"
+        return f"当前活动：{name}｜{project}｜{elapsed}｜{state}"
 
     def _session_values(self, session: dict) -> tuple[str, ...]:
         return (
