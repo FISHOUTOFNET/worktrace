@@ -45,13 +45,12 @@ class StatisticsView(ctk.CTkFrame):
                 f"有效：{format_duration(summary['effective_duration'])}    "
                 f"空闲：{format_duration(summary['idle_duration'])}    "
                 f"排除：{format_duration(summary['excluded_duration'])}    "
-                f"未归类：{format_duration(summary['uncategorized_duration'])}    "
-                f"未确认：{format_duration(summary['unconfirmed_duration'])}"
+                f"未归类：{format_duration(summary['uncategorized_duration'])}"
             )
         )
         for child in self.table.winfo_children():
             child.destroy()
-        headers = ["项目", "总时长", "计费", "非计费", "已确认", "未确认", "记录数"]
+        headers = ["项目", "总时长", "计费", "非计费", "记录数"]
         for col, header in enumerate(headers):
             ctk.CTkLabel(self.table, text=header, font=ctk.CTkFont(weight="bold")).grid(
                 row=0, column=col, padx=8, pady=4, sticky="w"
@@ -64,8 +63,6 @@ class StatisticsView(ctk.CTkFrame):
                 format_duration(row["total_duration"]),
                 format_duration(row["billable_duration"]),
                 format_duration(row["non_billable_duration"]),
-                format_duration(row["confirmed_duration"]),
-                format_duration(row["unconfirmed_duration"]),
                 row["record_count"],
             ]
             for col, value in enumerate(values):

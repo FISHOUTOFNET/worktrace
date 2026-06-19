@@ -10,11 +10,18 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
         }
         activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
         resource_columns = {row["name"] for row in conn.execute("PRAGMA table_info(resource)").fetchall()}
+        project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project)").fetchall()}
+        assignment_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(activity_project_assignment)").fetchall()
+        }
         setting = conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()
-        uncategorized = conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
+        uncategorized = conn.execute("SELECT * FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
 
     assert "resource_id" in activity_columns
     assert "file_path_hint" in activity_columns
+    assert "is_confirmed" not in activity_columns
+    assert "created_by" in project_columns
+    assert "suggested_project_name" in assignment_columns
     assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
     assert "resource" in tables
     assert "project_rule" in tables
@@ -22,6 +29,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "activity_project_assignment" in tables
     assert setting["value"] == "15"
     assert uncategorized is not None
+    assert uncategorized["created_by"] == "system"
     assert "rule" not in tables
 
 
@@ -40,7 +48,14 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 0
         activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
         resource_columns = {row["name"] for row in conn.execute("PRAGMA table_info(resource)").fetchall()}
+        project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project)").fetchall()}
+        assignment_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(activity_project_assignment)").fetchall()
+        }
         assert "file_path_hint" in activity_columns
+        assert "is_confirmed" not in activity_columns
+        assert "created_by" in project_columns
+        assert "suggested_project_name" in assignment_columns
         assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
         assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
         assert conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone() is not None

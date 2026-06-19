@@ -93,7 +93,6 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
             SELECT
                 a.id,
                 a.manual_override,
-                a.is_confirmed,
                 COALESCE(apa.project_id, a.project_id) AS effective_project_id,
                 COALESCE(apa.is_manual, 0) AS is_manual,
                 r.full_path,
@@ -142,11 +141,10 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
             if row.get("effective_project_id") is not None
             and int(row["effective_project_id"]) != int(project_id)
         ),
-        "manual_or_confirmed_activity_count": sum(
+        "manual_activity_count": sum(
             1
             for row in matching_activities
             if int(row.get("manual_override") or 0)
-            or int(row.get("is_confirmed") or 0)
             or int(row.get("is_manual") or 0)
         ),
     }
@@ -167,7 +165,6 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict:
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             WHERE a.is_deleted = 0
               AND a.manual_override = 0
-              AND a.is_confirmed = 0
               AND COALESCE(apa.is_manual, 0) = 0
               AND r.resource_role = 'anchor'
               AND r.resource_type = 'file'

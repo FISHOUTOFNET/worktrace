@@ -35,7 +35,6 @@ def _activity_line(row: dict) -> str:
     time_range = f"{start[11:16]}-{end[11:16] if end else ''}"
     project = row.get("project_name") or "未归类"
     billable = "计费" if row["is_billable"] else "非计费"
-    confirmed = "已确认" if row["is_confirmed"] else "未确认"
     resource = activity_service.activity_display_name(row)
     title = row.get("window_title") or ""
     activity_text = resource if not title or title == resource else f"{resource}｜{title}"
@@ -43,7 +42,7 @@ def _activity_line(row: dict) -> str:
     note_text = f"；备注：{note}" if note else ""
     return (
         f"- {start[:10]} {time_range}｜{format_duration(row['duration_seconds'])}｜"
-        f"{row['status']}｜{activity_text}｜{project}｜{billable}｜{confirmed}{note_text}"
+        f"{row['status']}｜{activity_text}｜{project}｜{billable}{note_text}"
     )
 
 
@@ -65,12 +64,6 @@ def export_markdown_file(start_date: str, end_date: str, path: str) -> str:
 
     details = "\n".join(_activity_line(row) for row in reversed(activities)) or "- 暂无"
 
-    unconfirmed_records = "\n".join(
-        f"- {row['start_time']}｜{activity_service.activity_display_name(row)}｜{format_duration(row['duration_seconds'])}"
-        for row in activities
-        if not row["is_confirmed"]
-    ) or "- 无"
-
     text = "\n".join(
         [
             "# WorkTrace 周报草稿",
@@ -84,10 +77,6 @@ def export_markdown_file(start_date: str, end_date: str, path: str) -> str:
             "## 明细列表",
             "",
             details,
-            "",
-            "## 未确认记录提醒",
-            "",
-            unconfirmed_records,
             "",
         ]
     )

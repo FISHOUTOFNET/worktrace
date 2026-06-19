@@ -71,16 +71,15 @@ def test_backfill_safe_does_not_overwrite_manual_override(temp_db):
     assert activity_service.get_activity(aid)["project_id"] == manual_project
 
 
-def test_backfill_safe_does_not_overwrite_confirmed_activity(temp_db):
+def test_backfill_safe_updates_non_manual_activity(temp_db):
     folder_project = project_service.create_project("Folder")
-    confirmed_project = project_service.create_project("Confirmed")
+    previous_project = project_service.create_project("Previous")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
-    aid = _activity_with_path("D:\\CaseA\\Confirmed.docx", "Confirmed.docx - Word")
-    activity_service.update_activity_project(aid, confirmed_project, manual=False)
-    activity_service.set_activity_confirmed(aid, True)
+    aid = _activity_with_path("D:\\CaseA\\Previous.docx", "Previous.docx - Word")
+    activity_service.update_activity_project(aid, previous_project, manual=False)
     result = folder_rule_service.backfill_folder_rule(rule_id)
-    assert result["updated_activity_count"] == 0
-    assert activity_service.get_activity(aid)["project_id"] == confirmed_project
+    assert result["updated_activity_count"] == 1
+    assert activity_service.get_activity(aid)["project_id"] == folder_project
 
 
 def test_backfill_safe_does_not_overwrite_manual_assignment(temp_db):
@@ -112,4 +111,4 @@ def test_preview_folder_rule_conflicts_counts_folder_scope(temp_db):
     preview = folder_rule_service.preview_folder_rule_conflicts("D:\\CaseA", parent_project)
     assert preview["child_folder_rule_conflicts"] == 1
     assert preview["other_project_activity_count"] == 1
-    assert preview["manual_or_confirmed_activity_count"] == 1
+    assert preview["manual_activity_count"] == 1

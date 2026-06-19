@@ -31,7 +31,6 @@ def get_summary(start_date: str, end_date: str) -> dict:
     idle = _sum_duration(base + " AND status = ?", params + (STATUS_IDLE,))
     paused = _sum_duration(base + " AND status = ?", params + (STATUS_PAUSED,))
     excluded = _sum_duration(base + " AND status = ?", params + (STATUS_EXCLUDED,))
-    unconfirmed = _sum_duration(base + " AND is_confirmed = 0", params)
     uncategorized = get_uncategorized_duration(start_date, end_date)
     return {
         "total_duration": total,
@@ -40,8 +39,6 @@ def get_summary(start_date: str, end_date: str) -> dict:
         "paused_duration": paused,
         "excluded_duration": excluded,
         "uncategorized_duration": uncategorized,
-        "unconfirmed_duration": unconfirmed,
-        "unconfirmed_count": get_unconfirmed_count(start_date, end_date),
     }
 
 
@@ -56,8 +53,6 @@ def get_project_stats(start_date: str, end_date: str) -> list[dict]:
                 COALESCE(SUM(a.duration_seconds), 0) AS total_duration,
                 COALESCE(SUM(CASE WHEN a.is_billable = 1 THEN a.duration_seconds ELSE 0 END), 0) AS billable_duration,
                 COALESCE(SUM(CASE WHEN a.is_billable = 0 THEN a.duration_seconds ELSE 0 END), 0) AS non_billable_duration,
-                COALESCE(SUM(CASE WHEN a.is_confirmed = 1 THEN a.duration_seconds ELSE 0 END), 0) AS confirmed_duration,
-                COALESCE(SUM(CASE WHEN a.is_confirmed = 0 THEN a.duration_seconds ELSE 0 END), 0) AS unconfirmed_duration,
                 COUNT(*) AS record_count
             FROM activity_log a
             LEFT JOIN project p ON p.id = a.project_id
@@ -71,22 +66,6 @@ def get_project_stats(start_date: str, end_date: str) -> list[dict]:
             (start, end),
         ).fetchall()
     return dict_rows(rows)
-
-
-def get_unconfirmed_count(start_date: str, end_date: str) -> int:
-    _ensure_context_range(start_date, end_date)
-    start, end = _range_bounds(start_date, end_date)
-    with get_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM activity_log
-            WHERE is_deleted = 0 AND is_hidden = 0 AND is_confirmed = 0
-              AND start_time BETWEEN ? AND ?
-            """,
-            (start, end),
-        ).fetchone()
-    return int(row["count"] or 0)
 
 
 def get_uncategorized_duration(start_date: str, end_date: str) -> int:

@@ -90,8 +90,8 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         )
     conn.execute(
         """
-        INSERT INTO project(name, description, default_billable, is_archived, created_at, updated_at)
-        VALUES (?, '', 1, 0, ?, ?)
+        INSERT INTO project(name, description, default_billable, is_archived, created_by, created_at, updated_at)
+        VALUES (?, '', 1, 0, 'system', ?, ?)
         ON CONFLICT(name) DO NOTHING
         """,
         (UNCATEGORIZED_PROJECT, ts, ts),

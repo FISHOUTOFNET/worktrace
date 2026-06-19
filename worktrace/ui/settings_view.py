@@ -54,6 +54,7 @@ class SettingsView(ctk.CTkFrame):
             side="left", padx=4
         )
 
+        self._build_project_bindings()
         self._build_folder_rules()
 
         self.info = ctk.CTkLabel(self.scroll, text="", justify="left")
@@ -71,7 +72,18 @@ class SettingsView(ctk.CTkFrame):
         self.folder_rules_frame.pack(fill="x", padx=8, pady=(0, 8))
         self.refresh_folder_rules()
 
+    def _build_project_bindings(self) -> None:
+        section = ctk.CTkFrame(self.scroll)
+        section.pack(fill="x", padx=12, pady=8)
+        header = ctk.CTkFrame(section)
+        header.pack(fill="x", padx=8, pady=8)
+        ctk.CTkLabel(header, text="用户项目绑定总览", font=ctk.CTkFont(weight="bold")).pack(side="left")
+        self.project_bindings_frame = ctk.CTkFrame(section)
+        self.project_bindings_frame.pack(fill="x", padx=8, pady=(0, 8))
+        self.refresh_project_bindings()
+
     def refresh(self) -> None:
+        self.refresh_project_bindings()
         self.refresh_folder_rules()
         paths = resolve_paths()
         self.info.configure(
@@ -116,6 +128,38 @@ class SettingsView(ctk.CTkFrame):
                 command=lambda rid=int(rule["id"]): self.delete_folder_rule(rid),
             ).pack(side="right", padx=3)
 
+    def refresh_project_bindings(self) -> None:
+        if not hasattr(self, "project_bindings_frame"):
+            return
+        for child in self.project_bindings_frame.winfo_children():
+            child.destroy()
+        projects = project_service.list_project_bindings()
+        if not projects:
+            ctk.CTkLabel(self.project_bindings_frame, text="暂无用户项目", anchor="w").pack(fill="x", padx=8, pady=6)
+            return
+        for project in projects:
+            folder_rules = project["folder_rules"]
+            file_defaults = project["file_defaults"]
+            lines = [project["name"]]
+            if folder_rules:
+                lines.append("文件夹：" + "；".join(rule["folder_path"] for rule in folder_rules[:5]))
+                if len(folder_rules) > 5:
+                    lines.append(f"另有 {len(folder_rules) - 5} 条文件夹规则")
+            if file_defaults:
+                file_names = [row.get("full_path") or row.get("display_name") or "未知文件" for row in file_defaults[:5]]
+                lines.append("文件：" + "；".join(file_names))
+                if len(file_defaults) > 5:
+                    lines.append(f"另有 {len(file_defaults) - 5} 个文件")
+            if not folder_rules and not file_defaults:
+                lines.append("暂无绑定")
+            ctk.CTkLabel(
+                self.project_bindings_frame,
+                text="\n".join(lines),
+                anchor="w",
+                justify="left",
+                wraplength=860,
+            ).pack(fill="x", padx=8, pady=6)
+
     def save(self) -> None:
         for key, entry in self.entries.items():
             set_setting(key, entry.get())
@@ -129,6 +173,7 @@ class SettingsView(ctk.CTkFrame):
             try:
                 project_service.create_project(name)
                 messagebox.showinfo("已创建", name)
+                self.refresh_project_bindings()
                 self.refresh_folder_rules()
             except Exception as exc:
                 messagebox.showerror("创建失败", str(exc))
@@ -137,7 +182,7 @@ class SettingsView(ctk.CTkFrame):
         folder = filedialog.askdirectory(title="选择要绑定项目的文件夹")
         if not folder:
             return
-        projects = project_service.list_active_projects()
+        projects = project_service.list_user_projects()
         if not projects:
             messagebox.showerror("无法新增", "请先创建项目")
             return
@@ -162,7 +207,10 @@ class SettingsView(ctk.CTkFrame):
             dialog.destroy()
             self._save_folder_rule(folder, int(project["id"]), recursive_var.get())
 
-        ctk.CTkButton(dialog, text="保存", command=save_rule).pack(anchor="e", padx=14, pady=12)
+        actions = ctk.CTkFrame(dialog)
+        actions.pack(fill="x", padx=14, pady=12)
+        ctk.CTkButton(actions, text="取消", width=72, command=dialog.destroy).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(actions, text="保存", width=72, command=save_rule).pack(side="right")
 
     def _save_folder_rule(self, folder: str, project_id: int, recursive: bool) -> None:
         preview = folder_rule_service.preview_folder_rule_conflicts(folder, project_id)
@@ -171,13 +219,14 @@ class SettingsView(ctk.CTkFrame):
                 f"下级已有不同项目的文件夹规则：{preview['child_folder_rule_conflicts']}\n"
                 f"具体文件已有不同项目：{preview['file_default_project_conflicts']}\n"
                 f"历史 activity 属于其他项目：{preview['other_project_activity_count']}\n"
-                f"手动确认或手动指定且 safe 回填不会覆盖：{preview['manual_or_confirmed_activity_count']}\n\n"
+                f"手动指定且 safe 回填不会覆盖：{preview['manual_activity_count']}\n\n"
                 "将保留下级独立设置，且默认不自动回填历史。是否继续保存？"
             )
             if not messagebox.askyesno("规则冲突预览", message):
                 return
         try:
             rule_id = folder_rule_service.create_or_update_folder_rule(folder, project_id, recursive=recursive)
+            self.refresh_project_bindings()
             self.refresh_folder_rules()
             if messagebox.askyesno("已保存", "文件夹规则已保存。是否执行 safe 历史回填？"):
                 result = folder_rule_service.backfill_folder_rule(rule_id, mode="safe")
@@ -188,11 +237,13 @@ class SettingsView(ctk.CTkFrame):
 
     def set_folder_rule_enabled(self, rule_id: int, enabled: bool) -> None:
         folder_rule_service.set_folder_rule_enabled(rule_id, enabled)
+        self.refresh_project_bindings()
         self.refresh_folder_rules()
 
     def delete_folder_rule(self, rule_id: int) -> None:
         if messagebox.askyesno("删除规则", "只删除规则本身，不会改写历史 activity。是否继续？"):
             folder_rule_service.delete_folder_rule(rule_id)
+            self.refresh_project_bindings()
             self.refresh_folder_rules()
 
     def show_notice(self) -> None:

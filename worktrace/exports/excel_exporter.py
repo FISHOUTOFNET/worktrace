@@ -32,8 +32,6 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
             "Total Duration",
             "Billable Duration",
             "Non-billable Duration",
-            "Confirmed Duration",
-            "Unconfirmed Duration",
             "Record Count",
         ]
     )
@@ -44,8 +42,6 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
                 format_duration(row["total_duration"]),
                 format_duration(row["billable_duration"]),
                 format_duration(row["non_billable_duration"]),
-                format_duration(row["confirmed_duration"]),
-                format_duration(row["unconfirmed_duration"]),
                 row["record_count"],
             ]
         )
@@ -63,7 +59,6 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
             "窗口标题",
             "项目",
             "是否计费",
-            "是否确认",
             "备注",
         ]
     )
@@ -82,7 +77,6 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
                 row["window_title"],
                 row.get("project_name") or "未归类",
                 "是" if row["is_billable"] else "否",
-                "已确认" if row["is_confirmed"] else "未确认",
                 row.get("note") or "",
             ]
         )

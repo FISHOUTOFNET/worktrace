@@ -1,4 +1,5 @@
 from worktrace.constants import UNCATEGORIZED_PROJECT
+from worktrace.db import get_connection
 from worktrace.services import activity_service, project_service, timeline_service
 
 
@@ -31,7 +32,7 @@ def test_sessions_merge_same_project_and_split_a_b_a(temp_db):
     assert [session["project_name"] for session in sessions] == ["A", "B", "A"]
     assert [session["start_time"][11:16] for session in sessions] == ["10:00", "09:30", "09:00"]
     assert sessions[0]["event_count"] == 2
-    assert [row["start_time"][11:16] for row in latest_details] == ["10:00", "10:05"]
+    assert [row["start_time"][11:16] for row in latest_details] == ["10:05", "10:00"]
 
 
 def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):
@@ -72,7 +73,7 @@ def test_resource_level_correction_and_remember_rules(temp_db):
 
     rows = [activity_service.get_activity(aid) for aid in session["activity_ids"]]
     assert {row["project_id"] for row in rows} == {project_b}
-    assert all(row["manual_override"] == 1 and row["is_confirmed"] == 1 for row in rows)
+    assert all(row["manual_override"] == 1 for row in rows)
 
 
 def test_auxiliary_cannot_be_remembered_for_future(temp_db):
@@ -93,3 +94,59 @@ def test_auxiliary_cannot_be_remembered_for_future(temp_db):
         pass
     else:
         raise AssertionError("auxiliary resources must not support remember_for_future")
+
+
+def test_auto_suggested_project_name_displays_without_creating_project(temp_db):
+    aid = activity_service.create_activity(
+        "WPS Writer",
+        "wps.exe",
+        "合同审查意见.docx - WPS",
+        file_path_hint="D:\\ClientA\\合同审查意见.docx",
+        start_time="2026-06-18 09:00:00",
+    )
+    activity_service.finalize_created_activity(aid)
+    activity_service.close_activity(aid, "2026-06-18 09:10:00")
+
+    activity = activity_service.get_activity(aid)
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert activity["project_name"] == UNCATEGORIZED_PROJECT
+    assert sessions[0]["project_name"] == "ClientA"
+    assert sessions[0]["is_uncategorized"] is True
+    assert "ClientA" not in [project["name"] for project in project_service.list_selectable_projects()]
+    with get_connection() as conn:
+        assert conn.execute("SELECT id FROM project WHERE name = 'ClientA'").fetchone() is None
+
+
+def test_session_level_project_update_warns_but_does_not_change_anchor_defaults(temp_db):
+    target_project = project_service.create_project("Target")
+    other_project = project_service.create_project("Other")
+    first = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "One.docx - Word",
+        file_path_hint="D:\\CaseA\\One.docx",
+        start_time="2026-06-18 09:00:00",
+    )
+    second = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "Two.docx - Word",
+        file_path_hint="D:\\CaseA\\Two.docx",
+        start_time="2026-06-18 09:05:00",
+    )
+    activity_service.finalize_created_activity(first)
+    activity_service.finalize_created_activity(second)
+    first_resource = activity_service.get_activity(first)["resource_id"]
+    with get_connection() as conn:
+        conn.execute("UPDATE resource SET default_project_id = ? WHERE id = ?", (other_project, first_resource))
+
+    preview = timeline_service.preview_session_project_update([first, second], target_project)
+    timeline_service.update_session_project([first, second], target_project)
+
+    assert len(preview["file_project_conflicts"]) == 1
+    assert len(preview["unassigned_anchor_files"]) == 1
+    assert {activity_service.get_activity(aid)["project_id"] for aid in [first, second]} == {target_project}
+    with get_connection() as conn:
+        row = conn.execute("SELECT default_project_id FROM resource WHERE id = ?", (first_resource,)).fetchone()
+    assert row["default_project_id"] == other_project

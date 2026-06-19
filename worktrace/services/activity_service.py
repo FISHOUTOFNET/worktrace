@@ -38,7 +38,6 @@ def create_activity(
     resource_id: int | None = None,
     file_path_hint: str | None = None,
     note: str | None = None,
-    is_confirmed: bool = False,
     auto_classified: bool = False,
     manual_override: bool = False,
 ) -> int:
@@ -57,10 +56,10 @@ def create_activity(
             """
             INSERT INTO activity_log(
                 start_time, end_time, duration_seconds, app_name, process_name, window_title,
-                file_path_hint, status, source, is_billable, is_deleted, is_hidden, is_confirmed,
+                file_path_hint, status, source, is_billable, is_deleted, is_hidden,
                 auto_classified, manual_override, project_id, resource_id, note, created_at, updated_at
             )
-            VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 start,
@@ -71,7 +70,6 @@ def create_activity(
                 status,
                 source,
                 billable,
-                int(is_confirmed),
                 int(auto_classified),
                 int(manual_assignment),
                 project,
@@ -86,9 +84,9 @@ def create_activity(
         conn.execute(
             """
             INSERT INTO activity_project_assignment(
-                activity_id, project_id, confidence, source, is_manual, created_at, updated_at
+                activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
             ON CONFLICT(activity_id) DO NOTHING
             """,
             (
@@ -285,27 +283,27 @@ def update_activities_project(activity_ids: list[int], project_id: int, manual: 
             UPDATE activity_log
             SET project_id = ?,
                 manual_override = CASE WHEN ? = 1 THEN 1 ELSE manual_override END,
-                is_confirmed = CASE WHEN ? = 1 THEN 1 ELSE is_confirmed END,
                 updated_at = ?
             WHERE id IN ({placeholders})
             """,
-            [project_id, int(manual), int(manual), ts, *activity_ids],
+            [project_id, int(manual), ts, *activity_ids],
         )
         for activity_id in activity_ids:
             conn.execute(
                 """
                 INSERT INTO activity_project_assignment(
-                    activity_id, project_id, confidence, source, is_manual, created_at, updated_at
+                    activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
                 ON CONFLICT(activity_id) DO UPDATE SET
                     project_id = excluded.project_id,
                     confidence = excluded.confidence,
                     source = excluded.source,
                     is_manual = excluded.is_manual,
+                    suggested_project_name = NULL,
                     updated_at = excluded.updated_at
                 """,
-                (activity_id, project_id, confidence, source, int(manual), ts, ts),
+                (activity_id, project_id, confidence, source, int(manual), None, ts, ts),
             )
 
 
@@ -318,7 +316,7 @@ def finalize_created_activity(activity_id: int) -> None:
 def update_activity_note(activity_id: int, note: str) -> None:
     with get_connection() as conn:
         conn.execute(
-            "UPDATE activity_log SET note = ?, source = 'manual', is_confirmed = 1, updated_at = ? WHERE id = ?",
+            "UPDATE activity_log SET note = ?, source = 'manual', updated_at = ? WHERE id = ?",
             (note, now_str(), activity_id),
         )
 
@@ -326,16 +324,8 @@ def update_activity_note(activity_id: int, note: str) -> None:
 def set_activity_billable(activity_id: int, is_billable: bool) -> None:
     with get_connection() as conn:
         conn.execute(
-            "UPDATE activity_log SET is_billable = ?, is_confirmed = 1, updated_at = ? WHERE id = ?",
+            "UPDATE activity_log SET is_billable = ?, updated_at = ? WHERE id = ?",
             (int(is_billable), now_str(), activity_id),
-        )
-
-
-def set_activity_confirmed(activity_id: int, is_confirmed: bool) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET is_confirmed = ?, updated_at = ? WHERE id = ?",
-            (int(is_confirmed), now_str(), activity_id),
         )
 
 
@@ -355,7 +345,6 @@ def update_activity_fields(activity_id: int, **fields: Any) -> None:
         "source",
         "is_billable",
         "is_hidden",
-        "is_confirmed",
         "auto_classified",
         "manual_override",
         "project_id",

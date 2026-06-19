@@ -33,7 +33,7 @@ def recover_unclosed_records() -> None:
             conn.execute(
                 """
                 UPDATE activity_log
-                SET end_time = ?, duration_seconds = ?, status = ?, is_confirmed = 0, updated_at = ?
+                SET end_time = ?, duration_seconds = ?, status = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (end_time, duration, status, now_str(), row["id"]),
@@ -55,7 +55,7 @@ def mark_record_error(activity_id: int, reason: str) -> None:
         conn.execute(
             """
             UPDATE activity_log
-            SET status = ?, is_confirmed = 0, note = COALESCE(note || CHAR(10), '') || ?, updated_at = ?
+            SET status = ?, note = COALESCE(note || CHAR(10), '') || ?, updated_at = ?
             WHERE id = ?
             """,
             (STATUS_ERROR, f"系统标记异常：{reason}", now_str(), activity_id),

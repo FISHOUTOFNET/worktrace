@@ -86,8 +86,14 @@ def _office_candidates(process_name: str) -> list[tuple[str, str]]:
         candidates.append(("Excel.Application", "ActiveWorkbook.FullName"))
     if "powerpnt" in process_name:
         candidates.append(("PowerPoint.Application", "ActivePresentation.FullName"))
+    # WPS unified process (wps.exe) handles all document types;
+    # standalone processes (et.exe, wpp.exe) may also be used.
+    # For wps.exe we try all three WPS COM objects so that xlsx/pptx
+    # files are resolved correctly even when the process name is wps.exe.
     if "wps" in process_name:
         candidates.append(("wps.Application", "ActiveDocument.FullName"))
+        candidates.append(("et.Application", "ActiveWorkbook.FullName"))
+        candidates.append(("wpp.Application", "ActivePresentation.FullName"))
     if "et" in process_name:
         candidates.append(("et.Application", "ActiveWorkbook.FullName"))
     if "wpp" in process_name:

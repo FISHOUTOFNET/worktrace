@@ -36,7 +36,6 @@ def test_excel_export_file_creation(temp_db, tmp_path):
         "窗口标题",
         "项目",
         "是否计费",
-        "是否确认",
         "备注",
     ]
 
@@ -52,7 +51,7 @@ def test_markdown_export_content(temp_db, tmp_path):
     assert "日期范围：2026-06-18 至 2026-06-18" in text
     assert "项目维度汇总" in text
     assert "未归类：总计 30分钟" in text
-    assert "未确认记录提醒" in text
+    assert "未确认记录提醒" not in text
 
 
 def test_exports_prefer_resource_file_name_for_wps_activity(temp_db, tmp_path):

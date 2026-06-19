@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS project (
     description TEXT,
     default_billable INTEGER NOT NULL DEFAULT 1,
     is_archived INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL DEFAULT 'user' CHECK (
+        created_by IN ('system', 'user')
+    ),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -26,7 +29,6 @@ CREATE TABLE IF NOT EXISTS activity_log (
     is_billable INTEGER NOT NULL DEFAULT 1,
     is_deleted INTEGER NOT NULL DEFAULT 0,
     is_hidden INTEGER NOT NULL DEFAULT 0,
-    is_confirmed INTEGER NOT NULL DEFAULT 0,
     auto_classified INTEGER NOT NULL DEFAULT 0,
     manual_override INTEGER NOT NULL DEFAULT 0,
     project_id INTEGER,
@@ -105,10 +107,12 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
             'anchor_keyword',
             'anchor_context',
             'folder_rule',
+            'suggested_project_name',
             'uncategorized'
         )
     ),
     is_manual INTEGER NOT NULL DEFAULT 0,
+    suggested_project_name TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (activity_id) REFERENCES activity_log(id),
@@ -123,9 +127,6 @@ ON activity_log(status);
 
 CREATE INDEX IF NOT EXISTS idx_activity_project
 ON activity_log(project_id);
-
-CREATE INDEX IF NOT EXISTS idx_activity_confirmed
-ON activity_log(is_confirmed);
 
 CREATE INDEX IF NOT EXISTS idx_resource_key
 ON resource(canonical_key);

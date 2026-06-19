@@ -351,7 +351,6 @@ If an activity record cannot be trusted because of an error, mark it:
 
 ```text
 status = error
-is_confirmed = 0
 ```
 
 ---
@@ -457,6 +456,9 @@ CREATE TABLE IF NOT EXISTS project (
     description TEXT,
     default_billable INTEGER NOT NULL DEFAULT 1,
     is_archived INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL DEFAULT 'user' CHECK (
+        created_by IN ('system', 'user')
+    ),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -478,7 +480,6 @@ CREATE TABLE IF NOT EXISTS activity_log (
     is_billable INTEGER NOT NULL DEFAULT 1,
     is_deleted INTEGER NOT NULL DEFAULT 0,
     is_hidden INTEGER NOT NULL DEFAULT 0,
-    is_confirmed INTEGER NOT NULL DEFAULT 0,
     auto_classified INTEGER NOT NULL DEFAULT 0,
     manual_override INTEGER NOT NULL DEFAULT 0,
     project_id INTEGER,
@@ -502,9 +503,6 @@ ON activity_log(status);
 
 CREATE INDEX IF NOT EXISTS idx_activity_project
 ON activity_log(project_id);
-
-CREATE INDEX IF NOT EXISTS idx_activity_confirmed
-ON activity_log(is_confirmed);
 ```
 
 Seed default settings:
@@ -586,16 +584,10 @@ manual    created or materially edited by user
 system    created by recovery or state transition logic
 ```
 
-### 14.3 Confirmation
+### 14.3 Review And Classification
 
-`is_confirmed` means the user has reviewed the record.
-
-Default behavior:
-
-1. Auto-created normal records: `is_confirmed = 0`.
-2. User edits project, note, billable status, or clicks confirm: `is_confirmed = 1`.
-3. Idle, paused, excluded, error records: `is_confirmed = 0` by default.
-4. Exports must clearly mark unconfirmed records.
+Auto-created records are drafts. Users can organize records by editing project, note,
+billable status, file defaults, and folder project rules.
 
 ### 14.4 Manual Override
 
@@ -879,8 +871,7 @@ On startup:
 2. if found, use `last_collector_heartbeat` as `end_time` where available;
 3. otherwise use current startup time and mark `status = error`;
 4. compute `duration_seconds`;
-5. set `is_confirmed = 0`;
-6. show such records as requiring user review.
+5. show such records as needing user review.
 
 ---
 
@@ -923,7 +914,6 @@ process_name = excluded
 window_title = 已排除窗口
 status = excluded
 is_billable = 0
-is_confirmed = 0
 ```
 
 Excluded records are not exported by default.
@@ -951,7 +941,7 @@ WorkTrace 不会记录：
 
 所有数据默认保存在本机，不上传到云端。
 
-自动记录只是工作轨迹草稿，最终工时应由用户确认。
+自动记录只是工作轨迹草稿，最终工时应由用户按需整理和归类。
 ```
 
 Rules:
@@ -1010,7 +1000,6 @@ If user changes project manually:
 
 ```text
 manual_override = 1
-is_confirmed = 1
 ```
 
 ---
@@ -1032,7 +1021,6 @@ get_activities_by_range(start_date: str, end_date: str) -> list[dict]
 update_activity_project(activity_id: int, project_id: int, manual: bool = True) -> None
 update_activity_note(activity_id: int, note: str) -> None
 set_activity_billable(activity_id: int, is_billable: bool) -> None
-set_activity_confirmed(activity_id: int, is_confirmed: bool) -> None
 soft_delete_activity(activity_id: int) -> None
 ```
 
@@ -1078,7 +1066,6 @@ Required functions:
 ```python
 get_summary(start_date: str, end_date: str) -> dict
 get_project_stats(start_date: str, end_date: str) -> list[dict]
-get_unconfirmed_count(start_date: str, end_date: str) -> int
 get_uncategorized_duration(start_date: str, end_date: str) -> int
 ```
 
@@ -1138,10 +1125,9 @@ Must show:
 4. records table
 5. project selector per record
 6. billable checkbox
-7. confirmed checkbox
-8. note editor
-9. delete action
-10. filters for unconfirmed and uncategorized records
+7. note editor
+8. delete action
+9. filters for uncategorized records
 
 Columns:
 
@@ -1168,10 +1154,9 @@ Must show:
 4. idle duration
 5. excluded duration
 6. uncategorized duration
-7. unconfirmed duration
-8. project stats table
-9. export Excel button
-10. export Markdown button
+7. project stats table
+8. export Excel button
+9. export Markdown button
 
 ### 24.3 Settings and Privacy Page
 
@@ -1208,8 +1193,6 @@ Project
 Total Duration
 Billable Duration
 Non-billable Duration
-Confirmed Duration
-Unconfirmed Duration
 Record Count
 ```
 
@@ -1239,7 +1222,6 @@ Default export filtering:
 4. exclude `excluded`;
 5. exclude `is_deleted = 1`;
 6. exclude `is_hidden = 1`;
-7. include unconfirmed records but mark them clearly.
 
 ### 25.2 Markdown Weekly Draft
 
@@ -1257,7 +1239,6 @@ Use template:
 空闲时间：{{ idle_duration }}  
 排除时间：{{ excluded_duration }}  
 未归类时间：{{ uncategorized_duration }}  
-未确认时间：{{ unconfirmed_duration }}  
 
 ## 二、项目投入情况
 
@@ -1266,11 +1247,6 @@ Use template:
 ## 三、项目明细
 
 {{ project_details }}
-
-## 四、待用户确认
-
-- 未确认记录：
-{{ unconfirmed_records }}
 
 - 未归类记录：
 {{ uncategorized_records }}
@@ -1346,8 +1322,8 @@ Rules:
 
 1. Duration must never be negative.
 2. If negative, set status to `error`.
-3. If a single normal record exceeds 4 hours, keep it but require confirmation.
-4. If system sleep or large time jump is detected, close the previous record and mark the next relevant record as unconfirmed.
+3. If a single normal record exceeds 4 hours, keep it and show it for user review.
+4. If system sleep or large time jump is detected, close the previous record and keep the next relevant record available for user review.
 
 ---
 
@@ -1382,7 +1358,7 @@ README must explicitly say:
 不读取正文。
 不上传数据。
 隐私排除窗口只保存匿名时间块。
-自动记录需由用户确认后再作为正式工时依据。
+自动记录需由用户整理归类后再作为正式工时依据。
 ```
 
 ---
@@ -1408,10 +1384,9 @@ The app is acceptable if:
 13. It allows assigning records to projects.
 14. It allows notes.
 15. It allows billable / non-billable marking.
-16. It allows confirmed / unconfirmed marking.
-17. It summarizes time by project.
-18. It exports Excel.
-19. It exports Markdown.
+16. It summarizes time by project.
+17. It exports Excel.
+18. It exports Markdown.
 20. It supports exclude keywords.
 21. It supports pause / resume.
 22. It supports soft delete.
@@ -1440,8 +1415,7 @@ The app is acceptable only if:
 11. no data upload;
 12. excluded windows do not save real title;
 13. user can clear the local database;
-14. exports mark unconfirmed records;
-15. collection does not start before first-run notice acceptance.
+14. collection does not start before first-run notice acceptance.
 
 ### 29.3 State Machine Acceptance
 

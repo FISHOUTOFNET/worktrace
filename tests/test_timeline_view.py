@@ -126,6 +126,7 @@ def _view_stub(project_name="Client"):
     view.new_project_var = FakeVar(project_name)
     view.resource_project_var = FakeVar("")
     view.resource_hint_label = FakeWidget()
+    view.session_project_menu = FakeWidget()
     view.resource_project_menu = FakeWidget()
     view.activity_project_menu = FakeWidget()
     view.resource_editor = FakeWidget(mapped=True)
@@ -222,7 +223,6 @@ def test_editor_panel_is_explicit_scrollable_container(monkeypatch):
     view._show_resource_editor = lambda _show: None
     view._show_activity_editor = lambda _show: None
     view.date_var = FakeVar("2026-06-18")
-    view.only_unconfirmed = FakeVar(False)
     view.only_uncategorized = FakeVar(False)
 
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkFrame", lambda master, **_kwargs: FakeWidget(master=master))
@@ -247,7 +247,6 @@ def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch)
     view.new_project_var = FakeVar()
     view.activity_project_var = FakeVar()
     view.billable_var = FakeVar(False)
-    view.confirmed_var = FakeVar(False)
 
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkFrame", lambda master, **_kwargs: FakeWidget(master=master))
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkLabel", lambda master, **_kwargs: FakeWidget(master=master))
@@ -264,6 +263,8 @@ def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch)
     assert view.activity_editor.master is view.editor_panel
     assert view.new_project_entry in view._resource_editor_widgets
     assert view.create_project_button in view._resource_editor_widgets
+    assert view.close_resource_button in view._resource_editor_widgets
+    assert view.close_activity_button in view._editor_widgets
 
 
 def test_editor_switching_uses_editor_panel_without_destroying_widgets():
@@ -390,7 +391,6 @@ def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists(
                 "total_duration_seconds": 60,
                 "event_count": 1,
                 "project_name": "Client",
-                "unconfirmed_count": 0,
             }
         ]
     )

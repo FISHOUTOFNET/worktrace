@@ -37,24 +37,25 @@ def assign_project_for_activity(activity_id: int) -> dict:
             project_id = activity["project_id"] if activity["project_id"] is not None else existing["project_id"]
             if project_id is None:
                 project_id = _get_uncategorized_project_id(conn)
-            _upsert_assignment(conn, activity_id, project_id, "manual", 100, True)
+            _upsert_assignment(conn, activity_id, project_id, "manual", 100, True, None)
             _sync_activity_project(conn, activity_id, project_id, auto_classified=False)
             return _assignment_dict(conn, activity_id)
 
         if activity["status"] != STATUS_NORMAL:
             project_id = _get_uncategorized_project_id(conn)
-            _upsert_assignment(conn, activity_id, project_id, "uncategorized", 0, False)
+            _upsert_assignment(conn, activity_id, project_id, "uncategorized", 0, False, None)
             _sync_activity_project(conn, activity_id, project_id, auto_classified=False)
             return _assignment_dict(conn, activity_id)
 
         if resource["resource_role"] == "anchor":
-            project_id, source, confidence = _infer_anchor_project(conn, dict(activity), resource)
+            project_id, source, confidence, suggested_name = _infer_anchor_project(conn, dict(activity), resource)
         else:
             project_id = _get_uncategorized_project_id(conn)
             source = "uncategorized"
             confidence = 0
+            suggested_name = None
 
-        _upsert_assignment(conn, activity_id, project_id, source, confidence, False)
+        _upsert_assignment(conn, activity_id, project_id, source, confidence, False, suggested_name)
         _sync_activity_project(
             conn,
             activity_id,
@@ -86,9 +87,9 @@ def process_new_activity(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
-def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, str, int]:
+def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, str, int, str | None]:
     if resource.get("default_project_id"):
-        return int(resource["default_project_id"]), "anchor_resource_default", 90
+        return int(resource["default_project_id"]), "anchor_resource_default", 90, None
 
     if (
         resource.get("resource_role") == "anchor"
@@ -99,7 +100,7 @@ def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, st
             resource.get("full_path") or resource.get("parent_dir") or ""
         )
         if rule:
-            return int(rule["project_id"]), "folder_rule", 85
+            return int(rule["project_id"]), "folder_rule", 85, None
 
     text = " ".join(
         [
@@ -119,22 +120,13 @@ def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, st
     for row in rows:
         pattern = (row["pattern"] or "").strip().casefold()
         if pattern and pattern in text:
-            return int(row["project_id"]), "anchor_keyword", 80
+            return int(row["project_id"]), "anchor_keyword", 80, None
 
     fallback_name = candidate_project_name_for_file_resource(resource)
     if fallback_name:
-        project_id = _get_or_create_project_in_conn(conn, fallback_name)
-        conn.execute(
-            """
-            UPDATE resource
-            SET default_project_id = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (project_id, now_str(), resource["id"]),
-        )
-        return project_id, "anchor_resource_default", 70
+        return _get_uncategorized_project_id(conn), "suggested_project_name", 40, fallback_name
 
-    return _get_uncategorized_project_id(conn), "uncategorized", 0
+    return _get_uncategorized_project_id(conn), "uncategorized", 0, None
 
 
 def candidate_project_name_for_file_resource(resource: dict) -> str | None:
@@ -166,25 +158,22 @@ def _clean_project_candidate(value: str | None) -> str | None:
     return cleaned or None
 
 
-def _get_or_create_project_in_conn(conn, name: str) -> int:
-    row = conn.execute("SELECT id FROM project WHERE name = ?", (name,)).fetchone()
-    if row:
-        return int(row["id"])
-    ts = now_str()
-    cur = conn.execute(
-        """
-        INSERT INTO project(name, description, default_billable, is_archived, created_at, updated_at)
-        VALUES (?, '', 1, 0, ?, ?)
-        """,
-        (name, ts, ts),
-    )
-    return int(cur.lastrowid)
-
-
-def _upsert_assignment(conn, activity_id: int, project_id: int, source: str, confidence: int, is_manual: bool) -> None:
+def _upsert_assignment(
+    conn,
+    activity_id: int,
+    project_id: int,
+    source: str,
+    confidence: int,
+    is_manual: bool,
+    suggested_project_name: str | None,
+) -> None:
     ts = now_str()
     row = conn.execute(
-        "SELECT project_id, source, confidence, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+        """
+        SELECT project_id, source, confidence, is_manual, suggested_project_name
+        FROM activity_project_assignment
+        WHERE activity_id = ?
+        """,
         (activity_id,),
     ).fetchone()
     if row and (
@@ -192,22 +181,24 @@ def _upsert_assignment(conn, activity_id: int, project_id: int, source: str, con
         and row["source"] == source
         and int(row["confidence"]) == confidence
         and int(row["is_manual"]) == int(is_manual)
+        and (row["suggested_project_name"] or None) == (suggested_project_name or None)
     ):
         return
     conn.execute(
         """
         INSERT INTO activity_project_assignment(
-            activity_id, project_id, confidence, source, is_manual, created_at, updated_at
+            activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(activity_id) DO UPDATE SET
             project_id = excluded.project_id,
             confidence = excluded.confidence,
             source = excluded.source,
             is_manual = excluded.is_manual,
+            suggested_project_name = excluded.suggested_project_name,
             updated_at = excluded.updated_at
         """,
-        (activity_id, project_id, confidence, source, int(is_manual), ts, ts),
+        (activity_id, project_id, confidence, source, int(is_manual), suggested_project_name, ts, ts),
     )
 
 
@@ -245,8 +236,8 @@ def _get_uncategorized_project_id(conn) -> int:
     ts = now_str()
     cur = conn.execute(
         """
-        INSERT INTO project(name, description, default_billable, is_archived, created_at, updated_at)
-        VALUES (?, '', 1, 0, ?, ?)
+        INSERT INTO project(name, description, default_billable, is_archived, created_by, created_at, updated_at)
+        VALUES (?, '', 1, 0, 'system', ?, ?)
         """,
         (UNCATEGORIZED_PROJECT, ts, ts),
     )

@@ -37,6 +37,5 @@ def make_excluded_activity_payload() -> dict:
         "window_title": EXCLUDED_WINDOW_TITLE,
         "status": STATUS_EXCLUDED,
         "is_billable": False,
-        "is_confirmed": False,
         "file_path_hint": None,
     }

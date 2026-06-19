@@ -9,7 +9,6 @@
 空闲时间：{{ idle_duration }}  
 排除时间：{{ excluded_duration }}  
 未归类时间：{{ uncategorized_duration }}  
-未确认时间：{{ unconfirmed_duration }}  
 
 ## 二、项目投入情况
 
@@ -18,11 +17,6 @@
 ## 三、项目明细
 
 {{ project_details }}
-
-## 四、待用户确认
-
-- 未确认记录：
-{{ unconfirmed_records }}
 
 - 未归类记录：
 {{ uncategorized_records }}
