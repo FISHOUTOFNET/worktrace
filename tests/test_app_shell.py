@@ -1,5 +1,5 @@
 from worktrace.services import settings_service
-from worktrace.ui.app import SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, WM_SIZE, WM_SYSCOMMAND, WorkTraceApp
+from worktrace.ui.app import LIVE_TICK_MS, SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, WM_SIZE, WM_SYSCOMMAND, WorkTraceApp
 
 
 class FakePage:
@@ -183,7 +183,7 @@ def test_shell_current_activity_tick_updates_only_active_page():
 
     assert overview.live_refreshed == 1
     assert timeline.live_refreshed == 0
-    assert scheduled[0][0] == 1000
+    assert scheduled[0][0] == LIVE_TICK_MS
     assert scheduled[0][1].__func__ is WorkTraceApp._refresh_current_activity_status
 
 
@@ -199,7 +199,7 @@ def test_shell_current_activity_tick_skips_during_resize():
     WorkTraceApp._refresh_current_activity_status(app)
 
     assert overview.live_refreshed == 0
-    assert scheduled[0][0] == 1000
+    assert scheduled[0][0] == LIVE_TICK_MS
 
 
 def test_shell_resize_uses_cover_and_catches_up_once():
@@ -271,7 +271,7 @@ def test_shell_visual_suspend_coalesces_scheduled_and_live_refreshes():
     assert overview.refreshed == 0
     assert overview.live_refreshed == 0
     assert app._refresh_after_resize is True
-    assert app._scheduled[0][0] == 1000
+    assert app._scheduled[0][0] == LIVE_TICK_MS
 
 
 def test_shell_native_minimize_prepares_full_cover_without_unmapping_content():

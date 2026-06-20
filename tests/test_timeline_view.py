@@ -2,6 +2,7 @@ import json
 import time
 
 from worktrace.services import activity_service, project_service, settings_service, timeline_service
+from worktrace.services.live_time_service import snapshot_signature
 from worktrace.ui.timeline_view import TimelineView
 
 
@@ -166,13 +167,17 @@ def _live_view_stub(detail_mode="resources"):
     view._sessions_by_id = {}
     view._resources_by_id = {}
     view._details_by_id = {}
+    view._session_live_bases = {}
+    view._resource_live_bases = {}
+    view._detail_live_bases = {}
+    view._current_snapshot = None
+    view._current_signature = None
     view._selected_session_id = "1-1"
     view._selected_resource_id = None
     view._selected_activity_id = None
     view._detail_mode = detail_mode
     view._project_name_by_id = {1: "Client"}
     view.is_user_interacting = lambda: False
-    view._current_activity_text = lambda: "当前活动：Spec｜Client｜00:00:35｜已进入历史"
     return view
 
 
@@ -183,6 +188,24 @@ def _seed_tree(view, tree, items):
     tree.items = {iid: tuple(values) for iid, values in items}
     for iid, values in items:
         view._tree_values[f"{id(tree)}:{iid}"] = tuple(values)
+
+
+def _live_snapshot(seconds=35):
+    return {
+        "resource_display_name": "Spec",
+        "app_name": "Word",
+        "process_name": "word.exe",
+        "inferred_project_name": "Client",
+        "status": "normal",
+        "start_time": "",
+        "elapsed_seconds": seconds,
+        "persisted_activity_id": 1,
+        "is_persisted": True,
+    }
+
+
+def _fail_if_called(*_args, **_kwargs):
+    raise AssertionError("live tick must not call timeline service queries")
 
 
 def test_visible_resource_editor_blocks_auto_refresh_even_after_recent_selection_window():
@@ -571,6 +594,9 @@ def test_current_activity_text_uses_second_level_duration(temp_db):
 
 def test_refresh_current_activity_updates_stable_resource_values_without_full_refresh(monkeypatch):
     view = _live_view_stub("resources")
+    snapshot = _live_snapshot(35)
+    settings_service.set_setting("current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False))
+    view._current_signature = snapshot_signature(snapshot)
     old_session = {
         "session_id": "1-1",
         "project_id": 1,
@@ -591,16 +617,22 @@ def test_refresh_current_activity_updates_stable_resource_values_without_full_re
         "resource_type": "file",
         "total_duration_seconds": 30,
         "event_count": 1,
+        "activity_ids": [1],
         "project_name": "Client",
     }
     new_resource = {**old_resource, "total_duration_seconds": 35}
+    view._sessions_by_id = {"1-1": old_session}
+    view._resources_by_id = {7: old_resource}
+    view._session_live_bases = {"1-1": 30}
+    view._resource_live_bases = {7: 30}
     _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, old_session))])
     _seed_tree(view, view.resource_tree, [("7", TimelineView._resource_values(view, old_resource))])
     view._selected_resource_id = 7
     fallback_refreshes = []
 
-    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", lambda *_args, **_kwargs: [new_session])
-    monkeypatch.setattr(timeline_service, "get_session_resource_summary", lambda *_args, **_kwargs: [new_resource])
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", _fail_if_called)
+    monkeypatch.setattr(timeline_service, "get_session_resource_summary", _fail_if_called)
+    monkeypatch.setattr("worktrace.ui.timeline_view.snapshot_seconds_for_date_range", lambda *_args, **_kwargs: 35)
     view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
 
     TimelineView.refresh_current_activity(view)
@@ -616,6 +648,9 @@ def test_refresh_current_activity_updates_stable_resource_values_without_full_re
 
 def test_refresh_current_activity_updates_stable_detail_values_without_full_refresh(monkeypatch):
     view = _live_view_stub("details")
+    snapshot = _live_snapshot(35)
+    settings_service.set_setting("current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False))
+    view._current_signature = snapshot_signature(snapshot)
     session = {
         "session_id": "1-1",
         "project_id": 1,
@@ -641,13 +676,18 @@ def test_refresh_current_activity_updates_stable_detail_values_without_full_refr
         "note": "",
     }
     new_detail = {**old_detail, "duration_seconds": 35}
+    view._sessions_by_id = {"1-1": session}
+    view._details_by_id = {1: old_detail}
+    view._session_live_bases = {"1-1": 30}
+    view._detail_live_bases = {1: 30}
     _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, session))])
     _seed_tree(view, view.detail_tree, [("1", TimelineView._detail_values(view, old_detail))])
     view._selected_activity_id = 1
     fallback_refreshes = []
 
-    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", lambda *_args, **_kwargs: [session])
-    monkeypatch.setattr(timeline_service, "get_session_activity_details", lambda *_args, **_kwargs: [new_detail])
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", _fail_if_called)
+    monkeypatch.setattr(timeline_service, "get_session_activity_details", _fail_if_called)
+    monkeypatch.setattr("worktrace.ui.timeline_view.snapshot_seconds_for_date_range", lambda *_args, **_kwargs: 35)
     view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
 
     TimelineView.refresh_current_activity(view)
@@ -658,8 +698,12 @@ def test_refresh_current_activity_updates_stable_detail_values_without_full_refr
     assert view.detail_tree.deleted == []
 
 
-def test_refresh_current_activity_falls_back_when_session_structure_changes(monkeypatch):
+def test_refresh_current_activity_falls_back_when_snapshot_identity_changes(monkeypatch):
     view = _live_view_stub("resources")
+    old_snapshot = _live_snapshot(30)
+    new_snapshot = {**old_snapshot, "persisted_activity_id": 2}
+    settings_service.set_setting("current_activity_snapshot", json.dumps(new_snapshot, ensure_ascii=False))
+    view._current_signature = snapshot_signature(old_snapshot)
     old_session = {
         "session_id": "1-1",
         "project_id": 1,
@@ -673,11 +717,11 @@ def test_refresh_current_activity_falls_back_when_session_structure_changes(monk
         "status_summary": "正常活动",
         "is_uncategorized": False,
     }
-    new_session = {**old_session, "session_id": "1-2", "duration_seconds": 35, "activity_ids": [1, 2]}
+    view._sessions_by_id = {"1-1": old_session}
     _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, old_session))])
     fallback_refreshes = []
 
-    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", lambda *_args, **_kwargs: [new_session])
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", _fail_if_called)
     view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
 
     TimelineView.refresh_current_activity(view)
@@ -688,6 +732,9 @@ def test_refresh_current_activity_falls_back_when_session_structure_changes(monk
 
 def test_refresh_current_activity_skips_tables_while_user_interacts(monkeypatch):
     view = _live_view_stub("resources")
+    snapshot = _live_snapshot(35)
+    settings_service.set_setting("current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False))
+    view._current_signature = snapshot_signature(snapshot)
     view.is_user_interacting = lambda: True
     session_calls = []
     fallback_refreshes = []

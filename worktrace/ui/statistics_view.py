@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from datetime import date
 from pathlib import Path
 from tkinter import messagebox
@@ -8,8 +9,10 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_duration, format_project_label
 from ..services import export_service, statistics_service, timeline_service
+from ..services.live_time_service import snapshot_seconds_for_date_range, snapshot_signature
 from ..services.settings_service import get_setting
 from . import design
 from .date_range import DateRange, classify_range, current_week_range, previous_week_range, shift_range, today_range
@@ -26,6 +29,11 @@ class StatisticsView(ctk.CTkFrame):
         self._summary_labels: dict[str, ctk.CTkLabel] = {}
         self._row_widgets: dict[str, dict[str, Any]] = {}
         self._latest_project_rows: list[dict] = []
+        self._base_summary_values: dict[str, int] = {}
+        self._base_project_rows: list[dict] = []
+        self._base_live_seconds = 0
+        self._current_snapshot: dict | None = None
+        self._current_signature: tuple | None = None
         self._range_refresh_after_id: str | None = None
         self._suppress_range_trace = False
         self.empty_label = None
@@ -131,7 +139,13 @@ class StatisticsView(ctk.CTkFrame):
             self._sync_range_buttons()
             return
         self._sync_range_buttons()
-        self._refresh_values(ensure_context=False)
+        snapshot = _read_current_activity_snapshot()
+        signature = snapshot_signature(snapshot)
+        if signature != self._current_signature:
+            self._refresh_values(ensure_context=False)
+            return
+        self._current_snapshot = snapshot
+        self._refresh_live_values(snapshot)
 
     def _apply_today_range(self) -> None:
         self._set_visible_range(today_range(timeline_service.get_default_report_date()))
@@ -217,6 +231,7 @@ class StatisticsView(ctk.CTkFrame):
             include_live=True,
         )
         self._sync_project_rows(rows, total)
+        self._store_live_baseline(summary, rows)
 
     def _sync_project_rows(self, rows: list[dict], total: int) -> None:
         self._latest_project_rows = list(rows)
@@ -237,6 +252,58 @@ class StatisticsView(ctk.CTkFrame):
                 self._row_widgets[key] = widgets
             widgets["frame"].grid(row=row_index, column=0, sticky="ew", padx=6, pady=5)
             self._update_project_stat_row(widgets, row, total)
+
+    def _store_live_baseline(self, summary: dict, rows: list[dict]) -> None:
+        self._current_snapshot = _read_current_activity_snapshot()
+        self._current_signature = snapshot_signature(self._current_snapshot)
+        self._base_summary_values = {
+            "total": int(summary.get("total_duration") or 0),
+            "effective": int(summary.get("effective_duration") or 0),
+            "idle": int(summary.get("idle_duration") or 0),
+            "excluded": int(summary.get("excluded_duration") or 0),
+            "uncategorized": int(summary.get("uncategorized_duration") or 0),
+        }
+        self._base_project_rows = [dict(row) for row in rows]
+        self._base_live_seconds = snapshot_seconds_for_date_range(
+            self._current_snapshot,
+            self.start_var.get(),
+            self.end_var.get(),
+        )
+
+    def _refresh_live_values(self, snapshot: dict | None) -> None:
+        if not self._base_summary_values:
+            return
+        live_seconds = snapshot_seconds_for_date_range(snapshot, self.start_var.get(), self.end_var.get())
+        delta = max(0, live_seconds - self._base_live_seconds)
+        values = dict(self._base_summary_values)
+        status = str((snapshot or {}).get("status") or "")
+        project = str((snapshot or {}).get("inferred_project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
+        if delta:
+            values["total"] += delta
+            if status == "normal":
+                values["effective"] += delta
+                if project == UNCATEGORIZED_PROJECT:
+                    values["uncategorized"] += delta
+            elif status == "idle":
+                values["idle"] += delta
+            elif status == "excluded":
+                values["excluded"] += delta
+        for key, seconds in values.items():
+            label = self._summary_labels.get(key)
+            if label is not None:
+                label.configure(text=format_duration(seconds))
+
+        rows = [dict(row) for row in self._base_project_rows]
+        if delta and status == "normal":
+            for row in rows:
+                if row["project"] == project:
+                    row["total_duration"] = int(row.get("total_duration") or 0) + delta
+                    break
+            else:
+                rows.append({"project": project, "total_duration": delta, "record_count": 1})
+        total = max(1, int(values.get("effective") or values.get("total") or 1))
+        rows = sorted(rows, key=lambda row: (-int(row["total_duration"]), str(row["project"]).casefold()))
+        self._sync_project_rows(rows, total)
 
     def _create_project_stat_row(self) -> dict[str, Any]:
         frame = ctk.CTkFrame(self.rows_frame, fg_color=design.CARD_SUBTLE_BG, corner_radius=design.RADIUS_MD)
@@ -341,3 +408,14 @@ class StatisticsView(ctk.CTkFrame):
         except Exception as exc:
             logging.exception("markdown export failed")
             messagebox.showerror("导出失败", str(exc))
+
+
+def _read_current_activity_snapshot() -> dict | None:
+    raw = get_setting("current_activity_snapshot", "") or ""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None

@@ -11,7 +11,13 @@ import customtkinter as ctk
 from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_current_duration, format_duration, format_project_label
 from ..services import activity_service, project_service, timeline_service
-from ..services.live_time_service import snapshot_elapsed_seconds, snapshot_extra_seconds
+from ..services.live_time_service import (
+    snapshot_elapsed_seconds,
+    snapshot_extra_seconds,
+    snapshot_persisted_id,
+    snapshot_seconds_for_date_range,
+    snapshot_signature,
+)
 from ..services.settings_service import get_setting
 from . import design
 from .date_range import DateRange, classify_range, current_week_range, previous_week_range, shift_range, today_range
@@ -44,6 +50,11 @@ class TimelineView(ctk.CTkFrame):
         self._sessions_by_id: dict[str, dict[str, Any]] = {}
         self._resources_by_id: dict[int, dict[str, Any]] = {}
         self._details_by_id: dict[int, dict[str, Any]] = {}
+        self._session_live_bases: dict[str, int] = {}
+        self._resource_live_bases: dict[int, int] = {}
+        self._detail_live_bases: dict[int, int] = {}
+        self._current_snapshot: dict | None = None
+        self._current_signature: tuple | None = None
         self._tree_values: dict[str, tuple[str, ...]] = {}
         self._selected_session_id: str | None = None
         self._selected_resource_id: int | None = None
@@ -352,7 +363,9 @@ class TimelineView(ctk.CTkFrame):
 
     def refresh(self, ensure_context: bool = True) -> None:
         self._ensure_range_vars()
-        self._sync_status()
+        self._current_snapshot = _read_current_activity_snapshot()
+        self._current_signature = snapshot_signature(self._current_snapshot)
+        self._sync_status(self._current_snapshot)
         if not self._valid_range():
             return
         self._sync_range_buttons()
@@ -397,6 +410,14 @@ class TimelineView(ctk.CTkFrame):
     def _sync_sessions(self, sessions: list[dict]) -> None:
         previous = self._pending_session_id or self._selected_session_id
         self._sessions_by_id = {session["session_id"]: session for session in sessions}
+        self._session_live_bases = {
+            session["session_id"]: self._activity_ids_live_seconds(
+                session.get("activity_ids") or [],
+                str(session.get("report_date") or session.get("start_time") or "")[:10],
+                getattr(self, "_current_snapshot", None),
+            )
+            for session in sessions
+        }
         if hasattr(self, "session_count_label"):
             self.session_count_label.configure(text=f"{len(sessions)} 条")
         self._sync_tree(self.session_tree, [(session["session_id"], self._session_values(session)) for session in sessions])
@@ -455,6 +476,15 @@ class TimelineView(ctk.CTkFrame):
         previous = self._selected_resource_id
         keep_editor_open = self._resource_editor_visible()
         self._resources_by_id = {int(row["resource_id"]): row for row in resources}
+        report_date = self._selected_session_report_date()
+        self._resource_live_bases = {
+            int(row["resource_id"]): self._activity_ids_live_seconds(
+                row.get("activity_ids") or [],
+                report_date,
+                getattr(self, "_current_snapshot", None),
+            )
+            for row in resources
+        }
         self._sync_tree(self.resource_tree, [(str(row["resource_id"]), self._resource_values(row)) for row in resources])
         if previous in self._resources_by_id:
             self._select_tree_item(self.resource_tree, str(previous))
@@ -470,6 +500,15 @@ class TimelineView(ctk.CTkFrame):
         previous = self._selected_activity_id
         keep_editor_open = self._activity_editor_visible()
         self._details_by_id = {int(row["id"]): row for row in details}
+        report_date = self._selected_session_report_date()
+        self._detail_live_bases = {
+            int(row["id"]): self._activity_ids_live_seconds(
+                [int(row["id"])],
+                report_date,
+                getattr(self, "_current_snapshot", None),
+            )
+            for row in details
+        }
         self._sync_tree(self.detail_tree, [(str(row["id"]), self._detail_values(row)) for row in details])
         if previous in self._details_by_id:
             self._select_tree_item(self.detail_tree, str(previous))
@@ -764,15 +803,27 @@ class TimelineView(ctk.CTkFrame):
             if menu is not None:
                 menu.configure(values=names or [UNCATEGORIZED_PROJECT])
 
-    def _sync_status(self) -> None:
-        self.current_activity_label.configure(text=self._current_activity_text())
+    def _sync_status(self, snapshot: dict | None = None) -> None:
+        self.current_activity_label.configure(text=self._current_activity_text(snapshot))
 
     def refresh_current_activity(self) -> None:
         self._ensure_range_vars()
-        self.current_activity_label.configure(text=self._current_activity_text())
+        snapshot = _read_current_activity_snapshot()
+        signature = snapshot_signature(snapshot)
+        self.current_activity_label.configure(text=self._current_activity_text(snapshot))
+        if signature != self._current_signature:
+            if not self._valid_range(show_message=False):
+                self._current_snapshot = snapshot
+                return
+            if self.is_user_interacting():
+                self._current_snapshot = snapshot
+                return
+            self.refresh(ensure_context=False)
+            return
+        self._current_snapshot = snapshot
         if not self._valid_range(show_message=False) or self.is_user_interacting():
             return
-        if not self._refresh_live_table_values():
+        if not self._refresh_live_table_values(snapshot):
             self.refresh(ensure_context=False)
 
     def copy_selection_text(self) -> str:
@@ -825,19 +876,14 @@ class TimelineView(ctk.CTkFrame):
                 rows.append("｜".join(str(value) for value in values))
         return rows
 
-    def _refresh_live_table_values(self) -> bool:
+    def _refresh_live_table_values(self, snapshot: dict | None) -> bool:
         self._ensure_range_vars()
-        sessions = timeline_service.get_project_sessions_by_range(
-            self.start_var.get(),
-            self.end_var.get(),
-            ensure_context=False,
-        )
+        sessions = self._live_sessions(snapshot)
         if self.only_uncategorized.get():
             sessions = [session for session in sessions if session["is_uncategorized"]]
         session_items = [(session["session_id"], self._session_values(session)) for session in sessions]
         if not self._sync_tree_values_only(self.session_tree, session_items):
             return False
-        self._sessions_by_id = {session["session_id"]: session for session in sessions}
         if hasattr(self, "session_count_label"):
             self.session_count_label.configure(text=f"{len(sessions)} 条")
         if not sessions:
@@ -846,40 +892,28 @@ class TimelineView(ctk.CTkFrame):
         session = self._sessions_by_id.get(self._selected_session_id or "")
         if not session:
             return False
-        self._sync_selected_session_summary(session)
+        live_session = next((item for item in sessions if item["session_id"] == self._selected_session_id), session)
+        self._sync_selected_session_summary(live_session)
         if self._detail_mode == "resources":
-            resources = timeline_service.get_session_resource_summary(
-                session["activity_ids"],
-                report_date=session.get("report_date"),
-                ensure_context=False,
-            )
+            resources = self._live_resources(snapshot)
             resource_items = [(str(row["resource_id"]), self._resource_values(row)) for row in resources]
             if not self._sync_tree_values_only(self.resource_tree, resource_items):
                 return False
-            self._resources_by_id = {int(row["resource_id"]): row for row in resources}
             if self._selected_resource_id is not None and self._selected_resource_id not in self._resources_by_id:
                 return False
             return True
-        details = timeline_service.get_session_activity_details(
-            session["activity_ids"],
-            report_date=session.get("report_date"),
-            ensure_context=False,
-        )
+        details = self._live_details(snapshot)
         detail_items = [(str(row["id"]), self._detail_values(row)) for row in details]
         if not self._sync_tree_values_only(self.detail_tree, detail_items):
             return False
-        self._details_by_id = {int(row["id"]): row for row in details}
         if self._selected_activity_id is not None and self._selected_activity_id not in self._details_by_id:
             return False
         return True
 
-    def _current_activity_text(self) -> str:
-        raw = get_setting("current_activity_snapshot", "") or ""
-        if not raw:
-            return "当前活动：无"
-        try:
-            snapshot = json.loads(raw)
-        except json.JSONDecodeError:
+    def _current_activity_text(self, snapshot: dict | None = None) -> str:
+        if snapshot is None:
+            snapshot = _read_current_activity_snapshot()
+        if not snapshot:
             return "当前活动：无"
         name = snapshot.get("resource_display_name") or snapshot.get("app_name") or snapshot.get("process_name") or "未知"
         project = snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT
@@ -888,6 +922,77 @@ class TimelineView(ctk.CTkFrame):
         if snapshot.get("status") == "idle":
             name = "空闲中"
         return f"当前活动：{name}｜{project}｜{elapsed}｜{state}"
+
+    def _live_sessions(self, snapshot: dict | None) -> list[dict]:
+        return [
+            self._with_live_duration(
+                session,
+                "duration_seconds",
+                session.get("activity_ids") or [],
+                self._session_live_bases.get(str(session["session_id"]), 0),
+                str(session.get("report_date") or session.get("start_time") or "")[:10],
+                snapshot,
+            )
+            for session in sorted(self._sessions_by_id.values(), key=lambda row: (str(row.get("start_time") or ""), str(row.get("session_id") or "")), reverse=True)
+        ]
+
+    def _live_resources(self, snapshot: dict | None) -> list[dict]:
+        return [
+            self._with_live_duration(
+                row,
+                "total_duration_seconds",
+                row.get("activity_ids") or [],
+                self._resource_live_bases.get(int(row["resource_id"]), 0),
+                self._selected_session_report_date(),
+                snapshot,
+            )
+            for row in sorted(
+                self._resources_by_id.values(),
+                key=lambda item: (-int(item.get("total_duration_seconds") or 0), str(item.get("display_name") or "").casefold()),
+            )
+        ]
+
+    def _live_details(self, snapshot: dict | None) -> list[dict]:
+        return [
+            self._with_live_duration(
+                row,
+                "duration_seconds",
+                [int(row["id"])],
+                self._detail_live_bases.get(int(row["id"]), 0),
+                self._selected_session_report_date(),
+                snapshot,
+            )
+            for row in sorted(self._details_by_id.values(), key=lambda item: (str(item.get("start_time") or ""), int(item.get("id") or 0)), reverse=True)
+        ]
+
+    def _with_live_duration(
+        self,
+        row: dict,
+        duration_key: str,
+        activity_ids: list[int],
+        base_live_seconds: int,
+        report_date: str,
+        snapshot: dict | None,
+    ) -> dict:
+        current_live = self._activity_ids_live_seconds(activity_ids, report_date, snapshot)
+        delta = max(0, current_live - int(base_live_seconds or 0))
+        if not delta:
+            return dict(row)
+        item = dict(row)
+        item[duration_key] = int(item.get(duration_key) or 0) + delta
+        return item
+
+    def _activity_ids_live_seconds(self, activity_ids: list[int], report_date: str, snapshot: dict | None) -> int:
+        persisted_id = snapshot_persisted_id(snapshot)
+        if persisted_id is None or persisted_id not in {int(activity_id) for activity_id in activity_ids}:
+            return 0
+        if not report_date:
+            return 0
+        return snapshot_seconds_for_date_range(snapshot, report_date, report_date)
+
+    def _selected_session_report_date(self) -> str:
+        session = getattr(self, "_sessions_by_id", {}).get(getattr(self, "_selected_session_id", None) or "")
+        return str((session or {}).get("report_date") or (session or {}).get("start_time") or "")[:10]
 
     def _session_values(self, session: dict) -> tuple[str, ...]:
         return (
@@ -1213,3 +1318,14 @@ class TimelineView(ctk.CTkFrame):
 
 def _current_elapsed_seconds(snapshot: dict) -> int:
     return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
+
+
+def _read_current_activity_snapshot() -> dict | None:
+    raw = get_setting("current_activity_snapshot", "") or ""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None

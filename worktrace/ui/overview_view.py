@@ -9,7 +9,13 @@ import customtkinter as ctk
 
 from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_current_duration, format_duration, format_project_label
-from ..services.live_time_service import snapshot_extra_seconds, snapshot_elapsed_seconds
+from ..services.live_time_service import (
+    snapshot_elapsed_seconds,
+    snapshot_extra_seconds,
+    snapshot_persisted_id,
+    snapshot_seconds_for_date_range,
+    snapshot_signature,
+)
 from ..services import statistics_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
@@ -34,6 +40,8 @@ class OverviewView(ctk.CTkFrame):
         self._recent_empty = None
         self._current_snapshot: dict | None = None
         self._current_signature: tuple | None = None
+        self._kpi_base_values: dict[str, int] = {"total": 0, "classified": 0, "uncategorized": 0}
+        self._kpi_base_live_seconds = 0
         self._last_data_refresh_monotonic = 0.0
         self._last_scope_range: tuple[str, str] | None = None
         self._build()
@@ -136,11 +144,14 @@ class OverviewView(ctk.CTkFrame):
         self._last_data_refresh_monotonic = time.monotonic()
         start, end = self._scope_dates()
         self._last_scope_range = (start, end)
+        self._current_snapshot = _read_current_activity_snapshot()
+        self._current_signature = snapshot_signature(self._current_snapshot)
         summary = statistics_service.get_summary(start, end, include_live=True)
+        self._store_kpi_baseline(summary, start, end)
         self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
         self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
         self.kpi_value_labels["uncategorized"].configure(text=format_duration(summary["uncategorized_duration"]))
-        self._sync_current_activity_from_store()
+        self.current_activity_label.configure(text=current_activity_text_from_snapshot(self._current_snapshot))
         self._sync_scope_labels()
         self._refresh_recent_sessions(start, end)
 
@@ -193,6 +204,9 @@ class OverviewView(ctk.CTkFrame):
             )
             widgets["subtitle"].configure(text=str(session.get("status_summary") or "正常活动"))
             widgets["duration"].configure(text=format_duration(session.get("duration_seconds") or 0))
+            widgets["base_duration_seconds"] = int(session.get("duration_seconds") or 0)
+            widgets["activity_ids"] = list(session.get("activity_ids") or [])
+            widgets["base_live_seconds"] = self._session_live_seconds(session, getattr(self, "_current_snapshot", None))
 
     def _sessions_for_range(self, start: str, end: str, ensure_context: bool = True) -> list[dict]:
         start_date = date.fromisoformat(start)
@@ -308,7 +322,7 @@ class OverviewView(ctk.CTkFrame):
 
     def refresh_current_activity(self) -> None:
         snapshot = _read_current_activity_snapshot()
-        signature = _snapshot_signature(snapshot)
+        signature = snapshot_signature(snapshot)
         if signature != self._current_signature:
             self.refresh()
             return
@@ -322,22 +336,66 @@ class OverviewView(ctk.CTkFrame):
         if snapshot is not None:
             self._current_snapshot = snapshot
         self.current_activity_label.configure(text=current_activity_text_from_snapshot(self._current_snapshot))
-        self._refresh_live_duration_values()
+        self._refresh_live_duration_values(self._current_snapshot)
 
-    def _refresh_live_duration_values(self) -> None:
+    def _refresh_live_duration_values(self, snapshot: dict | None) -> None:
         if not hasattr(self, "kpi_value_labels") or not hasattr(self, "_recent_rows"):
             return
         start, end = self._scope_dates()
-        summary = statistics_service.get_summary(start, end, ensure_context=False, include_live=True)
-        self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
-        self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
-        self.kpi_value_labels["uncategorized"].configure(text=format_duration(summary["uncategorized_duration"]))
-        self._refresh_recent_sessions(start, end, ensure_context=False)
+        live_seconds = snapshot_seconds_for_date_range(snapshot, start, end)
+        delta = max(0, live_seconds - self._kpi_base_live_seconds)
+        values = dict(self._kpi_base_values)
+        status = str((snapshot or {}).get("status") or "")
+        project = str((snapshot or {}).get("inferred_project_name") or UNCATEGORIZED_PROJECT).strip()
+        if delta:
+            values["total"] += delta
+            if status == "normal":
+                if project and project != UNCATEGORIZED_PROJECT:
+                    values["classified"] += delta
+                else:
+                    values["uncategorized"] += delta
+        self.kpi_value_labels["total"].configure(text=format_duration(values["total"]))
+        self.kpi_value_labels["classified"].configure(text=format_duration(values["classified"]))
+        self.kpi_value_labels["uncategorized"].configure(text=format_duration(values["uncategorized"]))
+        self._refresh_recent_live_durations(snapshot)
 
     def _sync_current_activity_from_store(self) -> None:
         self._current_snapshot = _read_current_activity_snapshot()
-        self._current_signature = _snapshot_signature(self._current_snapshot)
+        self._current_signature = snapshot_signature(self._current_snapshot)
         self.current_activity_label.configure(text=current_activity_text_from_snapshot(self._current_snapshot))
+
+    def _store_kpi_baseline(self, summary: dict, start: str, end: str) -> None:
+        self._kpi_base_values = {
+            "total": int(summary.get("total_duration") or 0),
+            "classified": int(summary.get("classified_duration") or 0),
+            "uncategorized": int(summary.get("uncategorized_duration") or 0),
+        }
+        self._kpi_base_live_seconds = snapshot_seconds_for_date_range(self._current_snapshot, start, end)
+
+    def _session_live_seconds(self, session: dict, snapshot: dict | None) -> int:
+        persisted_id = snapshot_persisted_id(snapshot)
+        if persisted_id is None or persisted_id not in set(session.get("activity_ids") or []):
+            return 0
+        report_date = str(session.get("report_date") or session.get("start_time") or "")[:10]
+        if not report_date:
+            return 0
+        return snapshot_seconds_for_date_range(snapshot, report_date, report_date)
+
+    def _refresh_recent_live_durations(self, snapshot: dict | None) -> None:
+        persisted_id = snapshot_persisted_id(snapshot)
+        if persisted_id is None:
+            return
+        for widgets in self._recent_rows.values():
+            activity_ids = set(widgets.get("activity_ids") or [])
+            if persisted_id not in activity_ids:
+                continue
+            target_date = str(widgets.get("target_date") or "")[:10]
+            if not target_date:
+                continue
+            current_live = snapshot_seconds_for_date_range(snapshot, target_date, target_date)
+            delta = max(0, current_live - int(widgets.get("base_live_seconds") or 0))
+            duration = int(widgets.get("base_duration_seconds") or 0) + delta
+            widgets["duration"].configure(text=format_duration(duration))
 
     def _bind_click(self, widget, command: Callable[[], None]) -> None:
         widget.bind("<Button-1>", lambda _event: command(), add="+")
@@ -362,17 +420,7 @@ def _read_current_activity_snapshot() -> dict | None:
 
 
 def _snapshot_signature(snapshot: dict | None) -> tuple | None:
-    if not snapshot:
-        return None
-    return (
-        snapshot.get("status"),
-        snapshot.get("app_name"),
-        snapshot.get("process_name"),
-        snapshot.get("window_title"),
-        snapshot.get("file_path_hint"),
-        snapshot.get("start_time"),
-        bool(snapshot.get("is_persisted")),
-    )
+    return snapshot_signature(snapshot)
 
 
 def current_activity_text_from_snapshot(snapshot: dict | None) -> str:

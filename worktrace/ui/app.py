@@ -18,6 +18,7 @@ WM_SYSCOMMAND = 0x0112
 SC_MINIMIZE = 0xF020
 SIZE_RESTORED = 0
 SIZE_MINIMIZED = 1
+LIVE_TICK_MS = 250
 
 
 class WorkTraceApp(ctk.CTk):
@@ -74,7 +75,7 @@ class WorkTraceApp(ctk.CTk):
         self.after(200, self._startup_privacy_gate)
         self.after(500, self.refresh_current_tab)
         self.after(1000, self._refresh_sidebar_status)
-        self.after(1000, self._refresh_current_activity_status)
+        self.after(LIVE_TICK_MS, self._refresh_current_activity_status)
         self.after_idle(self._install_native_window_hook)
 
     def _build_shell(self) -> None:
@@ -313,7 +314,7 @@ class WorkTraceApp(ctk.CTk):
             page = self.pages.get(self.active_page)
             if page is not None and hasattr(page, "refresh_current_activity"):
                 page.refresh_current_activity()
-        self.after(1000, self._refresh_current_activity_status)
+        self.after(LIVE_TICK_MS, self._refresh_current_activity_status)
 
     def _on_configure(self, event=None) -> None:
         if event is not None and getattr(event, "widget", self) is not self:
