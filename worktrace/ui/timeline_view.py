@@ -9,7 +9,7 @@ from typing import Any
 import customtkinter as ctk
 
 from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
-from ..formatters import format_current_duration, format_duration
+from ..formatters import format_current_duration, format_duration, format_project_label
 from ..services import activity_service, project_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
@@ -31,6 +31,7 @@ class TimelineView(ctk.CTkFrame):
         self.start_var = ctk.StringVar(value=today)
         self.end_var = ctk.StringVar(value=today)
         self.date_var = self.start_var
+        self.range_var = ctk.StringVar(value="今日")
         self.only_uncategorized = ctk.BooleanVar(value=False)
         self.session_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
         self.resource_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
@@ -92,20 +93,23 @@ class TimelineView(ctk.CTkFrame):
         controls.grid(row=0, column=1, sticky="e")
         self.prev_range_button = self._button(controls, text="<", width=34, command=lambda: self._shift_visible_range(-1))
         self.prev_range_button.pack(side="left", padx=(0, 4))
-        self.next_range_button = self._button(controls, text=">", width=34, command=lambda: self._shift_visible_range(1))
-        self.next_range_button.pack(side="left", padx=(0, 8))
-        self._button(controls, text="今日", width=58, command=self._apply_today_range).pack(side="left", padx=(0, 4))
-        self._button(controls, text="本周", width=58, command=self._apply_current_week_range).pack(side="left", padx=(0, 4))
-        self._button(controls, text="上周", width=58, command=self._apply_previous_week_range).pack(side="left", padx=(0, 8))
-        self._label(controls, text="开始", text_color=design.MUTED_TEXT).pack(side="left", padx=(4, 4))
+        self.range_segment = design.segmented_button(
+            controls,
+            values=["上周", "本周", "今日"],
+            variable=self.range_var,
+            command=self._apply_quick_range,
+            width=174,
+        )
+        self.range_segment.pack(side="left", padx=(0, 8))
         self.start_entry = self._entry(controls, textvariable=self.start_var, width=118)
         self.start_entry.pack(side="left")
         self.start_entry.bind("<Return>", lambda _event: self.refresh(), add="+")
-        self._label(controls, text="结束", text_color=design.MUTED_TEXT).pack(side="left", padx=(8, 4))
+        self._label(controls, text="-", text_color=design.MUTED_TEXT).pack(side="left", padx=6)
         self.end_entry = self._entry(controls, textvariable=self.end_var, width=118)
         self.end_entry.pack(side="left")
         self.end_entry.bind("<Return>", lambda _event: self.refresh(), add="+")
-        self._checkbox(controls, text="仅未归类", variable=self.only_uncategorized, command=self.refresh).pack(side="left", padx=(8, 0))
+        self.next_range_button = self._button(controls, text=">", width=34, command=lambda: self._shift_visible_range(1))
+        self.next_range_button.pack(side="left", padx=(8, 0))
 
         self._build_session_table()
         self._build_detail_area()
@@ -129,7 +133,15 @@ class TimelineView(ctk.CTkFrame):
         session_header = ctk.CTkFrame(self.session_panel, fg_color="transparent")
         session_header.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
         session_header.grid_columnconfigure(0, weight=1)
-        self._label(session_header, text="项目", font=design.FONT_SECTION).grid(row=0, column=0, sticky="w")
+        session_title_row = ctk.CTkFrame(session_header, fg_color="transparent")
+        session_title_row.grid(row=0, column=0, sticky="w")
+        self._label(session_title_row, text="项目", font=design.FONT_SECTION).pack(side="left")
+        self._checkbox(
+            session_title_row,
+            text="仅未归类",
+            variable=self.only_uncategorized,
+            command=self.refresh,
+        ).pack(side="left", padx=(10, 0))
         self.session_count_label = self._label(session_header, text="0 条", text_color=design.MUTED_TEXT)
         self.session_count_label.grid(row=0, column=1, sticky="e")
         columns = ("time", "project", "duration", "summary")
@@ -182,7 +194,7 @@ class TimelineView(ctk.CTkFrame):
         self.save_session_project_button.pack(side="left", padx=(0, 6))
         self.toggle_detail_button = self._button(
             actions,
-            text="时间顺序",
+            text="查看明细",
             width=150,
             command=self._toggle_detail_mode,
             fg_color=design.NEUTRAL_SOFT,
@@ -425,7 +437,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _sync_selected_session_summary(self, session: dict) -> None:
         self.detail_label.configure(
-            text=f"{self._session_time(session)} | {session['project_name']}"
+            text=f"{self._session_time(session)} | {format_project_label(session['project_name'], session.get('project_description'))}"
         )
         if hasattr(self, "detail_hint_label"):
             self.detail_hint_label.configure(
@@ -574,14 +586,14 @@ class TimelineView(ctk.CTkFrame):
             self.resource_tree_frame.grid_remove()
             self.detail_tree_frame.grid(row=0, column=0, sticky="nsew")
             self._apply_tree_column_widths(self.detail_tree)
-            self.toggle_detail_button.configure(text="返回资源汇总")
+            self.toggle_detail_button.configure(text="查看汇总")
             self._show_resource_editor(False)
         else:
             self._detail_mode = "resources"
             self.detail_tree_frame.grid_remove()
             self.resource_tree_frame.grid(row=0, column=0, sticky="nsew")
             self._apply_tree_column_widths(self.resource_tree)
-            self.toggle_detail_button.configure(text="查看时间顺序明细")
+            self.toggle_detail_button.configure(text="查看明细")
             self._show_activity_editor(False)
         self._editor_dirty = False
         self._refresh_selected_session()
@@ -875,7 +887,7 @@ class TimelineView(ctk.CTkFrame):
     def _session_values(self, session: dict) -> tuple[str, ...]:
         return (
             self._session_time(session),
-            str(session["project_name"]),
+            format_project_label(session["project_name"], session.get("project_description")),
             format_duration(session["duration_seconds"]),
             str(session["status_summary"]),
         )
@@ -886,7 +898,7 @@ class TimelineView(ctk.CTkFrame):
             str(row["resource_type"]),
             format_duration(row["total_duration_seconds"]),
             str(row["event_count"]),
-            str(row.get("project_name") or UNCATEGORIZED_PROJECT),
+            format_project_label(row.get("project_name") or UNCATEGORIZED_PROJECT, row.get("project_description")),
         )
 
     def _detail_values(self, row: dict) -> tuple[str, ...]:
@@ -901,7 +913,7 @@ class TimelineView(ctk.CTkFrame):
             str(row.get("window_title") or ""),
             str(row.get("resource_display_name") or ""),
             format_duration(row.get("duration_seconds") or 0),
-            str(row.get("project_name") or UNCATEGORIZED_PROJECT),
+            format_project_label(row.get("project_name") or UNCATEGORIZED_PROJECT, row.get("project_description")),
             note,
         )
 
@@ -917,13 +929,9 @@ class TimelineView(ctk.CTkFrame):
         return ctk.CTkLabel(master, **kwargs)
 
     def _button(self, master, **kwargs):
+        variant = kwargs.pop("variant", "primary")
         kwargs.setdefault("font", UI_FONT)
-        kwargs.setdefault("corner_radius", design.RADIUS_SM)
-        kwargs.setdefault("height", 34)
-        kwargs.setdefault("fg_color", design.ACCENT)
-        kwargs.setdefault("hover_color", design.ACCENT_HOVER)
-        kwargs.setdefault("text_color", "#ffffff")
-        return ctk.CTkButton(master, **kwargs)
+        return design.button(master, variant=variant, **kwargs)
 
     def _checkbox(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
@@ -1049,6 +1057,14 @@ class TimelineView(ctk.CTkFrame):
     def _apply_previous_week_range(self) -> None:
         self._set_visible_range(previous_week_range(timeline_service.get_default_report_date()))
 
+    def _apply_quick_range(self, value: str) -> None:
+        if value == "上周":
+            self._apply_previous_week_range()
+        elif value == "本周":
+            self._apply_current_week_range()
+        elif value == "今日":
+            self._apply_today_range()
+
     def _shift_visible_range(self, direction: int) -> None:
         shifted = shift_range(self.start_var.get(), self.end_var.get(), direction)
         if shifted is None:
@@ -1069,6 +1085,19 @@ class TimelineView(ctk.CTkFrame):
             button = getattr(self, button_name, None)
             if button is not None:
                 button.configure(state=state)
+        if hasattr(self, "range_var"):
+            self.range_var.set(self._active_range_label())
+
+    def _active_range_label(self) -> str:
+        today = timeline_service.get_default_report_date()
+        current = DateRange(self.start_var.get(), self.end_var.get(), classify_range(self.start_var.get(), self.end_var.get()))
+        if current == previous_week_range(today):
+            return "上周"
+        if current == current_week_range(today):
+            return "本周"
+        if current == today_range(today):
+            return "今日"
+        return ""
 
     def _valid_range(self, show_message: bool = True) -> bool:
         self._ensure_range_vars()
@@ -1097,6 +1126,11 @@ class TimelineView(ctk.CTkFrame):
             self.end_var = self.start_var
         if not hasattr(self, "date_var"):
             self.date_var = self.start_var
+        if not hasattr(self, "range_var"):
+            try:
+                self.range_var = ctk.StringVar(value="今日")
+            except RuntimeError:
+                self.range_var = self.start_var
 
     def _valid_date(self, value: str) -> bool:
         try:

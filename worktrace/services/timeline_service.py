@@ -13,6 +13,7 @@ from .project_service import get_or_create_uncategorized_project
 from .settings_service import get_int_setting, get_setting
 
 SHORT_CONTEXT_MERGE_SECONDS = 5 * 60
+DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS = 15 * 60
 
 
 def get_project_sessions_by_date(date: str, include_hidden: bool = True, ensure_context: bool = True) -> list[dict]:
@@ -99,6 +100,7 @@ def get_session_resource_summary(
                 "event_count": 0,
                 "project_id": row.get("effective_project_id"),
                 "project_name": row.get("display_project_name") or UNCATEGORIZED_PROJECT,
+                "project_description": row.get("display_project_description") or "",
                 "official_project_name": row.get("effective_project_name") or UNCATEGORIZED_PROJECT,
                 "is_suggested_project": bool(row.get("is_suggested_project")),
                 "can_remember_for_future": row.get("resource_role") == "anchor",
@@ -125,6 +127,7 @@ def get_session_activity_details(
         item["duration_seconds"] = _display_duration(row)
         item["project_id"] = row.get("effective_project_id")
         item["project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
+        item["project_description"] = row.get("display_project_description") or ""
         item["official_project_name"] = row.get("effective_project_name") or UNCATEGORIZED_PROJECT
         item["resource_display_name"] = row.get("resource_display_name") or row.get("app_name") or "未知资源"
         details.append(item)
@@ -279,7 +282,8 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
                 r.resource_type,
                 apa.suggested_project_name,
                 COALESCE(apa.project_id, a.project_id) AS effective_project_id,
-                p.name AS effective_project_name
+                p.name AS effective_project_name,
+                p.description AS effective_project_description
             FROM activity_log a
             LEFT JOIN resource r ON r.id = a.resource_id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
@@ -329,7 +333,8 @@ def _load_session_rows(
                 r.process_name AS resource_process_name,
                 apa.suggested_project_name,
                 COALESCE(apa.project_id, a.project_id) AS effective_project_id,
-                p.name AS effective_project_name
+                p.name AS effective_project_name,
+                p.description AS effective_project_description
             FROM activity_log a
             LEFT JOIN resource r ON r.id = a.resource_id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
@@ -357,6 +362,7 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     last = rows[-1]
     project_id = int(first.get("report_project_id") or first.get("effective_project_id") or uncategorized_id)
     project_name = first.get("report_project_name") or first.get("display_project_name") or UNCATEGORIZED_PROJECT
+    project_description = first.get("report_project_description") or first.get("display_project_description") or ""
     duration = sum(_display_duration(row) for row in rows)
     activity_ids = [int(row["id"]) for row in rows]
     status_summary = _status_summary(rows)
@@ -364,6 +370,7 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "session_id": f"{first['id']}-{last['id']}",
         "project_id": project_id,
         "project_name": project_name,
+        "project_description": project_description,
         "start_time": first.get("start_time"),
         "end_time": last.get("end_time"),
         "report_date": first.get("report_date"),
@@ -488,6 +495,7 @@ def _row_crosses_midnight(row: dict) -> bool:
 def _attach_original_report_project(row: dict) -> None:
     row["report_project_id"] = row.get("effective_project_id")
     row["report_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
+    row["report_project_description"] = row.get("display_project_description") or ""
     row["report_project_key"] = row.get("display_project_key") or ""
     row["report_is_suggested_project"] = bool(row.get("is_suggested_project"))
     row["report_context_merged"] = False
@@ -496,6 +504,7 @@ def _attach_original_report_project(row: dict) -> None:
 def _attach_merged_report_project(row: dict, anchor: dict) -> None:
     row["report_project_id"] = anchor.get("effective_project_id")
     row["report_project_name"] = anchor.get("display_project_name") or UNCATEGORIZED_PROJECT
+    row["report_project_description"] = anchor.get("display_project_description") or ""
     row["report_project_key"] = anchor.get("display_project_key") or ""
     row["report_is_suggested_project"] = bool(anchor.get("is_suggested_project"))
     row["report_context_merged"] = True
@@ -568,11 +577,28 @@ def _minutes_between(start: str, end: str) -> float:
 
 
 def _has_session_boundary_between(previous: dict, current: dict) -> bool:
+    if _has_unrecorded_gap_between(previous, current):
+        return True
     boundary_start = previous.get("end_time") or previous.get("start_time") or ""
     boundary_end = current.get("start_time") or ""
     if not boundary_start or not boundary_end:
         return False
     return session_boundary_service.has_boundary_between(str(boundary_start), str(boundary_end))
+
+
+def _has_unrecorded_gap_between(previous: dict, current: dict) -> bool:
+    previous_end = _parse_row_time(previous.get("end_time"))
+    current_start = _parse_row_time(current.get("start_time"))
+    if previous_end is None or current_start is None:
+        return False
+    gap_seconds = int((current_start - previous_end).total_seconds())
+    if gap_seconds <= 0:
+        return False
+    threshold = max(
+        60,
+        get_int_setting("context_carry_minutes", DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS // 60) * 60,
+    )
+    return gap_seconds > threshold
 
 
 def _ensure_context_for_report_range(start_date: str, end_date: str) -> None:
@@ -588,10 +614,12 @@ def _attach_display_project(row: dict, uncategorized_id: int) -> None:
     suggested = str(row.get("suggested_project_name") or "").strip()
     if project_id == int(uncategorized_id) and suggested:
         row["display_project_name"] = suggested
+        row["display_project_description"] = ""
         row["display_project_key"] = f"suggested:{suggested.casefold()}"
         row["is_suggested_project"] = True
         return
     row["display_project_name"] = row.get("effective_project_name") or UNCATEGORIZED_PROJECT
+    row["display_project_description"] = row.get("effective_project_description") or ""
     row["display_project_key"] = f"project:{project_id}"
     row["is_suggested_project"] = False
 

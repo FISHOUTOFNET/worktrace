@@ -12,6 +12,21 @@ class FakeLabel:
     def configure(self, **kwargs):
         self.config.update(kwargs)
 
+    def cget(self, key):
+        return self.config.get(key, "")
+
+
+class FakeRow:
+    def __init__(self):
+        self.grid_calls = []
+        self.destroyed = False
+
+    def grid(self, *args, **kwargs):
+        self.grid_calls.append((args, kwargs))
+
+    def destroy(self):
+        self.destroyed = True
+
 
 def test_overview_current_activity_text_uses_snapshot_duration(temp_db):
     settings_service.set_setting(
@@ -75,3 +90,40 @@ def test_overview_same_current_activity_ticks_without_full_refresh(temp_db):
 
     assert refresh_calls == []
     assert view.current_activity_label.config["text"].startswith("当前活动：Spec.docx｜Client｜")
+
+
+def test_overview_recent_project_title_includes_description():
+    view = object.__new__(OverviewView)
+    view._recent_rows = {}
+    view._recent_empty = None
+    view._hide_recent_empty = lambda: None
+    view._show_recent_empty = lambda: None
+    view._sessions_for_range = lambda *_args, **_kwargs: [
+        {
+            "session_id": "1-1",
+            "project_name": "Client",
+            "project_description": "billable",
+            "start_time": "2026-06-18 09:00:00",
+            "end_time": "2026-06-18 09:10:00",
+            "status_summary": "Spec.docx",
+            "duration_seconds": 600,
+            "report_date": "2026-06-18",
+        }
+    ]
+
+    def create_row(session_id):
+        return {
+            "row": FakeRow(),
+            "time": FakeLabel(),
+            "title": FakeLabel(),
+            "subtitle": FakeLabel(),
+            "duration": FakeLabel(),
+            "session_id": session_id,
+            "target_date": "2026-06-18",
+        }
+
+    view._create_recent_row = create_row
+
+    OverviewView._refresh_recent_sessions(view, "2026-06-18", "2026-06-18")
+
+    assert view._recent_rows["1-1"]["title"].config["text"] == "Client (billable)"

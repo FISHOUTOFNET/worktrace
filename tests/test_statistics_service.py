@@ -1,4 +1,7 @@
-from worktrace.services import activity_service, project_service, session_boundary_service, statistics_service
+import json
+from datetime import date
+
+from worktrace.services import activity_service, project_service, session_boundary_service, settings_service, statistics_service
 
 
 def test_statistics_aggregation(temp_db):
@@ -112,3 +115,55 @@ def test_project_stats_count_project_records_split_by_boundary(temp_db):
     assert statistics_service.get_project_stats("2026-06-18", "2026-06-18") == [
         {"project": "A", "total_duration": 20 * 60, "record_count": 2}
     ]
+
+
+def test_live_unpersisted_activity_is_projected_only_when_requested(temp_db):
+    today = date.today().isoformat()
+    project_service.create_project("Client", "billable")
+    settings_service.set_setting(
+        "current_activity_snapshot",
+        json.dumps(
+            {
+                "resource_display_name": "Spec.docx",
+                "inferred_project_name": "Client",
+                "status": "normal",
+                "start_time": "",
+                "elapsed_seconds": 65,
+                "is_persisted": False,
+                "persisted_activity_id": None,
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    assert statistics_service.get_summary(today, today)["total_duration"] == 0
+
+    summary = statistics_service.get_summary(today, today, include_live=True)
+    stats = statistics_service.get_project_stats(today, today, include_live=True)
+
+    assert summary["total_duration"] == 65
+    assert summary["effective_duration"] == 65
+    assert summary["classified_duration"] == 65
+    assert stats == [{"project": "Client", "total_duration": 65, "record_count": 1, "project_description": "billable"}]
+
+
+def test_live_persisted_snapshot_is_not_double_counted(temp_db):
+    today = date.today().isoformat()
+    settings_service.set_setting(
+        "current_activity_snapshot",
+        json.dumps(
+            {
+                "resource_display_name": "Spec.docx",
+                "inferred_project_name": "Client",
+                "status": "normal",
+                "start_time": "",
+                "elapsed_seconds": 65,
+                "is_persisted": True,
+                "persisted_activity_id": 99,
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    assert statistics_service.get_summary(today, today, include_live=True)["total_duration"] == 0
+    assert statistics_service.get_project_stats(today, today, include_live=True) == []

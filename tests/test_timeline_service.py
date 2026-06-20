@@ -308,6 +308,33 @@ def test_session_boundary_splits_same_project_records(temp_db):
     assert [session["start_time"][11:16] for session in sessions] == ["09:20", "09:00"]
 
 
+def test_unrecorded_gap_splits_same_project_records(temp_db):
+    project_a = project_service.create_project("A")
+    first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 09:00:00", project_a)
+    activity_service.close_activity(first, "2026-06-18 09:10:00")
+    second = _activity_at("Word", "winword.exe", "A2.docx", "2026-06-18 09:40:00", project_a)
+    activity_service.close_activity(second, "2026-06-18 09:50:00")
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert [session["project_name"] for session in sessions] == ["A", "A"]
+    assert [session["start_time"][11:16] for session in sessions] == ["09:40", "09:00"]
+
+
+def test_project_description_flows_to_timeline_rows(temp_db):
+    project = project_service.create_project("Client", "billable")
+    activity = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    activity_service.close_activity(activity, "2026-06-18 09:10:00")
+
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
+    resources = timeline_service.get_session_resource_summary(session["activity_ids"])
+    details = timeline_service.get_session_activity_details(session["activity_ids"])
+
+    assert session["project_description"] == "billable"
+    assert resources[0]["project_description"] == "billable"
+    assert details[0]["project_description"] == "billable"
+
+
 def test_session_boundary_stops_cross_midnight_project_carry(temp_db):
     project_a = project_service.create_project("A")
     first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 23:50:00", project_a)

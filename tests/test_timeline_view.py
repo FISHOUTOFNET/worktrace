@@ -260,6 +260,7 @@ def test_main_layout_no_longer_creates_global_editor_panel(monkeypatch):
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkButton", lambda master, **_kwargs: FakeWidget(master=master))
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkEntry", lambda master, **_kwargs: FakeWidget(master=master))
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkCheckBox", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkSegmentedButton", lambda master, **_kwargs: FakeWidget(master=master))
 
     TimelineView._build(view)
 
@@ -410,6 +411,55 @@ def test_sync_tree_values_only_rejects_structure_changes():
     assert TimelineView._sync_tree_values_only(view, tree, [("1", ("Spec.docx",)), ("2", ("Notes.md",))]) is False
     assert tree.item_calls == []
     assert tree.children == ["1"]
+
+
+def test_detail_toggle_uses_short_view_labels():
+    view = object.__new__(TimelineView)
+    view._detail_mode = "resources"
+    view.resource_tree_frame = FakeWidget(mapped=True)
+    view.detail_tree_frame = FakeWidget(mapped=False)
+    view.resource_tree = FakeTree()
+    view.detail_tree = FakeTree()
+    view.toggle_detail_button = FakeWidget()
+    view._apply_tree_column_widths = lambda _tree: None
+    view._show_resource_editor = lambda _show: None
+    view._show_activity_editor = lambda _show: None
+    view._refresh_selected_session = lambda: None
+    view._editor_dirty = False
+
+    TimelineView._toggle_detail_mode(view)
+    assert view._detail_mode == "details"
+    assert view.toggle_detail_button.config["text"] == "查看汇总"
+
+    TimelineView._toggle_detail_mode(view)
+    assert view._detail_mode == "resources"
+    assert view.toggle_detail_button.config["text"] == "查看明细"
+
+
+def test_timeline_project_values_include_description():
+    view = object.__new__(TimelineView)
+    view.start_var = FakeVar("2026-06-18")
+    view.end_var = FakeVar("2026-06-18")
+    view.date_var = view.start_var
+    session = {
+        "project_name": "Client",
+        "project_description": "billable",
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": "2026-06-18 09:10:00",
+        "duration_seconds": 600,
+        "status_summary": "Spec.docx",
+    }
+    resource = {
+        "display_name": "Spec.docx",
+        "resource_type": "file",
+        "total_duration_seconds": 600,
+        "event_count": 1,
+        "project_name": "Client",
+        "project_description": "billable",
+    }
+
+    assert TimelineView._session_values(view, session)[1] == "Client (billable)"
+    assert TimelineView._resource_values(view, resource)[4] == "Client (billable)"
 
 
 def test_open_context_selects_requested_session_on_sync():

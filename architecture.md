@@ -43,7 +43,7 @@ Start portable Windows app
 → anonymize excluded/private windows
 → let user organize and classify records
 → summarize time by project
-→ export Excel timesheet and Markdown weekly draft
+→ export Excel timesheet from the UI
 ```
 
 This version must be local-only, offline-capable, account-free, and runnable without administrator privileges.
@@ -101,7 +101,7 @@ Implement:
 12. Project time statistics.
 13. Date-range statistics.
 14. Excel export.
-15. Markdown weekly draft export.
+15. Markdown weekly draft export service/API.
 16. Pause / resume collection.
 17. Collector heartbeat display.
 18. Single-instance protection.
@@ -1243,7 +1243,6 @@ Must show:
 6. uncategorized duration
 7. project stats table
 8. export Excel button
-9. export Markdown button
 
 Project stats use the reporting context merge and report-date assignment. Total, effective, idle, excluded, and paused summary durations use raw activity status but the same report-date slicing and live open-record duration projection.
 
@@ -1376,7 +1375,7 @@ Implementation may delete and recreate the SQLite database or clear all tables a
 
 ### 26.2 Export All Local Data
 
-The UI does not expose export-all-local-data. Settings only supports clearing all local records; range Excel/Markdown exports remain available from reporting views.
+The UI does not expose export-all-local-data. Settings only supports clearing all local records; reporting views expose range Excel export. The Markdown exporter remains available as a service/API helper.
 
 ---
 
@@ -1473,7 +1472,7 @@ The app is acceptable if:
 14. It allows notes.
 15. It summarizes time by project.
 16. It exports Excel.
-17. It exports Markdown.
+17. It keeps Markdown export available outside the visible UI.
 20. It supports exclude keywords.
 21. It supports pause / resume.
 22. It supports soft delete.
@@ -1533,7 +1532,7 @@ Implement pytest tests for:
 8. privacy keyword matching
 9. statistics aggregation
 10. Excel export file creation
-11. Markdown export content
+11. Markdown service export content
 12. settings read / write
 13. single-instance lock behavior where feasible
 14. collector loop using fake adapter
@@ -1577,8 +1576,8 @@ handle idle and excluded windows correctly,
 classify records into projects,
 add notes,
 view project statistics,
-export an Excel timesheet,
-export a Markdown weekly draft,
+export an Excel timesheet from the UI,
+generate a Markdown weekly draft through the service/API,
 and clear or export all local data,
 without registration, network access, administrator privileges, screenshots, keyboard logging, content reading, or data upload.
 ```

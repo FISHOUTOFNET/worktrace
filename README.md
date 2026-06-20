@@ -11,7 +11,7 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 - First-run privacy notice before any collection starts.
 - Project creation, manual project assignment, notes, and soft delete.
 - File, folder, and keyword project rules, including the special local `排除规则`.
-- Excel export and Markdown weekly draft export.
+- Excel export from the UI. The Markdown weekly draft exporter remains available as a service/API helper.
 - Collector heartbeat and startup recovery for unclosed records.
 - Single-instance collector protection.
 
@@ -60,7 +60,7 @@ WorkTrace keeps the startup path small by creating only the Overview page at lau
 
 Heavy optional dependencies are loaded only when needed: `openpyxl` is imported during Excel export, and Windows process inspection dependencies are imported only when the real Windows adapter reads the foreground window. Shared duration formatting lives in `worktrace.formatters` so UI modules do not load export modules just to format `hh:mm:ss` values.
 
-The default full-page data refresh interval is 10 seconds. A lightweight 1-second tick updates the current-activity label plus visible Overview, Time Details, and Statistics durations, so active records grow smoothly between full refreshes. Time Details uses value-only Treeview updates on that tick when the table structure is unchanged, and falls back to one full refresh only when sessions, resources, or details are added, removed, or reordered. Heavy refreshes are suspended during window resize/minimize/restore. Resize uses a content-area cover and can catch up before revealing; restore keeps the content tree mounted under a full-window cover, reveals the complete UI first, then merges delayed refresh work after the window is stable. On Windows, an optional native minimize hook pre-paints the restore cover and silently falls back to Tk events if unavailable.
+The default full-page data refresh interval is 10 seconds. A lightweight 1-second tick updates the current-activity label plus visible Overview, Time Details, and Statistics durations, including the current activity before it is persisted to history, so active records grow smoothly between full refreshes. Time Details uses value-only Treeview updates on that tick when the table structure is unchanged, and falls back to one full refresh only when sessions, resources, or details are added, removed, or reordered. Heavy refreshes are suspended during window resize/minimize/restore. Resize uses a content-area cover and can catch up before revealing; restore keeps the content tree mounted under a full-window cover, reveals the complete UI first, then merges delayed refresh work after the window is stable. On Windows, an optional native minimize hook pre-paints the restore cover and silently falls back to Tk events if unavailable.
 
 ## Project Classification
 

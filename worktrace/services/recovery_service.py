@@ -46,6 +46,36 @@ def recover_unclosed_records() -> None:
         session_boundary_service.record_boundary(recovered_boundary_at, "recovered")
         set_setting("current_activity_snapshot", "")
         set_setting("pending_short_seconds", "0")
+    record_restart_boundary_if_needed()
+
+
+def record_restart_boundary_if_needed() -> None:
+    candidate = _latest_known_shutdown_boundary()
+    if not candidate:
+        return
+    if session_boundary_service.has_boundary_between(candidate, candidate):
+        return
+    session_boundary_service.record_boundary(candidate, "restart")
+
+
+def _latest_known_shutdown_boundary() -> str | None:
+    candidates = [
+        get_setting("last_shutdown_at", "") or "",
+        get_setting("last_collector_heartbeat", "") or "",
+    ]
+    parsed: list[tuple[datetime, str]] = []
+    for candidate in candidates:
+        try:
+            parsed.append((datetime.strptime(candidate, TIME_FORMAT), candidate))
+        except ValueError:
+            continue
+    if not parsed:
+        return None
+    now = datetime.strptime(now_str(), TIME_FORMAT)
+    past_candidates = [item for item in parsed if item[0] <= now]
+    if not past_candidates:
+        return None
+    return max(past_candidates, key=lambda item: item[0])[1]
 
 
 def detect_time_jump(last_loop_time: str, now: str, threshold_seconds: int = 300) -> bool:

@@ -42,7 +42,7 @@ class SettingsView(ctk.CTkFrame):
             row=0, column=0, columnspan=3, sticky="w", padx=18, pady=(16, 8)
         )
         fields = [
-            ("export_path", "导出目录", "Excel 和 Markdown 的默认位置"),
+            ("export_path", "导出目录", "Excel 导出的默认位置"),
         ]
         for row_index, (key, label, hint) in enumerate(fields, start=1):
             design.label(form, text=label, variant="strong").grid(

@@ -25,9 +25,9 @@ BORDER = ("#d9e2ef", "#334155")
 TEXT = ("#1f2937", "#f8fafc")
 MUTED_TEXT = ("#64748b", "#94a3b8")
 SUBTLE_TEXT = ("#7c8da5", "#a1adbd")
-ACCENT = ("#2563eb", "#60a5fa")
-ACCENT_HOVER = ("#1d4ed8", "#3b82f6")
-ACCENT_SOFT = ("#dbeafe", "#1e3a8a")
+ACCENT = ("#475569", "#cbd5e1")
+ACCENT_HOVER = ("#334155", "#94a3b8")
+ACCENT_SOFT = ("#e2e8f0", "#334155")
 SUCCESS = ("#0f8b5f", "#34d399")
 SUCCESS_SOFT = ("#dcfce7", "#064e3b")
 WARNING = ("#b45309", "#fbbf24")
@@ -46,7 +46,7 @@ PAD_Y = 16
 
 def apply_app_theme() -> None:
     ctk.set_appearance_mode("System")
-    ctk.set_default_color_theme("blue")
+    ctk.set_default_color_theme("green")
 
 
 def page_frame(master) -> ctk.CTkFrame:
@@ -144,12 +144,12 @@ def segmented_button(master, **kwargs) -> ctk.CTkSegmentedButton:
     kwargs.setdefault("font", FONT_BODY_STRONG)
     kwargs.setdefault("height", 34)
     kwargs.setdefault("corner_radius", RADIUS_SM)
-    kwargs.setdefault("fg_color", NEUTRAL_SOFT)
-    kwargs.setdefault("selected_color", ACCENT)
+    kwargs.setdefault("fg_color", ("#f1f5f9", "#1f2937"))
+    kwargs.setdefault("selected_color", ("#cbd5e1", "#475569"))
     kwargs.setdefault("selected_hover_color", ACCENT_HOVER)
-    kwargs.setdefault("unselected_color", NEUTRAL_SOFT)
+    kwargs.setdefault("unselected_color", ("#f1f5f9", "#1f2937"))
     kwargs.setdefault("unselected_hover_color", ("#cbd5e1", "#475569"))
-    kwargs.setdefault("text_color", "#ffffff")
+    kwargs.setdefault("text_color", TEXT)
     kwargs.setdefault("text_color_disabled", MUTED_TEXT)
     return ctk.CTkSegmentedButton(master, **kwargs)
 

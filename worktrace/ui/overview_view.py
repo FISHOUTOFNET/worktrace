@@ -8,7 +8,7 @@ from typing import Callable, Any
 import customtkinter as ctk
 
 from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
-from ..formatters import format_current_duration, format_duration
+from ..formatters import format_current_duration, format_duration, format_project_label
 from ..services import statistics_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
@@ -135,7 +135,7 @@ class OverviewView(ctk.CTkFrame):
         self._last_data_refresh_monotonic = time.monotonic()
         start, end = self._scope_dates()
         self._last_scope_range = (start, end)
-        summary = statistics_service.get_summary(start, end)
+        summary = statistics_service.get_summary(start, end, include_live=True)
         self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
         self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
         self.kpi_value_labels["uncategorized"].configure(text=format_duration(summary["uncategorized_duration"]))
@@ -184,7 +184,12 @@ class OverviewView(ctk.CTkFrame):
             widgets["session_id"] = session_id
             widgets["target_date"] = str(session.get("report_date") or session.get("start_time") or start)[:10] or start
             widgets["time"].configure(text=_session_time(session, include_date=start != end))
-            widgets["title"].configure(text=str(session.get("project_name") or UNCATEGORIZED_PROJECT))
+            widgets["title"].configure(
+                text=format_project_label(
+                    session.get("project_name") or UNCATEGORIZED_PROJECT,
+                    session.get("project_description"),
+                )
+            )
             widgets["subtitle"].configure(text=str(session.get("status_summary") or "正常活动"))
             widgets["duration"].configure(text=format_duration(session.get("duration_seconds") or 0))
 
@@ -314,7 +319,7 @@ class OverviewView(ctk.CTkFrame):
         if not hasattr(self, "kpi_value_labels") or not hasattr(self, "_recent_rows"):
             return
         start, end = self._scope_dates()
-        summary = statistics_service.get_summary(start, end, ensure_context=False)
+        summary = statistics_service.get_summary(start, end, ensure_context=False, include_live=True)
         self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
         self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
         self.kpi_value_labels["uncategorized"].configure(text=format_duration(summary["uncategorized_duration"]))

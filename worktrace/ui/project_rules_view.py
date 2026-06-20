@@ -5,6 +5,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from ..constants import EXCLUDED_PROJECT
+from ..formatters import format_project_label
 from ..services import folder_rule_service, project_service, resource_service, rule_service
 from . import design
 from .project_rule_dialog import PROJECT_MODE_NEW, RULE_TYPE_LABELS, open_project_rule_dialog
@@ -14,6 +15,8 @@ class ProjectRulesView(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
         self._rules_signature: tuple[tuple, ...] | None = None
+        self._project_widgets: dict[int, dict] = {}
+        self._empty_widget = None
         self._build()
 
     def _build(self) -> None:
@@ -51,25 +54,53 @@ class ProjectRulesView(ctk.CTkFrame):
         lines = ["项目规则"]
         for project in project_service.list_project_bindings():
             state = "已启用" if bool(int(project.get("enabled", 1))) else "已禁用"
-            lines.append(f"{project.get('name')}｜{state}｜{_project_rule_summary(project)}")
+            lines.append(f"{format_project_label(project.get('name'), project.get('description'))}｜{state}｜{_project_rule_summary(project)}")
             for rule in _rules_for_project(project):
                 lines.append(f"- {RULE_TYPE_LABELS[rule['kind']]}｜{rule['target']}｜{_rule_detail_text(rule)}")
         return "\n".join(lines)
 
     def refresh_rules(self) -> None:
+        if not hasattr(self, "_project_widgets"):
+            self._project_widgets = {}
+        if not hasattr(self, "_empty_widget"):
+            self._empty_widget = None
         projects = project_service.list_project_bindings()
         signature = tuple(_project_signature(project) for project in projects)
         if signature == self._rules_signature:
             return
+        scroll_position = self._scroll_position()
         self._rules_signature = signature
-        _clear_children(self.rules_frame)
         if not projects:
-            _empty_row(self.rules_frame, "暂无用户项目。请使用“新增项目”创建第一个项目。")
+            self._clear_project_widgets()
+            if self._empty_widget is None:
+                self._empty_widget = _empty_row(self.rules_frame, "暂无用户项目。请使用“新增项目”创建第一个项目。")
+            self._empty_widget.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
+            self._restore_scroll_position(scroll_position)
             return
+        if self._empty_widget is not None:
+            self._empty_widget.grid_remove()
+        active_ids = {int(project["id"]) for project in projects}
+        for project_id in list(self._project_widgets):
+            if project_id not in active_ids:
+                self._project_widgets[project_id]["widget"].destroy()
+                del self._project_widgets[project_id]
         for row_index, project in enumerate(projects):
-            self._project_group(self.rules_frame, row_index, project)
+            project_id = int(project["id"])
+            project_signature = _project_signature(project)
+            existing = self._project_widgets.get(project_id)
+            if existing is None or existing["signature"] != project_signature:
+                if existing is not None:
+                    existing["widget"].destroy()
+                existing = {
+                    "signature": project_signature,
+                    "widget": self._project_group(self.rules_frame, row_index, project),
+                }
+                self._project_widgets[project_id] = existing
+            else:
+                existing["widget"].grid(row=row_index, column=0, sticky="ew", padx=6, pady=6)
+        self._restore_scroll_position(scroll_position)
 
-    def _project_group(self, parent, row_index: int, project: dict) -> None:
+    def _project_group(self, parent, row_index: int, project: dict):
         project_enabled = bool(int(project.get("enabled", 1)))
         group = design.section(
             parent,
@@ -82,7 +113,7 @@ class ProjectRulesView(ctk.CTkFrame):
         header = ctk.CTkFrame(group, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 8))
         header.grid_columnconfigure(0, weight=1)
-        title = project["name"]
+        title = format_project_label(project["name"], project.get("description"))
         title_row = ctk.CTkFrame(header, fg_color="transparent")
         title_row.grid(row=0, column=0, sticky="w")
         design.label(
@@ -153,9 +184,10 @@ class ProjectRulesView(ctk.CTkFrame):
         rules_frame.grid_columnconfigure(1, weight=1)
         if not rules:
             design.label(rules_frame, text="暂无规则", variant="caption").grid(row=0, column=0, sticky="w", padx=6, pady=8)
-            return
+            return group
         for index, rule in enumerate(rules):
             self._rule_row(rules_frame, index, rule)
+        return group
 
     def _rule_row(self, parent, row_index: int, rule: dict) -> None:
         rule_enabled = bool(rule.get("enabled", True))
@@ -313,6 +345,30 @@ class ProjectRulesView(ctk.CTkFrame):
     def _invalidate(self) -> None:
         self._rules_signature = None
 
+    def _clear_project_widgets(self) -> None:
+        for item in self._project_widgets.values():
+            item["widget"].destroy()
+        self._project_widgets.clear()
+
+    def _scroll_position(self) -> float:
+        try:
+            canvas = getattr(self.scroll, "_parent_canvas")
+            return float(canvas.yview()[0])
+        except Exception:
+            return 0.0
+
+    def _restore_scroll_position(self, position: float) -> None:
+        def restore() -> None:
+            try:
+                getattr(self.scroll, "_parent_canvas").yview_moveto(position)
+            except Exception:
+                pass
+
+        try:
+            self.after_idle(restore)
+        except Exception:
+            restore()
+
 
 def _rules_for_project(project: dict) -> list[dict]:
     project_name = project.get("name") or "未知项目"
@@ -409,10 +465,11 @@ def _project_binding_text(project: dict) -> str:
     return "\n".join(lines)
 
 
-def _empty_row(parent, text: str) -> None:
+def _empty_row(parent, text: str):
     row = design.section(parent, fg_color=design.CARD_SUBTLE_BG)
     row.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
     design.label(row, text=text, variant="caption").pack(anchor="w", padx=14, pady=12)
+    return row
 
 
 def _clear_children(widget) -> None:

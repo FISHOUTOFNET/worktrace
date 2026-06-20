@@ -6,6 +6,42 @@ from worktrace.ui.project_rule_dialog import PROJECT_MODE_NEW
 from worktrace.ui.project_rules_view import ProjectRulesView, _project_binding_text
 
 
+class FakeRuleWidget:
+    def __init__(self, name=""):
+        self.name = name
+        self.destroyed = False
+        self.grid_calls = []
+        self.grid_removed = False
+
+    def grid(self, *args, **kwargs):
+        self.grid_calls.append((args, kwargs))
+        self.grid_removed = False
+
+    def grid_remove(self):
+        self.grid_removed = True
+
+    def destroy(self):
+        self.destroyed = True
+
+
+class FakeCanvas:
+    def __init__(self, position=0.0):
+        self.position = position
+        self.moves = []
+
+    def yview(self):
+        return (self.position, 1.0)
+
+    def yview_moveto(self, position):
+        self.position = position
+        self.moves.append(position)
+
+
+class FakeScroll:
+    def __init__(self, position=0.0):
+        self._parent_canvas = FakeCanvas(position)
+
+
 def test_project_rules_view_combines_file_folder_and_keyword_rules(temp_db):
     project_id = project_service.create_project("Client")
     resource_service.create_or_update_file_default("D:\\Client\\Spec.docx", project_id)
@@ -48,6 +84,45 @@ def test_project_rules_project_rule_button_locks_existing_project(monkeypatch):
     assert calls[0][1]["lock_project"] is True
 
 
+def test_project_rules_refresh_reuses_unchanged_rows_and_restores_scroll(monkeypatch):
+    first_projects = [
+        _binding(1, "A", "old", enabled=1),
+        _binding(2, "B", "", enabled=1),
+    ]
+    second_projects = [
+        _binding(1, "A", "old", enabled=0),
+        _binding(2, "B", "", enabled=1),
+    ]
+    calls = []
+    view = object.__new__(ProjectRulesView)
+    view._rules_signature = None
+    view._project_widgets = {}
+    view._empty_widget = None
+    view.rules_frame = FakeRuleWidget("rules")
+    view.scroll = FakeScroll(position=0.42)
+    view.after_idle = lambda callback: callback()
+
+    monkeypatch.setattr(project_service, "list_project_bindings", lambda: first_projects)
+    monkeypatch.setattr(
+        ProjectRulesView,
+        "_project_group",
+        lambda _self, _parent, _row_index, project: calls.append(project["id"]) or FakeRuleWidget(project["name"]),
+    )
+
+    ProjectRulesView.refresh_rules(view)
+    unchanged = view._project_widgets[2]["widget"]
+    changed = view._project_widgets[1]["widget"]
+
+    monkeypatch.setattr(project_service, "list_project_bindings", lambda: second_projects)
+    ProjectRulesView.refresh_rules(view)
+
+    assert calls == [1, 2, 1]
+    assert changed.destroyed is True
+    assert view._project_widgets[2]["widget"] is unchanged
+    assert unchanged.destroyed is False
+    assert view.scroll._parent_canvas.moves[-1] == 0.42
+
+
 def test_project_binding_text_includes_all_rule_types():
     text = _project_binding_text(
         {
@@ -60,6 +135,28 @@ def test_project_binding_text_includes_all_rule_types():
     assert "文件：D:\\Client\\Spec.docx" in text
     assert "文件夹：D:\\Client" in text
     assert "关键词：Spec" in text
+
+
+def test_project_rules_copy_text_includes_project_description(temp_db):
+    project_service.create_project("Client", "billable")
+    view = object.__new__(ProjectRulesView)
+
+    text = ProjectRulesView.copy_page_text(view)
+
+    assert "Client (billable)" in text
+
+
+def _binding(project_id, name, description="", enabled=1):
+    return {
+        "id": project_id,
+        "name": name,
+        "description": description,
+        "enabled": enabled,
+        "created_by": "user",
+        "folder_rules": [],
+        "file_defaults": [],
+        "keyword_rules": [],
+    }
 
 
 def test_delete_project_deletes_project_and_clears_associated_rules(temp_db):

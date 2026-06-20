@@ -109,9 +109,9 @@ class WorkTraceApp(ctk.CTk):
             text="开始记录",
             height=44,
             command=self.toggle_pause,
-            fg_color=design.SUCCESS,
-            hover_color=("#0f766e", "#10b981"),
-            text_color="#ffffff",
+            fg_color=design.NEUTRAL_SOFT,
+            hover_color=("#cbd5e1", "#475569"),
+            text_color=design.TEXT,
         )
         self.sidebar_record_button.pack(fill="x", padx=12, pady=(0, 12))
         self.sidebar_pause_button = self.sidebar_record_button
@@ -677,9 +677,9 @@ class WorkTraceApp(ctk.CTk):
             self.sidebar_status_label.configure(text_color=design.DANGER if paused else design.MUTED_TEXT)
             self.sidebar_record_button.configure(
                 text="开始记录",
-                fg_color=design.SUCCESS,
-                hover_color=("#0f766e", "#10b981"),
-                text_color="#ffffff",
+                fg_color=design.NEUTRAL_SOFT,
+                hover_color=("#cbd5e1", "#475569"),
+                text_color=design.TEXT,
             )
             self.sidebar_status_hint.configure(text="已暂停" if paused else "数据仅保存在本机")
 

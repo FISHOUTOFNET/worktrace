@@ -10,3 +10,11 @@ def format_duration(seconds: int | None) -> str:
 
 def format_current_duration(seconds: int | None) -> str:
     return format_duration(seconds)
+
+
+def format_project_label(name: str | None, description: str | None = "") -> str:
+    cleaned_name = str(name or "").strip() or "Unknown"
+    cleaned_description = " ".join(str(description or "").split())
+    if not cleaned_description:
+        return cleaned_name
+    return f"{cleaned_name} ({cleaned_description})"
