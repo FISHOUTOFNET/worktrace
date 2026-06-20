@@ -4,8 +4,6 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from .. import __version__
-from ..config import resolve_paths
 from ..services import export_service
 from ..services.settings_service import get_setting, set_setting
 from . import design
@@ -25,7 +23,7 @@ class SettingsView(ctk.CTkFrame):
         header.grid(row=0, column=0, sticky="ew", padx=24, pady=(22, 12))
         header.grid_columnconfigure(0, weight=1)
         design.label(header, text="设置与隐私", variant="title").grid(row=0, column=0, sticky="w")
-        design.label(header, text="查看本地数据位置，调整导出目录或清空本地记录。", variant="caption").grid(
+        design.label(header, text="调整导出目录、查看隐私说明或清空本地记录。", variant="caption").grid(
             row=1, column=0, sticky="w", pady=(4, 0)
         )
         design.button(header, text="查看隐私说明", variant="subtle", command=self.show_notice).grid(
@@ -61,17 +59,8 @@ class SettingsView(ctk.CTkFrame):
             row=len(fields) + 1, column=1, sticky="w", pady=(10, 18)
         )
 
-        about = design.card(self.scroll)
-        about.grid(row=1, column=0, sticky="ew", pady=(0, 14))
-        about.grid_columnconfigure(0, weight=1)
-        design.label(about, text="关于本地数据", variant="section").grid(
-            row=0, column=0, sticky="w", padx=18, pady=(16, 8)
-        )
-        self.info = design.label(about, text="", variant="caption", justify="left", anchor="w")
-        self.info.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 16))
-
         danger = design.card(self.scroll)
-        danger.grid(row=2, column=0, sticky="ew")
+        danger.grid(row=1, column=0, sticky="ew")
         danger.grid_columnconfigure(0, weight=1)
         design.label(danger, text="本地数据操作", variant="section").grid(
             row=0, column=0, sticky="w", padx=18, pady=(16, 4)
@@ -88,15 +77,7 @@ class SettingsView(ctk.CTkFrame):
         design.button(actions, text="清空所有本地记录", variant="danger", command=self.clear_all).pack(side="left")
 
     def refresh(self) -> None:
-        paths = resolve_paths()
-        self.info.configure(
-            text=(
-                f"数据路径：{paths.db_path}\n"
-                f"日志路径：{paths.log_path}\n"
-                f"采集器心跳：{get_setting('last_collector_heartbeat', '')}\n"
-                f"版本：{__version__}"
-            )
-        )
+        return
 
     def save(self) -> None:
         for key, entry in self.entries.items():

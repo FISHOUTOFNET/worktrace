@@ -1,6 +1,6 @@
 from worktrace.constants import UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection
-from worktrace.services import activity_service, project_service, timeline_service
+from worktrace.services import activity_service, project_service, settings_service, timeline_service
 
 
 def _activity(app, process, title, start, project_id=None, status="normal"):
@@ -9,6 +9,19 @@ def _activity(app, process, title, start, project_id=None, status="normal"):
         process,
         title,
         start_time=f"2026-06-18 {start}",
+        project_id=project_id,
+        status=status,
+    )
+    activity_service.finalize_created_activity(aid)
+    return aid
+
+
+def _activity_at(app, process, title, start_time, project_id=None, status="normal"):
+    aid = activity_service.create_activity(
+        app,
+        process,
+        title,
+        start_time=start_time,
         project_id=project_id,
         status=status,
     )
@@ -32,6 +45,72 @@ def test_sessions_merge_same_project_and_split_a_b_a(temp_db):
     assert [session["start_time"][11:16] for session in sessions] == ["10:00", "09:30", "09:00"]
     assert sessions[0]["event_count"] == 2
     assert [row["start_time"][11:16] for row in latest_details] == ["10:05", "10:00"]
+
+
+def test_same_project_after_midnight_reports_on_previous_day_until_next_project(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 23:50:00", project_a)
+    _activity_at("Word", "winword.exe", "A2.docx", "2026-06-19 00:10:00", project_a)
+    _activity_at("Word", "winword.exe", "B1.docx", "2026-06-19 00:30:00", project_b)
+    activity_service.close_current_open_record("2026-06-19 00:45:00")
+
+    previous_day = timeline_service.get_project_sessions_by_date("2026-06-18")
+    next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
+
+    assert [session["project_name"] for session in previous_day] == ["A"]
+    assert previous_day[0]["duration_seconds"] == 40 * 60
+    assert previous_day[0]["report_date"] == "2026-06-18"
+    assert [session["project_name"] for session in next_day] == ["B"]
+    assert next_day[0]["duration_seconds"] == 15 * 60
+
+
+def test_same_project_next_day_does_not_carry_when_previous_activity_ended_before_midnight(temp_db):
+    project_a = project_service.create_project("A")
+    first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 23:40:00", project_a)
+    activity_service.close_activity(first, "2026-06-18 23:50:00")
+    _activity_at("Word", "winword.exe", "A2.docx", "2026-06-19 08:00:00", project_a)
+    activity_service.close_current_open_record("2026-06-19 08:30:00")
+
+    previous_day = timeline_service.get_project_sessions_by_date("2026-06-18")
+    next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
+
+    assert previous_day[0]["duration_seconds"] == 10 * 60
+    assert next_day[0]["duration_seconds"] == 30 * 60
+    assert next_day[0]["report_date"] == "2026-06-19"
+
+
+def test_idle_and_uncategorized_split_at_midnight(temp_db):
+    _activity_at("空闲", "idle", "用户空闲", "2026-06-18 23:50:00", status="idle")
+    activity_service.close_current_open_record("2026-06-19 00:10:00")
+    _activity_at("Edge", "msedge.exe", "Search", "2026-06-19 00:10:00")
+    activity_service.close_current_open_record("2026-06-19 00:30:00")
+
+    previous_day = timeline_service.get_project_sessions_by_date("2026-06-18")
+    next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
+
+    assert previous_day[0]["status"] == "idle"
+    assert previous_day[0]["duration_seconds"] == 10 * 60
+    assert [session["duration_seconds"] for session in next_day] == [20 * 60, 10 * 60]
+    assert [session["project_name"] for session in next_day] == [UNCATEGORIZED_PROJECT, UNCATEGORIZED_PROJECT]
+
+
+def test_open_activity_duration_uses_current_snapshot_projection(temp_db):
+    project = project_service.create_project("A")
+    activity_id = _activity_at("Word", "winword.exe", "A.docx", "2026-06-18 09:00:00", project)
+    settings_service.set_setting(
+        "current_activity_snapshot",
+        (
+            '{"status":"normal","app_name":"Word","process_name":"winword.exe",'
+            '"window_title":"A.docx","start_time":"2026-06-18 09:00:00",'
+            f'"elapsed_seconds":90,"extra_seconds":5,"persisted_activity_id":{activity_id},'
+            '"is_persisted":true}'
+        ),
+    )
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert sessions[0]["duration_seconds"] == 95
 
 
 def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):

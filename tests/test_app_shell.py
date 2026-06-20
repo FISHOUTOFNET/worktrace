@@ -113,6 +113,21 @@ def test_shell_current_activity_tick_updates_only_active_page():
     assert scheduled[0][1].__func__ is WorkTraceApp._refresh_current_activity_status
 
 
+def test_shell_current_activity_tick_skips_during_resize():
+    app = object.__new__(WorkTraceApp)
+    overview = FakeLivePage()
+    app.pages = {"overview": overview}
+    app.active_page = "overview"
+    app._is_resizing = True
+    scheduled = []
+    app.after = lambda delay, callback: scheduled.append((delay, callback))
+
+    WorkTraceApp._refresh_current_activity_status(app)
+
+    assert overview.live_refreshed == 0
+    assert scheduled[0][0] == 1000
+
+
 def test_shell_toggle_pause_updates_setting(temp_db):
     app = _app_stub()
     app.timeline = FakePage()

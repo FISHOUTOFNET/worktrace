@@ -62,6 +62,23 @@ def test_short_activity_merges_into_previous_formal_normal_activity(temp_db):
     assert rows[0]["duration_seconds"] == 320
 
 
+def test_same_activity_resumes_after_absorbed_short_activity_without_new_record(temp_db):
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:05:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:05:20")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:07:00")
+    machine.transition_to("stopped", at_time="2026-06-18 09:07:00")
+
+    rows = _rows()
+    assert len(rows) == 1
+    assert rows[0]["window_title"] == "A"
+    assert rows[0]["start_time"] == "2026-06-18 09:00:00"
+    assert rows[0]["end_time"] == "2026-06-18 09:07:00"
+    assert rows[0]["duration_seconds"] == 7 * 60
+
+
 def test_multiple_short_activities_merge_into_previous_formal_activity(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")

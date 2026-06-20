@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import date
 import threading
+import time
 from typing import Any, Callable
 
 import customtkinter as ctk
 
+from ..services import timeline_service
 from ..services.settings_service import get_bool_setting, get_int_setting, get_setting, set_setting
 from . import design
 from .first_run_dialog import FirstRunDialog
@@ -26,12 +27,16 @@ class WorkTraceApp(ctk.CTk):
         self._resize_after_id: str | None = None
         self._last_configure_size: tuple[int, int] | None = None
         self._refresh_after_resize = False
+        self._resume_refresh_after_id: str | None = None
+        self._ui_suspend_until = 0.0
 
         self.title("有迹 WorkTrace")
         self.geometry("1240x780")
         self.minsize(1024, 720)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.bind("<Configure>", self._on_configure, add="+")
+        self.bind("<Unmap>", self._on_unmap, add="+")
+        self.bind("<Map>", self._on_map, add="+")
         design.apply_app_theme()
         self.configure(fg_color=design.WINDOW_BG)
 
@@ -212,7 +217,7 @@ class WorkTraceApp(ctk.CTk):
         session_id: str | None = None,
         target_date: str | None = None,
     ) -> None:
-        target = target_date or date.today().isoformat()
+        target = target_date or timeline_service.get_default_report_date()
         timeline = getattr(self, "timeline", None) or self._ensure_page("timeline")
         if timeline is None:
             return
@@ -271,13 +276,18 @@ class WorkTraceApp(ctk.CTk):
             run()
 
     def _refresh_current_activity_status(self) -> None:
-        page = self.pages.get(self.active_page)
-        if page is not None and hasattr(page, "refresh_current_activity"):
-            page.refresh_current_activity()
+        if self._can_run_live_refresh():
+            page = self.pages.get(self.active_page)
+            if page is not None and hasattr(page, "refresh_current_activity"):
+                page.refresh_current_activity()
         self.after(1000, self._refresh_current_activity_status)
 
     def _on_configure(self, event=None) -> None:
         if event is not None and getattr(event, "widget", self) is not self:
+            return
+        if not self._is_window_visible():
+            self._is_resizing = False
+            self._refresh_after_resize = True
             return
         size = (self.winfo_width(), self.winfo_height())
         if self._last_configure_size == size:
@@ -296,10 +306,12 @@ class WorkTraceApp(ctk.CTk):
         self._resize_after_id = None
         if self._refresh_after_resize:
             self._refresh_after_resize = False
-            self._schedule_page_refresh(self.active_page, delay_ms=0)
+            self._schedule_page_refresh(self.active_page, delay_ms=450)
 
     def _can_run_heavy_refresh(self) -> bool:
         if self.__dict__.get("_is_resizing", False):
+            return False
+        if time.monotonic() < self.__dict__.get("_ui_suspend_until", 0.0):
             return False
         if "tk" not in self.__dict__:
             return True
@@ -307,6 +319,44 @@ class WorkTraceApp(ctk.CTk):
             return self.state() != "iconic"
         except Exception:
             return True
+
+    def _can_run_live_refresh(self) -> bool:
+        return not self.__dict__.get("_is_resizing", False) and self._can_run_heavy_refresh()
+
+    def _is_window_visible(self) -> bool:
+        if "tk" not in self.__dict__:
+            return True
+        try:
+            return self.state() != "iconic"
+        except Exception:
+            return True
+
+    def _on_unmap(self, event=None) -> None:
+        if event is not None and getattr(event, "widget", self) is not self:
+            return
+        self._ui_suspend_until = time.monotonic() + 0.8
+        self._is_resizing = False
+        self._refresh_after_resize = True
+
+    def _on_map(self, event=None) -> None:
+        if event is not None and getattr(event, "widget", self) is not self:
+            return
+        self._ui_suspend_until = time.monotonic() + 0.8
+        self._is_resizing = False
+        self._refresh_after_resize = True
+        if self._resume_refresh_after_id is not None:
+            try:
+                self.after_cancel(self._resume_refresh_after_id)
+            except Exception:
+                pass
+        self._resume_refresh_after_id = self.after(900, self._finish_resume)
+
+    def _finish_resume(self) -> None:
+        self._resume_refresh_after_id = None
+        self._ui_suspend_until = 0.0
+        if self._refresh_after_resize:
+            self._refresh_after_resize = False
+            self._schedule_page_refresh(self.active_page, delay_ms=0)
 
     def _sync_nav_buttons(self) -> None:
         for key, button in self.nav_buttons.items():

@@ -15,6 +15,7 @@ from ..constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
+from ..path_utils import normalize_path_key
 from ..resource_patterns import infer_resource_identity
 from ..services import activity_service
 from ..services.settings_service import get_setting, set_setting
@@ -39,6 +40,7 @@ class AutoActivityRecorder:
     current_last_seen_time: str | None = None
     persisted_activity_id: int | None = None
     current_extra_seconds: int = 0
+    resume_after_short_activity: dict | None = None
 
     def observe(
         self,
@@ -59,6 +61,8 @@ class AutoActivityRecorder:
             return
 
         self.finish_current(at_time)
+        if self._resume_if_absorbed_activity_matches(payload, signature, at_time):
+            return
         self._start(payload, signature, at_time)
 
     def finish_current(self, at_time: str, merge_transient: bool = True) -> None:
@@ -94,13 +98,14 @@ class AutoActivityRecorder:
     def clear_snapshot(self) -> None:
         set_setting("current_activity_snapshot", "")
 
-    def _start(self, payload: dict, signature: tuple[str, str, str, str], at_time: str) -> None:
+    def _start(self, payload: dict, signature: tuple[str, ...], at_time: str) -> None:
         self.current_payload = dict(payload)
         self.current_signature = signature
         self.current_start_time = at_time
         self.current_last_seen_time = at_time
         self.persisted_activity_id = None
         self.current_extra_seconds = 0
+        self.resume_after_short_activity = None
         self._ensure_persisted_if_ready(at_time)
         self._update_persisted_progress(at_time)
         self._write_snapshot(at_time)
@@ -145,8 +150,36 @@ class AutoActivityRecorder:
         target = activity_service.get_latest_closed_auto_normal_activity()
         if target:
             activity_service.increment_activity_duration(int(target["id"]), seconds)
+            target["duration_seconds"] = int(target.get("duration_seconds") or 0) + seconds
+            self.resume_after_short_activity = target
             return
+        self.resume_after_short_activity = None
         self._set_pending_short_seconds(self._get_pending_short_seconds() + seconds)
+
+    def _resume_if_absorbed_activity_matches(
+        self,
+        payload: dict,
+        signature: tuple[str, ...],
+        at_time: str,
+    ) -> bool:
+        target = self.resume_after_short_activity
+        self.resume_after_short_activity = None
+        if not target or _activity_signature(target) != signature:
+            return False
+        start_time = str(target.get("start_time") or "")
+        if not start_time:
+            return False
+        activity_service.reopen_activity(int(target["id"]))
+        self.current_payload = {**dict(payload)}
+        self.current_signature = signature
+        self.current_start_time = start_time
+        self.current_last_seen_time = at_time
+        self.persisted_activity_id = int(target["id"])
+        stored_duration = int(target.get("duration_seconds") or 0)
+        self.current_extra_seconds = max(0, stored_duration - _seconds_between(start_time, at_time))
+        self._update_persisted_progress(at_time)
+        self._write_snapshot(at_time)
+        return True
 
     def _get_pending_short_seconds(self) -> int:
         raw = get_setting("pending_short_seconds", "0") or "0"
@@ -179,10 +212,21 @@ class AutoActivityRecorder:
             "status": self.current_payload.get("status") or STATUS_NORMAL,
             "start_time": self.current_start_time,
             "elapsed_seconds": elapsed,
+            "extra_seconds": self.current_extra_seconds,
             "persisted_activity_id": self.persisted_activity_id,
             "is_persisted": self.persisted_activity_id is not None,
         }
         set_setting("current_activity_snapshot", json.dumps(payload, ensure_ascii=False))
+
+
+def _activity_signature(activity: dict) -> tuple[str, str, str, str, str]:
+    return (
+        str(activity.get("status") or STATUS_NORMAL),
+        str(activity.get("app_name") or ""),
+        str(activity.get("process_name") or ""),
+        str(activity.get("window_title") or ""),
+        normalize_path_key(str(activity.get("file_path_hint") or "")),
+    )
 
 
 def _snapshot_project_name(identity) -> str:

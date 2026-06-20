@@ -2,6 +2,7 @@ import pytest
 
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from worktrace.services import activity_service, folder_rule_service, project_service, resource_service, rule_service
+from worktrace.ui.project_rule_dialog import PROJECT_MODE_NEW
 from worktrace.ui.project_rules_view import ProjectRulesView, _project_binding_text
 
 
@@ -15,6 +16,36 @@ def test_project_rules_view_combines_file_folder_and_keyword_rules(temp_db):
     rules = ProjectRulesView._combined_rules(view)
 
     assert {rule["kind"] for rule in rules} == {"file", "folder", "keyword"}
+
+
+def test_project_rules_create_project_opens_project_only_dialog(monkeypatch):
+    calls = []
+    view = object.__new__(ProjectRulesView)
+
+    monkeypatch.setattr(
+        "worktrace.ui.project_rules_view.open_project_rule_dialog",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    ProjectRulesView.create_project(view)
+
+    assert calls[0][1]["initial_project_mode"] == PROJECT_MODE_NEW
+    assert calls[0][1]["initial_create_rule"] is False
+
+
+def test_project_rules_project_rule_button_locks_existing_project(monkeypatch):
+    calls = []
+    view = object.__new__(ProjectRulesView)
+
+    monkeypatch.setattr(
+        "worktrace.ui.project_rules_view.open_project_rule_dialog",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    ProjectRulesView.open_new_rule_dialog(view, initial_project_name="Client")
+
+    assert calls[0][1]["initial_project_name"] == "Client"
+    assert calls[0][1]["lock_project"] is True
 
 
 def test_project_binding_text_includes_all_rule_types():

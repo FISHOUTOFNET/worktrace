@@ -37,6 +37,7 @@ class OverviewView(ctk.CTkFrame):
         self._current_snapshot: dict | None = None
         self._current_signature: tuple | None = None
         self._last_data_refresh_monotonic = 0.0
+        self._last_scope_range: tuple[str, str] | None = None
         self._build()
 
     def _build(self) -> None:
@@ -146,6 +147,7 @@ class OverviewView(ctk.CTkFrame):
     def refresh(self) -> None:
         self._last_data_refresh_monotonic = time.monotonic()
         start, end = self._scope_dates()
+        self._last_scope_range = (start, end)
         summary = statistics_service.get_summary(start, end)
         self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
         self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
@@ -169,14 +171,14 @@ class OverviewView(ctk.CTkFrame):
             self.export_button.configure(text="导出今日")
 
     def _scope_dates(self) -> tuple[str, str]:
-        today = date.today()
+        today = date.fromisoformat(timeline_service.get_default_report_date())
         if self.scope_var.get() == WEEK_SCOPE:
             start = today - timedelta(days=today.weekday())
             return start.isoformat(), today.isoformat()
         return today.isoformat(), today.isoformat()
 
-    def _refresh_recent_sessions(self, start: str, end: str) -> None:
-        sessions = self._sessions_for_range(start, end)[:8]
+    def _refresh_recent_sessions(self, start: str, end: str, ensure_context: bool = True) -> None:
+        sessions = self._sessions_for_range(start, end, ensure_context=ensure_context)[:8]
         active_ids = {str(session.get("session_id") or "") for session in sessions}
         for session_id in list(self._recent_rows):
             if session_id not in active_ids:
@@ -195,19 +197,25 @@ class OverviewView(ctk.CTkFrame):
                 self._recent_rows[session_id] = widgets
             widgets["row"].grid(row=row_index, column=0, sticky="ew", padx=6, pady=3)
             widgets["session_id"] = session_id
-            widgets["target_date"] = str(session.get("start_time") or start)[:10] or start
+            widgets["target_date"] = str(session.get("report_date") or session.get("start_time") or start)[:10] or start
             widgets["time"].configure(text=_session_time(session, include_date=start != end))
             widgets["title"].configure(text=str(session.get("project_name") or UNCATEGORIZED_PROJECT))
             widgets["subtitle"].configure(text=str(session.get("status_summary") or "正常活动"))
             widgets["duration"].configure(text=format_duration(session.get("duration_seconds") or 0))
 
-    def _sessions_for_range(self, start: str, end: str) -> list[dict]:
+    def _sessions_for_range(self, start: str, end: str, ensure_context: bool = True) -> list[dict]:
         start_date = date.fromisoformat(start)
         end_date = date.fromisoformat(end)
         sessions: list[dict] = []
         current = start_date
         while current <= end_date:
-            sessions.extend(timeline_service.get_project_sessions_by_date(current.isoformat(), include_hidden=False))
+            sessions.extend(
+                timeline_service.get_project_sessions_by_date(
+                    current.isoformat(),
+                    include_hidden=False,
+                    ensure_context=ensure_context,
+                )
+            )
             current += timedelta(days=1)
         return sorted(sessions, key=lambda session: str(session.get("start_time") or ""), reverse=True)
 
@@ -229,12 +237,12 @@ class OverviewView(ctk.CTkFrame):
             "subtitle": subtitle_label,
             "duration": duration_label,
             "session_id": session_id,
-            "target_date": date.today().isoformat(),
+            "target_date": timeline_service.get_default_report_date(),
         }
         command = lambda item=widgets: self._open_timeline(
             False,
             session_id=str(item.get("session_id") or ""),
-            target_date=str(item.get("target_date") or date.today().isoformat()),
+            target_date=str(item.get("target_date") or timeline_service.get_default_report_date()),
         )
         for widget in (row, time_label, title_label, subtitle_label, duration_label):
             self._bind_click(widget, command)
@@ -264,7 +272,7 @@ class OverviewView(ctk.CTkFrame):
             self.open_timeline_callback(
                 only_uncategorized=only_uncategorized,
                 session_id=session_id,
-                target_date=target_date or date.today().isoformat(),
+                target_date=target_date or timeline_service.get_default_report_date(),
             )
 
     def _open_statistics(self) -> None:
@@ -280,9 +288,24 @@ class OverviewView(ctk.CTkFrame):
         if time.monotonic() - self._last_data_refresh_monotonic >= 300:
             self.refresh()
             return
+        last_scope_range = getattr(self, "_last_scope_range", None)
+        if last_scope_range is not None and self._scope_dates() != last_scope_range:
+            self.refresh()
+            return
         if snapshot is not None:
             self._current_snapshot = snapshot
         self.current_activity_label.configure(text=current_activity_text_from_snapshot(self._current_snapshot))
+        self._refresh_live_duration_values()
+
+    def _refresh_live_duration_values(self) -> None:
+        if not hasattr(self, "kpi_value_labels") or not hasattr(self, "_recent_rows"):
+            return
+        start, end = self._scope_dates()
+        summary = statistics_service.get_summary(start, end, ensure_context=False)
+        self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
+        self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
+        self.kpi_value_labels["uncategorized"].configure(text=format_duration(summary["uncategorized_duration"]))
+        self._refresh_recent_sessions(start, end, ensure_context=False)
 
     def _sync_current_activity_from_store(self) -> None:
         self._current_snapshot = _read_current_activity_snapshot()
@@ -302,7 +325,7 @@ class OverviewView(ctk.CTkFrame):
             messagebox.showerror("导出失败", str(exc))
 
     def export_weekly_markdown(self) -> None:
-        today = date.today()
+        today = date.fromisoformat(timeline_service.get_default_report_date())
         start = today - timedelta(days=today.weekday())
         export_dir = Path(get_setting("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
         path = export_dir / f"worktrace_weekly_{start.isoformat()}_{today.isoformat()}.md"
@@ -362,15 +385,26 @@ def current_activity_text_from_snapshot(snapshot: dict | None) -> str:
 
 
 def _current_elapsed_seconds(snapshot: dict) -> int:
+    fallback = 0
+    try:
+        fallback = max(0, int(snapshot.get("elapsed_seconds") or 0))
+    except (TypeError, ValueError):
+        fallback = 0
     start_time = str(snapshot.get("start_time") or "").strip()
     if start_time:
         try:
             start = datetime.strptime(start_time, TIME_FORMAT)
-            return max(0, int((datetime.now() - start).total_seconds()))
+            seconds = int((datetime.now() - start).total_seconds())
+            if 0 <= seconds <= 36 * 60 * 60:
+                return seconds + _snapshot_extra_seconds(snapshot)
         except ValueError:
             pass
+    return fallback + _snapshot_extra_seconds(snapshot)
+
+
+def _snapshot_extra_seconds(snapshot: dict) -> int:
     try:
-        return max(0, int(snapshot.get("elapsed_seconds") or 0))
+        return max(0, int(snapshot.get("extra_seconds") or 0))
     except (TypeError, ValueError):
         return 0
 

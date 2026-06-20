@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import date as date_type, datetime, time as datetime_time, timedelta
 
 from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from ..db import dict_rows, get_connection, now_str
@@ -9,40 +10,14 @@ from . import folder_rule_service
 from .activity_service import update_activities_project
 from .context_service import recompute_context_assignments_for_date
 from .project_service import get_or_create_uncategorized_project
-from .settings_service import get_int_setting
+from .settings_service import get_int_setting, get_setting
 
 SHORT_CONTEXT_MERGE_SECONDS = 5 * 60
 
 
 def get_project_sessions_by_date(date: str, include_hidden: bool = True, ensure_context: bool = True) -> list[dict]:
-    if ensure_context:
-        recompute_context_assignments_for_date(date)
-    start = f"{date} 00:00:00"
-    end = f"{date} 23:59:59"
     uncategorized_id = get_or_create_uncategorized_project()
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                a.*,
-                r.display_name AS resource_display_name,
-                r.resource_role,
-                r.resource_type,
-                apa.suggested_project_name,
-                COALESCE(apa.project_id, a.project_id) AS effective_project_id,
-                p.name AS effective_project_name
-            FROM activity_log a
-            LEFT JOIN resource r ON r.id = a.resource_id
-            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
-            WHERE a.is_deleted = 0
-              AND a.start_time BETWEEN ? AND ?
-              AND (? = 1 OR a.is_hidden = 0)
-            ORDER BY a.start_time ASC, a.id ASC
-            """,
-            (start, end, int(include_hidden)),
-        ).fetchall()
-    rows = _with_reporting_projects(_with_display_projects(dict_rows(rows), uncategorized_id))
+    rows = get_report_activity_rows(date, date, include_hidden=include_hidden, ensure_context=ensure_context)
     sessions: list[dict] = []
     current: list[dict] = []
     for row in rows:
@@ -59,10 +34,42 @@ def get_project_sessions_by_date(date: str, include_hidden: bool = True, ensure_
     return sorted(sessions, key=_session_sort_key, reverse=True)
 
 
-def get_session_resource_summary(activity_ids: list[int]) -> list[dict]:
+def get_report_activity_rows(
+    start_date: str,
+    end_date: str,
+    include_hidden: bool = True,
+    ensure_context: bool = True,
+) -> list[dict]:
+    if ensure_context:
+        _ensure_context_for_report_range(start_date, end_date)
+    uncategorized_id = get_or_create_uncategorized_project()
+    rows = _load_activity_rows_for_report_range(start_date, end_date, include_hidden)
+    rows = _with_reporting_projects(_with_display_projects(rows, uncategorized_id))
+    return [
+        row
+        for row in _with_report_dates(rows)
+        if start_date <= str(row.get("report_date") or "") <= end_date
+    ]
+
+
+def get_default_report_date(today: date_type | None = None) -> str:
+    target_today = today or date_type.today()
+    snapshot = _read_current_activity_snapshot()
+    if snapshot:
+        report_date = _snapshot_report_date(snapshot, target_today)
+        if report_date:
+            return report_date
+    return target_today.isoformat()
+
+
+def get_session_resource_summary(
+    activity_ids: list[int],
+    report_date: str | None = None,
+    ensure_context: bool = True,
+) -> list[dict]:
     if not activity_ids:
         return []
-    rows = _load_session_rows(activity_ids)
+    rows = _load_session_rows(activity_ids, report_date=report_date, ensure_context=ensure_context)
     groups: dict[int, dict] = {}
     for row in rows:
         resource_id = int(row["resource_id"] or 0)
@@ -97,8 +104,12 @@ def get_session_resource_summary(activity_ids: list[int]) -> list[dict]:
     )
 
 
-def get_session_activity_details(activity_ids: list[int]) -> list[dict]:
-    rows = _load_session_rows(activity_ids, newest_first=True)
+def get_session_activity_details(
+    activity_ids: list[int],
+    report_date: str | None = None,
+    ensure_context: bool = True,
+) -> list[dict]:
+    rows = _load_session_rows(activity_ids, newest_first=True, report_date=report_date, ensure_context=ensure_context)
     details = []
     for row in rows:
         item = dict(row)
@@ -243,7 +254,56 @@ def update_resource_project_for_session(
             )
 
 
-def _load_session_rows(activity_ids: list[int], newest_first: bool = False) -> list[dict]:
+def _load_activity_rows_for_report_range(start_date: str, end_date: str, include_hidden: bool) -> list[dict]:
+    load_start_day = date_type.fromisoformat(start_date) - timedelta(days=1)
+    load_start = f"{load_start_day.isoformat()} 00:00:00"
+    load_end_day = date_type.fromisoformat(end_date) + timedelta(days=1)
+    load_end = f"{load_end_day.isoformat()} 00:00:00"
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                a.*,
+                r.display_name AS resource_display_name,
+                r.resource_role,
+                r.resource_type,
+                apa.suggested_project_name,
+                COALESCE(apa.project_id, a.project_id) AS effective_project_id,
+                p.name AS effective_project_name
+            FROM activity_log a
+            LEFT JOIN resource r ON r.id = a.resource_id
+            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
+            WHERE a.is_deleted = 0
+              AND (a.start_time >= ? OR a.end_time IS NULL OR a.end_time >= ?)
+              AND (a.end_time IS NULL OR a.start_time <= ?)
+              AND (? = 1 OR a.is_hidden = 0)
+            ORDER BY a.start_time ASC, a.id ASC
+            """,
+            (load_start, load_start, load_end, int(include_hidden)),
+        ).fetchall()
+    return dict_rows(rows)
+
+
+def _load_session_rows(
+    activity_ids: list[int],
+    newest_first: bool = False,
+    report_date: str | None = None,
+    ensure_context: bool = True,
+) -> list[dict]:
+    if report_date:
+        activity_set = {int(activity_id) for activity_id in activity_ids}
+        rows = [
+            row
+            for row in get_report_activity_rows(
+                report_date,
+                report_date,
+                include_hidden=True,
+                ensure_context=ensure_context,
+            )
+            if int(row["id"]) in activity_set
+        ]
+        return sorted(rows, key=lambda row: (row.get("start_time") or "", int(row["id"])), reverse=newest_first)
     placeholders = ",".join("?" for _ in activity_ids)
     order_direction = "DESC" if newest_first else "ASC"
     with get_connection() as conn:
@@ -292,6 +352,7 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "project_name": project_name,
         "start_time": first.get("start_time"),
         "end_time": last.get("end_time"),
+        "report_date": first.get("report_date"),
         "duration_seconds": duration,
         "activity_ids": activity_ids,
         "event_count": len(rows),
@@ -323,6 +384,84 @@ def _with_reporting_projects(rows: list[dict]) -> list[dict]:
         for interrupt_index in merge:
             _attach_merged_report_project(rows[interrupt_index], anchor)
     return rows
+
+
+def _with_report_dates(rows: list[dict]) -> list[dict]:
+    report_rows: list[dict] = []
+    carry_project_key: str | None = None
+    carry_report_date: str | None = None
+    carry_active = False
+    for row in rows:
+        if _is_project_day_carry_row(row):
+            start_day = _date_part(row.get("start_time"))
+            key = str(row.get("report_project_key") or "")
+            same_active_project = carry_active and carry_project_key == key and carry_report_date
+            report_date = carry_report_date if same_active_project else start_day
+            carry_project_key = str(row.get("report_project_key") or "")
+            carry_report_date = report_date
+            carry_active = bool(same_active_project) or _row_crosses_midnight(row)
+            item = dict(row)
+            item["report_date"] = report_date
+            item["report_duration_seconds"] = _display_duration(row)
+            item["report_slice"] = False
+            report_rows.append(item)
+            continue
+        report_rows.extend(_split_calendar_report_rows(row))
+    return report_rows
+
+
+def _split_calendar_report_rows(row: dict) -> list[dict]:
+    start_dt = _parse_row_time(row.get("start_time"))
+    if start_dt is None:
+        return []
+    duration = _display_duration(row)
+    if duration <= 0:
+        item = dict(row)
+        item["report_date"] = start_dt.date().isoformat()
+        item["report_duration_seconds"] = 0
+        item["report_slice"] = False
+        return [item]
+
+    end_dt = _parse_row_time(row.get("end_time"))
+    if end_dt is None or end_dt < start_dt:
+        end_dt = start_dt + timedelta(seconds=duration)
+
+    rows: list[dict] = []
+    current_start = start_dt
+    while current_start < end_dt:
+        next_midnight = datetime.combine(current_start.date() + timedelta(days=1), datetime_time.min)
+        current_end = min(end_dt, next_midnight)
+        seconds = max(0, int((current_end - current_start).total_seconds()))
+        if seconds <= 0:
+            break
+        item = dict(row)
+        item["start_time"] = current_start.strftime(TIME_FORMAT)
+        item["end_time"] = current_end.strftime(TIME_FORMAT)
+        item["duration_seconds"] = seconds
+        item["report_date"] = current_start.date().isoformat()
+        item["report_duration_seconds"] = seconds
+        item["report_slice"] = True
+        rows.append(item)
+        current_start = current_end
+    return rows
+
+
+def _is_project_day_carry_row(row: dict) -> bool:
+    return (
+        row.get("status") == STATUS_NORMAL
+        and (row.get("report_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
+    )
+
+
+def _row_crosses_midnight(row: dict) -> bool:
+    start_dt = _parse_row_time(row.get("start_time"))
+    if start_dt is None:
+        return False
+    duration = _display_duration(row)
+    end_dt = _parse_row_time(row.get("end_time"))
+    if end_dt is None or end_dt < start_dt:
+        end_dt = start_dt + timedelta(seconds=duration)
+    return end_dt.date() > start_dt.date()
 
 
 def _attach_original_report_project(row: dict) -> None:
@@ -405,6 +544,14 @@ def _minutes_between(start: str, end: str) -> float:
     return max(0.0, (end_dt - start_dt).total_seconds() / 60)
 
 
+def _ensure_context_for_report_range(start_date: str, end_date: str) -> None:
+    current = date_type.fromisoformat(start_date) - timedelta(days=1)
+    final = date_type.fromisoformat(end_date)
+    while current <= final:
+        recompute_context_assignments_for_date(current.isoformat())
+        current += timedelta(days=1)
+
+
 def _attach_display_project(row: dict, uncategorized_id: int) -> None:
     project_id = int(row.get("effective_project_id") or uncategorized_id)
     suggested = str(row.get("suggested_project_name") or "").strip()
@@ -471,6 +618,10 @@ def _activity_summary_label(row: dict) -> str:
 
 
 def _display_duration(row: dict) -> int:
+    live_duration = _live_duration_for_row(row)
+    if live_duration is not None:
+        stored = int(row.get("duration_seconds") or 0)
+        return max(stored, live_duration)
     if row.get("duration_seconds") is not None:
         return int(row.get("duration_seconds") or 0)
     start = row.get("start_time")
@@ -478,3 +629,110 @@ def _display_duration(row: dict) -> int:
         return 0
     start_dt = datetime.strptime(start, TIME_FORMAT)
     return max(0, int((datetime.now() - start_dt).total_seconds()))
+
+
+def _live_duration_for_row(row: dict) -> int | None:
+    if row.get("end_time") is not None:
+        return None
+    try:
+        row_id = int(row.get("id") or 0)
+    except (TypeError, ValueError):
+        return None
+    snapshot = _read_current_activity_snapshot()
+    if not snapshot:
+        return None
+    try:
+        snapshot_id = int(snapshot.get("persisted_activity_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    if snapshot_id != row_id:
+        return None
+    return _snapshot_elapsed_seconds(snapshot) + _snapshot_extra_seconds(snapshot)
+
+
+def _read_current_activity_snapshot() -> dict | None:
+    raw = get_setting("current_activity_snapshot", "") or ""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _snapshot_report_date(snapshot: dict, today: date_type) -> str | None:
+    status = str(snapshot.get("status") or STATUS_NORMAL)
+    project_name = str(snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT)
+    if status != STATUS_NORMAL or project_name == UNCATEGORIZED_PROJECT:
+        return today.isoformat()
+
+    persisted_id = _snapshot_persisted_id(snapshot)
+    if persisted_id:
+        start_day = _snapshot_start_date(snapshot) or today
+        first_day = min(start_day, today - timedelta(days=1))
+        rows = get_report_activity_rows(
+            first_day.isoformat(),
+            today.isoformat(),
+            include_hidden=True,
+            ensure_context=False,
+        )
+        for row in rows:
+            if int(row["id"]) == persisted_id:
+                return str(row.get("report_date") or today.isoformat())
+
+    start_day = _snapshot_start_date(snapshot)
+    if start_day and start_day < today:
+        return start_day.isoformat()
+    return today.isoformat()
+
+
+def _snapshot_persisted_id(snapshot: dict) -> int | None:
+    try:
+        value = int(snapshot.get("persisted_activity_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    return value or None
+
+
+def _snapshot_start_date(snapshot: dict) -> date_type | None:
+    start = _parse_row_time(snapshot.get("start_time"))
+    return start.date() if start else None
+
+
+def _snapshot_elapsed_seconds(snapshot: dict) -> int:
+    fallback = _safe_int(snapshot.get("elapsed_seconds"))
+    start = _parse_row_time(snapshot.get("start_time"))
+    if start is None:
+        return fallback
+    seconds = int((datetime.now() - start).total_seconds())
+    if 0 <= seconds <= 36 * 60 * 60:
+        return seconds
+    return fallback
+
+
+def _snapshot_extra_seconds(snapshot: dict) -> int:
+    return _safe_int(snapshot.get("extra_seconds"))
+
+
+def _safe_int(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _date_part(value: str | None) -> str:
+    parsed = _parse_row_time(value)
+    if parsed is None:
+        return date_type.today().isoformat()
+    return parsed.date().isoformat()
+
+
+def _parse_row_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), TIME_FORMAT)
+    except ValueError:
+        return None

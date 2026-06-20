@@ -60,7 +60,7 @@ WorkTrace keeps the startup path small by creating only the Overview page at lau
 
 Heavy optional dependencies are loaded only when needed: `openpyxl` is imported during Excel export, and Windows process inspection dependencies are imported only when the real Windows adapter reads the foreground window. Shared duration formatting lives in `worktrace.formatters` so UI modules do not load export modules just to format `hh:mm:ss` values.
 
-The default full-page data refresh interval is 10 seconds. The current-activity label uses a lightweight 1-second tick; if the active item is unchanged, the UI increments the displayed duration locally and refreshes heavier overview data only when the item changes or after roughly 5 minutes.
+The default full-page data refresh interval is 10 seconds. A lightweight 1-second tick updates the current-activity label plus visible Overview, Time Details, and Statistics durations, so active records grow smoothly between full refreshes. Heavy refreshes are suspended during window resize/minimize/restore to keep the shell responsive.
 
 ## Project Classification
 
@@ -71,6 +71,8 @@ If a file path is known but no rule or file default matches, Time Details may sh
 Context carry-over applies to all normal non-anchor auxiliary activity between nearby matching anchor files. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same project carry-over rules.
 
 For reporting, a short interruption is also folded into the surrounding anchor project: if two anchors for project A enclose a contiguous block under 5 minutes containing only another normal project or idle time, the Time Details session and project statistics count that block under A. The original activity status and project assignment are preserved in the detailed records.
+
+Report dates are project-aware across midnight. If a concrete project continues from the previous day into the next day, Overview, Time Details, Statistics, and exports keep counting that continuing project on the previous report date until the next concrete project appears. Idle time and uncategorized normal time switch at midnight and are split by calendar day.
 
 Activity history is persisted after 30 seconds. All duration displays use exact `hh:mm:ss`, including exports and the live current-activity counter.
 
@@ -95,7 +97,7 @@ WorkTrace prevents multiple collectors from writing to the same database. On Win
 
 ## Data Export And Clearing
 
-The Project Rules page shows project binding summaries and manages file rules, folder rules, keyword rules, project edits, project enable/disable state, and the special `排除规则`.
+The Project Rules page shows project binding summaries and manages file rules, folder rules, keyword rules, project edits, project enable/disable state, and the special `排除规则`. The top-right `新增项目` action opens project creation by default; each project card has its own `新增规则` action that opens rule creation preselected for that project.
 
 The Settings page can clear all local data after this confirmation text:
 

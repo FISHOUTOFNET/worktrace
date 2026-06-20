@@ -1039,6 +1039,16 @@ This reporting merge must not update `activity_log.project_id`, `activity_projec
 
 The reporting merge is only a supplement to existing context rules. If the enclosing A anchors exceed `context_carry_minutes`, do not merge the block.
 
+If a short activity is absorbed into the previous persisted normal activity and the same activity signature resumes immediately afterward, the recorder must reopen and continue the previous persisted row instead of creating a second row for the same activity.
+
+### 22.6 Report Dates Across Midnight
+
+Report views use an in-memory `report_date`, not only `activity_log.start_time`.
+
+If a concrete normal project continues across midnight, assign subsequent same-project normal rows to the previous report date until a different concrete project appears. This applies to Overview, Time Details, Statistics, and range exports that consume reporting summaries.
+
+Idle rows and uncategorized normal rows do not carry across midnight. Split them at local midnight and count each slice on its calendar date.
+
 ---
 
 ## 23. Services
@@ -1234,7 +1244,7 @@ Must show:
 8. export Excel button
 9. export Markdown button
 
-Project stats use the reporting context merge. Total, effective, idle, excluded, and paused summary durations continue to use raw activity status and duration.
+Project stats use the reporting context merge and report-date assignment. Total, effective, idle, excluded, and paused summary durations use raw activity status but the same report-date slicing and live open-record duration projection.
 
 ### 24.4 Project Rules Page
 
@@ -1242,25 +1252,22 @@ Must show:
 
 1. project binding overview
 2. project rules list
-3. new rule actions
+3. top-level add-project action
+4. per-project add-rule actions
 
 Project rules include file defaults, folder rules, and keyword rules. File rules clear `resource.default_project_id` when deleted. Folder and keyword rules support enable, disable, and delete.
+
+The top-level action is labeled `新增项目` and opens project creation by default. Each project card exposes `新增规则`, which opens rule creation with that project preselected.
 
 ### 24.5 Settings and Privacy Page
 
 Must show:
 
-1. poll interval
-2. idle threshold
-3. minimum activity seconds
-4. exclude keywords
-5. data path
-6. export path
-7. collector heartbeat
-8. view first-run notice
-9. export all local data
-10. clear all local data
-11. version info
+1. export path
+2. view first-run notice
+3. clear all local data
+
+The Settings and Privacy page must not show the removed `关于本地数据` section, including database path, log path, collector heartbeat, or version details.
 
 ---
 
@@ -1400,7 +1407,9 @@ Rules:
 4. If system sleep or large time jump is detected, close the previous record and keep the next relevant record available for user review.
 5. Persist normal, idle, paused, excluded, and error segments once they reach 30 seconds.
 6. Display all stored durations as exact `hh:mm:ss` without minute rounding.
-7. Display the current activity counter as `hh:mm:ss` and refresh it every 2 seconds without requiring a full Time Details refresh.
+7. Display the current activity counter as `hh:mm:ss`.
+8. Update visible Overview KPI durations, Time Details session/resource/detail durations, and Statistics durations every second from the current activity snapshot without requiring a full page refresh.
+9. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized; after restore, delay the catch-up refresh until the window is visible and stable.
 
 ---
 

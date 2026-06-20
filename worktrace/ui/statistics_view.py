@@ -9,7 +9,7 @@ from typing import Any
 import customtkinter as ctk
 
 from ..formatters import format_duration
-from ..services import export_service, statistics_service
+from ..services import export_service, statistics_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
 
@@ -17,9 +17,10 @@ from . import design
 class StatisticsView(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master)
-        today = date.today().isoformat()
+        today = timeline_service.get_default_report_date()
         self.start_var = ctk.StringVar(value=today)
         self.end_var = ctk.StringVar(value=today)
+        self._default_report_date = today
         self._summary_labels: dict[str, ctk.CTkLabel] = {}
         self._row_widgets: dict[str, dict[str, Any]] = {}
         self.empty_label = None
@@ -87,10 +88,27 @@ class StatisticsView(ctk.CTkFrame):
             value.pack(anchor="w", padx=16, pady=(0, 14))
             self._summary_labels[key] = value
 
-    def refresh(self) -> None:
+    def refresh(self, ensure_context: bool = True) -> None:
         if not self._validate_dates():
             return
-        summary = statistics_service.get_summary(self.start_var.get(), self.end_var.get())
+        self._refresh_values(ensure_context=ensure_context)
+
+    def refresh_current_activity(self) -> None:
+        current_default = timeline_service.get_default_report_date()
+        if (
+            self.start_var.get() == self._default_report_date
+            and self.end_var.get() == self._default_report_date
+            and current_default != self._default_report_date
+        ):
+            self.start_var.set(current_default)
+            self.end_var.set(current_default)
+            self._default_report_date = current_default
+        if not self._dates_are_valid():
+            return
+        self._refresh_values(ensure_context=False)
+
+    def _refresh_values(self, ensure_context: bool = True) -> None:
+        summary = statistics_service.get_summary(self.start_var.get(), self.end_var.get(), ensure_context=ensure_context)
         values = {
             "total": summary["total_duration"],
             "effective": summary["effective_duration"],
@@ -102,7 +120,7 @@ class StatisticsView(ctk.CTkFrame):
             self._summary_labels[key].configure(text=format_duration(seconds))
 
         total = max(1, int(summary["effective_duration"] or summary["total_duration"] or 1))
-        rows = statistics_service.get_project_stats(self.start_var.get(), self.end_var.get())
+        rows = statistics_service.get_project_stats(self.start_var.get(), self.end_var.get(), ensure_context=ensure_context)
         self._sync_project_rows(rows, total)
 
     def _sync_project_rows(self, rows: list[dict], total: int) -> None:
@@ -161,14 +179,21 @@ class StatisticsView(ctk.CTkFrame):
         return export_dir / f"worktrace_{self.start_var.get()}_{self.end_var.get()}.{suffix}"
 
     def _validate_dates(self) -> bool:
+        if not self._dates_are_valid(show_errors=True):
+            return False
+        return True
+
+    def _dates_are_valid(self, show_errors: bool = False) -> bool:
         try:
             start = date.fromisoformat(self.start_var.get())
             end = date.fromisoformat(self.end_var.get())
         except ValueError:
-            messagebox.showerror("日期格式错误", "日期格式必须为 YYYY-MM-DD")
+            if show_errors:
+                messagebox.showerror("日期格式错误", "日期格式必须为 YYYY-MM-DD")
             return False
         if start > end:
-            messagebox.showerror("日期范围错误", "开始日期不能晚于结束日期")
+            if show_errors:
+                messagebox.showerror("日期范围错误", "开始日期不能晚于结束日期")
             return False
         return True
 

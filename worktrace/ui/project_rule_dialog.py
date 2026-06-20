@@ -29,6 +29,9 @@ def open_project_rule_dialog(
     initial_type: str = "folder",
     initial_target: str = "",
     initial_project_name: str | None = None,
+    initial_project_mode: str | None = None,
+    initial_create_rule: bool | None = None,
+    lock_project: bool = False,
     edit_project_id: int | None = None,
     on_saved: SavedCallback | None = None,
 ):
@@ -37,6 +40,9 @@ def open_project_rule_dialog(
         initial_type=initial_type,
         initial_target=initial_target,
         initial_project_name=initial_project_name,
+        initial_project_mode=initial_project_mode,
+        initial_create_rule=initial_create_rule,
+        lock_project=lock_project,
         edit_project_id=edit_project_id,
         on_saved=on_saved,
     )
@@ -69,6 +75,9 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         initial_type: str = "folder",
         initial_target: str = "",
         initial_project_name: str | None = None,
+        initial_project_mode: str | None = None,
+        initial_create_rule: bool | None = None,
+        lock_project: bool = False,
         edit_project_id: int | None = None,
         on_saved: SavedCallback | None = None,
     ):
@@ -81,22 +90,28 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         project_names = [project["name"] for project in self.projects]
         initial_type = initial_type if initial_type in RULE_TYPE_LABELS else "folder"
         initial_project_name = initial_project_name if initial_project_name in project_names else None
+        self.lock_project = bool(lock_project and initial_project_name)
+        if initial_project_mode not in {PROJECT_MODE_EXISTING, PROJECT_MODE_NEW}:
+            initial_project_mode = PROJECT_MODE_EXISTING if initial_project_name or project_names else PROJECT_MODE_NEW
 
         self.project_mode_var = ctk.StringVar(
-            value=PROJECT_MODE_EXISTING if initial_project_name or project_names else PROJECT_MODE_NEW
+            value=initial_project_mode
         )
         self.selected_project_var = ctk.StringVar(value=initial_project_name or (project_names[0] if project_names else ""))
         self.new_project_var = ctk.StringVar(value=str(self.edit_project.get("name") or "") if self.edit_project else "")
         self.description_var = ctk.StringVar(
             value=str(self.edit_project.get("description") or "") if self.edit_project else ""
         )
-        self.create_rule_var = ctk.BooleanVar(value=self.edit_project is None)
+        if initial_create_rule is None:
+            initial_create_rule = self.edit_project is None
+        self.create_rule_var = ctk.BooleanVar(value=bool(initial_create_rule))
         self.rule_type_var = ctk.StringVar(value=RULE_TYPE_LABELS[initial_type])
         self.target_var = ctk.StringVar(value=initial_target)
         self.recursive_var = ctk.BooleanVar(value=True)
         self.feedback_var = ctk.StringVar(value="")
 
-        self.title("编辑项目" if self.edit_project else "新建项目规则")
+        self.dialog_title = self._dialog_title()
+        self.title(self.dialog_title)
         self.geometry("700x560")
         self.transient(master)
         self.grab_set()
@@ -115,8 +130,15 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         content.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         content.grid_columnconfigure(1, weight=1)
 
-        title = "编辑项目" if self.edit_project else "新建项目规则"
-        subtitle = "可修改项目名称和备注，也可以顺手添加一条新规则。" if self.edit_project else "可以创建新项目并添加首条规则，也可以选择已有项目新增规则。"
+        title = self.dialog_title
+        if self.edit_project:
+            subtitle = "可修改项目名称和备注，也可以顺手添加一条新规则。"
+        elif self.lock_project:
+            subtitle = "为当前项目添加一条文件、文件夹或关键词规则。"
+        elif self.project_mode_var.get() == PROJECT_MODE_NEW and not self.create_rule_var.get():
+            subtitle = "先创建项目，之后可在项目卡片中继续添加规则。"
+        else:
+            subtitle = "可以创建新项目并添加首条规则，也可以选择已有项目新增规则。"
         design.label(content, text=title, variant="section").grid(
             row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(16, 4)
         )
@@ -131,6 +153,10 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         if self.edit_project:
             design.label(content, text="项目", variant="strong").grid(row=2, column=0, sticky="w", padx=16, pady=7)
             design.label(content, text="编辑当前项目", variant="caption").grid(row=2, column=1, sticky="w", pady=7)
+            self.project_mode_control = None
+        elif self.lock_project:
+            design.label(content, text="项目", variant="strong").grid(row=2, column=0, sticky="w", padx=16, pady=7)
+            design.label(content, text=self.selected_project_var.get(), variant="caption").grid(row=2, column=1, sticky="w", pady=7)
             self.project_mode_control = None
         else:
             design.label(content, text="项目", variant="strong").grid(row=2, column=0, sticky="w", padx=16, pady=7)
@@ -205,6 +231,16 @@ class ProjectRuleDialog(ctk.CTkToplevel):
             self.description_label.grid()
             self.description_entry.grid()
             self.create_rule_checkbox.configure(state="normal")
+            self._sync_rule_enabled()
+            return
+        if self.lock_project:
+            self.existing_project_menu.grid_remove()
+            self.new_project_label.grid_remove()
+            self.new_project_entry.grid_remove()
+            self.description_label.grid_remove()
+            self.description_entry.grid_remove()
+            self.create_rule_var.set(True)
+            self.create_rule_checkbox.configure(state="disabled")
             self._sync_rule_enabled()
             return
         mode = self.project_mode_var.get()
@@ -339,3 +375,12 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         else:
             rule_service.create_rule(target, project_id)
         return True
+
+    def _dialog_title(self) -> str:
+        if self.edit_project:
+            return "编辑项目"
+        if self.lock_project:
+            return "新增规则"
+        if self.project_mode_var.get() == PROJECT_MODE_NEW and not self.create_rule_var.get():
+            return "新增项目"
+        return "新建项目规则"

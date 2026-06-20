@@ -161,6 +161,18 @@ def set_activity_duration(activity_id: int, seconds: int) -> None:
         )
 
 
+def reopen_activity(activity_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET end_time = NULL, updated_at = ?
+            WHERE id = ? AND is_deleted = 0
+            """,
+            (now_str(), activity_id),
+        )
+
+
 def get_latest_closed_auto_normal_activity() -> dict | None:
     with get_connection() as conn:
         row = conn.execute(

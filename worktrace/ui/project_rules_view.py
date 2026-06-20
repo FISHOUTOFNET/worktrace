@@ -7,7 +7,7 @@ import customtkinter as ctk
 from ..constants import EXCLUDED_PROJECT
 from ..services import folder_rule_service, project_service, resource_service, rule_service
 from . import design
-from .project_rule_dialog import RULE_TYPE_LABELS, open_project_rule_dialog
+from .project_rule_dialog import PROJECT_MODE_NEW, RULE_TYPE_LABELS, open_project_rule_dialog
 
 
 class ProjectRulesView(ctk.CTkFrame):
@@ -31,7 +31,7 @@ class ProjectRulesView(ctk.CTkFrame):
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
         actions = ctk.CTkFrame(header, fg_color="transparent")
         actions.grid(row=0, column=1, rowspan=2, sticky="e")
-        design.button(actions, text="新建项目规则", command=self.open_new_rule_dialog).pack(side="left")
+        design.button(actions, text="新增项目", command=self.open_new_project_dialog).pack(side="left")
 
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
@@ -55,7 +55,7 @@ class ProjectRulesView(ctk.CTkFrame):
         self._rules_signature = signature
         _clear_children(self.rules_frame)
         if not projects:
-            _empty_row(self.rules_frame, "暂无用户项目。请使用“新建项目规则”创建第一个项目。")
+            _empty_row(self.rules_frame, "暂无用户项目。请使用“新增项目”创建第一个项目。")
             return
         for row_index, project in enumerate(projects):
             self._project_group(self.rules_frame, row_index, project)
@@ -83,6 +83,13 @@ class ProjectRulesView(ctk.CTkFrame):
                 width=82,
                 command=lambda item=project: self.edit_project(item),
             ).pack(side="left", padx=(0, 8))
+        design.button(
+            actions,
+            text="新增规则",
+            variant="subtle",
+            width=82,
+            command=lambda item=project: self.open_new_rule_dialog(initial_project_name=str(item.get("name") or "")),
+        ).pack(side="left", padx=(0, 8))
         if project.get("name") != EXCLUDED_PROJECT:
             action_text = "禁用项目" if bool(int(project.get("enabled", 1))) else "启用项目"
             design.button(
@@ -168,10 +175,18 @@ class ProjectRulesView(ctk.CTkFrame):
         return rules
 
     def create_project(self) -> None:
-        self.open_new_rule_dialog()
+        self.open_new_project_dialog()
 
     def add_folder_rule(self) -> None:
         self.open_new_rule_dialog("folder")
+
+    def open_new_project_dialog(self) -> None:
+        open_project_rule_dialog(
+            self,
+            initial_project_mode=PROJECT_MODE_NEW,
+            initial_create_rule=False,
+            on_saved=lambda _result: self._after_project_rule_saved(),
+        )
 
     def open_new_rule_dialog(
         self,
@@ -185,6 +200,7 @@ class ProjectRulesView(ctk.CTkFrame):
             initial_type=initial_type,
             initial_target=initial_target,
             initial_project_name=initial_project_name,
+            lock_project=bool(initial_project_name),
             on_saved=lambda _result: self._after_project_rule_saved(),
         )
 

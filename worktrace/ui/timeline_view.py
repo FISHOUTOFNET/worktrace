@@ -26,7 +26,7 @@ TREE_ROWHEIGHT = 36
 class TimelineView(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
-        self.date_var = ctk.StringVar(value=date.today().isoformat())
+        self.date_var = ctk.StringVar(value=timeline_service.get_default_report_date())
         self.only_uncategorized = ctk.BooleanVar(value=False)
         self.session_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
         self.resource_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
@@ -314,18 +314,18 @@ class TimelineView(ctk.CTkFrame):
             widget.bind("<ButtonPress-1>", self._on_control_activity, add="+")
             widget.bind("<FocusIn>", self._on_control_activity, add="+")
 
-    def refresh(self) -> None:
+    def refresh(self, ensure_context: bool = True) -> None:
         self._sync_status()
         date_text = self.date_var.get()
         if not self._valid_date(date_text):
             self.current_activity_label.configure(text="日期格式错误，请使用 YYYY-MM-DD")
             return
         self._refresh_projects()
-        sessions = timeline_service.get_project_sessions_by_date(date_text)
+        sessions = timeline_service.get_project_sessions_by_date(date_text, ensure_context=ensure_context)
         if self.only_uncategorized.get():
             sessions = [session for session in sessions if session["is_uncategorized"]]
         self._sync_sessions(sessions)
-        self._refresh_selected_session()
+        self._refresh_selected_session(ensure_context=ensure_context)
 
     def open_context(
         self,
@@ -371,7 +371,7 @@ class TimelineView(ctk.CTkFrame):
             self._sync_details([])
         self._pending_session_id = None
 
-    def _refresh_selected_session(self) -> None:
+    def _refresh_selected_session(self, ensure_context: bool = True) -> None:
         session = self._sessions_by_id.get(self._selected_session_id or "")
         if not session:
             return
@@ -384,9 +384,21 @@ class TimelineView(ctk.CTkFrame):
             )
         self.session_project_var.set(self._project_name_by_id.get(int(session["project_id"]), UNCATEGORIZED_PROJECT))
         if self._detail_mode == "resources":
-            self._sync_resources(timeline_service.get_session_resource_summary(session["activity_ids"]))
+            self._sync_resources(
+                timeline_service.get_session_resource_summary(
+                    session["activity_ids"],
+                    report_date=session.get("report_date"),
+                    ensure_context=ensure_context,
+                )
+            )
         else:
-            self._sync_details(timeline_service.get_session_activity_details(session["activity_ids"]))
+            self._sync_details(
+                timeline_service.get_session_activity_details(
+                    session["activity_ids"],
+                    report_date=session.get("report_date"),
+                    ensure_context=ensure_context,
+                )
+            )
 
     def _sync_resources(self, resources: list[dict]) -> None:
         previous = self._selected_resource_id
@@ -433,7 +445,13 @@ class TimelineView(ctk.CTkFrame):
                 tree.move(iid, "", index)
             self._tree_values[key] = values
         self._apply_tree_column_widths(tree)
-        restore = lambda position=yview[0], target=tree: target.yview_moveto(position)
+        xview = tree.xview() if hasattr(tree, "xview") else (0.0, 1.0)
+
+        def restore(y_position=yview[0], x_position=xview[0], target=tree) -> None:
+            target.yview_moveto(y_position)
+            if hasattr(target, "xview_moveto"):
+                target.xview_moveto(x_position)
+
         if hasattr(self, "after_idle"):
             self.after_idle(restore)
         else:
@@ -679,6 +697,8 @@ class TimelineView(ctk.CTkFrame):
 
     def refresh_current_activity(self) -> None:
         self.current_activity_label.configure(text=self._current_activity_text())
+        if self._valid_date(self.date_var.get()) and not self.is_user_interacting():
+            self.refresh(ensure_context=False)
 
     def _current_activity_text(self) -> str:
         raw = get_setting("current_activity_snapshot", "") or ""
@@ -767,7 +787,9 @@ class TimelineView(ctk.CTkFrame):
     def _make_tree_frame(self, parent):
         frame = ctk.CTkFrame(parent, fg_color=design.PANEL_ALT_BG, corner_radius=design.RADIUS_MD)
         frame.grid_rowconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=0)
         frame.grid_columnconfigure(0, weight=1)
+        frame.grid_columnconfigure(1, weight=0)
         return frame
 
     def _make_tree(self, master, tree_key, columns, headings, widths, height=None) -> ttk.Treeview:
@@ -782,17 +804,23 @@ class TimelineView(ctk.CTkFrame):
             if column in {"summary", "resource", "window", "note"}:
                 minwidth = max(minwidth, 120)
             tree.heading(column, text=headings[column])
-            stretch = column in {"summary", "project", "resource", "window", "note"}
-            tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=stretch)
+            tree.column(column, width=width, minwidth=minwidth, anchor="w", stretch=False)
         vertical_scrollbar = ttk.Scrollbar(
             master,
             orient="vertical",
             command=tree.yview,
             style="WorkTrace.Vertical.TScrollbar",
         )
-        tree.configure(yscrollcommand=vertical_scrollbar.set)
+        horizontal_scrollbar = ttk.Scrollbar(
+            master,
+            orient="horizontal",
+            command=tree.xview,
+            style="WorkTrace.Horizontal.TScrollbar",
+        )
+        tree.configure(yscrollcommand=vertical_scrollbar.set, xscrollcommand=horizontal_scrollbar.set)
         tree.grid(row=0, column=0, sticky="nsew")
         vertical_scrollbar.grid(row=0, column=1, sticky="ns")
+        horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
         tree.bind("<ButtonRelease-1>", lambda _event, target=tree: self._save_tree_column_widths(target), add="+")
         self._apply_tree_column_widths(tree)
         return tree
@@ -920,14 +948,25 @@ class TimelineView(ctk.CTkFrame):
 
 
 def _current_elapsed_seconds(snapshot: dict) -> int:
+    fallback = 0
+    try:
+        fallback = max(0, int(snapshot.get("elapsed_seconds") or 0))
+    except (TypeError, ValueError):
+        fallback = 0
     start_time = str(snapshot.get("start_time") or "").strip()
     if start_time:
         try:
             start = datetime.strptime(start_time, TIME_FORMAT)
-            return max(0, int((datetime.now() - start).total_seconds()))
+            seconds = int((datetime.now() - start).total_seconds())
+            if 0 <= seconds <= 36 * 60 * 60:
+                return seconds + _snapshot_extra_seconds(snapshot)
         except ValueError:
             pass
+    return fallback + _snapshot_extra_seconds(snapshot)
+
+
+def _snapshot_extra_seconds(snapshot: dict) -> int:
     try:
-        return max(0, int(snapshot.get("elapsed_seconds") or 0))
+        return max(0, int(snapshot.get("extra_seconds") or 0))
     except (TypeError, ValueError):
         return 0
