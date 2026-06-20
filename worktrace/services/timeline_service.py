@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from datetime import date as date_type, datetime, time as datetime_time, timedelta
 
-from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, TIME_FORMAT, UNCATEGORIZED_PROJECT
+from ..constants import (
+    DEFAULT_CONTEXT_CARRY_MINUTES,
+    DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
+    REPORT_CONTEXT_SHORT_MERGE_SECONDS,
+    STATUS_ERROR,
+    STATUS_EXCLUDED,
+    STATUS_IDLE,
+    STATUS_NORMAL,
+    STATUS_PAUSED,
+    TIME_FORMAT,
+    UNCATEGORIZED_PROJECT,
+)
 from ..db import dict_rows, get_connection, now_str
 from ..resource_patterns import extract_anchor_file_name
 from . import folder_rule_service, session_boundary_service
@@ -11,10 +22,6 @@ from .context_service import recompute_context_assignments_for_date
 from .live_time_service import snapshot_elapsed_seconds, snapshot_extra_seconds
 from .project_service import get_or_create_uncategorized_project
 from .settings_service import get_int_setting
-
-SHORT_CONTEXT_MERGE_SECONDS = 5 * 60
-DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS = 15 * 60
-
 
 def get_project_sessions_by_date(date: str, include_hidden: bool = True, ensure_context: bool = True) -> list[dict]:
     return get_project_sessions_by_range(date, date, include_hidden=include_hidden, ensure_context=ensure_context)
@@ -28,9 +35,22 @@ def get_project_sessions_by_range(
 ) -> list[dict]:
     uncategorized_id = get_or_create_uncategorized_project()
     rows = get_report_activity_rows(start_date, end_date, include_hidden=include_hidden, ensure_context=ensure_context)
+    sessions = _build_sessions_from_rows(rows, uncategorized_id)
+    return sorted(sessions, key=_session_sort_key, reverse=True)
+
+
+def _build_sessions_from_rows(rows: list[dict], uncategorized_id: int) -> list[dict]:
     sessions: list[dict] = []
     current: list[dict] = []
+    manual_groups: dict[int, list[dict]] = {}
     for row in rows:
+        manual_session_id = _manual_session_id(row)
+        if manual_session_id is not None:
+            if current:
+                sessions.append(_build_session(current, uncategorized_id))
+                current = []
+            manual_groups.setdefault(manual_session_id, []).append(row)
+            continue
         if not current:
             current = [row]
             continue
@@ -41,7 +61,9 @@ def get_project_sessions_by_range(
             current = [row]
     if current:
         sessions.append(_build_session(current, uncategorized_id))
-    return sorted(sessions, key=_session_sort_key, reverse=True)
+    for manual_session_id, group_rows in manual_groups.items():
+        sessions.append(_build_session(group_rows, uncategorized_id, manual_session_id=manual_session_id))
+    return sessions
 
 
 def get_report_activity_rows(
@@ -158,6 +180,64 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
 
 def update_session_project(session_activity_ids: list[int], project_id: int) -> None:
     update_activities_project(session_activity_ids, project_id, manual=True)
+    _sync_manual_sessions_project(session_activity_ids, project_id)
+
+
+def split_session_at_activity(session_activity_ids: list[int], split_activity_id: int) -> dict:
+    ordered = _ordered_session_activity_rows(session_activity_ids)
+    ids = [int(row["id"]) for row in ordered]
+    if int(split_activity_id) not in ids:
+        raise ValueError("activity is not part of the selected session")
+    split_index = ids.index(int(split_activity_id))
+    if split_index <= 0 or split_index >= len(ids):
+        raise ValueError("请选择第二条或之后的活动作为拆分点")
+    project_id = _common_project_id(ordered)
+    left_group = _manual_session_id(ordered[0]) or _create_manual_session(project_id)
+    right_group = _create_manual_session(project_id)
+    _assign_manual_session(ids[:split_index], left_group)
+    _assign_manual_session(ids[split_index:], right_group)
+    _cleanup_empty_manual_sessions()
+    return {"left_manual_session_id": left_group, "right_manual_session_id": right_group}
+
+
+def merge_sessions(primary_activity_ids: list[int], secondary_activity_ids: list[int]) -> dict:
+    primary = _ordered_session_activity_rows(primary_activity_ids)
+    secondary = _ordered_session_activity_rows(secondary_activity_ids)
+    if not primary or not secondary:
+        raise ValueError("请选择两个项目段")
+    primary_project = _common_project_id(primary)
+    secondary_project = _common_project_id(secondary)
+    if primary_project != secondary_project:
+        raise ValueError("只能合并同名项目段")
+    target_group = _manual_session_id(primary[0]) or _manual_session_id(secondary[0]) or _create_manual_session(primary_project)
+    _assign_manual_session([int(row["id"]) for row in [*primary, *secondary]], target_group)
+    _cleanup_empty_manual_sessions()
+    return {"manual_session_id": target_group}
+
+
+def move_activity_to_project_target(
+    activity_id: int,
+    project_id: int,
+    manual_session_id: int | None = None,
+) -> None:
+    update_activities_project([activity_id], project_id, manual=True)
+    if manual_session_id is None:
+        _clear_manual_session_for_activities([activity_id])
+        return
+    _ensure_manual_session_project(manual_session_id, project_id)
+    _assign_manual_session([activity_id], manual_session_id)
+
+
+def move_activity_to_session(activity_id: int, target_session_activity_ids: list[int]) -> dict:
+    target_rows = _ordered_session_activity_rows(target_session_activity_ids)
+    if not target_rows:
+        raise ValueError("目标项目段不存在")
+    project_id = _common_project_id(target_rows)
+    target_group = _manual_session_id(target_rows[0]) or _create_manual_session(project_id)
+    update_activities_project([activity_id], project_id, manual=True)
+    _assign_manual_session([int(row["id"]) for row in target_rows] + [activity_id], target_group)
+    _cleanup_empty_manual_sessions()
+    return {"manual_session_id": target_group, "project_id": project_id}
 
 
 def preview_session_project_update(session_activity_ids: list[int], project_id: int) -> dict:
@@ -248,6 +328,7 @@ def update_resource_project_for_session(
         ).fetchall()
         activity_ids = [int(row["id"]) for row in rows]
     update_activities_project(activity_ids, project_id, manual=True)
+    _clear_manual_session_for_activities(activity_ids)
     if remember_for_future:
         with get_connection() as conn:
             conn.execute(
@@ -258,6 +339,134 @@ def update_resource_project_for_session(
                 """,
                 (project_id, now_str(), resource_id),
             )
+
+
+def _ordered_session_activity_rows(activity_ids: list[int]) -> list[dict]:
+    if not activity_ids:
+        return []
+    placeholders = ",".join("?" for _ in activity_ids)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                a.id,
+                a.project_id,
+                COALESCE(apa.project_id, a.project_id) AS effective_project_id,
+                mpsa.manual_session_id
+            FROM activity_log a
+            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            LEFT JOIN manual_project_session_activity mpsa ON mpsa.activity_id = a.id
+            WHERE a.id IN ({placeholders})
+              AND a.is_deleted = 0
+            ORDER BY a.start_time ASC, a.id ASC
+            """,
+            activity_ids,
+        ).fetchall()
+    return dict_rows(rows)
+
+
+def _common_project_id(rows: list[dict]) -> int:
+    if not rows:
+        raise ValueError("请选择项目段")
+    uncategorized_id = get_or_create_uncategorized_project()
+    project_ids = {int(row.get("effective_project_id") or row.get("project_id") or uncategorized_id) for row in rows}
+    if len(project_ids) != 1:
+        raise ValueError("只能操作同一项目段")
+    return project_ids.pop()
+
+
+def _create_manual_session(project_id: int) -> int:
+    ts = now_str()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO manual_project_session(project_id, created_at, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (project_id, ts, ts),
+        )
+        return int(cur.lastrowid)
+
+
+def _assign_manual_session(activity_ids: list[int], manual_session_id: int) -> None:
+    if not activity_ids:
+        return
+    ts = now_str()
+    with get_connection() as conn:
+        for activity_id in activity_ids:
+            conn.execute(
+                """
+                INSERT INTO manual_project_session_activity(activity_id, manual_session_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(activity_id) DO UPDATE SET
+                    manual_session_id = excluded.manual_session_id,
+                    updated_at = excluded.updated_at
+                """,
+                (activity_id, manual_session_id, ts, ts),
+            )
+        conn.execute(
+            "UPDATE manual_project_session SET updated_at = ? WHERE id = ?",
+            (ts, manual_session_id),
+        )
+
+
+def _clear_manual_session_for_activities(activity_ids: list[int]) -> None:
+    if not activity_ids:
+        return
+    placeholders = ",".join("?" for _ in activity_ids)
+    with get_connection() as conn:
+        conn.execute(
+            f"DELETE FROM manual_project_session_activity WHERE activity_id IN ({placeholders})",
+            activity_ids,
+        )
+    _cleanup_empty_manual_sessions()
+
+
+def _sync_manual_sessions_project(activity_ids: list[int], project_id: int) -> None:
+    if not activity_ids:
+        return
+    placeholders = ",".join("?" for _ in activity_ids)
+    ts = now_str()
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT manual_session_id
+            FROM manual_project_session_activity
+            WHERE activity_id IN ({placeholders})
+            """,
+            activity_ids,
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE manual_project_session SET project_id = ?, updated_at = ? WHERE id = ?",
+                (project_id, ts, int(row["manual_session_id"])),
+            )
+
+
+def _ensure_manual_session_project(manual_session_id: int, project_id: int) -> None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT project_id FROM manual_project_session WHERE id = ?",
+            (manual_session_id,),
+        ).fetchone()
+    if not row:
+        raise ValueError("目标项目段不存在")
+    if int(row["project_id"]) != int(project_id):
+        raise ValueError("目标项目段与目标项目不一致")
+
+
+def _cleanup_empty_manual_sessions() -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM manual_project_session
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM manual_project_session_activity mpsa
+                WHERE mpsa.manual_session_id = manual_project_session.id
+            )
+            """
+        )
 
 
 def _load_activity_rows_for_report_range(start_date: str, end_date: str, include_hidden: bool) -> list[dict]:
@@ -274,6 +483,7 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
                 r.display_name AS resource_display_name,
                 r.resource_role,
                 r.resource_type,
+                mpsa.manual_session_id,
                 apa.suggested_project_name,
                 apa.source AS assignment_source,
                 apa.is_manual AS assignment_is_manual,
@@ -282,6 +492,7 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
                 p.description AS effective_project_description
             FROM activity_log a
             LEFT JOIN resource r ON r.id = a.resource_id
+            LEFT JOIN manual_project_session_activity mpsa ON mpsa.activity_id = a.id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
             WHERE a.is_deleted = 0
@@ -327,6 +538,7 @@ def _load_session_rows(
                 r.display_name AS resource_display_name,
                 r.app_name AS resource_app_name,
                 r.process_name AS resource_process_name,
+                mpsa.manual_session_id,
                 apa.suggested_project_name,
                 apa.source AS assignment_source,
                 apa.is_manual AS assignment_is_manual,
@@ -335,6 +547,7 @@ def _load_session_rows(
                 p.description AS effective_project_description
             FROM activity_log a
             LEFT JOIN resource r ON r.id = a.resource_id
+            LEFT JOIN manual_project_session_activity mpsa ON mpsa.activity_id = a.id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
             WHERE a.id IN ({placeholders})
@@ -355,7 +568,7 @@ def _can_merge(previous: dict, current: dict) -> bool:
     return str(previous.get("report_project_key") or "") == str(current.get("report_project_key") or "")
 
 
-def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
+def _build_session(rows: list[dict], uncategorized_id: int, manual_session_id: int | None = None) -> dict:
     first = rows[0]
     last = rows[-1]
     project_id = int(first.get("report_project_id") or first.get("effective_project_id") or uncategorized_id)
@@ -364,8 +577,9 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     duration = sum(_display_duration(row) for row in rows)
     activity_ids = [int(row["id"]) for row in rows]
     status_summary = _status_summary(rows)
+    session_id = f"manual-{manual_session_id}" if manual_session_id is not None else f"{first['id']}-{last['id']}"
     return {
-        "session_id": f"{first['id']}-{last['id']}",
+        "session_id": session_id,
         "project_id": project_id,
         "project_name": project_name,
         "project_description": project_description,
@@ -374,11 +588,14 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "report_date": first.get("report_date"),
         "duration_seconds": duration,
         "activity_ids": activity_ids,
+        "sort_time": last.get("start_time") or first.get("start_time"),
         "event_count": len(rows),
         "status": first.get("status") if len({row.get("status") for row in rows}) == 1 else "mixed",
         "status_summary": status_summary,
         "is_uncategorized": project_id == int(uncategorized_id),
         "is_suggested_project": bool(first.get("report_is_suggested_project", first.get("is_suggested_project"))),
+        "manual_session_id": manual_session_id,
+        "is_manual_session": manual_session_id is not None,
     }
 
 
@@ -391,7 +608,7 @@ def _with_display_projects(rows: list[dict], uncategorized_id: int) -> list[dict
 def _with_reporting_projects(rows: list[dict]) -> list[dict]:
     for row in rows:
         _attach_original_report_project(row)
-    carry_minutes = max(0, get_int_setting("context_carry_minutes", 15))
+    carry_minutes = max(0, get_int_setting("context_carry_minutes", DEFAULT_CONTEXT_CARRY_MINUTES))
     if carry_minutes <= 0:
         return rows
     for anchor_index, anchor in enumerate(rows):
@@ -452,7 +669,8 @@ def _attach_original_report_project(row: dict) -> None:
     row["report_project_id"] = row.get("effective_project_id")
     row["report_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
     row["report_project_description"] = row.get("display_project_description") or ""
-    row["report_project_key"] = row.get("display_project_key") or ""
+    manual_session_id = _manual_session_id(row)
+    row["report_project_key"] = f"manual:{manual_session_id}" if manual_session_id is not None else row.get("display_project_key") or ""
     row["report_is_suggested_project"] = bool(row.get("is_suggested_project"))
     row["report_context_merged"] = False
 
@@ -478,7 +696,7 @@ def _find_short_context_merge(rows: list[dict], anchor_index: int, carry_minutes
         if _is_project_anchor(row) and str(row.get("display_project_key") or "") == anchor_key:
             if (
                 interrupt_indices
-                and _seconds_for_rows(rows, interrupt_indices) < SHORT_CONTEXT_MERGE_SECONDS
+                and _seconds_for_rows(rows, interrupt_indices) < REPORT_CONTEXT_SHORT_MERGE_SECONDS
                 and _minutes_between(_anchor_context_time(anchor), row["start_time"]) <= carry_minutes
             ):
                 return interrupt_indices
@@ -590,13 +808,22 @@ def _anchor_preview_item(row: dict, current_project_name: str | None) -> dict:
     }
 
 
+def _manual_session_id(row: dict) -> int | None:
+    value = row.get("manual_session_id")
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return parsed or None
+
+
 def _session_sort_key(session: dict) -> tuple[str, int]:
     first_id = str(session.get("session_id") or "0").split("-", 1)[0]
     try:
         start_id = int(first_id)
     except ValueError:
         start_id = 0
-    return (str(session.get("start_time") or ""), start_id)
+    return (str(session.get("sort_time") or session.get("start_time") or ""), start_id)
 
 
 _STATUS_DISPLAY_NAMES = {

@@ -290,7 +290,7 @@ def get_or_create_excluded_project() -> int:
         cur = conn.execute(
             """
             INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
-            VALUES (?, '命中后匿名记录为已排除窗口', 0, 1, 'system', ?, ?)
+            VALUES (?, '命中后匿名记录', 0, 0, 'system', ?, ?)
             """,
             (EXCLUDED_PROJECT, ts, ts),
         )

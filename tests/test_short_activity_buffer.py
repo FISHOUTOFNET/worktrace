@@ -4,6 +4,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from worktrace.collector.state_machine import CollectorStateMachine
+from worktrace.constants import HISTORY_PERSIST_THRESHOLD_SECONDS
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service, export_service, settings_service, statistics_service
 
@@ -34,6 +35,13 @@ def test_single_auto_activity_29_seconds_has_snapshot_but_no_history_stats_or_ex
     assert "Doc" not in Path(md_path).read_text(encoding="utf-8")
     xlsx_path = export_service.export_excel("2026-06-18", "2026-06-18", str(tmp_path / "out.xlsx"))
     assert load_workbook(xlsx_path)["Activity Logs"].max_row == 1
+
+
+def test_history_persist_threshold_is_shared_constant():
+    from worktrace.collector.auto_activity_recorder import HISTORY_PERSIST_THRESHOLD_SECONDS as recorder_threshold
+
+    assert recorder_threshold == HISTORY_PERSIST_THRESHOLD_SECONDS
+    assert HISTORY_PERSIST_THRESHOLD_SECONDS == 30
 
 
 def test_single_auto_activity_30_seconds_persists_once_with_actual_start(temp_db):

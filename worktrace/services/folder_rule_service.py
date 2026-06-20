@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from ..constants import EXCLUDED_PROJECT
+from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import (
     is_path_under_folder,
@@ -11,7 +11,7 @@ from ..path_utils import (
     normalize_path_key,
 )
 
-_FOLDER_RULE_CACHE_TTL_SECONDS = 5.0
+_FOLDER_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
 _FOLDER_RULE_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 

@@ -4,7 +4,7 @@ import logging
 import threading
 from datetime import datetime, time as datetime_time
 
-from ..constants import TIME_FORMAT
+from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
 from ..services import privacy_service, recovery_service
@@ -24,7 +24,7 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
     while not stop_event.is_set():
         try:
             now = now_str()
-            idle_threshold_seconds = get_int_setting("idle_threshold_seconds", 300)
+            idle_threshold_seconds = get_int_setting("idle_threshold_seconds", DEFAULT_IDLE_THRESHOLD_SECONDS)
             if last_loop_time and recovery_service.detect_time_jump(last_loop_time, now, idle_threshold_seconds):
                 machine.reset_for_time_jump(last_loop_time)
             elif last_loop_time:

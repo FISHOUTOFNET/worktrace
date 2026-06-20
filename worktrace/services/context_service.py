@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..constants import (
+    DEFAULT_CONTEXT_CARRY_MINUTES,
     STATUS_ERROR,
     STATUS_EXCLUDED,
     STATUS_IDLE,
@@ -15,13 +16,13 @@ from .project_inference_service import assign_project_for_activity
 from .resource_service import ensure_activity_resource
 from .settings_service import get_int_setting
 
-INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
+INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED}
 
 
 def recompute_context_assignments_for_date(date: str) -> None:
     start = f"{date} 00:00:00"
     end = f"{date} 23:59:59"
-    carry_minutes = max(0, get_int_setting("context_carry_minutes", 15))
+    carry_minutes = max(0, get_int_setting("context_carry_minutes", DEFAULT_CONTEXT_CARRY_MINUTES))
     uncategorized_id = _get_uncategorized_project_id()
 
     rows = _load_rows(start, end)
@@ -115,6 +116,8 @@ def _assignment_changed(row: dict, assignment: dict) -> bool:
 
 def _infer_context_project(rows: list[dict], index: int, carry_minutes: int, uncategorized_id: int) -> int:
     row = rows[index]
+    if _nearest_anchor_is_uncategorized(rows, index, -1, uncategorized_id) or _nearest_anchor_is_uncategorized(rows, index, 1, uncategorized_id):
+        return uncategorized_id
     previous_anchor = _find_previous_anchor(rows, index, uncategorized_id)
     next_anchor = _find_next_anchor(rows, index, uncategorized_id)
 
@@ -122,17 +125,29 @@ def _infer_context_project(rows: list[dict], index: int, carry_minutes: int, unc
         previous_project = _row_project_id(previous_anchor)
         next_project = _row_project_id(next_anchor)
         if previous_project == next_project:
-            previous_gap = _minutes_between(previous_anchor["start_time"], row["start_time"])
-            next_gap = _minutes_between(row["start_time"], next_anchor["start_time"])
-            if previous_gap <= carry_minutes or next_gap <= carry_minutes:
-                return previous_project
+            return previous_project
         return uncategorized_id
 
     if previous_anchor and not next_anchor:
         if _minutes_between(_anchor_context_time(previous_anchor), row["start_time"]) <= carry_minutes:
             return _row_project_id(previous_anchor)
+    if next_anchor and not previous_anchor:
+        if _minutes_between(row["start_time"], next_anchor["start_time"]) <= carry_minutes:
+            return _row_project_id(next_anchor)
 
     return uncategorized_id
+
+
+def _nearest_anchor_is_uncategorized(rows: list[dict], index: int, step: int, uncategorized_id: int) -> bool:
+    pos = index + step
+    while 0 <= pos < len(rows):
+        row = rows[pos]
+        if row["status"] in INTERRUPT_STATUSES:
+            return False
+        if _is_context_anchor(row):
+            return _row_project_id(row) == uncategorized_id
+        pos += step
+    return False
 
 
 def _find_previous_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:

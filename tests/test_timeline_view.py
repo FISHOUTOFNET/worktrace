@@ -310,8 +310,10 @@ def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch)
 
     assert view.resource_editor.master is view.editor_panel
     assert view.activity_editor.master is view.editor_panel
-    assert view.close_resource_button in view._resource_editor_widgets
-    assert view.close_activity_button in view._editor_widgets
+    assert view.resource_rule_button in view._resource_editor_widgets
+    assert view.delete_resource_button in view._resource_editor_widgets
+    assert view.activity_rule_button in view._editor_widgets
+    assert view.split_activity_button in view._editor_widgets
 
 
 def test_editor_switching_uses_editor_panel_without_destroying_widgets():
@@ -512,6 +514,23 @@ def test_open_context_selects_requested_session_on_sync():
     assert view._selected_session_id == "9-10"
     assert selected == ["9-10"]
     assert view._pending_session_id is None
+
+
+def test_find_session_containing_activity_clears_uncategorized_filter_for_project_target(monkeypatch):
+    view = object.__new__(TimelineView)
+    view.start_var = FakeVar("2026-06-18")
+    view.end_var = FakeVar("2026-06-18")
+    view.only_uncategorized = FakeVar(True)
+    target = {"session_id": "2-2", "activity_ids": [2], "is_uncategorized": False}
+
+    monkeypatch.setattr(
+        timeline_service,
+        "get_project_sessions_by_range",
+        lambda *_args, **_kwargs: [target],
+    )
+
+    assert TimelineView._find_session_containing_activity(view, 2) == target
+    assert view.only_uncategorized.get() is False
 
 
 def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists():

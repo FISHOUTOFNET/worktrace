@@ -20,6 +20,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
         removed_setting = conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone()
         min_history = conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone()
         min_idle = conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone()
+        min_activity = conn.execute("SELECT value FROM settings WHERE key = 'min_activity_seconds'").fetchone()
         uncategorized = conn.execute("SELECT * FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
         excluded = conn.execute("SELECT * FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone()
         exclude_rule_count = conn.execute(
@@ -51,17 +52,21 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "project_rule" in tables
     assert "folder_project_rule" in tables
     assert "activity_project_assignment" in tables
+    assert "manual_project_session" in tables
+    assert "manual_project_session_activity" in tables
     assert setting["value"] == "15"
     assert idle_threshold["value"] == "300"
     assert ui_refresh["value"] == "10"
     assert removed_setting is None
     assert min_history is None
     assert min_idle is None
+    assert min_activity is None
     assert uncategorized is not None
     assert uncategorized["created_by"] == "system"
     assert excluded is not None
     assert excluded["created_by"] == "system"
-    assert excluded["enabled"] == 1
+    assert excluded["enabled"] == 0
+    assert excluded["description"] == "命中后匿名记录"
     assert exclude_rule_count["c"] == 0
     assert "midnight_anchor" in assignment_schema
     assert "'file', 'app'" in resource_schema
@@ -105,6 +110,7 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone() is None
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone() is None
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone() is None
+        assert conn.execute("SELECT value FROM settings WHERE key = 'min_activity_seconds'").fetchone() is None
         assert conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone() is not None
         assert conn.execute("SELECT id FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone() is not None
 

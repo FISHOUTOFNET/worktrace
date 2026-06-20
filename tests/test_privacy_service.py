@@ -43,6 +43,7 @@ def test_privacy_keyword_cache_reuses_reads_and_updates_on_set(temp_db, monkeypa
 
 def test_exclude_project_keyword_file_and_folder_rules_match(temp_db):
     excluded_project = project_service.get_or_create_excluded_project()
+    project_service.set_project_enabled(excluded_project, True)
     rule_service.create_rule("SuperSecret", excluded_project)
     resource_service.create_or_update_file_default("D:\\Private\\Secret.docx", excluded_project)
     folder_rule_service.create_or_update_folder_rule("D:\\PrivateFolder", excluded_project)

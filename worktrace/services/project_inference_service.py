@@ -4,7 +4,7 @@ import ntpath
 import re
 import time
 
-from ..constants import EXCLUDED_PROJECT, STATUS_NORMAL
+from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL
 from ..db import get_connection, get_db_path, now_str
 from . import folder_rule_service
 from .resource_service import ensure_activity_resource
@@ -21,7 +21,7 @@ GENERIC_FILE_PROJECT_NAMES = {
     "桌面",
     "文档",
 }
-_KEYWORD_RULE_CACHE_TTL_SECONDS = 5.0
+_KEYWORD_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
 _KEYWORD_RULE_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 

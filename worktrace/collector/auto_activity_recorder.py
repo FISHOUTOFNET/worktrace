@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ..constants import (
+    HISTORY_PERSIST_THRESHOLD_SECONDS,
     SOURCE_AUTO,
     SOURCE_SYSTEM,
     STATUS_ERROR,
@@ -21,7 +22,6 @@ from ..services import activity_service, project_service, session_boundary_servi
 from ..services.settings_service import get_setting, set_setting
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
-HISTORY_PERSIST_THRESHOLD_SECONDS = 30
 
 
 def _parse_time(value: str) -> datetime:

@@ -410,7 +410,7 @@ def _project_signature(project: dict) -> tuple:
 def _project_rule_summary(project: dict) -> str:
     prefix = "已禁用 | " if not bool(int(project.get("enabled", 1))) else ""
     if project.get("name") == EXCLUDED_PROJECT:
-        prefix += "命中后匿名排除 | "
+        prefix += "命中后匿名记录 | "
     file_count = len(project.get("file_defaults", []))
     folder_count = len(project.get("folder_rules", []))
     keyword_count = len(project.get("keyword_rules", []))

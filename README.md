@@ -64,11 +64,11 @@ The default full-page data refresh interval is 10 seconds. A lightweight 1-secon
 
 ## Project Classification
 
-Folder project rules require a recognizable full local file path. File rules bind one specific file to a project. The special `排除规则` project supports file, folder, and keyword rules and starts with no default rules; matches are recorded anonymously as `已排除窗口` rather than classified as ordinary project time. Disabled projects remain visible but no longer participate in automatic classification.
+Folder project rules require a recognizable full local file path. File rules bind one specific file to a project. The special `排除规则` project supports file, folder, and keyword rules, starts disabled with no default rules, and records matches anonymously as `已排除窗口` only after the user enables it. Disabled projects remain visible but no longer participate in automatic classification.
 
 If a file path is known but no rule or file default matches, Time Details may show the parent folder name as a suggested project. Suggested names are display-only hints and are not inserted into the `project` table.
 
-Context carry-over applies to all normal non-anchor auxiliary activity between nearby matching anchor files. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same project carry-over rules.
+Context carry-over applies to normal non-anchor auxiliary activity. A single previous or next concrete anchor can carry context within 15 minutes. Two matching concrete anchors carry a continuous auxiliary block regardless of that 15-minute window. Idle and paused records stop anchor search; excluded and error records do not.
 
 For reporting, a short interruption is also folded into the surrounding anchor project: if two anchors for project A enclose a contiguous block under 5 minutes containing only another normal project or idle time, the Time Details session and project statistics count that block under A. The original activity status and project assignment are preserved in the detailed records.
 

@@ -506,8 +506,7 @@ Seed default settings:
 
 ```text
 poll_interval_seconds = 3
-idle_threshold_minutes = 5
-min_activity_seconds = 10
+idle_threshold_seconds = 300
 current_activity_snapshot =
 pending_short_seconds = 0
 collector_status = stopped
@@ -520,7 +519,7 @@ user_paused = false
 context_carry_minutes = 15
 ```
 
-The formal activity history threshold is fixed in code at 30 seconds. It is not stored in settings and is not configurable from the Settings page.
+The formal activity history threshold is a shared code constant fixed at 30 seconds. It is not stored in settings and is not configurable from the Settings page.
 
 Seed default project:
 
@@ -900,7 +899,7 @@ On startup:
 
 ### 20.1 Special Project
 
-WorkTrace seeds a system project named `排除规则`. It is displayed on the Project Rules page and supports the same three rule kinds as ordinary projects. It starts with no default rules; users add any file, folder, or keyword exclusions they want.
+WorkTrace seeds a disabled system project named `排除规则`. It is displayed on the Project Rules page and supports the same three rule kinds as ordinary projects. It starts with no default rules; users enable it and add any file, folder, or keyword exclusions they want.
 
 ```text
 folder

@@ -10,11 +10,14 @@ import customtkinter as ctk
 from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_current_duration, format_duration, format_project_label
 from ..services.live_time_service import (
+    is_unconfirmed_snapshot,
+    short_activity_carry_duration,
     snapshot_elapsed_seconds,
     snapshot_extra_seconds,
     snapshot_persisted_id,
     snapshot_seconds_for_date_range,
     snapshot_signature,
+    sync_short_activity_carry,
 )
 from ..services import statistics_service, timeline_service
 from ..services.settings_service import get_setting
@@ -402,46 +405,29 @@ class OverviewView(ctk.CTkFrame):
 
     def _sync_short_activity_carry(self, snapshot: dict | None) -> None:
         previous = getattr(self, "_current_snapshot", None)
-        if not _is_unconfirmed_snapshot(snapshot):
-            self._short_activity_carry = None
-            return
-
-        signature = snapshot_signature(snapshot)
-        carry = getattr(self, "_short_activity_carry", None)
-        if carry is None:
-            previous_id = snapshot_persisted_id(previous)
-            if previous_id is None:
-                return
-            carry = {
-                "activity_id": previous_id,
-                "base_seconds": _current_elapsed_seconds(previous or {}),
-                "completed_seconds": 0,
-                "transient_signature": signature,
-            }
-        elif carry.get("transient_signature") != signature:
-            if _is_unconfirmed_snapshot(previous):
-                carry["completed_seconds"] = int(carry.get("completed_seconds") or 0) + _current_elapsed_seconds(previous)
-            carry["transient_signature"] = signature
-        self._short_activity_carry = carry
+        self._short_activity_carry = sync_short_activity_carry(
+            getattr(self, "_short_activity_carry", None),
+            previous,
+            snapshot,
+        )
 
     def _refresh_recent_short_activity_carry(self, snapshot: dict | None) -> None:
         carry = getattr(self, "_short_activity_carry", None)
-        if not carry or not _is_unconfirmed_snapshot(snapshot):
+        if not carry or not is_unconfirmed_snapshot(snapshot):
             return
-        activity_id = int(carry.get("activity_id") or 0)
-        if activity_id <= 0:
-            return
-        confirmed_base = int(carry.get("base_seconds") or 0) + int(carry.get("completed_seconds") or 0)
         for widgets in self._recent_rows.values():
             activity_ids = {int(value) for value in widgets.get("activity_ids") or []}
-            if activity_id not in activity_ids:
-                continue
             target_date = str(widgets.get("target_date") or "")[:10]
-            if not target_date:
+            duration = short_activity_carry_duration(
+                carry,
+                list(activity_ids),
+                int(widgets.get("base_duration_seconds") or 0),
+                target_date,
+                snapshot,
+            )
+            if duration is None:
                 continue
-            current_live = snapshot_seconds_for_date_range(snapshot, target_date, target_date)
-            base_duration = int(widgets.get("base_duration_seconds") or 0)
-            widgets["duration"].configure(text=format_duration(max(base_duration, confirmed_base) + current_live))
+            widgets["duration"].configure(text=format_duration(duration))
             return
 
     def _bind_click(self, widget, command: Callable[[], None]) -> None:
@@ -487,7 +473,7 @@ def _current_elapsed_seconds(snapshot: dict) -> int:
 
 
 def _is_unconfirmed_snapshot(snapshot: dict | None) -> bool:
-    return bool(snapshot) and not bool(snapshot.get("is_persisted")) and snapshot_persisted_id(snapshot) is None
+    return is_unconfirmed_snapshot(snapshot)
 
 
 def _session_time(session: dict, include_date: bool = False) -> str:

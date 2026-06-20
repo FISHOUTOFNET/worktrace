@@ -295,6 +295,61 @@ def test_session_level_project_update_warns_but_does_not_change_anchor_defaults(
     assert row["default_project_id"] == other_project
 
 
+def test_manual_split_keeps_same_project_segments_separate(temp_db):
+    project_a = project_service.create_project("A")
+    first = _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
+    second = _activity("Word", "winword.exe", "A2.docx", "09:10:00", project_a)
+    third = _activity("Word", "winword.exe", "A3.docx", "09:20:00", project_a)
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
+
+    result = timeline_service.split_session_at_activity(session["activity_ids"], second)
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert result["left_manual_session_id"] != result["right_manual_session_id"]
+    assert [session["project_name"] for session in sessions] == ["A", "A"]
+    assert [session["activity_ids"] for session in sessions] == [[second, third], [first]]
+    assert all(session["is_manual_session"] for session in sessions)
+
+
+def test_manual_merge_combines_non_adjacent_same_project_without_moving_middle_project(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    first_a = _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
+    middle_b = _activity("Word", "winword.exe", "B1.docx", "09:10:00", project_b)
+    second_a = _activity("Word", "winword.exe", "A2.docx", "09:30:00", project_a)
+    activity_service.close_current_open_record("2026-06-18 09:40:00")
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+    latest_a = next(session for session in sessions if session["project_name"] == "A" and second_a in session["activity_ids"])
+    earliest_a = next(session for session in sessions if session["project_name"] == "A" and first_a in session["activity_ids"])
+
+    timeline_service.merge_sessions(latest_a["activity_ids"], earliest_a["activity_ids"])
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert [session["project_name"] for session in sessions] == ["A", "B"]
+    merged_a = next(session for session in sessions if session["project_name"] == "A")
+    assert set(merged_a["activity_ids"]) == {first_a, second_a}
+    assert activity_service.get_activity(middle_b)["project_id"] == project_b
+
+
+def test_move_activity_to_target_same_name_session(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    first_a = _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
+    _activity("Word", "winword.exe", "B1.docx", "09:10:00", project_b)
+    second_a = _activity("Word", "winword.exe", "A2.docx", "09:30:00", project_a)
+    activity_service.close_current_open_record("2026-06-18 09:40:00")
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+    latest_a = next(session for session in sessions if session["project_name"] == "A" and second_a in session["activity_ids"])
+
+    result = timeline_service.move_activity_to_session(first_a, latest_a["activity_ids"])
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    target = next(session for session in sessions if session.get("manual_session_id") == result["manual_session_id"])
+    assert set(target["activity_ids"]) == {first_a, second_a}
+    assert len([session for session in sessions if session["project_name"] == "A"]) == 1
+
+
 def test_session_boundary_splits_same_project_records(temp_db):
     project_a = project_service.create_project("A")
     first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 09:00:00", project_a)

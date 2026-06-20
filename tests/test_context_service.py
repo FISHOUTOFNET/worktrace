@@ -55,12 +55,34 @@ def test_uncategorized_anchor_stops_context_scan(temp_db):
     assert activity_service.get_activity(browser)["project_name"] == UNCATEGORIZED_PROJECT
 
 
-def test_same_project_anchors_do_not_classify_auxiliary_outside_carry_window(temp_db):
+def test_same_project_anchors_classify_auxiliary_without_carry_window_limit(temp_db):
     project = project_service.create_project("A")
     _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
     browser = _activity("Edge", "msedge.exe", "Search", "12:00:00")
     _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "15:00:00", project)
     activity_service.close_current_open_record("2026-06-18 15:10:00")
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(browser)["project_id"] == project
+
+
+def test_next_anchor_classifies_auxiliary_inside_carry_window(temp_db):
+    project = project_service.create_project("A")
+    browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
+    _activity("Word", "winword.exe", "A_file.docx", "09:20:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(browser)["project_id"] == project
+
+
+def test_next_anchor_does_not_classify_auxiliary_outside_carry_window(temp_db):
+    project = project_service.create_project("A")
+    browser = _activity("Edge", "msedge.exe", "Search", "09:00:00")
+    _activity("Word", "winword.exe", "A_file.docx", "09:30:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:40:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -93,6 +115,20 @@ def test_interrupt_and_carry_window_stop_context(temp_db):
     assert activity_service.get_activity(interrupted)["project_name"] == UNCATEGORIZED_PROJECT
     assert activity_service.get_activity(browser)["project_name"] == UNCATEGORIZED_PROJECT
     assert activity_service.get_activity(late)["project_name"] == UNCATEGORIZED_PROJECT
+
+
+def test_excluded_and_error_do_not_stop_context_scan(temp_db):
+    project = project_service.create_project("A")
+    _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project)
+    _activity("已排除", "excluded", "已排除窗口", "09:05:00", status="excluded")
+    browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
+    _activity("异常", "error", "采集异常", "09:15:00", status="error")
+    _activity("Word", "winword.exe", "A_file_2.docx", "09:20:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(browser)["project_id"] == project
 
 
 def test_recompute_is_idempotent_and_preserves_manual_auxiliary(temp_db):

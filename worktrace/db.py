@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Iterable
 
 from . import config
-from .constants import EXCLUDED_PROJECT, TIME_FORMAT, UNCATEGORIZED_PROJECT
+from .constants import (
+    DEFAULT_CONTEXT_CARRY_MINUTES,
+    DEFAULT_IDLE_THRESHOLD_SECONDS,
+    EXCLUDED_PROJECT,
+    TIME_FORMAT,
+    UNCATEGORIZED_PROJECT,
+)
 
 _db_path: Path | None = None
 
@@ -61,6 +67,45 @@ def initialize_database(path: str | Path | None = None) -> None:
 
 def migrate_schema(conn: sqlite3.Connection) -> None:
     _migrate_assignment_source_check(conn)
+    _ensure_manual_project_session_schema(conn)
+
+
+def _ensure_manual_project_session_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manual_project_session (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (project_id) REFERENCES project(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manual_project_session_activity (
+            activity_id INTEGER PRIMARY KEY,
+            manual_session_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (activity_id) REFERENCES activity_log(id),
+            FOREIGN KEY (manual_session_id) REFERENCES manual_project_session(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_manual_project_session_project
+        ON manual_project_session(project_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_manual_session_activity_session
+        ON manual_project_session_activity(manual_session_id)
+        """
+    )
 
 
 def _migrate_assignment_source_check(conn: sqlite3.Connection) -> None:
@@ -129,8 +174,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     ts = now_str()
     defaults = {
         "poll_interval_seconds": "3",
-        "idle_threshold_seconds": "300",
-        "min_activity_seconds": "10",
+        "idle_threshold_seconds": str(DEFAULT_IDLE_THRESHOLD_SECONDS),
         "current_activity_snapshot": "",
         "pending_short_seconds": "0",
         "collector_status": "stopped",
@@ -140,7 +184,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "export_path": str(config.get_default_export_dir().resolve()),
         "ui_refresh_seconds": "10",
         "user_paused": "false",
-        "context_carry_minutes": "15",
+        "context_carry_minutes": str(DEFAULT_CONTEXT_CARRY_MINUTES),
     }
     for key, value in defaults.items():
         conn.execute(
@@ -152,7 +196,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             (key, value, ts),
         )
     conn.execute(
-        "DELETE FROM settings WHERE key IN ('min_history_seconds', 'min_idle_segment_seconds', 'idle_threshold_minutes')"
+        "DELETE FROM settings WHERE key IN ('min_activity_seconds', 'min_history_seconds', 'min_idle_segment_seconds', 'idle_threshold_minutes')"
     )
     conn.execute(
         """
@@ -165,7 +209,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
-        VALUES (?, '命中后匿名记录为已排除窗口', 0, 1, 'system', ?, ?)
+        VALUES (?, '命中后匿名记录', 0, 0, 'system', ?, ?)
         ON CONFLICT(name) DO NOTHING
         """,
         (EXCLUDED_PROJECT, ts, ts),
@@ -196,6 +240,8 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         DROP TABLE IF EXISTS activity_project_assignment;
+        DROP TABLE IF EXISTS manual_project_session_activity;
+        DROP TABLE IF EXISTS manual_project_session;
         DROP TABLE IF EXISTS activity_log;
         DROP TABLE IF EXISTS session_boundary;
         DROP TABLE IF EXISTS folder_project_rule;

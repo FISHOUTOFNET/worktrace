@@ -7,6 +7,7 @@ from ..constants import (
     EXCLUDED_APP_NAME,
     EXCLUDED_PROCESS_NAME,
     EXCLUDED_WINDOW_TITLE,
+    RULE_CACHE_TTL_SECONDS,
     STATUS_EXCLUDED,
 )
 from ..db import dict_rows, get_connection, get_db_path
@@ -15,9 +16,9 @@ from ..platforms.base import ActiveWindow
 from ..resource_patterns import infer_resource_identity
 from .settings_service import get_list_setting, set_list_setting
 
-_EXCLUDE_KEYWORD_CACHE_TTL_SECONDS = 5.0
+_EXCLUDE_KEYWORD_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
 _EXCLUDE_KEYWORD_CACHE: dict[str, tuple[float, list[str]]] = {}
-_EXCLUDE_RULE_CACHE_TTL_SECONDS = 5.0
+_EXCLUDE_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
 _EXCLUDE_RULE_CACHE: dict[str, tuple[float, dict[str, list[dict]]]] = {}
 
 
