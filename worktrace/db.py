@@ -133,6 +133,7 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         """
         DROP TABLE IF EXISTS activity_project_assignment;
         DROP TABLE IF EXISTS activity_log;
+        DROP TABLE IF EXISTS session_boundary;
         DROP TABLE IF EXISTS folder_project_rule;
         DROP TABLE IF EXISTS project_rule;
         DROP TABLE IF EXISTS resource;

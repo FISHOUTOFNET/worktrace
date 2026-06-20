@@ -59,6 +59,8 @@ class WorkTraceApp(ctk.CTk):
         self.bind("<Configure>", self._on_configure, add="+")
         self.bind("<Unmap>", self._on_unmap, add="+")
         self.bind("<Map>", self._on_map, add="+")
+        self.bind_all("<Control-c>", self._copy_active_content, add="+")
+        self.bind_all("<Control-C>", self._copy_active_content, add="+")
         design.apply_app_theme()
         self.configure(fg_color=design.WINDOW_BG)
 
@@ -247,7 +249,12 @@ class WorkTraceApp(ctk.CTk):
         if hasattr(timeline, "open_context"):
             timeline.open_context(target, only_uncategorized=only_uncategorized, selected_session_id=session_id)
         else:
-            timeline.date_var.set(target)
+            if hasattr(timeline, "start_var"):
+                timeline.start_var.set(target)
+            if hasattr(timeline, "end_var"):
+                timeline.end_var.set(target)
+            if hasattr(timeline, "date_var"):
+                timeline.date_var.set(target)
             timeline.only_uncategorized.set(only_uncategorized)
         self.show_page("timeline")
 
@@ -695,11 +702,45 @@ class WorkTraceApp(ctk.CTk):
             self._start_collector_once()
         else:
             set_setting("user_paused", "true")
+            set_setting("collector_status", "paused")
+            set_setting("current_activity_snapshot", "")
         self._sync_sidebar_status()
         if self.active_page == "timeline":
             timeline = getattr(self, "timeline", None) or self.pages.get("timeline")
             if timeline is not None:
                 timeline.refresh()
+
+    def _copy_active_content(self, event=None):
+        focused = None
+        try:
+            focused = self.focus_get()
+        except Exception:
+            focused = None
+        if self._focused_widget_handles_copy(focused):
+            return None
+        page = self.pages.get(self.active_page)
+        text = ""
+        if page is not None and hasattr(page, "copy_selection_text"):
+            text = page.copy_selection_text() or ""
+        if not text and page is not None and hasattr(page, "copy_page_text"):
+            text = page.copy_page_text() or ""
+        if not text:
+            return None
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+        except Exception:
+            return None
+        return "break"
+
+    def _focused_widget_handles_copy(self, widget) -> bool:
+        if widget is None:
+            return False
+        try:
+            class_name = str(widget.winfo_class()).lower()
+        except Exception:
+            class_name = ""
+        return "entry" in class_name or "text" in class_name
 
     def on_close(self) -> None:
         self._restore_native_window_hook()

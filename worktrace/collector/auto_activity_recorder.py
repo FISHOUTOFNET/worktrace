@@ -17,7 +17,7 @@ from ..constants import (
 )
 from ..path_utils import normalize_path_key
 from ..resource_patterns import infer_resource_identity
-from ..services import activity_service
+from ..services import activity_service, session_boundary_service
 from ..services.settings_service import get_setting, set_setting
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
@@ -95,6 +95,10 @@ class AutoActivityRecorder:
     def stop(self, at_time: str, merge_transient: bool = True) -> None:
         self.finish_current(at_time, merge_transient=merge_transient)
 
+    def clear_short_buffers(self) -> None:
+        self.resume_after_short_activity = None
+        self._set_pending_short_seconds(0)
+
     def clear_snapshot(self) -> None:
         set_setting("current_activity_snapshot", "")
 
@@ -147,7 +151,9 @@ class AutoActivityRecorder:
     def _merge_or_pend_short_seconds(self, seconds: int) -> None:
         if seconds <= 0:
             return
-        target = activity_service.get_latest_closed_auto_normal_activity()
+        target = activity_service.get_latest_closed_auto_normal_activity(
+            after_time=session_boundary_service.latest_boundary_time()
+        )
         if target:
             activity_service.increment_activity_duration(int(target["id"]), seconds)
             target["duration_seconds"] = int(target.get("duration_seconds") or 0) + seconds

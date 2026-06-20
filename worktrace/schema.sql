@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS session_boundary (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS resource (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     resource_role TEXT NOT NULL CHECK (
@@ -120,6 +127,9 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
 
 CREATE INDEX IF NOT EXISTS idx_activity_time
 ON activity_log(start_time, end_time);
+
+CREATE INDEX IF NOT EXISTS idx_session_boundary_time
+ON session_boundary(occurred_at);
 
 CREATE INDEX IF NOT EXISTS idx_activity_status
 ON activity_log(status);

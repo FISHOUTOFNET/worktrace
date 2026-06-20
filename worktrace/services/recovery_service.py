@@ -5,12 +5,14 @@ from datetime import datetime
 
 from ..constants import STATUS_ERROR, TIME_FORMAT
 from ..db import get_connection, now_str
-from .settings_service import get_setting
+from . import session_boundary_service
+from .settings_service import get_setting, set_setting
 
 
 def recover_unclosed_records() -> None:
     heartbeat = get_setting("last_collector_heartbeat", "") or ""
     fallback_now = now_str()
+    recovered_boundary_at: str | None = None
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM activity_log WHERE end_time IS NULL ORDER BY id").fetchall()
         for row in rows:
@@ -38,7 +40,12 @@ def recover_unclosed_records() -> None:
                 """,
                 (end_time, duration, status, now_str(), row["id"]),
             )
+            recovered_boundary_at = end_time
             logging.info("recovered unclosed record id=%s status=%s", row["id"], status)
+    if recovered_boundary_at:
+        session_boundary_service.record_boundary(recovered_boundary_at, "recovered")
+        set_setting("current_activity_snapshot", "")
+        set_setting("pending_short_seconds", "0")
 
 
 def detect_time_jump(last_loop_time: str, now: str, threshold_seconds: int = 300) -> bool:

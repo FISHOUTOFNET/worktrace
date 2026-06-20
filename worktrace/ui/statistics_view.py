@@ -12,6 +12,7 @@ from ..formatters import format_duration
 from ..services import export_service, statistics_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
+from .date_range import DateRange, classify_range, current_week_range, previous_week_range, shift_range, today_range
 
 
 class StatisticsView(ctk.CTkFrame):
@@ -23,8 +24,12 @@ class StatisticsView(ctk.CTkFrame):
         self._default_report_date = today
         self._summary_labels: dict[str, ctk.CTkLabel] = {}
         self._row_widgets: dict[str, dict[str, Any]] = {}
+        self._latest_project_rows: list[dict] = []
+        self._range_refresh_after_id: str | None = None
+        self._suppress_range_trace = False
         self.empty_label = None
         self._build()
+        self._bind_range_traces()
 
     def _build(self) -> None:
         self.configure(fg_color="transparent")
@@ -41,13 +46,23 @@ class StatisticsView(ctk.CTkFrame):
 
         controls = ctk.CTkFrame(header, fg_color="transparent")
         controls.grid(row=0, column=1, rowspan=2, sticky="e")
+        self.prev_range_button = design.button(controls, text="<", width=34, command=lambda: self._shift_visible_range(-1))
+        self.prev_range_button.pack(side="left", padx=(0, 4))
+        self.next_range_button = design.button(controls, text=">", width=34, command=lambda: self._shift_visible_range(1))
+        self.next_range_button.pack(side="left", padx=(0, 8))
+        design.button(controls, text="今日", width=58, command=self._apply_today_range).pack(side="left", padx=(0, 4))
+        design.button(controls, text="本周", width=58, command=self._apply_current_week_range).pack(side="left", padx=(0, 4))
+        design.button(controls, text="上周", width=58, command=self._apply_previous_week_range).pack(side="left", padx=(0, 8))
         design.label(controls, text="开始", variant="caption").pack(side="left", padx=(0, 4))
-        design.entry(controls, textvariable=self.start_var, width=122).pack(side="left")
+        self.start_entry = design.entry(controls, textvariable=self.start_var, width=122)
+        self.start_entry.pack(side="left")
+        self.start_entry.bind("<Return>", lambda _event: self.refresh(), add="+")
         design.label(controls, text="结束", variant="caption").pack(side="left", padx=(12, 4))
-        design.entry(controls, textvariable=self.end_var, width=122).pack(side="left")
-        design.button(controls, text="刷新", width=70, command=self.refresh).pack(side="left", padx=8)
+        self.end_entry = design.entry(controls, textvariable=self.end_var, width=122)
+        self.end_entry.pack(side="left")
+        self.end_entry.bind("<Return>", lambda _event: self.refresh(), add="+")
         design.button(controls, text="Excel", variant="subtle", width=76, command=self.export_excel).pack(
-            side="left", padx=(0, 6)
+            side="left", padx=(8, 6)
         )
         design.button(controls, text="Markdown", variant="subtle", width=104, command=self.export_markdown).pack(side="left")
 
@@ -73,7 +88,7 @@ class StatisticsView(ctk.CTkFrame):
         self.rows_frame.grid_columnconfigure(0, weight=1)
 
     def _build_summary_cards(self) -> None:
-        for index, key in enumerate(["total", "effective", "idle", "excluded", "uncategorized"]):
+        for index, key in enumerate(["total", "effective", "uncategorized", "idle", "excluded"]):
             titles = {
                 "total": "总时长",
                 "effective": "有效",
@@ -88,9 +103,14 @@ class StatisticsView(ctk.CTkFrame):
             value.pack(anchor="w", padx=16, pady=(0, 14))
             self._summary_labels[key] = value
 
+    def _bind_range_traces(self) -> None:
+        for variable in (self.start_var, self.end_var):
+            variable.trace_add("write", lambda *_args: self._schedule_range_refresh())
+
     def refresh(self, ensure_context: bool = True) -> None:
         if not self._validate_dates():
             return
+        self._sync_range_buttons()
         self._refresh_values(ensure_context=ensure_context)
 
     def refresh_current_activity(self) -> None:
@@ -104,8 +124,59 @@ class StatisticsView(ctk.CTkFrame):
             self.end_var.set(current_default)
             self._default_report_date = current_default
         if not self._dates_are_valid():
+            self._sync_range_buttons()
             return
+        self._sync_range_buttons()
         self._refresh_values(ensure_context=False)
+
+    def _apply_today_range(self) -> None:
+        self._set_visible_range(today_range(timeline_service.get_default_report_date()))
+
+    def _apply_current_week_range(self) -> None:
+        self._set_visible_range(current_week_range(timeline_service.get_default_report_date()))
+
+    def _apply_previous_week_range(self) -> None:
+        self._set_visible_range(previous_week_range(timeline_service.get_default_report_date()))
+
+    def _shift_visible_range(self, direction: int) -> None:
+        shifted = shift_range(self.start_var.get(), self.end_var.get(), direction)
+        if shifted is None:
+            return
+        self._set_visible_range(shifted)
+
+    def _set_visible_range(self, date_range: DateRange) -> None:
+        self._suppress_range_trace = True
+        try:
+            self.start_var.set(date_range.start)
+            self.end_var.set(date_range.end)
+        finally:
+            self._suppress_range_trace = False
+        self.refresh()
+
+    def _schedule_range_refresh(self) -> None:
+        if self._suppress_range_trace:
+            return
+        if not hasattr(self, "after"):
+            return
+        if self._range_refresh_after_id is not None:
+            try:
+                self.after_cancel(self._range_refresh_after_id)
+            except Exception:
+                pass
+        self._range_refresh_after_id = self.after(500, self._refresh_after_range_change)
+
+    def _refresh_after_range_change(self) -> None:
+        self._range_refresh_after_id = None
+        self._sync_range_buttons()
+        if self._dates_are_valid():
+            self._refresh_values(ensure_context=True)
+
+    def _sync_range_buttons(self) -> None:
+        state = "normal" if classify_range(self.start_var.get(), self.end_var.get()) != "custom" else "disabled"
+        for button_name in ("prev_range_button", "next_range_button"):
+            button = getattr(self, button_name, None)
+            if button is not None:
+                button.configure(state=state)
 
     def _refresh_values(self, ensure_context: bool = True) -> None:
         summary = statistics_service.get_summary(self.start_var.get(), self.end_var.get(), ensure_context=ensure_context)
@@ -124,6 +195,7 @@ class StatisticsView(ctk.CTkFrame):
         self._sync_project_rows(rows, total)
 
     def _sync_project_rows(self, rows: list[dict], total: int) -> None:
+        self._latest_project_rows = list(rows)
         active_keys = {str(row["project"]) for row in rows}
         for key in list(self._row_widgets):
             if key not in active_keys:
@@ -159,9 +231,27 @@ class StatisticsView(ctk.CTkFrame):
         duration = int(row["total_duration"] or 0)
         percent = min(1.0, max(0.0, duration / total))
         widgets["name"].configure(text=str(row["project"]))
-        widgets["count"].configure(text=f"{row['record_count']} 条记录")
+        widgets["count"].configure(text=f"{row['record_count']} 条项目记录")
         widgets["bar"].set(percent)
         widgets["duration"].configure(text=format_duration(duration))
+
+    def copy_page_text(self) -> str:
+        lines = [
+            "统计与导出",
+            f"日期范围：{self.start_var.get()} 至 {self.end_var.get()}",
+            "",
+            "汇总",
+        ]
+        for key, title in [("total", "总时长"), ("effective", "有效"), ("uncategorized", "未归类"), ("idle", "空闲"), ("excluded", "排除")]:
+            label = self._summary_labels.get(key)
+            if label is not None:
+                lines.append(f"{title}：{label.cget('text')}")
+        lines.extend(["", "项目统计"])
+        for row in self._latest_project_rows:
+            lines.append(
+                f"{row['project']}｜{format_duration(row['total_duration'])}｜{row['record_count']} 条项目记录"
+            )
+        return "\n".join(lines)
 
     def _show_empty(self) -> None:
         for widgets in self._row_widgets.values():

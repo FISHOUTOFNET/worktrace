@@ -47,6 +47,15 @@ class ProjectRulesView(ctk.CTkFrame):
     def refresh_project_bindings(self) -> None:
         self.refresh_rules()
 
+    def copy_page_text(self) -> str:
+        lines = ["项目规则"]
+        for project in project_service.list_project_bindings():
+            state = "已启用" if bool(int(project.get("enabled", 1))) else "已禁用"
+            lines.append(f"{project.get('name')}｜{state}｜{_project_rule_summary(project)}")
+            for rule in _rules_for_project(project):
+                lines.append(f"- {RULE_TYPE_LABELS[rule['kind']]}｜{rule['target']}｜{_rule_detail_text(rule)}")
+        return "\n".join(lines)
+
     def refresh_rules(self) -> None:
         projects = project_service.list_project_bindings()
         signature = tuple(_project_signature(project) for project in projects)
@@ -61,7 +70,12 @@ class ProjectRulesView(ctk.CTkFrame):
             self._project_group(self.rules_frame, row_index, project)
 
     def _project_group(self, parent, row_index: int, project: dict) -> None:
-        group = design.section(parent, fg_color=design.CARD_SUBTLE_BG)
+        project_enabled = bool(int(project.get("enabled", 1)))
+        group = design.section(
+            parent,
+            fg_color=design.CARD_SUBTLE_BG if project_enabled else design.WARNING_SOFT,
+            border_color=design.BORDER if project_enabled else design.WARNING,
+        )
         group.grid(row=row_index, column=0, sticky="ew", padx=6, pady=6)
         group.grid_columnconfigure(0, weight=1)
 
@@ -69,9 +83,25 @@ class ProjectRulesView(ctk.CTkFrame):
         header.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 8))
         header.grid_columnconfigure(0, weight=1)
         title = project["name"]
-        if not bool(int(project.get("enabled", 1))):
-            title = f"{title}（已禁用）"
-        design.label(header, text=title, variant="section").grid(row=0, column=0, sticky="w")
+        title_row = ctk.CTkFrame(header, fg_color="transparent")
+        title_row.grid(row=0, column=0, sticky="w")
+        design.label(
+            title_row,
+            text=title,
+            variant="section",
+            text_color=design.TEXT if project_enabled else design.MUTED_TEXT,
+        ).pack(side="left")
+        if not project_enabled:
+            ctk.CTkLabel(
+                title_row,
+                text="已禁用",
+                font=design.FONT_CAPTION_STRONG,
+                text_color=design.WARNING,
+                fg_color=design.WARNING_SOFT,
+                corner_radius=999,
+                height=24,
+                width=58,
+            ).pack(side="left", padx=(8, 0))
         design.label(header, text=_project_rule_summary(project), variant="caption").grid(row=1, column=0, sticky="w", pady=(2, 0))
         actions = ctk.CTkFrame(header, fg_color="transparent")
         actions.grid(row=0, column=1, rowspan=2, sticky="e")
@@ -85,13 +115,13 @@ class ProjectRulesView(ctk.CTkFrame):
             ).pack(side="left", padx=(0, 8))
         design.button(
             actions,
-            text="新增规则",
+            text="新增排除" if project.get("name") == EXCLUDED_PROJECT else "新增规则",
             variant="subtle",
             width=82,
             command=lambda item=project: self.open_new_rule_dialog(initial_project_name=str(item.get("name") or "")),
         ).pack(side="left", padx=(0, 8))
         if project.get("name") != EXCLUDED_PROJECT:
-            action_text = "禁用项目" if bool(int(project.get("enabled", 1))) else "启用项目"
+            action_text = "禁用项目" if project_enabled else "启用项目"
             design.button(
                 actions,
                 text=action_text,
@@ -100,7 +130,7 @@ class ProjectRulesView(ctk.CTkFrame):
                 command=lambda item=project: self.set_project_enabled(item),
             ).pack(side="left", padx=(0, 8))
         else:
-            action_text = "禁用规则" if bool(int(project.get("enabled", 1))) else "启用规则"
+            action_text = "禁用排除" if project_enabled else "启用排除"
             design.button(
                 actions,
                 text=action_text,
@@ -128,7 +158,14 @@ class ProjectRulesView(ctk.CTkFrame):
             self._rule_row(rules_frame, index, rule)
 
     def _rule_row(self, parent, row_index: int, rule: dict) -> None:
-        row = ctk.CTkFrame(parent, fg_color=design.CARD_BG, corner_radius=design.RADIUS_MD, border_width=1, border_color=design.BORDER)
+        rule_enabled = bool(rule.get("enabled", True))
+        row = ctk.CTkFrame(
+            parent,
+            fg_color=design.CARD_BG if rule_enabled else design.WARNING_SOFT,
+            corner_radius=design.RADIUS_MD,
+            border_width=1,
+            border_color=design.BORDER if rule_enabled else design.WARNING,
+        )
         row.grid(row=row_index, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
         row.grid_columnconfigure(1, weight=1)
 
@@ -136,14 +173,20 @@ class ProjectRulesView(ctk.CTkFrame):
             row,
             text=RULE_TYPE_LABELS[rule["kind"]],
             font=design.FONT_CAPTION_STRONG,
-            text_color=design.ACCENT,
-            fg_color=design.ACCENT_SOFT,
+            text_color=design.ACCENT if rule_enabled else design.WARNING,
+            fg_color=design.ACCENT_SOFT if rule_enabled else design.WARNING_SOFT,
             corner_radius=999,
             height=26,
             width=58,
         )
         badge.grid(row=0, column=0, rowspan=2, sticky="w", padx=12, pady=9)
-        design.label(row, text=rule["target"], variant="strong", anchor="w").grid(
+        design.label(
+            row,
+            text=rule["target"],
+            variant="strong",
+            anchor="w",
+            text_color=design.TEXT if rule_enabled else design.MUTED_TEXT,
+        ).grid(
             row=0, column=1, sticky="ew", padx=(0, 12), pady=(9, 2)
         )
         design.label(row, text=_rule_detail_text(rule), variant="caption", anchor="w").grid(

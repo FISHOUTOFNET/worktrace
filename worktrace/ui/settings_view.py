@@ -52,7 +52,7 @@ class SettingsView(ctk.CTkFrame):
             entry.insert(0, get_setting(key, "") or "")
             entry.grid(row=row_index, column=1, sticky="ew", pady=7)
             self.entries[key] = entry
-            design.button(form, text="浏览", variant="ghost", width=72, command=self.choose_export_path).grid(
+            design.button(form, text="浏览", variant="subtle", width=72, command=self.choose_export_path).grid(
                 row=row_index, column=2, sticky="e", padx=(8, 18), pady=7
             )
         design.button(form, text="保存设置", command=self.save).grid(
@@ -78,6 +78,17 @@ class SettingsView(ctk.CTkFrame):
 
     def refresh(self) -> None:
         return
+
+    def copy_page_text(self) -> str:
+        export_path = self.entries.get("export_path").get() if "export_path" in self.entries else ""
+        return "\n".join(
+            [
+                "设置与隐私",
+                "调整导出目录、查看隐私说明或清空本地记录。",
+                f"导出目录：{export_path}",
+                "本地数据操作：清空所有本地记录",
+            ]
+        )
 
     def save(self) -> None:
         for key, entry in self.entries.items():

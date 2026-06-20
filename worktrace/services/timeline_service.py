@@ -6,7 +6,7 @@ from datetime import date as date_type, datetime, time as datetime_time, timedel
 from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from ..db import dict_rows, get_connection, now_str
 from ..resource_patterns import extract_anchor_file_name
-from . import folder_rule_service
+from . import folder_rule_service, session_boundary_service
 from .activity_service import update_activities_project
 from .context_service import recompute_context_assignments_for_date
 from .project_service import get_or_create_uncategorized_project
@@ -16,8 +16,17 @@ SHORT_CONTEXT_MERGE_SECONDS = 5 * 60
 
 
 def get_project_sessions_by_date(date: str, include_hidden: bool = True, ensure_context: bool = True) -> list[dict]:
+    return get_project_sessions_by_range(date, date, include_hidden=include_hidden, ensure_context=ensure_context)
+
+
+def get_project_sessions_by_range(
+    start_date: str,
+    end_date: str,
+    include_hidden: bool = True,
+    ensure_context: bool = True,
+) -> list[dict]:
     uncategorized_id = get_or_create_uncategorized_project()
-    rows = get_report_activity_rows(date, date, include_hidden=include_hidden, ensure_context=ensure_context)
+    rows = get_report_activity_rows(start_date, end_date, include_hidden=include_hidden, ensure_context=ensure_context)
     sessions: list[dict] = []
     current: list[dict] = []
     for row in rows:
@@ -336,6 +345,10 @@ def _load_session_rows(
 def _can_merge(previous: dict, current: dict) -> bool:
     if not (_can_participate_in_report_session(previous) and _can_participate_in_report_session(current)):
         return False
+    if str(previous.get("report_date") or "") != str(current.get("report_date") or ""):
+        return False
+    if _has_session_boundary_between(previous, current):
+        return False
     return str(previous.get("report_project_key") or "") == str(current.get("report_project_key") or "")
 
 
@@ -392,7 +405,12 @@ def _with_report_dates(rows: list[dict]) -> list[dict]:
     carry_project_key: str | None = None
     carry_report_date: str | None = None
     carry_active = False
+    previous_row: dict | None = None
     for row in rows:
+        if previous_row is not None and _has_session_boundary_between(previous_row, row):
+            carry_project_key = None
+            carry_report_date = None
+            carry_active = False
         if _is_project_day_carry_row(row):
             start_day = _date_part(row.get("start_time"))
             key = str(row.get("report_project_key") or "")
@@ -406,8 +424,10 @@ def _with_report_dates(rows: list[dict]) -> list[dict]:
             item["report_duration_seconds"] = _display_duration(row)
             item["report_slice"] = False
             report_rows.append(item)
+            previous_row = row
             continue
         report_rows.extend(_split_calendar_report_rows(row))
+        previous_row = row
     return report_rows
 
 
@@ -488,6 +508,8 @@ def _find_short_context_merge(rows: list[dict], anchor_index: int, carry_minutes
     after_interrupt_block = False
     for pos in range(anchor_index + 1, len(rows)):
         row = rows[pos]
+        if _has_session_boundary_between(rows[pos - 1], row):
+            return None
         if _is_project_anchor(row) and str(row.get("display_project_key") or "") == anchor_key:
             if (
                 interrupt_indices
@@ -543,6 +565,14 @@ def _minutes_between(start: str, end: str) -> float:
     start_dt = datetime.strptime(start, TIME_FORMAT)
     end_dt = datetime.strptime(end, TIME_FORMAT)
     return max(0.0, (end_dt - start_dt).total_seconds() / 60)
+
+
+def _has_session_boundary_between(previous: dict, current: dict) -> bool:
+    boundary_start = previous.get("end_time") or previous.get("start_time") or ""
+    boundary_end = current.get("start_time") or ""
+    if not boundary_start or not boundary_end:
+        return False
+    return session_boundary_service.has_boundary_between(str(boundary_start), str(boundary_end))
 
 
 def _ensure_context_for_report_range(start_date: str, end_date: str) -> None:

@@ -1,4 +1,4 @@
-from worktrace.services import activity_service, project_service, statistics_service
+from worktrace.services import activity_service, project_service, session_boundary_service, statistics_service
 
 
 def test_statistics_aggregation(temp_db):
@@ -26,21 +26,18 @@ def test_summary_ensures_context_once_and_reuses_it_for_project_stats(temp_db, m
     def fake_recompute(day):
         context_calls.append(day)
 
-    def fake_sessions(day, include_hidden=True, ensure_context=True):
-        session_calls.append((day, include_hidden, ensure_context))
+    def fake_sessions(start, end, include_hidden=True, ensure_context=True):
+        session_calls.append((start, end, include_hidden, ensure_context))
         return []
 
     monkeypatch.setattr(statistics_service, "recompute_context_assignments_for_date", fake_recompute)
-    monkeypatch.setattr(statistics_service.timeline_service, "get_project_sessions_by_date", fake_sessions)
+    monkeypatch.setattr(statistics_service.timeline_service, "get_project_sessions_by_range", fake_sessions)
 
     summary = statistics_service.get_summary("2026-06-18", "2026-06-19")
 
     assert summary["total_duration"] == 0
     assert context_calls == ["2026-06-17", "2026-06-18", "2026-06-19"]
-    assert session_calls == [
-        ("2026-06-18", False, False),
-        ("2026-06-19", False, False),
-    ]
+    assert session_calls == [("2026-06-18", "2026-06-19", False, False)]
 
 
 def test_project_stats_use_short_context_merge_without_changing_raw_project(temp_db):
@@ -62,7 +59,7 @@ def test_project_stats_use_short_context_merge_without_changing_raw_project(temp
 
     stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
 
-    assert stats == [{"project": "A", "total_duration": 900, "record_count": 3}]
+    assert stats == [{"project": "A", "total_duration": 900, "record_count": 1}]
     assert activity_service.get_activity(b)["project_id"] == project_b
 
 
@@ -93,8 +90,25 @@ def test_statistics_use_report_date_for_cross_midnight_projects_and_split_idle(t
     assert previous["total_duration"] == 40 * 60
     assert previous["classified_duration"] == 40 * 60
     assert statistics_service.get_project_stats("2026-06-18", "2026-06-18") == [
-        {"project": "A", "total_duration": 40 * 60, "record_count": 2}
+        {"project": "A", "total_duration": 40 * 60, "record_count": 1}
     ]
     assert current["total_duration"] == 45 * 60
     assert current["effective_duration"] == 15 * 60
     assert current["idle_duration"] == 30 * 60
+
+
+def test_project_stats_count_project_records_split_by_boundary(temp_db):
+    project_a = project_service.create_project("A")
+    first = activity_service.create_activity(
+        "Word", "word.exe", "A1.docx", project_id=project_a, start_time="2026-06-18 09:00:00"
+    )
+    activity_service.close_activity(first, "2026-06-18 09:10:00")
+    session_boundary_service.record_boundary("2026-06-18 09:10:00", "stopped")
+    second = activity_service.create_activity(
+        "Word", "word.exe", "A2.docx", project_id=project_a, start_time="2026-06-18 09:20:00"
+    )
+    activity_service.close_activity(second, "2026-06-18 09:30:00")
+
+    assert statistics_service.get_project_stats("2026-06-18", "2026-06-18") == [
+        {"project": "A", "total_duration": 20 * 60, "record_count": 2}
+    ]

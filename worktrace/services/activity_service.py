@@ -173,10 +173,15 @@ def reopen_activity(activity_id: int) -> None:
         )
 
 
-def get_latest_closed_auto_normal_activity() -> dict | None:
+def get_latest_closed_auto_normal_activity(after_time: str | None = None) -> dict | None:
+    time_clause = ""
+    params: list[Any] = [STATUS_NORMAL, SOURCE_AUTO]
+    if after_time:
+        time_clause = "AND end_time > ?"
+        params.append(after_time)
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT *
             FROM activity_log
             WHERE is_deleted = 0
@@ -184,10 +189,11 @@ def get_latest_closed_auto_normal_activity() -> dict | None:
               AND status = ?
               AND source = ?
               AND end_time IS NOT NULL
+              {time_clause}
             ORDER BY end_time DESC, id DESC
             LIMIT 1
             """,
-            (STATUS_NORMAL, SOURCE_AUTO),
+            params,
         ).fetchone()
     return dict(row) if row else None
 

@@ -44,7 +44,7 @@ def export_markdown_file(start_date: str, end_date: str, path: str) -> str:
     ]
 
     project_summary = "\n".join(
-        f"- {row['project']}：总计 {format_duration(row['total_duration'])}，记录 {row['record_count']} 条"
+        f"- {row['project']}：总计 {format_duration(row['total_duration'])}，项目记录 {row['record_count']} 条"
         for row in project_rows
     ) or "- 暂无"
 

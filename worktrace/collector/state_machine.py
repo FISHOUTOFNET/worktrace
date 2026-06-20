@@ -13,7 +13,7 @@ from ..constants import (
 from ..db import now_str
 from ..path_utils import normalize_path_key
 from ..platforms.base import ActiveWindow
-from ..services import activity_service, privacy_service
+from ..services import activity_service, privacy_service, session_boundary_service
 from .auto_activity_recorder import AutoActivityRecorder
 
 STATE_TO_STATUS = {
@@ -39,10 +39,13 @@ class CollectorStateMachine:
     ) -> None:
         transition_time = at_time or now_str()
         if state == "stopped":
-            self.recorder.stop(transition_time)
+            self._stop_recording_at_boundary(transition_time, "stopped")
             activity_service.close_current_open_record(transition_time)
             self.state = "stopped"
             self.active_signature = None
+            return
+        if state == "paused":
+            self.pause(transition_time)
             return
 
         status = STATE_TO_STATUS[state]
@@ -64,10 +67,23 @@ class CollectorStateMachine:
 
     def reset_for_time_jump(self, at_time: str | None = None) -> None:
         transition_time = at_time or now_str()
-        self.recorder.stop(transition_time, merge_transient=False)
+        self._stop_recording_at_boundary(transition_time, "time_jump")
         activity_service.close_current_open_record(transition_time)
         self.state = "stopped"
         self.active_signature = None
+
+    def pause(self, at_time: str | None = None) -> None:
+        transition_time = at_time or now_str()
+        if self.state != "paused" or self.recorder.current_payload is not None:
+            self._stop_recording_at_boundary(transition_time, "paused")
+            activity_service.close_current_open_record(transition_time)
+        self.state = "paused"
+        self.active_signature = None
+
+    def _stop_recording_at_boundary(self, at_time: str, reason: str) -> None:
+        self.recorder.stop(at_time, merge_transient=False)
+        self.recorder.clear_short_buffers()
+        session_boundary_service.record_boundary(at_time, reason)
 
     def _signature_for_payload(self, payload: dict) -> tuple[str, ...]:
         return (

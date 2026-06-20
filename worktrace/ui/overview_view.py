@@ -1,23 +1,20 @@
 from __future__ import annotations
 
 import json
-import logging
 import time
 from datetime import date, datetime, timedelta
-from pathlib import Path
-from tkinter import messagebox
 from typing import Callable, Any
 
 import customtkinter as ctk
 
 from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
 from ..formatters import format_current_duration, format_duration
-from ..services import export_service, statistics_service, timeline_service
+from ..services import statistics_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
 
 TODAY_SCOPE = "今日概览"
-WEEK_SCOPE = "每周概览"
+WEEK_SCOPE = "本周概览"
 
 
 class OverviewView(ctk.CTkFrame):
@@ -65,17 +62,7 @@ class OverviewView(ctk.CTkFrame):
             command=lambda _value: self._switch_scope(),
             width=180,
         )
-        self.scope_switch.pack(side="left", padx=(0, 8))
-        self.timeline_button = design.button(action_row, text="查看时间详情", command=lambda: self._open_timeline(False))
-        self.timeline_button.pack(side="left", padx=(0, 8))
-        design.button(
-            action_row,
-            text="只看未归类",
-            variant="subtle",
-            command=lambda: self._open_timeline(True),
-        ).pack(side="left", padx=(0, 8))
-        self.export_button = design.button(action_row, text="导出今日", variant="subtle", command=self.export_current_excel)
-        self.export_button.pack(side="left")
+        self.scope_switch.pack(side="left")
 
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
@@ -111,7 +98,7 @@ class OverviewView(ctk.CTkFrame):
         recent_header = ctk.CTkFrame(recent, fg_color="transparent")
         recent_header.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
         recent_header.grid_columnconfigure(0, weight=1)
-        self.recent_title_label = design.label(recent_header, text="最近会话", variant="section")
+        self.recent_title_label = design.label(recent_header, text="最近项目", variant="section")
         self.recent_title_label.grid(row=0, column=0, sticky="w")
         design.button(
             recent_header,
@@ -164,11 +151,9 @@ class OverviewView(ctk.CTkFrame):
         if self.scope_var.get() == WEEK_SCOPE:
             self.title_label.configure(text=WEEK_SCOPE)
             self.subtitle_label.configure(text="把本周工作轨迹整理成可确认、可导出的工作记忆。")
-            self.export_button.configure(text="导出本周")
         else:
             self.title_label.configure(text=TODAY_SCOPE)
             self.subtitle_label.configure(text="把今天的工作轨迹整理成可确认、可导出的工作记忆。")
-            self.export_button.configure(text="导出今日")
 
     def _scope_dates(self) -> tuple[str, str]:
         today = date.fromisoformat(timeline_service.get_default_report_date())
@@ -279,6 +264,34 @@ class OverviewView(ctk.CTkFrame):
         if self.open_statistics_callback is not None:
             self.open_statistics_callback()
 
+    def copy_page_text(self) -> str:
+        start, end = self._scope_dates()
+        lines = [
+            self.title_label.cget("text"),
+            self.subtitle_label.cget("text"),
+            f"日期范围：{start} 至 {end}",
+            self.current_activity_label.cget("text"),
+            "",
+            "指标",
+        ]
+        for key, title in [("total", "总时长"), ("classified", "已归类"), ("uncategorized", "未归类")]:
+            label = self.kpi_value_labels.get(key)
+            if label is not None:
+                lines.append(f"{title}：{label.cget('text')}")
+        lines.extend(["", "最近项目"])
+        for widgets in self._recent_rows.values():
+            lines.append(
+                "｜".join(
+                    [
+                        widgets["time"].cget("text"),
+                        widgets["title"].cget("text"),
+                        widgets["subtitle"].cget("text"),
+                        widgets["duration"].cget("text"),
+                    ]
+                )
+            )
+        return "\n".join(line for line in lines if line is not None)
+
     def refresh_current_activity(self) -> None:
         snapshot = _read_current_activity_snapshot()
         signature = _snapshot_signature(snapshot)
@@ -311,30 +324,6 @@ class OverviewView(ctk.CTkFrame):
         self._current_snapshot = _read_current_activity_snapshot()
         self._current_signature = _snapshot_signature(self._current_snapshot)
         self.current_activity_label.configure(text=current_activity_text_from_snapshot(self._current_snapshot))
-
-    def export_current_excel(self) -> None:
-        start, end = self._scope_dates()
-        export_dir = Path(get_setting("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
-        prefix = "today" if start == end else "weekly"
-        path = export_dir / f"worktrace_{prefix}_{start}_{end}.xlsx"
-        try:
-            exported = export_service.export_excel(start, end, str(path))
-            messagebox.showinfo("导出完成", exported)
-        except Exception as exc:
-            logging.exception("overview excel export failed")
-            messagebox.showerror("导出失败", str(exc))
-
-    def export_weekly_markdown(self) -> None:
-        today = date.fromisoformat(timeline_service.get_default_report_date())
-        start = today - timedelta(days=today.weekday())
-        export_dir = Path(get_setting("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
-        path = export_dir / f"worktrace_weekly_{start.isoformat()}_{today.isoformat()}.md"
-        try:
-            exported = export_service.export_markdown(start.isoformat(), today.isoformat(), str(path))
-            messagebox.showinfo("导出完成", exported)
-        except Exception as exc:
-            logging.exception("weekly markdown export failed")
-            messagebox.showerror("导出失败", str(exc))
 
     def _bind_click(self, widget, command: Callable[[], None]) -> None:
         widget.bind("<Button-1>", lambda _event: command(), add="+")

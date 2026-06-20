@@ -34,14 +34,15 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 heartbeat_counter = 0
 
             if not get_bool_setting("first_run_notice_accepted", False):
-                machine.transition_to("paused", at_time=now)
+                set_setting("collector_status", "paused")
+                machine.pause(at_time=now)
                 _sleep_poll(stop_event)
                 last_loop_time = now
                 continue
 
             if get_bool_setting("user_paused", False):
                 set_setting("collector_status", "paused")
-                machine.transition_to("paused", at_time=now)
+                machine.pause(at_time=now)
                 _sleep_poll(stop_event)
                 last_loop_time = now
                 continue

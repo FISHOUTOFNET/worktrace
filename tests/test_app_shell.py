@@ -57,6 +57,14 @@ class FakeVar:
         return self.value
 
 
+class FakeCopyPage(FakePage):
+    def copy_selection_text(self):
+        return "selected row"
+
+    def copy_page_text(self):
+        return "page summary"
+
+
 def _app_stub():
     app = object.__new__(WorkTraceApp)
     app.pages = {"overview": FakePage(), "timeline": FakePage()}
@@ -348,3 +356,17 @@ def test_shell_open_timeline_passes_session_context():
 
     assert calls == [("2026-06-18", False, "1-2")]
     assert app.active_page == "timeline"
+
+
+def test_shell_copy_uses_page_selection_before_page_summary():
+    app = _app_stub()
+    app.pages["overview"] = FakeCopyPage()
+    app.focus_get = lambda: None
+    copied = []
+    app.clipboard_clear = lambda: copied.clear()
+    app.clipboard_append = lambda text: copied.append(text)
+
+    result = WorkTraceApp._copy_active_content(app)
+
+    assert result == "break"
+    assert copied == ["selected row"]

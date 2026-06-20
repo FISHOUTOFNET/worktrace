@@ -1,6 +1,6 @@
 from worktrace.constants import UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection
-from worktrace.services import activity_service, project_service, settings_service, timeline_service
+from worktrace.services import activity_service, project_service, session_boundary_service, settings_service, timeline_service
 
 
 def _activity(app, process, title, start, project_id=None, status="normal"):
@@ -292,3 +292,32 @@ def test_session_level_project_update_warns_but_does_not_change_anchor_defaults(
     with get_connection() as conn:
         row = conn.execute("SELECT default_project_id FROM resource WHERE id = ?", (first_resource,)).fetchone()
     assert row["default_project_id"] == other_project
+
+
+def test_session_boundary_splits_same_project_records(temp_db):
+    project_a = project_service.create_project("A")
+    first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 09:00:00", project_a)
+    activity_service.close_activity(first, "2026-06-18 09:10:00")
+    session_boundary_service.record_boundary("2026-06-18 09:10:00", "stopped")
+    second = _activity_at("Word", "winword.exe", "A2.docx", "2026-06-18 09:20:00", project_a)
+    activity_service.close_activity(second, "2026-06-18 09:30:00")
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert [session["project_name"] for session in sessions] == ["A", "A"]
+    assert [session["start_time"][11:16] for session in sessions] == ["09:20", "09:00"]
+
+
+def test_session_boundary_stops_cross_midnight_project_carry(temp_db):
+    project_a = project_service.create_project("A")
+    first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 23:50:00", project_a)
+    activity_service.close_activity(first, "2026-06-19 00:05:00")
+    session_boundary_service.record_boundary("2026-06-19 00:05:00", "stopped")
+    second = _activity_at("Word", "winword.exe", "A2.docx", "2026-06-19 00:10:00", project_a)
+    activity_service.close_activity(second, "2026-06-19 00:20:00")
+
+    previous_day = timeline_service.get_project_sessions_by_date("2026-06-18")
+    next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
+
+    assert previous_day[0]["duration_seconds"] == 15 * 60
+    assert next_day[0]["duration_seconds"] == 10 * 60

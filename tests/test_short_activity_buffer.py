@@ -125,13 +125,13 @@ def test_stop_short_current_activity_merges_or_pends(temp_db):
     machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:00:00")
     machine.transition_to("stopped", at_time="2026-06-18 09:00:29")
     assert _rows() == []
-    assert settings_service.get_setting("pending_short_seconds") == "29"
+    assert settings_service.get_setting("pending_short_seconds") == "0"
 
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:30")
     machine.transition_to("stopped", at_time="2026-06-18 09:01:30")
-    assert _rows()[0]["duration_seconds"] == 59
+    assert _rows()[0]["duration_seconds"] == 30
 
 
 def test_short_idle_polling_does_not_create_history(temp_db):

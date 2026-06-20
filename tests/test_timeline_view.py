@@ -549,7 +549,7 @@ def test_refresh_current_activity_updates_stable_resource_values_without_full_re
     view._selected_resource_id = 7
     fallback_refreshes = []
 
-    monkeypatch.setattr(timeline_service, "get_project_sessions_by_date", lambda *_args, **_kwargs: [new_session])
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", lambda *_args, **_kwargs: [new_session])
     monkeypatch.setattr(timeline_service, "get_session_resource_summary", lambda *_args, **_kwargs: [new_resource])
     view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
 
@@ -596,7 +596,7 @@ def test_refresh_current_activity_updates_stable_detail_values_without_full_refr
     view._selected_activity_id = 1
     fallback_refreshes = []
 
-    monkeypatch.setattr(timeline_service, "get_project_sessions_by_date", lambda *_args, **_kwargs: [session])
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", lambda *_args, **_kwargs: [session])
     monkeypatch.setattr(timeline_service, "get_session_activity_details", lambda *_args, **_kwargs: [new_detail])
     view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
 
@@ -627,7 +627,7 @@ def test_refresh_current_activity_falls_back_when_session_structure_changes(monk
     _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, old_session))])
     fallback_refreshes = []
 
-    monkeypatch.setattr(timeline_service, "get_project_sessions_by_date", lambda *_args, **_kwargs: [new_session])
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", lambda *_args, **_kwargs: [new_session])
     view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
 
     TimelineView.refresh_current_activity(view)
@@ -642,7 +642,7 @@ def test_refresh_current_activity_skips_tables_while_user_interacts(monkeypatch)
     session_calls = []
     fallback_refreshes = []
 
-    monkeypatch.setattr(timeline_service, "get_project_sessions_by_date", lambda *_args, **_kwargs: session_calls.append("called"))
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", lambda *_args, **_kwargs: session_calls.append("called"))
     view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
 
     TimelineView.refresh_current_activity(view)

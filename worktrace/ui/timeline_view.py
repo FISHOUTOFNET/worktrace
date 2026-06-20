@@ -13,6 +13,7 @@ from ..formatters import format_current_duration, format_duration
 from ..services import activity_service, project_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
+from .date_range import DateRange, classify_range, current_week_range, previous_week_range, shift_range, today_range
 from .project_rule_dialog import open_project_rule_dialog
 
 
@@ -26,7 +27,10 @@ TREE_ROWHEIGHT = 36
 class TimelineView(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
-        self.date_var = ctk.StringVar(value=timeline_service.get_default_report_date())
+        today = timeline_service.get_default_report_date()
+        self.start_var = ctk.StringVar(value=today)
+        self.end_var = ctk.StringVar(value=today)
+        self.date_var = self.start_var
         self.only_uncategorized = ctk.BooleanVar(value=False)
         self.session_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
         self.resource_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
@@ -48,6 +52,8 @@ class TimelineView(ctk.CTkFrame):
         self._control_idle_after_id: str | None = None
         self._loading_editor = False
         self._resource_selected_at = 0.0
+        self._session_project_dirty = False
+        self._resource_project_dirty = False
         self._tree_column_widths: dict[str, dict[str, int]] = {}
         self._tree_keys: dict[int, str] = {}
         self._pending_session_id: str | None = None
@@ -55,6 +61,7 @@ class TimelineView(ctk.CTkFrame):
         self._build()
 
     def _build(self) -> None:
+        self._ensure_range_vars()
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -83,9 +90,21 @@ class TimelineView(ctk.CTkFrame):
 
         controls = ctk.CTkFrame(top, fg_color="transparent")
         controls.grid(row=0, column=1, sticky="e")
-        self._label(controls, text="日期", text_color=design.MUTED_TEXT).pack(side="left", padx=(4, 4))
-        self.date_entry = self._entry(controls, textvariable=self.date_var, width=120)
-        self.date_entry.pack(side="left")
+        self.prev_range_button = self._button(controls, text="<", width=34, command=lambda: self._shift_visible_range(-1))
+        self.prev_range_button.pack(side="left", padx=(0, 4))
+        self.next_range_button = self._button(controls, text=">", width=34, command=lambda: self._shift_visible_range(1))
+        self.next_range_button.pack(side="left", padx=(0, 8))
+        self._button(controls, text="今日", width=58, command=self._apply_today_range).pack(side="left", padx=(0, 4))
+        self._button(controls, text="本周", width=58, command=self._apply_current_week_range).pack(side="left", padx=(0, 4))
+        self._button(controls, text="上周", width=58, command=self._apply_previous_week_range).pack(side="left", padx=(0, 8))
+        self._label(controls, text="开始", text_color=design.MUTED_TEXT).pack(side="left", padx=(4, 4))
+        self.start_entry = self._entry(controls, textvariable=self.start_var, width=118)
+        self.start_entry.pack(side="left")
+        self.start_entry.bind("<Return>", lambda _event: self.refresh(), add="+")
+        self._label(controls, text="结束", text_color=design.MUTED_TEXT).pack(side="left", padx=(8, 4))
+        self.end_entry = self._entry(controls, textvariable=self.end_var, width=118)
+        self.end_entry.pack(side="left")
+        self.end_entry.bind("<Return>", lambda _event: self.refresh(), add="+")
         self._checkbox(controls, text="仅未归类", variable=self.only_uncategorized, command=self.refresh).pack(side="left", padx=(8, 0))
 
         self._build_session_table()
@@ -110,7 +129,7 @@ class TimelineView(ctk.CTkFrame):
         session_header = ctk.CTkFrame(self.session_panel, fg_color="transparent")
         session_header.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
         session_header.grid_columnconfigure(0, weight=1)
-        self._label(session_header, text="今日会话", font=design.FONT_SECTION).grid(row=0, column=0, sticky="w")
+        self._label(session_header, text="项目", font=design.FONT_SECTION).grid(row=0, column=0, sticky="w")
         self.session_count_label = self._label(session_header, text="0 条", text_color=design.MUTED_TEXT)
         self.session_count_label.grid(row=0, column=1, sticky="e")
         columns = ("time", "project", "duration", "summary")
@@ -146,12 +165,12 @@ class TimelineView(ctk.CTkFrame):
 
         actions = ctk.CTkFrame(header, fg_color="transparent")
         actions.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        self._label(actions, text="整体项目", text_color=design.MUTED_TEXT).pack(side="left", padx=(0, 4))
         self.session_project_menu = self._option_menu(
             actions,
             values=[UNCATEGORIZED_PROJECT],
             variable=self.session_project_var,
             width=160,
+            command=lambda _name: self._mark_session_project_dirty(),
         )
         self.session_project_menu.pack(side="left", padx=(0, 6))
         self.save_session_project_button = self._button(
@@ -315,13 +334,17 @@ class TimelineView(ctk.CTkFrame):
             widget.bind("<FocusIn>", self._on_control_activity, add="+")
 
     def refresh(self, ensure_context: bool = True) -> None:
+        self._ensure_range_vars()
         self._sync_status()
-        date_text = self.date_var.get()
-        if not self._valid_date(date_text):
-            self.current_activity_label.configure(text="日期格式错误，请使用 YYYY-MM-DD")
+        if not self._valid_range():
             return
+        self._sync_range_buttons()
         self._refresh_projects()
-        sessions = timeline_service.get_project_sessions_by_date(date_text, ensure_context=ensure_context)
+        sessions = timeline_service.get_project_sessions_by_range(
+            self.start_var.get(),
+            self.end_var.get(),
+            ensure_context=ensure_context,
+        )
         if self.only_uncategorized.get():
             sessions = [session for session in sessions if session["is_uncategorized"]]
         self._sync_sessions(sessions)
@@ -333,8 +356,13 @@ class TimelineView(ctk.CTkFrame):
         only_uncategorized: bool = False,
         selected_session_id: str | None = None,
     ) -> None:
-        self.date_var.set(target_date)
+        self._ensure_range_vars()
+        self.start_var.set(target_date)
+        self.end_var.set(target_date)
         self.only_uncategorized.set(only_uncategorized)
+        self._session_project_dirty = False
+        self._resource_project_dirty = False
+        self._editor_dirty = False
         self._pending_session_id = selected_session_id
 
     def is_user_interacting(self) -> bool:
@@ -363,6 +391,8 @@ class TimelineView(ctk.CTkFrame):
             self._select_tree_item(self.session_tree, self._selected_session_id)
         else:
             self._selected_session_id = None
+            self._session_project_dirty = False
+            self._resource_project_dirty = False
             self.session_project_var.set(UNCATEGORIZED_PROJECT)
             self.detail_label.configure(text="暂无项目会话")
             if hasattr(self, "detail_hint_label"):
@@ -401,7 +431,8 @@ class TimelineView(ctk.CTkFrame):
             self.detail_hint_label.configure(
                 text=f"{format_duration(session['duration_seconds'])} | {session['event_count']} 条活动 | {session['status_summary']}"
             )
-        self.session_project_var.set(self._project_name_by_id.get(int(session["project_id"]), UNCATEGORIZED_PROJECT))
+        if not getattr(self, "_session_project_dirty", False):
+            self.session_project_var.set(self._project_name_by_id.get(int(session["project_id"]), UNCATEGORIZED_PROJECT))
 
     def _sync_resources(self, resources: list[dict]) -> None:
         previous = self._selected_resource_id
@@ -414,6 +445,7 @@ class TimelineView(ctk.CTkFrame):
                 self._load_resource_editor(previous)
         else:
             self._selected_resource_id = None
+            self._resource_project_dirty = False
             self.resource_tree.selection_remove(self.resource_tree.selection())
             self._show_resource_editor(False)
 
@@ -479,6 +511,8 @@ class TimelineView(ctk.CTkFrame):
         self._selected_session_id = selection[0]
         self._selected_resource_id = None
         self._selected_activity_id = None
+        self._session_project_dirty = False
+        self._resource_project_dirty = False
         self._editor_dirty = False
         self._refresh_selected_session()
 
@@ -488,7 +522,10 @@ class TimelineView(ctk.CTkFrame):
             self._selected_resource_id = None
             self._show_resource_editor(False)
             return
-        self._selected_resource_id = int(selection[0])
+        next_resource_id = int(selection[0])
+        if self._selected_resource_id != next_resource_id:
+            self._resource_project_dirty = False
+        self._selected_resource_id = next_resource_id
         self._touch_resource_editor()
         if not self._load_resource_editor(self._selected_resource_id):
             self._show_resource_editor(False)
@@ -503,7 +540,8 @@ class TimelineView(ctk.CTkFrame):
         self.resource_label.configure(
             text=f"正在纠错{role_text}：{resource['display_name']}｜当前会话内共 {resource['event_count']} 条活动"
         )
-        self.resource_project_var.set(resource.get("official_project_name") or UNCATEGORIZED_PROJECT)
+        if not getattr(self, "_resource_project_dirty", False):
+            self.resource_project_var.set(resource.get("official_project_name") or UNCATEGORIZED_PROJECT)
         if resource["can_remember_for_future"]:
             self.remember_button.configure(state="normal", text="以后该文件都归入该项目")
             hint = ""
@@ -568,6 +606,7 @@ class TimelineView(ctk.CTkFrame):
         except ValueError as exc:
             self.resource_hint_label.configure(text=str(exc))
             return
+        self._resource_project_dirty = False
         self.refresh()
 
     def _save_session_project(self) -> None:
@@ -583,6 +622,7 @@ class TimelineView(ctk.CTkFrame):
             if not messagebox.askyesno("锚点文件归属提示", self._format_session_project_preview(preview)):
                 return
         timeline_service.update_session_project(session["activity_ids"], project_id)
+        self._session_project_dirty = False
         self.refresh()
 
     def _format_session_project_preview(self, preview: dict) -> str:
@@ -711,14 +751,70 @@ class TimelineView(ctk.CTkFrame):
         self.current_activity_label.configure(text=self._current_activity_text())
 
     def refresh_current_activity(self) -> None:
+        self._ensure_range_vars()
         self.current_activity_label.configure(text=self._current_activity_text())
-        if not self._valid_date(self.date_var.get()) or self.is_user_interacting():
+        if not self._valid_range(show_message=False) or self.is_user_interacting():
             return
         if not self._refresh_live_table_values():
             self.refresh(ensure_context=False)
 
+    def copy_selection_text(self) -> str:
+        detail_tree = self.detail_tree if self._detail_mode == "details" else self.resource_tree
+        for tree in (detail_tree, getattr(self, "session_tree", None)):
+            text = self._copy_tree_selection(tree)
+            if text:
+                return text
+        return ""
+
+    def copy_page_text(self) -> str:
+        self._ensure_range_vars()
+        lines = [
+            "时间详情",
+            f"日期范围：{self.start_var.get()} 至 {self.end_var.get()}",
+            self.current_activity_label.cget("text"),
+            "",
+            "项目",
+            *self._tree_rows_text(self.session_tree),
+        ]
+        if self._detail_mode == "resources":
+            lines.extend(["", "资源汇总", *self._tree_rows_text(self.resource_tree)])
+        else:
+            lines.extend(["", "时间顺序", *self._tree_rows_text(self.detail_tree)])
+        return "\n".join(line for line in lines if line)
+
+    def _copy_tree_selection(self, tree) -> str:
+        if tree is None:
+            return ""
+        try:
+            selection = tree.selection()
+        except Exception:
+            return ""
+        lines = []
+        for iid in selection:
+            values = self._tree_values.get(f"{id(tree)}:{iid}")
+            if values:
+                lines.append("\t".join(str(value) for value in values))
+        return "\n".join(lines)
+
+    def _tree_rows_text(self, tree) -> list[str]:
+        rows = []
+        try:
+            children = tree.get_children()
+        except Exception:
+            return rows
+        for iid in children:
+            values = self._tree_values.get(f"{id(tree)}:{iid}")
+            if values:
+                rows.append("｜".join(str(value) for value in values))
+        return rows
+
     def _refresh_live_table_values(self) -> bool:
-        sessions = timeline_service.get_project_sessions_by_date(self.date_var.get(), ensure_context=False)
+        self._ensure_range_vars()
+        sessions = timeline_service.get_project_sessions_by_range(
+            self.start_var.get(),
+            self.end_var.get(),
+            ensure_context=False,
+        )
         if self.only_uncategorized.get():
             sessions = [session for session in sessions if session["is_uncategorized"]]
         session_items = [(session["session_id"], self._session_values(session)) for session in sessions]
@@ -812,7 +908,8 @@ class TimelineView(ctk.CTkFrame):
     def _session_time(self, session: dict) -> str:
         start = session.get("start_time") or ""
         end = session.get("end_time") or ""
-        return f"{start[11:16] if len(start) >= 16 else start}-{end[11:16] if len(end) >= 16 else ''}"
+        prefix = f"{start[5:10]} " if self._include_session_dates() and len(start) >= 10 else ""
+        return f"{prefix}{start[11:16] if len(start) >= 16 else start}-{end[11:16] if len(end) >= 16 else ''}"
 
     def _label(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
@@ -939,12 +1036,78 @@ class TimelineView(ctk.CTkFrame):
         if hasattr(tree, "see"):
             tree.see(iid)
 
+    def _include_session_dates(self) -> bool:
+        self._ensure_range_vars()
+        return self.start_var.get() != self.end_var.get()
+
+    def _apply_today_range(self) -> None:
+        self._set_visible_range(today_range(timeline_service.get_default_report_date()))
+
+    def _apply_current_week_range(self) -> None:
+        self._set_visible_range(current_week_range(timeline_service.get_default_report_date()))
+
+    def _apply_previous_week_range(self) -> None:
+        self._set_visible_range(previous_week_range(timeline_service.get_default_report_date()))
+
+    def _shift_visible_range(self, direction: int) -> None:
+        shifted = shift_range(self.start_var.get(), self.end_var.get(), direction)
+        if shifted is None:
+            return
+        self._set_visible_range(shifted)
+
+    def _set_visible_range(self, date_range: DateRange) -> None:
+        self.start_var.set(date_range.start)
+        self.end_var.set(date_range.end)
+        self._session_project_dirty = False
+        self._resource_project_dirty = False
+        self._editor_dirty = False
+        self.refresh()
+
+    def _sync_range_buttons(self) -> None:
+        state = "normal" if classify_range(self.start_var.get(), self.end_var.get()) != "custom" else "disabled"
+        for button_name in ("prev_range_button", "next_range_button"):
+            button = getattr(self, button_name, None)
+            if button is not None:
+                button.configure(state=state)
+
+    def _valid_range(self, show_message: bool = True) -> bool:
+        self._ensure_range_vars()
+        try:
+            start = date.fromisoformat(self.start_var.get())
+            end = date.fromisoformat(self.end_var.get())
+        except ValueError:
+            if show_message:
+                self.current_activity_label.configure(text="日期格式错误，请使用 YYYY-MM-DD")
+            self._sync_range_buttons()
+            return False
+        if start > end:
+            if show_message:
+                self.current_activity_label.configure(text="日期范围错误，开始日期不能晚于结束日期")
+            self._sync_range_buttons()
+            return False
+        return True
+
+    def _ensure_range_vars(self) -> None:
+        if not hasattr(self, "start_var"):
+            if hasattr(self, "date_var"):
+                self.start_var = self.date_var
+            else:
+                self.start_var = ctk.StringVar(value=timeline_service.get_default_report_date())
+        if not hasattr(self, "end_var"):
+            self.end_var = self.start_var
+        if not hasattr(self, "date_var"):
+            self.date_var = self.start_var
+
     def _valid_date(self, value: str) -> bool:
         try:
             date.fromisoformat(value)
         except ValueError:
             return False
         return True
+
+    def _mark_session_project_dirty(self) -> None:
+        self._session_project_dirty = True
+        self._on_control_activity()
 
     def _mark_editor_dirty(self) -> None:
         if not self._loading_editor:
@@ -971,6 +1134,7 @@ class TimelineView(ctk.CTkFrame):
         return False
 
     def _on_resource_control_change(self) -> None:
+        self._resource_project_dirty = True
         self._touch_resource_editor()
         self._on_control_activity()
 
@@ -995,6 +1159,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _close_resource_editor(self) -> None:
         self._selected_resource_id = None
+        self._resource_project_dirty = False
         if hasattr(self, "resource_tree"):
             self.resource_tree.selection_remove(self.resource_tree.selection())
         self._show_resource_editor(False)

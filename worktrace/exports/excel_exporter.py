@@ -30,7 +30,7 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
         [
             "Project",
             "Total Duration",
-            "Record Count",
+            "Project Record Count",
         ]
     )
     for row in statistics_service.get_project_stats(start_date, end_date):
