@@ -320,6 +320,38 @@ def update_activities_project(activity_ids: list[int], project_id: int, manual: 
             )
 
 
+def apply_midnight_anchor_assignment(activity_id: int, project_id: int) -> None:
+    ts = now_str()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET project_id = ?,
+                auto_classified = 1,
+                manual_override = 0,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (project_id, ts, activity_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO activity_project_assignment(
+                activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
+            )
+            VALUES (?, ?, 90, 'midnight_anchor', 0, NULL, ?, ?)
+            ON CONFLICT(activity_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                confidence = excluded.confidence,
+                source = excluded.source,
+                is_manual = 0,
+                suggested_project_name = NULL,
+                updated_at = excluded.updated_at
+            """,
+            (activity_id, project_id, ts, ts),
+        )
+
+
 def finalize_created_activity(activity_id: int) -> None:
     from .project_inference_service import process_new_activity
 

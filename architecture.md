@@ -890,8 +890,9 @@ On startup:
 1. check for activity rows where `end_time IS NULL`;
 2. if found, use `last_collector_heartbeat` as `end_time` where available;
 3. otherwise use current startup time and mark `status = error`;
-4. compute `duration_seconds`;
-5. show such records as needing user review.
+4. split non-error recovered records at local midnight when needed;
+5. compute `duration_seconds`;
+6. show such records as needing user review.
 
 ---
 
@@ -899,7 +900,7 @@ On startup:
 
 ### 20.1 Special Project
 
-WorkTrace seeds a system project named `排除规则`. It is displayed on the Project Rules page and supports the same three rule kinds as ordinary projects:
+WorkTrace seeds a system project named `排除规则`. It is displayed on the Project Rules page and supports the same three rule kinds as ordinary projects. It starts with no default rules; users add any file, folder, or keyword exclusions they want.
 
 ```text
 folder
@@ -1045,9 +1046,13 @@ If a short activity is absorbed into the previous persisted normal activity and 
 
 Report views use an in-memory `report_date`, not only `activity_log.start_time`.
 
-If a concrete normal project continues across midnight, assign subsequent same-project normal rows to the previous report date until a different concrete project appears. This applies to Overview, Time Details, Statistics, and range exports that consume reporting summaries.
+All rows are split at local midnight and counted on their calendar date. This applies to Overview, Time Details, Statistics, and range exports that consume reporting summaries.
 
-Idle rows and uncategorized normal rows do not carry across midnight. Split them at local midnight and count each slice on its calendar date.
+When the collector itself crosses midnight during a concrete normal project, close the pre-midnight activity at `00:00:00`, record a `session_boundary` with reason `midnight`, and start a new activity at `00:00:00`.
+
+If the new post-midnight activity would otherwise be uncategorized or shorter than the 30-second history threshold, persist it immediately with an automatic `midnight_anchor` assignment to the previous concrete project. This assignment must not set `manual_override`, update file defaults, update folder rules, update keyword rules, or permanently change the resource identity. It may act as a context anchor for subsequent auxiliary activity.
+
+If the previous activity has no existing concrete project, do not create a suggested project and do not apply `midnight_anchor`.
 
 ---
 

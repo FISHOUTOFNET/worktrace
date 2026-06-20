@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
-from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, TIME_FORMAT, UNCATEGORIZED_PROJECT
+from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, UNCATEGORIZED_PROJECT
 from .context_service import recompute_context_assignments_for_date
 from . import timeline_service
+from .live_time_service import safe_int, snapshot_elapsed_seconds, snapshot_extra_seconds
 from .settings_service import get_setting
 
 
@@ -126,9 +127,9 @@ def _ensure_context_range(start_date: str, end_date: str) -> None:
 
 def _live_projection(start_date: str, end_date: str) -> dict | None:
     snapshot = _read_current_activity_snapshot()
-    if not snapshot or bool(snapshot.get("is_persisted")) or _safe_int(snapshot.get("persisted_activity_id")):
+    if not snapshot or bool(snapshot.get("is_persisted")) or safe_int(snapshot.get("persisted_activity_id")):
         return None
-    duration = _snapshot_elapsed_seconds(snapshot) + _safe_int(snapshot.get("extra_seconds"))
+    duration = snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
     if duration <= 0:
         return None
     report_date = timeline_service.get_default_report_date()
@@ -159,24 +160,3 @@ def _read_current_activity_snapshot() -> dict | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def _snapshot_elapsed_seconds(snapshot: dict) -> int:
-    fallback = _safe_int(snapshot.get("elapsed_seconds"))
-    start_text = str(snapshot.get("start_time") or "")
-    if start_text:
-        try:
-            start = datetime.strptime(start_text, TIME_FORMAT)
-        except ValueError:
-            return fallback
-        seconds = int((datetime.now() - start).total_seconds())
-        if 0 <= seconds <= 36 * 60 * 60:
-            return seconds
-    return fallback
-
-
-def _safe_int(value) -> int:
-    try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
-        return 0

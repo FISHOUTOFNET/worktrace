@@ -151,30 +151,20 @@ class ProjectRulesView(ctk.CTkFrame):
             width=82,
             command=lambda item=project: self.open_new_rule_dialog(initial_project_name=str(item.get("name") or "")),
         ).pack(side="left", padx=(0, 8))
-        if project.get("name") != EXCLUDED_PROJECT:
-            action_text = "禁用项目" if project_enabled else "启用项目"
-            design.button(
-                actions,
-                text=action_text,
-                variant="subtle",
-                width=82,
-                command=lambda item=project: self.set_project_enabled(item),
-            ).pack(side="left", padx=(0, 8))
-        else:
-            action_text = "禁用排除" if project_enabled else "启用排除"
-            design.button(
-                actions,
-                text=action_text,
-                variant="subtle",
-                width=82,
-                command=lambda item=project: self.set_project_enabled(item),
-            ).pack(side="left", padx=(0, 8))
+        action_text = "禁用" if project_enabled else "启用"
+        design.button(
+            actions,
+            text=action_text,
+            variant="subtle",
+            width=62,
+            command=lambda item=project: self.set_project_enabled(item),
+        ).pack(side="left", padx=(0, 8))
         if project.get("created_by") == "user":
             design.button(
                 actions,
-                text="删除项目",
+                text="删除",
                 variant="danger",
-                width=82,
+                width=62,
                 command=lambda item=project: self.delete_project(item),
             ).pack(side="left")
 
@@ -312,10 +302,10 @@ class ProjectRulesView(ctk.CTkFrame):
 
     def delete_project(self, project: dict) -> None:
         message = (
-            f"确定删除项目“{project['name']}”吗？\n\n"
+            f"确定删除“{project['name']}”吗？\n\n"
             "项目会从当前选择和未来自动归类中移除，相关规则会被删除；历史时间记录会保留原项目名称。"
         )
-        if not messagebox.askyesno("删除项目", message):
+        if not messagebox.askyesno("删除", message):
             return
         try:
             project_service.delete_project(int(project["id"]))

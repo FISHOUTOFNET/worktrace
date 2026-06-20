@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Callable, Any
 
 import customtkinter as ctk
 
-from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
+from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_current_duration, format_duration, format_project_label
+from ..services.live_time_service import snapshot_extra_seconds, snapshot_elapsed_seconds
 from ..services import statistics_service, timeline_service
 from ..services.settings_service import get_setting
 from . import design
@@ -212,13 +213,21 @@ class OverviewView(ctk.CTkFrame):
     def _create_recent_row(self, session_id: str) -> dict[str, Any]:
         row = ctk.CTkFrame(self.recent_frame, fg_color="transparent")
         row.grid_columnconfigure(1, weight=1)
-        time_label = design.label(row, text="", variant="mono", width=112, anchor="w")
-        time_label.grid(row=0, column=0, sticky="w", padx=(8, 12), pady=8)
-        title_label = design.label(row, text="", variant="strong", anchor="w")
+        time_label = design.label(
+            row,
+            text="",
+            variant="mono",
+            width=112,
+            anchor="w",
+            justify="left",
+            text_color=design.TEXT,
+        )
+        time_label.grid(row=0, column=0, rowspan=2, sticky="w", padx=(8, 12), pady=8)
+        title_label = design.label(row, text="", variant="strong", anchor="w", text_color=design.TEXT)
         title_label.grid(row=0, column=1, sticky="w")
-        subtitle_label = design.label(row, text="", variant="caption", anchor="w")
+        subtitle_label = design.label(row, text="", variant="caption", anchor="w", text_color=design.TEXT)
         subtitle_label.grid(row=1, column=1, sticky="w")
-        duration_label = design.label(row, text="", variant="strong")
+        duration_label = design.label(row, text="", variant="strong", text_color=design.TEXT)
         duration_label.grid(row=0, column=2, rowspan=2, sticky="e", padx=(12, 8))
         widgets = {
             "row": row,
@@ -379,35 +388,16 @@ def current_activity_text_from_snapshot(snapshot: dict | None) -> str:
 
 
 def _current_elapsed_seconds(snapshot: dict) -> int:
-    fallback = 0
-    try:
-        fallback = max(0, int(snapshot.get("elapsed_seconds") or 0))
-    except (TypeError, ValueError):
-        fallback = 0
-    start_time = str(snapshot.get("start_time") or "").strip()
-    if start_time:
-        try:
-            start = datetime.strptime(start_time, TIME_FORMAT)
-            seconds = int((datetime.now() - start).total_seconds())
-            if 0 <= seconds <= 36 * 60 * 60:
-                return seconds + _snapshot_extra_seconds(snapshot)
-        except ValueError:
-            pass
-    return fallback + _snapshot_extra_seconds(snapshot)
-
-
-def _snapshot_extra_seconds(snapshot: dict) -> int:
-    try:
-        return max(0, int(snapshot.get("extra_seconds") or 0))
-    except (TypeError, ValueError):
-        return 0
+    return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
 
 
 def _session_time(session: dict, include_date: bool = False) -> str:
     start = session.get("start_time") or ""
     end = session.get("end_time") or ""
-    prefix = f"{start[5:10]} " if include_date and len(start) >= 10 else ""
-    return f"{prefix}{start[11:16] if len(start) >= 16 else start}-{end[11:16] if len(end) >= 16 else ''}"
+    time_range = f"{start[11:16] if len(start) >= 16 else start}-{end[11:16] if len(end) >= 16 else ''}"
+    if include_date and len(start) >= 10:
+        return f"{start[5:10]}\n{time_range}"
+    return time_range
 
 
 def _clear_children(widget) -> None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import date as date_type, datetime, time as datetime_time, timedelta
 
 from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, TIME_FORMAT, UNCATEGORIZED_PROJECT
@@ -9,8 +8,9 @@ from ..resource_patterns import extract_anchor_file_name
 from . import folder_rule_service, session_boundary_service
 from .activity_service import update_activities_project
 from .context_service import recompute_context_assignments_for_date
+from .live_time_service import snapshot_elapsed_seconds, snapshot_extra_seconds
 from .project_service import get_or_create_uncategorized_project
-from .settings_service import get_int_setting, get_setting
+from .settings_service import get_int_setting
 
 SHORT_CONTEXT_MERGE_SECONDS = 5 * 60
 DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS = 15 * 60
@@ -63,13 +63,7 @@ def get_report_activity_rows(
 
 
 def get_default_report_date(today: date_type | None = None) -> str:
-    target_today = today or date_type.today()
-    snapshot = _read_current_activity_snapshot()
-    if snapshot:
-        report_date = _snapshot_report_date(snapshot, target_today)
-        if report_date:
-            return report_date
-    return target_today.isoformat()
+    return (today or date_type.today()).isoformat()
 
 
 def get_session_resource_summary(
@@ -281,6 +275,8 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
                 r.resource_role,
                 r.resource_type,
                 apa.suggested_project_name,
+                apa.source AS assignment_source,
+                apa.is_manual AS assignment_is_manual,
                 COALESCE(apa.project_id, a.project_id) AS effective_project_id,
                 p.name AS effective_project_name,
                 p.description AS effective_project_description
@@ -332,6 +328,8 @@ def _load_session_rows(
                 r.app_name AS resource_app_name,
                 r.process_name AS resource_process_name,
                 apa.suggested_project_name,
+                apa.source AS assignment_source,
+                apa.is_manual AS assignment_is_manual,
                 COALESCE(apa.project_id, a.project_id) AS effective_project_id,
                 p.name AS effective_project_name,
                 p.description AS effective_project_description
@@ -409,32 +407,8 @@ def _with_reporting_projects(rows: list[dict]) -> list[dict]:
 
 def _with_report_dates(rows: list[dict]) -> list[dict]:
     report_rows: list[dict] = []
-    carry_project_key: str | None = None
-    carry_report_date: str | None = None
-    carry_active = False
-    previous_row: dict | None = None
     for row in rows:
-        if previous_row is not None and _has_session_boundary_between(previous_row, row):
-            carry_project_key = None
-            carry_report_date = None
-            carry_active = False
-        if _is_project_day_carry_row(row):
-            start_day = _date_part(row.get("start_time"))
-            key = str(row.get("report_project_key") or "")
-            same_active_project = carry_active and carry_project_key == key and carry_report_date
-            report_date = carry_report_date if same_active_project else start_day
-            carry_project_key = str(row.get("report_project_key") or "")
-            carry_report_date = report_date
-            carry_active = bool(same_active_project) or _row_crosses_midnight(row)
-            item = dict(row)
-            item["report_date"] = report_date
-            item["report_duration_seconds"] = _display_duration(row)
-            item["report_slice"] = False
-            report_rows.append(item)
-            previous_row = row
-            continue
         report_rows.extend(_split_calendar_report_rows(row))
-        previous_row = row
     return report_rows
 
 
@@ -472,24 +446,6 @@ def _split_calendar_report_rows(row: dict) -> list[dict]:
         rows.append(item)
         current_start = current_end
     return rows
-
-
-def _is_project_day_carry_row(row: dict) -> bool:
-    return (
-        row.get("status") == STATUS_NORMAL
-        and (row.get("report_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
-    )
-
-
-def _row_crosses_midnight(row: dict) -> bool:
-    start_dt = _parse_row_time(row.get("start_time"))
-    if start_dt is None:
-        return False
-    duration = _display_duration(row)
-    end_dt = _parse_row_time(row.get("end_time"))
-    if end_dt is None or end_dt < start_dt:
-        end_dt = start_dt + timedelta(seconds=duration)
-    return end_dt.date() > start_dt.date()
 
 
 def _attach_original_report_project(row: dict) -> None:
@@ -543,7 +499,7 @@ def _find_short_context_merge(rows: list[dict], anchor_index: int, carry_minutes
 def _is_project_anchor(row: dict) -> bool:
     return (
         row.get("status") == STATUS_NORMAL
-        and row.get("resource_role") == "anchor"
+        and (row.get("resource_role") == "anchor" or row.get("assignment_source") == "midnight_anchor")
         and (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
     )
 
@@ -710,9 +666,13 @@ def _live_duration_for_row(row: dict) -> int | None:
 
 
 def _read_current_activity_snapshot() -> dict | None:
+    from .settings_service import get_setting
+
     raw = get_setting("current_activity_snapshot", "") or ""
     if not raw:
         return None
+    import json
+
     try:
         value = json.loads(raw)
     except json.JSONDecodeError:
@@ -720,72 +680,12 @@ def _read_current_activity_snapshot() -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def _snapshot_report_date(snapshot: dict, today: date_type) -> str | None:
-    status = str(snapshot.get("status") or STATUS_NORMAL)
-    project_name = str(snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT)
-    if status != STATUS_NORMAL or project_name == UNCATEGORIZED_PROJECT:
-        return today.isoformat()
-
-    persisted_id = _snapshot_persisted_id(snapshot)
-    if persisted_id:
-        start_day = _snapshot_start_date(snapshot) or today
-        first_day = min(start_day, today - timedelta(days=1))
-        rows = get_report_activity_rows(
-            first_day.isoformat(),
-            today.isoformat(),
-            include_hidden=True,
-            ensure_context=False,
-        )
-        for row in rows:
-            if int(row["id"]) == persisted_id:
-                return str(row.get("report_date") or today.isoformat())
-
-    start_day = _snapshot_start_date(snapshot)
-    if start_day and start_day < today:
-        return start_day.isoformat()
-    return today.isoformat()
-
-
-def _snapshot_persisted_id(snapshot: dict) -> int | None:
-    try:
-        value = int(snapshot.get("persisted_activity_id") or 0)
-    except (TypeError, ValueError):
-        return None
-    return value or None
-
-
-def _snapshot_start_date(snapshot: dict) -> date_type | None:
-    start = _parse_row_time(snapshot.get("start_time"))
-    return start.date() if start else None
-
-
 def _snapshot_elapsed_seconds(snapshot: dict) -> int:
-    fallback = _safe_int(snapshot.get("elapsed_seconds"))
-    start = _parse_row_time(snapshot.get("start_time"))
-    if start is None:
-        return fallback
-    seconds = int((datetime.now() - start).total_seconds())
-    if 0 <= seconds <= 36 * 60 * 60:
-        return seconds
-    return fallback
+    return snapshot_elapsed_seconds(snapshot)
 
 
 def _snapshot_extra_seconds(snapshot: dict) -> int:
-    return _safe_int(snapshot.get("extra_seconds"))
-
-
-def _safe_int(value) -> int:
-    try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _date_part(value: str | None) -> str:
-    parsed = _parse_row_time(value)
-    if parsed is None:
-        return date_type.today().isoformat()
-    return parsed.date().isoformat()
+    return snapshot_extra_seconds(snapshot)
 
 
 def _parse_row_time(value: str | None) -> datetime | None:

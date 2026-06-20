@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, time as datetime_time
 
 from ..constants import TIME_FORMAT
 from ..db import now_str
@@ -27,6 +27,10 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
             idle_threshold_seconds = get_int_setting("idle_threshold_seconds", 300)
             if last_loop_time and recovery_service.detect_time_jump(last_loop_time, now, idle_threshold_seconds):
                 machine.reset_for_time_jump(last_loop_time)
+            elif last_loop_time:
+                midnight = _midnight_crossed_between(last_loop_time, now)
+                if midnight is not None:
+                    machine.split_at_midnight(midnight)
 
             heartbeat_counter += 1
             if heartbeat_counter == 1 or heartbeat_counter >= 4:
@@ -77,3 +81,17 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
 def _sleep_poll(stop_event: threading.Event) -> None:
     interval = max(1, get_int_setting("poll_interval_seconds", 3))
     stop_event.wait(interval)
+
+
+def _midnight_crossed_between(previous: str, current: str) -> str | None:
+    try:
+        previous_dt = datetime.strptime(previous, TIME_FORMAT)
+        current_dt = datetime.strptime(current, TIME_FORMAT)
+    except ValueError:
+        return None
+    if current_dt <= previous_dt or current_dt.date() <= previous_dt.date():
+        return None
+    midnight = datetime.combine(current_dt.date(), datetime_time.min)
+    if previous_dt < midnight <= current_dt:
+        return midnight.strftime(TIME_FORMAT)
+    return None

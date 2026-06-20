@@ -47,7 +47,7 @@ def test_sessions_merge_same_project_and_split_a_b_a(temp_db):
     assert [row["start_time"][11:16] for row in latest_details] == ["10:05", "10:00"]
 
 
-def test_same_project_after_midnight_reports_on_previous_day_until_next_project(temp_db):
+def test_same_project_after_midnight_is_split_by_calendar_day(temp_db):
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")
     _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 23:50:00", project_a)
@@ -59,10 +59,11 @@ def test_same_project_after_midnight_reports_on_previous_day_until_next_project(
     next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
 
     assert [session["project_name"] for session in previous_day] == ["A"]
-    assert previous_day[0]["duration_seconds"] == 40 * 60
+    assert previous_day[0]["duration_seconds"] == 10 * 60
     assert previous_day[0]["report_date"] == "2026-06-18"
-    assert [session["project_name"] for session in next_day] == ["B"]
+    assert [session["project_name"] for session in next_day] == ["B", "A"]
     assert next_day[0]["duration_seconds"] == 15 * 60
+    assert next_day[1]["duration_seconds"] == 30 * 60
 
 
 def test_same_project_next_day_does_not_carry_when_previous_activity_ended_before_midnight(temp_db):
@@ -335,7 +336,7 @@ def test_project_description_flows_to_timeline_rows(temp_db):
     assert details[0]["project_description"] == "billable"
 
 
-def test_session_boundary_stops_cross_midnight_project_carry(temp_db):
+def test_session_boundary_stops_same_project_merge_after_midnight(temp_db):
     project_a = project_service.create_project("A")
     first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 23:50:00", project_a)
     activity_service.close_activity(first, "2026-06-19 00:05:00")
@@ -346,5 +347,31 @@ def test_session_boundary_stops_cross_midnight_project_carry(temp_db):
     previous_day = timeline_service.get_project_sessions_by_date("2026-06-18")
     next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
 
-    assert previous_day[0]["duration_seconds"] == 15 * 60
-    assert next_day[0]["duration_seconds"] == 10 * 60
+    assert previous_day[0]["duration_seconds"] == 10 * 60
+    assert [session["duration_seconds"] for session in next_day] == [10 * 60, 5 * 60]
+
+
+def test_midnight_anchor_classifies_following_auxiliary_without_resource_default(temp_db):
+    project_a = project_service.create_project("A")
+    anchor = _activity_at("Edge", "msedge.exe", "A browser", "2026-06-19 00:00:00")
+    activity_service.apply_midnight_anchor_assignment(anchor, project_a)
+    chat = _activity_at("Chat", "chat.exe", "Discuss A", "2026-06-19 00:00:10")
+    activity_service.close_activity(chat, "2026-06-19 00:00:45")
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-19")
+    details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"], report_date="2026-06-19")
+
+    assert len(sessions) == 1
+    assert sessions[0]["project_name"] == "A"
+    assert {row["project_name"] for row in details} == {"A"}
+    with get_connection() as conn:
+        resource = conn.execute(
+            """
+            SELECT r.default_project_id
+            FROM activity_log a
+            JOIN resource r ON r.id = a.resource_id
+            WHERE a.id = ?
+            """,
+            (anchor,),
+        ).fetchone()
+    assert resource["default_project_id"] is None

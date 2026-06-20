@@ -66,7 +66,7 @@ def test_project_stats_use_short_context_merge_without_changing_raw_project(temp
     assert activity_service.get_activity(b)["project_id"] == project_b
 
 
-def test_statistics_use_report_date_for_cross_midnight_projects_and_split_idle(temp_db):
+def test_statistics_split_cross_midnight_projects_by_calendar_day(temp_db):
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")
     a1 = activity_service.create_activity(
@@ -90,14 +90,18 @@ def test_statistics_use_report_date_for_cross_midnight_projects_and_split_idle(t
     previous = statistics_service.get_summary("2026-06-18", "2026-06-18")
     current = statistics_service.get_summary("2026-06-19", "2026-06-19")
 
-    assert previous["total_duration"] == 40 * 60
-    assert previous["classified_duration"] == 40 * 60
+    assert previous["total_duration"] == 10 * 60
+    assert previous["classified_duration"] == 10 * 60
     assert statistics_service.get_project_stats("2026-06-18", "2026-06-18") == [
-        {"project": "A", "total_duration": 40 * 60, "record_count": 1}
+        {"project": "A", "total_duration": 10 * 60, "record_count": 1}
     ]
-    assert current["total_duration"] == 45 * 60
-    assert current["effective_duration"] == 15 * 60
+    assert current["total_duration"] == 75 * 60
+    assert current["effective_duration"] == 45 * 60
     assert current["idle_duration"] == 30 * 60
+    assert statistics_service.get_project_stats("2026-06-19", "2026-06-19") == [
+        {"project": "A", "total_duration": 30 * 60, "record_count": 1},
+        {"project": "B", "total_duration": 15 * 60, "record_count": 1},
+    ]
 
 
 def test_project_stats_count_project_records_split_by_boundary(temp_db):

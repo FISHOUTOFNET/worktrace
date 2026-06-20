@@ -2,8 +2,9 @@ import json
 
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
+from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import activity_service, privacy_service, settings_service
+from worktrace.services import activity_service, privacy_service, project_service, settings_service
 
 
 def _snapshot():
@@ -135,3 +136,49 @@ def test_state_machine_splits_when_both_paths_differ(temp_db):
     assert activity_service.get_activity(first_id)["end_time"] == "2026-06-18 09:01:10"
     assert activity_service.get_open_activity() is None
     assert _snapshot()["file_path_hint"] == "D:\\CaseB\\Spec.docx"
+
+
+def test_midnight_split_restarts_with_persistent_temporary_anchor(temp_db):
+    project_id = project_service.create_project("A")
+    machine = CollectorStateMachine()
+    machine.transition_to(
+        "recording",
+        ActiveWindow("Edge", "msedge.exe", "A research"),
+        at_time="2026-06-18 23:59:00",
+    )
+    machine.transition_to(
+        "recording",
+        ActiveWindow("Edge", "msedge.exe", "A research"),
+        at_time="2026-06-18 23:59:30",
+    )
+    previous = activity_service.get_open_activity()
+    activity_service.update_activity_project(int(previous["id"]), project_id, manual=False)
+
+    machine.split_at_midnight("2026-06-19 00:00:00")
+    machine.transition_to(
+        "recording",
+        ActiveWindow("Edge", "msedge.exe", "A research"),
+        at_time="2026-06-19 00:00:05",
+    )
+
+    old_row = activity_service.get_activity(int(previous["id"]))
+    new_row = activity_service.get_open_activity()
+    with get_connection() as conn:
+        assignment = conn.execute(
+            "SELECT source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            (new_row["id"],),
+        ).fetchone()
+        boundaries = conn.execute(
+            "SELECT occurred_at, reason FROM session_boundary ORDER BY occurred_at"
+        ).fetchall()
+
+    assert old_row["end_time"] == "2026-06-19 00:00:00"
+    assert new_row["start_time"] == "2026-06-19 00:00:00"
+    assert new_row["duration_seconds"] == 5
+    assert new_row["project_id"] == project_id
+    assert new_row["manual_override"] == 0
+    assert assignment["source"] == "midnight_anchor"
+    assert assignment["is_manual"] == 0
+    assert [(row["occurred_at"], row["reason"]) for row in boundaries] == [
+        ("2026-06-19 00:00:00", "midnight")
+    ]

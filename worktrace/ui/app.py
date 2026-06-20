@@ -27,6 +27,9 @@ class WorkTraceApp(ctk.CTk):
         self.stop_event = stop_event
         self.collector_started = False
         self.active_page = "overview"
+        default_report_date = timeline_service.get_default_report_date()
+        self.shared_start_var = ctk.StringVar(value=default_report_date)
+        self.shared_end_var = ctk.StringVar(value=default_report_date)
         self.nav_buttons: dict[str, ctk.CTkButton] = {}
         self.pages: dict[str, Any] = {}
         self._page_factories: dict[str, Callable[[], Any]] = {}
@@ -169,14 +172,14 @@ class WorkTraceApp(ctk.CTk):
     def _create_timeline_page(self):
         from .timeline_view import TimelineView
 
-        page = TimelineView(self.content)
+        page = TimelineView(self.content, start_var=self.shared_start_var, end_var=self.shared_end_var)
         self.timeline = page
         return page
 
     def _create_statistics_page(self):
         from .statistics_view import StatisticsView
 
-        page = StatisticsView(self.content)
+        page = StatisticsView(self.content, start_var=self.shared_start_var, end_var=self.shared_end_var)
         self.statistics = page
         return page
 

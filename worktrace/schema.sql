@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
             'anchor_keyword',
             'anchor_context',
             'folder_rule',
+            'midnight_anchor',
             'suggested_project_name',
             'uncategorized'
         )

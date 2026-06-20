@@ -34,6 +34,9 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
         resource_schema = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'resource'"
         ).fetchone()["sql"]
+        assignment_schema = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_project_assignment'"
+        ).fetchone()["sql"]
 
     assert "resource_id" in activity_columns
     assert "file_path_hint" in activity_columns
@@ -59,7 +62,8 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert excluded is not None
     assert excluded["created_by"] == "system"
     assert excluded["enabled"] == 1
-    assert exclude_rule_count["c"] == 4
+    assert exclude_rule_count["c"] == 0
+    assert "midnight_anchor" in assignment_schema
     assert "'file', 'app'" in resource_schema
     assert "web" not in resource_schema
     assert "communication" not in resource_schema
@@ -80,7 +84,7 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM resource").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 4
+        assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 0
         activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
         resource_columns = {row["name"] for row in conn.execute("PRAGMA table_info(resource)").fetchall()}
         project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project)").fetchall()}
@@ -103,3 +107,74 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone() is None
         assert conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone() is not None
         assert conn.execute("SELECT id FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone() is not None
+
+
+def test_seed_defaults_removes_only_old_system_exclude_keywords(temp_db):
+    from worktrace.services import project_service, rule_service
+
+    excluded_id = project_service.get_or_create_excluded_project()
+    user_rule_id = rule_service.create_rule("银行", excluded_id)
+    with db.get_connection() as conn:
+        for keyword in ["微信", "银行", "密码", "个人"]:
+            conn.execute(
+                """
+                INSERT INTO project_rule(project_id, rule_type, pattern, enabled, created_by, created_at, updated_at)
+                VALUES (?, 'keyword', ?, 1, 'system', '2026-06-18 09:00:00', '2026-06-18 09:00:00')
+                """,
+                (excluded_id, keyword),
+            )
+
+    with db.get_connection() as conn:
+        db.seed_defaults(conn)
+
+    with db.get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, pattern, created_by
+            FROM project_rule
+            WHERE project_id = ?
+            ORDER BY id
+            """,
+            (excluded_id,),
+        ).fetchall()
+
+    assert [(row["id"], row["pattern"], row["created_by"]) for row in rows] == [(user_rule_id, "银行", "user")]
+
+
+def test_initialize_database_migrates_assignment_source_check(tmp_path):
+    path = tmp_path / "old.db"
+    db.configure_database(path)
+    with db.get_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE activity_project_assignment (
+                activity_id INTEGER PRIMARY KEY,
+                project_id INTEGER,
+                confidence INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL CHECK (
+                    source IN (
+                        'manual',
+                        'anchor_resource_default',
+                        'anchor_keyword',
+                        'anchor_context',
+                        'folder_rule',
+                        'suggested_project_name',
+                        'uncategorized'
+                    )
+                ),
+                is_manual INTEGER NOT NULL DEFAULT 0,
+                suggested_project_name TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    db.initialize_database(path)
+
+    with db.get_connection() as conn:
+        schema = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_project_assignment'"
+        ).fetchone()["sql"]
+
+    assert "midnight_anchor" in schema

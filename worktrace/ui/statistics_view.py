@@ -16,11 +16,11 @@ from .date_range import DateRange, classify_range, current_week_range, previous_
 
 
 class StatisticsView(ctk.CTkFrame):
-    def __init__(self, master):
+    def __init__(self, master, start_var=None, end_var=None):
         super().__init__(master)
         today = timeline_service.get_default_report_date()
-        self.start_var = ctk.StringVar(value=today)
-        self.end_var = ctk.StringVar(value=today)
+        self.start_var = start_var or ctk.StringVar(value=today)
+        self.end_var = end_var or ctk.StringVar(value=today)
         self.range_var = ctk.StringVar(value="今日")
         self._default_report_date = today
         self._summary_labels: dict[str, ctk.CTkLabel] = {}
@@ -240,14 +240,16 @@ class StatisticsView(ctk.CTkFrame):
 
     def _create_project_stat_row(self) -> dict[str, Any]:
         frame = ctk.CTkFrame(self.rows_frame, fg_color=design.CARD_SUBTLE_BG, corner_radius=design.RADIUS_MD)
+        frame.grid_columnconfigure(0, weight=0, minsize=230)
         frame.grid_columnconfigure(1, weight=1)
-        name = design.label(frame, text="", variant="strong", anchor="w")
+        frame.grid_columnconfigure(2, weight=0, minsize=94)
+        name = design.label(frame, text="", variant="strong", anchor="w", width=220)
         name.grid(row=0, column=0, sticky="w", padx=14, pady=(10, 2))
-        count = design.label(frame, text="", variant="caption")
+        count = design.label(frame, text="", variant="caption", width=220, anchor="w")
         count.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
         bar = ctk.CTkProgressBar(frame, height=8, progress_color=design.ACCENT)
         bar.grid(row=0, column=1, rowspan=2, sticky="ew", padx=14)
-        duration = design.label(frame, text="", variant="strong", width=72)
+        duration = design.label(frame, text="", variant="strong", width=90)
         duration.grid(row=0, column=2, rowspan=2, sticky="e", padx=(0, 14))
         return {"frame": frame, "name": name, "count": count, "bar": bar, "duration": duration}
 

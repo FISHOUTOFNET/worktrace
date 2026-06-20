@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import date, datetime
+from datetime import date
 from tkinter import messagebox, ttk
 from typing import Any
 
 import customtkinter as ctk
 
-from ..constants import TIME_FORMAT, UNCATEGORIZED_PROJECT
+from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_current_duration, format_duration, format_project_label
 from ..services import activity_service, project_service, timeline_service
+from ..services.live_time_service import snapshot_elapsed_seconds, snapshot_extra_seconds
 from ..services.settings_service import get_setting
 from . import design
 from .date_range import DateRange, classify_range, current_week_range, previous_week_range, shift_range, today_range
@@ -25,11 +26,11 @@ TREE_ROWHEIGHT = 36
 
 
 class TimelineView(ctk.CTkFrame):
-    def __init__(self, master):
+    def __init__(self, master, start_var=None, end_var=None):
         super().__init__(master, fg_color="transparent")
         today = timeline_service.get_default_report_date()
-        self.start_var = ctk.StringVar(value=today)
-        self.end_var = ctk.StringVar(value=today)
+        self.start_var = start_var or ctk.StringVar(value=today)
+        self.end_var = end_var or ctk.StringVar(value=today)
         self.date_var = self.start_var
         self.range_var = ctk.StringVar(value="今日")
         self.only_uncategorized = ctk.BooleanVar(value=False)
@@ -141,12 +142,16 @@ class TimelineView(ctk.CTkFrame):
             text="仅未归类",
             variable=self.only_uncategorized,
             command=self.refresh,
+            width=92,
+            height=24,
+            checkbox_width=16,
+            checkbox_height=16,
         ).pack(side="left", padx=(10, 0))
         self.session_count_label = self._label(session_header, text="0 条", text_color=design.MUTED_TEXT)
         self.session_count_label.grid(row=0, column=1, sticky="e")
         columns = ("time", "project", "duration", "summary")
-        headings = {"time": "时间", "project": "项目/状态", "duration": "时长", "summary": "摘要"}
-        widths = {"time": 88, "project": 130, "duration": 72, "summary": 180}
+        headings = {"time": "时间", "project": "项目", "duration": "时长", "summary": "摘要"}
+        widths = {"time": 132, "project": 130, "duration": 72, "summary": 180}
         self.session_tree_frame = self._make_tree_frame(self.session_panel)
         self.session_tree_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.session_tree = self._make_tree(self.session_tree_frame, "sessions", columns, headings, widths, height=14)
@@ -1207,25 +1212,4 @@ class TimelineView(ctk.CTkFrame):
 
 
 def _current_elapsed_seconds(snapshot: dict) -> int:
-    fallback = 0
-    try:
-        fallback = max(0, int(snapshot.get("elapsed_seconds") or 0))
-    except (TypeError, ValueError):
-        fallback = 0
-    start_time = str(snapshot.get("start_time") or "").strip()
-    if start_time:
-        try:
-            start = datetime.strptime(start_time, TIME_FORMAT)
-            seconds = int((datetime.now() - start).total_seconds())
-            if 0 <= seconds <= 36 * 60 * 60:
-                return seconds + _snapshot_extra_seconds(snapshot)
-        except ValueError:
-            pass
-    return fallback + _snapshot_extra_seconds(snapshot)
-
-
-def _snapshot_extra_seconds(snapshot: dict) -> int:
-    try:
-        return max(0, int(snapshot.get("extra_seconds") or 0))
-    except (TypeError, ValueError):
-        return 0
+    return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)

@@ -17,7 +17,7 @@ from ..constants import (
 )
 from ..path_utils import normalize_path_key
 from ..resource_patterns import infer_resource_identity
-from ..services import activity_service, session_boundary_service
+from ..services import activity_service, project_service, session_boundary_service
 from ..services.settings_service import get_setting, set_setting
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
@@ -95,6 +95,21 @@ class AutoActivityRecorder:
     def stop(self, at_time: str, merge_transient: bool = True) -> None:
         self.finish_current(at_time, merge_transient=merge_transient)
 
+    def split_at_midnight(self, at_time: str) -> bool:
+        if self.current_payload is None or self.current_start_time is None:
+            self.clear_short_buffers()
+            self.clear_snapshot()
+            return False
+        payload = dict(self.current_payload)
+        signature = self.current_signature or _activity_signature(payload)
+        project_id = self._current_concrete_project_id()
+        self.stop(at_time, merge_transient=False)
+        self.clear_short_buffers()
+        self._start(payload, signature, at_time)
+        if payload.get("status") == STATUS_NORMAL and project_id is not None:
+            self._persist_midnight_anchor(project_id, at_time)
+        return True
+
     def clear_short_buffers(self) -> None:
         self.resume_after_short_activity = None
         self._set_pending_short_seconds(0)
@@ -138,6 +153,30 @@ class AutoActivityRecorder:
             if pending > 0:
                 self.current_extra_seconds += pending
                 self._set_pending_short_seconds(0)
+
+    def _persist_midnight_anchor(self, project_id: int, at_time: str) -> None:
+        if self.current_payload is None or self.current_start_time is None or self.persisted_activity_id is not None:
+            return
+        activity_id = activity_service.create_activity(
+            start_time=self.current_start_time,
+            source=SOURCE_AUTO,
+            **self.current_payload,
+        )
+        activity_service.finalize_created_activity(activity_id)
+        activity_service.apply_midnight_anchor_assignment(activity_id, project_id)
+        self.persisted_activity_id = activity_id
+        self.current_extra_seconds = 0
+        self._update_persisted_progress(at_time)
+        self._write_snapshot(at_time)
+
+    def _current_concrete_project_id(self) -> int | None:
+        if self.persisted_activity_id is None:
+            return None
+        activity = activity_service.get_activity(self.persisted_activity_id)
+        if not activity:
+            return None
+        project_id = activity.get("project_id")
+        return int(project_id) if project_service.is_concrete_project_id(project_id) else None
 
     def _update_persisted_progress(self, at_time: str) -> None:
         if self.persisted_activity_id is None or self.current_start_time is None:

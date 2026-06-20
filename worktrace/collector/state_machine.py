@@ -72,6 +72,14 @@ class CollectorStateMachine:
         self.state = "stopped"
         self.active_signature = None
 
+    def split_at_midnight(self, at_time: str) -> None:
+        if self.recorder.split_at_midnight(at_time):
+            session_boundary_service.record_boundary(at_time, "midnight")
+            self.active_signature = self.recorder.current_signature
+        else:
+            self.recorder.clear_short_buffers()
+            session_boundary_service.record_boundary(at_time, "midnight")
+
     def pause(self, at_time: str | None = None) -> None:
         transition_time = at_time or now_str()
         if self.state != "paused" or self.recorder.current_payload is not None:

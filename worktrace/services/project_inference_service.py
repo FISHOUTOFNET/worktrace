@@ -88,6 +88,11 @@ def assign_project_for_activity(activity_id: int) -> dict:
             _sync_activity_project(conn, activity_id, project_id, auto_classified=False)
             return _assignment_dict(conn, activity_id)
 
+        if existing and existing["source"] == "midnight_anchor":
+            project_id = existing["project_id"] if existing["project_id"] is not None else _get_uncategorized_project_id(conn)
+            _sync_activity_project(conn, activity_id, project_id, auto_classified=True)
+            return _assignment_dict(conn, activity_id)
+
         if activity["status"] != STATUS_NORMAL:
             project_id = _get_uncategorized_project_id(conn)
             _upsert_assignment(conn, activity_id, project_id, "uncategorized", 0, False, None)

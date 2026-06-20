@@ -80,6 +80,15 @@ def get_project_by_name(name: str) -> dict | None:
     return dict(row) if row else None
 
 
+def is_concrete_project_id(project_id: int | None) -> bool:
+    if not project_id:
+        return False
+    project = get_project(int(project_id))
+    if not project:
+        return False
+    return project.get("name") not in {UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT}
+
+
 def get_or_create_project(name: str) -> int:
     existing = get_project_by_name(name)
     if existing:

@@ -33,6 +33,8 @@ def recompute_context_assignments_for_date(date: str) -> None:
     for index, row in enumerate(rows):
         if row["status"] != STATUS_NORMAL:
             continue
+        if row.get("assignment_source") == "midnight_anchor":
+            continue
         if row["resource_role"] != "auxiliary":
             continue
         if int(row["manual_override"] or 0) or int(row["assignment_is_manual"] or 0):
@@ -90,6 +92,8 @@ def _ensure_resources_and_assignments(rows: list[dict]) -> bool:
 def _recompute_anchor_rows(rows: list[dict]) -> bool:
     changed = False
     for row in rows:
+        if row["status"] == STATUS_NORMAL and row.get("assignment_source") == "midnight_anchor":
+            continue
         if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
             if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
                 continue
@@ -136,7 +140,7 @@ def _find_previous_anchor(rows: list[dict], index: int, uncategorized_id: int) -
         row = rows[pos]
         if row["status"] in INTERRUPT_STATUSES:
             return None
-        if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
+        if _is_context_anchor(row):
             project_id = _row_project_id(row)
             return row if project_id != uncategorized_id else None
     return None
@@ -147,7 +151,7 @@ def _find_next_anchor(rows: list[dict], index: int, uncategorized_id: int) -> di
         row = rows[pos]
         if row["status"] in INTERRUPT_STATUSES:
             return None
-        if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
+        if _is_context_anchor(row):
             project_id = _row_project_id(row)
             return row if project_id != uncategorized_id else None
     return None
@@ -155,6 +159,12 @@ def _find_next_anchor(rows: list[dict], index: int, uncategorized_id: int) -> di
 
 def _row_project_id(row: dict) -> int:
     return int(row.get("assignment_project_id") or row.get("project_id") or 0)
+
+
+def _is_context_anchor(row: dict) -> bool:
+    return row["status"] == STATUS_NORMAL and (
+        row.get("resource_role") == "anchor" or row.get("assignment_source") == "midnight_anchor"
+    )
 
 
 def _anchor_context_time(row: dict) -> str:

@@ -1,7 +1,7 @@
 import threading
 import time
 
-from worktrace.collector.collector import run_collector
+from worktrace.collector.collector import _midnight_crossed_between, run_collector
 from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.fake_adapter import FakeAdapter
 from worktrace.services import activity_service, settings_service
@@ -53,3 +53,9 @@ def test_collector_pause_does_not_poll_active_window(temp_db):
     assert adapter.calls == 0
     assert activity_service.get_activities_by_date(time.strftime("%Y-%m-%d")) == []
     assert settings_service.get_setting("current_activity_snapshot", "") == ""
+
+
+def test_midnight_crossing_detects_exact_boundary():
+    assert _midnight_crossed_between("2026-06-18 23:59:59", "2026-06-19 00:00:02") == "2026-06-19 00:00:00"
+    assert _midnight_crossed_between("2026-06-18 23:59:59", "2026-06-18 23:59:59") is None
+    assert _midnight_crossed_between("2026-06-19 00:00:01", "2026-06-19 00:00:02") is None

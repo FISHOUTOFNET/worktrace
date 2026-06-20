@@ -64,7 +64,7 @@ The default full-page data refresh interval is 10 seconds. A lightweight 1-secon
 
 ## Project Classification
 
-Folder project rules require a recognizable full local file path. File rules bind one specific file to a project. The special `排除规则` project supports file, folder, and keyword rules; matches are recorded anonymously as `已排除窗口` rather than classified as ordinary project time. Disabled projects remain visible but no longer participate in automatic classification.
+Folder project rules require a recognizable full local file path. File rules bind one specific file to a project. The special `排除规则` project supports file, folder, and keyword rules and starts with no default rules; matches are recorded anonymously as `已排除窗口` rather than classified as ordinary project time. Disabled projects remain visible but no longer participate in automatic classification.
 
 If a file path is known but no rule or file default matches, Time Details may show the parent folder name as a suggested project. Suggested names are display-only hints and are not inserted into the `project` table.
 
@@ -72,7 +72,7 @@ Context carry-over applies to all normal non-anchor auxiliary activity between n
 
 For reporting, a short interruption is also folded into the surrounding anchor project: if two anchors for project A enclose a contiguous block under 5 minutes containing only another normal project or idle time, the Time Details session and project statistics count that block under A. The original activity status and project assignment are preserved in the detailed records.
 
-Report dates are project-aware across midnight. If a concrete project continues from the previous day into the next day, Overview, Time Details, Statistics, and exports keep counting that continuing project on the previous report date until the next concrete project appears. Idle time and uncategorized normal time switch at midnight and are split by calendar day.
+Report dates are calendar-day based. Activities are split at local midnight for Overview, Time Details, Statistics, and exports. When the collector crosses midnight during an existing concrete project, the new post-midnight activity gets a persistent temporary `midnight_anchor` assignment to the previous concrete project, bypassing the 30-second history threshold for that new activity only. This does not change file defaults, folder rules, keyword rules, or the permanent resource identity.
 
 Activity history is persisted after 30 seconds. All duration displays use exact `hh:mm:ss`, including exports and the live current-activity counter.
 
@@ -89,7 +89,7 @@ The collector writes `collector_status` and `last_collector_heartbeat` into the 
 
 ## Abnormal Recovery
 
-If the app exits unexpectedly, startup recovery closes any `activity_log` rows where `end_time IS NULL`. It uses the last heartbeat when available; otherwise it closes at startup time and marks the row as `error` for review.
+If the app exits unexpectedly, startup recovery closes any `activity_log` rows where `end_time IS NULL`. It uses the last heartbeat when available; otherwise it closes at startup time and marks the row as `error` for review. Recovered rows that cross midnight are split into calendar-day records.
 
 ## Single Instance
 
@@ -105,7 +105,7 @@ The Settings page can clear all local data after this confirmation text:
 此操作将删除本机保存的所有工作轨迹、项目、规则和设置。删除后无法恢复。是否继续？
 ```
 
-Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`.
+Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, but no default exclusion keywords.
 
 ## Tests
 

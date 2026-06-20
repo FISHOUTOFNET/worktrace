@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, time as datetime_time, timedelta
 
-from ..constants import STATUS_ERROR, TIME_FORMAT
+from ..constants import STATUS_ERROR, STATUS_NORMAL, TIME_FORMAT
 from ..db import get_connection, now_str
-from . import session_boundary_service
+from . import activity_service, project_service, session_boundary_service
 from .settings_service import get_setting, set_setting
 
 
@@ -15,23 +15,30 @@ def recover_unclosed_records() -> None:
     recovered_boundary_at: str | None = None
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM activity_log WHERE end_time IS NULL ORDER BY id").fetchall()
-        for row in rows:
-            end_time = heartbeat or fallback_now
-            status = row["status"] if heartbeat else STATUS_ERROR
-            try:
-                duration = int(
-                    (
-                        datetime.strptime(end_time, TIME_FORMAT)
-                        - datetime.strptime(row["start_time"], TIME_FORMAT)
-                    ).total_seconds()
-                )
-            except ValueError:
-                duration = 0
-                status = STATUS_ERROR
-            if duration < 0:
-                duration = 0
-                status = STATUS_ERROR
-                end_time = fallback_now
+    for row in rows:
+        end_time = heartbeat or fallback_now
+        status = row["status"] if heartbeat else STATUS_ERROR
+        try:
+            duration = int(
+                (
+                    datetime.strptime(end_time, TIME_FORMAT)
+                    - datetime.strptime(row["start_time"], TIME_FORMAT)
+                ).total_seconds()
+            )
+        except ValueError:
+            duration = 0
+            status = STATUS_ERROR
+        if duration < 0:
+            duration = 0
+            status = STATUS_ERROR
+            end_time = fallback_now
+        start_dt = _parse_time(row["start_time"])
+        end_dt = _parse_time(end_time)
+        if start_dt and end_dt and status != STATUS_ERROR and end_dt.date() > start_dt.date():
+            recovered_boundary_at = _recover_cross_midnight_row(row, end_dt)
+            logging.info("recovered cross-midnight unclosed record id=%s", row["id"])
+            continue
+        with get_connection() as conn:
             conn.execute(
                 """
                 UPDATE activity_log
@@ -40,13 +47,58 @@ def recover_unclosed_records() -> None:
                 """,
                 (end_time, duration, status, now_str(), row["id"]),
             )
-            recovered_boundary_at = end_time
-            logging.info("recovered unclosed record id=%s status=%s", row["id"], status)
+        recovered_boundary_at = end_time
+        logging.info("recovered unclosed record id=%s status=%s", row["id"], status)
     if recovered_boundary_at:
         session_boundary_service.record_boundary(recovered_boundary_at, "recovered")
         set_setting("current_activity_snapshot", "")
         set_setting("pending_short_seconds", "0")
     record_restart_boundary_if_needed()
+
+
+def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
+    start_dt = datetime.strptime(row["start_time"], TIME_FORMAT)
+    first_midnight = datetime.combine(start_dt.date() + timedelta(days=1), datetime_time.min)
+    first_midnight_text = first_midnight.strftime(TIME_FORMAT)
+    original_project_id = row["project_id"] if project_service.is_concrete_project_id(row["project_id"]) else None
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET end_time = ?, duration_seconds = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                first_midnight_text,
+                max(0, int((first_midnight - start_dt).total_seconds())),
+                now_str(),
+                row["id"],
+            ),
+        )
+    current_start = first_midnight
+    last_activity_id: int | None = None
+    while current_start < end_dt:
+        next_midnight = datetime.combine(current_start.date() + timedelta(days=1), datetime_time.min)
+        current_end = min(end_dt, next_midnight)
+        activity_id = activity_service.create_activity(
+            row["app_name"],
+            row["process_name"],
+            row["window_title"],
+            status=row["status"],
+            source=row["source"],
+            start_time=current_start.strftime(TIME_FORMAT),
+            resource_id=row["resource_id"],
+            file_path_hint=row["file_path_hint"],
+            note=row["note"],
+        )
+        activity_service.finalize_created_activity(activity_id)
+        if row["status"] == STATUS_NORMAL and original_project_id is not None:
+            activity_service.apply_midnight_anchor_assignment(activity_id, int(original_project_id))
+        activity_service.close_activity(activity_id, current_end.strftime(TIME_FORMAT))
+        session_boundary_service.record_boundary(current_start.strftime(TIME_FORMAT), "midnight")
+        last_activity_id = activity_id
+        current_start = current_end
+    return end_dt.strftime(TIME_FORMAT) if last_activity_id is not None else first_midnight_text
 
 
 def record_restart_boundary_if_needed() -> None:
@@ -76,6 +128,15 @@ def _latest_known_shutdown_boundary() -> str | None:
     if not past_candidates:
         return None
     return max(past_candidates, key=lambda item: item[0])[1]
+
+
+def _parse_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, TIME_FORMAT)
+    except ValueError:
+        return None
 
 
 def detect_time_jump(last_loop_time: str, now: str, threshold_seconds: int = 300) -> bool:

@@ -54,8 +54,75 @@ def initialize_database(path: str | Path | None = None) -> None:
     schema_path = Path(__file__).with_name("schema.sql")
     with get_connection() as conn:
         conn.executescript(schema_path.read_text(encoding="utf-8"))
+        migrate_schema(conn)
         seed_defaults(conn)
     logging.info("database initialized")
+
+
+def migrate_schema(conn: sqlite3.Connection) -> None:
+    _migrate_assignment_source_check(conn)
+
+
+def _migrate_assignment_source_check(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_project_assignment'"
+    ).fetchone()
+    table_sql = str(row["sql"] if row else "")
+    if "midnight_anchor" in table_sql:
+        return
+    conn.execute("ALTER TABLE activity_project_assignment RENAME TO activity_project_assignment_old")
+    conn.execute(
+        """
+        CREATE TABLE activity_project_assignment (
+            activity_id INTEGER PRIMARY KEY,
+            project_id INTEGER,
+            confidence INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL CHECK (
+                source IN (
+                    'manual',
+                    'anchor_resource_default',
+                    'anchor_keyword',
+                    'anchor_context',
+                    'folder_rule',
+                    'midnight_anchor',
+                    'suggested_project_name',
+                    'uncategorized'
+                )
+            ),
+            is_manual INTEGER NOT NULL DEFAULT 0,
+            suggested_project_name TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (activity_id) REFERENCES activity_log(id),
+            FOREIGN KEY (project_id) REFERENCES project(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO activity_project_assignment(
+            activity_id, project_id, confidence, source, is_manual,
+            suggested_project_name, created_at, updated_at
+        )
+        SELECT
+            activity_id, project_id, confidence, source, is_manual,
+            suggested_project_name, created_at, updated_at
+        FROM activity_project_assignment_old
+        """
+    )
+    conn.execute("DROP TABLE activity_project_assignment_old")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_assignment_project
+        ON activity_project_assignment(project_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_assignment_source_manual
+        ON activity_project_assignment(source, is_manual)
+        """
+    )
 
 
 def seed_defaults(conn: sqlite3.Connection) -> None:
@@ -105,19 +172,16 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     )
     excluded = conn.execute("SELECT id FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone()
     if excluded:
-        for keyword in ["微信", "银行", "密码", "个人"]:
-            conn.execute(
-                """
-                INSERT INTO project_rule(project_id, rule_type, pattern, enabled, created_by, created_at, updated_at)
-                SELECT ?, 'keyword', ?, 1, 'system', ?, ?
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM project_rule
-                    WHERE project_id = ? AND rule_type = 'keyword' AND pattern = ?
-                )
-                """,
-                (excluded["id"], keyword, ts, ts, excluded["id"], keyword),
-            )
+        conn.execute(
+            """
+            DELETE FROM project_rule
+            WHERE project_id = ?
+              AND rule_type = 'keyword'
+              AND created_by = 'system'
+              AND pattern IN ('微信', '银行', '密码', '个人')
+            """,
+            (excluded["id"],),
+        )
 
 
 def reset_database() -> None:

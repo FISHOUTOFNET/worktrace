@@ -358,6 +358,36 @@ def test_shell_open_timeline_passes_session_context():
     assert app.active_page == "timeline"
 
 
+def test_shell_creates_timeline_and_statistics_with_shared_range(monkeypatch):
+    app = object.__new__(WorkTraceApp)
+    app.content = FakePage()
+    app.shared_start_var = FakeVar("2026-06-18")
+    app.shared_end_var = FakeVar("2026-06-19")
+    created = []
+
+    class FakeRangePage(FakePage):
+        def __init__(self, _master, start_var=None, end_var=None):
+            super().__init__()
+            self.start_var = start_var
+            self.end_var = end_var
+            created.append((start_var, end_var))
+
+    monkeypatch.setattr("worktrace.ui.timeline_view.TimelineView", FakeRangePage)
+    monkeypatch.setattr("worktrace.ui.statistics_view.StatisticsView", FakeRangePage)
+
+    timeline = WorkTraceApp._create_timeline_page(app)
+    statistics = WorkTraceApp._create_statistics_page(app)
+
+    assert timeline.start_var is app.shared_start_var
+    assert timeline.end_var is app.shared_end_var
+    assert statistics.start_var is app.shared_start_var
+    assert statistics.end_var is app.shared_end_var
+    assert created == [
+        (app.shared_start_var, app.shared_end_var),
+        (app.shared_start_var, app.shared_end_var),
+    ]
+
+
 def test_shell_copy_uses_page_selection_before_page_summary():
     app = _app_stub()
     app.pages["overview"] = FakeCopyPage()
