@@ -1,5 +1,5 @@
 from worktrace.services import settings_service
-from worktrace.ui.app import WorkTraceApp
+from worktrace.ui.app import SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, WM_SIZE, WM_SYSCOMMAND, WorkTraceApp
 
 
 class FakePage:
@@ -9,6 +9,7 @@ class FakePage:
         self.raised = 0
         self.grid_removed = False
         self.grid_calls = []
+        self.config = {}
 
     def grid(self, *_args, **_kwargs):
         self.visible = True
@@ -20,6 +21,9 @@ class FakePage:
 
     def tkraise(self):
         self.raised += 1
+
+    def configure(self, **kwargs):
+        self.config.update(kwargs)
 
     def refresh(self):
         self.refreshed += 1
@@ -66,9 +70,17 @@ def _app_stub():
 
 def _visual_app_stub():
     app = _app_stub()
+    app.tk = object()
     app.content = FakePage()
+    app.content.visible = True
+    app.sidebar = FakePage()
     app._visual_suspend_cover = FakePage()
     app._visual_suspend_reason = None
+    app._visual_suspend_scope = "content"
+    app._visual_suspend_hides_content = False
+    app._visual_reveal_after_id = None
+    app._restore_refresh_after_id = None
+    app._deferred_resume_refresh = False
     app._refresh_after_resize = False
     app._is_resizing = False
     app._resize_after_id = None
@@ -76,18 +88,44 @@ def _visual_app_stub():
     app._ui_suspend_until = 0.0
     app._last_configure_size = (1240, 780)
     app._seen_root_map = True
+    app._native_minimize_pending = False
+    app._native_window_hook_installed = False
+    app._native_window_handle = None
+    app._native_old_wndproc = None
+    app._native_wndproc = None
+    app._native_win32gui = None
+    app._page_refresh_after_ids = {}
     app.winfo_width = lambda: 1242
     app.winfo_height = lambda: 782
+    app.winfo_id = lambda: 100
+    app.state = lambda: "normal"
     scheduled = []
+    idle = []
+    cancelled = []
 
     def after(delay, callback):
         scheduled.append((delay, callback))
         return f"after-{len(scheduled)}"
 
+    def after_idle(callback):
+        idle.append(callback)
+        return f"idle-{len(idle)}"
+
     app.after = after
-    app.after_cancel = lambda _after_id: None
+    app.after_idle = after_idle
+    app.after_cancel = lambda after_id: cancelled.append(after_id)
+    app.update_idletasks_calls = 0
+    app.update_idletasks = lambda: setattr(app, "update_idletasks_calls", app.update_idletasks_calls + 1)
     app._scheduled = scheduled
+    app._idle = idle
+    app._cancelled = cancelled
     return app
+
+
+def _run_reveal_pipeline(app):
+    app._scheduled[-1][1]()
+    while app._idle:
+        app._idle.pop(0)()
 
 
 def test_shell_show_page_raises_target_and_refreshes_once():
@@ -170,27 +208,47 @@ def test_shell_resize_uses_cover_and_catches_up_once():
     app._scheduled[0][1]()
 
     assert app.pages["overview"].refreshed == 1
+    assert app._visual_suspend_cover.visible is True
+    assert app._scheduled[-1][0] == 80
+
+    _run_reveal_pipeline(app)
+
     assert app.content.visible is True
     assert app._visual_suspend_cover.visible is False
     assert app._visual_suspend_reason is None
+    assert app.update_idletasks_calls >= 3
 
 
-def test_shell_restore_keeps_cover_until_catch_up_refresh():
+def test_shell_restore_keeps_content_mounted_and_defers_refresh_until_after_reveal():
     app = _visual_app_stub()
 
     WorkTraceApp._on_unmap(app)
     WorkTraceApp._on_map(app)
 
-    assert app.content.visible is False
+    assert app.content.visible is True
+    assert app.content.grid_removed is False
     assert app._visual_suspend_cover.visible is True
+    assert app._visual_suspend_cover.raised == 2
+    assert app._visual_suspend_cover.grid_calls[-1][1]["columnspan"] == 2
     assert app.pages["overview"].refreshed == 0
     assert app._scheduled[-1][0] == 120
 
     app._scheduled[-1][1]()
 
-    assert app.pages["overview"].refreshed == 1
+    assert app.pages["overview"].refreshed == 0
+    assert app._visual_suspend_cover.visible is True
+    assert app._scheduled[-1][0] == 220
+
+    _run_reveal_pipeline(app)
+
     assert app.content.visible is True
     assert app._visual_suspend_cover.visible is False
+    assert app.pages["overview"].refreshed == 0
+    assert app._scheduled[-1][0] == 650
+
+    app._scheduled[-1][1]()
+
+    assert app.pages["overview"].refreshed == 1
 
 
 def test_shell_visual_suspend_coalesces_scheduled_and_live_refreshes():
@@ -206,6 +264,54 @@ def test_shell_visual_suspend_coalesces_scheduled_and_live_refreshes():
     assert overview.live_refreshed == 0
     assert app._refresh_after_resize is True
     assert app._scheduled[0][0] == 1000
+
+
+def test_shell_native_minimize_prepares_full_cover_without_unmapping_content():
+    app = _visual_app_stub()
+
+    WorkTraceApp._handle_native_window_message(app, WM_SYSCOMMAND, SC_MINIMIZE, 0)
+
+    assert app._native_minimize_pending is True
+    assert app._refresh_after_resize is True
+    assert app.content.visible is True
+    assert app.content.grid_removed is False
+    assert app._visual_suspend_cover.visible is True
+    assert app._visual_suspend_cover.grid_calls[-1][1]["columnspan"] == 2
+    assert app.update_idletasks_calls == 1
+
+
+def test_shell_native_size_minimized_marks_pending_without_forced_paint():
+    app = _visual_app_stub()
+
+    WorkTraceApp._handle_native_window_message(app, WM_SIZE, SIZE_MINIMIZED, 0)
+
+    assert app._native_minimize_pending is True
+    assert app._visual_suspend_reason == "hidden"
+    assert app.content.visible is True
+    assert app.content.grid_removed is False
+    assert app.update_idletasks_calls == 0
+
+
+def test_shell_native_restore_starts_resume_pipeline():
+    app = _visual_app_stub()
+    WorkTraceApp._handle_native_window_message(app, WM_SYSCOMMAND, SC_MINIMIZE, 0)
+
+    WorkTraceApp._handle_native_window_message(app, WM_SIZE, SIZE_RESTORED, 0)
+
+    assert app._native_minimize_pending is False
+    assert app._visual_suspend_reason == "resume"
+    assert app.content.grid_removed is False
+    assert app._scheduled[-1][0] == 120
+
+
+def test_shell_native_hook_install_failure_falls_back_silently():
+    app = _visual_app_stub()
+    app.winfo_id = lambda: (_ for _ in ()).throw(RuntimeError("no hwnd"))
+
+    WorkTraceApp._install_native_window_hook(app)
+
+    assert app._native_window_hook_installed is False
+    assert app._native_window_handle is None
 
 
 def test_shell_toggle_pause_updates_setting(temp_db):

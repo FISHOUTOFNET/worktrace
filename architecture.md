@@ -1181,7 +1181,7 @@ Use 5 pages:
 5. Settings and Privacy
 
 The collector thread must not directly update UI widgets. UI must refresh via Tkinter `after()` polling.
-Pages are created lazily on first visit, then stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels and visible durations are refreshed by the app shell every 1 second without rebuilding page content. Time Details must use value-only Treeview updates while session/resource/detail structure is stable, falling back to one full refresh when rows are added, removed, or reordered.
+Pages are created lazily on first visit, then stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels and visible durations are refreshed by the app shell every 1 second without rebuilding page content. Time Details must use value-only Treeview updates while session/resource/detail structure is stable, falling back to one full refresh when rows are added, removed, or reordered. Resize and restore use separate visual-suspend strategies: resize may temporarily unmap the content area under a content cover, while restore keeps content mounted under a full-window cover and defers heavy refresh until after reveal.
 
 Default refresh interval:
 
@@ -1410,7 +1410,8 @@ Rules:
 6. Display all stored durations as exact `hh:mm:ss` without minute rounding.
 7. Display the current activity counter as `hh:mm:ss`.
 8. Update visible Overview KPI durations, Time Details session/resource/detail durations, and Statistics durations every second from the current activity snapshot without requiring a full page refresh.
-9. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized; use a stable content-area cover during resize/restore, then run one catch-up refresh before revealing the page again.
+9. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized. Resize uses a stable content-area cover and can run one catch-up refresh before reveal. Restore uses a full-window cover, keeps the content tree mounted, reveals the complete UI first, then runs one delayed merged refresh.
+10. On Windows, install an optional native minimize/restore hook to pre-paint the full-window restore cover before minimize and detect restore earlier than Tk `<Map>`; hook failures must silently fall back to Tk events.
 
 ---
 

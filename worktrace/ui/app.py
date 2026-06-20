@@ -13,6 +13,13 @@ from . import design
 from .first_run_dialog import FirstRunDialog
 
 
+WM_SIZE = 0x0005
+WM_SYSCOMMAND = 0x0112
+SC_MINIMIZE = 0xF020
+SIZE_RESTORED = 0
+SIZE_MINIMIZED = 1
+
+
 class WorkTraceApp(ctk.CTk):
     def __init__(self, start_collector_callback, stop_event: threading.Event):
         super().__init__()
@@ -32,7 +39,18 @@ class WorkTraceApp(ctk.CTk):
         self._ui_suspend_until = 0.0
         self._visual_suspend_reason: str | None = None
         self._visual_suspend_cover: tk.Frame | None = None
+        self._visual_suspend_scope = "content"
+        self._visual_suspend_hides_content = False
+        self._visual_reveal_after_id: str | None = None
+        self._restore_refresh_after_id: str | None = None
+        self._deferred_resume_refresh = False
         self._seen_root_map = False
+        self._native_minimize_pending = False
+        self._native_window_hook_installed = False
+        self._native_window_handle: int | None = None
+        self._native_old_wndproc = None
+        self._native_wndproc = None
+        self._native_win32gui = None
 
         self.title("有迹 WorkTrace")
         self.geometry("1240x780")
@@ -52,6 +70,7 @@ class WorkTraceApp(ctk.CTk):
         self.after(500, self.refresh_current_tab)
         self.after(1000, self._refresh_sidebar_status)
         self.after(1000, self._refresh_current_activity_status)
+        self.after_idle(self._install_native_window_hook)
 
     def _build_shell(self) -> None:
         self.sidebar = ctk.CTkFrame(self, fg_color=design.SIDEBAR_BG, corner_radius=0, width=228)
@@ -292,7 +311,7 @@ class WorkTraceApp(ctk.CTk):
         if not self._is_window_visible():
             self._is_resizing = False
             self._refresh_after_resize = True
-            self._begin_visual_suspend("hidden")
+            self._begin_visual_suspend("hidden", scope="full", hide_content=False)
             return
         size = (self.winfo_width(), self.winfo_height())
         if self._last_configure_size is None:
@@ -302,7 +321,7 @@ class WorkTraceApp(ctk.CTk):
             return
         self._last_configure_size = size
         self._is_resizing = True
-        self._begin_visual_suspend("resize")
+        self._begin_visual_suspend("resize", scope="content", hide_content=True)
         if self._resize_after_id is not None:
             try:
                 self.after_cancel(self._resize_after_id)
@@ -313,7 +332,7 @@ class WorkTraceApp(ctk.CTk):
     def _finish_resize(self) -> None:
         self._is_resizing = False
         self._resize_after_id = None
-        self._finish_visual_suspend()
+        self._finish_visual_suspend(refresh_before_reveal=True, reveal_delay_ms=80)
 
     def _can_run_heavy_refresh(self, allow_visual_suspend: bool = False) -> bool:
         if self.__dict__.get("_is_resizing", False):
@@ -346,7 +365,8 @@ class WorkTraceApp(ctk.CTk):
         self._ui_suspend_until = 0.0
         self._is_resizing = False
         self._refresh_after_resize = True
-        self._begin_visual_suspend("hidden")
+        self._native_minimize_pending = True
+        self._begin_visual_suspend("hidden", scope="full", hide_content=False, paint_now=True)
 
     def _on_map(self, event=None) -> None:
         if event is not None and getattr(event, "widget", self) is not self:
@@ -354,37 +374,62 @@ class WorkTraceApp(ctk.CTk):
         if not self.__dict__.get("_seen_root_map", False):
             self._seen_root_map = True
             return
+        self._start_resume_visual_suspend()
+
+    def _finish_resume(self) -> None:
+        self._resume_refresh_after_id = None
+        self._ui_suspend_until = 0.0
+        if not self._is_window_visible():
+            self._refresh_after_resize = True
+            return
+        self._deferred_resume_refresh = self._deferred_resume_refresh or self._refresh_after_resize
+        self._refresh_after_resize = False
+        self._finish_visual_suspend(
+            refresh_before_reveal=False,
+            reveal_delay_ms=220,
+            refresh_after_reveal=True,
+        )
+
+    def _start_resume_visual_suspend(self) -> None:
         self._ui_suspend_until = 0.0
         self._is_resizing = False
         self._refresh_after_resize = True
-        self._begin_visual_suspend("resume")
+        self._native_minimize_pending = False
+        self._begin_visual_suspend("resume", scope="full", hide_content=False)
+        self._schedule_finish_resume(120)
+
+    def _schedule_finish_resume(self, delay_ms: int) -> None:
         if self._resume_refresh_after_id is not None:
             try:
                 self.after_cancel(self._resume_refresh_after_id)
             except Exception:
                 pass
-        self._resume_refresh_after_id = self.after(120, self._finish_resume)
+        self._resume_refresh_after_id = self.after(delay_ms, self._finish_resume)
 
-    def _finish_resume(self) -> None:
-        self._resume_refresh_after_id = None
-        self._ui_suspend_until = 0.0
-        self._finish_visual_suspend()
-
-    def _begin_visual_suspend(self, reason: str) -> None:
+    def _begin_visual_suspend(
+        self,
+        reason: str,
+        scope: str = "content",
+        hide_content: bool = True,
+        paint_now: bool = False,
+    ) -> None:
         self._visual_suspend_reason = reason
+        self._visual_suspend_scope = scope
+        self._visual_suspend_hides_content = hide_content
+        self._cancel_visual_reveal()
+        self._cancel_scheduled_page_refreshes()
         cover = self._ensure_visual_suspend_cover()
         content = getattr(self, "content", None)
-        if content is not None:
+        if hide_content and content is not None:
             try:
                 content.grid_remove()
             except Exception:
                 pass
         if cover is not None:
             self._refresh_visual_suspend_cover_color()
-            try:
-                cover.grid(row=0, column=1, sticky="nsew")
-            except Exception:
-                pass
+            self._place_visual_suspend_cover(cover, scope)
+            if paint_now:
+                self._drain_layout()
 
     def _ensure_visual_suspend_cover(self):
         cover = self.__dict__.get("_visual_suspend_cover")
@@ -395,6 +440,17 @@ class WorkTraceApp(ctk.CTk):
         cover = tk.Frame(self, bg=self._appearance_color(design.WINDOW_BG), bd=0, highlightthickness=0)
         self._visual_suspend_cover = cover
         return cover
+
+    def _place_visual_suspend_cover(self, cover, scope: str) -> None:
+        try:
+            if scope == "full":
+                cover.grid(row=0, column=0, columnspan=2, sticky="nsew")
+            else:
+                cover.grid(row=0, column=1, sticky="nsew")
+            if hasattr(cover, "tkraise"):
+                cover.tkraise()
+        except Exception:
+            pass
 
     def _refresh_visual_suspend_cover_color(self) -> None:
         cover = self.__dict__.get("_visual_suspend_cover")
@@ -411,21 +467,61 @@ class WorkTraceApp(ctk.CTk):
             return color[index]
         return color
 
-    def _finish_visual_suspend(self) -> None:
-        if self._refresh_after_resize:
+    def _finish_visual_suspend(
+        self,
+        refresh_before_reveal: bool = True,
+        reveal_delay_ms: int = 80,
+        refresh_after_reveal: bool = False,
+    ) -> None:
+        if refresh_before_reveal and self._refresh_after_resize:
             self._refresh_after_resize = False
             self._refresh_page(self.active_page, allow_visual_suspend=True)
-        self._restore_content_after_idle()
+        if refresh_after_reveal:
+            self._deferred_resume_refresh = self._deferred_resume_refresh or self._refresh_after_resize
+            self._refresh_after_resize = False
+        self._schedule_visual_reveal(reveal_delay_ms)
 
-    def _restore_content_after_idle(self) -> None:
-        if "tk" in self.__dict__ and hasattr(self, "after_idle"):
-            self.after_idle(self._end_visual_suspend)
+    def _schedule_visual_reveal(self, delay_ms: int) -> None:
+        self._cancel_visual_reveal()
+        if "tk" in self.__dict__ and hasattr(self, "after"):
+            self._visual_reveal_after_id = self.after(delay_ms, self._start_visual_reveal)
         else:
-            self._end_visual_suspend()
+            self._start_visual_reveal()
+
+    def _cancel_visual_reveal(self) -> None:
+        after_id = self.__dict__.get("_visual_reveal_after_id")
+        if after_id is not None and hasattr(self, "after_cancel"):
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        self._visual_reveal_after_id = None
+
+    def _start_visual_reveal(self) -> None:
+        self._visual_reveal_after_id = None
+        self._drain_visual_reveal(2)
+
+    def _drain_visual_reveal(self, remaining_idle_drains: int) -> None:
+        self._drain_layout()
+        if remaining_idle_drains > 0 and "tk" in self.__dict__ and hasattr(self, "after_idle"):
+            self.after_idle(lambda remaining=remaining_idle_drains - 1: self._drain_visual_reveal(remaining))
+            return
+        self._end_visual_suspend()
+
+    def _drain_layout(self) -> None:
+        if hasattr(self, "update_idletasks"):
+            try:
+                self.update_idletasks()
+            except Exception:
+                pass
 
     def _end_visual_suspend(self) -> None:
+        reason = self.__dict__.get("_visual_suspend_reason")
+        refresh_after_reveal = self.__dict__.get("_deferred_resume_refresh", False) or (
+            reason == "resume" and self.__dict__.get("_refresh_after_resize", False)
+        )
         content = getattr(self, "content", None)
-        if content is not None:
+        if content is not None and self.__dict__.get("_visual_suspend_hides_content", False):
             try:
                 content.grid(row=0, column=1, sticky="nsew")
             except Exception:
@@ -437,6 +533,113 @@ class WorkTraceApp(ctk.CTk):
             except Exception:
                 pass
         self._visual_suspend_reason = None
+        self._visual_suspend_hides_content = False
+        self._deferred_resume_refresh = False
+        if refresh_after_reveal:
+            self._refresh_after_resize = False
+            self._schedule_deferred_resume_refresh()
+
+    def _schedule_deferred_resume_refresh(self, delay_ms: int = 650) -> None:
+        if self._restore_refresh_after_id is not None:
+            try:
+                self.after_cancel(self._restore_refresh_after_id)
+            except Exception:
+                pass
+        if "tk" in self.__dict__ and hasattr(self, "after"):
+            self._restore_refresh_after_id = self.after(delay_ms, self._run_deferred_resume_refresh)
+        else:
+            self._run_deferred_resume_refresh()
+
+    def _run_deferred_resume_refresh(self) -> None:
+        self._restore_refresh_after_id = None
+        if not self._can_run_heavy_refresh():
+            self._refresh_after_resize = True
+            return
+        page = self.pages.get(self.active_page)
+        if self.active_page == "timeline" and page is not None and hasattr(page, "is_user_interacting"):
+            if page.is_user_interacting():
+                return
+        self._refresh_page(self.active_page)
+
+    def _cancel_scheduled_page_refreshes(self) -> None:
+        for after_id in list(getattr(self, "_page_refresh_after_ids", {}).values()):
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        if "_page_refresh_after_ids" in self.__dict__:
+            self._page_refresh_after_ids.clear()
+
+    def _install_native_window_hook(self) -> None:
+        if self.__dict__.get("_native_window_hook_installed", False) or "tk" not in self.__dict__:
+            return
+        try:
+            import win32con
+            import win32gui
+
+            hwnd = int(self.winfo_id())
+            callback = self._native_window_proc
+            old_wndproc = win32gui.SetWindowLong(hwnd, win32con.GWL_WNDPROC, callback)
+        except Exception:
+            self._native_window_hook_installed = False
+            self._native_window_handle = None
+            self._native_old_wndproc = None
+            self._native_win32gui = None
+            return
+        self._native_window_hook_installed = True
+        self._native_window_handle = hwnd
+        self._native_old_wndproc = old_wndproc
+        self._native_wndproc = callback
+        self._native_win32gui = win32gui
+
+    def _native_window_proc(self, hwnd, message, wparam, lparam):
+        try:
+            self._handle_native_window_message(message, wparam, lparam)
+        except Exception:
+            pass
+        win32gui = self.__dict__.get("_native_win32gui")
+        old_wndproc = self.__dict__.get("_native_old_wndproc")
+        if win32gui is not None and old_wndproc is not None:
+            return win32gui.CallWindowProc(old_wndproc, hwnd, message, wparam, lparam)
+        return 0
+
+    def _handle_native_window_message(self, message: int, wparam: int, _lparam: int) -> None:
+        if message == WM_SYSCOMMAND and (int(wparam) & 0xFFF0) == SC_MINIMIZE:
+            self._prepare_native_minimize()
+            return
+        if message != WM_SIZE:
+            return
+        if int(wparam) == SIZE_MINIMIZED:
+            self._prepare_native_minimize(paint_now=False)
+        elif int(wparam) == SIZE_RESTORED and (
+            self.__dict__.get("_native_minimize_pending", False)
+            or self.__dict__.get("_visual_suspend_reason") in {"hidden", "resume"}
+        ):
+            self._start_resume_visual_suspend()
+
+    def _prepare_native_minimize(self, paint_now: bool = True) -> None:
+        self._native_minimize_pending = True
+        self._refresh_after_resize = True
+        self._begin_visual_suspend("hidden", scope="full", hide_content=False, paint_now=paint_now)
+
+    def _restore_native_window_hook(self) -> None:
+        if not self.__dict__.get("_native_window_hook_installed", False):
+            return
+        win32gui = self.__dict__.get("_native_win32gui")
+        hwnd = self.__dict__.get("_native_window_handle")
+        old_wndproc = self.__dict__.get("_native_old_wndproc")
+        try:
+            if win32gui is not None and hwnd is not None and old_wndproc is not None:
+                import win32con
+
+                win32gui.SetWindowLong(hwnd, win32con.GWL_WNDPROC, old_wndproc)
+        except Exception:
+            pass
+        self._native_window_hook_installed = False
+        self._native_window_handle = None
+        self._native_old_wndproc = None
+        self._native_wndproc = None
+        self._native_win32gui = None
 
     def _sync_nav_buttons(self) -> None:
         for key, button in self.nav_buttons.items():
@@ -499,5 +702,6 @@ class WorkTraceApp(ctk.CTk):
                 timeline.refresh()
 
     def on_close(self) -> None:
+        self._restore_native_window_hook()
         self.stop_event.set()
         self.destroy()
