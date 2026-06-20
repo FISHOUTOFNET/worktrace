@@ -66,6 +66,7 @@ class FakeTree:
         self.items = {}
         self.moves = []
         self.deleted = []
+        self.item_calls = []
         self.yview_position = 0.0
 
     def __getitem__(self, key):
@@ -102,6 +103,7 @@ class FakeTree:
     def item(self, iid, **kwargs):
         if "values" in kwargs:
             self.items[iid] = tuple(kwargs["values"])
+            self.item_calls.append((iid, tuple(kwargs["values"])))
         return {"values": self.items.get(iid)}
 
     def move(self, iid, _parent, index):
@@ -146,6 +148,41 @@ def _editor_view_stub():
     view.resource_tree_frame = FakeWidget(mapped=True)
     view.detail_tree_frame = FakeWidget(mapped=False)
     return view
+
+
+def _live_view_stub(detail_mode="resources"):
+    view = object.__new__(TimelineView)
+    view.current_activity_label = FakeWidget()
+    view.date_var = FakeVar("2026-06-18")
+    view.only_uncategorized = FakeVar(False)
+    view.session_project_var = FakeVar("")
+    view.detail_label = FakeWidget()
+    view.detail_hint_label = FakeWidget()
+    view.session_count_label = FakeWidget()
+    view.session_tree = FakeTree()
+    view.resource_tree = FakeTree()
+    view.detail_tree = FakeTree()
+    view._tree_values = {}
+    view._sessions_by_id = {}
+    view._resources_by_id = {}
+    view._details_by_id = {}
+    view._selected_session_id = "1-1"
+    view._selected_resource_id = None
+    view._selected_activity_id = None
+    view._detail_mode = detail_mode
+    view._project_name_by_id = {1: "Client"}
+    view.is_user_interacting = lambda: False
+    view._current_activity_text = lambda: "当前活动：Spec｜Client｜00:00:35｜已进入历史"
+    return view
+
+
+def _seed_tree(view, tree, items):
+    if not hasattr(view, "_tree_values"):
+        view._tree_values = {}
+    tree.children = [iid for iid, _values in items]
+    tree.items = {iid: tuple(values) for iid, values in items}
+    for iid, values in items:
+        view._tree_values[f"{id(tree)}:{iid}"] = tuple(values)
 
 
 def test_visible_resource_editor_blocks_auto_refresh_even_after_recent_selection_window():
@@ -350,6 +387,31 @@ def test_sync_tree_keeps_saved_column_widths():
     assert tree.widths["type"] == 80
 
 
+def test_sync_tree_values_only_updates_values_without_layout_changes():
+    view = object.__new__(TimelineView)
+    tree = FakeTree()
+    _seed_tree(view, tree, [("1", ("Spec.docx", "00:00:30"))])
+
+    changed = TimelineView._sync_tree_values_only(view, tree, [("1", ("Spec.docx", "00:00:35"))])
+
+    assert changed is True
+    assert tree.item_calls == [("1", ("Spec.docx", "00:00:35"))]
+    assert tree.moves == []
+    assert tree.deleted == []
+    assert tree.children == ["1"]
+
+
+def test_sync_tree_values_only_rejects_structure_changes():
+    view = object.__new__(TimelineView)
+    tree = FakeTree()
+    _seed_tree(view, tree, [("1", ("Spec.docx",))])
+
+    assert TimelineView._sync_tree_values_only(view, tree, [("2", ("Spec.docx",))]) is False
+    assert TimelineView._sync_tree_values_only(view, tree, [("1", ("Spec.docx",)), ("2", ("Notes.md",))]) is False
+    assert tree.item_calls == []
+    assert tree.children == ["1"]
+
+
 def test_open_context_selects_requested_session_on_sync():
     view = object.__new__(TimelineView)
     view.date_var = FakeVar()
@@ -455,6 +517,139 @@ def test_current_activity_text_uses_second_level_duration(temp_db):
     )
 
     assert TimelineView._current_activity_text(view) == "当前活动：Spec.docx｜Client｜00:01:05｜已进入历史"
+
+
+def test_refresh_current_activity_updates_stable_resource_values_without_full_refresh(monkeypatch):
+    view = _live_view_stub("resources")
+    old_session = {
+        "session_id": "1-1",
+        "project_id": 1,
+        "project_name": "Client",
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": None,
+        "report_date": "2026-06-18",
+        "duration_seconds": 30,
+        "activity_ids": [1],
+        "event_count": 1,
+        "status_summary": "正常活动",
+        "is_uncategorized": False,
+    }
+    new_session = {**old_session, "duration_seconds": 35}
+    old_resource = {
+        "resource_id": 7,
+        "display_name": "Spec.docx",
+        "resource_type": "file",
+        "total_duration_seconds": 30,
+        "event_count": 1,
+        "project_name": "Client",
+    }
+    new_resource = {**old_resource, "total_duration_seconds": 35}
+    _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, old_session))])
+    _seed_tree(view, view.resource_tree, [("7", TimelineView._resource_values(view, old_resource))])
+    view._selected_resource_id = 7
+    fallback_refreshes = []
+
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_date", lambda *_args, **_kwargs: [new_session])
+    monkeypatch.setattr(timeline_service, "get_session_resource_summary", lambda *_args, **_kwargs: [new_resource])
+    view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
+
+    TimelineView.refresh_current_activity(view)
+
+    assert fallback_refreshes == []
+    assert view.current_activity_label.config["text"] == "当前活动：Spec｜Client｜00:00:35｜已进入历史"
+    assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, new_session))]
+    assert view.resource_tree.item_calls == [("7", TimelineView._resource_values(view, new_resource))]
+    assert view.session_tree.moves == []
+    assert view.resource_tree.moves == []
+    assert view.resource_tree.deleted == []
+
+
+def test_refresh_current_activity_updates_stable_detail_values_without_full_refresh(monkeypatch):
+    view = _live_view_stub("details")
+    session = {
+        "session_id": "1-1",
+        "project_id": 1,
+        "project_name": "Client",
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": None,
+        "report_date": "2026-06-18",
+        "duration_seconds": 35,
+        "activity_ids": [1],
+        "event_count": 1,
+        "status_summary": "正常活动",
+        "is_uncategorized": False,
+    }
+    old_detail = {
+        "id": 1,
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": None,
+        "app_name": "Word",
+        "window_title": "Spec.docx",
+        "resource_display_name": "Spec.docx",
+        "duration_seconds": 30,
+        "project_name": "Client",
+        "note": "",
+    }
+    new_detail = {**old_detail, "duration_seconds": 35}
+    _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, session))])
+    _seed_tree(view, view.detail_tree, [("1", TimelineView._detail_values(view, old_detail))])
+    view._selected_activity_id = 1
+    fallback_refreshes = []
+
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_date", lambda *_args, **_kwargs: [session])
+    monkeypatch.setattr(timeline_service, "get_session_activity_details", lambda *_args, **_kwargs: [new_detail])
+    view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
+
+    TimelineView.refresh_current_activity(view)
+
+    assert fallback_refreshes == []
+    assert view.detail_tree.item_calls == [("1", TimelineView._detail_values(view, new_detail))]
+    assert view.detail_tree.moves == []
+    assert view.detail_tree.deleted == []
+
+
+def test_refresh_current_activity_falls_back_when_session_structure_changes(monkeypatch):
+    view = _live_view_stub("resources")
+    old_session = {
+        "session_id": "1-1",
+        "project_id": 1,
+        "project_name": "Client",
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": None,
+        "report_date": "2026-06-18",
+        "duration_seconds": 30,
+        "activity_ids": [1],
+        "event_count": 1,
+        "status_summary": "正常活动",
+        "is_uncategorized": False,
+    }
+    new_session = {**old_session, "session_id": "1-2", "duration_seconds": 35, "activity_ids": [1, 2]}
+    _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, old_session))])
+    fallback_refreshes = []
+
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_date", lambda *_args, **_kwargs: [new_session])
+    view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
+
+    TimelineView.refresh_current_activity(view)
+
+    assert fallback_refreshes == [{"ensure_context": False}]
+    assert view.session_tree.item_calls == []
+
+
+def test_refresh_current_activity_skips_tables_while_user_interacts(monkeypatch):
+    view = _live_view_stub("resources")
+    view.is_user_interacting = lambda: True
+    session_calls = []
+    fallback_refreshes = []
+
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_date", lambda *_args, **_kwargs: session_calls.append("called"))
+    view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
+
+    TimelineView.refresh_current_activity(view)
+
+    assert view.current_activity_label.config["text"] == "当前活动：Spec｜Client｜00:00:35｜已进入历史"
+    assert session_calls == []
+    assert fallback_refreshes == []
 
 
 def test_timeline_resource_rule_dialog_prefills_selected_resource(monkeypatch):

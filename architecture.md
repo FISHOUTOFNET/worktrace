@@ -215,7 +215,7 @@ Default UI refresh interval:
 
 ```text
 10 seconds for full page data refresh
-2 seconds for current-activity label refresh
+1 second for current-activity label and live duration refresh
 ```
 
 Collector thread communicates state through:
@@ -1181,12 +1181,13 @@ Use 5 pages:
 5. Settings and Privacy
 
 The collector thread must not directly update UI widgets. UI must refresh via Tkinter `after()` polling.
-Pages are created lazily on first visit, then stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels are refreshed by the app shell every 2 seconds without rebuilding page content.
+Pages are created lazily on first visit, then stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels and visible durations are refreshed by the app shell every 1 second without rebuilding page content. Time Details must use value-only Treeview updates while session/resource/detail structure is stable, falling back to one full refresh when rows are added, removed, or reordered.
 
 Default refresh interval:
 
 ```text
 10 seconds
+1 second for live current-activity and duration values
 ```
 
 ### 24.1 Overview Page
@@ -1409,7 +1410,7 @@ Rules:
 6. Display all stored durations as exact `hh:mm:ss` without minute rounding.
 7. Display the current activity counter as `hh:mm:ss`.
 8. Update visible Overview KPI durations, Time Details session/resource/detail durations, and Statistics durations every second from the current activity snapshot without requiring a full page refresh.
-9. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized; after restore, delay the catch-up refresh until the window is visible and stable.
+9. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized; use a stable content-area cover during resize/restore, then run one catch-up refresh before revealing the page again.
 
 ---
 

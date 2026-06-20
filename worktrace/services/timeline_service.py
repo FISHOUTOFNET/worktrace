@@ -257,7 +257,8 @@ def update_resource_project_for_session(
 def _load_activity_rows_for_report_range(start_date: str, end_date: str, include_hidden: bool) -> list[dict]:
     load_start_day = date_type.fromisoformat(start_date) - timedelta(days=1)
     load_start = f"{load_start_day.isoformat()} 00:00:00"
-    load_end_day = date_type.fromisoformat(end_date) + timedelta(days=1)
+    # Project report dates can carry into the day after the requested range.
+    load_end_day = date_type.fromisoformat(end_date) + timedelta(days=2)
     load_end = f"{load_end_day.isoformat()} 00:00:00"
     with get_connection() as conn:
         rows = conn.execute(

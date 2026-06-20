@@ -375,14 +375,7 @@ class TimelineView(ctk.CTkFrame):
         session = self._sessions_by_id.get(self._selected_session_id or "")
         if not session:
             return
-        self.detail_label.configure(
-            text=f"{self._session_time(session)} | {session['project_name']}"
-        )
-        if hasattr(self, "detail_hint_label"):
-            self.detail_hint_label.configure(
-                text=f"{format_duration(session['duration_seconds'])} | {session['event_count']} 条活动 | {session['status_summary']}"
-            )
-        self.session_project_var.set(self._project_name_by_id.get(int(session["project_id"]), UNCATEGORIZED_PROJECT))
+        self._sync_selected_session_summary(session)
         if self._detail_mode == "resources":
             self._sync_resources(
                 timeline_service.get_session_resource_summary(
@@ -399,6 +392,16 @@ class TimelineView(ctk.CTkFrame):
                     ensure_context=ensure_context,
                 )
             )
+
+    def _sync_selected_session_summary(self, session: dict) -> None:
+        self.detail_label.configure(
+            text=f"{self._session_time(session)} | {session['project_name']}"
+        )
+        if hasattr(self, "detail_hint_label"):
+            self.detail_hint_label.configure(
+                text=f"{format_duration(session['duration_seconds'])} | {session['event_count']} 条活动 | {session['status_summary']}"
+            )
+        self.session_project_var.set(self._project_name_by_id.get(int(session["project_id"]), UNCATEGORIZED_PROJECT))
 
     def _sync_resources(self, resources: list[dict]) -> None:
         previous = self._selected_resource_id
@@ -456,6 +459,18 @@ class TimelineView(ctk.CTkFrame):
             self.after_idle(restore)
         else:
             restore()
+
+    def _sync_tree_values_only(self, tree: ttk.Treeview, items: list[tuple[str, tuple[str, ...]]]) -> bool:
+        existing = list(tree.get_children())
+        incoming = [iid for iid, _values in items]
+        if existing != incoming:
+            return False
+        for iid, values in items:
+            key = f"{id(tree)}:{iid}"
+            if self._tree_values.get(key) != values:
+                tree.item(iid, values=values)
+            self._tree_values[key] = values
+        return True
 
     def _on_session_select(self, _event=None) -> None:
         selection = self.session_tree.selection()
@@ -697,8 +712,53 @@ class TimelineView(ctk.CTkFrame):
 
     def refresh_current_activity(self) -> None:
         self.current_activity_label.configure(text=self._current_activity_text())
-        if self._valid_date(self.date_var.get()) and not self.is_user_interacting():
+        if not self._valid_date(self.date_var.get()) or self.is_user_interacting():
+            return
+        if not self._refresh_live_table_values():
             self.refresh(ensure_context=False)
+
+    def _refresh_live_table_values(self) -> bool:
+        sessions = timeline_service.get_project_sessions_by_date(self.date_var.get(), ensure_context=False)
+        if self.only_uncategorized.get():
+            sessions = [session for session in sessions if session["is_uncategorized"]]
+        session_items = [(session["session_id"], self._session_values(session)) for session in sessions]
+        if not self._sync_tree_values_only(self.session_tree, session_items):
+            return False
+        self._sessions_by_id = {session["session_id"]: session for session in sessions}
+        if hasattr(self, "session_count_label"):
+            self.session_count_label.configure(text=f"{len(sessions)} 条")
+        if not sessions:
+            self._selected_session_id = None
+            return True
+        session = self._sessions_by_id.get(self._selected_session_id or "")
+        if not session:
+            return False
+        self._sync_selected_session_summary(session)
+        if self._detail_mode == "resources":
+            resources = timeline_service.get_session_resource_summary(
+                session["activity_ids"],
+                report_date=session.get("report_date"),
+                ensure_context=False,
+            )
+            resource_items = [(str(row["resource_id"]), self._resource_values(row)) for row in resources]
+            if not self._sync_tree_values_only(self.resource_tree, resource_items):
+                return False
+            self._resources_by_id = {int(row["resource_id"]): row for row in resources}
+            if self._selected_resource_id is not None and self._selected_resource_id not in self._resources_by_id:
+                return False
+            return True
+        details = timeline_service.get_session_activity_details(
+            session["activity_ids"],
+            report_date=session.get("report_date"),
+            ensure_context=False,
+        )
+        detail_items = [(str(row["id"]), self._detail_values(row)) for row in details]
+        if not self._sync_tree_values_only(self.detail_tree, detail_items):
+            return False
+        self._details_by_id = {int(row["id"]): row for row in details}
+        if self._selected_activity_id is not None and self._selected_activity_id not in self._details_by_id:
+            return False
+        return True
 
     def _current_activity_text(self) -> str:
         raw = get_setting("current_activity_snapshot", "") or ""

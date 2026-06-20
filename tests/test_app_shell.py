@@ -8,9 +8,11 @@ class FakePage:
         self.refreshed = 0
         self.raised = 0
         self.grid_removed = False
+        self.grid_calls = []
 
     def grid(self, *_args, **_kwargs):
         self.visible = True
+        self.grid_calls.append((_args, _kwargs))
 
     def grid_remove(self):
         self.visible = False
@@ -59,6 +61,32 @@ def _app_stub():
     app.collector_started = True
     app.start_collector_callback = lambda: None
     app._sync_sidebar_status = lambda: None
+    return app
+
+
+def _visual_app_stub():
+    app = _app_stub()
+    app.content = FakePage()
+    app._visual_suspend_cover = FakePage()
+    app._visual_suspend_reason = None
+    app._refresh_after_resize = False
+    app._is_resizing = False
+    app._resize_after_id = None
+    app._resume_refresh_after_id = None
+    app._ui_suspend_until = 0.0
+    app._last_configure_size = (1240, 780)
+    app._seen_root_map = True
+    app.winfo_width = lambda: 1242
+    app.winfo_height = lambda: 782
+    scheduled = []
+
+    def after(delay, callback):
+        scheduled.append((delay, callback))
+        return f"after-{len(scheduled)}"
+
+    app.after = after
+    app.after_cancel = lambda _after_id: None
+    app._scheduled = scheduled
     return app
 
 
@@ -126,6 +154,58 @@ def test_shell_current_activity_tick_skips_during_resize():
 
     assert overview.live_refreshed == 0
     assert scheduled[0][0] == 1000
+
+
+def test_shell_resize_uses_cover_and_catches_up_once():
+    app = _visual_app_stub()
+
+    WorkTraceApp._on_configure(app)
+
+    assert app._is_resizing is True
+    assert app.content.visible is False
+    assert app._visual_suspend_cover.visible is True
+    assert app._scheduled[0][0] == 250
+
+    app._refresh_after_resize = True
+    app._scheduled[0][1]()
+
+    assert app.pages["overview"].refreshed == 1
+    assert app.content.visible is True
+    assert app._visual_suspend_cover.visible is False
+    assert app._visual_suspend_reason is None
+
+
+def test_shell_restore_keeps_cover_until_catch_up_refresh():
+    app = _visual_app_stub()
+
+    WorkTraceApp._on_unmap(app)
+    WorkTraceApp._on_map(app)
+
+    assert app.content.visible is False
+    assert app._visual_suspend_cover.visible is True
+    assert app.pages["overview"].refreshed == 0
+    assert app._scheduled[-1][0] == 120
+
+    app._scheduled[-1][1]()
+
+    assert app.pages["overview"].refreshed == 1
+    assert app.content.visible is True
+    assert app._visual_suspend_cover.visible is False
+
+
+def test_shell_visual_suspend_coalesces_scheduled_and_live_refreshes():
+    app = _visual_app_stub()
+    overview = FakeLivePage()
+    app.pages = {"overview": overview}
+    app._visual_suspend_reason = "resize"
+
+    WorkTraceApp._schedule_page_refresh(app, "overview")
+    WorkTraceApp._refresh_current_activity_status(app)
+
+    assert overview.refreshed == 0
+    assert overview.live_refreshed == 0
+    assert app._refresh_after_resize is True
+    assert app._scheduled[0][0] == 1000
 
 
 def test_shell_toggle_pause_updates_setting(temp_db):

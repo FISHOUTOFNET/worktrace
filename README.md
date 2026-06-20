@@ -60,7 +60,7 @@ WorkTrace keeps the startup path small by creating only the Overview page at lau
 
 Heavy optional dependencies are loaded only when needed: `openpyxl` is imported during Excel export, and Windows process inspection dependencies are imported only when the real Windows adapter reads the foreground window. Shared duration formatting lives in `worktrace.formatters` so UI modules do not load export modules just to format `hh:mm:ss` values.
 
-The default full-page data refresh interval is 10 seconds. A lightweight 1-second tick updates the current-activity label plus visible Overview, Time Details, and Statistics durations, so active records grow smoothly between full refreshes. Heavy refreshes are suspended during window resize/minimize/restore to keep the shell responsive.
+The default full-page data refresh interval is 10 seconds. A lightweight 1-second tick updates the current-activity label plus visible Overview, Time Details, and Statistics durations, so active records grow smoothly between full refreshes. Time Details uses value-only Treeview updates on that tick when the table structure is unchanged, and falls back to one full refresh only when sessions, resources, or details are added, removed, or reordered. Heavy refreshes are suspended during window resize/minimize/restore; the content area shows a stable background cover and performs a single catch-up refresh before becoming visible again.
 
 ## Project Classification
 

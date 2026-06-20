@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import tkinter as tk
 from typing import Any, Callable
 
 import customtkinter as ctk
@@ -29,6 +30,9 @@ class WorkTraceApp(ctk.CTk):
         self._refresh_after_resize = False
         self._resume_refresh_after_id: str | None = None
         self._ui_suspend_until = 0.0
+        self._visual_suspend_reason: str | None = None
+        self._visual_suspend_cover: tk.Frame | None = None
+        self._seen_root_map = False
 
         self.title("有迹 WorkTrace")
         self.geometry("1240x780")
@@ -241,8 +245,8 @@ class WorkTraceApp(ctk.CTk):
         refresh_ms = max(5, get_int_setting("ui_refresh_seconds", 10)) * 1000
         self.after(refresh_ms, self.refresh_current_tab)
 
-    def _refresh_page(self, key: str) -> None:
-        if not self._can_run_heavy_refresh():
+    def _refresh_page(self, key: str, allow_visual_suspend: bool = False) -> None:
+        if not self._can_run_heavy_refresh(allow_visual_suspend=allow_visual_suspend):
             self._refresh_after_resize = True
             return
         page = self.pages.get(key)
@@ -288,12 +292,17 @@ class WorkTraceApp(ctk.CTk):
         if not self._is_window_visible():
             self._is_resizing = False
             self._refresh_after_resize = True
+            self._begin_visual_suspend("hidden")
             return
         size = (self.winfo_width(), self.winfo_height())
+        if self._last_configure_size is None:
+            self._last_configure_size = size
+            return
         if self._last_configure_size == size:
             return
         self._last_configure_size = size
         self._is_resizing = True
+        self._begin_visual_suspend("resize")
         if self._resize_after_id is not None:
             try:
                 self.after_cancel(self._resize_after_id)
@@ -304,12 +313,12 @@ class WorkTraceApp(ctk.CTk):
     def _finish_resize(self) -> None:
         self._is_resizing = False
         self._resize_after_id = None
-        if self._refresh_after_resize:
-            self._refresh_after_resize = False
-            self._schedule_page_refresh(self.active_page, delay_ms=450)
+        self._finish_visual_suspend()
 
-    def _can_run_heavy_refresh(self) -> bool:
+    def _can_run_heavy_refresh(self, allow_visual_suspend: bool = False) -> bool:
         if self.__dict__.get("_is_resizing", False):
+            return False
+        if self.__dict__.get("_visual_suspend_reason") and not allow_visual_suspend:
             return False
         if time.monotonic() < self.__dict__.get("_ui_suspend_until", 0.0):
             return False
@@ -334,29 +343,100 @@ class WorkTraceApp(ctk.CTk):
     def _on_unmap(self, event=None) -> None:
         if event is not None and getattr(event, "widget", self) is not self:
             return
-        self._ui_suspend_until = time.monotonic() + 0.8
+        self._ui_suspend_until = 0.0
         self._is_resizing = False
         self._refresh_after_resize = True
+        self._begin_visual_suspend("hidden")
 
     def _on_map(self, event=None) -> None:
         if event is not None and getattr(event, "widget", self) is not self:
             return
-        self._ui_suspend_until = time.monotonic() + 0.8
+        if not self.__dict__.get("_seen_root_map", False):
+            self._seen_root_map = True
+            return
+        self._ui_suspend_until = 0.0
         self._is_resizing = False
         self._refresh_after_resize = True
+        self._begin_visual_suspend("resume")
         if self._resume_refresh_after_id is not None:
             try:
                 self.after_cancel(self._resume_refresh_after_id)
             except Exception:
                 pass
-        self._resume_refresh_after_id = self.after(900, self._finish_resume)
+        self._resume_refresh_after_id = self.after(120, self._finish_resume)
 
     def _finish_resume(self) -> None:
         self._resume_refresh_after_id = None
         self._ui_suspend_until = 0.0
+        self._finish_visual_suspend()
+
+    def _begin_visual_suspend(self, reason: str) -> None:
+        self._visual_suspend_reason = reason
+        cover = self._ensure_visual_suspend_cover()
+        content = getattr(self, "content", None)
+        if content is not None:
+            try:
+                content.grid_remove()
+            except Exception:
+                pass
+        if cover is not None:
+            self._refresh_visual_suspend_cover_color()
+            try:
+                cover.grid(row=0, column=1, sticky="nsew")
+            except Exception:
+                pass
+
+    def _ensure_visual_suspend_cover(self):
+        cover = self.__dict__.get("_visual_suspend_cover")
+        if cover is not None:
+            return cover
+        if "tk" not in self.__dict__:
+            return None
+        cover = tk.Frame(self, bg=self._appearance_color(design.WINDOW_BG), bd=0, highlightthickness=0)
+        self._visual_suspend_cover = cover
+        return cover
+
+    def _refresh_visual_suspend_cover_color(self) -> None:
+        cover = self.__dict__.get("_visual_suspend_cover")
+        if cover is None:
+            return
+        try:
+            cover.configure(bg=self._appearance_color(design.WINDOW_BG))
+        except Exception:
+            pass
+
+    def _appearance_color(self, color):
+        if isinstance(color, (tuple, list)):
+            index = 1 if ctk.get_appearance_mode().lower() == "dark" else 0
+            return color[index]
+        return color
+
+    def _finish_visual_suspend(self) -> None:
         if self._refresh_after_resize:
             self._refresh_after_resize = False
-            self._schedule_page_refresh(self.active_page, delay_ms=0)
+            self._refresh_page(self.active_page, allow_visual_suspend=True)
+        self._restore_content_after_idle()
+
+    def _restore_content_after_idle(self) -> None:
+        if "tk" in self.__dict__ and hasattr(self, "after_idle"):
+            self.after_idle(self._end_visual_suspend)
+        else:
+            self._end_visual_suspend()
+
+    def _end_visual_suspend(self) -> None:
+        content = getattr(self, "content", None)
+        if content is not None:
+            try:
+                content.grid(row=0, column=1, sticky="nsew")
+            except Exception:
+                pass
+        cover = self.__dict__.get("_visual_suspend_cover")
+        if cover is not None:
+            try:
+                cover.grid_remove()
+            except Exception:
+                pass
+        self._visual_suspend_reason = None
 
     def _sync_nav_buttons(self) -> None:
         for key, button in self.nav_buttons.items():
