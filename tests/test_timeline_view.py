@@ -749,6 +749,160 @@ def test_refresh_current_activity_skips_tables_while_user_interacts(monkeypatch)
     assert fallback_refreshes == []
 
 
+def test_timeline_session_carries_unconfirmed_activity_without_resource_or_detail_updates(temp_db):
+    view = _live_view_stub("resources")
+    confirmed = _live_snapshot(300)
+    transient = {
+        "resource_display_name": "B.docx",
+        "app_name": "Word",
+        "process_name": "word.exe",
+        "inferred_project_name": "Other",
+        "status": "normal",
+        "start_time": "2026-06-18 09:05:00",
+        "elapsed_seconds": 12,
+        "persisted_activity_id": None,
+        "is_persisted": False,
+    }
+    settings_service.set_setting("current_activity_snapshot", json.dumps(transient, ensure_ascii=False))
+    view._current_snapshot = confirmed
+    view._current_signature = snapshot_signature(confirmed)
+    view._short_activity_carry = None
+    view._session_project_dirty = False
+    session = {
+        "session_id": "1-1",
+        "project_id": 1,
+        "project_name": "Client",
+        "project_description": "",
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": "2026-06-18 09:05:00",
+        "report_date": "2026-06-18",
+        "duration_seconds": 300,
+        "activity_ids": [1],
+        "event_count": 1,
+        "status_summary": "A.docx",
+        "is_uncategorized": False,
+    }
+    resource = {
+        "resource_id": 7,
+        "display_name": "A.docx",
+        "resource_type": "file",
+        "total_duration_seconds": 300,
+        "event_count": 1,
+        "activity_ids": [1],
+        "project_name": "Client",
+    }
+    view._sessions_by_id = {"1-1": session}
+    view._resources_by_id = {7: resource}
+    view._session_live_bases = {"1-1": 300}
+    view._resource_live_bases = {7: 300}
+    _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, session))])
+    _seed_tree(view, view.resource_tree, [("7", TimelineView._resource_values(view, resource))])
+
+    def fake_refresh(**_kwargs):
+        view._current_snapshot = transient
+        view._current_signature = snapshot_signature(transient)
+        view._sessions_by_id = {"1-1": session}
+        view._session_live_bases = {"1-1": 0}
+        display_session = TimelineView._session_with_short_activity_carry(view, session, transient)
+        TimelineView._sync_tree_values_only(
+            view,
+            view.session_tree,
+            [("1-1", TimelineView._session_values(view, display_session))],
+        )
+        TimelineView._sync_selected_session_summary(view, display_session)
+
+    view.refresh = fake_refresh
+
+    TimelineView.refresh_current_activity(view)
+
+    carried_session = {**session, "duration_seconds": 312}
+    assert view.current_activity_label.config["text"] == "当前活动：B.docx｜Other｜00:00:12｜暂不入历史"
+    assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, carried_session))]
+    assert view.detail_hint_label.config["text"] == "00:05:12 | 1 条活动 | A.docx"
+    assert view.resource_tree.item_calls == []
+
+    view.session_tree.item_calls.clear()
+    settings_service.set_setting(
+        "current_activity_snapshot",
+        json.dumps({**transient, "elapsed_seconds": 15}, ensure_ascii=False),
+    )
+
+    TimelineView.refresh_current_activity(view)
+
+    carried_session = {**session, "duration_seconds": 315}
+    assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, carried_session))]
+    assert view.resource_tree.item_calls == []
+
+    detail = {
+        "id": 1,
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": "2026-06-18 09:05:00",
+        "app_name": "Word",
+        "window_title": "A.docx",
+        "resource_display_name": "A.docx",
+        "duration_seconds": 300,
+        "project_name": "Client",
+        "note": "",
+    }
+    view._detail_mode = "details"
+    view._details_by_id = {1: detail}
+    view._detail_live_bases = {1: 300}
+    _seed_tree(view, view.detail_tree, [("1", TimelineView._detail_values(view, detail))])
+    view.session_tree.item_calls.clear()
+    settings_service.set_setting(
+        "current_activity_snapshot",
+        json.dumps({**transient, "elapsed_seconds": 18}, ensure_ascii=False),
+    )
+
+    TimelineView.refresh_current_activity(view)
+
+    carried_session = {**session, "duration_seconds": 318}
+    assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, carried_session))]
+    assert view.detail_tree.item_calls == []
+
+
+def test_timeline_short_activity_carry_accumulates_across_transients_and_clears_when_confirmed():
+    view = _live_view_stub("resources")
+    confirmed = _live_snapshot(300)
+    first_transient = {
+        "resource_display_name": "B.docx",
+        "inferred_project_name": "Other",
+        "status": "normal",
+        "start_time": "2026-06-18 09:05:00",
+        "elapsed_seconds": 20,
+        "is_persisted": False,
+    }
+    second_transient = {
+        **first_transient,
+        "resource_display_name": "C.docx",
+        "start_time": "2026-06-18 09:05:20",
+        "elapsed_seconds": 5,
+    }
+    session = {
+        "session_id": "1-1",
+        "project_id": 1,
+        "project_name": "Client",
+        "start_time": "2026-06-18 09:00:00",
+        "report_date": "2026-06-18",
+        "duration_seconds": 320,
+        "activity_ids": [1],
+        "event_count": 1,
+        "status_summary": "A.docx",
+        "is_uncategorized": False,
+    }
+
+    view._current_snapshot = confirmed
+    TimelineView._sync_short_activity_carry(view, first_transient)
+    view._current_snapshot = first_transient
+    TimelineView._sync_short_activity_carry(view, second_transient)
+
+    display_session = TimelineView._session_with_short_activity_carry(view, session, second_transient)
+    assert display_session["duration_seconds"] == 325
+
+    TimelineView._sync_short_activity_carry(view, {**second_transient, "is_persisted": True, "persisted_activity_id": 2})
+    assert view._short_activity_carry is None
+
+
 def test_timeline_resource_rule_dialog_prefills_selected_resource(monkeypatch):
     view = object.__new__(TimelineView)
     view._selected_resource_id = 7

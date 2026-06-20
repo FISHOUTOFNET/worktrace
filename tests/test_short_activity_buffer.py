@@ -107,6 +107,19 @@ def test_initial_short_activity_merges_into_first_formal_normal_activity(temp_db
     assert settings_service.get_setting("pending_short_seconds") == "0"
 
 
+def test_pending_short_seconds_are_not_added_twice_when_formal_activity_closes(temp_db):
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:20")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:20")
+    machine.transition_to("stopped", at_time="2026-06-18 09:01:30")
+
+    rows = _rows()
+    assert len(rows) == 1
+    assert rows[0]["window_title"] == "A"
+    assert rows[0]["duration_seconds"] == 90
+
+
 def test_persisted_current_activity_continues_to_90_seconds_without_duplicate_insert(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")

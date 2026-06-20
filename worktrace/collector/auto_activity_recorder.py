@@ -75,12 +75,11 @@ class AutoActivityRecorder:
         status = self.current_payload.get("status")
         self._ensure_persisted_if_ready(end_time)
         if self.persisted_activity_id is not None:
-            activity_service.close_activity(self.persisted_activity_id, end_time)
-            if self.current_extra_seconds:
-                activity_service.increment_activity_duration(
-                    self.persisted_activity_id,
-                    self.current_extra_seconds,
-                )
+            activity_service.close_activity(
+                self.persisted_activity_id,
+                end_time,
+                duration_seconds=elapsed + self.current_extra_seconds,
+            )
         elif merge_transient and elapsed > 0 and status in {STATUS_NORMAL, STATUS_IDLE}:
             self._merge_or_pend_short_seconds(elapsed)
 

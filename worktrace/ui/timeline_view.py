@@ -55,6 +55,7 @@ class TimelineView(ctk.CTkFrame):
         self._detail_live_bases: dict[int, int] = {}
         self._current_snapshot: dict | None = None
         self._current_signature: tuple | None = None
+        self._short_activity_carry: dict[str, Any] | None = None
         self._tree_values: dict[str, tuple[str, ...]] = {}
         self._selected_session_id: str | None = None
         self._selected_resource_id: int | None = None
@@ -418,9 +419,10 @@ class TimelineView(ctk.CTkFrame):
             )
             for session in sessions
         }
+        display_sessions = self._sessions_with_short_activity_carry(sessions, getattr(self, "_current_snapshot", None))
         if hasattr(self, "session_count_label"):
-            self.session_count_label.configure(text=f"{len(sessions)} 条")
-        self._sync_tree(self.session_tree, [(session["session_id"], self._session_values(session)) for session in sessions])
+            self.session_count_label.configure(text=f"{len(display_sessions)} 条")
+        self._sync_tree(self.session_tree, [(session["session_id"], self._session_values(session)) for session in display_sessions])
         if previous in self._sessions_by_id:
             self._selected_session_id = previous
             self._select_tree_item(self.session_tree, previous)
@@ -443,7 +445,8 @@ class TimelineView(ctk.CTkFrame):
         session = self._sessions_by_id.get(self._selected_session_id or "")
         if not session:
             return
-        self._sync_selected_session_summary(session)
+        display_session = self._session_with_short_activity_carry(session, getattr(self, "_current_snapshot", None))
+        self._sync_selected_session_summary(display_session)
         if self._detail_mode == "resources":
             self._sync_resources(
                 timeline_service.get_session_resource_summary(
@@ -810,6 +813,7 @@ class TimelineView(ctk.CTkFrame):
         self._ensure_range_vars()
         snapshot = _read_current_activity_snapshot()
         signature = snapshot_signature(snapshot)
+        self._sync_short_activity_carry(snapshot)
         self.current_activity_label.configure(text=self._current_activity_text(snapshot))
         if signature != self._current_signature:
             if not self._valid_range(show_message=False):
@@ -924,7 +928,7 @@ class TimelineView(ctk.CTkFrame):
         return f"当前活动：{name}｜{project}｜{elapsed}｜{state}"
 
     def _live_sessions(self, snapshot: dict | None) -> list[dict]:
-        return [
+        sessions = [
             self._with_live_duration(
                 session,
                 "duration_seconds",
@@ -935,6 +939,56 @@ class TimelineView(ctk.CTkFrame):
             )
             for session in sorted(self._sessions_by_id.values(), key=lambda row: (str(row.get("start_time") or ""), str(row.get("session_id") or "")), reverse=True)
         ]
+        return self._sessions_with_short_activity_carry(sessions, snapshot)
+
+    def _sync_short_activity_carry(self, snapshot: dict | None) -> None:
+        previous = getattr(self, "_current_snapshot", None)
+        if not _is_unconfirmed_snapshot(snapshot):
+            self._short_activity_carry = None
+            return
+
+        signature = snapshot_signature(snapshot)
+        carry = getattr(self, "_short_activity_carry", None)
+        if carry is None:
+            previous_id = snapshot_persisted_id(previous)
+            if previous_id is None:
+                return
+            carry = {
+                "activity_id": previous_id,
+                "base_seconds": _current_elapsed_seconds(previous or {}),
+                "completed_seconds": 0,
+                "transient_signature": signature,
+            }
+        elif carry.get("transient_signature") != signature:
+            if _is_unconfirmed_snapshot(previous):
+                carry["completed_seconds"] = int(carry.get("completed_seconds") or 0) + _current_elapsed_seconds(previous)
+            carry["transient_signature"] = signature
+        self._short_activity_carry = carry
+
+    def _sessions_with_short_activity_carry(self, sessions: list[dict], snapshot: dict | None) -> list[dict]:
+        return [self._session_with_short_activity_carry(session, snapshot) for session in sessions]
+
+    def _session_with_short_activity_carry(self, session: dict, snapshot: dict | None) -> dict:
+        duration = self._short_activity_carry_duration(session, snapshot)
+        if duration is None:
+            return session
+        item = dict(session)
+        item["duration_seconds"] = duration
+        return item
+
+    def _short_activity_carry_duration(self, session: dict, snapshot: dict | None) -> int | None:
+        carry = getattr(self, "_short_activity_carry", None)
+        if not carry or not _is_unconfirmed_snapshot(snapshot):
+            return None
+        activity_id = int(carry.get("activity_id") or 0)
+        if activity_id <= 0 or activity_id not in {int(value) for value in session.get("activity_ids") or []}:
+            return None
+        report_date = str(session.get("report_date") or session.get("start_time") or "")[:10]
+        if not report_date:
+            return None
+        current_live = snapshot_seconds_for_date_range(snapshot, report_date, report_date)
+        confirmed_base = int(carry.get("base_seconds") or 0) + int(carry.get("completed_seconds") or 0)
+        return max(int(session.get("duration_seconds") or 0), confirmed_base) + current_live
 
     def _live_resources(self, snapshot: dict | None) -> list[dict]:
         return [
@@ -1318,6 +1372,10 @@ class TimelineView(ctk.CTkFrame):
 
 def _current_elapsed_seconds(snapshot: dict) -> int:
     return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
+
+
+def _is_unconfirmed_snapshot(snapshot: dict | None) -> bool:
+    return bool(snapshot) and not bool(snapshot.get("is_persisted")) and snapshot_persisted_id(snapshot) is None
 
 
 def _read_current_activity_snapshot() -> dict | None:

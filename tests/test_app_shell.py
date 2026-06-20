@@ -322,6 +322,19 @@ def test_shell_native_hook_install_failure_falls_back_silently():
     assert app._native_window_handle is None
 
 
+def test_shell_native_hook_is_disabled_without_subclassing_window():
+    app = _visual_app_stub()
+    calls = []
+    app.winfo_id = lambda: calls.append("winfo_id") or 100
+
+    WorkTraceApp._install_native_window_hook(app)
+
+    assert calls == []
+    assert app._native_window_hook_installed is False
+    assert app._native_window_handle is None
+    assert app._native_old_wndproc is None
+
+
 def test_shell_toggle_pause_updates_setting(temp_db):
     app = _app_stub()
     app.timeline = FakePage()

@@ -76,7 +76,6 @@ class WorkTraceApp(ctk.CTk):
         self.after(500, self.refresh_current_tab)
         self.after(1000, self._refresh_sidebar_status)
         self.after(LIVE_TICK_MS, self._refresh_current_activity_status)
-        self.after_idle(self._install_native_window_hook)
 
     def _build_shell(self) -> None:
         self.sidebar = ctk.CTkFrame(self, fg_color=design.SIDEBAR_BG, corner_radius=0, width=228)
@@ -582,36 +581,17 @@ class WorkTraceApp(ctk.CTk):
             self._page_refresh_after_ids.clear()
 
     def _install_native_window_hook(self) -> None:
-        if self.__dict__.get("_native_window_hook_installed", False) or "tk" not in self.__dict__:
-            return
-        try:
-            import win32con
-            import win32gui
-
-            hwnd = int(self.winfo_id())
-            callback = self._native_window_proc
-            old_wndproc = win32gui.SetWindowLong(hwnd, win32con.GWL_WNDPROC, callback)
-        except Exception:
-            self._native_window_hook_installed = False
-            self._native_window_handle = None
-            self._native_old_wndproc = None
-            self._native_win32gui = None
-            return
-        self._native_window_hook_installed = True
-        self._native_window_handle = hwnd
-        self._native_old_wndproc = old_wndproc
-        self._native_wndproc = callback
-        self._native_win32gui = win32gui
+        self._native_window_hook_installed = False
+        self._native_window_handle = None
+        self._native_old_wndproc = None
+        self._native_wndproc = None
+        self._native_win32gui = None
 
     def _native_window_proc(self, hwnd, message, wparam, lparam):
         try:
             self._handle_native_window_message(message, wparam, lparam)
         except Exception:
             pass
-        win32gui = self.__dict__.get("_native_win32gui")
-        old_wndproc = self.__dict__.get("_native_old_wndproc")
-        if win32gui is not None and old_wndproc is not None:
-            return win32gui.CallWindowProc(old_wndproc, hwnd, message, wparam, lparam)
         return 0
 
     def _handle_native_window_message(self, message: int, wparam: int, _lparam: int) -> None:
@@ -634,18 +614,6 @@ class WorkTraceApp(ctk.CTk):
         self._begin_visual_suspend("hidden", scope="full", hide_content=False, paint_now=paint_now)
 
     def _restore_native_window_hook(self) -> None:
-        if not self.__dict__.get("_native_window_hook_installed", False):
-            return
-        win32gui = self.__dict__.get("_native_win32gui")
-        hwnd = self.__dict__.get("_native_window_handle")
-        old_wndproc = self.__dict__.get("_native_old_wndproc")
-        try:
-            if win32gui is not None and hwnd is not None and old_wndproc is not None:
-                import win32con
-
-                win32gui.SetWindowLong(hwnd, win32con.GWL_WNDPROC, old_wndproc)
-        except Exception:
-            pass
         self._native_window_hook_installed = False
         self._native_window_handle = None
         self._native_old_wndproc = None

@@ -40,6 +40,7 @@ class OverviewView(ctk.CTkFrame):
         self._recent_empty = None
         self._current_snapshot: dict | None = None
         self._current_signature: tuple | None = None
+        self._short_activity_carry: dict[str, Any] | None = None
         self._kpi_base_values: dict[str, int] = {"total": 0, "classified": 0, "uncategorized": 0}
         self._kpi_base_live_seconds = 0
         self._last_data_refresh_monotonic = 0.0
@@ -154,6 +155,7 @@ class OverviewView(ctk.CTkFrame):
         self.current_activity_label.configure(text=current_activity_text_from_snapshot(self._current_snapshot))
         self._sync_scope_labels()
         self._refresh_recent_sessions(start, end)
+        self._refresh_recent_short_activity_carry(self._current_snapshot)
 
     def _switch_scope(self) -> None:
         self._sync_scope_labels()
@@ -323,6 +325,7 @@ class OverviewView(ctk.CTkFrame):
     def refresh_current_activity(self) -> None:
         snapshot = _read_current_activity_snapshot()
         signature = snapshot_signature(snapshot)
+        self._sync_short_activity_carry(snapshot)
         if signature != self._current_signature:
             self.refresh()
             return
@@ -383,19 +386,63 @@ class OverviewView(ctk.CTkFrame):
 
     def _refresh_recent_live_durations(self, snapshot: dict | None) -> None:
         persisted_id = snapshot_persisted_id(snapshot)
-        if persisted_id is None:
+        if persisted_id is not None:
+            for widgets in self._recent_rows.values():
+                activity_ids = set(widgets.get("activity_ids") or [])
+                if persisted_id not in activity_ids:
+                    continue
+                target_date = str(widgets.get("target_date") or "")[:10]
+                if not target_date:
+                    continue
+                current_live = snapshot_seconds_for_date_range(snapshot, target_date, target_date)
+                delta = max(0, current_live - int(widgets.get("base_live_seconds") or 0))
+                duration = int(widgets.get("base_duration_seconds") or 0) + delta
+                widgets["duration"].configure(text=format_duration(duration))
+        self._refresh_recent_short_activity_carry(snapshot)
+
+    def _sync_short_activity_carry(self, snapshot: dict | None) -> None:
+        previous = getattr(self, "_current_snapshot", None)
+        if not _is_unconfirmed_snapshot(snapshot):
+            self._short_activity_carry = None
             return
+
+        signature = snapshot_signature(snapshot)
+        carry = getattr(self, "_short_activity_carry", None)
+        if carry is None:
+            previous_id = snapshot_persisted_id(previous)
+            if previous_id is None:
+                return
+            carry = {
+                "activity_id": previous_id,
+                "base_seconds": _current_elapsed_seconds(previous or {}),
+                "completed_seconds": 0,
+                "transient_signature": signature,
+            }
+        elif carry.get("transient_signature") != signature:
+            if _is_unconfirmed_snapshot(previous):
+                carry["completed_seconds"] = int(carry.get("completed_seconds") or 0) + _current_elapsed_seconds(previous)
+            carry["transient_signature"] = signature
+        self._short_activity_carry = carry
+
+    def _refresh_recent_short_activity_carry(self, snapshot: dict | None) -> None:
+        carry = getattr(self, "_short_activity_carry", None)
+        if not carry or not _is_unconfirmed_snapshot(snapshot):
+            return
+        activity_id = int(carry.get("activity_id") or 0)
+        if activity_id <= 0:
+            return
+        confirmed_base = int(carry.get("base_seconds") or 0) + int(carry.get("completed_seconds") or 0)
         for widgets in self._recent_rows.values():
-            activity_ids = set(widgets.get("activity_ids") or [])
-            if persisted_id not in activity_ids:
+            activity_ids = {int(value) for value in widgets.get("activity_ids") or []}
+            if activity_id not in activity_ids:
                 continue
             target_date = str(widgets.get("target_date") or "")[:10]
             if not target_date:
                 continue
             current_live = snapshot_seconds_for_date_range(snapshot, target_date, target_date)
-            delta = max(0, current_live - int(widgets.get("base_live_seconds") or 0))
-            duration = int(widgets.get("base_duration_seconds") or 0) + delta
-            widgets["duration"].configure(text=format_duration(duration))
+            base_duration = int(widgets.get("base_duration_seconds") or 0)
+            widgets["duration"].configure(text=format_duration(max(base_duration, confirmed_base) + current_live))
+            return
 
     def _bind_click(self, widget, command: Callable[[], None]) -> None:
         widget.bind("<Button-1>", lambda _event: command(), add="+")
@@ -437,6 +484,10 @@ def current_activity_text_from_snapshot(snapshot: dict | None) -> str:
 
 def _current_elapsed_seconds(snapshot: dict) -> int:
     return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
+
+
+def _is_unconfirmed_snapshot(snapshot: dict | None) -> bool:
+    return bool(snapshot) and not bool(snapshot.get("is_persisted")) and snapshot_persisted_id(snapshot) is None
 
 
 def _session_time(session: dict, include_date: bool = False) -> str:

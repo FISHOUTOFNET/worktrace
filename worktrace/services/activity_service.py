@@ -97,11 +97,18 @@ def create_activity(
         return activity_id
 
 
-def _close_activity_in_conn(conn, activity_id: int, end_time: str) -> None:
-    row = conn.execute("SELECT start_time, status FROM activity_log WHERE id = ?", (activity_id,)).fetchone()
+def _close_activity_in_conn(conn, activity_id: int, end_time: str, duration_seconds: int | None = None) -> None:
+    row = conn.execute(
+        "SELECT start_time, status, duration_seconds FROM activity_log WHERE id = ?",
+        (activity_id,),
+    ).fetchone()
     if not row:
         return
     duration, is_error = _duration_seconds(row["start_time"], end_time)
+    existing = int(row["duration_seconds"] or 0)
+    if duration_seconds is not None:
+        duration = max(duration, int(duration_seconds or 0))
+    duration = max(existing, duration)
     status = STATUS_ERROR if is_error else row["status"]
     conn.execute(
         """
@@ -113,9 +120,9 @@ def _close_activity_in_conn(conn, activity_id: int, end_time: str) -> None:
     )
 
 
-def close_activity(activity_id: int, end_time: str) -> None:
+def close_activity(activity_id: int, end_time: str, duration_seconds: int | None = None) -> None:
     with get_connection() as conn:
-        _close_activity_in_conn(conn, activity_id, end_time)
+        _close_activity_in_conn(conn, activity_id, end_time, duration_seconds=duration_seconds)
 
 
 def close_current_open_record(end_time: str | None = None) -> None:
@@ -151,13 +158,20 @@ def increment_activity_duration(activity_id: int, seconds: int) -> None:
 def set_activity_duration(activity_id: int, seconds: int) -> None:
     seconds = max(0, int(seconds or 0))
     with get_connection() as conn:
+        row = conn.execute(
+            "SELECT duration_seconds FROM activity_log WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        if not row:
+            return
+        duration = max(int(row["duration_seconds"] or 0), seconds)
         conn.execute(
             """
             UPDATE activity_log
             SET duration_seconds = ?, updated_at = ?
             WHERE id = ?
             """,
-            (seconds, now_str(), activity_id),
+            (duration, now_str(), activity_id),
         )
 
 

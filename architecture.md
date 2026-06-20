@@ -1413,9 +1413,11 @@ Rules:
 5. Persist normal, idle, paused, excluded, and error segments once they reach 30 seconds.
 6. Display all stored durations as exact `hh:mm:ss` without minute rounding.
 7. Display the current activity counter as `hh:mm:ss`.
-8. Update visible Overview KPI durations, Time Details session/resource/detail durations, and Statistics durations every second from the current activity snapshot without requiring a full page refresh.
-9. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized. Resize uses a stable content-area cover and can run one catch-up refresh before reveal. Restore uses a full-window cover, keeps the content tree mounted, reveals the complete UI first, then runs one delayed merged refresh.
-10. On Windows, install an optional native minimize/restore hook to pre-paint the full-window restore cover before minimize and detect restore earlier than Tk `<Map>`; hook failures must silently fall back to Tk events.
+8. Persisted activity durations must be monotonic: live projections, `extra_seconds`, close operations, and recovery must never reduce an already stored duration.
+9. Update visible Overview KPI durations, Time Details session/resource/detail durations, and Statistics durations every second from the current activity snapshot without requiring a full page refresh.
+10. While a new current activity is still below the 30-second history threshold, only the Overview recent-project row and Time Details project/session row temporarily carry those seconds on the previous confirmed project. The current-activity label, KPI summaries, Statistics, resource summaries, and activity details keep using the real current snapshot.
+11. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized. Resize uses a stable content-area cover and can run one catch-up refresh before reveal. Restore uses a full-window cover, keeps the content tree mounted, reveals the complete UI first, then runs one delayed merged refresh.
+12. On Windows, rely on Tk `<Unmap>`, `<Map>`, and `<Configure>` events for minimize/restore handling. Native WndProc subclassing is disabled to avoid Python runtime/GIL crashes.
 
 ---
 

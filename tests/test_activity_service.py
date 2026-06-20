@@ -25,3 +25,27 @@ def test_create_activity_closes_existing_open_record(temp_db):
     )
     assert activity_service.get_activity(first)["end_time"] == "2026-06-18 09:10:00"
     assert activity_service.get_open_activity()["id"] == second
+
+
+def test_activity_duration_writes_are_monotonic(temp_db):
+    activity_id = activity_service.create_activity(
+        "Word", "winword.exe", "Spec", start_time="2026-06-18 09:00:00"
+    )
+    activity_service.set_activity_duration(activity_id, 120)
+    activity_service.set_activity_duration(activity_id, 60)
+
+    assert activity_service.get_activity(activity_id)["duration_seconds"] == 120
+
+    activity_service.close_activity(activity_id, "2026-06-18 09:01:00", duration_seconds=90)
+
+    assert activity_service.get_activity(activity_id)["duration_seconds"] == 120
+
+
+def test_close_activity_can_use_larger_projected_duration(temp_db):
+    activity_id = activity_service.create_activity(
+        "Word", "winword.exe", "Spec", start_time="2026-06-18 09:00:00"
+    )
+
+    activity_service.close_activity(activity_id, "2026-06-18 09:01:00", duration_seconds=180)
+
+    assert activity_service.get_activity(activity_id)["duration_seconds"] == 180

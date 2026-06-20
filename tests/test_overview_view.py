@@ -3,7 +3,12 @@ import time
 
 from worktrace.services import settings_service, statistics_service
 from worktrace.services.live_time_service import snapshot_signature
-from worktrace.ui.overview_view import OverviewView, _snapshot_signature, current_activity_text
+from worktrace.ui.overview_view import (
+    OverviewView,
+    _snapshot_signature,
+    current_activity_text,
+    current_activity_text_from_snapshot,
+)
 
 
 class FakeLabel:
@@ -125,6 +130,56 @@ def test_overview_live_tick_updates_kpis_without_statistics_query(temp_db, monke
 
     assert view.kpi_value_labels["total"].config["text"] == "00:00:35"
     assert view.kpi_value_labels["classified"].config["text"] == "00:00:35"
+
+
+def test_overview_recent_project_carries_unconfirmed_activity_without_changing_current_label(temp_db):
+    confirmed = {
+        "resource_display_name": "A.docx",
+        "inferred_project_name": "Client",
+        "status": "normal",
+        "start_time": "",
+        "elapsed_seconds": 300,
+        "is_persisted": True,
+        "persisted_activity_id": 1,
+    }
+    transient = {
+        "resource_display_name": "B.docx",
+        "inferred_project_name": "Other",
+        "status": "normal",
+        "start_time": "2026-06-18 09:05:00",
+        "elapsed_seconds": 12,
+        "is_persisted": False,
+        "persisted_activity_id": None,
+    }
+    settings_service.set_setting("current_activity_snapshot", json.dumps(transient, ensure_ascii=False))
+    view = object.__new__(OverviewView)
+    view._current_snapshot = confirmed
+    view._current_signature = snapshot_signature(confirmed)
+    view._short_activity_carry = None
+    view.current_activity_label = FakeLabel()
+    duration_label = FakeLabel()
+    view._recent_rows = {
+        "1-1": {
+            "duration": duration_label,
+            "activity_ids": [1],
+            "target_date": "2026-06-18",
+            "base_duration_seconds": 300,
+            "base_live_seconds": 300,
+        }
+    }
+
+    def fake_refresh():
+        view._current_snapshot = transient
+        view._current_signature = snapshot_signature(transient)
+        view.current_activity_label.configure(text=current_activity_text_from_snapshot(transient))
+        OverviewView._refresh_recent_short_activity_carry(view, transient)
+
+    view.refresh = fake_refresh
+
+    OverviewView.refresh_current_activity(view)
+
+    assert view.current_activity_label.config["text"] == "当前活动：B.docx｜Other｜00:00:12｜暂不入历史"
+    assert duration_label.config["text"] == "00:05:12"
 
 
 def test_overview_recent_project_title_includes_description():
