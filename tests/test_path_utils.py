@@ -2,8 +2,10 @@ from worktrace.constants import ANCHOR_FILE_EXTENSIONS
 from worktrace import activity_identity, path_utils
 from worktrace.path_utils import (
     extract_file_path_from_title,
+    has_auto_project_extension,
     is_path_under_folder,
     looks_like_anchor_file_path,
+    looks_like_local_file_path,
     normalize_folder_key,
     split_file_path,
 )
@@ -31,7 +33,11 @@ def test_non_recursive_only_matches_direct_child_files():
 def test_anchor_path_detection_and_splitting():
     assert looks_like_anchor_file_path("C:\\Users\\me\\OneDrive\\客户 A\\方案.PDF")
     assert looks_like_anchor_file_path("\\\\server\\share\\客户 A\\方案.docx")
-    assert not looks_like_anchor_file_path("C:\\Users\\me\\image.png")
+    assert looks_like_anchor_file_path("C:\\Users\\me\\image.png")
+    assert looks_like_local_file_path("C:\\Users\\me\\Project\\main.py")
+    assert looks_like_local_file_path("D:\\Design\\floorplan.dwg")
+    assert has_auto_project_extension("C:\\Users\\me\\OneDrive\\客户 A\\方案.PDF")
+    assert not has_auto_project_extension("C:\\Users\\me\\Project\\main.py")
     assert split_file_path("C:/Users/me/客户 A/方案.PDF") == (
         "C:\\Users\\me\\客户 A\\方案.PDF",
         "C:\\Users\\me\\客户 A",
@@ -43,3 +49,9 @@ def test_extract_file_path_from_title_prefers_full_path():
     title = "C:\\Users\\me\\客户 A\\方案.docx - Word"
     assert extract_file_path_from_title(title) == "C:\\Users\\me\\客户 A\\方案.docx"
     assert extract_file_path_from_title("方案.docx - Word") is None
+
+
+def test_extract_file_path_from_title_accepts_any_extension():
+    assert extract_file_path_from_title("C:\\Repo\\WorkTrace\\main.py - Visual Studio Code") == "C:\\Repo\\WorkTrace\\main.py"
+    assert extract_file_path_from_title("D:\\Drawings\\客户 A\\平面图.dwg - AutoCAD") == "D:\\Drawings\\客户 A\\平面图.dwg"
+    assert extract_file_path_from_title("D:\\Images\\hero.psd @ 66.7% (RGB/8)") == "D:\\Images\\hero.psd"

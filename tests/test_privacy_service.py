@@ -51,6 +51,9 @@ def test_exclude_project_keyword_and_folder_rules_match(temp_db):
     assert privacy_service.is_excluded(
         ActiveWindow("Word", "word.exe", "Doc.docx - Word", "D:\\PrivateFolder\\Doc.docx")
     )
+    assert privacy_service.is_excluded(
+        ActiveWindow("Photoshop", "Photoshop.exe", "hero.psd - Adobe Photoshop", "D:\\PrivateFolder\\hero.psd")
+    )
 
 
 def test_disabled_exclude_project_stops_rule_matching(temp_db):

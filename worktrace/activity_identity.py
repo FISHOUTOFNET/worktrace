@@ -4,11 +4,16 @@ import re
 from dataclasses import dataclass
 
 from .constants import ANCHOR_FILE_EXTENSIONS
-from .path_utils import extract_file_path_from_title, looks_like_anchor_file_path, normalize_path_key, split_file_path
+from .path_utils import (
+    extract_file_path_from_title,
+    has_auto_project_extension,
+    looks_like_local_file_path,
+    normalize_path_key,
+    split_file_path,
+)
 
-_ANCHOR_EXT_RE = "|".join(re.escape(ext.lstrip(".")) for ext in ANCHOR_FILE_EXTENSIONS)
 _FILE_RE = re.compile(
-    rf"(?P<name>[^\\/:*?\"<>|\r\n]+?\.({_ANCHOR_EXT_RE}))",
+    r"(?P<name>[^\\/:*?\"<>|\r\n]+?\.[^\\/:*?\"<>|\r\n\s.]+)(?=$|[\s\"'）)\]】。；;，,]| - )",
     re.IGNORECASE,
 )
 
@@ -36,7 +41,7 @@ def infer_activity_identity(
     process = (process_name or "").strip()
     title = (window_title or "").strip()
 
-    full_path_candidate = file_path_hint if looks_like_anchor_file_path(file_path_hint) else None
+    full_path_candidate = file_path_hint if looks_like_local_file_path(file_path_hint) else None
     full_path_candidate = full_path_candidate or extract_file_path_from_title(title)
     if full_path_candidate:
         full_path, parent_dir, file_stem = split_file_path(full_path_candidate)
@@ -101,6 +106,13 @@ def attach_activity_identity(row: dict) -> dict:
 
 
 def extract_anchor_file_name(window_title: str | None) -> str | None:
+    file_name = extract_file_name_from_title(window_title)
+    if file_name and has_auto_project_extension(file_name):
+        return file_name
+    return None
+
+
+def extract_file_name_from_title(window_title: str | None) -> str | None:
     title = (window_title or "").strip()
     if not title:
         return None

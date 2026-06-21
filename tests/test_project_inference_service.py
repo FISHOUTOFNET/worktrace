@@ -18,6 +18,38 @@ def test_folder_rule_classifies_anchor_file_activity(temp_db):
     assert activity_service.get_activity(aid)["project_id"] == pid
 
 
+def test_folder_rule_classifies_full_path_with_any_extension(temp_db):
+    pid = project_service.create_project("Development")
+    folder_rule_service.create_or_update_folder_rule("D:\\Repo\\WorkTrace", pid)
+    aid = activity_service.create_activity(
+        "Visual Studio Code",
+        "Code.exe",
+        "main.py - Visual Studio Code",
+        file_path_hint="D:\\Repo\\WorkTrace\\main.py",
+        start_time="2026-06-18 09:00:00",
+    )
+
+    assignment = assign_project_for_activity(aid)
+
+    assert assignment["source"] == "folder_rule"
+    assert activity_service.get_activity(aid)["project_id"] == pid
+
+
+def test_non_whitelisted_full_path_does_not_auto_suggest_project_name(temp_db):
+    aid = activity_service.create_activity(
+        "Visual Studio Code",
+        "Code.exe",
+        "main.py - Visual Studio Code",
+        file_path_hint="D:\\Repo\\WorkTrace\\main.py",
+        start_time="2026-06-18 09:00:00",
+    )
+
+    assignment = assign_project_for_activity(aid)
+
+    assert assignment["source"] == "uncategorized"
+    assert assignment["suggested_project_name"] is None
+
+
 def test_keyword_rules_match_activity_text(temp_db):
     pid = project_service.create_project("Writing")
     rule_service.create_rule("Spec", pid)

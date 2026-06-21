@@ -93,6 +93,23 @@ def test_backfill_safe_updates_non_manual_activity(temp_db):
     assert activity_service.get_activity(aid)["project_id"] == folder_project
 
 
+def test_backfill_safe_updates_non_whitelisted_extension_activity(temp_db):
+    folder_project = project_service.create_project("Folder")
+    rule_id = folder_rule_service.create_or_update_folder_rule("D:\\Design", folder_project)
+    aid = activity_service.create_activity(
+        "AutoCAD",
+        "acad.exe",
+        "floorplan.dwg - AutoCAD",
+        file_path_hint="D:\\Design\\floorplan.dwg",
+        start_time="2026-06-18 09:00:00",
+    )
+
+    result = folder_rule_service.backfill_folder_rule(rule_id)
+
+    assert result["updated_activity_count"] == 1
+    assert activity_service.get_activity(aid)["project_id"] == folder_project
+
+
 def test_backfill_safe_does_not_overwrite_manual_assignment(temp_db):
     folder_project = project_service.create_project("Folder")
     manual_project = project_service.create_project("Manual")

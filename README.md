@@ -50,6 +50,7 @@ The first launch shows the privacy notice. The collector starts only after the n
 
 - Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`
 - Logs: `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`
+- Optional COM path catalog: `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`
 - Default exports: `Documents\WorkTrace Exports`
 
 The app writes to user-local folders and does not require administrator privileges.
@@ -66,9 +67,26 @@ Time Details no longer supports manual session splitting, merging same-name proj
 
 ## Project Classification
 
-Folder project rules require a recognizable full local file path. Keyword rules match activity app names, process names, and window titles. The special `排除规则` project supports folder and keyword rules, starts disabled with no default rules, and records matches anonymously as `已排除窗口` only after the user enables it. Disabled projects remain visible but no longer participate in automatic classification.
+Folder project rules require a recognizable full local file path. Any full local file path can be an anchor regardless of extension, so rules can match source code, CAD drawings, design files, images, PDFs, and Office documents. Keyword rules match activity app names, process names, window titles, and known local file paths. The special `排除规则` project supports folder and keyword rules, starts disabled with no default rules, and records matches anonymously as `已排除窗口` only after the user enables it. Disabled projects remain visible but no longer participate in automatic classification.
 
-If a file path is known but no folder or keyword rule matches, Time Details may show the parent folder name as a suggested project. Suggested names are display-only hints and are not inserted into the `project` table.
+If a file path is known but no folder or keyword rule matches, Time Details may show the parent folder name as a suggested project only for the built-in low-risk document extensions. Suggested names are display-only hints and are not inserted into the `project` table. User-created folder and keyword rules are not limited by that extension list.
+
+On Windows, the collector resolves active file paths in this order: full paths visible in the window title, a best-effort COM path catalog, then `psutil.Process(pid).open_files()` for the foreground process. The open-files fallback is not limited to Office/WPS; it uses the file name visible in the title and accepts a result only when exactly one open file has that basename.
+
+The built-in COM catalog covers common Office/WPS apps, Acrobat, AutoCAD, Photoshop, Illustrator, InDesign, CorelDRAW, and SOLIDWORKS when their ProgIDs are registered locally. Advanced users may add entries in `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`; there is no UI for this file. Example:
+
+```json
+{
+  "entries": [
+    {
+      "name": "Custom App",
+      "process_names": ["custom.exe"],
+      "prog_ids": ["Custom.Application"],
+      "path_expressions": ["ActiveDocument.FullName"]
+    }
+  ]
+}
+```
 
 Context carry-over applies to normal non-anchor auxiliary activity. A single previous or next concrete anchor can carry context within 15 minutes. Two matching concrete anchors carry a continuous auxiliary block regardless of that 15-minute window. Idle and paused records stop anchor search; excluded and error records do not.
 

@@ -5,14 +5,14 @@ import re
 
 from .constants import ANCHOR_FILE_EXTENSIONS
 
-_ANCHOR_EXT_RE = "|".join(re.escape(ext.lstrip(".")) for ext in ANCHOR_FILE_EXTENSIONS)
 _ANCHOR_EXT_SET = {item.casefold() for item in ANCHOR_FILE_EXTENSIONS}
+_FILE_EXT_RE = r"[^\\/\r\n<>|?*\"'\s.][^\\/\r\n<>|?*\"'\s]*"
 _DRIVE_PATH_RE = re.compile(
-    rf"(?P<path>[A-Za-z]:[\\/][^\r\n<>|?*]+?\.({_ANCHOR_EXT_RE}))(?=$|[\s\"'）)\]】。；;，,]| - )",
+    rf"(?P<path>[A-Za-z]:[\\/][^\r\n<>|?*]+?\.{_FILE_EXT_RE})(?=$|[\s\"'）)\]】。；;，,]| - )",
     re.IGNORECASE,
 )
 _UNC_PATH_RE = re.compile(
-    rf"(?P<path>\\\\[^\\/\r\n<>|?*]+[\\/][^\r\n<>|?*]+?\.({_ANCHOR_EXT_RE}))(?=$|[\s\"'）)\]】。；;，,]| - )",
+    rf"(?P<path>\\\\[^\\/\r\n<>|?*]+[\\/][^\r\n<>|?*]+?\.{_FILE_EXT_RE})(?=$|[\s\"'）)\]】。；;，,]| - )",
     re.IGNORECASE,
 )
 
@@ -57,7 +57,7 @@ def extract_file_path_from_title(window_title: str | None) -> str | None:
         return None
     match = sorted(matches, key=lambda item: item.start())[-1]
     candidate = _clean_path(match.group("path"))
-    return candidate if looks_like_anchor_file_path(candidate) else None
+    return candidate if looks_like_local_file_path(candidate) else None
 
 
 def split_file_path(path: str) -> tuple[str, str, str]:
@@ -68,14 +68,26 @@ def split_file_path(path: str) -> tuple[str, str, str]:
     return full_path, parent_dir, file_stem
 
 
-def looks_like_anchor_file_path(path: str | None) -> bool:
+def looks_like_local_file_path(path: str | None) -> bool:
     candidate = _clean_path(path or "")
     if not candidate:
         return False
     if not (_is_drive_path(candidate) or _is_unc_path(candidate)):
         return False
     _, ext = ntpath.splitext(candidate)
+    return bool(ext)
+
+
+def has_auto_project_extension(path_or_file_name: str | None) -> bool:
+    candidate = _clean_path(path_or_file_name or "")
+    if not candidate:
+        return False
+    _, ext = ntpath.splitext(candidate)
     return ext.casefold() in _ANCHOR_EXT_SET
+
+
+def looks_like_anchor_file_path(path: str | None) -> bool:
+    return looks_like_local_file_path(path)
 
 
 def _clean_path(path: str) -> str:

@@ -27,6 +27,27 @@ def test_activity_identity_prefers_file_path_hint(temp_db):
     assert identity.file_stem == "Spec"
 
 
+def test_full_path_hint_with_any_extension_is_anchor_file(temp_db):
+    identity = infer_activity_identity(
+        "Visual Studio Code",
+        "Code.exe",
+        "main.py - Visual Studio Code",
+        "D:\\Repo\\WorkTrace\\main.py",
+    )
+
+    assert identity.is_anchor_file is True
+    assert identity.identity_key == "file_path:d:\\repo\\worktrace\\main.py"
+    assert identity.display_name == "main.py"
+    assert identity.parent_dir == "D:\\Repo\\WorkTrace"
+
+
+def test_title_only_file_name_still_uses_auto_project_extension_whitelist(temp_db):
+    identity = infer_activity_identity("Visual Studio Code", "Code.exe", "main.py - Visual Studio Code")
+
+    assert identity.is_anchor_file is False
+    assert identity.identity_key.startswith("app:")
+
+
 def test_activity_rows_include_derived_file_identity(temp_db):
     aid = activity_service.create_activity(
         "Word",

@@ -613,7 +613,7 @@ parent-folder suggested project name
 uncategorized
 ```
 
-Folder project rules require a known full file path or parent directory derived from the activity. A file name without a path must not create a suggested project name from the file stem.
+Folder project rules require a known full file path or parent directory derived from the activity. A known full local file path is an anchor regardless of extension. A file name without a path must not create a suggested project name from the file stem. Parent-folder suggested project names are limited to the built-in low-risk document extensions; user folder and keyword rules are not extension-limited.
 
 Context carry-over may classify any normal auxiliary non-anchor activity. It uses the nearest previous and next anchor file activities only; an uncategorized anchor or an interrupt status stops the scan. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same carry-over rules.
 
@@ -651,6 +651,31 @@ class PlatformAdapter(Protocol):
 `fake_adapter.py` must implement deterministic fake data for tests.
 
 The rest of the application must depend on `PlatformAdapter`, not directly on `pywin32`.
+
+Windows active file path resolution order:
+
+```text
+window title full path
+COM path catalog
+foreground process open_files()
+```
+
+Full paths resolved by any source are stored as `file_path_hint` and may use any extension. The COM catalog is best-effort: use `GetActiveObject` only, filter built-in and user entries by registered ProgID, evaluate simple property / zero-argument method expressions, validate the result against the current window title, and silently fall back when lookup fails. The foreground `psutil` fallback must be attempted for any foreground process, not only Office/WPS, and must accept a path only when the title file name uniquely matches one open file basename.
+
+The built-in COM catalog should cover Office/WPS document apps, Acrobat/Reader, AutoCAD, Photoshop, Illustrator, InDesign, CorelDRAW, and SOLIDWORKS. Users may append entries through `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json` with this shape:
+
+```json
+{
+  "entries": [
+    {
+      "name": "Custom App",
+      "process_names": ["custom.exe"],
+      "prog_ids": ["Custom.Application"],
+      "path_expressions": ["ActiveDocument.FullName"]
+    }
+  ]
+}
+```
 
 ---
 
@@ -916,6 +941,7 @@ Check keyword exclude rules against:
 app_name
 process_name
 window_title
+file_path_hint
 ```
 
 ### 20.3 Excluded Record Behavior
@@ -996,6 +1022,7 @@ Match keyword against:
 window_title
 app_name
 process_name
+file_path_hint
 ```
 
 ### 22.2 Conflict Handling
@@ -1024,9 +1051,9 @@ manual_override = 1
 
 ### 22.4 Folder Rules And Suggested Names
 
-Folder project rules match only anchor file activities with a recognized full path or parent directory. Office/WPS adapters should resolve paths through COM and may fall back to the foreground process open-file list when the window title has a unique exact file-name match.
+Folder project rules match only anchor file activities with a recognized full path or parent directory. Recognized full local paths are anchor files regardless of extension. Windows adapters should resolve paths through the COM catalog and may fall back to the foreground process open-file list for any process when the window title has a unique exact file-name match.
 
-Suggested project names are display-only Time Details hints. They may be derived from a known non-generic parent folder name, but must not be derived from a bare file name or file stem.
+Suggested project names are display-only Time Details hints. They may be derived from a known non-generic parent folder name only when the file extension is in the built-in automatic-project extension list, and must not be derived from a bare file name or file stem.
 
 ### 22.5 Reporting Context Merge
 

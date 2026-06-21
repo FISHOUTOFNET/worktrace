@@ -7,6 +7,7 @@ import time
 from ..activity_identity import ActivityIdentity, infer_identity_for_activity
 from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL
 from ..db import get_connection, get_db_path, now_str
+from ..path_utils import has_auto_project_extension
 from . import folder_rule_service
 
 GENERIC_FILE_PROJECT_NAMES = {
@@ -167,12 +168,24 @@ def candidate_project_name_for_file_activity(identity: ActivityIdentity | dict) 
     if isinstance(identity, dict):
         is_anchor = bool(identity.get("is_anchor_file"))
         parent_dir = str(identity.get("parent_dir") or identity.get("anchor_parent_dir") or "").strip()
+        file_name_or_path = str(
+            identity.get("full_path")
+            or identity.get("anchor_full_path")
+            or identity.get("title_hint")
+            or identity.get("anchor_title_hint")
+            or identity.get("display_name")
+            or identity.get("activity_display_name")
+            or ""
+        )
     else:
         is_anchor = identity.is_anchor_file
         parent_dir = str(identity.parent_dir or "").strip()
+        file_name_or_path = str(identity.full_path or identity.title_hint or identity.display_name or "")
     if not is_anchor:
         return None
     if not parent_dir:
+        return None
+    if not has_auto_project_extension(file_name_or_path):
         return None
     parent_name = ntpath.basename(parent_dir.rstrip("\\/")) if parent_dir else ""
     parent_candidate = _clean_project_candidate(parent_name)
