@@ -10,9 +10,20 @@ class ActiveWindow:
     file_path_hint: str | None = None
 
 
+@dataclass(frozen=True)
+class ClipboardTextEvent:
+    text: str
+    source_window: ActiveWindow
+    copied_at: str | None = None
+    sequence_number: int | None = None
+
+
 class PlatformAdapter(Protocol):
     def get_active_window(self) -> ActiveWindow:
         ...
 
     def get_idle_seconds(self) -> int:
+        ...
+
+    def get_clipboard_events(self) -> list[ClipboardTextEvent]:
         ...

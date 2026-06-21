@@ -207,7 +207,7 @@ class OverviewView(ctk.CTkFrame):
                     session.get("project_description"),
                 )
             )
-            widgets["subtitle"].configure(text=str(session.get("status_summary") or "正常活动"))
+            widgets["subtitle"].configure(text=str(session.get("session_note") or session.get("status_summary") or "正常活动"))
             widgets["duration"].configure(text=format_duration(session.get("duration_seconds") or 0))
             widgets["base_duration_seconds"] = int(session.get("duration_seconds") or 0)
             widgets["activity_ids"] = list(session.get("activity_ids") or [])

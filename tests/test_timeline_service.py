@@ -374,3 +374,28 @@ def test_midnight_anchor_classifies_following_auxiliary_without_file_default(tem
     assert len(sessions) == 1
     assert sessions[0]["project_name"] == "A"
     assert {row["project_name"] for row in details} == {"A"}
+
+
+def test_project_session_note_attaches_to_session_by_first_activity(temp_db):
+    project = project_service.create_project("Client")
+    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    _activity_at("Word", "winword.exe", "Spec 2.docx", "2026-06-18 09:10:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:20:00")
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    timeline_service.update_session_note("2026-06-18", first, "follow up with client")
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert sessions[0]["first_activity_id"] == first
+    assert sessions[0]["session_note"] == "follow up with client"
+
+
+def test_project_session_note_can_be_cleared(temp_db):
+    project = project_service.create_project("Client")
+    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:20:00")
+
+    timeline_service.update_session_note("2026-06-18", first, "temporary")
+    timeline_service.update_session_note("2026-06-18", first, "")
+
+    assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["session_note"] == ""

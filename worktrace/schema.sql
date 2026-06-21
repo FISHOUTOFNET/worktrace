@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
             'manual',
             'keyword_rule',
             'anchor_context',
+            'clipboard_transition_context',
             'folder_rule',
             'midnight_anchor',
             'suggested_project_name',
@@ -130,6 +131,34 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
     updated_at TEXT NOT NULL,
     FOREIGN KEY (activity_id) REFERENCES activity_log(id),
     FOREIGN KEY (project_id) REFERENCES project(id)
+);
+
+CREATE TABLE IF NOT EXISTS activity_clipboard_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    activity_id INTEGER NOT NULL,
+    copied_at TEXT NOT NULL,
+    app_name TEXT NOT NULL,
+    process_name TEXT NOT NULL,
+    window_title TEXT NOT NULL,
+    file_path_hint TEXT,
+    copied_text TEXT NOT NULL,
+    text_hash TEXT NOT NULL,
+    text_length INTEGER NOT NULL DEFAULT 0,
+    clipboard_sequence INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (activity_id) REFERENCES activity_log(id)
+);
+
+CREATE TABLE IF NOT EXISTS project_session_note (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_date TEXT NOT NULL,
+    first_activity_id INTEGER NOT NULL,
+    note TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (first_activity_id) REFERENCES activity_log(id),
+    UNIQUE(report_date, first_activity_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_activity_time
@@ -170,3 +199,15 @@ ON activity_project_assignment(source, is_manual);
 
 CREATE INDEX IF NOT EXISTS idx_project_rule_pattern
 ON project_rule(pattern);
+
+CREATE INDEX IF NOT EXISTS idx_clipboard_event_activity
+ON activity_clipboard_event(activity_id);
+
+CREATE INDEX IF NOT EXISTS idx_clipboard_event_time
+ON activity_clipboard_event(copied_at);
+
+CREATE INDEX IF NOT EXISTS idx_clipboard_event_sequence
+ON activity_clipboard_event(clipboard_sequence);
+
+CREATE INDEX IF NOT EXISTS idx_project_session_note_key
+ON project_session_note(report_date, first_activity_id);

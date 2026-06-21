@@ -128,14 +128,21 @@ class AutoActivityRecorder:
         self._update_persisted_progress(at_time)
         self._write_snapshot(at_time)
 
-    def _ensure_persisted_if_ready(self, at_time: str) -> None:
+    def ensure_persisted_for_clipboard(self, at_time: str) -> int | None:
+        self._ensure_persisted_if_ready(at_time, force=True)
+        self._update_persisted_progress(at_time)
+        self._write_snapshot(at_time)
+        return self.persisted_activity_id
+
+    def _ensure_persisted_if_ready(self, at_time: str, force: bool = False) -> None:
         if self.current_payload is None or self.current_start_time is None or self.persisted_activity_id is not None:
             return
         status = self.current_payload.get("status")
-        if status not in {STATUS_NORMAL, STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}:
+        allowed_statuses = {STATUS_NORMAL} if force else {STATUS_NORMAL, STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
+        if status not in allowed_statuses:
             return
         elapsed = _seconds_between(self.current_start_time, at_time)
-        if elapsed < self._threshold_for_status(str(status)):
+        if not force and elapsed < self._threshold_for_status(str(status)):
             return
 
         source = SOURCE_AUTO if status == STATUS_NORMAL else SOURCE_SYSTEM

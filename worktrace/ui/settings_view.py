@@ -5,7 +5,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from ..services import export_service
-from ..services.settings_service import get_setting, set_setting
+from ..services.settings_service import get_bool_setting, get_setting, set_setting
 from . import design
 from .first_run_dialog import PrivacyNoticeDialog
 
@@ -35,6 +35,7 @@ class SettingsView(ctk.CTkFrame):
         self.scroll.grid_columnconfigure(0, weight=1)
 
         self.entries: dict[str, ctk.CTkEntry] = {}
+        self.clipboard_capture_var = ctk.BooleanVar(value=get_bool_setting("clipboard_capture_enabled", False))
         form = design.card(self.scroll)
         form.grid(row=0, column=0, sticky="ew", pady=(0, 14))
         form.grid_columnconfigure(1, weight=1)
@@ -59,8 +60,27 @@ class SettingsView(ctk.CTkFrame):
             row=len(fields) + 1, column=1, sticky="w", pady=(10, 18)
         )
 
+        privacy = design.card(self.scroll)
+        privacy.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        privacy.grid_columnconfigure(0, weight=1)
+        design.label(privacy, text="复制文字记录", variant="section").grid(
+            row=0, column=0, sticky="w", padx=18, pady=(16, 4)
+        )
+        design.label(
+            privacy,
+            text="开启后会在本机保存每次复制的文本内容，并自动清理 30 天前的记录。",
+            variant="caption",
+            anchor="w",
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 8))
+        design.checkbox(
+            privacy,
+            text="记录复制文字（默认关闭）",
+            variable=self.clipboard_capture_var,
+        ).grid(row=2, column=0, sticky="w", padx=18, pady=(0, 16))
+
         danger = design.card(self.scroll)
-        danger.grid(row=1, column=0, sticky="ew")
+        danger.grid(row=2, column=0, sticky="ew")
         danger.grid_columnconfigure(0, weight=1)
         design.label(danger, text="本地数据操作", variant="section").grid(
             row=0, column=0, sticky="w", padx=18, pady=(16, 4)
@@ -77,7 +97,11 @@ class SettingsView(ctk.CTkFrame):
         design.button(actions, text="清空所有本地记录", variant="danger", command=self.clear_all).pack(side="left")
 
     def refresh(self) -> None:
-        return
+        for key, entry in self.entries.items():
+            entry.delete(0, "end")
+            entry.insert(0, get_setting(key, "") or "")
+        if hasattr(self, "clipboard_capture_var"):
+            self.clipboard_capture_var.set(get_bool_setting("clipboard_capture_enabled", False))
 
     def copy_page_text(self) -> str:
         export_path = self.entries.get("export_path").get() if "export_path" in self.entries else ""
@@ -86,6 +110,7 @@ class SettingsView(ctk.CTkFrame):
                 "设置与隐私",
                 "调整导出目录、查看隐私说明或清空本地记录。",
                 f"导出目录：{export_path}",
+                f"记录复制文字：{'开启' if self.clipboard_capture_var.get() else '关闭'}",
                 "本地数据操作：清空所有本地记录",
             ]
         )
@@ -93,6 +118,7 @@ class SettingsView(ctk.CTkFrame):
     def save(self) -> None:
         for key, entry in self.entries.items():
             set_setting(key, entry.get())
+        set_setting("clipboard_capture_enabled", "true" if self.clipboard_capture_var.get() else "false")
         self.refresh()
         messagebox.showinfo("已保存", "设置已保存")
 

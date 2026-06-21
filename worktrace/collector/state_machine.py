@@ -12,8 +12,8 @@ from ..constants import (
 )
 from ..db import now_str
 from ..path_utils import normalize_path_key
-from ..platforms.base import ActiveWindow
-from ..services import activity_service, privacy_service, session_boundary_service
+from ..platforms.base import ActiveWindow, ClipboardTextEvent
+from ..services import activity_service, clipboard_service, privacy_service, session_boundary_service
 from .auto_activity_recorder import AutoActivityRecorder
 
 STATE_TO_STATUS = {
@@ -65,6 +65,25 @@ class CollectorStateMachine:
         else:
             logging.info("collector state transition state=%s", state)
 
+    def record_clipboard_event(self, event: ClipboardTextEvent, at_time: str | None = None) -> int | None:
+        if not event.text:
+            return None
+        if privacy_service.is_excluded(event.source_window):
+            return None
+        copied_at = event.copied_at or at_time or now_str()
+        activity_id = self._current_activity_id_for_clipboard_event(event, copied_at)
+        if activity_id is None:
+            activity_id = clipboard_service.find_activity_for_clipboard_event(event.source_window, copied_at)
+        if activity_id is None:
+            return None
+        return clipboard_service.record_clipboard_event(
+            activity_id,
+            event.text,
+            event.source_window,
+            copied_at=copied_at,
+            sequence_number=event.sequence_number,
+        )
+
     def reset_for_time_jump(self, at_time: str | None = None) -> None:
         transition_time = at_time or now_str()
         self._stop_recording_at_boundary(transition_time, "time_jump")
@@ -92,6 +111,16 @@ class CollectorStateMachine:
         self.recorder.stop(at_time, merge_transient=False)
         self.recorder.clear_short_buffers()
         session_boundary_service.record_boundary(at_time, reason)
+
+    def _current_activity_id_for_clipboard_event(self, event: ClipboardTextEvent, copied_at: str) -> int | None:
+        current = self.recorder.current_payload
+        if current is None or current.get("status") != STATUS_NORMAL:
+            return None
+        payload = self._payload_for(STATUS_NORMAL, event.source_window)
+        signature = self._signature_for_payload(payload)
+        if not self._current_matches(payload, signature):
+            return None
+        return self.recorder.ensure_persisted_for_clipboard(copied_at)
 
     def _signature_for_payload(self, payload: dict) -> tuple[str, ...]:
         return (

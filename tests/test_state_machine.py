@@ -3,7 +3,7 @@ import json
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.db import get_connection
-from worktrace.platforms.base import ActiveWindow
+from worktrace.platforms.base import ActiveWindow, ClipboardTextEvent
 from worktrace.services import activity_service, folder_rule_service, privacy_service, project_service, settings_service
 
 
@@ -203,3 +203,40 @@ def test_midnight_split_restarts_with_persistent_temporary_anchor(temp_db):
     assert [(row["occurred_at"], row["reason"]) for row in boundaries] == [
         ("2026-06-19 00:00:00", "midnight")
     ]
+
+
+def test_clipboard_event_forces_short_activity_into_history(temp_db):
+    machine = CollectorStateMachine()
+    window = ActiveWindow("Edge", "msedge.exe", "Research")
+    machine.transition_to("recording", window, at_time="2026-06-18 09:00:00")
+
+    event_id = machine.record_clipboard_event(
+        ClipboardTextEvent("copied text", window, copied_at="2026-06-18 09:00:05", sequence_number=7),
+        at_time="2026-06-18 09:00:05",
+    )
+
+    row = activity_service.get_open_activity()
+    with get_connection() as conn:
+        event_count = conn.execute("SELECT COUNT(*) AS c FROM activity_clipboard_event").fetchone()["c"]
+    assert event_id is not None
+    assert row is not None
+    assert row["start_time"] == "2026-06-18 09:00:00"
+    assert row["duration_seconds"] == 5
+    assert event_count == 1
+
+
+def test_clipboard_event_for_excluded_window_is_not_recorded(temp_db):
+    privacy_service.set_exclude_keywords(["Secret"])
+    machine = CollectorStateMachine()
+    window = ActiveWindow("Edge", "msedge.exe", "Secret page")
+    machine.transition_to("recording", window, at_time="2026-06-18 09:00:00")
+
+    event_id = machine.record_clipboard_event(
+        ClipboardTextEvent("sensitive copied text", window, copied_at="2026-06-18 09:00:05", sequence_number=8),
+        at_time="2026-06-18 09:00:05",
+    )
+
+    with get_connection() as conn:
+        event_count = conn.execute("SELECT COUNT(*) AS c FROM activity_clipboard_event").fetchone()["c"]
+    assert event_id is None
+    assert event_count == 0

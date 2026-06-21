@@ -15,6 +15,8 @@ It records only:
 * record status
 * user-selected project
 * user note
+* project-session note
+* copied text only when the user enables clipboard text recording; retained for at most 30 days
 
 It must not record:
 
@@ -26,7 +28,7 @@ It must not record:
 * webpage contents
 * email contents
 * chat contents
-* clipboard contents
+* clipboard contents while clipboard text recording is disabled
 * browser history
 * browser cookies
 * browser passwords
@@ -517,6 +519,7 @@ export_path = Documents\WorkTrace Exports
 ui_refresh_seconds = 10
 user_paused = false
 context_carry_minutes = 15
+clipboard_capture_enabled = false
 ```
 
 The formal activity history threshold is a shared code constant fixed at 30 seconds. It is not stored in settings and is not configurable from the Settings page.
@@ -1159,7 +1162,7 @@ get_uncategorized_duration(start_date: str, end_date: str) -> int
 `get_summary` returns `classified_duration` in addition to total, effective, idle, paused, excluded, and uncategorized durations.
 `get_summary` should ensure context assignments once for the requested range, then compute status totals with SQL aggregation and call project stats without repeating context recomputation.
 
-Per-date context recomputation should keep an in-memory fingerprint cache keyed by database path and date. If the relevant activity, assignment, project, folder-rule, keyword-rule, and context-setting fingerprint is unchanged, repeated Overview/Time Details/Statistics refreshes must skip the scan-and-write recomputation path.
+Per-date context recomputation should keep an in-memory fingerprint cache keyed by database path and date. If the relevant activity, assignment, project, folder-rule, keyword-rule, clipboard-event, and context-setting fingerprint is unchanged, repeated Overview/Time Details/Statistics refreshes must skip the scan-and-write recomputation path.
 
 ### 23.6 recovery_service.py
 

@@ -1,5 +1,6 @@
 from worktrace.constants import UNCATEGORIZED_PROJECT
-from worktrace.services import activity_service, context_service, project_service
+from worktrace.platforms.base import ActiveWindow
+from worktrace.services import activity_service, clipboard_service, context_service, project_service
 from worktrace.services.context_service import recompute_context_assignments_for_date
 
 
@@ -197,3 +198,67 @@ def test_recompute_context_runs_again_when_date_fingerprint_changes(temp_db, mon
 
     assert len(calls) > first_call_count
     assert activity_service.get_activity(browser)["project_id"] == project
+
+
+def test_clipboard_transition_context_beats_anchor_context(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project_a)
+    source = _activity("Edge", "msedge.exe", "B Dashboard", "09:04:00", project_b)
+    target = _activity("Edge", "msedge.exe", "Search", "09:04:08")
+    _activity("Word", "winword.exe", "A_file_2.docx", "09:10:00", project_a)
+    activity_service.close_current_open_record("2026-06-18 09:20:00")
+    activity_service.update_activity_project(target, project_a, manual=False)
+    clipboard_service.record_clipboard_event(
+        source,
+        "copied from B",
+        ActiveWindow("Edge", "msedge.exe", "B Dashboard"),
+        copied_at="2026-06-18 09:04:03",
+    )
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    row = activity_service.get_activity(target)
+    assert row["project_id"] == project_b
+    with context_service.get_connection() as conn:
+        assignment = conn.execute(
+            "SELECT source, confidence FROM activity_project_assignment WHERE activity_id = ?",
+            (target,),
+        ).fetchone()
+    assert assignment["source"] == "clipboard_transition_context"
+    assert assignment["confidence"] == 70
+
+
+def test_clipboard_transition_does_not_override_direct_conflict(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    source = _activity("Edge", "msedge.exe", "B Dashboard", "09:00:00", project_b)
+    target = _activity("Word", "winword.exe", "A_file.docx", "09:00:08", project_a)
+    activity_service.close_current_open_record("2026-06-18 09:10:00")
+    clipboard_service.record_clipboard_event(
+        source,
+        "copied from B",
+        ActiveWindow("Edge", "msedge.exe", "B Dashboard"),
+        copied_at="2026-06-18 09:00:03",
+    )
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(target)["project_id"] == project_a
+
+
+def test_clipboard_transition_expires_after_ten_seconds(temp_db):
+    project_b = project_service.create_project("B")
+    source = _activity("Edge", "msedge.exe", "B Dashboard", "09:00:00", project_b)
+    target = _activity("Edge", "msedge.exe", "Search", "09:00:20")
+    activity_service.close_current_open_record("2026-06-18 09:10:00")
+    clipboard_service.record_clipboard_event(
+        source,
+        "copied from B",
+        ActiveWindow("Edge", "msedge.exe", "B Dashboard"),
+        copied_at="2026-06-18 09:00:03",
+    )
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(target)["project_name"] == UNCATEGORIZED_PROJECT

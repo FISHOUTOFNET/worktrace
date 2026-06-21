@@ -17,7 +17,7 @@ from ..constants import (
 )
 from ..activity_identity import attach_activity_identity, extract_anchor_file_name
 from ..db import dict_rows, get_connection
-from . import folder_rule_service, session_boundary_service
+from . import folder_rule_service, session_boundary_service, session_note_service
 from .activity_service import update_activities_project
 from .context_service import recompute_context_assignments_for_date
 from .live_time_service import snapshot_elapsed_seconds, snapshot_extra_seconds
@@ -37,6 +37,7 @@ def get_project_sessions_by_range(
     uncategorized_id = get_or_create_uncategorized_project()
     rows = get_report_activity_rows(start_date, end_date, include_hidden=include_hidden, ensure_context=ensure_context)
     sessions = _build_sessions_from_rows(rows, uncategorized_id, _boundary_times_for_rows(rows))
+    session_note_service.attach_session_notes(sessions)
     return sorted(sessions, key=_session_sort_key, reverse=True)
 
 
@@ -128,6 +129,10 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
 
 def update_session_project(session_activity_ids: list[int], project_id: int) -> None:
     update_activities_project(session_activity_ids, project_id, manual=True)
+
+
+def update_session_note(report_date: str, first_activity_id: int, note: str) -> None:
+    session_note_service.set_session_note(report_date, first_activity_id, note)
 
 
 def update_activity_group_project(
@@ -294,6 +299,8 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "report_date": first.get("report_date"),
         "duration_seconds": duration,
         "activity_ids": activity_ids,
+        "first_activity_id": int(activity_ids[0]) if activity_ids else None,
+        "session_note": "",
         "sort_time": last.get("start_time") or first.get("start_time"),
         "event_count": len(rows),
         "status": first.get("status") if len({row.get("status") for row in rows}) == 1 else "mixed",

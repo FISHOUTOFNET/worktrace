@@ -16,6 +16,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
         setting = conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()
         idle_threshold = conn.execute("SELECT value FROM settings WHERE key = 'idle_threshold_seconds'").fetchone()
         ui_refresh = conn.execute("SELECT value FROM settings WHERE key = 'ui_refresh_seconds'").fetchone()
+        clipboard_capture = conn.execute("SELECT value FROM settings WHERE key = 'clipboard_capture_enabled'").fetchone()
         removed_setting = conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone()
         min_history = conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone()
         min_idle = conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone()
@@ -49,11 +50,14 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "folder_rule_index_state" in tables
     assert "folder_rule_file_index" in tables
     assert "activity_project_assignment" in tables
+    assert "activity_clipboard_event" in tables
+    assert "project_session_note" in tables
     assert "manual_project_session" not in tables
     assert "manual_project_session_activity" not in tables
     assert setting["value"] == "15"
     assert idle_threshold["value"] == "300"
     assert ui_refresh["value"] == "10"
+    assert clipboard_capture["value"] == "false"
     assert removed_setting is None
     assert min_history is None
     assert min_idle is None
@@ -67,6 +71,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert exclude_rule_count["c"] == 0
     assert "midnight_anchor" in assignment_schema
     assert "keyword_rule" in assignment_schema
+    assert "clipboard_transition_context" in assignment_schema
     assert "anchor_keyword" not in assignment_schema
     assert "anchor_resource_default" not in assignment_schema
     assert "rule" not in tables
@@ -82,6 +87,8 @@ def test_reset_database_clears_current_schema_tables(temp_db):
 
     with db.get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM activity_clipboard_event").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM project_session_note").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_index_state").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_file_index").fetchone()["c"] == 0
@@ -101,6 +108,7 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
         assert conn.execute("SELECT value FROM settings WHERE key = 'idle_threshold_seconds'").fetchone()["value"] == "300"
         assert conn.execute("SELECT value FROM settings WHERE key = 'ui_refresh_seconds'").fetchone()["value"] == "10"
+        assert conn.execute("SELECT value FROM settings WHERE key = 'clipboard_capture_enabled'").fetchone()["value"] == "false"
         assert conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone() is None
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone() is None
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone() is None

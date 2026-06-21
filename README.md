@@ -23,12 +23,13 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 不截屏。  
 不录屏。  
 不记录键盘。  
-不读取正文。  
+不主动读取正文。  
 不上传数据。  
 命中排除规则的窗口只保存匿名时间块。  
+复制文字记录默认关闭；开启后仅本地保存复制到剪贴板的文本，并自动清理 30 天前的复制文字。  
 自动记录需由用户整理归类后再作为正式工时依据。
 
-WorkTrace records only the current application name, process name, window title, identifiable local file path, local folder-rule file-name/path indexes, start time, end time, duration, status, project, and note. It does not read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, clipboard data, camera, or microphone data.
+WorkTrace records the current application name, process name, window title, identifiable local file path, local folder-rule file-name/path indexes, start time, end time, duration, status, project, and notes. If the user enables clipboard text recording in Settings, it also stores copied text locally for up to 30 days. It does not actively read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, camera, or microphone data.
 
 ## Portable Usage
 
@@ -67,7 +68,7 @@ Time Details no longer supports manual session splitting, merging same-name proj
 
 ## Project Classification
 
-Folder project rules prefer a recognizable full local file path, and WorkTrace also keeps a local file-name/path index for bound folders so title-only file windows can still match the correct rule. Any full local file path can be an anchor regardless of extension, and the folder index also covers all file extensions, so rules can match source code, CAD drawings, design files, images, PDFs, and Office documents. Keyword rules match activity app names, process names, window titles, and known local file paths. The special `排除规则` project supports folder and keyword rules, starts disabled with no default rules, and records matches anonymously as `已排除窗口` only after the user enables it. Disabled projects remain visible but no longer participate in automatic classification.
+Folder project rules prefer a recognizable full local file path, and WorkTrace also keeps a local file-name/path index for bound folders so title-only file windows can still match the correct rule. Any full local file path can be an anchor regardless of extension, and the folder index also covers all file extensions, so rules can match source code, CAD drawings, design files, images, PDFs, and Office documents. Keyword rules match activity app names, process names, window titles, known local file paths, and copied text when clipboard recording is enabled. The special `排除规则` project supports folder and keyword rules, starts disabled with no default rules, and records matches anonymously as `已排除窗口` only after the user enables it. Disabled projects remain visible but no longer participate in automatic classification.
 
 If a file path is known but no folder or keyword rule matches, Time Details may show the parent folder name as a suggested project only for the built-in low-risk document extensions. Suggested names are display-only hints and are not inserted into the `project` table. User-created folder and keyword rules are not limited by that extension list.
 
@@ -90,7 +91,7 @@ The built-in COM catalog covers common Office/WPS apps, Acrobat, AutoCAD, Photos
 }
 ```
 
-Context carry-over applies to normal non-anchor auxiliary activity. A single previous or next concrete anchor can carry context within 15 minutes. Two matching concrete anchors carry a continuous auxiliary block regardless of that 15-minute window. Idle and paused records stop anchor search; excluded and error records do not. Per-date context recomputation is skipped when the activity, assignment, project, rule, and context-setting fingerprint is unchanged, so switching pages does not repeatedly rescan and rewrite the same day.
+Context carry-over applies to normal non-anchor auxiliary activity. A single previous or next concrete anchor can carry context within 15 minutes. Two matching concrete anchors carry a continuous auxiliary block regardless of that 15-minute window. When clipboard recording is enabled, copying text and switching to the next normal activity within 10 seconds is treated as a stronger same-project signal than anchor/time context, but it does not override manual assignments, folder rules, or keyword rules. Idle and paused records stop anchor search; excluded and error records do not. Per-date context recomputation is skipped when the activity, assignment, project, rule, clipboard, and context-setting fingerprint is unchanged, so switching pages does not repeatedly rescan and rewrite the same day.
 
 For reporting, a short interruption is also folded into the surrounding anchor project: if two anchors for project A enclose a contiguous block under 5 minutes containing only another normal project or idle time, the Time Details session and project statistics count that block under A. The original activity status and project assignment are preserved in the detailed records.
 
@@ -127,7 +128,7 @@ The Settings page can clear all local data after this confirmation text:
 此操作将删除本机保存的所有工作轨迹、项目、规则和设置。删除后无法恢复。是否继续？
 ```
 
-Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, but no default exclusion keywords. The all-data export intentionally excludes folder index tables because they are derived caches that may contain many local file paths.
+Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, but no default exclusion keywords. The all-data export includes clipboard events and project session notes, and intentionally excludes folder index tables because they are derived caches that may contain many local file paths.
 
 ## Tests
 

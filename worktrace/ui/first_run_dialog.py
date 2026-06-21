@@ -32,7 +32,7 @@ class FirstRunDialog(ctk.CTkToplevel):
         ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 12))
         highlights = ctk.CTkFrame(shell, fg_color="transparent")
         highlights.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 12))
-        for index, item in enumerate(["本地保存", "不截屏录屏", "不读取正文", "用户可清空"]):
+        for index, item in enumerate(["本地保存", "不截屏录屏", "不主动读正文", "用户可清空"]):
             pill = ctk.CTkLabel(
                 highlights,
                 text=item,

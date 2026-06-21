@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..constants import (
+    CLIPBOARD_TRANSITION_SECONDS,
     DEFAULT_CONTEXT_CARRY_MINUTES,
     STATUS_ERROR,
     STATUS_EXCLUDED,
@@ -13,10 +14,12 @@ from ..constants import (
 )
 from ..activity_identity import attach_activity_identity
 from ..db import dict_rows, get_connection, get_db_path, now_str
+from . import clipboard_service, session_boundary_service
 from .project_inference_service import assign_project_for_activity
 from .settings_service import get_int_setting
 
 INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED}
+DIRECT_ASSIGNMENT_SOURCES = {"manual", "folder_rule", "keyword_rule", "midnight_anchor"}
 _CONTEXT_RECOMPUTE_CACHE: dict[str, tuple] = {}
 
 
@@ -35,11 +38,15 @@ def recompute_context_assignments_for_date(date: str) -> None:
         rows = _load_rows(start, end)
     if _recompute_anchor_rows(rows):
         rows = _load_rows(start, end)
+    if _recompute_clipboard_transition_rows(rows, uncategorized_id):
+        rows = _load_rows(start, end)
 
     for index, row in enumerate(rows):
         if row["status"] != STATUS_NORMAL:
             continue
         if row.get("assignment_source") == "midnight_anchor":
+            continue
+        if row.get("assignment_source") in DIRECT_ASSIGNMENT_SOURCES | {"clipboard_transition_context"}:
             continue
         if row.get("is_anchor_file"):
             continue
@@ -115,7 +122,17 @@ def _context_fingerprint(start: str, end: str, carry_minutes: int) -> tuple:
         folder_rule_sig = _table_update_signature(conn, "folder_project_rule")
         folder_index_sig = _table_update_signature(conn, "folder_rule_index_state")
         keyword_rule_sig = _table_update_signature(conn, "project_rule")
-    return (carry_minutes, activity_sig, assignment_sig, project_sig, folder_rule_sig, folder_index_sig, keyword_rule_sig)
+        clipboard_sig = _table_update_signature(conn, "activity_clipboard_event")
+    return (
+        carry_minutes,
+        activity_sig,
+        assignment_sig,
+        project_sig,
+        folder_rule_sig,
+        folder_index_sig,
+        keyword_rule_sig,
+        clipboard_sig,
+    )
 
 
 def _ordered_concat(conn, sql: str, params: tuple = ()) -> str:
@@ -179,6 +196,92 @@ def _assignment_changed(row: dict, assignment: dict) -> bool:
         and str(row.get("assignment_source") or "") == str(assignment.get("source") or "")
         and int(row.get("assignment_is_manual") or 0) == int(assignment.get("is_manual") or 0)
     )
+
+
+def _recompute_clipboard_transition_rows(rows: list[dict], uncategorized_id: int) -> bool:
+    if len(rows) < 2:
+        return False
+    with get_connection() as conn:
+        copy_times = clipboard_service.clipboard_times_for_activity_ids(conn, [int(row["id"]) for row in rows])
+    changed = False
+    for index in range(len(rows) - 1):
+        previous = rows[index]
+        current = rows[index + 1]
+        if not copy_times.get(int(previous["id"])):
+            continue
+        if not _is_normal_adjacent_transition(previous, current):
+            continue
+        if not _copied_before_transition(previous, current, copy_times):
+            continue
+        previous_project = _row_project_id(previous)
+        current_project = _row_project_id(current)
+        previous_concrete = previous_project != uncategorized_id
+        current_concrete = current_project != uncategorized_id
+        if previous_concrete and _can_apply_clipboard_context(current):
+            _set_clipboard_context_assignment(current, previous_project)
+            changed = True
+            continue
+        if current_concrete and _can_apply_clipboard_context(previous):
+            _set_clipboard_context_assignment(previous, current_project)
+            changed = True
+    return changed
+
+
+def _is_normal_adjacent_transition(previous: dict, current: dict) -> bool:
+    if previous.get("status") != STATUS_NORMAL or current.get("status") != STATUS_NORMAL:
+        return False
+    return not _has_session_boundary_between(previous, current)
+
+
+def _has_session_boundary_between(previous: dict, current: dict) -> bool:
+    boundary_start = previous.get("end_time") or previous.get("start_time") or ""
+    boundary_end = current.get("start_time") or ""
+    if not boundary_start or not boundary_end:
+        return False
+    return session_boundary_service.has_boundary_between(str(boundary_start), str(boundary_end))
+
+
+def _copied_before_transition(previous: dict, current: dict, copy_times: dict[int, list[str]]) -> bool:
+    current_start = str(current.get("start_time") or "")
+    if not current_start:
+        return False
+    for copied_at in copy_times.get(int(previous["id"]), []):
+        seconds = _seconds_between(copied_at, current_start)
+        if seconds is not None and 0 <= seconds <= CLIPBOARD_TRANSITION_SECONDS:
+            return True
+    return False
+
+
+def _seconds_between(start: str, end: str) -> int | None:
+    try:
+        start_dt = datetime.strptime(start, TIME_FORMAT)
+        end_dt = datetime.strptime(end, TIME_FORMAT)
+    except (TypeError, ValueError):
+        return None
+    return int((end_dt - start_dt).total_seconds())
+
+
+def _can_apply_clipboard_context(row: dict) -> bool:
+    if row.get("status") != STATUS_NORMAL:
+        return False
+    if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
+        return False
+    return row.get("assignment_source") not in DIRECT_ASSIGNMENT_SOURCES
+
+
+def _set_clipboard_context_assignment(row: dict, project_id: int) -> None:
+    _sync_assignment_and_activity(
+        int(row["id"]),
+        int(project_id),
+        "clipboard_transition_context",
+        70,
+        is_manual=False,
+        auto_classified=False,
+    )
+    row["assignment_project_id"] = int(project_id)
+    row["project_id"] = int(project_id)
+    row["assignment_source"] = "clipboard_transition_context"
+    row["assignment_is_manual"] = 0
 
 
 def _infer_context_project(rows: list[dict], index: int, carry_minutes: int, uncategorized_id: int) -> int:

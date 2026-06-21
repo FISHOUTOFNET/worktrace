@@ -7,7 +7,7 @@ from datetime import datetime, time as datetime_time
 from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
-from ..services import privacy_service, recovery_service
+from ..services import clipboard_service, privacy_service, recovery_service
 from ..services.settings_service import get_bool_setting, get_int_setting, set_setting
 from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
@@ -17,9 +17,11 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
     machine = CollectorStateMachine()
     last_loop_time: str | None = None
     heartbeat_counter = 0
+    prune_counter = 0
     logging.info("collector start")
     set_setting("collector_status", "running")
     recovery_service.recover_unclosed_records()
+    clipboard_service.prune_old_events()
 
     while not stop_event.is_set():
         try:
@@ -52,8 +54,12 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 continue
 
             active_window = adapter.get_active_window()
+            clipboard_events = _clipboard_events(adapter) if clipboard_service.is_capture_enabled() else []
             idle_seconds = adapter.get_idle_seconds()
             idle_threshold = max(1, idle_threshold_seconds)
+
+            for event in clipboard_events:
+                machine.record_clipboard_event(event, at_time=now)
 
             if idle_seconds >= idle_threshold:
                 machine.transition_to("idle", at_time=now)
@@ -61,6 +67,12 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 machine.transition_to("excluded", at_time=now)
             else:
                 machine.transition_to("recording", active_window, at_time=now)
+                for event in clipboard_events:
+                    machine.record_clipboard_event(event, at_time=now)
+            prune_counter += 1
+            if prune_counter >= 20:
+                clipboard_service.prune_old_events()
+                prune_counter = 0
             last_loop_time = now
             _sleep_poll(stop_event)
         except Exception:
@@ -81,6 +93,16 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
 def _sleep_poll(stop_event: threading.Event) -> None:
     interval = max(1, get_int_setting("poll_interval_seconds", 3))
     stop_event.wait(interval)
+
+
+def _clipboard_events(adapter: PlatformAdapter):
+    try:
+        return adapter.get_clipboard_events()
+    except AttributeError:
+        return []
+    except Exception:
+        logging.debug("clipboard event polling failed", exc_info=True)
+        return []
 
 
 def _midnight_crossed_between(previous: str, current: str) -> str | None:

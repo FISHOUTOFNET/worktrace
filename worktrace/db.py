@@ -89,6 +89,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "ui_refresh_seconds": "10",
         "user_paused": "false",
         "context_carry_minutes": str(DEFAULT_CONTEXT_CARRY_MINUTES),
+        "clipboard_capture_enabled": "false",
     }
     for key, value in defaults.items():
         conn.execute(
@@ -145,6 +146,8 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         """
         DROP TABLE IF EXISTS folder_rule_file_index;
         DROP TABLE IF EXISTS folder_rule_index_state;
+        DROP TABLE IF EXISTS project_session_note;
+        DROP TABLE IF EXISTS activity_clipboard_event;
         DROP TABLE IF EXISTS activity_project_assignment;
         DROP TABLE IF EXISTS manual_project_session_activity;
         DROP TABLE IF EXISTS manual_project_session;

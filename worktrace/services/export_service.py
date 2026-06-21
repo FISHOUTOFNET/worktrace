@@ -40,7 +40,9 @@ def export_all_local_data(path: str) -> str:
         for table in [
             "activity_log",
             "activity_project_assignment",
+            "activity_clipboard_event",
             "project",
+            "project_session_note",
             "folder_project_rule",
             "project_rule",
             "settings",

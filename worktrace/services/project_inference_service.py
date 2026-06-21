@@ -8,7 +8,7 @@ from ..activity_identity import ActivityIdentity, extract_file_name_from_title, 
 from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL
 from ..db import get_connection, get_db_path, now_str
 from ..path_utils import has_auto_project_extension
-from . import folder_index_service, folder_rule_service
+from . import clipboard_service, folder_index_service, folder_rule_service
 
 GENERIC_FILE_PROJECT_NAMES = {
     "desktop",
@@ -157,6 +157,7 @@ def _infer_project(conn, activity: dict, identity: ActivityIdentity) -> tuple[in
             str(identity.process_name or ""),
             str(activity.get("window_title") or ""),
             str(activity.get("file_path_hint") or ""),
+            clipboard_service.clipboard_text_for_activity(conn, int(activity.get("id") or 0)) if activity.get("id") else "",
         ]
     ).casefold()
     for row in _enabled_keyword_rules(conn):

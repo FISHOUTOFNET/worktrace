@@ -9,20 +9,23 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from ctypes import wintypes
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from urllib.parse import unquote, urlparse
 
 from .. import config
 from ..activity_identity import extract_anchor_file_name, extract_file_name_from_title
+from ..constants import TIME_FORMAT
 from ..path_utils import (
     extract_file_path_from_title,
     looks_like_local_file_path,
     normalize_path_key,
     split_file_path,
 )
-from .base import ActiveWindow
+from .base import ActiveWindow, ClipboardTextEvent
 
 
 @dataclass(frozen=True)
@@ -189,31 +192,11 @@ def _run_with_timeout(func, timeout_seconds: float, *args):
 
 
 class WindowsAdapter:
+    def __init__(self) -> None:
+        self._clipboard_monitor = _ClipboardMonitor()
+
     def get_active_window(self) -> ActiveWindow:
-        import win32gui
-        import win32process
-
-        hwnd = win32gui.GetForegroundWindow()
-        title = win32gui.GetWindowText(hwnd) or ""
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        process_name = ""
-        app_name = ""
-        import psutil
-
-        try:
-            process = psutil.Process(pid)
-            process_name = process.name()
-            app_name = process_name
-        except psutil.Error:
-            process_name = "unknown"
-            app_name = "unknown"
-        file_path_hint = _resolve_active_file_path(process_name, title, pid)
-        return ActiveWindow(
-            app_name=app_name,
-            process_name=process_name,
-            window_title=title,
-            file_path_hint=file_path_hint,
-        )
+        return _get_foreground_active_window()
 
     def get_idle_seconds(self) -> int:
         class LASTINPUTINFO(ctypes.Structure):
@@ -225,6 +208,123 @@ class WindowsAdapter:
             return 0
         tick_count = ctypes.windll.kernel32.GetTickCount()
         return int((tick_count - last_input.dwTime) / 1000)
+
+    def get_clipboard_events(self) -> list[ClipboardTextEvent]:
+        return self._clipboard_monitor.drain()
+
+
+class _ClipboardMonitor:
+    def __init__(self) -> None:
+        self._events: deque[ClipboardTextEvent] = deque()
+        self._lock = threading.Lock()
+        self._started = False
+        self._last_sequence: int | None = None
+
+    def drain(self) -> list[ClipboardTextEvent]:
+        self._ensure_started()
+        with self._lock:
+            events = list(self._events)
+            self._events.clear()
+        return events
+
+    def _ensure_started(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        thread = threading.Thread(target=self._run, name="WorkTraceClipboardMonitor", daemon=True)
+        thread.start()
+
+    def _run(self) -> None:
+        while True:
+            try:
+                sequence = _clipboard_sequence_number()
+                if sequence is None:
+                    time.sleep(0.25)
+                    continue
+                if self._last_sequence is None:
+                    self._last_sequence = sequence
+                    time.sleep(0.25)
+                    continue
+                if sequence != self._last_sequence:
+                    self._last_sequence = sequence
+                    self._capture(sequence)
+            except Exception:
+                logging.debug("clipboard monitor loop failed", exc_info=True)
+            time.sleep(0.25)
+
+    def _capture(self, sequence: int) -> None:
+        text = _read_clipboard_unicode_text()
+        if not text:
+            return
+        event = ClipboardTextEvent(
+            text=text,
+            source_window=_get_foreground_active_window(),
+            copied_at=datetime.now().strftime(TIME_FORMAT),
+            sequence_number=sequence,
+        )
+        with self._lock:
+            self._events.append(event)
+
+
+def _get_foreground_active_window() -> ActiveWindow:
+    import win32gui
+    import win32process
+
+    hwnd = win32gui.GetForegroundWindow()
+    title = win32gui.GetWindowText(hwnd) or ""
+    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+    process_name = ""
+    app_name = ""
+    import psutil
+
+    try:
+        process = psutil.Process(pid)
+        process_name = process.name()
+        app_name = process_name
+    except psutil.Error:
+        process_name = "unknown"
+        app_name = "unknown"
+    file_path_hint = _resolve_active_file_path(process_name, title, pid)
+    return ActiveWindow(
+        app_name=app_name,
+        process_name=process_name,
+        window_title=title,
+        file_path_hint=file_path_hint,
+    )
+
+
+def _clipboard_sequence_number() -> int | None:
+    try:
+        import win32clipboard
+
+        return int(win32clipboard.GetClipboardSequenceNumber())
+    except Exception:
+        logging.debug("clipboard sequence read failed", exc_info=True)
+        return None
+
+
+def _read_clipboard_unicode_text() -> str | None:
+    opened = False
+    try:
+        import win32clipboard
+        import win32con
+
+        win32clipboard.OpenClipboard()
+        opened = True
+        if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+            return None
+        value = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+        text = str(value or "")
+        return text if text else None
+    except Exception:
+        logging.debug("clipboard text read failed", exc_info=True)
+        return None
+    finally:
+        if opened:
+            try:
+                win32clipboard.CloseClipboard()
+            except Exception:
+                pass
 
 
 def _ensure_com_initialized() -> bool:
