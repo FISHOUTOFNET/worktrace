@@ -127,16 +127,21 @@ class FakeTree:
 
 def _view_stub(project_name="Client"):
     view = object.__new__(TimelineView)
-    view.new_project_var = FakeVar(project_name)
-    view.resource_project_var = FakeVar("")
+    view.adjust_project_var = FakeVar("")
+    view.resource_project_var = view.adjust_project_var
+    view.activity_project_var = view.adjust_project_var
     view.resource_hint_label = FakeWidget()
+    view.adjustment_hint_label = view.resource_hint_label
     view.session_project_menu = FakeWidget()
     view.resource_project_menu = FakeWidget()
     view.activity_project_menu = FakeWidget()
+    view.adjust_project_menu = view.resource_project_menu
     view.resource_editor = FakeWidget(mapped=True)
+    view.adjustment_editor = view.resource_editor
     view._selected_resource_id = 1
     view._resource_selected_at = 0.0
     view._project_by_name = {}
+    view._active_adjustment = None
     return view
 
 
@@ -144,8 +149,10 @@ def _editor_view_stub():
     view = object.__new__(TimelineView)
     view.editor_scroll_frame = FakeWidget(mapped=True)
     view.editor_panel = view.editor_scroll_frame
-    view.resource_editor = FakeWidget(mapped=False, master=view.editor_panel)
-    view.activity_editor = FakeWidget(mapped=False, master=view.editor_panel)
+    view.adjustment_editor = FakeWidget(mapped=False, master=view.editor_panel)
+    view.resource_editor = view.adjustment_editor
+    view.activity_editor = view.adjustment_editor
+    view._active_adjustment = None
     view.resource_tree_frame = FakeWidget(mapped=True)
     view.detail_tree_frame = FakeWidget(mapped=False)
     return view
@@ -214,8 +221,10 @@ def test_visible_resource_editor_blocks_auto_refresh_even_after_recent_selection
     view._editor_dirty = False
     view._editor_widgets = []
     view._resource_editor_widgets = []
-    view.resource_editor = FakeWidget(mapped=True)
-    view.activity_editor = FakeWidget(mapped=False)
+    view.adjustment_editor = FakeWidget(mapped=True)
+    view.resource_editor = view.adjustment_editor
+    view.activity_editor = view.adjustment_editor
+    view._active_adjustment = {"kind": "resource"}
     view._selected_resource_id = 42
     view._resource_selected_at = time.monotonic() - 60
     view.focus_get = lambda: None
@@ -229,8 +238,10 @@ def test_visible_activity_editor_blocks_auto_refresh():
     view._editor_dirty = False
     view._editor_widgets = []
     view._resource_editor_widgets = []
-    view.resource_editor = FakeWidget(mapped=False)
-    view.activity_editor = FakeWidget(mapped=True)
+    view.adjustment_editor = FakeWidget(mapped=True)
+    view.resource_editor = view.adjustment_editor
+    view.activity_editor = view.adjustment_editor
+    view._active_adjustment = {"kind": "activity"}
     view.focus_get = lambda: None
 
     assert view.is_user_interacting()
@@ -242,8 +253,10 @@ def test_no_visible_editor_or_focus_is_not_user_interacting():
     view._editor_dirty = False
     view._editor_widgets = []
     view._resource_editor_widgets = []
-    view.resource_editor = FakeWidget(mapped=False)
-    view.activity_editor = FakeWidget(mapped=False)
+    view.adjustment_editor = FakeWidget(mapped=False)
+    view.resource_editor = view.adjustment_editor
+    view.activity_editor = view.adjustment_editor
+    view._active_adjustment = None
     view.focus_get = lambda: None
 
     assert not view.is_user_interacting()
@@ -254,10 +267,12 @@ def test_resource_editor_widgets_are_part_of_interaction_guard():
     resource_control = FakeWidget()
     view._control_active = False
     view._editor_dirty = False
-    view._editor_widgets = []
-    view._resource_editor_widgets = [resource_control]
-    view.resource_editor = FakeWidget(mapped=True)
-    view.activity_editor = FakeWidget(mapped=False)
+    view._editor_widgets = [resource_control]
+    view._resource_editor_widgets = view._editor_widgets
+    view.adjustment_editor = FakeWidget(mapped=True)
+    view.resource_editor = view.adjustment_editor
+    view.activity_editor = view.adjustment_editor
+    view._active_adjustment = {"kind": "resource"}
     view._selected_resource_id = 42
     view._resource_selected_at = time.monotonic()
     view.focus_get = lambda: resource_control
@@ -271,10 +286,8 @@ def test_main_layout_no_longer_creates_global_editor_panel(monkeypatch):
     view.grid_columnconfigure = lambda *_args, **_kwargs: None
     view._build_session_table = lambda: None
     view._build_detail_area = lambda: None
-    view._build_resource_editor = lambda: None
-    view._build_activity_editor = lambda: None
-    view._show_resource_editor = lambda _show: None
-    view._show_activity_editor = lambda _show: None
+    view._build_adjustment_editor = lambda: None
+    view._show_adjustment_editor = lambda _show: None
     view.date_var = FakeVar("2026-06-18")
     view.only_uncategorized = FakeVar(False)
 
@@ -290,12 +303,12 @@ def test_main_layout_no_longer_creates_global_editor_panel(monkeypatch):
     assert not hasattr(view, "editor_scroll_frame")
 
 
-def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch):
+def test_resource_and_activity_editors_share_adjustment_editor(monkeypatch):
     view = object.__new__(TimelineView)
     view.editor_panel = FakeWidget()
-    view.resource_project_var = FakeVar()
-    view.new_project_var = FakeVar()
-    view.activity_project_var = FakeVar()
+    view.adjust_project_var = FakeVar()
+    view.resource_project_var = view.adjust_project_var
+    view.activity_project_var = view.adjust_project_var
 
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkFrame", lambda master, **_kwargs: FakeWidget(master=master))
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkLabel", lambda master, **_kwargs: FakeWidget(master=master))
@@ -305,15 +318,16 @@ def test_resource_and_activity_editors_are_children_of_editor_panel(monkeypatch)
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkCheckBox", lambda master, **_kwargs: FakeWidget(master=master))
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkTextbox", lambda master, **_kwargs: FakeWidget(master=master))
 
-    TimelineView._build_resource_editor(view)
-    TimelineView._build_activity_editor(view)
+    TimelineView._build_adjustment_editor(view)
 
+    assert view.adjustment_editor.master is view.editor_panel
     assert view.resource_editor.master is view.editor_panel
     assert view.activity_editor.master is view.editor_panel
-    assert view.resource_rule_button in view._resource_editor_widgets
-    assert view.delete_resource_button in view._resource_editor_widgets
+    assert view.resource_editor is view.activity_editor
+    assert view.resource_rule_button in view._editor_widgets
     assert view.activity_rule_button in view._editor_widgets
-    assert view.split_activity_button in view._editor_widgets
+    assert view.delete_resource_button in view._editor_widgets
+    assert not hasattr(view, "split_activity_button")
 
 
 def test_editor_switching_uses_editor_panel_without_destroying_widgets():
@@ -322,22 +336,20 @@ def test_editor_switching_uses_editor_panel_without_destroying_widgets():
     TimelineView._show_resource_editor(view, True)
 
     assert view.editor_scroll_frame.mapped
-    assert view.resource_editor.mapped
-    assert view.activity_editor.grid_removed
-    assert view.resource_editor.master is view.editor_panel
+    assert view.adjustment_editor.mapped
+    assert view.resource_editor is view.activity_editor
+    assert view.adjustment_editor.master is view.editor_panel
 
     TimelineView._show_activity_editor(view, True)
 
     assert view.editor_scroll_frame.mapped
-    assert view.activity_editor.mapped
-    assert view.resource_editor.grid_removed
-    assert not view.resource_editor.destroyed
-    assert not view.activity_editor.destroyed
+    assert view.adjustment_editor.mapped
+    assert not view.adjustment_editor.destroyed
 
     TimelineView._show_activity_editor(view, False)
 
     assert not view.editor_scroll_frame.mapped
-    assert not view.activity_editor.destroyed
+    assert not view.adjustment_editor.destroyed
 
 
 def test_toggle_detail_mode_switches_tree_frames():
@@ -372,9 +384,12 @@ def test_resource_rule_button_focus_marks_user_interacting():
     view._editor_dirty = False
     view._editor_widgets = []
     view.resource_rule_button = FakeWidget()
-    view._resource_editor_widgets = [view.resource_rule_button]
-    view.resource_editor = FakeWidget(mapped=True)
-    view.activity_editor = FakeWidget(mapped=False)
+    view._editor_widgets = [view.resource_rule_button]
+    view._resource_editor_widgets = view._editor_widgets
+    view.adjustment_editor = FakeWidget(mapped=True)
+    view.resource_editor = view.adjustment_editor
+    view.activity_editor = view.adjustment_editor
+    view._active_adjustment = {"kind": "resource"}
     view._selected_resource_id = None
     view._resource_selected_at = 0.0
     view.focus_get = lambda: view.resource_rule_button
@@ -535,9 +550,12 @@ def test_find_session_containing_activity_clears_uncategorized_filter_for_projec
 
 def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists():
     view = object.__new__(TimelineView)
-    view._selected_resource_id = 7
+    view._selected_resource_id = "7"
     view._resource_selected_at = time.monotonic()
-    view.resource_editor = FakeWidget(mapped=True)
+    view.adjustment_editor = FakeWidget(mapped=True)
+    view.resource_editor = view.adjustment_editor
+    view.activity_editor = view.adjustment_editor
+    view._active_adjustment = {"kind": "resource"}
     view.resource_tree = FakeTree()
     view._resources_by_id = {}
     loaded = []
@@ -549,8 +567,6 @@ def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists(
     view._show_resource_editor = lambda show: hidden.append(show)
 
     view._selected_session_id = "session-1"
-    view.new_project_var = FakeVar("Typing Project")
-
     view._sync_resources(
         [
             {
@@ -564,19 +580,21 @@ def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists(
         ]
     )
 
-    assert view._selected_resource_id == 7
+    assert view._selected_resource_id == "7"
     assert view._selected_session_id == "session-1"
-    assert view.new_project_var.get() == "Typing Project"
     assert selected == ["7"]
-    assert loaded == [7]
+    assert loaded == ["7"]
     assert hidden == []
 
 
 def test_sync_resources_hides_editor_only_when_selected_resource_disappears():
     view = object.__new__(TimelineView)
-    view._selected_resource_id = 7
+    view._selected_resource_id = "7"
     view._resource_selected_at = time.monotonic()
-    view.resource_editor = FakeWidget(mapped=True)
+    view.adjustment_editor = FakeWidget(mapped=True)
+    view.resource_editor = view.adjustment_editor
+    view.activity_editor = view.adjustment_editor
+    view._active_adjustment = {"kind": "resource"}
     view.resource_tree = FakeTree()
     view._resources_by_id = {}
     hidden = []
@@ -924,12 +942,12 @@ def test_timeline_short_activity_carry_accumulates_across_transients_and_clears_
 
 def test_timeline_resource_rule_dialog_prefills_selected_resource(monkeypatch):
     view = object.__new__(TimelineView)
-    view._selected_resource_id = 7
-    view._resources_by_id = {
-        7: {"full_path": "D:\\Client\\Spec.docx", "display_name": "Spec.docx"}
+    view.adjust_project_var = FakeVar("Client")
+    view.resource_project_var = view.adjust_project_var
+    view._active_adjustment = {
+        "rule_type": "file",
+        "rule_target": "D:\\Client\\Spec.docx",
     }
-    view.resource_project_var = FakeVar("Client")
-    view.resource_editor = FakeWidget(mapped=True)
     view._resource_selected_at = 0.0
     calls = []
     monkeypatch.setattr(
@@ -968,13 +986,14 @@ def test_created_project_can_be_used_for_resource_correction_immediately(temp_db
     project_service.create_project("Client")
     view = _view_stub("")
     view.session_project_var = FakeVar("")
-    view.activity_project_var = FakeVar("")
+    view.activity_project_var = view.adjust_project_var
     view.refresh = lambda: None
     TimelineView._after_project_rule_saved(view, {"project_name": "Client"})
     view._sessions_by_id = {session["session_id"]: session}
     view._selected_session_id = session["session_id"]
-    view._resources_by_id = {int(resource["resource_id"]): resource}
-    view._selected_resource_id = int(resource["resource_id"])
+    view._resources_by_id = {resource["summary_id"]: resource}
+    view._selected_resource_id = resource["summary_id"]
+    view._active_adjustment = TimelineView._adjustment_from_resource(view, resource)
 
     view._save_resource_project(False)
 

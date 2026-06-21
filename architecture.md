@@ -1213,14 +1213,22 @@ Must show:
 1. collector status
 2. pause / resume button
 3. date selector
-4. records table
-5. project selector per record
-6. note editor
-7. delete action
-8. filters for uncategorized records
-9. current activity with a live `hh:mm:ss` counter
+4. project session table
+5. resource summary table
+6. detail activity table
+7. shared adjustment panel for resource summary rows and detail activity rows
+8. note editor for single detail activity rows
+9. delete action
+10. filters for uncategorized records
+11. current activity with a live `hh:mm:ss` counter
 
 The page exposes `open_context(target_date, only_uncategorized=False, selected_session_id=None)` so other pages can open it with a date, filter, and selected session.
+
+Time Details must not expose manual session splitting, same-name project segment merge, cross-project session merge, or moving a detail activity into another session. Project correction targets are limited to the selected project session, the selected detail activity, or the selected resource summary row.
+
+Resource summary grouping must keep anchor files grouped by their stable file resource. Auxiliary app activities must be grouped by app/process plus normalized activity name from the window title, not by app resource alone. The resource summary row stores the activity IDs in that group; the shared adjustment panel treats that list the same way it treats the single activity ID from the detail table.
+
+The detail activity project selector must list selectable projects only. It must not add current session rows or other session targets, because that reintroduces cross-session merge behavior and can create large menus on busy days.
 
 Columns:
 

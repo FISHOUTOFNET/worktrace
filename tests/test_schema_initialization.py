@@ -52,8 +52,8 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "project_rule" in tables
     assert "folder_project_rule" in tables
     assert "activity_project_assignment" in tables
-    assert "manual_project_session" in tables
-    assert "manual_project_session_activity" in tables
+    assert "manual_project_session" not in tables
+    assert "manual_project_session_activity" not in tables
     assert setting["value"] == "15"
     assert idle_threshold["value"] == "300"
     assert ui_refresh["value"] == "10"

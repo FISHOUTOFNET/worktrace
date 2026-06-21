@@ -12,7 +12,6 @@ from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_current_duration, format_duration, format_project_label
 from ..services import activity_service, project_service, timeline_service
 from ..services.live_time_service import (
-    is_unconfirmed_snapshot,
     short_activity_carry_duration,
     snapshot_elapsed_seconds,
     snapshot_extra_seconds,
@@ -44,26 +43,27 @@ class TimelineView(ctk.CTkFrame):
         self.range_var = ctk.StringVar(value="今日")
         self.only_uncategorized = ctk.BooleanVar(value=False)
         self.session_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
-        self.resource_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
-        self.new_project_var = ctk.StringVar(value="")
-        self.activity_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
+        self.adjust_project_var = ctk.StringVar(value=UNCATEGORIZED_PROJECT)
+        self.resource_project_var = self.adjust_project_var
+        self.activity_project_var = self.adjust_project_var
 
         self._project_by_name: dict[str, int] = {}
         self._project_name_by_id: dict[int, str] = {}
         self._activity_project_targets: dict[str, dict[str, Any]] = {}
         self._sessions_by_id: dict[str, dict[str, Any]] = {}
-        self._resources_by_id: dict[int, dict[str, Any]] = {}
+        self._resources_by_id: dict[str, dict[str, Any]] = {}
         self._details_by_id: dict[int, dict[str, Any]] = {}
         self._session_live_bases: dict[str, int] = {}
-        self._resource_live_bases: dict[int, int] = {}
+        self._resource_live_bases: dict[str, int] = {}
         self._detail_live_bases: dict[int, int] = {}
         self._current_snapshot: dict | None = None
         self._current_signature: tuple | None = None
         self._short_activity_carry: dict[str, Any] | None = None
         self._tree_values: dict[str, tuple[str, ...]] = {}
         self._selected_session_id: str | None = None
-        self._selected_resource_id: int | None = None
+        self._selected_resource_id: str | None = None
         self._selected_activity_id: int | None = None
+        self._active_adjustment: dict[str, Any] | None = None
         self._detail_mode = "resources"
         self._editor_dirty = False
         self._control_active = False
@@ -130,10 +130,8 @@ class TimelineView(ctk.CTkFrame):
 
         self._build_session_table()
         self._build_detail_area()
-        self._build_resource_editor()
-        self._build_activity_editor()
-        self._show_resource_editor(False)
-        self._show_activity_editor(False)
+        self._build_adjustment_editor()
+        self._show_adjustment_editor(False)
 
     def _build_session_table(self) -> None:
         self._configure_tree_style()
@@ -222,15 +220,6 @@ class TimelineView(ctk.CTkFrame):
             text_color=design.TEXT,
         )
         self.session_rule_button.pack(side="left", padx=(0, 6))
-        self.merge_session_button = self._button(
-            actions,
-            text="合并同名",
-            width=86,
-            command=self._merge_selected_session_with_nearest,
-            fg_color=design.NEUTRAL_SOFT,
-            text_color=design.TEXT,
-        )
-        self.merge_session_button.pack(side="left", padx=(0, 6))
         self.toggle_detail_button = self._button(
             actions,
             text="查看明细",
@@ -300,99 +289,76 @@ class TimelineView(ctk.CTkFrame):
         self.editor_panel = self.editor_scroll_frame
         self.editor_scroll_frame.grid_columnconfigure(0, weight=1)
 
-    def _build_resource_editor(self) -> None:
-        self.resource_editor = ctk.CTkFrame(self.editor_panel, fg_color="transparent")
-        self.resource_editor.grid_columnconfigure(5, weight=1)
-        self.resource_label = self._label(self.resource_editor, text="未选择资源", font=UI_FONT_BOLD)
-        self.resource_label.grid(row=0, column=0, columnspan=6, sticky="w", padx=14, pady=(14, 6))
-        self._label(self.resource_editor, text="改归类到", text_color=design.MUTED_TEXT).grid(row=1, column=0, sticky="w", padx=(14, 4), pady=6)
-        self.resource_project_menu = self._option_menu(
-            self.resource_editor,
+    def _build_adjustment_editor(self) -> None:
+        self.adjustment_editor = ctk.CTkFrame(self.editor_panel, fg_color="transparent")
+        self.adjustment_editor.grid_columnconfigure(6, weight=1)
+        self.resource_editor = self.adjustment_editor
+        self.activity_editor = self.adjustment_editor
+        self.adjustment_label = self._label(self.adjustment_editor, text="未选择活动", font=UI_FONT_BOLD)
+        self.adjustment_label.grid(row=0, column=0, columnspan=7, sticky="w", padx=14, pady=(14, 6))
+        self.resource_label = self.adjustment_label
+        self.activity_editor_label = self.adjustment_label
+        self._label(self.adjustment_editor, text="项目", text_color=design.MUTED_TEXT).grid(row=1, column=0, sticky="w", padx=(14, 4), pady=4)
+        self.adjust_project_menu = self._option_menu(
+            self.adjustment_editor,
             values=[UNCATEGORIZED_PROJECT],
-            variable=self.resource_project_var,
+            variable=self.adjust_project_var,
             width=180,
-            command=lambda _name: self._on_resource_control_change(),
+            command=lambda _name: self._mark_editor_dirty(),
         )
-        self.resource_project_menu.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=6)
-        self.current_session_button = self._button(
-            self.resource_editor,
-            text="仅改当前会话该资源",
-            width=160,
-            command=lambda: self._save_resource_project(False),
-        )
-        self.current_session_button.grid(row=1, column=2, sticky="w", padx=(0, 8), pady=6)
+        self.adjust_project_menu.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=4)
+        self.resource_project_menu = self.adjust_project_menu
+        self.activity_project_menu = self.adjust_project_menu
+        self.save_adjustment_button = self._button(self.adjustment_editor, text="保存", width=72, command=lambda: self._save_adjustment(False))
+        self.save_adjustment_button.grid(row=1, column=2, sticky="w", padx=(0, 8), pady=4)
+        self.save_activity_button = self.save_adjustment_button
+        self.current_session_button = self.save_adjustment_button
         self.remember_button = self._button(
-            self.resource_editor,
+            self.adjustment_editor,
             text="以后该文件都归入该项目",
             width=180,
-            command=lambda: self._save_resource_project(True),
+            command=lambda: self._save_adjustment(True),
         )
-        self.remember_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=6)
-        self.resource_rule_button = self._button(
-            self.resource_editor,
+        self.remember_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=4)
+        self.adjustment_rule_button = self._button(
+            self.adjustment_editor,
             text="新增规则",
             width=86,
-            command=self._open_resource_project_rule_dialog,
+            command=self._open_adjustment_project_rule_dialog,
             fg_color=design.NEUTRAL_SOFT,
             text_color=design.TEXT,
         )
-        self.resource_rule_button.grid(row=1, column=4, sticky="w", padx=(0, 8), pady=6)
-        self.delete_resource_button = self._button(
-            self.resource_editor,
+        self.adjustment_rule_button.grid(row=1, column=4, sticky="w", padx=(0, 8), pady=4)
+        self.resource_rule_button = self.adjustment_rule_button
+        self.activity_rule_button = self.adjustment_rule_button
+        self.delete_adjustment_button = self._button(
+            self.adjustment_editor,
             text="删除",
             width=72,
             fg_color=design.DANGER,
             hover_color=design.DANGER_HOVER,
-            command=self._delete_resource_activities,
+            command=self._delete_adjustment_activities,
         )
-        self.delete_resource_button.grid(row=1, column=5, sticky="w", padx=(0, 8), pady=6)
-        self.resource_hint_label = self._label(self.resource_editor, text="", text_color=design.MUTED_TEXT)
-        self.resource_hint_label.grid(row=2, column=0, columnspan=6, sticky="w", padx=14, pady=(0, 14))
-        self._resource_editor_widgets = [
-            self.resource_project_menu,
-            self.current_session_button,
-            self.remember_button,
-            self.resource_rule_button,
-            self.delete_resource_button,
-        ]
-        for widget in self._resource_editor_widgets:
-            widget.bind("<ButtonPress-1>", self._on_control_activity, add="+")
-            widget.bind("<FocusIn>", self._on_control_activity, add="+")
-
-    def _build_activity_editor(self) -> None:
-        self.activity_editor = ctk.CTkFrame(self.editor_panel, fg_color="transparent")
-        self.activity_editor.grid_columnconfigure(6, weight=1)
-        self.activity_editor_label = self._label(self.activity_editor, text="未选择明细", font=UI_FONT_BOLD)
-        self.activity_editor_label.grid(row=0, column=0, columnspan=7, sticky="w", padx=14, pady=(14, 6))
-        self._label(self.activity_editor, text="项目", text_color=design.MUTED_TEXT).grid(row=1, column=0, sticky="w", padx=(14, 4), pady=4)
-        self.activity_project_menu = self._option_menu(
-            self.activity_editor,
-            values=[UNCATEGORIZED_PROJECT],
-            variable=self.activity_project_var,
-            width=160,
-            command=lambda _name: self._mark_editor_dirty(),
-        )
-        self.activity_project_menu.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=4)
-        self.save_activity_button = self._button(self.activity_editor, text="保存", width=72, command=self._save_activity)
-        self.save_activity_button.grid(row=1, column=2, sticky="w", padx=(0, 8), pady=4)
-        self.delete_activity_button = self._button(self.activity_editor, text="删除", width=72, fg_color=design.DANGER, hover_color=design.DANGER_HOVER, command=self._delete_activity)
-        self.delete_activity_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=4)
-        self.activity_rule_button = self._button(self.activity_editor, text="新增规则", width=86, command=self._open_activity_project_rule_dialog, fg_color=design.NEUTRAL_SOFT, text_color=design.TEXT)
-        self.activity_rule_button.grid(row=1, column=4, sticky="w", padx=(0, 8), pady=4)
-        self.split_activity_button = self._button(self.activity_editor, text="从此拆分", width=86, command=self._split_at_selected_activity, fg_color=design.NEUTRAL_SOFT, text_color=design.TEXT)
-        self.split_activity_button.grid(row=1, column=5, sticky="w", padx=(0, 8), pady=4)
-        self._label(self.activity_editor, text="备注", text_color=design.MUTED_TEXT).grid(row=2, column=0, sticky="nw", padx=(14, 4), pady=(8, 14))
-        self.note_text = ctk.CTkTextbox(self.activity_editor, height=72, font=UI_FONT, corner_radius=design.RADIUS_SM, border_width=1, border_color=design.BORDER)
-        self.note_text.grid(row=2, column=1, columnspan=6, sticky="ew", padx=(0, 14), pady=(8, 14))
+        self.delete_adjustment_button.grid(row=1, column=5, sticky="w", padx=(0, 8), pady=4)
+        self.delete_resource_button = self.delete_adjustment_button
+        self.delete_activity_button = self.delete_adjustment_button
+        self.adjustment_hint_label = self._label(self.adjustment_editor, text="", text_color=design.MUTED_TEXT)
+        self.adjustment_hint_label.grid(row=2, column=0, columnspan=7, sticky="w", padx=14, pady=(0, 8))
+        self.resource_hint_label = self.adjustment_hint_label
+        self.note_label = self._label(self.adjustment_editor, text="备注", text_color=design.MUTED_TEXT)
+        self.note_label.grid(row=3, column=0, sticky="nw", padx=(14, 4), pady=(8, 14))
+        self.note_text = ctk.CTkTextbox(self.adjustment_editor, height=72, font=UI_FONT, corner_radius=design.RADIUS_SM, border_width=1, border_color=design.BORDER)
+        self.note_text.grid(row=3, column=1, columnspan=6, sticky="ew", padx=(0, 14), pady=(8, 14))
         self.note_text.bind("<KeyRelease>", lambda _event: self._mark_editor_dirty(), add="+")
         self._editor_widgets = [
-            self.activity_project_menu,
-            self.save_activity_button,
-            self.delete_activity_button,
-            self.activity_rule_button,
-            self.split_activity_button,
+            self.adjust_project_menu,
+            self.save_adjustment_button,
+            self.remember_button,
+            self.adjustment_rule_button,
+            self.delete_adjustment_button,
             self.note_text,
         ]
+        self._resource_editor_widgets = self._editor_widgets
         for widget in self._editor_widgets:
             widget.bind("<ButtonPress-1>", self._on_control_activity, add="+")
             widget.bind("<FocusIn>", self._on_control_activity, add="+")
@@ -432,15 +398,12 @@ class TimelineView(ctk.CTkFrame):
         self._pending_session_id = selected_session_id
 
     def is_user_interacting(self) -> bool:
-        activity_focus = any(self._widget_has_focus(widget) for widget in getattr(self, "_editor_widgets", []))
-        resource_focus = any(self._widget_has_focus(widget) for widget in getattr(self, "_resource_editor_widgets", []))
+        editor_focus = any(self._widget_has_focus(widget) for widget in getattr(self, "_editor_widgets", []))
         return (
             self._control_active
             or self._editor_dirty
-            or self._resource_editor_visible()
-            or self._activity_editor_visible()
-            or activity_focus
-            or resource_focus
+            or self._adjustment_editor_visible()
+            or editor_focus
         )
 
     def _sync_sessions(self, sessions: list[dict]) -> None:
@@ -514,23 +477,24 @@ class TimelineView(ctk.CTkFrame):
     def _sync_resources(self, resources: list[dict]) -> None:
         previous = self._selected_resource_id
         keep_editor_open = self._resource_editor_visible()
-        self._resources_by_id = {int(row["resource_id"]): row for row in resources}
+        self._resources_by_id = {self._resource_row_iid(row): row for row in resources}
         report_date = self._selected_session_report_date()
         self._resource_live_bases = {
-            int(row["resource_id"]): self._activity_ids_live_seconds(
+            self._resource_row_iid(row): self._activity_ids_live_seconds(
                 row.get("activity_ids") or [],
                 report_date,
                 getattr(self, "_current_snapshot", None),
             )
             for row in resources
         }
-        self._sync_tree(self.resource_tree, [(str(row["resource_id"]), self._resource_values(row)) for row in resources])
+        self._sync_tree(self.resource_tree, [(self._resource_row_iid(row), self._resource_values(row)) for row in resources])
         if previous in self._resources_by_id:
-            self._select_tree_item(self.resource_tree, str(previous))
+            self._select_tree_item(self.resource_tree, previous)
             if keep_editor_open:
                 self._load_resource_editor(previous)
         else:
             self._selected_resource_id = None
+            self._active_adjustment = None
             self._resource_project_dirty = False
             self.resource_tree.selection_remove(self.resource_tree.selection())
             self._show_resource_editor(False)
@@ -555,6 +519,7 @@ class TimelineView(ctk.CTkFrame):
                 self._load_activity_editor(previous)
         elif not self._editor_dirty:
             self._selected_activity_id = None
+            self._active_adjustment = None
             self._show_activity_editor(False)
 
     def _sync_tree(self, tree: ttk.Treeview, items: list[tuple[str, tuple[str, ...]]]) -> None:
@@ -615,9 +580,10 @@ class TimelineView(ctk.CTkFrame):
         selection = self.resource_tree.selection()
         if not selection:
             self._selected_resource_id = None
+            self._active_adjustment = None
             self._show_resource_editor(False)
             return
-        next_resource_id = int(selection[0])
+        next_resource_id = str(selection[0])
         if self._selected_resource_id != next_resource_id:
             self._resource_project_dirty = False
         self._selected_resource_id = next_resource_id
@@ -626,17 +592,16 @@ class TimelineView(ctk.CTkFrame):
             self._show_resource_editor(False)
             return
 
-    def _load_resource_editor(self, resource_id: int) -> bool:
-        resource = self._resources_by_id.get(resource_id)
+    def _load_resource_editor(self, resource_id: str) -> bool:
+        resource = self._resources_by_id.get(str(resource_id))
         if not resource:
             return False
         self._show_resource_editor(True)
         role_text = "锚点文件" if resource["resource_role"] == "anchor" else "辅助活动"
-        self.resource_label.configure(
-            text=f"正在纠错{role_text}：{resource['display_name']}｜当前会话内共 {resource['event_count']} 条活动"
-        )
+        self._active_adjustment = self._adjustment_from_resource(resource)
+        self.resource_label.configure(text=self._active_adjustment["label"])
         if not getattr(self, "_resource_project_dirty", False):
-            self.resource_project_var.set(resource.get("official_project_name") or UNCATEGORIZED_PROJECT)
+            self.adjust_project_var.set(resource.get("official_project_name") or UNCATEGORIZED_PROJECT)
         if resource["can_remember_for_future"]:
             self.remember_button.configure(state="normal", text="以后该文件都归入该项目")
             hint = ""
@@ -645,7 +610,8 @@ class TimelineView(ctk.CTkFrame):
             self.resource_hint_label.configure(text=hint)
         else:
             self.remember_button.configure(state="disabled", text="以后该资源都归入该项目")
-            self.resource_hint_label.configure(text="辅助活动不能作为项目长期判定依据，只能纠正当前会话。")
+            self.resource_hint_label.configure(text=f"{role_text}不能作为项目长期判定依据，只能纠正当前会话。")
+        self._set_note_visible(False)
         return True
 
     def _on_activity_select(self, _event=None) -> None:
@@ -653,6 +619,7 @@ class TimelineView(ctk.CTkFrame):
         if not selection:
             if not self._editor_dirty:
                 self._selected_activity_id = None
+                self._active_adjustment = None
                 self._show_activity_editor(False)
             return
         activity_id = int(selection[0])
@@ -682,27 +649,7 @@ class TimelineView(ctk.CTkFrame):
         self._refresh_selected_session()
 
     def _save_resource_project(self, remember: bool) -> None:
-        self._touch_resource_editor()
-        session = self._sessions_by_id.get(self._selected_session_id or "")
-        resource = self._resources_by_id.get(self._selected_resource_id or 0)
-        if not session or not resource:
-            return
-        project_id = self._project_by_name.get(self.resource_project_var.get())
-        if project_id is None:
-            self.resource_hint_label.configure(text="请选择有效项目")
-            return
-        try:
-            timeline_service.update_resource_project_for_session(
-                session["activity_ids"],
-                int(resource["resource_id"]),
-                project_id,
-                remember_for_future=remember,
-            )
-        except ValueError as exc:
-            self.resource_hint_label.configure(text=str(exc))
-            return
-        self._resource_project_dirty = False
-        self.refresh()
+        self._save_adjustment(remember)
 
     def _save_session_project(self) -> None:
         session = self._sessions_by_id.get(self._selected_session_id or "")
@@ -759,21 +706,7 @@ class TimelineView(ctk.CTkFrame):
         )
 
     def _open_resource_project_rule_dialog(self) -> None:
-        self._touch_resource_editor()
-        resource = self._resources_by_id.get(self._selected_resource_id or 0)
-        target = ""
-        if resource:
-            target = str(resource.get("full_path") or resource.get("display_name") or "")
-        project_name = self.resource_project_var.get()
-        if project_name == UNCATEGORIZED_PROJECT:
-            project_name = None
-        open_project_rule_dialog(
-            self,
-            initial_type="file",
-            initial_target=target,
-            initial_project_name=project_name,
-            on_saved=self._after_project_rule_saved,
-        )
+        self._open_adjustment_project_rule_dialog()
 
     def _after_project_rule_saved(self, result: dict) -> None:
         project_name = str(result.get("project_name") or "")
@@ -791,118 +724,52 @@ class TimelineView(ctk.CTkFrame):
             return ""
         folders = timeline_service.get_session_anchor_folders(session["activity_ids"])
         return folders[0] if folders else ""
+
     def _load_activity_editor(self, activity_id: int) -> None:
         row = self._details_by_id.get(activity_id)
         if not row:
             self._show_activity_editor(False)
             return
         self._show_activity_editor(True)
+        self._active_adjustment = self._adjustment_from_activity(row)
         self._loading_editor = True
-        self.activity_project_var.set(self._activity_target_label_for_row(row))
+        self.adjust_project_var.set(self._activity_target_label_for_row(row))
         self.note_text.delete("1.0", "end")
         self.note_text.insert("1.0", row.get("note") or "")
+        self._set_note_visible(True)
+        if self._active_adjustment.get("can_remember_for_future"):
+            self.remember_button.configure(state="normal", text="以后该文件都归入该项目")
+            self.adjustment_hint_label.configure(text="")
+        else:
+            self.remember_button.configure(state="disabled", text="以后该资源都归入该项目")
+            self.adjustment_hint_label.configure(text="辅助活动不能作为项目长期判定依据，只能纠正当前活动。")
         self._loading_editor = False
         self._editor_dirty = False
-        self.activity_editor_label.configure(text=f"正在编辑：{self._detail_values(row)[0]}｜{row.get('app_name') or ''}")
+        self.activity_editor_label.configure(text=self._active_adjustment["label"])
 
     def _save_activity(self) -> None:
-        activity_id = self._selected_activity_id
-        row = self._details_by_id.get(activity_id or 0)
-        if activity_id is None or not row:
-            return
-        target_label = self.activity_project_var.get()
-        target = self._activity_project_targets.get(target_label)
-        if target is None:
-            self.activity_editor_label.configure(text="请选择有效项目")
-            return
-        project_id = int(target["project_id"])
-        target_session_ids = target.get("session_activity_ids")
-        if target_session_ids:
-            timeline_service.move_activity_to_session(activity_id, list(target_session_ids))
-        elif int(row.get("project_id") or 0) != project_id or row.get("manual_session_id"):
-            timeline_service.move_activity_to_project_target(activity_id, project_id)
-        note = self.note_text.get("1.0", "end-1c")
-        if (row.get("note") or "") != note:
-            activity_service.update_activity_note(activity_id, note)
-        self._editor_dirty = False
-        self._focus_activity_after_refresh(activity_id)
+        self._save_adjustment(False)
 
     def _delete_activity(self) -> None:
-        if self._selected_activity_id is None:
-            return
-        activity_service.soft_delete_activity(self._selected_activity_id)
-        self._selected_activity_id = None
-        self._editor_dirty = False
-        self.refresh()
+        self._delete_adjustment_activities()
 
     def _delete_resource_activities(self) -> None:
-        session = self._sessions_by_id.get(self._selected_session_id or "")
-        resource = self._resources_by_id.get(self._selected_resource_id or 0)
-        if not session or not resource:
-            return
-        if not messagebox.askyesno("删除活动", "将删除当前会话中该资源的活动记录。是否继续？"):
-            return
-        for activity_id in resource.get("activity_ids") or []:
-            activity_service.soft_delete_activity(int(activity_id))
-        self._selected_resource_id = None
-        self._resource_project_dirty = False
-        self.refresh()
-
-    def _split_at_selected_activity(self) -> None:
-        session = self._sessions_by_id.get(self._selected_session_id or "")
-        activity_id = self._selected_activity_id
-        if not session or activity_id is None:
-            return
-        try:
-            result = timeline_service.split_session_at_activity(session["activity_ids"], activity_id)
-        except ValueError as exc:
-            self.activity_editor_label.configure(text=str(exc))
-            return
-        self._editor_dirty = False
-        self._pending_session_id = f"manual-{result['right_manual_session_id']}"
-        self._focus_activity_after_refresh(activity_id)
-
-    def _merge_selected_session_with_nearest(self) -> None:
-        session = self._sessions_by_id.get(self._selected_session_id or "")
-        if not session:
-            return
-        target = self._nearest_same_project_session(session)
-        if not target:
-            messagebox.showinfo("合并同名", "没有找到可合并的同名项目段")
-            return
-        try:
-            result = timeline_service.merge_sessions(session["activity_ids"], target["activity_ids"])
-        except ValueError as exc:
-            messagebox.showerror("合并失败", str(exc))
-            return
-        self._pending_session_id = f"manual-{result['manual_session_id']}"
-        self.refresh(ensure_context=False)
-
-    def _nearest_same_project_session(self, session: dict) -> dict | None:
-        project_id = int(session.get("project_id") or 0)
-        current_start = str(session.get("start_time") or "")
-        candidates = [
-            item
-            for key, item in self._sessions_by_id.items()
-            if key != session.get("session_id") and int(item.get("project_id") or 0) == project_id
-        ]
-        if not candidates:
-            return None
-        return min(candidates, key=lambda item: abs(_time_sort_value(str(item.get("start_time") or "")) - _time_sort_value(current_start)))
+        self._delete_adjustment_activities()
 
     def _open_activity_project_rule_dialog(self) -> None:
-        row = self._details_by_id.get(self._selected_activity_id or 0)
-        if not row:
+        self._open_adjustment_project_rule_dialog()
+
+    def _open_adjustment_project_rule_dialog(self) -> None:
+        adjustment = self._active_adjustment or {}
+        if not adjustment:
             return
-        target = str(row.get("resource_full_path") or row.get("file_path_hint") or row.get("resource_display_name") or "")
-        initial_type = "file" if row.get("resource_role") == "anchor" else "keyword"
-        project_name = self.activity_project_var.get().split("｜", 1)[0]
+        project_name = self.adjust_project_var.get()
         if project_name == UNCATEGORIZED_PROJECT:
             project_name = None
         open_project_rule_dialog(
             self,
-            initial_type=initial_type,
-            initial_target=target,
+            initial_type=str(adjustment.get("rule_type") or "keyword"),
+            initial_target=str(adjustment.get("rule_target") or ""),
             initial_project_name=project_name,
             on_saved=self._after_project_rule_saved,
         )
@@ -920,39 +787,104 @@ class TimelineView(ctk.CTkFrame):
                 project_id = next((pid for pid, pname in project_name_by_id.items() if pname == UNCATEGORIZED_PROJECT), None)
             if project_id is not None:
                 targets[name] = {"project_id": int(project_id), "label": name}
-        seen: set[str] = set(targets)
-        for session in sorted(getattr(self, "_sessions_by_id", {}).values(), key=lambda item: str(item.get("start_time") or "")):
-            project_id = int(session.get("project_id") or 0)
-            if project_id <= 0:
-                continue
-            name = str(session.get("project_name") or project_name_by_id.get(project_id) or UNCATEGORIZED_PROJECT)
-            label = f"{name}｜{self._session_time(session)}"
-            if label in seen:
-                label = f"{label}｜{session.get('session_id')}"
-            seen.add(label)
-            targets[label] = {
-                "project_id": project_id,
-                "session_activity_ids": list(session.get("activity_ids") or []),
-                "manual_session_id": session.get("manual_session_id"),
-                "label": label,
-            }
         self._activity_project_targets = targets
         menu = getattr(self, "activity_project_menu", None)
         if menu is not None:
             menu.configure(values=list(targets) or [UNCATEGORIZED_PROJECT])
 
     def _activity_target_label_for_row(self, row: dict) -> str:
-        manual_session_id = row.get("manual_session_id")
-        if manual_session_id:
-            for label, target in self._activity_project_targets.items():
-                if target.get("manual_session_id") == manual_session_id:
-                    return label
-        selected = self._sessions_by_id.get(self._selected_session_id or "")
-        if selected and int(row.get("id") or 0) in {int(value) for value in selected.get("activity_ids") or []}:
-            for label, target in self._activity_project_targets.items():
-                if target.get("session_activity_ids") == list(selected.get("activity_ids") or []):
-                    return label
         return row.get("official_project_name") or UNCATEGORIZED_PROJECT
+
+    def _adjustment_from_resource(self, resource: dict) -> dict[str, Any]:
+        role_text = "锚点文件" if resource.get("resource_role") == "anchor" else "辅助活动"
+        return {
+            "kind": "resource",
+            "activity_ids": [int(value) for value in resource.get("activity_ids") or []],
+            "resource_id": int(resource.get("resource_id") or 0),
+            "can_remember_for_future": bool(resource.get("can_remember_for_future")),
+            "project_id": int(resource.get("project_id") or 0),
+            "project_name": resource.get("official_project_name") or UNCATEGORIZED_PROJECT,
+            "label": f"正在调整{role_text}：{resource.get('display_name') or '未知资源'}｜当前会话内共 {resource.get('event_count') or 0} 条活动",
+            "rule_type": "file" if resource.get("resource_role") == "anchor" else "keyword",
+            "rule_target": resource.get("full_path") or resource.get("display_name") or "",
+        }
+
+    def _adjustment_from_activity(self, row: dict) -> dict[str, Any]:
+        resource_role = row.get("resource_role")
+        target = row.get("resource_full_path") or row.get("file_path_hint") or row.get("resource_display_name") or row.get("window_title") or ""
+        return {
+            "kind": "activity",
+            "activity_ids": [int(row["id"])],
+            "resource_id": int(row.get("resource_id") or 0),
+            "can_remember_for_future": resource_role == "anchor",
+            "project_id": int(row.get("project_id") or 0),
+            "project_name": row.get("official_project_name") or UNCATEGORIZED_PROJECT,
+            "label": f"正在调整：{self._detail_values(row)[0]}｜{row.get('app_name') or ''}",
+            "rule_type": "file" if resource_role == "anchor" else "keyword",
+            "rule_target": str(target),
+            "note": row.get("note") or "",
+        }
+
+    def _save_adjustment(self, remember: bool = False) -> None:
+        adjustment = self._active_adjustment or {}
+        activity_ids = [int(value) for value in adjustment.get("activity_ids") or []]
+        if not adjustment or not activity_ids:
+            return
+        project_id = self._project_by_name.get(self.adjust_project_var.get())
+        if project_id is None:
+            self.adjustment_hint_label.configure(text="请选择有效项目")
+            return
+        if remember and not adjustment.get("can_remember_for_future"):
+            self.adjustment_hint_label.configure(text="辅助活动不能作为项目长期判定依据")
+            return
+        remember_resource_id = int(adjustment.get("resource_id") or 0) if remember else None
+        if remember_resource_id == 0:
+            remember_resource_id = None
+        try:
+            should_update_project = (
+                adjustment.get("kind") == "resource"
+                or remember
+                or int(adjustment.get("project_id") or 0) != int(project_id)
+            )
+            if should_update_project:
+                timeline_service.update_activity_group_project(
+                    activity_ids,
+                    int(project_id),
+                    remember_resource_id=remember_resource_id,
+                )
+        except ValueError as exc:
+            self.adjustment_hint_label.configure(text=str(exc))
+            return
+        if adjustment.get("kind") == "activity":
+            activity_id = activity_ids[0]
+            row = self._details_by_id.get(activity_id) or {}
+            note = self.note_text.get("1.0", "end-1c")
+            if (row.get("note") or "") != note:
+                activity_service.update_activity_note(activity_id, note)
+            self._editor_dirty = False
+            self._focus_activity_after_refresh(activity_id)
+            return
+        self._resource_project_dirty = False
+        self._editor_dirty = False
+        self.refresh()
+
+    def _delete_adjustment_activities(self) -> None:
+        adjustment = self._active_adjustment or {}
+        activity_ids = [int(value) for value in adjustment.get("activity_ids") or []]
+        if not activity_ids:
+            return
+        if len(activity_ids) > 1 and not messagebox.askyesno("删除活动", "将删除当前会话中这组活动记录。是否继续？"):
+            return
+        for activity_id in activity_ids:
+            activity_service.soft_delete_activity(activity_id)
+        if adjustment.get("kind") == "resource":
+            self._selected_resource_id = None
+            self._resource_project_dirty = False
+        else:
+            self._selected_activity_id = None
+        self._active_adjustment = None
+        self._editor_dirty = False
+        self.refresh()
 
     def _focus_activity_after_refresh(self, activity_id: int) -> None:
         self._detail_mode = "details"
@@ -1097,7 +1029,7 @@ class TimelineView(ctk.CTkFrame):
         self._sync_selected_session_summary(live_session)
         if self._detail_mode == "resources":
             resources = self._live_resources(snapshot)
-            resource_items = [(str(row["resource_id"]), self._resource_values(row)) for row in resources]
+            resource_items = [(self._resource_row_iid(row), self._resource_values(row)) for row in resources]
             if not self._sync_tree_values_only(self.resource_tree, resource_items):
                 return False
             if self._selected_resource_id is not None and self._selected_resource_id not in self._resources_by_id:
@@ -1174,7 +1106,7 @@ class TimelineView(ctk.CTkFrame):
                 row,
                 "total_duration_seconds",
                 row.get("activity_ids") or [],
-                self._resource_live_bases.get(int(row["resource_id"]), 0),
+                self._resource_live_base(row),
                 self._selected_session_report_date(),
                 snapshot,
             )
@@ -1183,6 +1115,16 @@ class TimelineView(ctk.CTkFrame):
                 key=lambda item: (-int(item.get("total_duration_seconds") or 0), str(item.get("display_name") or "").casefold()),
             )
         ]
+
+    def _resource_live_base(self, row: dict) -> int:
+        iid = self._resource_row_iid(row)
+        if iid in self._resource_live_bases:
+            return int(self._resource_live_bases.get(iid) or 0)
+        try:
+            resource_id = int(row.get("resource_id") or 0)
+        except (TypeError, ValueError):
+            return 0
+        return int(self._resource_live_bases.get(resource_id, 0) or 0)
 
     def _live_details(self, snapshot: dict | None) -> list[dict]:
         return [
@@ -1242,6 +1184,9 @@ class TimelineView(ctk.CTkFrame):
             str(row["event_count"]),
             format_project_label(row.get("project_name") or UNCATEGORIZED_PROJECT, row.get("project_description")),
         )
+
+    def _resource_row_iid(self, row: dict) -> str:
+        return str(row.get("summary_id") or row.get("resource_id") or "")
 
     def _detail_values(self, row: dict) -> tuple[str, ...]:
         note = " ".join(str(row.get("note") or "").split())
@@ -1353,30 +1298,32 @@ class TimelineView(ctk.CTkFrame):
                 tree.column(column, width=width)
 
     def _show_resource_editor(self, show: bool) -> None:
-        if show:
-            self._show_editor_panel(True)
-            self.activity_editor.grid_remove()
-            self.resource_editor.grid(row=0, column=0, sticky="ew")
-        else:
-            self.resource_editor.grid_remove()
-            if not self._activity_editor_visible():
-                self._show_editor_panel(False)
+        self._show_adjustment_editor(show)
 
     def _show_activity_editor(self, show: bool) -> None:
+        self._show_adjustment_editor(show)
+
+    def _show_adjustment_editor(self, show: bool) -> None:
         if show:
             self._show_editor_panel(True)
-            self.resource_editor.grid_remove()
-            self.activity_editor.grid(row=0, column=0, sticky="ew")
+            self.adjustment_editor.grid(row=0, column=0, sticky="ew")
         else:
-            self.activity_editor.grid_remove()
-            if not self._resource_editor_visible():
-                self._show_editor_panel(False)
+            self.adjustment_editor.grid_remove()
+            self._show_editor_panel(False)
 
     def _show_editor_panel(self, show: bool) -> None:
         if show:
             self.editor_scroll_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
         else:
             self.editor_scroll_frame.grid_remove()
+
+    def _set_note_visible(self, visible: bool) -> None:
+        if visible:
+            self.note_label.grid(row=3, column=0, sticky="nw", padx=(14, 4), pady=(8, 14))
+            self.note_text.grid(row=3, column=1, columnspan=6, sticky="ew", padx=(0, 14), pady=(8, 14))
+        else:
+            self.note_label.grid_remove()
+            self.note_text.grid_remove()
 
     def _select_tree_item(self, tree: ttk.Treeview, iid: str | None) -> None:
         if iid is None or not tree.exists(iid):
@@ -1488,6 +1435,8 @@ class TimelineView(ctk.CTkFrame):
     def _mark_editor_dirty(self) -> None:
         if not self._loading_editor:
             self._editor_dirty = True
+            if (self._active_adjustment or {}).get("kind") == "resource":
+                self._resource_project_dirty = True
             self.activity_editor_label.configure(text="当前修改未保存")
 
     def _on_control_activity(self, _event=None) -> None:
@@ -1509,32 +1458,25 @@ class TimelineView(ctk.CTkFrame):
             focused = getattr(focused, "master", None)
         return False
 
-    def _on_resource_control_change(self) -> None:
-        self._resource_project_dirty = True
-        self._touch_resource_editor()
-        self._on_control_activity()
-
     def _touch_resource_editor(self) -> None:
         if self._selected_resource_id is not None or self._resource_editor_visible():
             self._resource_selected_at = time.monotonic()
 
-    def _resource_editor_recently_selected(self) -> bool:
-        return self._selected_resource_id is not None and time.monotonic() - self._resource_selected_at <= 5.0
-
     def _resource_editor_visible(self) -> bool:
-        try:
-            return bool(self.resource_editor.winfo_ismapped())
-        except Exception:
-            return False
+        return self._adjustment_editor_visible() and (self._active_adjustment or {}).get("kind") == "resource"
 
     def _activity_editor_visible(self) -> bool:
+        return self._adjustment_editor_visible() and (self._active_adjustment or {}).get("kind") == "activity"
+
+    def _adjustment_editor_visible(self) -> bool:
         try:
-            return bool(self.activity_editor.winfo_ismapped())
+            return bool(self.adjustment_editor.winfo_ismapped())
         except Exception:
             return False
 
     def _close_resource_editor(self) -> None:
         self._selected_resource_id = None
+        self._active_adjustment = None
         self._resource_project_dirty = False
         if hasattr(self, "resource_tree"):
             self.resource_tree.selection_remove(self.resource_tree.selection())
@@ -1542,6 +1484,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _close_activity_editor(self) -> None:
         self._selected_activity_id = None
+        self._active_adjustment = None
         self._editor_dirty = False
         if hasattr(self, "detail_tree"):
             self.detail_tree.selection_remove(self.detail_tree.selection())
@@ -1550,10 +1493,6 @@ class TimelineView(ctk.CTkFrame):
 
 def _current_elapsed_seconds(snapshot: dict) -> int:
     return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
-
-
-def _is_unconfirmed_snapshot(snapshot: dict | None) -> bool:
-    return is_unconfirmed_snapshot(snapshot)
 
 
 def _read_current_activity_snapshot() -> dict | None:
@@ -1565,11 +1504,3 @@ def _read_current_activity_snapshot() -> dict | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def _time_sort_value(value: str) -> int:
-    digits = "".join(ch for ch in value if ch.isdigit())
-    try:
-        return int(digits or 0)
-    except ValueError:
-        return 0

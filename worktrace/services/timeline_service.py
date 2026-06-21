@@ -42,15 +42,7 @@ def get_project_sessions_by_range(
 def _build_sessions_from_rows(rows: list[dict], uncategorized_id: int) -> list[dict]:
     sessions: list[dict] = []
     current: list[dict] = []
-    manual_groups: dict[int, list[dict]] = {}
     for row in rows:
-        manual_session_id = _manual_session_id(row)
-        if manual_session_id is not None:
-            if current:
-                sessions.append(_build_session(current, uncategorized_id))
-                current = []
-            manual_groups.setdefault(manual_session_id, []).append(row)
-            continue
         if not current:
             current = [row]
             continue
@@ -61,8 +53,6 @@ def _build_sessions_from_rows(rows: list[dict], uncategorized_id: int) -> list[d
             current = [row]
     if current:
         sessions.append(_build_session(current, uncategorized_id))
-    for manual_session_id, group_rows in manual_groups.items():
-        sessions.append(_build_session(group_rows, uncategorized_id, manual_session_id=manual_session_id))
     return sessions
 
 
@@ -96,21 +86,26 @@ def get_session_resource_summary(
     if not activity_ids:
         return []
     rows = _load_session_rows(activity_ids, report_date=report_date, ensure_context=ensure_context)
-    groups: dict[int, dict] = {}
+    groups: dict[str, dict] = {}
     for row in rows:
         resource_id = int(row["resource_id"] or 0)
         if not resource_id:
             continue
+        summary_id = _resource_summary_id(row)
+        display_name = _resource_summary_name(row)
         group = groups.setdefault(
-            resource_id,
+            summary_id,
             {
+                "summary_id": summary_id,
                 "resource_id": resource_id,
                 "resource_key": row.get("canonical_key") or "",
                 "resource_role": row.get("resource_role") or "auxiliary",
                 "resource_type": row.get("resource_type") or "unknown",
-                "display_name": row.get("resource_display_name") or row.get("app_name") or "未知资源",
+                "display_name": display_name,
                 "app_name": row.get("resource_app_name") or row.get("app_name") or "",
                 "process_name": row.get("resource_process_name") or row.get("process_name") or "",
+                "full_path": row.get("resource_full_path") or row.get("full_path") or "",
+                "parent_dir": row.get("resource_parent_dir") or row.get("parent_dir") or "",
                 "total_duration_seconds": 0,
                 "activity_ids": [],
                 "event_count": 0,
@@ -180,64 +175,35 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
 
 def update_session_project(session_activity_ids: list[int], project_id: int) -> None:
     update_activities_project(session_activity_ids, project_id, manual=True)
-    _sync_manual_sessions_project(session_activity_ids, project_id)
 
 
-def split_session_at_activity(session_activity_ids: list[int], split_activity_id: int) -> dict:
-    ordered = _ordered_session_activity_rows(session_activity_ids)
-    ids = [int(row["id"]) for row in ordered]
-    if int(split_activity_id) not in ids:
-        raise ValueError("activity is not part of the selected session")
-    split_index = ids.index(int(split_activity_id))
-    if split_index <= 0 or split_index >= len(ids):
-        raise ValueError("请选择第二条或之后的活动作为拆分点")
-    project_id = _common_project_id(ordered)
-    left_group = _manual_session_id(ordered[0]) or _create_manual_session(project_id)
-    right_group = _create_manual_session(project_id)
-    _assign_manual_session(ids[:split_index], left_group)
-    _assign_manual_session(ids[split_index:], right_group)
-    _cleanup_empty_manual_sessions()
-    return {"left_manual_session_id": left_group, "right_manual_session_id": right_group}
-
-
-def merge_sessions(primary_activity_ids: list[int], secondary_activity_ids: list[int]) -> dict:
-    primary = _ordered_session_activity_rows(primary_activity_ids)
-    secondary = _ordered_session_activity_rows(secondary_activity_ids)
-    if not primary or not secondary:
-        raise ValueError("请选择两个项目段")
-    primary_project = _common_project_id(primary)
-    secondary_project = _common_project_id(secondary)
-    if primary_project != secondary_project:
-        raise ValueError("只能合并同名项目段")
-    target_group = _manual_session_id(primary[0]) or _manual_session_id(secondary[0]) or _create_manual_session(primary_project)
-    _assign_manual_session([int(row["id"]) for row in [*primary, *secondary]], target_group)
-    _cleanup_empty_manual_sessions()
-    return {"manual_session_id": target_group}
-
-
-def move_activity_to_project_target(
-    activity_id: int,
+def update_activity_group_project(
+    activity_ids: list[int],
     project_id: int,
-    manual_session_id: int | None = None,
+    remember_resource_id: int | None = None,
 ) -> None:
-    update_activities_project([activity_id], project_id, manual=True)
-    if manual_session_id is None:
-        _clear_manual_session_for_activities([activity_id])
+    ids = [int(activity_id) for activity_id in activity_ids]
+    if not ids:
         return
-    _ensure_manual_session_project(manual_session_id, project_id)
-    _assign_manual_session([activity_id], manual_session_id)
-
-
-def move_activity_to_session(activity_id: int, target_session_activity_ids: list[int]) -> dict:
-    target_rows = _ordered_session_activity_rows(target_session_activity_ids)
-    if not target_rows:
-        raise ValueError("目标项目段不存在")
-    project_id = _common_project_id(target_rows)
-    target_group = _manual_session_id(target_rows[0]) or _create_manual_session(project_id)
-    update_activities_project([activity_id], project_id, manual=True)
-    _assign_manual_session([int(row["id"]) for row in target_rows] + [activity_id], target_group)
-    _cleanup_empty_manual_sessions()
-    return {"manual_session_id": target_group, "project_id": project_id}
+    with get_connection() as conn:
+        if remember_resource_id is not None:
+            resource = conn.execute("SELECT * FROM resource WHERE id = ?", (remember_resource_id,)).fetchone()
+            if not resource:
+                raise ValueError(f"resource not found: {remember_resource_id}")
+            if resource["resource_role"] != "anchor":
+                raise ValueError("auxiliary resources cannot be remembered for future")
+    update_activities_project(ids, project_id, manual=True)
+    if remember_resource_id is None:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE resource
+            SET default_project_id = ?, updated_at = ?
+            WHERE id = ? AND resource_role = 'anchor'
+            """,
+            (project_id, now_str(), remember_resource_id),
+        )
 
 
 def preview_session_project_update(session_activity_ids: list[int], project_id: int) -> dict:
@@ -302,173 +268,6 @@ def preview_session_project_update(session_activity_ids: list[int], project_id: 
     }
 
 
-def update_resource_project_for_session(
-    session_activity_ids: list[int],
-    resource_id: int,
-    project_id: int,
-    remember_for_future: bool = False,
-) -> None:
-    if not session_activity_ids:
-        return
-    placeholders = ",".join("?" for _ in session_activity_ids)
-    with get_connection() as conn:
-        resource = conn.execute("SELECT * FROM resource WHERE id = ?", (resource_id,)).fetchone()
-        if not resource:
-            raise ValueError(f"resource not found: {resource_id}")
-        if remember_for_future and resource["resource_role"] != "anchor":
-            raise ValueError("auxiliary resources cannot be remembered for future")
-        rows = conn.execute(
-            f"""
-            SELECT id
-            FROM activity_log
-            WHERE id IN ({placeholders}) AND resource_id = ? AND is_deleted = 0
-            ORDER BY start_time ASC, id ASC
-            """,
-            [*session_activity_ids, resource_id],
-        ).fetchall()
-        activity_ids = [int(row["id"]) for row in rows]
-    update_activities_project(activity_ids, project_id, manual=True)
-    _clear_manual_session_for_activities(activity_ids)
-    if remember_for_future:
-        with get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE resource
-                SET default_project_id = ?, updated_at = ?
-                WHERE id = ? AND resource_role = 'anchor'
-                """,
-                (project_id, now_str(), resource_id),
-            )
-
-
-def _ordered_session_activity_rows(activity_ids: list[int]) -> list[dict]:
-    if not activity_ids:
-        return []
-    placeholders = ",".join("?" for _ in activity_ids)
-    with get_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT
-                a.id,
-                a.project_id,
-                COALESCE(apa.project_id, a.project_id) AS effective_project_id,
-                mpsa.manual_session_id
-            FROM activity_log a
-            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            LEFT JOIN manual_project_session_activity mpsa ON mpsa.activity_id = a.id
-            WHERE a.id IN ({placeholders})
-              AND a.is_deleted = 0
-            ORDER BY a.start_time ASC, a.id ASC
-            """,
-            activity_ids,
-        ).fetchall()
-    return dict_rows(rows)
-
-
-def _common_project_id(rows: list[dict]) -> int:
-    if not rows:
-        raise ValueError("请选择项目段")
-    uncategorized_id = get_or_create_uncategorized_project()
-    project_ids = {int(row.get("effective_project_id") or row.get("project_id") or uncategorized_id) for row in rows}
-    if len(project_ids) != 1:
-        raise ValueError("只能操作同一项目段")
-    return project_ids.pop()
-
-
-def _create_manual_session(project_id: int) -> int:
-    ts = now_str()
-    with get_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO manual_project_session(project_id, created_at, updated_at)
-            VALUES (?, ?, ?)
-            """,
-            (project_id, ts, ts),
-        )
-        return int(cur.lastrowid)
-
-
-def _assign_manual_session(activity_ids: list[int], manual_session_id: int) -> None:
-    if not activity_ids:
-        return
-    ts = now_str()
-    with get_connection() as conn:
-        for activity_id in activity_ids:
-            conn.execute(
-                """
-                INSERT INTO manual_project_session_activity(activity_id, manual_session_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(activity_id) DO UPDATE SET
-                    manual_session_id = excluded.manual_session_id,
-                    updated_at = excluded.updated_at
-                """,
-                (activity_id, manual_session_id, ts, ts),
-            )
-        conn.execute(
-            "UPDATE manual_project_session SET updated_at = ? WHERE id = ?",
-            (ts, manual_session_id),
-        )
-
-
-def _clear_manual_session_for_activities(activity_ids: list[int]) -> None:
-    if not activity_ids:
-        return
-    placeholders = ",".join("?" for _ in activity_ids)
-    with get_connection() as conn:
-        conn.execute(
-            f"DELETE FROM manual_project_session_activity WHERE activity_id IN ({placeholders})",
-            activity_ids,
-        )
-    _cleanup_empty_manual_sessions()
-
-
-def _sync_manual_sessions_project(activity_ids: list[int], project_id: int) -> None:
-    if not activity_ids:
-        return
-    placeholders = ",".join("?" for _ in activity_ids)
-    ts = now_str()
-    with get_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT DISTINCT manual_session_id
-            FROM manual_project_session_activity
-            WHERE activity_id IN ({placeholders})
-            """,
-            activity_ids,
-        ).fetchall()
-        for row in rows:
-            conn.execute(
-                "UPDATE manual_project_session SET project_id = ?, updated_at = ? WHERE id = ?",
-                (project_id, ts, int(row["manual_session_id"])),
-            )
-
-
-def _ensure_manual_session_project(manual_session_id: int, project_id: int) -> None:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT project_id FROM manual_project_session WHERE id = ?",
-            (manual_session_id,),
-        ).fetchone()
-    if not row:
-        raise ValueError("目标项目段不存在")
-    if int(row["project_id"]) != int(project_id):
-        raise ValueError("目标项目段与目标项目不一致")
-
-
-def _cleanup_empty_manual_sessions() -> None:
-    with get_connection() as conn:
-        conn.execute(
-            """
-            DELETE FROM manual_project_session
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM manual_project_session_activity mpsa
-                WHERE mpsa.manual_session_id = manual_project_session.id
-            )
-            """
-        )
-
-
 def _load_activity_rows_for_report_range(start_date: str, end_date: str, include_hidden: bool) -> list[dict]:
     load_start_day = date_type.fromisoformat(start_date) - timedelta(days=1)
     load_start = f"{load_start_day.isoformat()} 00:00:00"
@@ -480,10 +279,14 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
             """
             SELECT
                 a.*,
+                r.canonical_key,
                 r.display_name AS resource_display_name,
                 r.resource_role,
                 r.resource_type,
-                mpsa.manual_session_id,
+                r.app_name AS resource_app_name,
+                r.process_name AS resource_process_name,
+                r.full_path AS resource_full_path,
+                r.parent_dir AS resource_parent_dir,
                 apa.suggested_project_name,
                 apa.source AS assignment_source,
                 apa.is_manual AS assignment_is_manual,
@@ -492,7 +295,6 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
                 p.description AS effective_project_description
             FROM activity_log a
             LEFT JOIN resource r ON r.id = a.resource_id
-            LEFT JOIN manual_project_session_activity mpsa ON mpsa.activity_id = a.id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
             WHERE a.is_deleted = 0
@@ -538,7 +340,8 @@ def _load_session_rows(
                 r.display_name AS resource_display_name,
                 r.app_name AS resource_app_name,
                 r.process_name AS resource_process_name,
-                mpsa.manual_session_id,
+                r.full_path AS resource_full_path,
+                r.parent_dir AS resource_parent_dir,
                 apa.suggested_project_name,
                 apa.source AS assignment_source,
                 apa.is_manual AS assignment_is_manual,
@@ -547,7 +350,6 @@ def _load_session_rows(
                 p.description AS effective_project_description
             FROM activity_log a
             LEFT JOIN resource r ON r.id = a.resource_id
-            LEFT JOIN manual_project_session_activity mpsa ON mpsa.activity_id = a.id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
             WHERE a.id IN ({placeholders})
@@ -568,7 +370,7 @@ def _can_merge(previous: dict, current: dict) -> bool:
     return str(previous.get("report_project_key") or "") == str(current.get("report_project_key") or "")
 
 
-def _build_session(rows: list[dict], uncategorized_id: int, manual_session_id: int | None = None) -> dict:
+def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     first = rows[0]
     last = rows[-1]
     project_id = int(first.get("report_project_id") or first.get("effective_project_id") or uncategorized_id)
@@ -577,7 +379,7 @@ def _build_session(rows: list[dict], uncategorized_id: int, manual_session_id: i
     duration = sum(_display_duration(row) for row in rows)
     activity_ids = [int(row["id"]) for row in rows]
     status_summary = _status_summary(rows)
-    session_id = f"manual-{manual_session_id}" if manual_session_id is not None else f"{first['id']}-{last['id']}"
+    session_id = f"{first['id']}-{last['id']}"
     return {
         "session_id": session_id,
         "project_id": project_id,
@@ -594,8 +396,6 @@ def _build_session(rows: list[dict], uncategorized_id: int, manual_session_id: i
         "status_summary": status_summary,
         "is_uncategorized": project_id == int(uncategorized_id),
         "is_suggested_project": bool(first.get("report_is_suggested_project", first.get("is_suggested_project"))),
-        "manual_session_id": manual_session_id,
-        "is_manual_session": manual_session_id is not None,
     }
 
 
@@ -669,8 +469,7 @@ def _attach_original_report_project(row: dict) -> None:
     row["report_project_id"] = row.get("effective_project_id")
     row["report_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
     row["report_project_description"] = row.get("display_project_description") or ""
-    manual_session_id = _manual_session_id(row)
-    row["report_project_key"] = f"manual:{manual_session_id}" if manual_session_id is not None else row.get("display_project_key") or ""
+    row["report_project_key"] = row.get("display_project_key") or ""
     row["report_is_suggested_project"] = bool(row.get("is_suggested_project"))
     row["report_context_merged"] = False
 
@@ -798,6 +597,25 @@ def _attach_display_project(row: dict, uncategorized_id: int) -> None:
     row["is_suggested_project"] = False
 
 
+def _resource_summary_id(row: dict) -> str:
+    resource_id = int(row.get("resource_id") or 0)
+    if row.get("resource_role") == "anchor":
+        return f"resource:{resource_id}"
+    app = str(row.get("resource_app_name") or row.get("app_name") or "").casefold()
+    process = str(row.get("resource_process_name") or row.get("process_name") or "").casefold()
+    name = _resource_summary_name(row).casefold()
+    return f"activity:{resource_id}:{app}:{process}:{name}"
+
+
+def _resource_summary_name(row: dict) -> str:
+    if row.get("resource_role") == "anchor":
+        return str(row.get("resource_display_name") or row.get("app_name") or "未知资源").strip()
+    title = " ".join(str(row.get("window_title") or "").split())
+    if title:
+        return title
+    return str(row.get("resource_display_name") or row.get("app_name") or "未知资源").strip()
+
+
 def _anchor_preview_item(row: dict, current_project_name: str | None) -> dict:
     return {
         "resource_id": int(row["resource_id"]),
@@ -806,15 +624,6 @@ def _anchor_preview_item(row: dict, current_project_name: str | None) -> dict:
         "parent_dir": row.get("parent_dir") or "",
         "current_project_name": current_project_name or "",
     }
-
-
-def _manual_session_id(row: dict) -> int | None:
-    value = row.get("manual_session_id")
-    try:
-        parsed = int(value or 0)
-    except (TypeError, ValueError):
-        return None
-    return parsed or None
 
 
 def _session_sort_key(session: dict) -> tuple[str, int]:

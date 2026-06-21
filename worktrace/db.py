@@ -67,45 +67,12 @@ def initialize_database(path: str | Path | None = None) -> None:
 
 def migrate_schema(conn: sqlite3.Connection) -> None:
     _migrate_assignment_source_check(conn)
-    _ensure_manual_project_session_schema(conn)
+    _drop_manual_project_session_schema(conn)
 
 
-def _ensure_manual_project_session_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS manual_project_session (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (project_id) REFERENCES project(id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS manual_project_session_activity (
-            activity_id INTEGER PRIMARY KEY,
-            manual_session_id INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (activity_id) REFERENCES activity_log(id),
-            FOREIGN KEY (manual_session_id) REFERENCES manual_project_session(id) ON DELETE CASCADE
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_manual_project_session_project
-        ON manual_project_session(project_id)
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_manual_session_activity_session
-        ON manual_project_session_activity(manual_session_id)
-        """
-    )
+def _drop_manual_project_session_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS manual_project_session_activity")
+    conn.execute("DROP TABLE IF EXISTS manual_project_session")
 
 
 def _migrate_assignment_source_check(conn: sqlite3.Connection) -> None:

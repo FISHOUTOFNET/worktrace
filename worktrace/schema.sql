@@ -126,23 +126,6 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
     FOREIGN KEY (project_id) REFERENCES project(id)
 );
 
-CREATE TABLE IF NOT EXISTS manual_project_session (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES project(id)
-);
-
-CREATE TABLE IF NOT EXISTS manual_project_session_activity (
-    activity_id INTEGER PRIMARY KEY,
-    manual_session_id INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (activity_id) REFERENCES activity_log(id),
-    FOREIGN KEY (manual_session_id) REFERENCES manual_project_session(id) ON DELETE CASCADE
-);
-
 CREATE INDEX IF NOT EXISTS idx_activity_time
 ON activity_log(start_time, end_time);
 
@@ -181,9 +164,3 @@ ON activity_project_assignment(source, is_manual);
 
 CREATE INDEX IF NOT EXISTS idx_project_rule_pattern
 ON project_rule(pattern);
-
-CREATE INDEX IF NOT EXISTS idx_manual_project_session_project
-ON manual_project_session(project_id);
-
-CREATE INDEX IF NOT EXISTS idx_manual_session_activity_session
-ON manual_project_session_activity(manual_session_id);
