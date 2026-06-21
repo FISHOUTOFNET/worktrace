@@ -252,7 +252,7 @@ class AutoActivityRecorder:
             "window_title": self.current_payload.get("window_title") or "",
             "file_path_hint": self.current_payload.get("file_path_hint"),
             "activity_display_name": identity.display_name,
-            "inferred_project_name": _snapshot_project_name(identity),
+            "inferred_project_name": _snapshot_project_name(identity, self.current_payload, self.persisted_activity_id),
             "status": self.current_payload.get("status") or STATUS_NORMAL,
             "start_time": self.current_start_time,
             "elapsed_seconds": elapsed,
@@ -273,9 +273,13 @@ def _activity_signature(activity: dict) -> tuple[str, str, str, str, str]:
     )
 
 
-def _snapshot_project_name(identity) -> str:
-    if not identity.is_anchor_file:
+def _snapshot_project_name(identity, activity: dict | None = None, persisted_activity_id: int | None = None) -> str:
+    if activity and activity.get("status") in SYSTEM_STATUSES:
         return UNCATEGORIZED_PROJECT
-    from ..services.project_inference_service import candidate_project_name_for_file_activity
+    if persisted_activity_id is not None:
+        activity = activity_service.get_activity(persisted_activity_id)
+        if activity and activity.get("project_name") and activity["project_name"] != UNCATEGORIZED_PROJECT:
+            return activity["project_name"]
+    from ..services.project_inference_service import candidate_project_name_for_activity
 
-    return candidate_project_name_for_file_activity(identity) or UNCATEGORIZED_PROJECT
+    return candidate_project_name_for_activity(identity, activity) or UNCATEGORIZED_PROJECT

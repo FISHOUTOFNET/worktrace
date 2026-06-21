@@ -1,4 +1,3 @@
-import sys
 import threading
 from types import SimpleNamespace
 
@@ -8,11 +7,17 @@ from worktrace.platforms.windows_adapter import (
     _com_candidates,
     _ensure_com_initialized,
     _evaluate_com_path_expression,
+    _get_com_file_path_threadsafe,
+    _is_com_available,
+    _is_open_files_available,
     _is_valid_com_path,
+    _mark_com_failed,
+    _mark_open_files_failed,
     _match_open_file_path,
     _normalize_com_file_path,
     _office_candidates,
     _resolve_active_file_path,
+    _run_with_timeout,
     _uninitialize_com,
 )
 
@@ -99,25 +104,42 @@ def test_com_path_expression_supports_properties_and_zero_arg_methods():
 
 
 def test_resolve_active_file_path_uses_open_files_for_any_process(monkeypatch):
-    class FakeOpenFile:
-        def __init__(self, path):
-            self.path = path
-
-    class FakeProcess:
-        def __init__(self, _pid):
-            pass
-
-        def open_files(self):
-            return [
-                FakeOpenFile("C:\\Repo\\WorkTrace\\main.py"),
-                FakeOpenFile("C:\\Repo\\WorkTrace\\README.md"),
-            ]
-
-    fake_psutil = SimpleNamespace(Process=FakeProcess, Error=Exception)
-    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
     monkeypatch.setattr(windows_adapter, "_com_candidates", lambda _process_name: [])
+    monkeypatch.setattr(
+        windows_adapter,
+        "_get_process_open_file_paths",
+        lambda _pid: [
+            "C:\\Repo\\WorkTrace\\main.py",
+            "C:\\Repo\\WorkTrace\\README.md",
+        ],
+    )
 
     assert _resolve_active_file_path("Code.exe", "main.py - Visual Studio Code", 123) == "C:\\Repo\\WorkTrace\\main.py"
+
+
+def test_open_files_timeout_marks_pid_cooldown(monkeypatch):
+    calls = []
+    pid = 424242
+    windows_adapter._open_files_failure_times.pop(pid, None)
+    monkeypatch.setattr(windows_adapter, "_com_candidates", lambda _process_name: [])
+
+    def _timeout(_pid):
+        calls.append(_pid)
+        raise TimeoutError("slow handle enumeration")
+
+    monkeypatch.setattr(windows_adapter, "_get_process_open_file_paths", _timeout)
+
+    assert _resolve_active_file_path("Code.exe", "main.py - Visual Studio Code", pid) is None
+    assert _resolve_active_file_path("Code.exe", "main.py - Visual Studio Code", pid) is None
+    assert calls == [pid]
+
+
+def test_open_files_cooldown_skips_recently_failed_pid():
+    pid = 434343
+    windows_adapter._open_files_failure_times.pop(pid, None)
+    _mark_open_files_failed(pid)
+    assert not _is_open_files_available(pid)
+    assert _is_open_files_available(pid + 1)
 
 
 def test_user_com_catalog_file_is_loaded(tmp_path, monkeypatch):
@@ -175,11 +197,11 @@ def test_ensure_com_initialized_succeeds_on_background_thread():
 
 
 def test_resolve_active_file_path_initializes_com_on_background_thread(monkeypatch):
-    """_resolve_active_file_path must work from a background thread.
+    """COM initialization must happen in the worker thread when resolving via COM catalog.
 
-    The collector runs on a daemon thread.  Without CoInitialize the COM
-    lookup silently fails and file_path_hint stays None, causing activities
-    to be misclassified as uncategorized.
+    The collector runs on a daemon thread. COM calls are dispatched to worker
+    threads via _run_with_timeout, and each worker must initialize COM before
+    calling GetActiveObject.
     """
     com_init_called = [False]
     original_ensure = _ensure_com_initialized
@@ -191,24 +213,28 @@ def test_resolve_active_file_path_initializes_com_on_background_thread(monkeypat
 
     monkeypatch.setattr(windows_adapter, "_ensure_com_initialized", _fake_ensure)
     monkeypatch.setattr(windows_adapter, "_uninitialize_com", original_uninit)
-
-    # No COM candidates, no open files -> returns None, but COM init must still be attempted
-    monkeypatch.setattr(windows_adapter, "_com_candidates", lambda _pn: [])
+    # Provide a COM candidate so the code path triggers
+    monkeypatch.setattr(
+        windows_adapter, "_com_candidates",
+        lambda _pn: [("Word.Application", "ActiveDocument.FullName")],
+    )
+    # Mock _get_com_file_path to avoid actual COM calls
+    monkeypatch.setattr(windows_adapter, "_get_com_file_path", lambda _pid, _expr: None)
 
     bg_result = [None]
 
     def _worker():
-        bg_result[0] = _resolve_active_file_path("wps.exe", "doc.docx - WPS Office", 1234)
+        bg_result[0] = _resolve_active_file_path("winword.exe", "doc.docx - Word", None)
 
     t = threading.Thread(target=_worker)
     t.start()
     t.join(timeout=10)
 
-    assert com_init_called[0] is True, "COM should be initialized even on background threads"
+    assert com_init_called[0] is True, "COM should be initialized in the worker thread"
 
 
-def test_uninitialize_com_is_balanced_after_resolve(monkeypatch):
-    """After _resolve_active_file_path completes, COM init/uninit must be balanced."""
+def test_get_com_file_path_threadsafe_balances_com_init_uninit(monkeypatch):
+    """_get_com_file_path_threadsafe must balance CoInitialize/CoUninitialize."""
     init_count = [0]
     uninit_count = [0]
     original_ensure = _ensure_com_initialized
@@ -226,10 +252,42 @@ def test_uninitialize_com_is_balanced_after_resolve(monkeypatch):
 
     monkeypatch.setattr(windows_adapter, "_ensure_com_initialized", _counting_ensure)
     monkeypatch.setattr(windows_adapter, "_uninitialize_com", _counting_uninit)
-    monkeypatch.setattr(windows_adapter, "_com_candidates", lambda _pn: [])
+    # Mock _get_com_file_path to avoid actual COM calls
+    monkeypatch.setattr(windows_adapter, "_get_com_file_path", lambda _pid, _expr: None)
 
-    _resolve_active_file_path("wps.exe", "doc.docx - WPS Office")
+    _get_com_file_path_threadsafe("Word.Application", "ActiveDocument.FullName")
 
-    # If COM was initialized, uninit must have been called the same number of times
     if init_count[0] > 0:
         assert uninit_count[0] == init_count[0], "CoInitialize/CoUninitialize calls must be balanced"
+
+
+def test_run_with_timeout_returns_result():
+    assert _run_with_timeout(lambda x: x * 2, 5.0, 21) == 42
+
+
+def test_run_with_timeout_raises_timeout_error():
+    import time
+
+    try:
+        _run_with_timeout(time.sleep, 0.05, 10)
+        assert False, "should have raised TimeoutError"
+    except TimeoutError:
+        pass
+
+
+def test_run_with_timeout_propagates_exception():
+    def _boom():
+        raise ValueError("kaboom")
+
+    try:
+        _run_with_timeout(_boom, 5.0)
+        assert False, "should have raised ValueError"
+    except ValueError as exc:
+        assert "kaboom" in str(exc)
+
+
+def test_com_failure_cooldown_skips_recently_failed_prog_id():
+    _mark_com_failed("Test.Application")
+    assert not _is_com_available("Test.Application")
+    # A different prog_id should still be available
+    assert _is_com_available("Other.Application")

@@ -4,7 +4,7 @@ from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import activity_service, privacy_service, project_service, settings_service
+from worktrace.services import activity_service, folder_rule_service, privacy_service, project_service, settings_service
 
 
 def _snapshot():
@@ -69,6 +69,27 @@ def test_state_machine_writes_file_path_hint_to_snapshot(temp_db):
         at_time="2026-06-18 09:00:00",
     )
     assert _snapshot()["file_path_hint"] == "D:\\CaseA\\Spec.docx"
+
+
+def test_current_activity_snapshot_uses_folder_rule_project_before_persistence(temp_db):
+    project_id = project_service.create_project("21IP0300")
+    folder_rule_service.create_or_update_folder_rule("D:\\Work\\1-21IP0300", project_id)
+    machine = CollectorStateMachine()
+
+    machine.transition_to(
+        "recording",
+        ActiveWindow(
+            "WPS Writer",
+            "wps.exe",
+            "监督阅卷所函_瑞翁_20251020.doc - WPS Office",
+            "D:\\Work\\1-21IP0300\\监督阅卷所函_瑞翁_20251020.doc",
+        ),
+        at_time="2026-06-18 09:00:00",
+    )
+
+    snap = _snapshot()
+    assert snap["is_persisted"] is False
+    assert snap["inferred_project_name"] == "21IP0300"
 
 
 def test_state_machine_fills_missing_path_without_splitting(temp_db):

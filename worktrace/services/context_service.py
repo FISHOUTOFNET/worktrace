@@ -12,17 +12,22 @@ from ..constants import (
     TIME_FORMAT,
 )
 from ..activity_identity import attach_activity_identity
-from ..db import dict_rows, get_connection, now_str
+from ..db import dict_rows, get_connection, get_db_path, now_str
 from .project_inference_service import assign_project_for_activity
 from .settings_service import get_int_setting
 
 INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED}
+_CONTEXT_RECOMPUTE_CACHE: dict[str, tuple] = {}
 
 
 def recompute_context_assignments_for_date(date: str) -> None:
     start = f"{date} 00:00:00"
     end = f"{date} 23:59:59"
     carry_minutes = max(0, get_int_setting("context_carry_minutes", DEFAULT_CONTEXT_CARRY_MINUTES))
+    cache_key = _context_cache_key(date)
+    fingerprint = _context_fingerprint(start, end, carry_minutes)
+    if _CONTEXT_RECOMPUTE_CACHE.get(cache_key) == fingerprint:
+        return
     uncategorized_id = _get_uncategorized_project_id()
 
     rows = _load_rows(start, end)
@@ -52,6 +57,74 @@ def recompute_context_assignments_for_date(date: str) -> None:
             is_manual=False,
             auto_classified=False,
         )
+    _CONTEXT_RECOMPUTE_CACHE[cache_key] = _context_fingerprint(start, end, carry_minutes)
+
+
+def invalidate_context_recompute_cache(date: str | None = None) -> None:
+    if date is None:
+        _CONTEXT_RECOMPUTE_CACHE.clear()
+        return
+    _CONTEXT_RECOMPUTE_CACHE.pop(_context_cache_key(date), None)
+
+
+def _context_cache_key(date: str) -> str:
+    return f"{get_db_path().resolve()}:{date}"
+
+
+def _context_fingerprint(start: str, end: str, carry_minutes: int) -> tuple:
+    with get_connection() as conn:
+        activity_sig = _ordered_concat(
+            conn,
+            """
+            SELECT
+                a.id || ':' ||
+                COALESCE(a.start_time, '') || ':' ||
+                COALESCE(a.end_time, '') || ':' ||
+                COALESCE(a.app_name, '') || ':' ||
+                COALESCE(a.process_name, '') || ':' ||
+                COALESCE(a.window_title, '') || ':' ||
+                COALESCE(a.file_path_hint, '') || ':' ||
+                COALESCE(a.status, '') || ':' ||
+                COALESCE(a.project_id, '') || ':' ||
+                COALESCE(a.manual_override, 0) AS sig
+            FROM activity_log a
+            WHERE a.is_deleted = 0
+              AND a.start_time BETWEEN ? AND ?
+            ORDER BY a.start_time ASC, a.id ASC
+            """,
+            (start, end),
+        )
+        assignment_sig = _ordered_concat(
+            conn,
+            """
+            SELECT
+                apa.activity_id || ':' ||
+                COALESCE(apa.project_id, '') || ':' ||
+                COALESCE(apa.source, '') || ':' ||
+                COALESCE(apa.is_manual, 0) || ':' ||
+                COALESCE(apa.suggested_project_name, '') AS sig
+            FROM activity_project_assignment apa
+            JOIN activity_log a ON a.id = apa.activity_id
+            WHERE a.is_deleted = 0
+              AND a.start_time BETWEEN ? AND ?
+            ORDER BY apa.activity_id ASC
+            """,
+            (start, end),
+        )
+        project_sig = _table_update_signature(conn, "project")
+        folder_rule_sig = _table_update_signature(conn, "folder_project_rule")
+        keyword_rule_sig = _table_update_signature(conn, "project_rule")
+    return (carry_minutes, activity_sig, assignment_sig, project_sig, folder_rule_sig, keyword_rule_sig)
+
+
+def _ordered_concat(conn, sql: str, params: tuple = ()) -> str:
+    row = conn.execute(f"SELECT COALESCE(group_concat(sig, '|'), '') AS sig FROM ({sql})", params).fetchone()
+    return str(row["sig"] or "") if row else ""
+
+
+def _table_update_signature(conn, table_name: str) -> tuple[int, str]:
+    row = conn.execute(f"SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS updated_at FROM {table_name}").fetchone()
+    return (int(row["count"] or 0), str(row["updated_at"] or "")) if row else (0, "")
 
 
 def _load_rows(start: str, end: str) -> list[dict]:

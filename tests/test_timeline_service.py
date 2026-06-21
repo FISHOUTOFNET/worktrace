@@ -294,6 +294,33 @@ def test_session_boundary_splits_same_project_records(temp_db):
     assert [session["start_time"][11:16] for session in sessions] == ["09:20", "09:00"]
 
 
+def test_project_sessions_batch_load_session_boundaries(temp_db, monkeypatch):
+    project_a = project_service.create_project("A")
+    first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 09:00:00", project_a)
+    activity_service.close_activity(first, "2026-06-18 09:10:00")
+    session_boundary_service.record_boundary("2026-06-18 09:10:00", "stopped")
+    second = _activity_at("Word", "winword.exe", "A2.docx", "2026-06-18 09:20:00", project_a)
+    activity_service.close_activity(second, "2026-06-18 09:30:00")
+    calls = []
+    original = session_boundary_service.list_boundaries
+
+    def counted_list_boundaries(start_time: str, end_time: str):
+        calls.append((start_time, end_time))
+        return original(start_time, end_time)
+
+    monkeypatch.setattr(session_boundary_service, "list_boundaries", counted_list_boundaries)
+    monkeypatch.setattr(
+        session_boundary_service,
+        "has_boundary_between",
+        lambda _start, _end: (_ for _ in ()).throw(AssertionError("per-pair boundary lookup should not run")),
+    )
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert [session["project_name"] for session in sessions] == ["A", "A"]
+    assert 1 <= len(calls) <= 2
+
+
 def test_unrecorded_gap_splits_same_project_records(temp_db):
     project_a = project_service.create_project("A")
     first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 09:00:00", project_a)

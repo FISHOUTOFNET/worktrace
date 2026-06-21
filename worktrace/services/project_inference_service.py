@@ -194,6 +194,24 @@ def candidate_project_name_for_file_activity(identity: ActivityIdentity | dict) 
     return None
 
 
+def candidate_project_name_for_activity(identity: ActivityIdentity, activity: dict | None = None) -> str | None:
+    """Return the display project name that automatic inference would use without writing to DB."""
+    activity_dict = dict(activity or {})
+    activity_dict.setdefault("app_name", identity.app_name or "")
+    activity_dict.setdefault("process_name", identity.process_name or "")
+    activity_dict.setdefault("window_title", identity.title_hint or "")
+    activity_dict.setdefault("file_path_hint", identity.full_path or "")
+    with get_connection() as conn:
+        project_id, source, _confidence, suggested_name = _infer_project(conn, activity_dict, identity)
+        if source == "suggested_project_name":
+            return suggested_name
+        uncategorized_id = _get_uncategorized_project_id(conn)
+        if int(project_id) == int(uncategorized_id):
+            return None
+        row = conn.execute("SELECT name FROM project WHERE id = ?", (project_id,)).fetchone()
+        return str(row["name"]) if row and row["name"] else None
+
+
 def _clean_project_candidate(value: str | None) -> str | None:
     cleaned = str(value or "").strip()
     if not cleaned:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from datetime import date as date_type, datetime, time as datetime_time, timedelta
 
 from ..constants import (
@@ -35,18 +36,18 @@ def get_project_sessions_by_range(
 ) -> list[dict]:
     uncategorized_id = get_or_create_uncategorized_project()
     rows = get_report_activity_rows(start_date, end_date, include_hidden=include_hidden, ensure_context=ensure_context)
-    sessions = _build_sessions_from_rows(rows, uncategorized_id)
+    sessions = _build_sessions_from_rows(rows, uncategorized_id, _boundary_times_for_rows(rows))
     return sorted(sessions, key=_session_sort_key, reverse=True)
 
 
-def _build_sessions_from_rows(rows: list[dict], uncategorized_id: int) -> list[dict]:
+def _build_sessions_from_rows(rows: list[dict], uncategorized_id: int, boundary_times: list[str] | None = None) -> list[dict]:
     sessions: list[dict] = []
     current: list[dict] = []
     for row in rows:
         if not current:
             current = [row]
             continue
-        if _can_merge(current[-1], row):
+        if _can_merge(current[-1], row, boundary_times):
             current.append(row)
         else:
             sessions.append(_build_session(current, uncategorized_id))
@@ -66,7 +67,8 @@ def get_report_activity_rows(
         _ensure_context_for_report_range(start_date, end_date)
     uncategorized_id = get_or_create_uncategorized_project()
     rows = _load_activity_rows_for_report_range(start_date, end_date, include_hidden)
-    rows = _with_reporting_projects(_with_display_projects(rows, uncategorized_id))
+    boundary_times = _boundary_times_for_rows(rows)
+    rows = _with_reporting_projects(_with_display_projects(rows, uncategorized_id), boundary_times)
     return [
         row
         for row in _with_report_dates(rows)
@@ -262,12 +264,12 @@ def _load_session_rows(
     )
 
 
-def _can_merge(previous: dict, current: dict) -> bool:
+def _can_merge(previous: dict, current: dict, boundary_times: list[str] | None = None) -> bool:
     if not (_can_participate_in_report_session(previous) and _can_participate_in_report_session(current)):
         return False
     if str(previous.get("report_date") or "") != str(current.get("report_date") or ""):
         return False
-    if _has_session_boundary_between(previous, current):
+    if _has_session_boundary_between(previous, current, boundary_times):
         return False
     return str(previous.get("report_project_key") or "") == str(current.get("report_project_key") or "")
 
@@ -307,7 +309,7 @@ def _with_display_projects(rows: list[dict], uncategorized_id: int) -> list[dict
     return rows
 
 
-def _with_reporting_projects(rows: list[dict]) -> list[dict]:
+def _with_reporting_projects(rows: list[dict], boundary_times: list[str] | None = None) -> list[dict]:
     for row in rows:
         _attach_original_report_project(row)
     carry_minutes = max(0, get_int_setting("context_carry_minutes", DEFAULT_CONTEXT_CARRY_MINUTES))
@@ -316,7 +318,7 @@ def _with_reporting_projects(rows: list[dict]) -> list[dict]:
     for anchor_index, anchor in enumerate(rows):
         if not _is_project_anchor(anchor):
             continue
-        merge = _find_short_context_merge(rows, anchor_index, carry_minutes)
+        merge = _find_short_context_merge(rows, anchor_index, carry_minutes, boundary_times)
         if merge is None:
             continue
         for interrupt_index in merge:
@@ -385,14 +387,19 @@ def _attach_merged_report_project(row: dict, anchor: dict) -> None:
     row["report_context_merged"] = True
 
 
-def _find_short_context_merge(rows: list[dict], anchor_index: int, carry_minutes: int) -> list[int] | None:
+def _find_short_context_merge(
+    rows: list[dict],
+    anchor_index: int,
+    carry_minutes: int,
+    boundary_times: list[str] | None = None,
+) -> list[int] | None:
     anchor = rows[anchor_index]
     anchor_key = str(anchor.get("display_project_key") or "")
     interrupt_indices: list[int] = []
     after_interrupt_block = False
     for pos in range(anchor_index + 1, len(rows)):
         row = rows[pos]
-        if _has_session_boundary_between(rows[pos - 1], row):
+        if _has_session_boundary_between(rows[pos - 1], row, boundary_times):
             return None
         if _is_project_anchor(row) and str(row.get("display_project_key") or "") == anchor_key:
             if (
@@ -451,14 +458,36 @@ def _minutes_between(start: str, end: str) -> float:
     return max(0.0, (end_dt - start_dt).total_seconds() / 60)
 
 
-def _has_session_boundary_between(previous: dict, current: dict) -> bool:
+def _has_session_boundary_between(previous: dict, current: dict, boundary_times: list[str] | None = None) -> bool:
     if _has_unrecorded_gap_between(previous, current):
         return True
     boundary_start = previous.get("end_time") or previous.get("start_time") or ""
     boundary_end = current.get("start_time") or ""
     if not boundary_start or not boundary_end:
         return False
+    if boundary_times is not None:
+        return _has_boundary_time_between(boundary_times, str(boundary_start), str(boundary_end))
     return session_boundary_service.has_boundary_between(str(boundary_start), str(boundary_end))
+
+
+def _boundary_times_for_rows(rows: list[dict]) -> list[str]:
+    ranges = [
+        str(value)
+        for row in rows
+        for value in (row.get("start_time"), row.get("end_time"))
+        if value
+    ]
+    if not ranges:
+        return []
+    boundaries = session_boundary_service.list_boundaries(min(ranges), max(ranges))
+    return [str(row["occurred_at"]) for row in boundaries if row.get("occurred_at")]
+
+
+def _has_boundary_time_between(boundary_times: list[str], start_time: str, end_time: str) -> bool:
+    if not start_time or not end_time or start_time > end_time:
+        return False
+    index = bisect_left(boundary_times, start_time)
+    return index < len(boundary_times) and boundary_times[index] <= end_time
 
 
 def _has_unrecorded_gap_between(previous: dict, current: dict) -> bool:

@@ -1,5 +1,5 @@
 from worktrace.constants import UNCATEGORIZED_PROJECT
-from worktrace.services import activity_service, project_service
+from worktrace.services import activity_service, context_service, project_service
 from worktrace.services.context_service import recompute_context_assignments_for_date
 
 
@@ -148,3 +148,52 @@ def test_recompute_is_idempotent_and_preserves_manual_auxiliary(temp_db):
     assert first["project_id"] == manual_project
     assert second["project_id"] == manual_project
     assert second["updated_at"] == first["updated_at"]
+
+
+def test_recompute_context_skips_when_date_fingerprint_is_unchanged(temp_db, monkeypatch):
+    project = project_service.create_project("A")
+    _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project)
+    browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
+    _activity("Word", "winword.exe", "A_file_2.docx", "09:20:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    calls = []
+    original = context_service._load_rows
+
+    def counted_load_rows(start: str, end: str):
+        calls.append((start, end))
+        return original(start, end)
+
+    monkeypatch.setattr(context_service, "_load_rows", counted_load_rows)
+
+    recompute_context_assignments_for_date("2026-06-18")
+    first_call_count = len(calls)
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert first_call_count > 0
+    assert len(calls) == first_call_count
+    assert activity_service.get_activity(browser)["project_id"] == project
+
+
+def test_recompute_context_runs_again_when_date_fingerprint_changes(temp_db, monkeypatch):
+    project = project_service.create_project("A")
+    _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project)
+    browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
+    _activity("Word", "winword.exe", "A_file_2.docx", "09:20:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    calls = []
+    original = context_service._load_rows
+
+    def counted_load_rows(start: str, end: str):
+        calls.append((start, end))
+        return original(start, end)
+
+    monkeypatch.setattr(context_service, "_load_rows", counted_load_rows)
+
+    recompute_context_assignments_for_date("2026-06-18")
+    first_call_count = len(calls)
+    _activity("Word", "winword.exe", "A_file_3.docx", "09:40:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:50:00")
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert len(calls) > first_call_count
+    assert activity_service.get_activity(browser)["project_id"] == project

@@ -5,6 +5,10 @@ import json
 import logging
 import ntpath
 import re
+import subprocess
+import sys
+import threading
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
 from functools import lru_cache
@@ -124,6 +128,66 @@ _BUILTIN_COM_PATH_CATALOG: tuple[ComPathCatalogEntry, ...] = (
 )
 
 
+_COM_CALL_TIMEOUT_SECONDS = 2.0
+_OPEN_FILES_TIMEOUT_SECONDS = 2.0
+_COM_FAILURE_COOLDOWN_SECONDS = 30.0
+_OPEN_FILES_FAILURE_COOLDOWN_SECONDS = 30.0
+
+_com_failure_times: dict[str, float] = {}
+_open_files_failure_times: dict[int, float] = {}
+
+
+def _is_com_available(prog_id: str) -> bool:
+    last_fail = _com_failure_times.get(prog_id)
+    if last_fail is None:
+        return True
+    return time.monotonic() - last_fail > _COM_FAILURE_COOLDOWN_SECONDS
+
+
+def _mark_com_failed(prog_id: str) -> None:
+    _com_failure_times[prog_id] = time.monotonic()
+
+
+def _is_open_files_available(pid: int) -> bool:
+    last_fail = _open_files_failure_times.get(pid)
+    if last_fail is None:
+        return True
+    return time.monotonic() - last_fail > _OPEN_FILES_FAILURE_COOLDOWN_SECONDS
+
+
+def _mark_open_files_failed(pid: int) -> None:
+    _open_files_failure_times[pid] = time.monotonic()
+
+
+def _run_with_timeout(func, timeout_seconds: float, *args):
+    """Run *func* in a daemon thread and wait up to *timeout_seconds*.
+
+    Returns the function result.  Raises ``TimeoutError`` if the call
+    does not finish in time (the background thread is left running as a
+    daemon and will be cleaned up on process exit).  Any exception raised
+    by *func* is re-raised in the caller.
+    """
+    result_box: list = [None]
+    exc_box: list = [None]
+    done = threading.Event()
+
+    def _worker():
+        try:
+            result_box[0] = func(*args)
+        except Exception as exc:
+            exc_box[0] = exc
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    if not done.wait(timeout=timeout_seconds):
+        raise TimeoutError(f"call timed out after {timeout_seconds:.1f}s")
+    if exc_box[0] is not None:
+        raise exc_box[0]
+    return result_box[0]
+
+
 class WindowsAdapter:
     def get_active_window(self) -> ActiveWindow:
         import win32gui
@@ -200,19 +264,22 @@ def _resolve_active_file_path(process_name: str, window_title: str, pid: int | N
     except Exception:
         logging.debug("active file path title parse failed", exc_info=True)
 
-    com_initialized = _ensure_com_initialized()
-    try:
-        for prog_id, expression in _com_candidates(process_name):
-            try:
-                path = _get_com_file_path(prog_id, expression)
-                if _is_valid_com_path(path, window_title):
-                    logging.debug("active file path resolved from com catalog")
-                    return split_file_path(path)[0]
-            except Exception:
-                logging.debug("active file path com lookup failed", exc_info=True)
-    finally:
-        if com_initialized:
-            _uninitialize_com()
+    for prog_id, expression in _com_candidates(process_name):
+        if not _is_com_available(prog_id):
+            continue
+        try:
+            path = _run_with_timeout(
+                _get_com_file_path_threadsafe, _COM_CALL_TIMEOUT_SECONDS,
+                prog_id, expression,
+            )
+            if _is_valid_com_path(path, window_title):
+                logging.debug("active file path resolved from com catalog")
+                return split_file_path(path)[0]
+        except TimeoutError:
+            _mark_com_failed(prog_id)
+            logging.debug("active file path com lookup timed out for %s", prog_id)
+        except Exception:
+            logging.debug("active file path com lookup failed", exc_info=True)
 
     fallback = _resolve_open_file_path(pid, window_title)
     if fallback:
@@ -258,6 +325,15 @@ def _get_com_file_path(prog_id: str, path_expression: str) -> str | None:
     return _normalize_com_file_path(value)
 
 
+def _get_com_file_path_threadsafe(prog_id: str, path_expression: str) -> str | None:
+    """COM call wrapper that initializes/cleans up COM on the calling thread."""
+    _ensure_com_initialized()
+    try:
+        return _get_com_file_path(prog_id, path_expression)
+    finally:
+        _uninitialize_com()
+
+
 def _evaluate_com_path_expression(app, path_expression: str):
     value = app
     for raw_step in path_expression.split("."):
@@ -299,14 +375,72 @@ def _resolve_open_file_path(pid: int | None, window_title: str | None) -> str | 
     title_file = extract_file_name_from_title(window_title) or extract_anchor_file_name(window_title)
     if not title_file:
         return None
-    import psutil
+    if not _is_open_files_available(pid):
+        return None
 
     try:
-        paths = [item.path for item in psutil.Process(pid).open_files()]
-    except (OSError, psutil.Error):
+        paths = _get_process_open_file_paths(pid)
+    except TimeoutError:
+        _mark_open_files_failed(pid)
+        logging.debug("active file path open-files lookup timed out")
+        return None
+    except Exception:
         logging.debug("active file path open-files lookup failed", exc_info=True)
         return None
     return _match_open_file_path(title_file, paths)
+
+
+def _get_process_open_file_paths(pid: int) -> list[str]:
+    if sys.platform.startswith("win"):
+        return _get_process_open_file_paths_subprocess(pid)
+
+    import psutil
+
+    return [item.path for item in psutil.Process(pid).open_files()]
+
+
+def _get_process_open_file_paths_subprocess(pid: int) -> list[str]:
+    if getattr(sys, "frozen", False):
+        logging.debug("active file path open-files lookup disabled in frozen executable")
+        return []
+
+    script = (
+        "import json, sys\n"
+        "import psutil\n"
+        "pid = int(sys.argv[1])\n"
+        "paths = [item.path for item in psutil.Process(pid).open_files()]\n"
+        "print(json.dumps(paths, ensure_ascii=False))\n"
+    )
+    startupinfo = None
+    creationflags = 0
+    if sys.platform.startswith("win"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(pid)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_OPEN_FILES_TIMEOUT_SECONDS,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"open-files helper timed out after {_OPEN_FILES_TIMEOUT_SECONDS:.1f}s") from exc
+
+    if completed.returncode != 0:
+        message = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(f"open-files helper failed: {message}")
+
+    raw = json.loads(completed.stdout or "[]")
+    if not isinstance(raw, list):
+        return []
+    return [str(path) for path in raw if str(path or "").strip()]
 
 
 def _match_open_file_path(title_file: str, paths: list[str]) -> str | None:

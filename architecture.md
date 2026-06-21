@@ -615,6 +615,8 @@ uncategorized
 
 Folder project rules require a known full file path or parent directory derived from the activity. A known full local file path is an anchor regardless of extension. A file name without a path must not create a suggested project name from the file stem. Parent-folder suggested project names are limited to the built-in low-risk document extensions; user folder and keyword rules are not extension-limited.
 
+The live current-activity snapshot must preview the same automatic inference priority without writing to history. Folder and keyword rules must be shown before parent-folder suggestions, so a file under a bound folder displays the project name immediately even before the 30-second persistence threshold.
+
 Context carry-over may classify any normal auxiliary non-anchor activity. It uses the nearest previous and next anchor file activities only; an uncategorized anchor or an interrupt status stops the scan. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same carry-over rules.
 
 ---
@@ -660,7 +662,7 @@ COM path catalog
 foreground process open_files()
 ```
 
-Full paths resolved by any source are stored as `file_path_hint` and may use any extension. The COM catalog is best-effort: use `GetActiveObject` only, filter built-in and user entries by registered ProgID, evaluate simple property / zero-argument method expressions, validate the result against the current window title, and silently fall back when lookup fails. The foreground `psutil` fallback must be attempted for any foreground process, not only Office/WPS, and must accept a path only when the title file name uniquely matches one open file basename.
+Full paths resolved by any source are stored as `file_path_hint` and may use any extension. The COM catalog is best-effort: use `GetActiveObject` only, filter built-in and user entries by registered ProgID, evaluate simple property / zero-argument method expressions, validate the result against the current window title, and silently fall back when lookup fails. The foreground `psutil` fallback must be attempted for any foreground process, not only Office/WPS, through a timeout-limited helper process. It must accept a path only when the title file name uniquely matches one open file basename, and a helper timeout must put that PID on a short cooldown so UI and collector threads cannot freeze on handle enumeration.
 
 The built-in COM catalog should cover Office/WPS document apps, Acrobat/Reader, AutoCAD, Photoshop, Illustrator, InDesign, CorelDRAW, and SOLIDWORKS. Users may append entries through `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json` with this shape:
 
@@ -1156,6 +1158,8 @@ get_uncategorized_duration(start_date: str, end_date: str) -> int
 `get_summary` returns `classified_duration` in addition to total, effective, idle, paused, excluded, and uncategorized durations.
 `get_summary` should ensure context assignments once for the requested range, then compute status totals with SQL aggregation and call project stats without repeating context recomputation.
 
+Per-date context recomputation should keep an in-memory fingerprint cache keyed by database path and date. If the relevant activity, assignment, project, folder-rule, keyword-rule, and context-setting fingerprint is unchanged, repeated Overview/Time Details/Statistics refreshes must skip the scan-and-write recomputation path.
+
 ### 23.6 recovery_service.py
 
 Required functions:
@@ -1437,7 +1441,7 @@ Rules:
 7. Display the current activity counter as `hh:mm:ss`.
 8. Persisted activity durations must be monotonic: live projections, `extra_seconds`, close operations, and recovery must never reduce an already stored duration.
 9. Update visible Overview KPI durations, Time Details session/detail durations, and Statistics durations every second from the current activity snapshot without requiring a full page refresh.
-10. While a new current activity is still below the 30-second history threshold, only the Overview recent-project row and Time Details project/session row temporarily carry those seconds on the previous confirmed project. The current-activity label, KPI summaries, Statistics, and activity details keep using the real current snapshot.
+10. While a new current activity is still below the 30-second history threshold, only the Overview recent-project row and Time Details project/session row temporarily carry those seconds on the previous confirmed project. The current-activity label, KPI summaries, Statistics, and activity details keep using the real current snapshot, and that snapshot must preview folder/keyword project rules before falling back to parent-folder suggestions.
 11. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized. Resize uses a stable content-area cover and can run one catch-up refresh before reveal. Restore uses a full-window cover, keeps the content tree mounted, reveals the complete UI first, then runs one delayed merged refresh.
 12. On Windows, rely on Tk `<Unmap>`, `<Map>`, and `<Configure>` events for minimize/restore handling. Native WndProc subclassing is disabled to avoid Python runtime/GIL crashes.
 
