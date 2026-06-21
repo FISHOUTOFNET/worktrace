@@ -7,7 +7,7 @@ import threading
 from . import config, db
 from .collector.collector import run_collector
 from .collector.single_instance import acquire_single_instance, release_single_instance
-from .services import activity_service, recovery_service
+from .services import activity_service, folder_index_service, recovery_service
 from .services.settings_service import set_setting
 from .ui.app import WorkTraceApp
 
@@ -44,6 +44,7 @@ def main() -> int:
 
     recovery_service.recover_unclosed_records()
     stop_event = threading.Event()
+    index_thread = folder_index_service.start_folder_index_worker(stop_event)
     collector_thread: threading.Thread | None = None
 
     def start_collector() -> None:
@@ -63,6 +64,8 @@ def main() -> int:
         app.mainloop()
     finally:
         stop_event.set()
+        if index_thread:
+            index_thread.join(timeout=5)
         if collector_thread:
             collector_thread.join(timeout=5)
         activity_service.close_current_open_record()

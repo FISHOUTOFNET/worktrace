@@ -113,8 +113,9 @@ def _context_fingerprint(start: str, end: str, carry_minutes: int) -> tuple:
         )
         project_sig = _table_update_signature(conn, "project")
         folder_rule_sig = _table_update_signature(conn, "folder_project_rule")
+        folder_index_sig = _table_update_signature(conn, "folder_rule_index_state")
         keyword_rule_sig = _table_update_signature(conn, "project_rule")
-    return (carry_minutes, activity_sig, assignment_sig, project_sig, folder_rule_sig, keyword_rule_sig)
+    return (carry_minutes, activity_sig, assignment_sig, project_sig, folder_rule_sig, folder_index_sig, keyword_rule_sig)
 
 
 def _ordered_concat(conn, sql: str, params: tuple = ()) -> str:

@@ -46,6 +46,8 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "resource" not in tables
     assert "project_rule" in tables
     assert "folder_project_rule" in tables
+    assert "folder_rule_index_state" in tables
+    assert "folder_rule_file_index" in tables
     assert "activity_project_assignment" in tables
     assert "manual_project_session" not in tables
     assert "manual_project_session_activity" not in tables
@@ -81,6 +83,8 @@ def test_reset_database_clears_current_schema_tables(temp_db):
     with db.get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_index_state").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_file_index").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 0
         activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
         project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project)").fetchall()}

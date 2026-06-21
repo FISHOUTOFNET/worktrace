@@ -73,9 +73,12 @@ def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: b
         ).fetchone()
     invalidate_folder_rule_cache()
     from .privacy_service import clear_exclude_rules_cache
+    from .folder_index_service import request_rebuild_for_rule
 
     clear_exclude_rules_cache()
-    return int(row["id"] if row else cur.lastrowid)
+    rule_id = int(row["id"] if row else cur.lastrowid)
+    request_rebuild_for_rule(rule_id)
+    return rule_id
 
 
 def delete_folder_rule(rule_id: int) -> None:
@@ -83,8 +86,10 @@ def delete_folder_rule(rule_id: int) -> None:
         conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))
     invalidate_folder_rule_cache()
     from .privacy_service import clear_exclude_rules_cache
+    from .folder_index_service import delete_index_for_rule
 
     clear_exclude_rules_cache()
+    delete_index_for_rule(rule_id)
 
 
 def set_folder_rule_enabled(rule_id: int, enabled: bool) -> None:
@@ -183,7 +188,7 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict:
         ).fetchall()
         activity_ids = []
         for row in rows:
-            if _activity_matches_folder(dict(row), rule["folder_path"], bool(rule["recursive"])):
+            if _activity_matches_folder(dict(row), rule["folder_path"], bool(rule["recursive"]), int(rule["id"])):
                 activity_ids.append(int(row["id"]))
 
         ts = now_str()
@@ -214,15 +219,23 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict:
     return {"updated_activity_count": len(activity_ids), "mode": mode}
 
 
-def _activity_matches_folder(activity: dict, folder_path: str, recursive: bool = True) -> bool:
+def _activity_matches_folder(activity: dict, folder_path: str, recursive: bool = True, rule_id: int | None = None) -> bool:
     identity = infer_identity_for_activity(activity)
     if not identity.is_anchor_file:
-        return False
+        if rule_id is None:
+            return False
+        from .folder_index_service import activity_matches_rule_by_index
+
+        return activity_matches_rule_by_index(activity, rule_id)
     full_path = identity.full_path or ""
     parent_dir = identity.parent_dir or ""
     if full_path:
         return is_path_under_folder(full_path, folder_path, recursive)
     if not parent_dir:
+        if rule_id is not None:
+            from .folder_index_service import activity_matches_rule_by_index
+
+            return activity_matches_rule_by_index(activity, rule_id)
         return False
     if normalize_folder_key(parent_dir) == normalize_folder_key(folder_path):
         return True

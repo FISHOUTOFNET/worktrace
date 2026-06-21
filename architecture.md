@@ -613,7 +613,7 @@ parent-folder suggested project name
 uncategorized
 ```
 
-Folder project rules require a known full file path or parent directory derived from the activity. A known full local file path is an anchor regardless of extension. A file name without a path must not create a suggested project name from the file stem. Parent-folder suggested project names are limited to the built-in low-risk document extensions; user folder and keyword rules are not extension-limited.
+Folder project rules prefer a known full file path or parent directory derived from the activity, but may fall back to the local folder-rule index when only a file name is visible. A known full local file path is an anchor regardless of extension. A file name without a path must not create a suggested project name from the file stem. Parent-folder suggested project names are limited to the built-in low-risk document extensions; user folder and keyword rules are not extension-limited. The folder-rule index stores file names and full paths for bound folders only, applies only after its `valid_from` time, and must not classify when the same title file name maps to different active projects.
 
 The live current-activity snapshot must preview the same automatic inference priority without writing to history. Folder and keyword rules must be shown before parent-folder suggestions, so a file under a bound folder displays the project name immediately even before the 30-second persistence threshold.
 
@@ -660,9 +660,10 @@ Windows active file path resolution order:
 window title full path
 COM path catalog
 foreground process open_files()
+folder-rule file index
 ```
 
-Full paths resolved by any source are stored as `file_path_hint` and may use any extension. The COM catalog is best-effort: use `GetActiveObject` only, filter built-in and user entries by registered ProgID, evaluate simple property / zero-argument method expressions, validate the result against the current window title, and silently fall back when lookup fails. The foreground `psutil` fallback must be attempted for any foreground process, not only Office/WPS, through a timeout-limited helper process. It must accept a path only when the title file name uniquely matches one open file basename, and a helper timeout must put that PID on a short cooldown so UI and collector threads cannot freeze on handle enumeration.
+Full paths resolved by any source are stored as `file_path_hint` and may use any extension. The COM catalog is best-effort: use `GetActiveObject` only, filter built-in and user entries by registered ProgID, evaluate simple property / zero-argument method expressions, validate the result against the current window title, and silently fall back when lookup fails. The foreground `psutil` fallback must be attempted for any foreground process, not only Office/WPS, through a timeout-limited helper process. It must accept a path only when the title file name uniquely matches one open file basename, and a helper timeout must put that PID on a short cooldown so UI and collector threads cannot freeze on handle enumeration. The folder-rule index is the final fallback and must also return a path only when the indexed basename is unambiguous.
 
 The built-in COM catalog should cover Office/WPS document apps, Acrobat/Reader, AutoCAD, Photoshop, Illustrator, InDesign, CorelDRAW, and SOLIDWORKS. Users may append entries through `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json` with this shape:
 

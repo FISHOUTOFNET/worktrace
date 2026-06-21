@@ -28,7 +28,7 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 命中排除规则的窗口只保存匿名时间块。  
 自动记录需由用户整理归类后再作为正式工时依据。
 
-WorkTrace records only the current application name, process name, window title, identifiable local file path, start time, end time, duration, status, project, and note. It does not read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, clipboard data, camera, or microphone data.
+WorkTrace records only the current application name, process name, window title, identifiable local file path, local folder-rule file-name/path indexes, start time, end time, duration, status, project, and note. It does not read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, clipboard data, camera, or microphone data.
 
 ## Portable Usage
 
@@ -67,11 +67,13 @@ Time Details no longer supports manual session splitting, merging same-name proj
 
 ## Project Classification
 
-Folder project rules require a recognizable full local file path. Any full local file path can be an anchor regardless of extension, so rules can match source code, CAD drawings, design files, images, PDFs, and Office documents. Keyword rules match activity app names, process names, window titles, and known local file paths. The special `排除规则` project supports folder and keyword rules, starts disabled with no default rules, and records matches anonymously as `已排除窗口` only after the user enables it. Disabled projects remain visible but no longer participate in automatic classification.
+Folder project rules prefer a recognizable full local file path, and WorkTrace also keeps a local file-name/path index for bound folders so title-only file windows can still match the correct rule. Any full local file path can be an anchor regardless of extension, and the folder index also covers all file extensions, so rules can match source code, CAD drawings, design files, images, PDFs, and Office documents. Keyword rules match activity app names, process names, window titles, and known local file paths. The special `排除规则` project supports folder and keyword rules, starts disabled with no default rules, and records matches anonymously as `已排除窗口` only after the user enables it. Disabled projects remain visible but no longer participate in automatic classification.
 
 If a file path is known but no folder or keyword rule matches, Time Details may show the parent folder name as a suggested project only for the built-in low-risk document extensions. Suggested names are display-only hints and are not inserted into the `project` table. User-created folder and keyword rules are not limited by that extension list.
 
-On Windows, the collector resolves active file paths in this order: full paths visible in the window title, a best-effort COM path catalog, then a timeout-limited helper process that calls `psutil.Process(pid).open_files()` for the foreground process. The open-files fallback is not limited to Office/WPS; it uses the file name visible in the title and accepts a result only when exactly one open file has that basename. If the helper times out, that PID is skipped briefly so a slow handle enumeration cannot freeze the UI.
+On Windows, the collector resolves active file paths in this order: full paths visible in the window title, a best-effort COM path catalog, a timeout-limited helper process that calls `psutil.Process(pid).open_files()` for the foreground process, then the local folder-rule index. The open-files and index fallbacks use the file name visible in the title and accept a path only when the result is unambiguous. If the helper times out, that PID is skipped briefly so a slow handle enumeration cannot freeze the UI.
+
+Folder indexes are local derived caches. They store file names and paths under user-bound folder rules, do not read file contents, and only affect activities after the index `valid_from` time. If the same title file name appears under different active projects, WorkTrace treats it as ambiguous and leaves the activity unclassified.
 
 The built-in COM catalog covers common Office/WPS apps, Acrobat, AutoCAD, Photoshop, Illustrator, InDesign, CorelDRAW, and SOLIDWORKS when their ProgIDs are registered locally. Advanced users may add entries in `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`; there is no UI for this file. Example:
 
@@ -125,7 +127,7 @@ The Settings page can clear all local data after this confirmation text:
 此操作将删除本机保存的所有工作轨迹、项目、规则和设置。删除后无法恢复。是否继续？
 ```
 
-Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, but no default exclusion keywords.
+Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, but no default exclusion keywords. The all-data export intentionally excludes folder index tables because they are derived caches that may contain many local file paths.
 
 ## Tests
 

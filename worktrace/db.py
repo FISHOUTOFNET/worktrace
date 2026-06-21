@@ -143,6 +143,8 @@ def reset_database() -> None:
 def drop_all_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
+        DROP TABLE IF EXISTS folder_rule_file_index;
+        DROP TABLE IF EXISTS folder_rule_index_state;
         DROP TABLE IF EXISTS activity_project_assignment;
         DROP TABLE IF EXISTS manual_project_session_activity;
         DROP TABLE IF EXISTS manual_project_session;

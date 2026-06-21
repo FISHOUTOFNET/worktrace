@@ -4,11 +4,11 @@ import ntpath
 import re
 import time
 
-from ..activity_identity import ActivityIdentity, infer_identity_for_activity
+from ..activity_identity import ActivityIdentity, extract_file_name_from_title, infer_identity_for_activity
 from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL
 from ..db import get_connection, get_db_path, now_str
 from ..path_utils import has_auto_project_extension
-from . import folder_rule_service
+from . import folder_index_service, folder_rule_service
 
 GENERIC_FILE_PROJECT_NAMES = {
     "desktop",
@@ -138,6 +138,14 @@ def process_new_activity(activity_id: int) -> dict:
 def _infer_project(conn, activity: dict, identity: ActivityIdentity) -> tuple[int, str, int, str | None]:
     if identity.full_path or identity.parent_dir:
         rule = folder_rule_service.find_matching_folder_rule(identity.full_path or identity.parent_dir or "")
+        if rule:
+            return int(rule["project_id"]), "folder_rule", 85, None
+    else:
+        file_name = identity.title_hint or extract_file_name_from_title(activity.get("window_title"))
+        rule = folder_index_service.find_matching_folder_rule_for_file_name(
+            file_name,
+            str(activity.get("start_time") or "") or None,
+        )
         if rule:
             return int(rule["project_id"]), "folder_rule", 85, None
 

@@ -61,6 +61,7 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     return (
         _matches_exclude_keyword(haystack)
         or _matches_exclude_folder(active_window.file_path_hint)
+        or _matches_indexed_exclude_folder(active_window.window_title)
     )
 
 
@@ -151,3 +152,15 @@ def _matches_exclude_folder(file_path_hint: str | None) -> bool:
         if folder and is_path_under_folder(target, folder, bool(row.get("recursive"))):
             return True
     return False
+
+
+def _matches_indexed_exclude_folder(window_title: str | None) -> bool:
+    if not (window_title or "").strip():
+        return False
+    try:
+        from .folder_index_service import resolve_unique_path_from_title
+
+        path = resolve_unique_path_from_title(window_title, include_excluded=True)
+    except Exception:
+        return False
+    return _matches_exclude_folder(path)

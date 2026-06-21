@@ -94,6 +94,8 @@ def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):
     assert Path(path).exists()
     wb = load_workbook(path)
     assert "folder_project_rule" in wb.sheetnames
+    assert "folder_rule_index_state" not in wb.sheetnames
+    assert "folder_rule_file_index" not in wb.sheetnames
     assert "resource" not in wb.sheetnames
     try:
         export_service.clear_all_local_data(confirm=False)

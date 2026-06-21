@@ -285,6 +285,10 @@ def _resolve_active_file_path(process_name: str, window_title: str, pid: int | N
     if fallback:
         logging.debug("active file path resolved from process open files")
         return fallback
+    indexed = _resolve_indexed_file_path(window_title)
+    if indexed:
+        logging.debug("active file path resolved from folder rule index")
+        return indexed
     return None
 
 
@@ -388,6 +392,16 @@ def _resolve_open_file_path(pid: int | None, window_title: str | None) -> str | 
         logging.debug("active file path open-files lookup failed", exc_info=True)
         return None
     return _match_open_file_path(title_file, paths)
+
+
+def _resolve_indexed_file_path(window_title: str | None) -> str | None:
+    try:
+        from ..services.folder_index_service import resolve_unique_path_from_title
+
+        return resolve_unique_path_from_title(window_title, include_excluded=True)
+    except Exception:
+        logging.debug("active file path folder index lookup failed", exc_info=True)
+        return None
 
 
 def _get_process_open_file_paths(pid: int) -> list[str]:

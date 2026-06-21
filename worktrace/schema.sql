@@ -62,6 +62,37 @@ CREATE TABLE IF NOT EXISTS folder_project_rule (
     FOREIGN KEY (project_id) REFERENCES project(id)
 );
 
+CREATE TABLE IF NOT EXISTS folder_rule_index_state (
+    folder_rule_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'indexing', 'ready', 'stale', 'error')
+    ),
+    valid_from TEXT,
+    last_indexed_at TEXT,
+    last_checked_at TEXT,
+    file_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    refresh_requested INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS folder_rule_file_index (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_rule_id INTEGER NOT NULL,
+    file_name TEXT NOT NULL,
+    normalized_file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    normalized_path_key TEXT NOT NULL,
+    mtime REAL,
+    size INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE,
+    UNIQUE(folder_rule_id, normalized_path_key)
+);
+
 CREATE TABLE IF NOT EXISTS project_rule (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
@@ -118,6 +149,18 @@ ON folder_project_rule(normalized_folder_key);
 
 CREATE INDEX IF NOT EXISTS idx_folder_project_rule_project
 ON folder_project_rule(project_id);
+
+CREATE INDEX IF NOT EXISTS idx_folder_rule_index_status
+ON folder_rule_index_state(status, refresh_requested);
+
+CREATE INDEX IF NOT EXISTS idx_folder_rule_file_index_name
+ON folder_rule_file_index(normalized_file_name);
+
+CREATE INDEX IF NOT EXISTS idx_folder_rule_file_index_rule_name
+ON folder_rule_file_index(folder_rule_id, normalized_file_name);
+
+CREATE INDEX IF NOT EXISTS idx_folder_rule_file_index_path
+ON folder_rule_file_index(normalized_path_key);
 
 CREATE INDEX IF NOT EXISTS idx_assignment_project
 ON activity_project_assignment(project_id);
