@@ -4,6 +4,8 @@ from tkinter import ttk
 
 import customtkinter as ctk
 
+from .copy_support import bind_copy_menu
+
 
 FONT_FAMILY = "Microsoft YaHei UI"
 FONT_BODY = (FONT_FAMILY, 13)
@@ -82,7 +84,9 @@ def label(master, text: str = "", variant: str = "body", **kwargs) -> ctk.CTkLab
     }
     kwargs.setdefault("font", fonts.get(variant, FONT_BODY))
     kwargs.setdefault("text_color", TEXT if variant not in {"caption", "mono"} else MUTED_TEXT)
-    return ctk.CTkLabel(master, text=text, **kwargs)
+    widget = ctk.CTkLabel(master, text=text, **kwargs)
+    bind_copy_menu(widget)
+    return widget
 
 
 def button(master, text: str, variant: str = "primary", **kwargs) -> ctk.CTkButton:
@@ -105,7 +109,9 @@ def button(master, text: str, variant: str = "primary", **kwargs) -> ctk.CTkButt
         kwargs.setdefault("fg_color", "transparent")
         kwargs.setdefault("hover_color", NEUTRAL_SOFT)
         kwargs.setdefault("text_color", TEXT)
-    return ctk.CTkButton(master, text=text, **kwargs)
+    widget = ctk.CTkButton(master, text=text, **kwargs)
+    bind_copy_menu(widget)
+    return widget
 
 
 def entry(master, **kwargs) -> ctk.CTkEntry:
@@ -128,7 +134,9 @@ def option_menu(master, **kwargs) -> ctk.CTkOptionMenu:
     kwargs.setdefault("dropdown_hover_color", ACCENT_SOFT)
     kwargs.setdefault("dropdown_text_color", TEXT)
     kwargs.setdefault("text_color", TEXT)
-    return ctk.CTkOptionMenu(master, **kwargs)
+    widget = ctk.CTkOptionMenu(master, **kwargs)
+    bind_copy_menu(widget)
+    return widget
 
 
 def checkbox(master, **kwargs) -> ctk.CTkCheckBox:
@@ -137,7 +145,9 @@ def checkbox(master, **kwargs) -> ctk.CTkCheckBox:
     kwargs.setdefault("fg_color", ACCENT)
     kwargs.setdefault("hover_color", ACCENT_HOVER)
     kwargs.setdefault("border_color", BORDER)
-    return ctk.CTkCheckBox(master, **kwargs)
+    widget = ctk.CTkCheckBox(master, **kwargs)
+    bind_copy_menu(widget)
+    return widget
 
 
 def segmented_button(master, **kwargs) -> ctk.CTkSegmentedButton:
@@ -151,7 +161,9 @@ def segmented_button(master, **kwargs) -> ctk.CTkSegmentedButton:
     kwargs.setdefault("unselected_hover_color", ("#cbd5e1", "#475569"))
     kwargs.setdefault("text_color", TEXT)
     kwargs.setdefault("text_color_disabled", MUTED_TEXT)
-    return ctk.CTkSegmentedButton(master, **kwargs)
+    widget = ctk.CTkSegmentedButton(master, **kwargs)
+    bind_copy_menu(widget)
+    return widget
 
 
 def color(value) -> str:

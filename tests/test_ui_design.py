@@ -29,6 +29,11 @@ def test_design_uses_gray_accent_instead_of_blue_buttons():
     assert 'kwargs.setdefault("text_color", TEXT)' in inspect.getsource(design.segmented_button)
 
 
+def test_design_widgets_bind_copy_menu():
+    for factory in (design.label, design.button, design.checkbox, design.option_menu, design.segmented_button):
+        assert "bind_copy_menu(widget)" in inspect.getsource(factory)
+
+
 def test_timeline_project_table_uses_project_heading_and_wider_time_column():
     source = inspect.getsource(TimelineView._build_session_table)
 

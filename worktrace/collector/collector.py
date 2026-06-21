@@ -58,9 +58,6 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
             idle_seconds = adapter.get_idle_seconds()
             idle_threshold = max(1, idle_threshold_seconds)
 
-            for event in clipboard_events:
-                machine.record_clipboard_event(event, at_time=now)
-
             if idle_seconds >= idle_threshold:
                 machine.transition_to("idle", at_time=now)
             elif privacy_service.is_excluded(active_window):

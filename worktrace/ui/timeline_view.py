@@ -21,6 +21,7 @@ from ..services.live_time_service import (
 )
 from ..services.settings_service import get_setting
 from . import design
+from .copy_support import bind_copy_menu, bind_tree_copy_menu
 from .date_range import DateRange, classify_range, current_week_range, previous_week_range, shift_range, today_range
 from .project_rule_dialog import open_project_rule_dialog
 
@@ -65,6 +66,9 @@ class TimelineView(ctk.CTkFrame):
         self._loading_editor = False
         self._session_project_dirty = False
         self._session_note_dirty = False
+        self._session_note_placeholder_active = False
+        self._session_note_loading = False
+        self._session_note_save_after_id: str | None = None
         self._tree_column_widths: dict[str, dict[str, int]] = {}
         self._tree_keys: dict[int, str] = {}
         self._pending_session_id: str | None = None
@@ -184,8 +188,21 @@ class TimelineView(ctk.CTkFrame):
         title_stack.grid(row=0, column=0, sticky="ew")
         self.detail_label = self._label(title_stack, text="请选择项目会话", font=design.FONT_SECTION)
         self.detail_label.pack(anchor="w")
-        self.detail_hint_label = self._label(title_stack, text="选择左侧会话后查看活动明细", text_color=design.MUTED_TEXT)
-        self.detail_hint_label.pack(anchor="w", pady=(2, 0))
+        self.session_note_text = self._textbox(
+            title_stack,
+            height=54,
+            font=UI_FONT,
+            wrap="word",
+            corner_radius=design.RADIUS_SM,
+            border_width=1,
+            border_color=design.BORDER,
+            fg_color=design.CARD_SUBTLE_BG,
+            text_color=design.color(design.MUTED_TEXT),
+        )
+        self.session_note_text.pack(anchor="w", fill="x", expand=True, pady=(5, 0))
+        self.session_note_text.bind("<FocusIn>", self._on_session_note_focus_in, add="+")
+        self.session_note_text.bind("<FocusOut>", self._on_session_note_focus_out, add="+")
+        self.session_note_text.bind("<KeyRelease>", lambda _event: self._mark_session_note_dirty(), add="+")
 
         actions = ctk.CTkFrame(header, fg_color="transparent")
         actions.grid(row=1, column=0, sticky="ew", pady=(8, 0))
@@ -213,36 +230,6 @@ class TimelineView(ctk.CTkFrame):
             text_color=design.TEXT,
         )
         self.session_rule_button.pack(side="left", padx=(0, 6))
-
-        self.session_note_frame = ctk.CTkFrame(header, fg_color=design.CARD_SUBTLE_BG, corner_radius=design.RADIUS_MD)
-        self.session_note_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        self.session_note_frame.grid_columnconfigure(0, weight=1)
-        note_header = ctk.CTkFrame(self.session_note_frame, fg_color="transparent")
-        note_header.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
-        note_header.grid_columnconfigure(0, weight=1)
-        self.session_note_label = self._label(note_header, text="项目备注", font=UI_FONT_BOLD)
-        self.session_note_label.grid(row=0, column=0, sticky="w")
-        self.save_session_note_button = self._button(
-            note_header,
-            text="保存备注",
-            width=86,
-            command=self._save_session_note,
-            fg_color=design.NEUTRAL_SOFT,
-            text_color=design.TEXT,
-        )
-        self.save_session_note_button.grid(row=0, column=1, sticky="e")
-        self.session_note_text = self._textbox(
-            self.session_note_frame,
-            height=58,
-            font=UI_FONT,
-            corner_radius=design.RADIUS_SM,
-            border_width=1,
-            border_color=design.BORDER,
-        )
-        self.session_note_text.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 4))
-        self.session_note_text.bind("<KeyRelease>", lambda _event: self._mark_session_note_dirty(), add="+")
-        self.session_note_hint_label = self._label(self.session_note_frame, text="", text_color=design.MUTED_TEXT)
-        self.session_note_hint_label.grid(row=2, column=0, sticky="w", padx=12, pady=(0, 10))
         self.detail_container = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
         self.detail_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.detail_container.grid_rowconfigure(0, weight=1)
@@ -350,6 +337,7 @@ class TimelineView(ctk.CTkFrame):
             widget.bind("<FocusIn>", self._on_control_activity, add="+")
 
     def refresh(self, ensure_context: bool = True) -> None:
+        self._flush_session_note_if_dirty()
         self._ensure_range_vars()
         self._current_snapshot = _read_current_activity_snapshot()
         self._current_signature = snapshot_signature(self._current_snapshot)
@@ -374,6 +362,7 @@ class TimelineView(ctk.CTkFrame):
         only_uncategorized: bool = False,
         selected_session_id: str | None = None,
     ) -> None:
+        self._flush_session_note_if_dirty()
         self._ensure_range_vars()
         self.start_var.set(target_date)
         self.end_var.set(target_date)
@@ -423,8 +412,6 @@ class TimelineView(ctk.CTkFrame):
             self._session_note_dirty = False
             self.session_project_var.set(UNCATEGORIZED_PROJECT)
             self.detail_label.configure(text="暂无项目会话")
-            if hasattr(self, "detail_hint_label"):
-                self.detail_hint_label.configure(text="调整日期或关闭筛选后再查看")
             self._load_session_note({})
             self._sync_details([])
         self._pending_session_id = None
@@ -447,10 +434,6 @@ class TimelineView(ctk.CTkFrame):
         self.detail_label.configure(
             text=f"{self._session_time(session)} | {format_project_label(session['project_name'], session.get('project_description'))}"
         )
-        if hasattr(self, "detail_hint_label"):
-            self.detail_hint_label.configure(
-                text=f"{format_duration(session['duration_seconds'])} | {session['event_count']} 条活动 | {session['status_summary']}"
-            )
         if not getattr(self, "_session_project_dirty", False):
             self.session_project_var.set(self._project_name_by_id.get(int(session["project_id"]), UNCATEGORIZED_PROJECT))
         self._load_session_note(session)
@@ -525,9 +508,7 @@ class TimelineView(ctk.CTkFrame):
         if not selection:
             return
         if self._session_note_dirty and selection[0] != self._selected_session_id:
-            self._select_tree_item(self.session_tree, self._selected_session_id)
-            self.session_note_hint_label.configure(text="项目备注未保存，请先保存后再切换项目")
-            return
+            self._flush_session_note_if_dirty()
         self._selected_session_id = selection[0]
         self._selected_activity_id = None
         self._session_project_dirty = False
@@ -554,34 +535,93 @@ class TimelineView(ctk.CTkFrame):
     def _load_session_note(self, session: dict) -> None:
         if not hasattr(self, "session_note_text") or getattr(self, "_session_note_dirty", False):
             return
-        self.session_note_text.delete("1.0", "end")
-        self.session_note_text.insert("1.0", session.get("session_note") or "")
-        if session:
-            self.session_note_hint_label.configure(text="用于记录这一段项目时间的个别说明")
+        if self._widget_has_focus(self.session_note_text) and not getattr(self, "_session_note_placeholder_active", False):
+            return
+        note = str(session.get("session_note") or "").strip()
+        if note:
+            self._set_session_note_text(note, placeholder=False)
         else:
-            self.session_note_hint_label.configure(text="")
+            self._set_session_note_text(self._session_note_placeholder(session), placeholder=True)
 
     def _mark_session_note_dirty(self) -> None:
+        if getattr(self, "_session_note_loading", False):
+            return
+        if getattr(self, "_session_note_placeholder_active", False):
+            return
         self._session_note_dirty = True
-        if hasattr(self, "session_note_hint_label"):
-            self.session_note_hint_label.configure(text="项目备注未保存")
+        self._schedule_session_note_save()
         self._on_control_activity()
 
     def _save_session_note(self) -> None:
+        self._flush_session_note_if_dirty(force=True)
+
+    def _flush_session_note_if_dirty(self, force: bool = False) -> None:
+        if not getattr(self, "_session_note_dirty", False) and not force:
+            return
+        self._cancel_session_note_save()
         session = self._sessions_by_id.get(self._selected_session_id or "")
         if not session:
+            self._session_note_dirty = False
             return
         report_date = str(session.get("report_date") or session.get("start_time") or "")[:10]
         first_activity_id = int(session.get("first_activity_id") or (session.get("activity_ids") or [0])[0] or 0)
         if not report_date or not first_activity_id:
-            self.session_note_hint_label.configure(text="当前项目无法保存备注")
             return
-        note = self.session_note_text.get("1.0", "end-1c")
+        note = self._current_session_note()
         timeline_service.update_session_note(report_date, first_activity_id, note)
         session["session_note"] = note.strip()
         self._session_note_dirty = False
-        self.session_note_hint_label.configure(text="项目备注已保存")
-        self.refresh(ensure_context=False)
+        if not note.strip() and not self._widget_has_focus(self.session_note_text):
+            self._set_session_note_text(self._session_note_placeholder(session), placeholder=True)
+
+    def _schedule_session_note_save(self) -> None:
+        self._cancel_session_note_save()
+        if hasattr(self, "after") and "tk" in self.__dict__:
+            self._session_note_save_after_id = self.after(700, self._flush_session_note_if_dirty)
+        else:
+            self._flush_session_note_if_dirty()
+
+    def _cancel_session_note_save(self) -> None:
+        after_id = getattr(self, "_session_note_save_after_id", None)
+        if after_id is not None and hasattr(self, "after_cancel"):
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        self._session_note_save_after_id = None
+
+    def _on_session_note_focus_in(self, _event=None) -> None:
+        if getattr(self, "_session_note_placeholder_active", False):
+            self._set_session_note_text("", placeholder=False)
+        self._on_control_activity()
+
+    def _on_session_note_focus_out(self, _event=None) -> None:
+        self._flush_session_note_if_dirty(force=True)
+        if not self._current_session_note().strip():
+            session = self._sessions_by_id.get(self._selected_session_id or "")
+            self._set_session_note_text(self._session_note_placeholder(session), placeholder=True)
+
+    def _set_session_note_text(self, text: str, placeholder: bool) -> None:
+        if not hasattr(self, "session_note_text"):
+            return
+        self._session_note_loading = True
+        try:
+            self.session_note_text.delete("1.0", "end")
+            self.session_note_text.insert("1.0", text)
+            self.session_note_text.configure(text_color=design.color(design.MUTED_TEXT if placeholder else design.TEXT))
+            self._session_note_placeholder_active = placeholder
+        finally:
+            self._session_note_loading = False
+
+    def _current_session_note(self) -> str:
+        if not hasattr(self, "session_note_text") or getattr(self, "_session_note_placeholder_active", False):
+            return ""
+        return self.session_note_text.get("1.0", "end-1c")
+
+    def _session_note_placeholder(self, session: dict | None) -> str:
+        if not session:
+            return "选择左侧会话后查看活动明细"
+        return f"{format_duration(session['duration_seconds'])} | {session['event_count']} 条活动 | {session['status_summary']}"
 
     def _save_session_project(self) -> None:
         session = self._sessions_by_id.get(self._selected_session_id or "")
@@ -846,7 +886,7 @@ class TimelineView(ctk.CTkFrame):
             f"日期范围：{self.start_var.get()} 至 {self.end_var.get()}",
             self.current_activity_label.cget("text"),
         ]
-        session_note = self.session_note_text.get("1.0", "end-1c") if hasattr(self, "session_note_text") else ""
+        session_note = self._current_session_note() if hasattr(self, "session_note_text") else ""
         if session_note.strip():
             lines.extend(["", f"当前项目备注：{session_note.strip()}"])
         lines.extend(["", "项目", *self._tree_rows_text(self.session_tree)])
@@ -1036,7 +1076,9 @@ class TimelineView(ctk.CTkFrame):
     def _label(self, master, **kwargs):
         kwargs.setdefault("font", UI_FONT)
         kwargs.setdefault("text_color", design.TEXT)
-        return ctk.CTkLabel(master, **kwargs)
+        widget = ctk.CTkLabel(master, **kwargs)
+        bind_copy_menu(widget)
+        return widget
 
     def _button(self, master, **kwargs):
         variant = kwargs.pop("variant", "primary")
@@ -1102,8 +1144,41 @@ class TimelineView(ctk.CTkFrame):
         vertical_scrollbar.grid(row=0, column=1, sticky="ns")
         horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
         tree.bind("<ButtonRelease-1>", lambda _event, target=tree: self._save_tree_column_widths(target), add="+")
+        bind_tree_copy_menu(
+            tree,
+            cell_getter=lambda row_id, column_id, target=tree: self._tree_cell_text(target, row_id, column_id),
+            row_getter=lambda row_id, target=tree: self._tree_row_text(target, row_id),
+            page_getter=self.copy_page_text,
+        )
         self._apply_tree_column_widths(tree)
         return tree
+
+    def _tree_cell_text(self, tree, row_id: str, column_id: str) -> str:
+        values = self._tree_row_values(tree, row_id)
+        if not values:
+            return ""
+        try:
+            index = int(str(column_id).lstrip("#")) - 1
+        except ValueError:
+            return ""
+        if index < 0 or index >= len(values):
+            return ""
+        return str(values[index])
+
+    def _tree_row_text(self, tree, row_id: str) -> str:
+        values = self._tree_row_values(tree, row_id)
+        return "\t".join(str(value) for value in values)
+
+    def _tree_row_values(self, tree, row_id: str) -> tuple[str, ...]:
+        if not row_id:
+            return ()
+        values = self._tree_values.get(f"{id(tree)}:{row_id}")
+        if values is not None:
+            return tuple(str(value) for value in values)
+        try:
+            return tuple(str(value) for value in tree.item(row_id).get("values") or ())
+        except Exception:
+            return ()
 
     def _configure_tree_style(self) -> None:
         design.configure_tree_style(self)
@@ -1186,6 +1261,7 @@ class TimelineView(ctk.CTkFrame):
         self._set_visible_range(shifted)
 
     def _set_visible_range(self, date_range: DateRange) -> None:
+        self._flush_session_note_if_dirty()
         self.start_var.set(date_range.start)
         self.end_var.set(date_range.end)
         self._session_project_dirty = False
@@ -1303,8 +1379,12 @@ class _MemoryTextbox:
         self.master = master
         self._text = ""
         self._mapped = False
+        self.config = {}
 
     def grid(self, *args, **kwargs):
+        self._mapped = True
+
+    def pack(self, *args, **kwargs):
         self._mapped = True
 
     def grid_remove(self):
@@ -1322,8 +1402,11 @@ class _MemoryTextbox:
     def get(self, *_args):
         return self._text
 
-    def configure(self, **_kwargs):
-        return None
+    def configure(self, **kwargs):
+        self.config.update(kwargs)
+
+    def cget(self, key):
+        return self.config.get(key, "")
 
 
 def _current_elapsed_seconds(snapshot: dict) -> int:

@@ -188,10 +188,11 @@ def _find_duplicate_event(
             SELECT id
             FROM activity_clipboard_event
             WHERE clipboard_sequence = ?
+              AND activity_id = ?
             ORDER BY id DESC
             LIMIT 1
             """,
-            (sequence_number,),
+            (sequence_number, activity_id),
         ).fetchone()
         if row:
             return int(row["id"])

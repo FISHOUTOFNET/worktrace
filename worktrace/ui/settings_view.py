@@ -77,6 +77,7 @@ class SettingsView(ctk.CTkFrame):
             privacy,
             text="记录复制文字（默认关闭）",
             variable=self.clipboard_capture_var,
+            command=self.save_clipboard_capture,
         ).grid(row=2, column=0, sticky="w", padx=18, pady=(0, 16))
 
         danger = design.card(self.scroll)
@@ -118,9 +119,11 @@ class SettingsView(ctk.CTkFrame):
     def save(self) -> None:
         for key, entry in self.entries.items():
             set_setting(key, entry.get())
-        set_setting("clipboard_capture_enabled", "true" if self.clipboard_capture_var.get() else "false")
         self.refresh()
         messagebox.showinfo("已保存", "设置已保存")
+
+    def save_clipboard_capture(self) -> None:
+        set_setting("clipboard_capture_enabled", "true" if self.clipboard_capture_var.get() else "false")
 
     def choose_export_path(self) -> None:
         folder = filedialog.askdirectory(title="选择导出目录")

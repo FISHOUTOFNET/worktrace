@@ -61,7 +61,6 @@ Do not add:
 * AI
 * cloud sync
 * login or account system
-* tray app
 * installer
 * browser extension
 * OCR
@@ -112,6 +111,7 @@ Implement:
 21. Local data export.
 22. First-run privacy notice.
 23. Local logging.
+24. Windows notification-area tray lifecycle.
 
 ### 3.2 Out of Scope
 
@@ -131,12 +131,11 @@ Do not implement:
 12. Word export.
 13. client / project / task three-level hierarchy.
 14. complex rule priority system.
-15. tray app.
-16. auto-start on boot.
-17. installer.
-18. background Windows service.
-19. driver.
-20. admin privilege request.
+15. auto-start on boot.
+16. installer.
+17. background Windows service.
+18. driver.
+19. admin privilege request.
 
 ---
 
@@ -227,17 +226,27 @@ Collector thread communicates state through:
 3. in-memory stop event.
 4. in-memory pause/resume state if needed.
 
-### 5.3 Shutdown Rules
+### 5.3 Window, Tray, And Shutdown Rules
+
+On Windows, the UI owns a notification-area tray icon:
+
+1. A color tray icon means collection is running.
+2. A monochrome tray icon means collection is paused, stopped, or in error.
+3. Closing the main window hides it; it does not stop collection.
+4. The tray menu must provide show, pause/resume, and exit actions.
+5. If tray initialization fails, the app must not hide the window and may keep the legacy close-to-exit behavior.
 
 On app exit:
 
-1. UI sets `collector_stop_event`.
-2. Collector loop exits cleanly.
-3. Collector closes current open activity record.
-4. Collector writes `collector_status = stopped`.
-5. Collector writes `last_shutdown_at = current local timestamp`.
-6. Single-instance lock is released.
-7. UI exits.
+1. User chooses exit from the tray menu, or the app exits through the no-tray fallback path.
+2. UI removes the tray icon.
+3. UI sets `collector_stop_event`.
+4. Collector loop exits cleanly.
+5. Collector closes current open activity record.
+6. Collector writes `collector_status = stopped`.
+7. Collector writes `last_shutdown_at = current local timestamp`.
+8. Single-instance lock is released.
+9. UI exits.
 
 If graceful shutdown fails, recovery logic must handle unclosed records on next startup.
 
@@ -1211,6 +1220,8 @@ Use 5 pages:
 The collector thread must not directly update UI widgets. UI must refresh via Tkinter `after()` polling.
 Pages are created lazily on first visit, then stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels and visible durations are refreshed by the app shell every 1 second without rebuilding page content. Time Details must use value-only Treeview updates while session/detail structure is stable, falling back to one full refresh when rows are added, removed, or reordered. Resize and restore use separate visual-suspend strategies: resize may temporarily unmap the content area under a content cover, while restore keeps content mounted under a full-window cover and defers heavy refresh until after reveal.
 
+Displayed UI text must be copyable. Labels, buttons, checkboxes, option menus, and segmented controls provide right-click copy menus for their visible text. Text fields and text boxes keep native copy behavior. Time Details tables provide right-click copy for the current cell, current row, and current page text; global `Ctrl+C` copies selected table rows before falling back to the active page text.
+
 Default refresh interval:
 
 ```text
@@ -1244,6 +1255,7 @@ Must show:
 8. delete action
 9. filters for uncategorized records
 10. current activity with a live `hh:mm:ss` counter
+11. project-session note editor in the selected session summary area
 
 The page exposes `open_context(target_date, only_uncategorized=False, selected_session_id=None)` so other pages can open it with a date, filter, and selected session.
 
@@ -1252,6 +1264,8 @@ Time Details must not expose manual session splitting, same-name project segment
 The detail activity table is the only activity-level view. File identity is derived from each activity at runtime from app name, process name, window title, and file path hint; the UI must not expose a separate persisted-file view or a per-file default binding.
 
 The detail activity project selector must list selectable projects only. It must not add current session rows or other session targets, because that reintroduces cross-session merge behavior and can create large menus on busy days.
+
+Project-session notes are edited in the same visual position as the generated session summary. Empty notes show the generated summary as muted placeholder text. User-entered text uses the normal text color and saves automatically after editing, on focus loss, and before session/date changes. The UI must not expose a separate project-note section or a visible save-note button.
 
 Columns:
 
@@ -1300,7 +1314,10 @@ Must show:
 
 1. export path
 2. view first-run notice
-3. clear all local data
+3. clipboard text recording toggle
+4. clear all local data
+
+Changing the clipboard text recording toggle must persist `clipboard_capture_enabled` immediately, so periodic settings refreshes cannot revert an unsaved checkbox state.
 
 The Settings and Privacy page must not show the removed `关于本地数据` section, including database path, log path, collector heartbeat, or version details.
 
@@ -1519,7 +1536,8 @@ The app is acceptable if:
 26. It recovers unclosed records.
 27. It prevents multiple collectors.
 28. UI remains responsive while collector runs.
-29. App exits cleanly and closes current open record.
+29. Closing the window hides to tray when tray is available.
+30. App exits cleanly from the tray menu and closes current open record.
 
 ### 29.2 Privacy Acceptance
 

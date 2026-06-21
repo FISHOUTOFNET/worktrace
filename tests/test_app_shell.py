@@ -65,6 +65,35 @@ class FakeCopyPage(FakePage):
         return "page summary"
 
 
+class FakeEvent:
+    def __init__(self):
+        self.set_calls = 0
+
+    def set(self):
+        self.set_calls += 1
+
+
+class FakeTray:
+    def __init__(self, actions=None):
+        self.actions = list(actions or [])
+        self.updates = []
+        self.stopped = 0
+
+    def start(self):
+        return True
+
+    def stop(self):
+        self.stopped += 1
+
+    def drain_actions(self):
+        actions = list(self.actions)
+        self.actions = []
+        return actions
+
+    def update_state(self, *args):
+        self.updates.append(args)
+
+
 def _app_stub():
     app = object.__new__(WorkTraceApp)
     app.pages = {"overview": FakePage(), "timeline": FakePage()}
@@ -73,6 +102,10 @@ def _app_stub():
     app.collector_started = True
     app.start_collector_callback = lambda: None
     app._sync_sidebar_status = lambda: None
+    app._tray = None
+    app._tray_enabled = False
+    app._tray_after_id = None
+    app._exiting = False
     return app
 
 
@@ -333,6 +366,78 @@ def test_shell_native_hook_is_disabled_without_subclassing_window():
     assert app._native_window_hook_installed is False
     assert app._native_window_handle is None
     assert app._native_old_wndproc is None
+
+
+def test_shell_close_hides_window_when_tray_is_available():
+    app = _app_stub()
+    app._tray_enabled = True
+    calls = []
+    app.withdraw = lambda: calls.append("withdraw")
+    app.destroy = lambda: calls.append("destroy")
+
+    WorkTraceApp.on_close(app)
+
+    assert calls == ["withdraw"]
+    assert app._exiting is False
+
+
+def test_shell_tray_exit_stops_tray_and_destroys_window():
+    app = _app_stub()
+    tray = FakeTray()
+    stop_event = FakeEvent()
+    calls = []
+    app._tray = tray
+    app._tray_enabled = True
+    app.stop_event = stop_event
+    app._restore_native_window_hook = lambda: calls.append("restore_hook")
+    app.destroy = lambda: calls.append("destroy")
+
+    WorkTraceApp.exit_from_tray(app)
+
+    assert tray.stopped == 1
+    assert stop_event.set_calls == 1
+    assert calls == ["restore_hook", "destroy"]
+    assert app._exiting is True
+
+
+def test_shell_close_exits_normally_when_tray_is_unavailable():
+    app = _app_stub()
+    stop_event = FakeEvent()
+    calls = []
+    app.stop_event = stop_event
+    app._restore_native_window_hook = lambda: calls.append("restore_hook")
+    app.destroy = lambda: calls.append("destroy")
+
+    WorkTraceApp.on_close(app)
+
+    assert stop_event.set_calls == 1
+    assert calls == ["restore_hook", "destroy"]
+
+
+def test_shell_tray_status_tracks_recording_and_paused(temp_db):
+    app = _app_stub()
+    tray = FakeTray()
+    app._tray = tray
+    settings_service.set_setting("collector_status", "running")
+    settings_service.set_setting("user_paused", "false")
+
+    WorkTraceApp._sync_tray_status(app)
+
+    settings_service.set_setting("user_paused", "true")
+    WorkTraceApp._sync_tray_status(app)
+
+    assert tray.updates[0] == ("记录中", True, False)
+    assert tray.updates[1] == ("已暂停", False, True)
+
+
+def test_shell_tray_initialization_failure_leaves_tray_disabled(monkeypatch):
+    app = _app_stub()
+    monkeypatch.setattr("worktrace.ui.app.create_tray_controller", lambda: type("BrokenTray", (), {"start": lambda self: False})())
+
+    WorkTraceApp._initialize_tray(app)
+
+    assert app._tray is None
+    assert app._tray_enabled is False
 
 
 def test_shell_toggle_pause_updates_setting(temp_db):

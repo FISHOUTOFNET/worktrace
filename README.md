@@ -5,6 +5,7 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 ## Core Features
 
 - CustomTkinter desktop UI with Overview, Time Details, Statistics/Export, Project Rules, and Settings/Privacy pages.
+- Windows notification-area tray icon; closing the window keeps WorkTrace running, and exit is available from the tray menu.
 - SQLite local storage at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
 - Background collector thread using pywin32/psutil on Windows.
 - Idle, paused, excluded, normal, and error activity states.
@@ -47,6 +48,8 @@ python -m worktrace.main
 
 The first launch shows the privacy notice. The collector starts only after the notice is accepted.
 
+Closing the main window hides WorkTrace to the Windows notification area. Use the tray icon right-click menu to show the window, pause or resume recording, or exit WorkTrace cleanly.
+
 ## Local Paths
 
 - Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`
@@ -62,9 +65,11 @@ WorkTrace keeps the startup path small by creating only the Overview page at lau
 
 Heavy optional dependencies are loaded only when needed: `openpyxl` is imported during Excel export, and Windows process inspection dependencies are imported only when the real Windows adapter reads the foreground window. Shared duration formatting lives in `worktrace.formatters` so UI modules do not load export modules just to format `hh:mm:ss` values.
 
+Displayed UI text supports copying through right-click copy menus. Time Details tables also support right-click copying for the current cell, row, or page text, while `Ctrl+C` keeps copying selected table rows before falling back to the current page summary.
+
 The default full-page data refresh interval is 10 seconds. A lightweight 1-second tick updates the current-activity label plus visible Overview, Time Details, and Statistics durations, including the current activity before it is persisted to history, so active records grow smoothly between full refreshes. The current-activity label previews automatic project inference immediately: folder rules and keyword rules win before parent-folder suggestions, even while the activity is still under the 30-second history threshold. During that threshold window, only the Overview recent-project row and the Time Details project/session row temporarily continue the previous confirmed project counter; the current-activity label, KPIs, Statistics, and activity details keep using the real snapshot. Time Details uses value-only Treeview updates on that tick when the table structure is unchanged, and falls back to one full refresh only when sessions or details are added, removed, or reordered. Heavy refreshes are suspended during window resize/minimize/restore. Resize uses a content-area cover and can catch up before revealing; restore keeps the content tree mounted under a full-window cover, reveals the complete UI first, then merges delayed refresh work after the window is stable. On Windows, WorkTrace relies on Tk window events for minimize/restore handling and keeps native WndProc subclassing disabled for Python runtime stability.
 
-Time Details no longer supports manual session splitting, merging same-name project segments, or moving an activity into another session. Project corrections operate on the selected project session or selected detail activity only. The detail table is the only activity-level view; file identity is derived from the activity's app, process, window title, and file path hint at runtime.
+Time Details no longer supports manual session splitting, merging same-name project segments, or moving an activity into another session. Project corrections operate on the selected project session or selected detail activity only. The detail table is the only activity-level view; file identity is derived from the activity's app, process, window title, and file path hint at runtime. Project-session notes live in the selected session summary area: an empty note shows the generated summary as light placeholder text, and user text is saved automatically without a separate save button.
 
 ## Project Classification
 
@@ -110,6 +115,8 @@ The collector writes `collector_status` and `last_collector_heartbeat` into the 
 - `采集器未运行` when stopped
 - `状态异常` on collector errors
 
+The tray icon mirrors the same state: color means WorkTrace is recording, while the monochrome icon means recording is paused, stopped, or in an error state.
+
 ## Abnormal Recovery
 
 If the app exits unexpectedly, startup recovery closes any `activity_log` rows where `end_time IS NULL`. It uses the last heartbeat when available; otherwise it closes at startup time and marks the row as `error` for review. Recovered rows that cross midnight are split into calendar-day records.
@@ -122,7 +129,7 @@ WorkTrace prevents multiple collectors from writing to the same database. On Win
 
 The Project Rules page shows project binding summaries and manages file rules, folder rules, keyword rules, project edits, project enable/disable state, and the special `排除规则`. The top-right `新增项目` action opens project creation by default; each project card has its own `新增规则` action that opens rule creation preselected for that project.
 
-The Settings page can clear all local data after this confirmation text:
+The Settings page saves the clipboard text recording toggle immediately when it is changed. It can also clear all local data after this confirmation text:
 
 ```text
 此操作将删除本机保存的所有工作轨迹、项目、规则和设置。删除后无法恢复。是否继续？
@@ -142,7 +149,7 @@ Tests use `worktrace.platforms.fake_adapter.FakeAdapter`.
 
 ## Uninstall
 
-Close WorkTrace, then delete:
+Exit WorkTrace from the notification-area tray menu, then delete:
 
 ```text
 %LOCALAPPDATA%\WorkTrace
@@ -154,6 +161,6 @@ Also remove the project folder or packaged executable if you no longer need it.
 ## Current Limitations
 
 - Windows is the intended production platform; non-Windows runs use the fake adapter.
-- No tray app, installer, service, driver, cloud sync, login, AI, OCR, screenshots, screen recording, or automatic startup.
+- No installer, service, driver, cloud sync, login, AI, OCR, screenshots, screen recording, or automatic startup.
 - Date inputs are plain `YYYY-MM-DD` text fields in v0.1 Lite.
 - Time Details uses plain text date fields in `YYYY-MM-DD` format.

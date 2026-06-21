@@ -3,6 +3,7 @@ import json
 from worktrace.constants import UNCATEGORIZED_PROJECT
 from worktrace.services import activity_service, project_service, settings_service, timeline_service
 from worktrace.services.live_time_service import snapshot_signature
+from worktrace.ui import design
 from worktrace.ui.timeline_view import TimelineView
 
 
@@ -173,6 +174,7 @@ def _view_stub():
     view.activity_editor = view.adjustment_editor
     view.note_text = FakeWidget()
     view.note_label = FakeWidget()
+    view.session_note_text = FakeWidget()
     view.activity_editor_label = FakeWidget()
     view._project_by_name = {}
     view._project_name_by_id = {}
@@ -182,6 +184,11 @@ def _view_stub():
     view._active_adjustment = None
     view._editor_dirty = False
     view._loading_editor = False
+    view._session_note_dirty = False
+    view._session_note_placeholder_active = False
+    view._session_note_loading = False
+    view._session_note_save_after_id = None
+    view.focus_get = lambda: None
     return view
 
 
@@ -189,7 +196,7 @@ def _live_view_stub():
     view = _view_stub()
     view.current_activity_label = FakeWidget()
     view.detail_label = FakeWidget()
-    view.detail_hint_label = FakeWidget()
+    view.session_note_text = FakeWidget()
     view.session_count_label = FakeWidget()
     view.session_tree = FakeTree()
     view.detail_tree = FakeTree()
@@ -206,10 +213,15 @@ def _live_view_stub():
     view._selected_session_id = "1-1"
     view._selected_activity_id = None
     view._session_project_dirty = False
+    view._session_note_dirty = False
+    view._session_note_placeholder_active = False
+    view._session_note_loading = False
+    view._session_note_save_after_id = None
     view._project_name_by_id = {1: "Client"}
     view.is_user_interacting = lambda: False
     view._valid_range = lambda show_message=True: True
     view.after_idle = lambda func, *args: func(*args)
+    view.focus_get = lambda: None
     return view
 
 
@@ -304,6 +316,9 @@ def test_detail_area_builds_activity_detail_table_only(monkeypatch):
     assert created_trees[0][1] == ("time", "app", "window", "duration", "project", "note")
     assert "resource" not in created_trees[0][1]
     assert not hasattr(view, "resource_tree")
+    assert hasattr(view, "session_note_text")
+    assert not hasattr(view, "save_session_note_button")
+    assert not hasattr(view, "session_note_frame")
 
 
 def test_adjustment_editor_has_activity_controls_only(monkeypatch):
@@ -484,6 +499,84 @@ def test_sync_details_hides_editor_when_selected_activity_disappears():
     assert hidden == [False]
 
 
+def test_session_note_empty_value_uses_summary_placeholder():
+    view = _live_view_stub()
+    session = {
+        "duration_seconds": 300,
+        "event_count": 2,
+        "status_summary": "Spec.docx",
+        "session_note": "",
+    }
+
+    TimelineView._load_session_note(view, session)
+
+    assert view.session_note_text.text == "00:05:00 | 2 条活动 | Spec.docx"
+    assert view.session_note_text.config["text_color"] == design.color(design.MUTED_TEXT)
+    assert view._session_note_placeholder_active is True
+    assert TimelineView._current_session_note(view) == ""
+
+
+def test_session_note_user_text_uses_primary_text_color():
+    view = _live_view_stub()
+
+    TimelineView._load_session_note(view, {"session_note": "follow up"})
+
+    assert view.session_note_text.text == "follow up"
+    assert view.session_note_text.config["text_color"] == design.color(design.TEXT)
+    assert view._session_note_placeholder_active is False
+
+
+def test_session_note_flush_persists_current_text(monkeypatch):
+    view = _live_view_stub()
+    view._selected_session_id = "1-1"
+    view._sessions_by_id = {
+        "1-1": {
+            "session_id": "1-1",
+            "report_date": "2026-06-18",
+            "first_activity_id": 11,
+            "activity_ids": [11],
+            "duration_seconds": 300,
+            "event_count": 1,
+            "status_summary": "Spec.docx",
+        }
+    }
+    view.session_note_text.insert("1.0", "client note")
+    view._session_note_dirty = True
+    saved = []
+    monkeypatch.setattr(timeline_service, "update_session_note", lambda *args: saved.append(args))
+
+    TimelineView._flush_session_note_if_dirty(view)
+
+    assert saved == [("2026-06-18", 11, "client note")]
+    assert view._sessions_by_id["1-1"]["session_note"] == "client note"
+    assert view._session_note_dirty is False
+
+
+def test_session_select_flushes_dirty_note_before_switch(monkeypatch):
+    view = _live_view_stub()
+    view._selected_session_id = "old"
+    view._session_note_dirty = True
+    view.session_tree.selected = ["new"]
+    calls = []
+    monkeypatch.setattr(TimelineView, "_flush_session_note_if_dirty", lambda self: calls.append(self._selected_session_id))
+    monkeypatch.setattr(TimelineView, "_refresh_selected_session", lambda self: None)
+
+    TimelineView._on_session_select(view)
+
+    assert calls == ["old"]
+    assert view._selected_session_id == "new"
+
+
+def test_tree_copy_text_helpers_return_cell_and_row_values():
+    view = object.__new__(TimelineView)
+    tree = FakeTree(columns=("time", "summary"))
+    view._tree_values = {}
+    _seed_tree(view, tree, [("1", ("09:00-09:30", "Spec.docx"))])
+
+    assert TimelineView._tree_cell_text(view, tree, "1", "#2") == "Spec.docx"
+    assert TimelineView._tree_row_text(view, tree, "1") == "09:00-09:30\tSpec.docx"
+
+
 def test_current_activity_text_uses_activity_display_name(temp_db):
     settings_service.set_setting(
         "current_activity_snapshot",
@@ -645,7 +738,8 @@ def test_timeline_session_carries_unconfirmed_activity_without_detail_updates(te
     carried_session = {**session, "duration_seconds": 312}
     assert view.current_activity_label.config["text"] == "当前活动：B.docx｜Other｜00:00:12｜暂不入历史"
     assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, carried_session))]
-    assert view.detail_hint_label.config["text"] == "00:05:12 | 1 条活动 | A.docx"
+    assert view.session_note_text.text == "00:05:12 | 1 条活动 | A.docx"
+    assert view.session_note_text.config["text_color"] == design.color(design.MUTED_TEXT)
     assert view.detail_tree.item_calls == []
 
 

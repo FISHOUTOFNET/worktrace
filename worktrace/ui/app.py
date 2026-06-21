@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import tkinter as tk
@@ -11,6 +12,7 @@ from ..services import timeline_service
 from ..services.settings_service import get_bool_setting, get_int_setting, get_setting, set_setting
 from . import design
 from .first_run_dialog import FirstRunDialog
+from .tray import create_tray_controller
 
 
 WM_SIZE = 0x0005
@@ -55,6 +57,10 @@ class WorkTraceApp(ctk.CTk):
         self._native_old_wndproc = None
         self._native_wndproc = None
         self._native_win32gui = None
+        self._tray = None
+        self._tray_enabled = False
+        self._tray_after_id: str | None = None
+        self._exiting = False
 
         self.title("有迹 WorkTrace")
         self.geometry("1240x780")
@@ -71,6 +77,7 @@ class WorkTraceApp(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         self._build_shell()
+        self._initialize_tray()
 
         self.after(200, self._startup_privacy_gate)
         self.after(500, self.refresh_current_tab)
@@ -223,6 +230,53 @@ class WorkTraceApp(ctk.CTk):
         if not self.collector_started:
             self.collector_started = True
             self.start_collector_callback()
+
+    def _initialize_tray(self) -> None:
+        try:
+            tray = create_tray_controller()
+            if tray is None or not tray.start():
+                self._tray = None
+                self._tray_enabled = False
+                return
+            self._tray = tray
+            self._tray_enabled = True
+            self._sync_tray_status()
+            self._schedule_tray_action_drain()
+        except Exception:
+            self._tray = None
+            self._tray_enabled = False
+            logging.exception("tray initialization failed")
+
+    def _schedule_tray_action_drain(self) -> None:
+        if not self.__dict__.get("_tray_enabled", False) or self.__dict__.get("_exiting", False):
+            return
+        if "tk" in self.__dict__ and hasattr(self, "after"):
+            self._tray_after_id = self.after(250, self._drain_tray_actions)
+
+    def _drain_tray_actions(self) -> None:
+        self._tray_after_id = None
+        tray = self.__dict__.get("_tray")
+        if tray is None or self.__dict__.get("_exiting", False):
+            return
+        for action in tray.drain_actions():
+            if action == "show":
+                self.show_from_tray()
+            elif action == "toggle":
+                self.toggle_pause()
+            elif action == "exit":
+                self.exit_from_tray()
+                return
+        self._schedule_tray_action_drain()
+
+    def show_from_tray(self) -> None:
+        for method_name in ("deiconify", "lift", "focus_force"):
+            method = getattr(self, method_name, None)
+            if method is None:
+                continue
+            try:
+                method()
+            except Exception:
+                pass
 
     def show_page(self, key: str) -> None:
         if key not in self.pages and key not in getattr(self, "_page_factories", {}):
@@ -654,6 +708,21 @@ class WorkTraceApp(ctk.CTk):
                 text_color=design.TEXT,
             )
             self.sidebar_status_hint.configure(text="已暂停" if paused else "数据仅保存在本机")
+        self._sync_tray_status(status_text=status, raw_status=raw_status, paused=paused)
+
+    def _sync_tray_status(
+        self,
+        status_text: str | None = None,
+        raw_status: str | None = None,
+        paused: bool | None = None,
+    ) -> None:
+        tray = self.__dict__.get("_tray")
+        if tray is None:
+            return
+        raw = raw_status if raw_status is not None else get_setting("collector_status", "stopped")
+        is_paused = paused if paused is not None else get_bool_setting("user_paused", False) or raw == "paused"
+        text = status_text or self._status_text()
+        tray.update_state(text, raw == "running" and not is_paused, bool(is_paused))
 
     def _status_text(self) -> str:
         status = get_setting("collector_status", "stopped")
@@ -715,6 +784,32 @@ class WorkTraceApp(ctk.CTk):
         return "entry" in class_name or "text" in class_name
 
     def on_close(self) -> None:
+        if self.__dict__.get("_tray_enabled", False) and not self.__dict__.get("_exiting", False):
+            try:
+                self.withdraw()
+            except Exception:
+                pass
+            return
+        self.exit_from_tray()
+
+    def exit_from_tray(self) -> None:
+        if self.__dict__.get("_exiting", False):
+            return
+        self._exiting = True
+        after_id = self.__dict__.get("_tray_after_id")
+        if after_id is not None and hasattr(self, "after_cancel"):
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        tray = self.__dict__.get("_tray")
+        self._tray = None
+        self._tray_enabled = False
+        if tray is not None:
+            try:
+                tray.stop()
+            except Exception:
+                logging.exception("failed to stop tray")
         self._restore_native_window_hook()
         self.stop_event.set()
         self.destroy()
