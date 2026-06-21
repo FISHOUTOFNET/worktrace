@@ -14,8 +14,8 @@ from ..constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
-from ..db import dict_rows, get_connection, now_str
-from ..resource_patterns import extract_anchor_file_name
+from ..activity_identity import attach_activity_identity, extract_anchor_file_name
+from ..db import dict_rows, get_connection
 from . import folder_rule_service, session_boundary_service
 from .activity_service import update_activities_project
 from .context_service import recompute_context_assignments_for_date
@@ -78,54 +78,6 @@ def get_default_report_date(today: date_type | None = None) -> str:
     return (today or date_type.today()).isoformat()
 
 
-def get_session_resource_summary(
-    activity_ids: list[int],
-    report_date: str | None = None,
-    ensure_context: bool = True,
-) -> list[dict]:
-    if not activity_ids:
-        return []
-    rows = _load_session_rows(activity_ids, report_date=report_date, ensure_context=ensure_context)
-    groups: dict[str, dict] = {}
-    for row in rows:
-        resource_id = int(row["resource_id"] or 0)
-        if not resource_id:
-            continue
-        summary_id = _resource_summary_id(row)
-        display_name = _resource_summary_name(row)
-        group = groups.setdefault(
-            summary_id,
-            {
-                "summary_id": summary_id,
-                "resource_id": resource_id,
-                "resource_key": row.get("canonical_key") or "",
-                "resource_role": row.get("resource_role") or "auxiliary",
-                "resource_type": row.get("resource_type") or "unknown",
-                "display_name": display_name,
-                "app_name": row.get("resource_app_name") or row.get("app_name") or "",
-                "process_name": row.get("resource_process_name") or row.get("process_name") or "",
-                "full_path": row.get("resource_full_path") or row.get("full_path") or "",
-                "parent_dir": row.get("resource_parent_dir") or row.get("parent_dir") or "",
-                "total_duration_seconds": 0,
-                "activity_ids": [],
-                "event_count": 0,
-                "project_id": row.get("effective_project_id"),
-                "project_name": row.get("display_project_name") or UNCATEGORIZED_PROJECT,
-                "project_description": row.get("display_project_description") or "",
-                "official_project_name": row.get("effective_project_name") or UNCATEGORIZED_PROJECT,
-                "is_suggested_project": bool(row.get("is_suggested_project")),
-                "can_remember_for_future": row.get("resource_role") == "anchor",
-            },
-        )
-        group["total_duration_seconds"] += _display_duration(row)
-        group["activity_ids"].append(int(row["id"]))
-        group["event_count"] += 1
-    return sorted(
-        groups.values(),
-        key=lambda item: (-int(item["total_duration_seconds"]), str(item["display_name"]).casefold()),
-    )
-
-
 def get_session_activity_details(
     activity_ids: list[int],
     report_date: str | None = None,
@@ -140,7 +92,7 @@ def get_session_activity_details(
         item["project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
         item["project_description"] = row.get("display_project_description") or ""
         item["official_project_name"] = row.get("effective_project_name") or UNCATEGORIZED_PROJECT
-        item["resource_display_name"] = row.get("resource_display_name") or row.get("app_name") or "未知资源"
+        item["activity_display_name"] = row.get("activity_display_name") or row.get("app_name") or "未知活动"
         details.append(item)
     return details
 
@@ -152,22 +104,21 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
     with get_connection() as conn:
         rows = conn.execute(
             f"""
-            SELECT DISTINCT r.parent_dir, r.full_path
+            SELECT *
             FROM activity_log a
-            JOIN resource r ON r.id = a.resource_id
             WHERE a.id IN ({placeholders})
               AND a.is_deleted = 0
-              AND r.resource_role = 'anchor'
-              AND r.resource_type = 'file'
-            ORDER BY r.parent_dir COLLATE NOCASE, r.full_path COLLATE NOCASE
+            ORDER BY a.start_time, a.id
             """,
             activity_ids,
         ).fetchall()
     folders = []
-    for row in rows:
-        folder = (row["parent_dir"] or "").strip()
-        if not folder and row["full_path"]:
-            folder = str(row["full_path"]).rsplit("\\", 1)[0]
+    for row in [attach_activity_identity(item) for item in dict_rows(rows)]:
+        if not row.get("is_anchor_file"):
+            continue
+        folder = (row.get("anchor_parent_dir") or "").strip()
+        if not folder and row.get("anchor_full_path"):
+            folder = str(row["anchor_full_path"]).rsplit("\\", 1)[0]
         if folder and folder not in folders:
             folders.append(folder)
     return folders
@@ -180,81 +131,48 @@ def update_session_project(session_activity_ids: list[int], project_id: int) -> 
 def update_activity_group_project(
     activity_ids: list[int],
     project_id: int,
-    remember_resource_id: int | None = None,
 ) -> None:
     ids = [int(activity_id) for activity_id in activity_ids]
     if not ids:
         return
-    with get_connection() as conn:
-        if remember_resource_id is not None:
-            resource = conn.execute("SELECT * FROM resource WHERE id = ?", (remember_resource_id,)).fetchone()
-            if not resource:
-                raise ValueError(f"resource not found: {remember_resource_id}")
-            if resource["resource_role"] != "anchor":
-                raise ValueError("auxiliary resources cannot be remembered for future")
     update_activities_project(ids, project_id, manual=True)
-    if remember_resource_id is None:
-        return
-    with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE resource
-            SET default_project_id = ?, updated_at = ?
-            WHERE id = ? AND resource_role = 'anchor'
-            """,
-            (project_id, now_str(), remember_resource_id),
-        )
 
 
 def preview_session_project_update(session_activity_ids: list[int], project_id: int) -> dict:
     if not session_activity_ids:
         return {
-            "file_project_conflicts": [],
             "folder_rule_conflicts": [],
             "unassigned_anchor_files": [],
         }
     if int(project_id) == int(get_or_create_uncategorized_project()):
         return {
-            "file_project_conflicts": [],
             "folder_rule_conflicts": [],
             "unassigned_anchor_files": [],
         }
     placeholders = ",".join("?" for _ in session_activity_ids)
     with get_connection() as conn:
-        rows = dict_rows(
-            conn.execute(
-                f"""
-                SELECT DISTINCT
-                    r.id AS resource_id,
-                    r.display_name,
-                    r.full_path,
-                    r.parent_dir,
-                    r.default_project_id,
-                    p.name AS default_project_name
-                FROM activity_log a
-                JOIN resource r ON r.id = a.resource_id
-                LEFT JOIN project p ON p.id = r.default_project_id
-                WHERE a.id IN ({placeholders})
-                  AND a.is_deleted = 0
-                  AND r.resource_role = 'anchor'
-                  AND r.resource_type = 'file'
-                ORDER BY r.display_name COLLATE NOCASE, r.id
-                """,
-                session_activity_ids,
-            ).fetchall()
-        )
+        rows = [
+            attach_activity_identity(row)
+            for row in dict_rows(
+                conn.execute(
+                    f"""
+                    SELECT a.*
+                    FROM activity_log a
+                    WHERE a.id IN ({placeholders})
+                      AND a.is_deleted = 0
+                    ORDER BY a.start_time, a.id
+                    """,
+                    session_activity_ids,
+                ).fetchall()
+            )
+        ]
 
-    file_project_conflicts = []
     folder_rule_conflicts = []
     unassigned_anchor_files = []
     for row in rows:
-        default_project_id = row.get("default_project_id")
-        if default_project_id and int(default_project_id) != int(project_id):
-            file_project_conflicts.append(_anchor_preview_item(row, row.get("default_project_name")))
+        if not row.get("is_anchor_file"):
             continue
-        if default_project_id:
-            continue
-        target_path = row.get("full_path") or row.get("parent_dir") or ""
+        target_path = row.get("anchor_full_path") or row.get("anchor_parent_dir") or ""
         rule = folder_rule_service.find_matching_folder_rule(target_path)
         if rule:
             if int(rule["project_id"]) != int(project_id):
@@ -262,7 +180,6 @@ def preview_session_project_update(session_activity_ids: list[int], project_id: 
             continue
         unassigned_anchor_files.append(_anchor_preview_item(row, None))
     return {
-        "file_project_conflicts": file_project_conflicts,
         "folder_rule_conflicts": folder_rule_conflicts,
         "unassigned_anchor_files": unassigned_anchor_files,
     }
@@ -279,14 +196,6 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
             """
             SELECT
                 a.*,
-                r.canonical_key,
-                r.display_name AS resource_display_name,
-                r.resource_role,
-                r.resource_type,
-                r.app_name AS resource_app_name,
-                r.process_name AS resource_process_name,
-                r.full_path AS resource_full_path,
-                r.parent_dir AS resource_parent_dir,
                 apa.suggested_project_name,
                 apa.source AS assignment_source,
                 apa.is_manual AS assignment_is_manual,
@@ -294,7 +203,6 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
                 p.name AS effective_project_name,
                 p.description AS effective_project_description
             FROM activity_log a
-            LEFT JOIN resource r ON r.id = a.resource_id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
             WHERE a.is_deleted = 0
@@ -305,7 +213,7 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
             """,
             (load_start, load_start, load_end, int(include_hidden)),
         ).fetchall()
-    return dict_rows(rows)
+    return [attach_activity_identity(row) for row in dict_rows(rows)]
 
 
 def _load_session_rows(
@@ -334,14 +242,6 @@ def _load_session_rows(
             f"""
             SELECT
                 a.*,
-                r.canonical_key,
-                r.resource_role,
-                r.resource_type,
-                r.display_name AS resource_display_name,
-                r.app_name AS resource_app_name,
-                r.process_name AS resource_process_name,
-                r.full_path AS resource_full_path,
-                r.parent_dir AS resource_parent_dir,
                 apa.suggested_project_name,
                 apa.source AS assignment_source,
                 apa.is_manual AS assignment_is_manual,
@@ -349,7 +249,6 @@ def _load_session_rows(
                 p.name AS effective_project_name,
                 p.description AS effective_project_description
             FROM activity_log a
-            LEFT JOIN resource r ON r.id = a.resource_id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
             WHERE a.id IN ({placeholders})
@@ -357,7 +256,10 @@ def _load_session_rows(
             """,
             activity_ids,
         ).fetchall()
-    return _with_display_projects(dict_rows(rows), get_or_create_uncategorized_project())
+    return _with_display_projects(
+        [attach_activity_identity(row) for row in dict_rows(rows)],
+        get_or_create_uncategorized_project(),
+    )
 
 
 def _can_merge(previous: dict, current: dict) -> bool:
@@ -516,7 +418,7 @@ def _find_short_context_merge(rows: list[dict], anchor_index: int, carry_minutes
 def _is_project_anchor(row: dict) -> bool:
     return (
         row.get("status") == STATUS_NORMAL
-        and (row.get("resource_role") == "anchor" or row.get("assignment_source") == "midnight_anchor")
+        and (row.get("is_anchor_file") or row.get("assignment_source") == "midnight_anchor")
         and (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
     )
 
@@ -597,31 +499,12 @@ def _attach_display_project(row: dict, uncategorized_id: int) -> None:
     row["is_suggested_project"] = False
 
 
-def _resource_summary_id(row: dict) -> str:
-    resource_id = int(row.get("resource_id") or 0)
-    if row.get("resource_role") == "anchor":
-        return f"resource:{resource_id}"
-    app = str(row.get("resource_app_name") or row.get("app_name") or "").casefold()
-    process = str(row.get("resource_process_name") or row.get("process_name") or "").casefold()
-    name = _resource_summary_name(row).casefold()
-    return f"activity:{resource_id}:{app}:{process}:{name}"
-
-
-def _resource_summary_name(row: dict) -> str:
-    if row.get("resource_role") == "anchor":
-        return str(row.get("resource_display_name") or row.get("app_name") or "未知资源").strip()
-    title = " ".join(str(row.get("window_title") or "").split())
-    if title:
-        return title
-    return str(row.get("resource_display_name") or row.get("app_name") or "未知资源").strip()
-
-
 def _anchor_preview_item(row: dict, current_project_name: str | None) -> dict:
     return {
-        "resource_id": int(row["resource_id"]),
-        "display_name": row.get("display_name") or "未知文件",
-        "full_path": row.get("full_path") or "",
-        "parent_dir": row.get("parent_dir") or "",
+        "activity_id": int(row["id"]),
+        "display_name": row.get("activity_display_name") or "未知文件",
+        "full_path": row.get("anchor_full_path") or "",
+        "parent_dir": row.get("anchor_parent_dir") or "",
         "current_project_name": current_project_name or "",
     }
 
@@ -659,9 +542,9 @@ def _status_summary(rows: list[dict]) -> str:
 
 
 def _activity_summary_label(row: dict) -> str:
-    resource_name = str(row.get("resource_display_name") or "").strip()
-    if row.get("resource_role") == "anchor" and resource_name:
-        return resource_name
+    activity_name = str(row.get("activity_display_name") or "").strip()
+    if row.get("is_anchor_file") and activity_name:
+        return activity_name
     title_file = extract_anchor_file_name(row.get("window_title"))
     if title_file:
         return title_file

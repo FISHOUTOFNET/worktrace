@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS
+from ..activity_identity import infer_identity_for_activity
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import (
     is_path_under_folder,
@@ -127,50 +128,27 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
         activity_rows = dict_rows(conn.execute(
             """
             SELECT
-                a.id,
-                a.manual_override,
+                a.*,
                 COALESCE(apa.project_id, a.project_id) AS effective_project_id,
-                COALESCE(apa.is_manual, 0) AS is_manual,
-                r.full_path,
-                r.parent_dir
+                COALESCE(apa.is_manual, 0) AS is_manual
             FROM activity_log a
-            JOIN resource r ON r.id = a.resource_id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             WHERE a.is_deleted = 0
-              AND r.resource_role = 'anchor'
-              AND r.resource_type = 'file'
             """
         ).fetchall())
 
         rules = dict_rows(conn.execute("SELECT * FROM folder_project_rule").fetchall())
-        resources = dict_rows(
-            conn.execute(
-                """
-                SELECT id, default_project_id, full_path, parent_dir
-                FROM resource
-                WHERE resource_role = 'anchor' AND resource_type = 'file'
-                """
-            ).fetchall()
-        )
     child_count = sum(
         1
         for rule in rules
         if int(rule["project_id"]) != int(project_id)
         and is_path_under_folder(rule["folder_path"], folder, recursive=True)
     )
-    file_default_count = sum(
-        1
-        for resource in resources
-        if resource.get("default_project_id")
-        and int(resource["default_project_id"]) != int(project_id)
-        and _resource_matches_folder(resource, folder)
-    )
     matching_activities = [
-        row for row in activity_rows if _resource_matches_folder(row, folder)
+        row for row in activity_rows if _activity_matches_folder(row, folder)
     ]
     return {
         "child_folder_rule_conflicts": child_count,
-        "file_default_project_conflicts": file_default_count,
         "other_project_activity_count": sum(
             1
             for row in matching_activities
@@ -195,28 +173,17 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict:
             raise ValueError(f"folder rule not found: {rule_id}")
         rows = conn.execute(
             """
-            SELECT a.id
+            SELECT a.*
             FROM activity_log a
-            JOIN resource r ON r.id = a.resource_id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             WHERE a.is_deleted = 0
               AND a.manual_override = 0
               AND COALESCE(apa.is_manual, 0) = 0
-              AND r.resource_role = 'anchor'
-              AND r.resource_type = 'file'
             """
         ).fetchall()
         activity_ids = []
         for row in rows:
-            resource = conn.execute(
-                """
-                SELECT full_path, parent_dir
-                FROM resource
-                WHERE id = (SELECT resource_id FROM activity_log WHERE id = ?)
-                """,
-                (row["id"],),
-            ).fetchone()
-            if resource and _resource_matches_folder(dict(resource), rule["folder_path"], bool(rule["recursive"])):
+            if _activity_matches_folder(dict(row), rule["folder_path"], bool(rule["recursive"])):
                 activity_ids.append(int(row["id"]))
 
         ts = now_str()
@@ -247,9 +214,12 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict:
     return {"updated_activity_count": len(activity_ids), "mode": mode}
 
 
-def _resource_matches_folder(resource: dict, folder_path: str, recursive: bool = True) -> bool:
-    full_path = resource.get("full_path") or ""
-    parent_dir = resource.get("parent_dir") or ""
+def _activity_matches_folder(activity: dict, folder_path: str, recursive: bool = True) -> bool:
+    identity = infer_identity_for_activity(activity)
+    if not identity.is_anchor_file:
+        return False
+    full_path = identity.full_path or ""
+    parent_dir = identity.parent_dir or ""
     if full_path:
         return is_path_under_folder(full_path, folder_path, recursive)
     if not parent_dir:

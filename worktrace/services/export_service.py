@@ -41,7 +41,6 @@ def export_all_local_data(path: str) -> str:
             "activity_log",
             "activity_project_assignment",
             "project",
-            "resource",
             "folder_project_rule",
             "project_rule",
             "settings",

@@ -14,11 +14,10 @@ _FILE_RE = re.compile(
 
 
 @dataclass(frozen=True)
-class ResourceIdentity:
-    resource_role: str
-    resource_type: str
+class ActivityIdentity:
+    is_anchor_file: bool
     display_name: str
-    canonical_key: str
+    identity_key: str
     app_name: str | None = None
     process_name: str | None = None
     title_hint: str | None = None
@@ -27,12 +26,12 @@ class ResourceIdentity:
     file_stem: str | None = None
 
 
-def infer_resource_identity(
+def infer_activity_identity(
     app_name: str | None,
     process_name: str | None,
     window_title: str | None,
     file_path_hint: str | None = None,
-) -> ResourceIdentity:
+) -> ActivityIdentity:
     app = (app_name or "").strip()
     process = (process_name or "").strip()
     title = (window_title or "").strip()
@@ -42,11 +41,10 @@ def infer_resource_identity(
     if full_path_candidate:
         full_path, parent_dir, file_stem = split_file_path(full_path_candidate)
         file_name = full_path.rsplit("\\", 1)[-1]
-        return ResourceIdentity(
-            resource_role="anchor",
-            resource_type="file",
+        return ActivityIdentity(
+            is_anchor_file=True,
             display_name=file_name,
-            canonical_key=f"file_path:{normalize_path_key(full_path)}",
+            identity_key=f"file_path:{normalize_path_key(full_path)}",
             app_name=app or None,
             process_name=process or None,
             title_hint=file_name,
@@ -57,11 +55,10 @@ def infer_resource_identity(
 
     file_name = extract_anchor_file_name(title)
     if file_name:
-        return ResourceIdentity(
-            resource_role="anchor",
-            resource_type="file",
+        return ActivityIdentity(
+            is_anchor_file=True,
             display_name=file_name,
-            canonical_key=f"file:{normalize_file_name(file_name)}",
+            identity_key=f"file:{normalize_file_name(file_name)}",
             app_name=app or None,
             process_name=process or None,
             title_hint=file_name,
@@ -71,15 +68,36 @@ def infer_resource_identity(
     display = app or process or "未知应用"
     key_parts = [part for part in (app, process) if part]
     key_base = "|".join(key_parts) if key_parts else "unknown"
-    return ResourceIdentity(
-        resource_role="auxiliary",
-        resource_type="app",
+    return ActivityIdentity(
+        is_anchor_file=False,
         display_name=display,
-        canonical_key=f"app:{_slug(key_base)}",
+        identity_key=f"app:{_slug(key_base)}",
         app_name=app or None,
         process_name=process or None,
         title_hint=None,
     )
+
+
+def infer_identity_for_activity(activity: dict) -> ActivityIdentity:
+    return infer_activity_identity(
+        activity.get("app_name"),
+        activity.get("process_name"),
+        activity.get("window_title"),
+        activity.get("file_path_hint"),
+    )
+
+
+def attach_activity_identity(row: dict) -> dict:
+    item = dict(row)
+    identity = infer_identity_for_activity(item)
+    item["activity_display_name"] = identity.display_name
+    item["activity_identity_key"] = identity.identity_key
+    item["is_anchor_file"] = identity.is_anchor_file
+    item["anchor_full_path"] = identity.full_path or ""
+    item["anchor_parent_dir"] = identity.parent_dir or ""
+    item["anchor_file_stem"] = identity.file_stem or ""
+    item["anchor_title_hint"] = identity.title_hint or ""
+    return item
 
 
 def extract_anchor_file_name(window_title: str | None) -> str | None:

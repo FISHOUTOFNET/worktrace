@@ -11,7 +11,7 @@ from ..path_utils import (
     normalize_path_key,
     split_file_path,
 )
-from ..resource_patterns import extract_anchor_file_name
+from ..activity_identity import extract_anchor_file_name
 from .base import ActiveWindow
 
 

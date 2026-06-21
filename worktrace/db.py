@@ -66,75 +66,12 @@ def initialize_database(path: str | Path | None = None) -> None:
 
 
 def migrate_schema(conn: sqlite3.Connection) -> None:
-    _migrate_assignment_source_check(conn)
     _drop_manual_project_session_schema(conn)
 
 
 def _drop_manual_project_session_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS manual_project_session_activity")
     conn.execute("DROP TABLE IF EXISTS manual_project_session")
-
-
-def _migrate_assignment_source_check(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_project_assignment'"
-    ).fetchone()
-    table_sql = str(row["sql"] if row else "")
-    if "midnight_anchor" in table_sql:
-        return
-    conn.execute("ALTER TABLE activity_project_assignment RENAME TO activity_project_assignment_old")
-    conn.execute(
-        """
-        CREATE TABLE activity_project_assignment (
-            activity_id INTEGER PRIMARY KEY,
-            project_id INTEGER,
-            confidence INTEGER NOT NULL DEFAULT 0,
-            source TEXT NOT NULL CHECK (
-                source IN (
-                    'manual',
-                    'anchor_resource_default',
-                    'anchor_keyword',
-                    'anchor_context',
-                    'folder_rule',
-                    'midnight_anchor',
-                    'suggested_project_name',
-                    'uncategorized'
-                )
-            ),
-            is_manual INTEGER NOT NULL DEFAULT 0,
-            suggested_project_name TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (activity_id) REFERENCES activity_log(id),
-            FOREIGN KEY (project_id) REFERENCES project(id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO activity_project_assignment(
-            activity_id, project_id, confidence, source, is_manual,
-            suggested_project_name, created_at, updated_at
-        )
-        SELECT
-            activity_id, project_id, confidence, source, is_manual,
-            suggested_project_name, created_at, updated_at
-        FROM activity_project_assignment_old
-        """
-    )
-    conn.execute("DROP TABLE activity_project_assignment_old")
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_assignment_project
-        ON activity_project_assignment(project_id)
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_assignment_source_manual
-        ON activity_project_assignment(source, is_manual)
-        """
-    )
 
 
 def seed_defaults(conn: sqlite3.Connection) -> None:
@@ -213,7 +150,6 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS session_boundary;
         DROP TABLE IF EXISTS folder_project_rule;
         DROP TABLE IF EXISTS project_rule;
-        DROP TABLE IF EXISTS resource;
         DROP TABLE IF EXISTS project;
         DROP TABLE IF EXISTS settings;
         """

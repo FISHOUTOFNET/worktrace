@@ -459,7 +459,7 @@ def _snapshot_signature(snapshot: dict | None) -> tuple | None:
 def current_activity_text_from_snapshot(snapshot: dict | None) -> str:
     if not snapshot:
         return "当前活动：无"
-    name = snapshot.get("resource_display_name") or snapshot.get("app_name") or snapshot.get("process_name") or "未知"
+    name = snapshot.get("activity_display_name") or snapshot.get("app_name") or snapshot.get("process_name") or "未知"
     project = snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT
     elapsed = format_current_duration(_current_elapsed_seconds(snapshot))
     state = "已进入历史" if snapshot.get("is_persisted") else "暂不入历史"

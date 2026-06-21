@@ -1,5 +1,5 @@
 from worktrace.constants import ANCHOR_FILE_EXTENSIONS
-from worktrace import path_utils, resource_patterns
+from worktrace import activity_identity, path_utils
 from worktrace.path_utils import (
     extract_file_path_from_title,
     is_path_under_folder,
@@ -10,7 +10,7 @@ from worktrace.path_utils import (
 
 
 def test_anchor_extensions_are_shared():
-    assert resource_patterns.ANCHOR_FILE_EXTENSIONS is ANCHOR_FILE_EXTENSIONS
+    assert activity_identity.ANCHOR_FILE_EXTENSIONS is ANCHOR_FILE_EXTENSIONS
     assert path_utils.ANCHOR_FILE_EXTENSIONS is ANCHOR_FILE_EXTENSIONS
 
 

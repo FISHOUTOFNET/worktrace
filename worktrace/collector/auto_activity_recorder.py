@@ -16,8 +16,8 @@ from ..constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
+from ..activity_identity import infer_activity_identity
 from ..path_utils import normalize_path_key
-from ..resource_patterns import infer_resource_identity
 from ..services import activity_service, project_service, session_boundary_service
 from ..services.settings_service import get_setting, set_setting
 
@@ -240,7 +240,7 @@ class AutoActivityRecorder:
             self.clear_snapshot()
             return
         elapsed = _seconds_between(self.current_start_time, at_time)
-        identity = infer_resource_identity(
+        identity = infer_activity_identity(
             self.current_payload.get("app_name"),
             self.current_payload.get("process_name"),
             self.current_payload.get("window_title"),
@@ -251,7 +251,7 @@ class AutoActivityRecorder:
             "process_name": self.current_payload.get("process_name") or "",
             "window_title": self.current_payload.get("window_title") or "",
             "file_path_hint": self.current_payload.get("file_path_hint"),
-            "resource_display_name": identity.display_name,
+            "activity_display_name": identity.display_name,
             "inferred_project_name": _snapshot_project_name(identity),
             "status": self.current_payload.get("status") or STATUS_NORMAL,
             "start_time": self.current_start_time,
@@ -274,16 +274,8 @@ def _activity_signature(activity: dict) -> tuple[str, str, str, str, str]:
 
 
 def _snapshot_project_name(identity) -> str:
-    if identity.resource_role != "anchor" or identity.resource_type != "file":
+    if not identity.is_anchor_file:
         return UNCATEGORIZED_PROJECT
-    from ..services.project_inference_service import candidate_project_name_for_file_resource
+    from ..services.project_inference_service import candidate_project_name_for_file_activity
 
-    return candidate_project_name_for_file_resource(
-        {
-            "parent_dir": identity.parent_dir,
-            "file_stem": identity.file_stem,
-            "display_name": identity.display_name,
-            "resource_role": identity.resource_role,
-            "resource_type": identity.resource_type,
-        }
-    ) or UNCATEGORIZED_PROJECT
+    return candidate_project_name_for_file_activity(identity) or UNCATEGORIZED_PROJECT

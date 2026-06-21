@@ -51,7 +51,7 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
             "时长",
             "状态",
             "应用",
-            "资源/文件",
+            "活动",
             "窗口标题",
             "项目",
             "备注",

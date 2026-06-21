@@ -39,7 +39,7 @@ def test_overview_current_activity_text_uses_snapshot_duration(temp_db):
         "current_activity_snapshot",
         json.dumps(
             {
-                "resource_display_name": "Spec.docx",
+                "activity_display_name": "Spec.docx",
                 "app_name": "Word",
                 "process_name": "word.exe",
                 "inferred_project_name": "Client",
@@ -77,7 +77,7 @@ def test_overview_open_timeline_passes_filter_and_session_context():
 
 def test_overview_same_current_activity_ticks_without_full_refresh(temp_db):
     snapshot = {
-        "resource_display_name": "Spec.docx",
+        "activity_display_name": "Spec.docx",
         "inferred_project_name": "Client",
         "status": "normal",
         "start_time": "2026-06-18 09:00:00",
@@ -100,7 +100,7 @@ def test_overview_same_current_activity_ticks_without_full_refresh(temp_db):
 
 def test_overview_live_tick_updates_kpis_without_statistics_query(temp_db, monkeypatch):
     snapshot = {
-        "resource_display_name": "Spec.docx",
+        "activity_display_name": "Spec.docx",
         "inferred_project_name": "Client",
         "status": "normal",
         "start_time": "",
@@ -134,7 +134,7 @@ def test_overview_live_tick_updates_kpis_without_statistics_query(temp_db, monke
 
 def test_overview_recent_project_carries_unconfirmed_activity_without_changing_current_label(temp_db):
     confirmed = {
-        "resource_display_name": "A.docx",
+        "activity_display_name": "A.docx",
         "inferred_project_name": "Client",
         "status": "normal",
         "start_time": "",
@@ -143,7 +143,7 @@ def test_overview_recent_project_carries_unconfirmed_activity_without_changing_c
         "persisted_activity_id": 1,
     }
     transient = {
-        "resource_display_name": "B.docx",
+        "activity_display_name": "B.docx",
         "inferred_project_name": "Other",
         "status": "normal",
         "start_time": "2026-06-18 09:05:00",

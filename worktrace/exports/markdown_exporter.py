@@ -22,9 +22,9 @@ def _activity_line(row: dict) -> str:
     end = row["end_time"] or ""
     time_range = f"{start[11:16]}-{end[11:16] if end else ''}"
     project = row.get("project_name") or "未归类"
-    resource = activity_service.activity_display_name(row)
+    activity_name = activity_service.activity_display_name(row)
     title = row.get("window_title") or ""
-    activity_text = resource if not title or title == resource else f"{resource}｜{title}"
+    activity_text = activity_name if not title or title == activity_name else f"{activity_name}｜{title}"
     note = row.get("note") or ""
     note_text = f"；备注：{note}" if note else ""
     return (

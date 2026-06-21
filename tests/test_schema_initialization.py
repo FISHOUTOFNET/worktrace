@@ -9,7 +9,6 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
         activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
-        resource_columns = {row["name"] for row in conn.execute("PRAGMA table_info(resource)").fetchall()}
         project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project)").fetchall()}
         assignment_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(activity_project_assignment)").fetchall()
@@ -32,14 +31,11 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
             """,
             (EXCLUDED_PROJECT,),
         ).fetchone()
-        resource_schema = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'resource'"
-        ).fetchone()["sql"]
         assignment_schema = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_project_assignment'"
         ).fetchone()["sql"]
 
-    assert "resource_id" in activity_columns
+    assert "resource_id" not in activity_columns
     assert "file_path_hint" in activity_columns
     assert "is_billable" not in activity_columns
     assert "is_confirmed" not in activity_columns
@@ -47,8 +43,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "enabled" in project_columns
     assert "default_billable" not in project_columns
     assert "suggested_project_name" in assignment_columns
-    assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
-    assert "resource" in tables
+    assert "resource" not in tables
     assert "project_rule" in tables
     assert "folder_project_rule" in tables
     assert "activity_project_assignment" in tables
@@ -69,11 +64,9 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert excluded["description"] == "命中后匿名记录"
     assert exclude_rule_count["c"] == 0
     assert "midnight_anchor" in assignment_schema
-    assert "'file', 'app'" in resource_schema
-    assert "web" not in resource_schema
-    assert "communication" not in resource_schema
-    assert "meeting" not in resource_schema
-    assert "unknown" not in resource_schema
+    assert "keyword_rule" in assignment_schema
+    assert "anchor_keyword" not in assignment_schema
+    assert "anchor_resource_default" not in assignment_schema
     assert "rule" not in tables
 
 
@@ -87,11 +80,9 @@ def test_reset_database_clears_current_schema_tables(temp_db):
 
     with db.get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM resource").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 0
         activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
-        resource_columns = {row["name"] for row in conn.execute("PRAGMA table_info(resource)").fetchall()}
         project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project)").fetchall()}
         assignment_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(activity_project_assignment)").fetchall()
@@ -103,7 +94,6 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert "enabled" in project_columns
         assert "default_billable" not in project_columns
         assert "suggested_project_name" in assignment_columns
-        assert {"full_path", "parent_dir", "file_stem"} <= resource_columns
         assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
         assert conn.execute("SELECT value FROM settings WHERE key = 'idle_threshold_seconds'").fetchone()["value"] == "300"
         assert conn.execute("SELECT value FROM settings WHERE key = 'ui_refresh_seconds'").fetchone()["value"] == "10"
@@ -145,42 +135,3 @@ def test_seed_defaults_removes_only_old_system_exclude_keywords(temp_db):
         ).fetchall()
 
     assert [(row["id"], row["pattern"], row["created_by"]) for row in rows] == [(user_rule_id, "银行", "user")]
-
-
-def test_initialize_database_migrates_assignment_source_check(tmp_path):
-    path = tmp_path / "old.db"
-    db.configure_database(path)
-    with db.get_connection() as conn:
-        conn.execute(
-            """
-            CREATE TABLE activity_project_assignment (
-                activity_id INTEGER PRIMARY KEY,
-                project_id INTEGER,
-                confidence INTEGER NOT NULL DEFAULT 0,
-                source TEXT NOT NULL CHECK (
-                    source IN (
-                        'manual',
-                        'anchor_resource_default',
-                        'anchor_keyword',
-                        'anchor_context',
-                        'folder_rule',
-                        'suggested_project_name',
-                        'uncategorized'
-                    )
-                ),
-                is_manual INTEGER NOT NULL DEFAULT 0,
-                suggested_project_name TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-
-    db.initialize_database(path)
-
-    with db.get_connection() as conn:
-        schema = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_project_assignment'"
-        ).fetchone()["sql"]
-
-    assert "midnight_anchor" in schema

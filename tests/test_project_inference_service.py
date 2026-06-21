@@ -1,25 +1,24 @@
-from worktrace.constants import UNCATEGORIZED_PROJECT
-from worktrace.services import activity_service, project_inference_service, project_service, rule_service
+from worktrace.services import activity_service, folder_rule_service, project_inference_service, project_service, rule_service
 from worktrace.services.project_inference_service import assign_project_for_activity
 
 
-def test_anchor_default_project_classifies_activity(temp_db):
+def test_folder_rule_classifies_anchor_file_activity(temp_db):
     pid = project_service.create_project("Client A")
-    aid = activity_service.create_activity("Word", "winword.exe", "合同.docx", start_time="2026-06-18 09:00:00")
-    assign_project_for_activity(aid)
-    resource_id = activity_service.get_activity(aid)["resource_id"]
-    from worktrace.db import get_connection, now_str
+    folder_rule_service.create_or_update_folder_rule("D:\\ClientA", pid)
+    aid = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "合同.docx",
+        file_path_hint="D:\\ClientA\\合同.docx",
+        start_time="2026-06-18 09:00:00",
+    )
 
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE resource SET default_project_id = ?, updated_at = ? WHERE id = ?",
-            (pid, now_str(), resource_id),
-        )
     assign_project_for_activity(aid)
+
     assert activity_service.get_activity(aid)["project_id"] == pid
 
 
-def test_keyword_rules_only_match_anchor_files(temp_db):
+def test_keyword_rules_match_activity_text(temp_db):
     pid = project_service.create_project("Writing")
     rule_service.create_rule("Spec", pid)
     anchor = activity_service.create_activity("Word", "winword.exe", "Architecture Spec.docx", start_time="2026-06-18 09:00:00")
@@ -27,7 +26,7 @@ def test_keyword_rules_only_match_anchor_files(temp_db):
     rule_service.apply_rules_to_activity(anchor)
     rule_service.apply_rules_to_activity(auxiliary)
     assert activity_service.get_activity(anchor)["project_id"] == pid
-    assert activity_service.get_activity(auxiliary)["project_name"] == UNCATEGORIZED_PROJECT
+    assert activity_service.get_activity(auxiliary)["project_id"] == pid
 
 
 def test_keyword_rule_cache_reuses_reads_and_invalidates_on_create(temp_db, monkeypatch):

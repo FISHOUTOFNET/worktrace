@@ -87,7 +87,6 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
             status=row["status"],
             source=row["source"],
             start_time=current_start.strftime(TIME_FORMAT),
-            resource_id=row["resource_id"],
             file_path_hint=row["file_path_hint"],
             note=row["note"],
         )

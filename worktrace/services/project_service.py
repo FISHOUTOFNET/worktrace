@@ -173,20 +173,6 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
                 """
             ).fetchall()
         )
-        resource_rows = dict_rows(
-            conn.execute(
-                """
-                SELECT r.id, r.display_name, r.full_path, r.parent_dir, r.default_project_id,
-                       p.name AS project_name
-                FROM resource r
-                LEFT JOIN project p ON p.id = r.default_project_id
-                WHERE r.default_project_id IS NOT NULL
-                  AND r.resource_role = 'anchor'
-                  AND r.resource_type = 'file'
-                ORDER BY r.display_name COLLATE NOCASE, r.id
-                """
-            ).fetchall()
-        )
         keyword_rows = dict_rows(
             conn.execute(
                 """
@@ -200,17 +186,13 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
             ).fetchall()
         )
     by_project = {
-        int(project["id"]): {**project, "folder_rules": [], "file_defaults": [], "keyword_rules": []}
+        int(project["id"]): {**project, "folder_rules": [], "keyword_rules": []}
         for project in projects
     }
     for row in folder_rows:
         project = by_project.get(int(row["project_id"]))
         if project is not None:
             project["folder_rules"].append(row)
-    for row in resource_rows:
-        project = by_project.get(int(row["default_project_id"]))
-        if project is not None:
-            project["file_defaults"].append(row)
     for row in keyword_rows:
         project = by_project.get(int(row["project_id"]))
         if project is not None:
@@ -232,12 +214,7 @@ def delete_project(project_id: int) -> None:
         raise ValueError("project not found")
     if project.get("created_by") == "system" or project.get("name") == UNCATEGORIZED_PROJECT:
         raise ValueError("system project cannot be deleted")
-    ts = now_str()
     with get_connection() as conn:
-        conn.execute(
-            "UPDATE resource SET default_project_id = NULL, updated_at = ? WHERE default_project_id = ?",
-            (ts, project_id),
-        )
         conn.execute("DELETE FROM folder_project_rule WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM project_rule WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM project WHERE id = ?", (project_id,))

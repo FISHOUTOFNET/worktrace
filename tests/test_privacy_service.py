@@ -1,6 +1,6 @@
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import folder_rule_service, privacy_service, project_service, resource_service, rule_service
+from worktrace.services import folder_rule_service, privacy_service, project_service, rule_service
 
 
 def test_privacy_keyword_matching_and_payload(temp_db):
@@ -41,17 +41,13 @@ def test_privacy_keyword_cache_reuses_reads_and_updates_on_set(temp_db, monkeypa
     assert calls["count"] == 1
 
 
-def test_exclude_project_keyword_file_and_folder_rules_match(temp_db):
+def test_exclude_project_keyword_and_folder_rules_match(temp_db):
     excluded_project = project_service.get_or_create_excluded_project()
     project_service.set_project_enabled(excluded_project, True)
     rule_service.create_rule("SuperSecret", excluded_project)
-    resource_service.create_or_update_file_default("D:\\Private\\Secret.docx", excluded_project)
     folder_rule_service.create_or_update_folder_rule("D:\\PrivateFolder", excluded_project)
 
     assert privacy_service.is_excluded(ActiveWindow("Word", "word.exe", "SuperSecret plan"))
-    assert privacy_service.is_excluded(
-        ActiveWindow("Word", "word.exe", "Secret.docx - Word", "D:\\Private\\Secret.docx")
-    )
     assert privacy_service.is_excluded(
         ActiveWindow("Word", "word.exe", "Doc.docx - Word", "D:\\PrivateFolder\\Doc.docx")
     )

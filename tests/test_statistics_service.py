@@ -128,7 +128,7 @@ def test_live_unpersisted_activity_is_projected_only_when_requested(temp_db):
         "current_activity_snapshot",
         json.dumps(
             {
-                "resource_display_name": "Spec.docx",
+                "activity_display_name": "Spec.docx",
                 "inferred_project_name": "Client",
                 "status": "normal",
                 "start_time": "",
@@ -157,7 +157,7 @@ def test_live_persisted_snapshot_is_not_double_counted(temp_db):
         "current_activity_snapshot",
         json.dumps(
             {
-                "resource_display_name": "Spec.docx",
+                "activity_display_name": "Spec.docx",
                 "inferred_project_name": "Client",
                 "status": "normal",
                 "start_time": "",

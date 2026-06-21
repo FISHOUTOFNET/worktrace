@@ -31,12 +31,10 @@ CREATE TABLE IF NOT EXISTS activity_log (
     auto_classified INTEGER NOT NULL DEFAULT 0,
     manual_override INTEGER NOT NULL DEFAULT 0,
     project_id INTEGER,
-    resource_id INTEGER,
     note TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES project(id),
-    FOREIGN KEY (resource_id) REFERENCES resource(id)
+    FOREIGN KEY (project_id) REFERENCES project(id)
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -50,28 +48,6 @@ CREATE TABLE IF NOT EXISTS session_boundary (
     occurred_at TEXT NOT NULL,
     reason TEXT NOT NULL,
     created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS resource (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    resource_role TEXT NOT NULL CHECK (
-        resource_role IN ('anchor', 'auxiliary')
-    ),
-    resource_type TEXT NOT NULL CHECK (
-        resource_type IN ('file', 'app')
-    ),
-    display_name TEXT NOT NULL,
-    canonical_key TEXT NOT NULL UNIQUE,
-    app_name TEXT,
-    process_name TEXT,
-    title_hint TEXT,
-    full_path TEXT,
-    parent_dir TEXT,
-    file_stem TEXT,
-    default_project_id INTEGER,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (default_project_id) REFERENCES project(id)
 );
 
 CREATE TABLE IF NOT EXISTS folder_project_rule (
@@ -109,8 +85,7 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
     source TEXT NOT NULL CHECK (
         source IN (
             'manual',
-            'anchor_resource_default',
-            'anchor_keyword',
+            'keyword_rule',
             'anchor_context',
             'folder_rule',
             'midnight_anchor',
@@ -137,18 +112,6 @@ ON activity_log(status);
 
 CREATE INDEX IF NOT EXISTS idx_activity_project
 ON activity_log(project_id);
-
-CREATE INDEX IF NOT EXISTS idx_resource_key
-ON resource(canonical_key);
-
-CREATE INDEX IF NOT EXISTS idx_resource_role_type
-ON resource(resource_role, resource_type);
-
-CREATE INDEX IF NOT EXISTS idx_resource_default_project
-ON resource(default_project_id);
-
-CREATE INDEX IF NOT EXISTS idx_resource_path
-ON resource(full_path, parent_dir);
 
 CREATE INDEX IF NOT EXISTS idx_folder_project_rule_key
 ON folder_project_rule(normalized_folder_key);

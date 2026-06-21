@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 from ..constants import EXCLUDED_PROJECT
 from ..formatters import format_project_label
-from ..services import folder_rule_service, project_service, resource_service, rule_service
+from ..services import folder_rule_service, project_service, rule_service
 from . import design
 from .project_rule_dialog import PROJECT_MODE_NEW, RULE_TYPE_LABELS, open_project_rule_dialog
 
@@ -29,7 +29,7 @@ class ProjectRulesView(ctk.CTkFrame):
         design.label(header, text="项目规则", variant="title").grid(row=0, column=0, sticky="w")
         design.label(
             header,
-            text="按项目管理文件、文件夹和关键词规则，让时间详情自动归到正确上下文。",
+            text="按项目管理文件夹和关键词规则，让时间详情自动归到正确上下文。",
             variant="caption",
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
         actions = ctk.CTkFrame(header, fg_color="transparent")
@@ -291,9 +291,7 @@ class ProjectRulesView(ctk.CTkFrame):
     def delete_rule(self, rule: dict) -> None:
         if not messagebox.askyesno("删除规则", "只删除规则本身，不会改写历史 activity。是否继续？"):
             return
-        if rule["kind"] == "file":
-            resource_service.clear_file_default(int(rule["id"]))
-        elif rule["kind"] == "folder":
+        if rule["kind"] == "folder":
             folder_rule_service.delete_folder_rule(int(rule["id"]))
         elif rule["kind"] == "keyword":
             rule_service.delete_rule(int(rule["id"]))
@@ -362,15 +360,6 @@ class ProjectRulesView(ctk.CTkFrame):
 
 def _rules_for_project(project: dict) -> list[dict]:
     project_name = project.get("name") or "未知项目"
-    file_rules = [
-        {
-            "kind": "file",
-            "id": int(row["id"]),
-            "target": row.get("full_path") or row.get("display_name") or "未知文件",
-            "project_name": project_name,
-        }
-        for row in project.get("file_defaults", [])
-    ]
     folder_rules = [
         {
             "kind": "folder",
@@ -392,7 +381,7 @@ def _rules_for_project(project: dict) -> list[dict]:
         }
         for rule in project.get("keyword_rules", [])
     ]
-    return [*file_rules, *folder_rules, *keyword_rules]
+    return [*folder_rules, *keyword_rules]
 
 
 def _project_signature(project: dict) -> tuple:
@@ -401,7 +390,6 @@ def _project_signature(project: dict) -> tuple:
         project["name"],
         project.get("description") or "",
         int(project.get("enabled", 1)),
-        tuple((row["id"], row.get("full_path") or row.get("display_name")) for row in project.get("file_defaults", [])),
         tuple((rule["id"], rule["folder_path"], rule["enabled"], rule["recursive"]) for rule in project.get("folder_rules", [])),
         tuple((rule["id"], rule["keyword"], rule["enabled"]) for rule in project.get("keyword_rules", [])),
     )
@@ -411,13 +399,12 @@ def _project_rule_summary(project: dict) -> str:
     prefix = "已禁用 | " if not bool(int(project.get("enabled", 1))) else ""
     if project.get("name") == EXCLUDED_PROJECT:
         prefix += "命中后匿名记录 | "
-    file_count = len(project.get("file_defaults", []))
     folder_count = len(project.get("folder_rules", []))
     keyword_count = len(project.get("keyword_rules", []))
-    total = file_count + folder_count + keyword_count
+    total = folder_count + keyword_count
     if total == 0:
         return f"{prefix}暂无规则"
-    return f"{prefix}{total} 条规则：文件 {file_count}，文件夹 {folder_count}，关键词 {keyword_count}"
+    return f"{prefix}{total} 条规则：文件夹 {folder_count}，关键词 {keyword_count}"
 
 
 def _rule_detail_text(rule: dict) -> str:
@@ -434,14 +421,8 @@ def _rule_detail_text(rule: dict) -> str:
 
 def _project_binding_text(project: dict) -> str:
     folder_rules = project["folder_rules"]
-    file_defaults = project["file_defaults"]
     keyword_rules = project.get("keyword_rules", [])
     lines = []
-    if file_defaults:
-        file_names = [row.get("full_path") or row.get("display_name") or "未知文件" for row in file_defaults[:5]]
-        lines.append("文件：" + "；".join(file_names))
-        if len(file_defaults) > 5:
-            lines.append(f"另有 {len(file_defaults) - 5} 个文件")
     if folder_rules:
         lines.append("文件夹：" + "；".join(rule["folder_path"] for rule in folder_rules[:5]))
         if len(folder_rules) > 5:

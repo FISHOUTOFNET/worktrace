@@ -6,13 +6,11 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from ..constants import ANCHOR_FILE_EXTENSIONS
-from ..services import folder_rule_service, project_service, resource_service, rule_service
+from ..services import folder_rule_service, project_service, rule_service
 from . import design
 
 
 RULE_TYPE_LABELS = {
-    "file": "文件",
     "folder": "文件夹",
     "keyword": "关键词",
 }
@@ -53,7 +51,6 @@ def save_folder_rule_with_confirmation(folder: str, project_id: int, recursive: 
     if any(int(preview[key]) for key in preview):
         message = (
             f"下级已有不同项目的文件夹规则：{preview['child_folder_rule_conflicts']}\n"
-            f"具体文件已有不同项目：{preview['file_default_project_conflicts']}\n"
             f"历史 activity 属于其他项目：{preview['other_project_activity_count']}\n"
             f"手动指定且 safe 回填不会覆盖：{preview['manual_activity_count']}\n\n"
             "将保留下级独立设置，且默认不自动回填历史。是否继续保存？"
@@ -134,7 +131,7 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         if self.edit_project:
             subtitle = "可修改项目名称和备注，也可以顺手添加一条新规则。"
         elif self.lock_project:
-            subtitle = "为当前项目添加一条文件、文件夹或关键词规则。"
+            subtitle = "为当前项目添加一条文件夹或关键词规则。"
         elif self.project_mode_var.get() == PROJECT_MODE_NEW and not self.create_rule_var.get():
             subtitle = "先创建项目，之后可在项目卡片中继续添加规则。"
         else:
@@ -203,7 +200,7 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         )
         self.rule_type_menu.grid(row=7, column=1, sticky="w", pady=7)
 
-        self.target_label = design.label(content, text="文件", variant="strong")
+        self.target_label = design.label(content, text="文件夹", variant="strong")
         self.target_label.grid(row=8, column=0, sticky="w", padx=16, pady=7)
         self.target_entry = design.entry(content, textvariable=self.target_var)
         self.target_entry.grid(row=8, column=1, sticky="ew", pady=7)
@@ -286,11 +283,10 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         if not self.create_rule_var.get():
             return
         kind = self._current_kind()
-        labels = {"file": "文件", "folder": "文件夹", "keyword": "关键词"}
+        labels = {"folder": "文件夹", "keyword": "关键词"}
         hints = {
-            "file": "选择一个具体文件，之后该文件默认归入所选项目。",
             "folder": "选择一个文件夹，之后目录内文件会按该规则归入所选项目。",
-            "keyword": "输入关键词，匹配到的锚点文件会自动归入所选项目。",
+            "keyword": "输入关键词，匹配到的活动会自动归入所选项目。",
         }
         self.target_label.configure(text=labels[kind])
         self.hint_label.configure(text=hints[kind])
@@ -299,20 +295,14 @@ class ProjectRuleDialog(ctk.CTkToplevel):
             self.recursive_checkbox.grid_remove()
         else:
             self.browse_button.configure(state="normal")
-            if kind == "folder":
-                self.recursive_checkbox.grid(row=9, column=1, sticky="w", pady=7)
-            else:
-                self.recursive_checkbox.grid_remove()
+            self.recursive_checkbox.grid(row=9, column=1, sticky="w", pady=7)
 
     def _current_kind(self) -> str:
-        return RULE_LABEL_TO_TYPE.get(self.rule_type_var.get(), "file")
+        return RULE_LABEL_TO_TYPE.get(self.rule_type_var.get(), "folder")
 
     def _browse_target(self) -> None:
         kind = self._current_kind()
-        if kind == "file":
-            pattern = " ".join(f"*{ext}" for ext in ANCHOR_FILE_EXTENSIONS)
-            path = filedialog.askopenfilename(title="选择要绑定项目的文件", filetypes=[("支持的文件", pattern), ("所有文件", "*.*")])
-        elif kind == "folder":
+        if kind == "folder":
             path = filedialog.askdirectory(title="选择要绑定项目的文件夹")
         else:
             path = ""
@@ -368,9 +358,7 @@ class ProjectRuleDialog(ctk.CTkToplevel):
 
     def _save_rule(self, project_id: int, target: str) -> bool:
         kind = self._current_kind()
-        if kind == "file":
-            resource_service.create_or_update_file_default(target, project_id)
-        elif kind == "folder":
+        if kind == "folder":
             return save_folder_rule_with_confirmation(target, project_id, bool(self.recursive_var.get()))
         else:
             rule_service.create_rule(target, project_id)

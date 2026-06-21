@@ -123,13 +123,11 @@ def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):
     activity_service.close_current_open_record("2026-06-18 09:30:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
-    summary = timeline_service.get_session_resource_summary(sessions[0]["activity_ids"])
-    app_rows = [row for row in summary if row["resource_type"] == "app"]
+    details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
 
     assert len(sessions) == 1
     assert sessions[0]["project_name"] == "A"
-    assert {row["display_name"] for row in app_rows} == {"Search 1", "Search 2"}
-    assert all(row["event_count"] == 1 for row in app_rows)
+    assert {"Search 1", "Search 2"} <= {row["window_title"] for row in details}
 
 
 def test_short_other_project_between_same_project_anchors_reports_inside_anchor_session(temp_db):
@@ -197,7 +195,7 @@ def test_short_other_project_does_not_merge_when_anchor_gap_exceeds_context_wind
     assert [session["project_name"] for session in sessions] == ["A", "B", "A"]
 
 
-def test_resource_level_correction_and_remember_rules(temp_db):
+def test_activity_group_correction_updates_selected_activities(temp_db):
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")
     _activity("Word", "winword.exe", "Contract.docx", "09:00:00", project_a)
@@ -205,56 +203,32 @@ def test_resource_level_correction_and_remember_rules(temp_db):
     activity_service.close_current_open_record("2026-06-18 09:20:00")
 
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
-    summary = timeline_service.get_session_resource_summary(session["activity_ids"])
-    resource = summary[0]
-    timeline_service.update_activity_group_project(
-        resource["activity_ids"],
-        project_b,
-        remember_resource_id=resource["resource_id"],
-    )
+    timeline_service.update_activity_group_project(session["activity_ids"], project_b)
 
     rows = [activity_service.get_activity(aid) for aid in session["activity_ids"]]
     assert {row["project_id"] for row in rows} == {project_b}
     assert all(row["manual_override"] == 1 for row in rows)
 
-
-def test_auxiliary_cannot_be_remembered_for_future(temp_db):
+def test_auxiliary_activity_can_be_corrected_for_current_record(temp_db):
     project = project_service.create_project("A")
-    _activity("Edge", "msedge.exe", "Search", "09:00:00")
+    activity = _activity("Edge", "msedge.exe", "Search", "09:00:00")
     activity_service.close_current_open_record("2026-06-18 09:10:00")
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
-    resource = timeline_service.get_session_resource_summary(session["activity_ids"])[0]
     assert session["project_name"] == UNCATEGORIZED_PROJECT
-    try:
-        timeline_service.update_activity_group_project(
-            resource["activity_ids"],
-            project,
-            remember_resource_id=resource["resource_id"],
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("auxiliary resources must not support remember_for_future")
+    timeline_service.update_activity_group_project([activity], project)
+    assert activity_service.get_activity(activity)["project_id"] == project
 
 
-def test_auxiliary_resource_summary_groups_same_app_by_activity_name(temp_db):
+def test_activity_details_keep_same_app_activity_names(temp_db):
     _activity("Edge", "msedge.exe", "Search", "09:00:00")
     _activity("Edge", "msedge.exe", "Docs", "09:10:00")
     _activity("Edge", "msedge.exe", "Search", "09:20:00")
     activity_service.close_current_open_record("2026-06-18 09:30:00")
 
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
-    summary = timeline_service.get_session_resource_summary(session["activity_ids"])
+    details = timeline_service.get_session_activity_details(session["activity_ids"])
 
-    assert [row["display_name"] for row in summary] == ["Search", "Docs"]
-    search = summary[0]
-    docs = summary[1]
-    assert search["event_count"] == 2
-    assert search["total_duration_seconds"] == 20 * 60
-    assert docs["event_count"] == 1
-    assert docs["total_duration_seconds"] == 10 * 60
-    assert search["resource_id"] == docs["resource_id"]
-    assert search["summary_id"] != docs["summary_id"]
+    assert [row["window_title"] for row in details] == ["Search", "Docs", "Search"]
 
 
 def test_auto_suggested_project_name_displays_without_creating_project(temp_db):
@@ -279,9 +253,8 @@ def test_auto_suggested_project_name_displays_without_creating_project(temp_db):
         assert conn.execute("SELECT id FROM project WHERE name = 'ClientA'").fetchone() is None
 
 
-def test_session_level_project_update_warns_but_does_not_change_anchor_defaults(temp_db):
+def test_session_level_project_update_warns_about_unassigned_anchor_files(temp_db):
     target_project = project_service.create_project("Target")
-    other_project = project_service.create_project("Other")
     first = activity_service.create_activity(
         "Word",
         "winword.exe",
@@ -298,19 +271,13 @@ def test_session_level_project_update_warns_but_does_not_change_anchor_defaults(
     )
     activity_service.finalize_created_activity(first)
     activity_service.finalize_created_activity(second)
-    first_resource = activity_service.get_activity(first)["resource_id"]
-    with get_connection() as conn:
-        conn.execute("UPDATE resource SET default_project_id = ? WHERE id = ?", (other_project, first_resource))
 
     preview = timeline_service.preview_session_project_update([first, second], target_project)
     timeline_service.update_session_project([first, second], target_project)
 
-    assert len(preview["file_project_conflicts"]) == 1
-    assert len(preview["unassigned_anchor_files"]) == 1
+    assert "file_project_conflicts" not in preview
+    assert len(preview["unassigned_anchor_files"]) == 2
     assert {activity_service.get_activity(aid)["project_id"] for aid in [first, second]} == {target_project}
-    with get_connection() as conn:
-        row = conn.execute("SELECT default_project_id FROM resource WHERE id = ?", (first_resource,)).fetchone()
-    assert row["default_project_id"] == other_project
 
 
 def test_session_boundary_splits_same_project_records(temp_db):
@@ -346,11 +313,9 @@ def test_project_description_flows_to_timeline_rows(temp_db):
     activity_service.close_activity(activity, "2026-06-18 09:10:00")
 
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
-    resources = timeline_service.get_session_resource_summary(session["activity_ids"])
     details = timeline_service.get_session_activity_details(session["activity_ids"])
 
     assert session["project_description"] == "billable"
-    assert resources[0]["project_description"] == "billable"
     assert details[0]["project_description"] == "billable"
 
 
@@ -369,7 +334,7 @@ def test_session_boundary_stops_same_project_merge_after_midnight(temp_db):
     assert [session["duration_seconds"] for session in next_day] == [10 * 60, 5 * 60]
 
 
-def test_midnight_anchor_classifies_following_auxiliary_without_resource_default(temp_db):
+def test_midnight_anchor_classifies_following_auxiliary_without_file_default(temp_db):
     project_a = project_service.create_project("A")
     anchor = _activity_at("Edge", "msedge.exe", "A browser", "2026-06-19 00:00:00")
     activity_service.apply_midnight_anchor_assignment(anchor, project_a)
@@ -382,14 +347,3 @@ def test_midnight_anchor_classifies_following_auxiliary_without_resource_default
     assert len(sessions) == 1
     assert sessions[0]["project_name"] == "A"
     assert {row["project_name"] for row in details} == {"A"}
-    with get_connection() as conn:
-        resource = conn.execute(
-            """
-            SELECT r.default_project_id
-            FROM activity_log a
-            JOIN resource r ON r.id = a.resource_id
-            WHERE a.id = ?
-            """,
-            (anchor,),
-        ).fetchone()
-    assert resource["default_project_id"] is None

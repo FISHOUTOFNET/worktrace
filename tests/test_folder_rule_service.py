@@ -3,7 +3,6 @@ from worktrace.services import (
     activity_service,
     folder_rule_service,
     project_service,
-    resource_service,
     rule_service,
 )
 from worktrace.services.project_inference_service import assign_project_for_activity
@@ -17,7 +16,6 @@ def _activity_with_path(path: str, title: str = "Spec.docx - Word") -> int:
         file_path_hint=path,
         start_time="2026-06-18 09:00:00",
     )
-    resource_service.refresh_activity_resource(aid)
     return aid
 
 
@@ -53,18 +51,6 @@ def test_folder_rule_lookup_cache_reuses_reads_and_invalidates_on_update(temp_db
 
     assert folder_rule_service.find_matching_folder_rule("D:\\CaseA\\Sub\\Spec.docx")["project_id"] == child_project
     assert calls["count"] == calls_after_update + 1
-
-
-def test_file_default_project_wins_over_folder_rule(temp_db):
-    folder_project = project_service.create_project("Folder")
-    file_project = project_service.create_project("File")
-    folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
-    aid = _activity_with_path("D:\\CaseA\\Spec.docx")
-    resource_id = activity_service.get_activity(aid)["resource_id"]
-    with get_connection() as conn:
-        conn.execute("UPDATE resource SET default_project_id = ? WHERE id = ?", (file_project, resource_id))
-    assign_project_for_activity(aid)
-    assert activity_service.get_activity(aid)["project_id"] == file_project
 
 
 def test_folder_rule_wins_over_keyword_rule_and_source_is_persisted(temp_db):

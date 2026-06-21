@@ -1,6 +1,6 @@
 import json
-import time
 
+from worktrace.constants import UNCATEGORIZED_PROJECT
 from worktrace.services import activity_service, project_service, settings_service, timeline_service
 from worktrace.services.live_time_service import snapshot_signature
 from worktrace.ui.timeline_view import TimelineView
@@ -26,12 +26,16 @@ class FakeWidget:
         self.grid_calls = []
         self.grid_removed = False
         self.destroyed = False
+        self.text = ""
 
     def bind(self, *args, **kwargs):
         self.bindings.append((args, kwargs))
 
     def configure(self, **kwargs):
         self.config.update(kwargs)
+
+    def cget(self, key):
+        return self.config.get(key, "")
 
     def grid(self, *args, **kwargs):
         self.mapped = True
@@ -57,6 +61,15 @@ class FakeWidget:
     def destroy(self):
         self.destroyed = True
 
+    def delete(self, *_args):
+        self.text = ""
+
+    def insert(self, _index, value):
+        self.text += str(value)
+
+    def get(self, *_args):
+        return self.text
+
 
 class FakeTree:
     def __init__(self, columns=()):
@@ -69,6 +82,9 @@ class FakeTree:
         self.deleted = []
         self.item_calls = []
         self.yview_position = 0.0
+        self.xview_position = 0.0
+        self.selected = []
+        self.focused = None
 
     def __getitem__(self, key):
         if key == "columns":
@@ -93,6 +109,12 @@ class FakeTree:
 
     def yview_moveto(self, position):
         self.yview_position = position
+
+    def xview(self):
+        return (self.xview_position, 1.0)
+
+    def xview_moveto(self, position):
+        self.xview_position = position
 
     def exists(self, iid):
         return iid in self.children
@@ -119,72 +141,75 @@ class FakeTree:
         self.deleted.append(iid)
 
     def selection(self):
-        return []
+        return tuple(self.selected)
+
+    def selection_set(self, iid):
+        self.selected = [iid]
 
     def selection_remove(self, _selection):
+        self.selected = []
+
+    def focus(self, iid):
+        self.focused = iid
+
+    def see(self, _iid):
         pass
 
 
-def _view_stub(project_name="Client"):
+def _view_stub():
     view = object.__new__(TimelineView)
-    view.adjust_project_var = FakeVar("")
-    view.resource_project_var = view.adjust_project_var
-    view.activity_project_var = view.adjust_project_var
-    view.resource_hint_label = FakeWidget()
-    view.adjustment_hint_label = view.resource_hint_label
-    view.session_project_menu = FakeWidget()
-    view.resource_project_menu = FakeWidget()
-    view.activity_project_menu = FakeWidget()
-    view.adjust_project_menu = view.resource_project_menu
-    view.resource_editor = FakeWidget(mapped=True)
-    view.adjustment_editor = view.resource_editor
-    view._selected_resource_id = 1
-    view._resource_selected_at = 0.0
-    view._project_by_name = {}
-    view._active_adjustment = None
-    return view
-
-
-def _editor_view_stub():
-    view = object.__new__(TimelineView)
-    view.editor_scroll_frame = FakeWidget(mapped=True)
-    view.editor_panel = view.editor_scroll_frame
-    view.adjustment_editor = FakeWidget(mapped=False, master=view.editor_panel)
-    view.resource_editor = view.adjustment_editor
-    view.activity_editor = view.adjustment_editor
-    view._active_adjustment = None
-    view.resource_tree_frame = FakeWidget(mapped=True)
-    view.detail_tree_frame = FakeWidget(mapped=False)
-    return view
-
-
-def _live_view_stub(detail_mode="resources"):
-    view = object.__new__(TimelineView)
-    view.current_activity_label = FakeWidget()
-    view.date_var = FakeVar("2026-06-18")
+    view.start_var = FakeVar("2026-06-18")
+    view.end_var = FakeVar("2026-06-18")
+    view.date_var = view.start_var
     view.only_uncategorized = FakeVar(False)
     view.session_project_var = FakeVar("")
+    view.adjust_project_var = FakeVar("")
+    view.activity_project_var = view.adjust_project_var
+    view.session_project_menu = FakeWidget()
+    view.activity_project_menu = FakeWidget()
+    view.adjust_project_menu = view.activity_project_menu
+    view.adjustment_hint_label = FakeWidget()
+    view.adjustment_editor = FakeWidget(mapped=True)
+    view.activity_editor = view.adjustment_editor
+    view.note_text = FakeWidget()
+    view.note_label = FakeWidget()
+    view.activity_editor_label = FakeWidget()
+    view._project_by_name = {}
+    view._project_name_by_id = {}
+    view._activity_project_targets = {}
+    view._details_by_id = {}
+    view._selected_activity_id = None
+    view._active_adjustment = None
+    view._editor_dirty = False
+    view._loading_editor = False
+    return view
+
+
+def _live_view_stub():
+    view = _view_stub()
+    view.current_activity_label = FakeWidget()
     view.detail_label = FakeWidget()
     view.detail_hint_label = FakeWidget()
     view.session_count_label = FakeWidget()
     view.session_tree = FakeTree()
-    view.resource_tree = FakeTree()
     view.detail_tree = FakeTree()
     view._tree_values = {}
+    view._tree_column_widths = {}
+    view._tree_keys = {id(view.session_tree): "sessions", id(view.detail_tree): "details"}
     view._sessions_by_id = {}
-    view._resources_by_id = {}
     view._details_by_id = {}
     view._session_live_bases = {}
-    view._resource_live_bases = {}
     view._detail_live_bases = {}
     view._current_snapshot = None
     view._current_signature = None
+    view._short_activity_carry = None
     view._selected_session_id = "1-1"
-    view._selected_resource_id = None
     view._selected_activity_id = None
-    view._detail_mode = detail_mode
+    view._session_project_dirty = False
     view._project_name_by_id = {1: "Client"}
     view.is_user_interacting = lambda: False
+    view._valid_range = lambda show_message=True: True
+    view.after_idle = lambda func, *args: func(*args)
     return view
 
 
@@ -197,17 +222,17 @@ def _seed_tree(view, tree, items):
         view._tree_values[f"{id(tree)}:{iid}"] = tuple(values)
 
 
-def _live_snapshot(seconds=35):
+def _live_snapshot(seconds=35, *, persisted=True):
     return {
-        "resource_display_name": "Spec",
+        "activity_display_name": "Spec.docx",
         "app_name": "Word",
         "process_name": "word.exe",
         "inferred_project_name": "Client",
         "status": "normal",
-        "start_time": "",
+        "start_time": "2026-06-18 09:00:00",
         "elapsed_seconds": seconds,
-        "persisted_activity_id": 1,
-        "is_persisted": True,
+        "persisted_activity_id": 1 if persisted else None,
+        "is_persisted": persisted,
     }
 
 
@@ -215,31 +240,12 @@ def _fail_if_called(*_args, **_kwargs):
     raise AssertionError("live tick must not call timeline service queries")
 
 
-def test_visible_resource_editor_blocks_auto_refresh_even_after_recent_selection_window():
-    view = object.__new__(TimelineView)
-    view._control_active = False
-    view._editor_dirty = False
-    view._editor_widgets = []
-    view._resource_editor_widgets = []
-    view.adjustment_editor = FakeWidget(mapped=True)
-    view.resource_editor = view.adjustment_editor
-    view.activity_editor = view.adjustment_editor
-    view._active_adjustment = {"kind": "resource"}
-    view._selected_resource_id = 42
-    view._resource_selected_at = time.monotonic() - 60
-    view.focus_get = lambda: None
-
-    assert view.is_user_interacting()
-
-
 def test_visible_activity_editor_blocks_auto_refresh():
     view = object.__new__(TimelineView)
     view._control_active = False
     view._editor_dirty = False
     view._editor_widgets = []
-    view._resource_editor_widgets = []
     view.adjustment_editor = FakeWidget(mapped=True)
-    view.resource_editor = view.adjustment_editor
     view.activity_editor = view.adjustment_editor
     view._active_adjustment = {"kind": "activity"}
     view.focus_get = lambda: None
@@ -252,9 +258,7 @@ def test_no_visible_editor_or_focus_is_not_user_interacting():
     view._control_active = False
     view._editor_dirty = False
     view._editor_widgets = []
-    view._resource_editor_widgets = []
     view.adjustment_editor = FakeWidget(mapped=False)
-    view.resource_editor = view.adjustment_editor
     view.activity_editor = view.adjustment_editor
     view._active_adjustment = None
     view.focus_get = lambda: None
@@ -262,249 +266,137 @@ def test_no_visible_editor_or_focus_is_not_user_interacting():
     assert not view.is_user_interacting()
 
 
-def test_resource_editor_widgets_are_part_of_interaction_guard():
+def test_activity_editor_widgets_are_part_of_interaction_guard():
     view = object.__new__(TimelineView)
-    resource_control = FakeWidget()
+    activity_control = FakeWidget()
     view._control_active = False
     view._editor_dirty = False
-    view._editor_widgets = [resource_control]
-    view._resource_editor_widgets = view._editor_widgets
-    view.adjustment_editor = FakeWidget(mapped=True)
-    view.resource_editor = view.adjustment_editor
+    view._editor_widgets = [activity_control]
+    view.adjustment_editor = FakeWidget(mapped=False)
     view.activity_editor = view.adjustment_editor
-    view._active_adjustment = {"kind": "resource"}
-    view._selected_resource_id = 42
-    view._resource_selected_at = time.monotonic()
-    view.focus_get = lambda: resource_control
+    view._active_adjustment = None
+    view.focus_get = lambda: activity_control
 
     assert view.is_user_interacting()
 
 
-def test_main_layout_no_longer_creates_global_editor_panel(monkeypatch):
+def test_detail_area_builds_activity_detail_table_only(monkeypatch):
     view = object.__new__(TimelineView)
-    view.grid_rowconfigure = lambda *_args, **_kwargs: None
-    view.grid_columnconfigure = lambda *_args, **_kwargs: None
-    view._build_session_table = lambda: None
-    view._build_detail_area = lambda: None
-    view._build_adjustment_editor = lambda: None
-    view._show_adjustment_editor = lambda _show: None
-    view.date_var = FakeVar("2026-06-18")
-    view.only_uncategorized = FakeVar(False)
+    view.content_frame = FakeWidget()
+    view.session_project_var = FakeVar()
+    created_trees = []
 
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkFrame", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkLabel", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkButton", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkEntry", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkCheckBox", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkSegmentedButton", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr(TimelineView, "_label", lambda _self, master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr(TimelineView, "_button", lambda _self, master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr(TimelineView, "_option_menu", lambda _self, master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr(TimelineView, "_make_tree_frame", lambda _self, parent: FakeWidget(master=parent))
 
-    TimelineView._build(view)
+    def fake_make_tree(_self, _master, tree_key, columns, headings, widths, height=None):
+        created_trees.append((tree_key, tuple(columns), dict(headings), dict(widths), height))
+        return FakeTree(columns)
 
-    assert not hasattr(view, "editor_scroll_frame")
+    monkeypatch.setattr(TimelineView, "_make_tree", fake_make_tree)
+
+    TimelineView._build_detail_area(view)
+
+    assert created_trees[0][0] == "details"
+    assert created_trees[0][1] == ("time", "app", "window", "duration", "project", "note")
+    assert "resource" not in created_trees[0][1]
+    assert not hasattr(view, "resource_tree")
 
 
-def test_resource_and_activity_editors_share_adjustment_editor(monkeypatch):
+def test_adjustment_editor_has_activity_controls_only(monkeypatch):
     view = object.__new__(TimelineView)
     view.editor_panel = FakeWidget()
     view.adjust_project_var = FakeVar()
-    view.resource_project_var = view.adjust_project_var
     view.activity_project_var = view.adjust_project_var
 
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkFrame", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkLabel", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkOptionMenu", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkButton", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkEntry", lambda master, **_kwargs: FakeWidget(master=master))
-    monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkCheckBox", lambda master, **_kwargs: FakeWidget(master=master))
     monkeypatch.setattr("worktrace.ui.timeline_view.ctk.CTkTextbox", lambda master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr(TimelineView, "_label", lambda _self, master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr(TimelineView, "_button", lambda _self, master, **_kwargs: FakeWidget(master=master))
+    monkeypatch.setattr(TimelineView, "_option_menu", lambda _self, master, **_kwargs: FakeWidget(master=master))
 
     TimelineView._build_adjustment_editor(view)
 
     assert view.adjustment_editor.master is view.editor_panel
-    assert view.resource_editor.master is view.editor_panel
-    assert view.activity_editor.master is view.editor_panel
-    assert view.resource_editor is view.activity_editor
-    assert view.resource_rule_button in view._editor_widgets
+    assert view.activity_editor is view.adjustment_editor
     assert view.activity_rule_button in view._editor_widgets
-    assert view.delete_resource_button in view._editor_widgets
-    assert not hasattr(view, "split_activity_button")
-
-
-def test_editor_switching_uses_editor_panel_without_destroying_widgets():
-    view = _editor_view_stub()
-
-    TimelineView._show_resource_editor(view, True)
-
-    assert view.editor_scroll_frame.mapped
-    assert view.adjustment_editor.mapped
-    assert view.resource_editor is view.activity_editor
-    assert view.adjustment_editor.master is view.editor_panel
-
-    TimelineView._show_activity_editor(view, True)
-
-    assert view.editor_scroll_frame.mapped
-    assert view.adjustment_editor.mapped
-    assert not view.adjustment_editor.destroyed
-
-    TimelineView._show_activity_editor(view, False)
-
-    assert not view.editor_scroll_frame.mapped
-    assert not view.adjustment_editor.destroyed
-
-
-def test_toggle_detail_mode_switches_tree_frames():
-    view = _editor_view_stub()
-    view._detail_mode = "resources"
-    view.resource_tree = FakeTree(columns=("resource",))
-    view.detail_tree = FakeTree(columns=("time",))
-    view.toggle_detail_button = FakeWidget()
-    view._tree_keys = {id(view.resource_tree): "resources", id(view.detail_tree): "details"}
-    view._tree_column_widths = {}
-    view._editor_dirty = False
-    view._show_resource_editor = lambda _show: None
-    view._show_activity_editor = lambda _show: None
-    view._refresh_selected_session = lambda: None
-
-    TimelineView._toggle_detail_mode(view)
-
-    assert view._detail_mode == "details"
-    assert view.resource_tree_frame.grid_removed
-    assert view.detail_tree_frame.mapped
-
-    TimelineView._toggle_detail_mode(view)
-
-    assert view._detail_mode == "resources"
-    assert view.detail_tree_frame.grid_removed
-    assert view.resource_tree_frame.mapped
-
-
-def test_resource_rule_button_focus_marks_user_interacting():
-    view = object.__new__(TimelineView)
-    view._control_active = False
-    view._editor_dirty = False
-    view._editor_widgets = []
-    view.resource_rule_button = FakeWidget()
-    view._editor_widgets = [view.resource_rule_button]
-    view._resource_editor_widgets = view._editor_widgets
-    view.adjustment_editor = FakeWidget(mapped=True)
-    view.resource_editor = view.adjustment_editor
-    view.activity_editor = view.adjustment_editor
-    view._active_adjustment = {"kind": "resource"}
-    view._selected_resource_id = None
-    view._resource_selected_at = 0.0
-    view.focus_get = lambda: view.resource_rule_button
-
-    assert view.is_user_interacting()
+    assert view.delete_activity_button in view._editor_widgets
+    assert not hasattr(view, "resource_editor")
+    assert not hasattr(view, "resource_rule_button")
+    assert not hasattr(view, "delete_resource_button")
+    assert not hasattr(view, "remember_button")
 
 
 def test_tree_column_widths_are_saved_and_restored():
     view = object.__new__(TimelineView)
-    tree = FakeTree(columns=("resource", "type"))
-    tree.widths["resource"] = 240
-    tree.widths["type"] = 90
-    view._tree_keys = {id(tree): "resources"}
+    tree = FakeTree(columns=("window", "duration"))
+    tree.widths["window"] = 240
+    view._tree_keys = {id(tree): "details"}
     view._tree_column_widths = {}
 
     TimelineView._save_tree_column_widths(view, tree)
-    tree.widths["resource"] = 120
-    tree.widths["type"] = 60
+    tree.widths["window"] = 120
     TimelineView._apply_tree_column_widths(view, tree)
 
-    assert tree.widths["resource"] == 240
-    assert tree.widths["type"] == 90
-
-
-def test_sync_tree_keeps_saved_column_widths():
-    view = object.__new__(TimelineView)
-    tree = FakeTree(columns=("resource", "type"))
-    view._tree_values = {}
-    view._tree_keys = {id(tree): "resources"}
-    view._tree_column_widths = {"resources": {"resource": 280, "type": 80}}
-    view.after_idle = lambda callback: callback()
-
-    TimelineView._sync_tree(view, tree, [("1", ("Spec.docx", "file"))])
-
-    assert tree.widths["resource"] == 280
-    assert tree.widths["type"] == 80
+    assert tree.widths["window"] == 240
 
 
 def test_sync_tree_values_only_updates_values_without_layout_changes():
     view = object.__new__(TimelineView)
     tree = FakeTree()
-    _seed_tree(view, tree, [("1", ("Spec.docx", "00:00:30"))])
+    view._tree_values = {}
+    _seed_tree(view, tree, [("1", ("old",)), ("2", ("same",))])
 
-    changed = TimelineView._sync_tree_values_only(view, tree, [("1", ("Spec.docx", "00:00:35"))])
-
-    assert changed is True
-    assert tree.item_calls == [("1", ("Spec.docx", "00:00:35"))]
+    assert TimelineView._sync_tree_values_only(view, tree, [("1", ("new",)), ("2", ("same",))])
+    assert tree.item_calls == [("1", ("new",))]
     assert tree.moves == []
     assert tree.deleted == []
-    assert tree.children == ["1"]
 
 
 def test_sync_tree_values_only_rejects_structure_changes():
     view = object.__new__(TimelineView)
     tree = FakeTree()
-    _seed_tree(view, tree, [("1", ("Spec.docx",))])
+    view._tree_values = {}
+    _seed_tree(view, tree, [("1", ("old",))])
 
-    assert TimelineView._sync_tree_values_only(view, tree, [("2", ("Spec.docx",))]) is False
-    assert TimelineView._sync_tree_values_only(view, tree, [("1", ("Spec.docx",)), ("2", ("Notes.md",))]) is False
+    assert not TimelineView._sync_tree_values_only(view, tree, [("2", ("new",))])
     assert tree.item_calls == []
-    assert tree.children == ["1"]
-
-
-def test_detail_toggle_uses_short_view_labels():
-    view = object.__new__(TimelineView)
-    view._detail_mode = "resources"
-    view.resource_tree_frame = FakeWidget(mapped=True)
-    view.detail_tree_frame = FakeWidget(mapped=False)
-    view.resource_tree = FakeTree()
-    view.detail_tree = FakeTree()
-    view.toggle_detail_button = FakeWidget()
-    view._apply_tree_column_widths = lambda _tree: None
-    view._show_resource_editor = lambda _show: None
-    view._show_activity_editor = lambda _show: None
-    view._refresh_selected_session = lambda: None
-    view._editor_dirty = False
-
-    TimelineView._toggle_detail_mode(view)
-    assert view._detail_mode == "details"
-    assert view.toggle_detail_button.config["text"] == "查看汇总"
-
-    TimelineView._toggle_detail_mode(view)
-    assert view._detail_mode == "resources"
-    assert view.toggle_detail_button.config["text"] == "查看明细"
 
 
 def test_timeline_project_values_include_description():
     view = object.__new__(TimelineView)
     view.start_var = FakeVar("2026-06-18")
-    view.end_var = FakeVar("2026-06-18")
-    view.date_var = view.start_var
+    view.end_var = view.start_var
     session = {
-        "project_name": "Client",
-        "project_description": "billable",
         "start_time": "2026-06-18 09:00:00",
         "end_time": "2026-06-18 09:10:00",
+        "project_name": "Client",
+        "project_description": "billable",
         "duration_seconds": 600,
-        "status_summary": "Spec.docx",
+        "status_summary": "Spec",
     }
-    resource = {
-        "display_name": "Spec.docx",
-        "resource_type": "file",
-        "total_duration_seconds": 600,
-        "event_count": 1,
+    detail = {
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": "2026-06-18 09:10:00",
+        "app_name": "Word",
+        "window_title": "Spec.docx",
+        "duration_seconds": 600,
         "project_name": "Client",
         "project_description": "billable",
     }
 
     assert TimelineView._session_values(view, session)[1] == "Client (billable)"
-    assert TimelineView._resource_values(view, resource)[4] == "Client (billable)"
+    assert TimelineView._detail_values(view, detail)[4] == "Client (billable)"
 
 
 def test_open_context_selects_requested_session_on_sync():
     view = object.__new__(TimelineView)
     view.date_var = FakeVar()
+    view.start_var = view.date_var
+    view.end_var = view.date_var
     view.only_uncategorized = FakeVar(False)
     view._pending_session_id = None
     view._selected_session_id = None
@@ -512,6 +404,9 @@ def test_open_context_selects_requested_session_on_sync():
     view.session_count_label = FakeWidget()
     view.session_tree = FakeTree()
     selected = []
+    view._refresh_activity_project_targets = lambda: None
+    view._activity_ids_live_seconds = lambda *_args: 0
+    view._sessions_with_short_activity_carry = lambda sessions, _snapshot: sessions
     view._sync_tree = lambda *_args, **_kwargs: None
     view._select_tree_item = lambda _tree, iid: selected.append(iid)
 
@@ -538,153 +433,68 @@ def test_find_session_containing_activity_clears_uncategorized_filter_for_projec
     view.only_uncategorized = FakeVar(True)
     target = {"session_id": "2-2", "activity_ids": [2], "is_uncategorized": False}
 
-    monkeypatch.setattr(
-        timeline_service,
-        "get_project_sessions_by_range",
-        lambda *_args, **_kwargs: [target],
-    )
+    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", lambda *_args, **_kwargs: [target])
 
     assert TimelineView._find_session_containing_activity(view, 2) == target
     assert view.only_uncategorized.get() is False
 
 
-def test_refresh_keeps_selected_resource_editor_open_when_resource_still_exists():
-    view = object.__new__(TimelineView)
-    view._selected_resource_id = "7"
-    view._resource_selected_at = time.monotonic()
+def test_sync_details_keeps_selected_activity_editor_open_when_activity_still_exists():
+    view = _live_view_stub()
+    view._selected_activity_id = 7
     view.adjustment_editor = FakeWidget(mapped=True)
-    view.resource_editor = view.adjustment_editor
-    view.activity_editor = view.adjustment_editor
-    view._active_adjustment = {"kind": "resource"}
-    view.resource_tree = FakeTree()
-    view._resources_by_id = {}
-    loaded = []
-    hidden = []
+    view._active_adjustment = {"kind": "activity"}
     selected = []
-    view._sync_tree = lambda *_args, **_kwargs: None
+    loaded = []
     view._select_tree_item = lambda _tree, iid: selected.append(iid)
-    view._load_resource_editor = lambda resource_id: loaded.append(resource_id) or True
-    view._show_resource_editor = lambda show: hidden.append(show)
+    view._load_activity_editor = lambda activity_id: loaded.append(activity_id)
 
-    view._selected_session_id = "session-1"
-    view._sync_resources(
+    TimelineView._sync_details(
+        view,
         [
             {
-                "resource_id": 7,
-                "display_name": "Spec.docx",
-                "resource_type": "file",
-                "total_duration_seconds": 60,
-                "event_count": 1,
+                "id": 7,
+                "start_time": "2026-06-18 09:00:00",
+                "end_time": "2026-06-18 09:05:00",
+                "app_name": "Word",
+                "window_title": "Spec.docx",
+                "duration_seconds": 300,
                 "project_name": "Client",
             }
-        ]
+        ],
     )
 
-    assert view._selected_resource_id == "7"
-    assert view._selected_session_id == "session-1"
+    assert view._selected_activity_id == 7
     assert selected == ["7"]
-    assert loaded == ["7"]
-    assert hidden == []
+    assert loaded == [7]
 
 
-def test_sync_resources_hides_editor_only_when_selected_resource_disappears():
-    view = object.__new__(TimelineView)
-    view._selected_resource_id = "7"
-    view._resource_selected_at = time.monotonic()
+def test_sync_details_hides_editor_when_selected_activity_disappears():
+    view = _live_view_stub()
+    view._selected_activity_id = 7
     view.adjustment_editor = FakeWidget(mapped=True)
-    view.resource_editor = view.adjustment_editor
-    view.activity_editor = view.adjustment_editor
-    view._active_adjustment = {"kind": "resource"}
-    view.resource_tree = FakeTree()
-    view._resources_by_id = {}
+    view._active_adjustment = {"kind": "activity"}
     hidden = []
-    view._sync_tree = lambda *_args, **_kwargs: None
-    view._show_resource_editor = lambda show: hidden.append(show)
+    view._show_activity_editor = lambda show: hidden.append(show)
 
-    view._sync_resources([])
+    TimelineView._sync_details(view, [])
 
-    assert view._selected_resource_id is None
+    assert view._selected_activity_id is None
+    assert view._active_adjustment is None
     assert hidden == [False]
 
 
-def test_current_activity_text_uses_second_level_duration(temp_db):
-    view = object.__new__(TimelineView)
+def test_current_activity_text_uses_activity_display_name(temp_db):
     settings_service.set_setting(
         "current_activity_snapshot",
-        json.dumps(
-            {
-                "resource_display_name": "Spec.docx",
-                "app_name": "Word",
-                "process_name": "word.exe",
-                "inferred_project_name": "Client",
-                "status": "normal",
-                "start_time": "",
-                "elapsed_seconds": 65,
-                "is_persisted": True,
-            },
-            ensure_ascii=False,
-        ),
+        json.dumps({**_live_snapshot(35), "activity_display_name": "Spec.docx"}, ensure_ascii=False),
     )
 
-    assert TimelineView._current_activity_text(view) == "当前活动：Spec.docx｜Client｜00:01:05｜已进入历史"
-
-
-def test_refresh_current_activity_updates_stable_resource_values_without_full_refresh(monkeypatch):
-    view = _live_view_stub("resources")
-    snapshot = _live_snapshot(35)
-    settings_service.set_setting("current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False))
-    view._current_signature = snapshot_signature(snapshot)
-    old_session = {
-        "session_id": "1-1",
-        "project_id": 1,
-        "project_name": "Client",
-        "start_time": "2026-06-18 09:00:00",
-        "end_time": None,
-        "report_date": "2026-06-18",
-        "duration_seconds": 30,
-        "activity_ids": [1],
-        "event_count": 1,
-        "status_summary": "正常活动",
-        "is_uncategorized": False,
-    }
-    new_session = {**old_session, "duration_seconds": 35}
-    old_resource = {
-        "resource_id": 7,
-        "display_name": "Spec.docx",
-        "resource_type": "file",
-        "total_duration_seconds": 30,
-        "event_count": 1,
-        "activity_ids": [1],
-        "project_name": "Client",
-    }
-    new_resource = {**old_resource, "total_duration_seconds": 35}
-    view._sessions_by_id = {"1-1": old_session}
-    view._resources_by_id = {7: old_resource}
-    view._session_live_bases = {"1-1": 30}
-    view._resource_live_bases = {7: 30}
-    _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, old_session))])
-    _seed_tree(view, view.resource_tree, [("7", TimelineView._resource_values(view, old_resource))])
-    view._selected_resource_id = 7
-    fallback_refreshes = []
-
-    monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", _fail_if_called)
-    monkeypatch.setattr(timeline_service, "get_session_resource_summary", _fail_if_called)
-    monkeypatch.setattr("worktrace.ui.timeline_view.snapshot_seconds_for_date_range", lambda *_args, **_kwargs: 35)
-    view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
-
-    TimelineView.refresh_current_activity(view)
-
-    assert fallback_refreshes == []
-    assert view.current_activity_label.config["text"] == "当前活动：Spec｜Client｜00:00:35｜已进入历史"
-    assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, new_session))]
-    assert view.resource_tree.item_calls == [("7", TimelineView._resource_values(view, new_resource))]
-    assert view.session_tree.moves == []
-    assert view.resource_tree.moves == []
-    assert view.resource_tree.deleted == []
+    assert TimelineView._current_activity_text(object.__new__(TimelineView)) == "当前活动：Spec.docx｜Client｜00:00:35｜已进入历史"
 
 
 def test_refresh_current_activity_updates_stable_detail_values_without_full_refresh(monkeypatch):
-    view = _live_view_stub("details")
+    view = _live_view_stub()
     snapshot = _live_snapshot(35)
     settings_service.set_setting("current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False))
     view._current_signature = snapshot_signature(snapshot)
@@ -692,70 +502,55 @@ def test_refresh_current_activity_updates_stable_detail_values_without_full_refr
         "session_id": "1-1",
         "project_id": 1,
         "project_name": "Client",
+        "project_description": "",
         "start_time": "2026-06-18 09:00:00",
-        "end_time": None,
+        "end_time": "2026-06-18 09:00:30",
         "report_date": "2026-06-18",
-        "duration_seconds": 35,
+        "duration_seconds": 30,
         "activity_ids": [1],
         "event_count": 1,
-        "status_summary": "正常活动",
+        "status_summary": "Spec.docx",
         "is_uncategorized": False,
     }
-    old_detail = {
+    detail = {
         "id": 1,
         "start_time": "2026-06-18 09:00:00",
-        "end_time": None,
+        "end_time": "2026-06-18 09:00:30",
         "app_name": "Word",
         "window_title": "Spec.docx",
-        "resource_display_name": "Spec.docx",
         "duration_seconds": 30,
         "project_name": "Client",
-        "note": "",
     }
-    new_detail = {**old_detail, "duration_seconds": 35}
+    live_session = {**session, "duration_seconds": 35}
+    live_detail = {**detail, "duration_seconds": 35}
     view._sessions_by_id = {"1-1": session}
-    view._details_by_id = {1: old_detail}
+    view._details_by_id = {1: detail}
     view._session_live_bases = {"1-1": 30}
     view._detail_live_bases = {1: 30}
     _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, session))])
-    _seed_tree(view, view.detail_tree, [("1", TimelineView._detail_values(view, old_detail))])
-    view._selected_activity_id = 1
-    fallback_refreshes = []
+    _seed_tree(view, view.detail_tree, [("1", TimelineView._detail_values(view, detail))])
 
     monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", _fail_if_called)
-    monkeypatch.setattr(timeline_service, "get_session_activity_details", _fail_if_called)
-    monkeypatch.setattr("worktrace.ui.timeline_view.snapshot_seconds_for_date_range", lambda *_args, **_kwargs: 35)
-    view.refresh = lambda **kwargs: fallback_refreshes.append(kwargs)
+    view.refresh = lambda **_kwargs: _fail_if_called()
 
     TimelineView.refresh_current_activity(view)
 
-    assert fallback_refreshes == []
-    assert view.detail_tree.item_calls == [("1", TimelineView._detail_values(view, new_detail))]
-    assert view.detail_tree.moves == []
-    assert view.detail_tree.deleted == []
+    assert view.current_activity_label.config["text"] == "当前活动：Spec.docx｜Client｜00:00:35｜已进入历史"
+    assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, live_session))]
+    assert view.detail_tree.item_calls == [("1", TimelineView._detail_values(view, live_detail))]
 
 
 def test_refresh_current_activity_falls_back_when_snapshot_identity_changes(monkeypatch):
-    view = _live_view_stub("resources")
+    view = _live_view_stub()
     old_snapshot = _live_snapshot(30)
-    new_snapshot = {**old_snapshot, "persisted_activity_id": 2}
+    new_snapshot = {
+        **old_snapshot,
+        "activity_display_name": "Other.docx",
+        "window_title": "Other.docx",
+        "elapsed_seconds": 35,
+    }
     settings_service.set_setting("current_activity_snapshot", json.dumps(new_snapshot, ensure_ascii=False))
     view._current_signature = snapshot_signature(old_snapshot)
-    old_session = {
-        "session_id": "1-1",
-        "project_id": 1,
-        "project_name": "Client",
-        "start_time": "2026-06-18 09:00:00",
-        "end_time": None,
-        "report_date": "2026-06-18",
-        "duration_seconds": 30,
-        "activity_ids": [1],
-        "event_count": 1,
-        "status_summary": "正常活动",
-        "is_uncategorized": False,
-    }
-    view._sessions_by_id = {"1-1": old_session}
-    _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, old_session))])
     fallback_refreshes = []
 
     monkeypatch.setattr(timeline_service, "get_project_sessions_by_range", _fail_if_called)
@@ -768,7 +563,7 @@ def test_refresh_current_activity_falls_back_when_snapshot_identity_changes(monk
 
 
 def test_refresh_current_activity_skips_tables_while_user_interacts(monkeypatch):
-    view = _live_view_stub("resources")
+    view = _live_view_stub()
     snapshot = _live_snapshot(35)
     settings_service.set_setting("current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False))
     view._current_signature = snapshot_signature(snapshot)
@@ -781,16 +576,16 @@ def test_refresh_current_activity_skips_tables_while_user_interacts(monkeypatch)
 
     TimelineView.refresh_current_activity(view)
 
-    assert view.current_activity_label.config["text"] == "当前活动：Spec｜Client｜00:00:35｜已进入历史"
+    assert view.current_activity_label.config["text"] == "当前活动：Spec.docx｜Client｜00:00:35｜已进入历史"
     assert session_calls == []
     assert fallback_refreshes == []
 
 
-def test_timeline_session_carries_unconfirmed_activity_without_resource_or_detail_updates(temp_db):
-    view = _live_view_stub("resources")
+def test_timeline_session_carries_unconfirmed_activity_without_detail_updates(temp_db):
+    view = _live_view_stub()
     confirmed = _live_snapshot(300)
     transient = {
-        "resource_display_name": "B.docx",
+        "activity_display_name": "B.docx",
         "app_name": "Word",
         "process_name": "word.exe",
         "inferred_project_name": "Other",
@@ -804,7 +599,6 @@ def test_timeline_session_carries_unconfirmed_activity_without_resource_or_detai
     view._current_snapshot = confirmed
     view._current_signature = snapshot_signature(confirmed)
     view._short_activity_carry = None
-    view._session_project_dirty = False
     session = {
         "session_id": "1-1",
         "project_id": 1,
@@ -819,21 +613,21 @@ def test_timeline_session_carries_unconfirmed_activity_without_resource_or_detai
         "status_summary": "A.docx",
         "is_uncategorized": False,
     }
-    resource = {
-        "resource_id": 7,
-        "display_name": "A.docx",
-        "resource_type": "file",
-        "total_duration_seconds": 300,
-        "event_count": 1,
-        "activity_ids": [1],
+    detail = {
+        "id": 1,
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": "2026-06-18 09:05:00",
+        "app_name": "Word",
+        "window_title": "A.docx",
+        "duration_seconds": 300,
         "project_name": "Client",
     }
     view._sessions_by_id = {"1-1": session}
-    view._resources_by_id = {7: resource}
+    view._details_by_id = {1: detail}
     view._session_live_bases = {"1-1": 300}
-    view._resource_live_bases = {7: 300}
+    view._detail_live_bases = {1: 300}
     _seed_tree(view, view.session_tree, [("1-1", TimelineView._session_values(view, session))])
-    _seed_tree(view, view.resource_tree, [("7", TimelineView._resource_values(view, resource))])
+    _seed_tree(view, view.detail_tree, [("1", TimelineView._detail_values(view, detail))])
 
     def fake_refresh(**_kwargs):
         view._current_snapshot = transient
@@ -841,11 +635,7 @@ def test_timeline_session_carries_unconfirmed_activity_without_resource_or_detai
         view._sessions_by_id = {"1-1": session}
         view._session_live_bases = {"1-1": 0}
         display_session = TimelineView._session_with_short_activity_carry(view, session, transient)
-        TimelineView._sync_tree_values_only(
-            view,
-            view.session_tree,
-            [("1-1", TimelineView._session_values(view, display_session))],
-        )
+        TimelineView._sync_tree_values_only(view, view.session_tree, [("1-1", TimelineView._session_values(view, display_session))])
         TimelineView._sync_selected_session_summary(view, display_session)
 
     view.refresh = fake_refresh
@@ -856,145 +646,122 @@ def test_timeline_session_carries_unconfirmed_activity_without_resource_or_detai
     assert view.current_activity_label.config["text"] == "当前活动：B.docx｜Other｜00:00:12｜暂不入历史"
     assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, carried_session))]
     assert view.detail_hint_label.config["text"] == "00:05:12 | 1 条活动 | A.docx"
-    assert view.resource_tree.item_calls == []
-
-    view.session_tree.item_calls.clear()
-    settings_service.set_setting(
-        "current_activity_snapshot",
-        json.dumps({**transient, "elapsed_seconds": 15}, ensure_ascii=False),
-    )
-
-    TimelineView.refresh_current_activity(view)
-
-    carried_session = {**session, "duration_seconds": 315}
-    assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, carried_session))]
-    assert view.resource_tree.item_calls == []
-
-    detail = {
-        "id": 1,
-        "start_time": "2026-06-18 09:00:00",
-        "end_time": "2026-06-18 09:05:00",
-        "app_name": "Word",
-        "window_title": "A.docx",
-        "resource_display_name": "A.docx",
-        "duration_seconds": 300,
-        "project_name": "Client",
-        "note": "",
-    }
-    view._detail_mode = "details"
-    view._details_by_id = {1: detail}
-    view._detail_live_bases = {1: 300}
-    _seed_tree(view, view.detail_tree, [("1", TimelineView._detail_values(view, detail))])
-    view.session_tree.item_calls.clear()
-    settings_service.set_setting(
-        "current_activity_snapshot",
-        json.dumps({**transient, "elapsed_seconds": 18}, ensure_ascii=False),
-    )
-
-    TimelineView.refresh_current_activity(view)
-
-    carried_session = {**session, "duration_seconds": 318}
-    assert view.session_tree.item_calls == [("1-1", TimelineView._session_values(view, carried_session))]
     assert view.detail_tree.item_calls == []
 
 
-def test_timeline_short_activity_carry_accumulates_across_transients_and_clears_when_confirmed():
-    view = _live_view_stub("resources")
-    confirmed = _live_snapshot(300)
-    first_transient = {
-        "resource_display_name": "B.docx",
-        "inferred_project_name": "Other",
-        "status": "normal",
-        "start_time": "2026-06-18 09:05:00",
-        "elapsed_seconds": 20,
-        "is_persisted": False,
-    }
-    second_transient = {
-        **first_transient,
-        "resource_display_name": "C.docx",
-        "start_time": "2026-06-18 09:05:20",
-        "elapsed_seconds": 5,
-    }
-    session = {
-        "session_id": "1-1",
+def test_activity_rule_dialog_prefills_selected_anchor_activity(monkeypatch):
+    view = _view_stub()
+    view.adjust_project_var.set("Client")
+    row = {
+        "id": 42,
         "project_id": 1,
+        "official_project_name": "Client",
         "project_name": "Client",
         "start_time": "2026-06-18 09:00:00",
-        "report_date": "2026-06-18",
-        "duration_seconds": 320,
-        "activity_ids": [1],
-        "event_count": 1,
-        "status_summary": "A.docx",
-        "is_uncategorized": False,
+        "end_time": "2026-06-18 09:05:00",
+        "app_name": "Word",
+        "window_title": "Spec.docx",
+        "duration_seconds": 300,
+        "is_anchor_file": True,
+        "activity_display_name": "Spec.docx",
+        "anchor_parent_dir": "D:\\Client",
     }
+    captured = {}
+    monkeypatch.setattr("worktrace.ui.timeline_view.open_project_rule_dialog", lambda *_args, **kwargs: captured.update(kwargs))
 
-    view._current_snapshot = confirmed
-    TimelineView._sync_short_activity_carry(view, first_transient)
-    view._current_snapshot = first_transient
-    TimelineView._sync_short_activity_carry(view, second_transient)
+    view._active_adjustment = TimelineView._adjustment_from_activity(view, row)
+    TimelineView._open_adjustment_project_rule_dialog(view)
 
-    display_session = TimelineView._session_with_short_activity_carry(view, session, second_transient)
-    assert display_session["duration_seconds"] == 325
-
-    TimelineView._sync_short_activity_carry(view, {**second_transient, "is_persisted": True, "persisted_activity_id": 2})
-    assert view._short_activity_carry is None
+    assert captured["initial_type"] == "folder"
+    assert captured["initial_target"] == "D:\\Client"
+    assert captured["initial_project_name"] == "Client"
 
 
-def test_timeline_resource_rule_dialog_prefills_selected_resource(monkeypatch):
-    view = object.__new__(TimelineView)
-    view.adjust_project_var = FakeVar("Client")
-    view.resource_project_var = view.adjust_project_var
-    view._active_adjustment = {
-        "rule_type": "file",
-        "rule_target": "D:\\Client\\Spec.docx",
+def test_activity_rule_dialog_prefills_keyword_for_auxiliary_activity(monkeypatch):
+    view = _view_stub()
+    row = {
+        "id": 42,
+        "project_id": 1,
+        "official_project_name": "Client",
+        "project_name": "Client",
+        "start_time": "2026-06-18 09:00:00",
+        "end_time": "2026-06-18 09:05:00",
+        "app_name": "Edge",
+        "window_title": "Research",
+        "duration_seconds": 300,
+        "is_anchor_file": False,
+        "activity_display_name": "Research",
     }
-    view._resource_selected_at = 0.0
-    calls = []
-    monkeypatch.setattr(
-        "worktrace.ui.timeline_view.open_project_rule_dialog",
-        lambda _master, **kwargs: calls.append(kwargs),
+    captured = {}
+    monkeypatch.setattr("worktrace.ui.timeline_view.open_project_rule_dialog", lambda *_args, **kwargs: captured.update(kwargs))
+
+    view._active_adjustment = TimelineView._adjustment_from_activity(view, row)
+    TimelineView._open_adjustment_project_rule_dialog(view)
+
+    assert captured["initial_type"] == "keyword"
+    assert captured["initial_target"] == "Research"
+
+
+def test_session_rule_dialog_prefills_folder_from_activity_identity(temp_db, monkeypatch):
+    project = project_service.create_project("Client")
+    activity = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "Spec.docx - Word",
+        file_path_hint="D:\\Client\\Spec.docx",
+        start_time="2026-06-18 09:00:00",
+        project_id=project,
     )
+    activity_service.finalize_created_activity(activity)
+    activity_service.close_activity(activity, "2026-06-18 09:05:00")
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
+    view = _view_stub()
+    view._sessions_by_id = {session["session_id"]: session}
+    view._selected_session_id = session["session_id"]
+    view.session_project_var.set("Client")
+    captured = {}
+    monkeypatch.setattr("worktrace.ui.timeline_view.open_project_rule_dialog", lambda *_args, **kwargs: captured.update(kwargs))
 
-    TimelineView._open_resource_project_rule_dialog(view)
+    TimelineView._open_project_rule_dialog(view)
 
-    assert calls[0]["initial_type"] == "file"
-    assert calls[0]["initial_target"] == "D:\\Client\\Spec.docx"
-    assert calls[0]["initial_project_name"] == "Client"
+    assert captured["initial_type"] == "folder"
+    assert captured["initial_target"] == "D:\\Client"
+    assert captured["initial_project_name"] == "Client"
 
 
 def test_project_rule_saved_selects_project_immediately(temp_db):
     project_service.create_project("Client")
-    view = _view_stub("")
-    view.session_project_var = FakeVar("")
-    view.activity_project_var = FakeVar("")
-    view.refresh = lambda: None
+    view = _view_stub()
+    refreshed = []
+    view.refresh = lambda: refreshed.append("refresh")
 
     TimelineView._after_project_rule_saved(view, {"project_name": "Client"})
 
     assert view.session_project_var.get() == "Client"
-    assert view.resource_project_var.get() == "Client"
     assert view.activity_project_var.get() == "Client"
-    assert "Client" in view._project_by_name
-    assert view.resource_hint_label.config["text"] == "已保存新建项目规则：Client"
+    assert view.adjustment_hint_label.config["text"] == "已保存新建项目规则：Client"
+    assert refreshed == ["refresh"]
 
 
-def test_created_project_can_be_used_for_resource_correction_immediately(temp_db):
-    aid = activity_service.create_activity("Word", "winword.exe", "Spec.docx", start_time="2026-06-18 09:00:00")
-    activity_service.close_activity(aid, "2026-06-18 09:30:00")
-    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
-    resource = timeline_service.get_session_resource_summary(session["activity_ids"])[0]
-    project_service.create_project("Client")
-    view = _view_stub("")
-    view.session_project_var = FakeVar("")
-    view.activity_project_var = view.adjust_project_var
-    view.refresh = lambda: None
-    TimelineView._after_project_rule_saved(view, {"project_name": "Client"})
-    view._sessions_by_id = {session["session_id"]: session}
-    view._selected_session_id = session["session_id"]
-    view._resources_by_id = {resource["summary_id"]: resource}
-    view._selected_resource_id = resource["summary_id"]
-    view._active_adjustment = TimelineView._adjustment_from_resource(view, resource)
+def test_created_project_can_be_used_for_activity_correction_immediately(temp_db):
+    activity = activity_service.create_activity("Word", "winword.exe", "Spec.docx", start_time="2026-06-18 09:00:00")
+    activity_service.finalize_created_activity(activity)
+    activity_service.close_activity(activity, "2026-06-18 09:05:00")
+    project = project_service.create_project("Client")
+    row = activity_service.get_activity(activity)
+    view = _view_stub()
+    view._project_by_name = {"Client": project}
+    view._project_name_by_id = {project: "Client"}
+    view.adjust_project_var.set("Client")
+    view._details_by_id = {activity: row}
+    view._active_adjustment = TimelineView._adjustment_from_activity(view, row)
+    view.note_text.insert("1.0", "reviewed")
+    focused = []
+    view._focus_activity_after_refresh = lambda activity_id: focused.append(activity_id)
 
-    view._save_resource_project(False)
+    TimelineView._save_adjustment(view)
 
-    assert activity_service.get_activity(aid)["project_id"] == view._project_by_name["Client"]
+    updated = activity_service.get_activity(activity)
+    assert updated["project_id"] == project
+    assert updated["note"] == "reviewed"
+    assert focused == [activity]

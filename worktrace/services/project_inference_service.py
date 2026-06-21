@@ -4,10 +4,10 @@ import ntpath
 import re
 import time
 
+from ..activity_identity import ActivityIdentity, infer_identity_for_activity
 from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL
 from ..db import get_connection, get_db_path, now_str
 from . import folder_rule_service
-from .resource_service import ensure_activity_resource
 
 GENERIC_FILE_PROJECT_NAMES = {
     "desktop",
@@ -70,11 +70,12 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
 
 
 def assign_project_for_activity(activity_id: int) -> dict:
-    resource = ensure_activity_resource(activity_id)
     with get_connection() as conn:
         activity = conn.execute("SELECT * FROM activity_log WHERE id = ?", (activity_id,)).fetchone()
         if not activity:
             raise ValueError(f"activity not found: {activity_id}")
+        activity_dict = dict(activity)
+        identity = infer_identity_for_activity(activity_dict)
 
         existing = conn.execute(
             "SELECT * FROM activity_project_assignment WHERE activity_id = ?",
@@ -99,20 +100,14 @@ def assign_project_for_activity(activity_id: int) -> dict:
             _sync_activity_project(conn, activity_id, project_id, auto_classified=False)
             return _assignment_dict(conn, activity_id)
 
-        if resource["resource_role"] == "anchor":
-            project_id, source, confidence, suggested_name = _infer_anchor_project(conn, dict(activity), resource)
-        else:
-            project_id = _get_uncategorized_project_id(conn)
-            source = "uncategorized"
-            confidence = 0
-            suggested_name = None
+        project_id, source, confidence, suggested_name = _infer_project(conn, activity_dict, identity)
 
         _upsert_assignment(conn, activity_id, project_id, source, confidence, False, suggested_name)
         _sync_activity_project(
             conn,
             activity_id,
             project_id,
-            auto_classified=source in {"anchor_resource_default", "anchor_keyword", "folder_rule"},
+            auto_classified=source in {"keyword_rule", "folder_rule"},
         )
         return _assignment_dict(conn, activity_id)
 
@@ -139,52 +134,44 @@ def process_new_activity(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
-def _infer_anchor_project(conn, activity: dict, resource: dict) -> tuple[int, str, int, str | None]:
-    if resource.get("default_project_id") and _project_can_auto_classify(conn, int(resource["default_project_id"])):
-        return int(resource["default_project_id"]), "anchor_resource_default", 90, None
-
-    if (
-        resource.get("resource_role") == "anchor"
-        and resource.get("resource_type") == "file"
-        and (resource.get("full_path") or resource.get("parent_dir"))
-    ):
-        rule = folder_rule_service.find_matching_folder_rule(
-            resource.get("full_path") or resource.get("parent_dir") or ""
-        )
+def _infer_project(conn, activity: dict, identity: ActivityIdentity) -> tuple[int, str, int, str | None]:
+    if identity.full_path or identity.parent_dir:
+        rule = folder_rule_service.find_matching_folder_rule(identity.full_path or identity.parent_dir or "")
         if rule:
             return int(rule["project_id"]), "folder_rule", 85, None
 
     text = " ".join(
         [
-            str(resource.get("display_name") or ""),
-            str(resource.get("title_hint") or ""),
+            str(identity.display_name or ""),
+            str(identity.title_hint or ""),
+            str(identity.app_name or ""),
+            str(identity.process_name or ""),
             str(activity.get("window_title") or ""),
+            str(activity.get("file_path_hint") or ""),
         ]
     ).casefold()
     for row in _enabled_keyword_rules(conn):
         pattern = row["pattern"]
         if pattern and pattern in text:
-            return int(row["project_id"]), "anchor_keyword", 80, None
+            return int(row["project_id"]), "keyword_rule", 80, None
 
-    fallback_name = candidate_project_name_for_file_resource(resource)
-    if fallback_name:
-        return _get_uncategorized_project_id(conn), "suggested_project_name", 40, fallback_name
+    if identity.is_anchor_file:
+        fallback_name = candidate_project_name_for_file_activity(identity)
+        if fallback_name:
+            return _get_uncategorized_project_id(conn), "suggested_project_name", 40, fallback_name
 
     return _get_uncategorized_project_id(conn), "uncategorized", 0, None
 
 
-def _project_can_auto_classify(conn, project_id: int) -> bool:
-    row = conn.execute(
-        "SELECT name, enabled FROM project WHERE id = ?",
-        (project_id,),
-    ).fetchone()
-    return bool(row and int(row["enabled"] or 0) and row["name"] != EXCLUDED_PROJECT)
-
-
-def candidate_project_name_for_file_resource(resource: dict) -> str | None:
-    if resource.get("resource_role") != "anchor" or resource.get("resource_type") != "file":
+def candidate_project_name_for_file_activity(identity: ActivityIdentity | dict) -> str | None:
+    if isinstance(identity, dict):
+        is_anchor = bool(identity.get("is_anchor_file"))
+        parent_dir = str(identity.get("parent_dir") or identity.get("anchor_parent_dir") or "").strip()
+    else:
+        is_anchor = identity.is_anchor_file
+        parent_dir = str(identity.parent_dir or "").strip()
+    if not is_anchor:
         return None
-    parent_dir = str(resource.get("parent_dir") or "").strip()
     if not parent_dir:
         return None
     parent_name = ntpath.basename(parent_dir.rstrip("\\/")) if parent_dir else ""

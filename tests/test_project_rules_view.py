@@ -1,7 +1,7 @@
 import pytest
 
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
-from worktrace.services import activity_service, folder_rule_service, project_service, resource_service, rule_service
+from worktrace.services import activity_service, folder_rule_service, project_service, rule_service
 from worktrace.ui.project_rule_dialog import PROJECT_MODE_NEW
 from worktrace.ui.project_rules_view import ProjectRulesView, _project_binding_text
 
@@ -42,16 +42,15 @@ class FakeScroll:
         self._parent_canvas = FakeCanvas(position)
 
 
-def test_project_rules_view_combines_file_folder_and_keyword_rules(temp_db):
+def test_project_rules_view_combines_folder_and_keyword_rules(temp_db):
     project_id = project_service.create_project("Client")
-    resource_service.create_or_update_file_default("D:\\Client\\Spec.docx", project_id)
     folder_rule_service.create_or_update_folder_rule("D:\\Client", project_id)
     rule_service.create_rule("Spec", project_id)
     view = object.__new__(ProjectRulesView)
 
     rules = ProjectRulesView._combined_rules(view)
 
-    assert {rule["kind"] for rule in rules} == {"file", "folder", "keyword"}
+    assert {rule["kind"] for rule in rules} == {"folder", "keyword"}
 
 
 def test_project_rules_create_project_opens_project_only_dialog(monkeypatch):
@@ -127,12 +126,10 @@ def test_project_binding_text_includes_all_rule_types():
     text = _project_binding_text(
         {
             "folder_rules": [{"folder_path": "D:\\Client"}],
-            "file_defaults": [{"full_path": "D:\\Client\\Spec.docx"}],
             "keyword_rules": [{"keyword": "Spec"}],
         }
     )
 
-    assert "文件：D:\\Client\\Spec.docx" in text
     assert "文件夹：D:\\Client" in text
     assert "关键词：Spec" in text
 
@@ -154,14 +151,12 @@ def _binding(project_id, name, description="", enabled=1):
         "enabled": enabled,
         "created_by": "user",
         "folder_rules": [],
-        "file_defaults": [],
         "keyword_rules": [],
     }
 
 
 def test_delete_project_deletes_project_and_clears_associated_rules(temp_db):
     project_id = project_service.create_project("Client")
-    resource_service.create_or_update_file_default("D:\\Client\\Spec.docx", project_id)
     folder_rule_service.create_or_update_folder_rule("D:\\Client", project_id)
     rule_service.create_rule("Spec", project_id)
 
@@ -169,7 +164,6 @@ def test_delete_project_deletes_project_and_clears_associated_rules(temp_db):
 
     assert project_service.get_project(project_id) is None
     assert "Client" not in [project["name"] for project in project_service.list_user_projects()]
-    assert resource_service.list_file_defaults() == []
     assert folder_rule_service.list_folder_rules() == []
     assert rule_service.list_rules() == []
 

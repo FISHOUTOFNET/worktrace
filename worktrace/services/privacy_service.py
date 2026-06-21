@@ -13,7 +13,6 @@ from ..constants import (
 from ..db import dict_rows, get_connection, get_db_path
 from ..path_utils import is_path_under_folder, normalize_folder_key, normalize_path_key
 from ..platforms.base import ActiveWindow
-from ..resource_patterns import infer_resource_identity
 from .settings_service import get_list_setting, set_list_setting
 
 _EXCLUDE_KEYWORD_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
@@ -61,7 +60,6 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     ).casefold()
     return (
         _matches_exclude_keyword(haystack)
-        or _matches_exclude_file(active_window.file_path_hint)
         or _matches_exclude_folder(active_window.file_path_hint)
     )
 
@@ -95,7 +93,7 @@ def _exclude_rules() -> dict[str, list[dict]]:
             (EXCLUDED_PROJECT,),
         ).fetchone()
         if not project or not int(project["enabled"] or 0):
-            result = {"keywords": [], "files": [], "folders": []}
+            result = {"keywords": [], "folders": []}
             _EXCLUDE_RULE_CACHE[cache_key] = (now + _EXCLUDE_RULE_CACHE_TTL_SECONDS, result)
             return result
         project_id = int(project["id"])
@@ -112,18 +110,6 @@ def _exclude_rules() -> dict[str, list[dict]]:
                 (project_id,),
             ).fetchall()
         )
-        files = dict_rows(
-            conn.execute(
-                """
-                SELECT canonical_key, full_path
-                FROM resource
-                WHERE default_project_id = ?
-                  AND resource_role = 'anchor'
-                  AND resource_type = 'file'
-                """,
-                (project_id,),
-            ).fetchall()
-        )
         folders = dict_rows(
             conn.execute(
                 """
@@ -136,7 +122,7 @@ def _exclude_rules() -> dict[str, list[dict]]:
                 (project_id,),
             ).fetchall()
         )
-    result = {"keywords": keywords, "files": files, "folders": folders}
+    result = {"keywords": keywords, "folders": folders}
     _EXCLUDE_RULE_CACHE[cache_key] = (now + _EXCLUDE_RULE_CACHE_TTL_SECONDS, result)
     return {
         key: [dict(row) for row in rows]
@@ -151,21 +137,6 @@ def _matches_exclude_keyword(haystack: str) -> bool:
     ]
     legacy_keywords = [keyword.casefold() for keyword in get_exclude_keywords()]
     return any(keyword and keyword in haystack for keyword in [*rule_keywords, *legacy_keywords])
-
-
-def _matches_exclude_file(file_path_hint: str | None) -> bool:
-    target = (file_path_hint or "").strip()
-    if not target:
-        return False
-    identity = infer_resource_identity(None, None, None, file_path_hint=target)
-    target_key = identity.canonical_key
-    target_path_key = normalize_path_key(identity.full_path or target)
-    for row in _exclude_rules()["files"]:
-        if target_key and row.get("canonical_key") == target_key:
-            return True
-        if target_path_key and normalize_path_key(str(row.get("full_path") or "")) == target_path_key:
-            return True
-    return False
 
 
 def _matches_exclude_folder(file_path_hint: str | None) -> bool:

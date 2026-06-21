@@ -10,8 +10,8 @@ from ..constants import (
     STATUS_NORMAL,
     TIME_FORMAT,
 )
+from ..activity_identity import attach_activity_identity
 from ..db import dict_rows, get_connection, now_str
-from ..resource_patterns import extract_anchor_file_name
 from .project_service import get_or_create_uncategorized_project
 
 
@@ -34,7 +34,6 @@ def create_activity(
     source: str = SOURCE_AUTO,
     start_time: str | None = None,
     project_id: int | None = None,
-    resource_id: int | None = None,
     file_path_hint: str | None = None,
     note: str | None = None,
     auto_classified: bool = False,
@@ -53,9 +52,9 @@ def create_activity(
             INSERT INTO activity_log(
                 start_time, end_time, duration_seconds, app_name, process_name, window_title,
                 file_path_hint, status, source, is_deleted, is_hidden,
-                auto_classified, manual_override, project_id, resource_id, note, created_at, updated_at
+                auto_classified, manual_override, project_id, note, created_at, updated_at
             )
-            VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)
             """,
             (
                 start,
@@ -68,7 +67,6 @@ def create_activity(
                 int(auto_classified),
                 int(manual_assignment),
                 project,
-                resource_id,
                 note,
                 ts,
                 ts,
@@ -224,16 +222,9 @@ def _activity_select_sql(where: str) -> str:
     return f"""
         SELECT
             a.*,
-            p.name AS project_name,
-            r.display_name AS resource_display_name,
-            r.resource_role,
-            r.resource_type,
-            r.full_path AS resource_full_path,
-            r.parent_dir AS resource_parent_dir,
-            r.file_stem AS resource_file_stem
+            p.name AS project_name
         FROM activity_log a
         LEFT JOIN project p ON p.id = a.project_id
-        LEFT JOIN resource r ON r.id = a.resource_id
         WHERE {where}
         ORDER BY a.start_time DESC, a.id DESC
     """
@@ -251,35 +242,23 @@ def get_activities_by_range(start_date: str, end_date: str) -> list[dict]:
             _activity_select_sql("a.is_deleted = 0 AND a.start_time BETWEEN ? AND ?"),
             (start, end),
         ).fetchall()
-    return dict_rows(rows)
+    return [attach_activity_identity(row) for row in dict_rows(rows)]
 
 
 def get_activity(activity_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute(_activity_select_sql("a.id = ?"), (activity_id,)).fetchone()
-    return dict(row) if row else None
+    return attach_activity_identity(dict(row)) if row else None
 
 
 def activity_display_name(activity: dict) -> str:
-    resource_name = str(activity.get("resource_display_name") or "").strip()
-    if activity.get("resource_role") == "anchor" and resource_name:
-        return resource_name
-    title_file = extract_anchor_file_name(activity.get("window_title"))
-    if title_file:
-        return title_file
-    return str(activity.get("app_name") or activity.get("process_name") or "").strip()
+    if activity.get("activity_display_name"):
+        return str(activity["activity_display_name"]).strip()
+    return attach_activity_identity(activity)["activity_display_name"]
 
 
 def update_activity_project(activity_id: int, project_id: int, manual: bool = True) -> None:
     update_activities_project([activity_id], project_id, manual=manual)
-
-
-def update_activity_resource(activity_id: int, resource_id: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET resource_id = ?, updated_at = ? WHERE id = ?",
-            (resource_id, now_str(), activity_id),
-        )
 
 
 def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> None:
@@ -290,10 +269,8 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> Non
             "UPDATE activity_log SET file_path_hint = ?, updated_at = ? WHERE id = ?",
             (file_path_hint, now_str(), activity_id),
         )
-    from . import resource_service
     from .project_inference_service import assign_project_for_activity
 
-    resource_service.refresh_activity_resource(activity_id)
     assign_project_for_activity(activity_id)
 
 
@@ -398,7 +375,6 @@ def update_activity_fields(activity_id: int, **fields: Any) -> None:
         "auto_classified",
         "manual_override",
         "project_id",
-        "resource_id",
         "note",
     }
     items = [(key, value) for key, value in fields.items() if key in allowed]

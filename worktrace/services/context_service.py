@@ -11,9 +11,9 @@ from ..constants import (
     STATUS_PAUSED,
     TIME_FORMAT,
 )
+from ..activity_identity import attach_activity_identity
 from ..db import dict_rows, get_connection, now_str
 from .project_inference_service import assign_project_for_activity
-from .resource_service import ensure_activity_resource
 from .settings_service import get_int_setting
 
 INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED}
@@ -26,7 +26,7 @@ def recompute_context_assignments_for_date(date: str) -> None:
     uncategorized_id = _get_uncategorized_project_id()
 
     rows = _load_rows(start, end)
-    if _ensure_resources_and_assignments(rows):
+    if _ensure_assignments(rows):
         rows = _load_rows(start, end)
     if _recompute_anchor_rows(rows):
         rows = _load_rows(start, end)
@@ -36,7 +36,7 @@ def recompute_context_assignments_for_date(date: str) -> None:
             continue
         if row.get("assignment_source") == "midnight_anchor":
             continue
-        if row["resource_role"] != "auxiliary":
+        if row.get("is_anchor_file"):
             continue
         if int(row["manual_override"] or 0) or int(row["assignment_is_manual"] or 0):
             continue
@@ -60,14 +60,10 @@ def _load_rows(start: str, end: str) -> list[dict]:
             """
             SELECT
                 a.*,
-                r.resource_role,
-                r.resource_type,
-                r.display_name AS resource_display_name,
                 apa.project_id AS assignment_project_id,
                 apa.source AS assignment_source,
                 apa.is_manual AS assignment_is_manual
             FROM activity_log a
-            LEFT JOIN resource r ON r.id = a.resource_id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             WHERE a.is_deleted = 0
               AND a.start_time BETWEEN ? AND ?
@@ -75,15 +71,12 @@ def _load_rows(start: str, end: str) -> list[dict]:
             """,
             (start, end),
         ).fetchall()
-    return dict_rows(rows)
+    return [attach_activity_identity(row) for row in dict_rows(rows)]
 
 
-def _ensure_resources_and_assignments(rows: list[dict]) -> bool:
+def _ensure_assignments(rows: list[dict]) -> bool:
     changed = False
     for row in rows:
-        if row["resource_id"] is None:
-            ensure_activity_resource(int(row["id"]))
-            changed = True
         if row["assignment_project_id"] is None:
             assign_project_for_activity(int(row["id"]))
             changed = True
@@ -95,7 +88,7 @@ def _recompute_anchor_rows(rows: list[dict]) -> bool:
     for row in rows:
         if row["status"] == STATUS_NORMAL and row.get("assignment_source") == "midnight_anchor":
             continue
-        if row["status"] == STATUS_NORMAL and row.get("resource_role") == "anchor":
+        if row["status"] == STATUS_NORMAL and row.get("is_anchor_file"):
             if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
                 continue
             assignment = assign_project_for_activity(int(row["id"]))
@@ -178,7 +171,7 @@ def _row_project_id(row: dict) -> int:
 
 def _is_context_anchor(row: dict) -> bool:
     return row["status"] == STATUS_NORMAL and (
-        row.get("resource_role") == "anchor" or row.get("assignment_source") == "midnight_anchor"
+        row.get("is_anchor_file") or row.get("assignment_source") == "midnight_anchor"
     )
 
 

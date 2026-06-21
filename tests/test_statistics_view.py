@@ -26,7 +26,7 @@ class FakeVar:
 
 def test_statistics_live_tick_updates_from_cache_without_statistics_query(temp_db, monkeypatch):
     snapshot = {
-        "resource_display_name": "Spec.docx",
+        "activity_display_name": "Spec.docx",
         "inferred_project_name": "Client",
         "status": "normal",
         "start_time": "",

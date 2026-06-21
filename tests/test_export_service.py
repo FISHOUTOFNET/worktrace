@@ -44,7 +44,7 @@ def test_excel_export_file_creation(temp_db, tmp_path):
         "时长",
         "状态",
         "应用",
-        "资源/文件",
+        "活动",
         "窗口标题",
         "项目",
         "备注",
@@ -66,7 +66,7 @@ def test_markdown_export_content(temp_db, tmp_path):
     assert "未确认记录提醒" not in text
 
 
-def test_exports_prefer_resource_file_name_for_wps_activity(temp_db, tmp_path):
+def test_exports_prefer_activity_file_name_for_wps_activity(temp_db, tmp_path):
     aid = activity_service.create_activity(
         "WPS Writer",
         "wps.exe",
@@ -85,8 +85,8 @@ def test_exports_prefer_resource_file_name_for_wps_activity(temp_db, tmp_path):
     xlsx_path = export_service.export_excel("2026-06-18", "2026-06-18", str(tmp_path / "out.xlsx"))
     ws = load_workbook(xlsx_path)["Activity Logs"]
     headers = [cell.value for cell in ws[1]]
-    resource_col = headers.index("资源/文件") + 1
-    assert ws.cell(row=2, column=resource_col).value == "合同审查意见.docx"
+    activity_col = headers.index("活动") + 1
+    assert ws.cell(row=2, column=activity_col).value == "合同审查意见.docx"
 
 
 def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):
@@ -94,6 +94,7 @@ def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):
     assert Path(path).exists()
     wb = load_workbook(path)
     assert "folder_project_rule" in wb.sheetnames
+    assert "resource" not in wb.sheetnames
     try:
         export_service.clear_all_local_data(confirm=False)
     except ValueError:

@@ -588,7 +588,7 @@ system    created by recovery or state transition logic
 ### 14.3 Review And Classification
 
 Auto-created records are drafts. Users can organize records by editing project, note,
-file defaults, folder project rules, and keyword project rules.
+folder project rules, and keyword project rules.
 
 ### 14.4 Manual Override
 
@@ -607,16 +607,15 @@ Automatic project inference uses this priority:
 
 ```text
 manual assignment
-file default project
 folder project rule
 keyword rule
 parent-folder suggested project name
 uncategorized
 ```
 
-Folder project rules require a known full file path or parent directory. A file name without a path must not create a suggested project name from the file stem.
+Folder project rules require a known full file path or parent directory derived from the activity. A file name without a path must not create a suggested project name from the file stem.
 
-Context carry-over may classify any normal auxiliary non-anchor resource. It uses the nearest previous and next anchor files only; an uncategorized anchor or an interrupt status stops the scan. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same carry-over rules.
+Context carry-over may classify any normal auxiliary non-anchor activity. It uses the nearest previous and next anchor file activities only; an uncategorized anchor or an interrupt status stops the scan. Browsers, chat apps, meeting apps, editors, IDEs, and other apps use the same carry-over rules.
 
 ---
 
@@ -1025,7 +1024,7 @@ manual_override = 1
 
 ### 22.4 Folder Rules And Suggested Names
 
-Folder project rules match only anchor file resources with a recognized full path or parent directory. Office/WPS adapters should resolve paths through COM and may fall back to the foreground process open-file list when the window title has a unique exact file-name match.
+Folder project rules match only anchor file activities with a recognized full path or parent directory. Office/WPS adapters should resolve paths through COM and may fall back to the foreground process open-file list when the window title has a unique exact file-name match.
 
 Suggested project names are display-only Time Details hints. They may be derived from a known non-generic parent folder name, but must not be derived from a bare file name or file stem.
 
@@ -1049,7 +1048,7 @@ All rows are split at local midnight and counted on their calendar date. This ap
 
 When the collector itself crosses midnight during a concrete normal project, close the pre-midnight activity at `00:00:00`, record a `session_boundary` with reason `midnight`, and start a new activity at `00:00:00`.
 
-If the new post-midnight activity would otherwise be uncategorized or shorter than the 30-second history threshold, persist it immediately with an automatic `midnight_anchor` assignment to the previous concrete project. This assignment must not set `manual_override`, update file defaults, update folder rules, update keyword rules, or permanently change the resource identity. It may act as a context anchor for subsequent auxiliary activity.
+If the new post-midnight activity would otherwise be uncategorized or shorter than the 30-second history threshold, persist it immediately with an automatic `midnight_anchor` assignment to the previous concrete project. This assignment must not set `manual_override`, update folder rules, update keyword rules, or create any long-term per-file binding. It may act as a context anchor for subsequent auxiliary activity.
 
 If the previous activity has no existing concrete project, do not create a suggested project and do not apply `midnight_anchor`.
 
@@ -1085,17 +1084,7 @@ archive_project(project_id: int) -> None
 get_or_create_uncategorized_project() -> int
 ```
 
-### 23.3 resource_service.py
-
-Required functions:
-
-```python
-list_file_defaults() -> list[dict]
-create_or_update_file_default(file_path: str, project_id: int) -> int
-clear_file_default(resource_id: int) -> None
-```
-
-### 23.4 rule_service.py
+### 23.3 rule_service.py
 
 Required functions:
 
@@ -1110,7 +1099,7 @@ apply_rules_to_unclassified() -> None
 
 Folder-rule and keyword-rule lookup paths may keep short TTL caches keyed by the active database path. Creating, deleting, enabling, or disabling a rule must invalidate the relevant cache.
 
-### 23.5 settings_service.py
+### 23.4 settings_service.py
 
 Required functions:
 
@@ -1127,7 +1116,7 @@ set_list_setting(key: str, values: list[str]) -> None
 `settings_service` may keep a short TTL in-memory cache, but cache keys must include the active database path. `set_setting` must update the cache for the written key.
 Privacy exclusion keywords may cache the parsed list by database path; `set_exclude_keywords` must update or invalidate that cache.
 
-### 23.6 statistics_service.py
+### 23.5 statistics_service.py
 
 Required functions:
 
@@ -1140,7 +1129,7 @@ get_uncategorized_duration(start_date: str, end_date: str) -> int
 `get_summary` returns `classified_duration` in addition to total, effective, idle, paused, excluded, and uncategorized durations.
 `get_summary` should ensure context assignments once for the requested range, then compute status totals with SQL aggregation and call project stats without repeating context recomputation.
 
-### 23.7 recovery_service.py
+### 23.6 recovery_service.py
 
 Required functions:
 
@@ -1150,7 +1139,7 @@ detect_time_jump(last_loop_time: str, now: str) -> bool
 mark_record_error(activity_id: int, reason: str) -> None
 ```
 
-### 23.8 privacy_service.py
+### 23.7 privacy_service.py
 
 Required functions:
 
@@ -1161,7 +1150,7 @@ is_excluded(active_window: ActiveWindow) -> bool
 make_excluded_activity_payload() -> dict
 ```
 
-### 23.9 export_service.py
+### 23.8 export_service.py
 
 Required functions:
 
@@ -1185,7 +1174,7 @@ Use 5 pages:
 5. Settings and Privacy
 
 The collector thread must not directly update UI widgets. UI must refresh via Tkinter `after()` polling.
-Pages are created lazily on first visit, then stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels and visible durations are refreshed by the app shell every 1 second without rebuilding page content. Time Details must use value-only Treeview updates while session/resource/detail structure is stable, falling back to one full refresh when rows are added, removed, or reordered. Resize and restore use separate visual-suspend strategies: resize may temporarily unmap the content area under a content cover, while restore keeps content mounted under a full-window cover and defers heavy refresh until after reveal.
+Pages are created lazily on first visit, then stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels and visible durations are refreshed by the app shell every 1 second without rebuilding page content. Time Details must use value-only Treeview updates while session/detail structure is stable, falling back to one full refresh when rows are added, removed, or reordered. Resize and restore use separate visual-suspend strategies: resize may temporarily unmap the content area under a content cover, while restore keeps content mounted under a full-window cover and defers heavy refresh until after reveal.
 
 Default refresh interval:
 
@@ -1214,19 +1203,18 @@ Must show:
 2. pause / resume button
 3. date selector
 4. project session table
-5. resource summary table
-6. detail activity table
-7. shared adjustment panel for resource summary rows and detail activity rows
-8. note editor for single detail activity rows
-9. delete action
-10. filters for uncategorized records
-11. current activity with a live `hh:mm:ss` counter
+5. detail activity table
+6. adjustment panel for selected detail activity rows
+7. note editor for single detail activity rows
+8. delete action
+9. filters for uncategorized records
+10. current activity with a live `hh:mm:ss` counter
 
 The page exposes `open_context(target_date, only_uncategorized=False, selected_session_id=None)` so other pages can open it with a date, filter, and selected session.
 
-Time Details must not expose manual session splitting, same-name project segment merge, cross-project session merge, or moving a detail activity into another session. Project correction targets are limited to the selected project session, the selected detail activity, or the selected resource summary row.
+Time Details must not expose manual session splitting, same-name project segment merge, cross-project session merge, or moving a detail activity into another session. Project correction targets are limited to the selected project session or the selected detail activity.
 
-Resource summary grouping must keep anchor files grouped by their stable file resource. Auxiliary app activities must be grouped by app/process plus normalized activity name from the window title, not by app resource alone. The resource summary row stores the activity IDs in that group; the shared adjustment panel treats that list the same way it treats the single activity ID from the detail table.
+The detail activity table is the only activity-level view. File identity is derived from each activity at runtime from app name, process name, window title, and file path hint; the UI must not expose a separate persisted-file view or a per-file default binding.
 
 The detail activity project selector must list selectable projects only. It must not add current session rows or other session targets, because that reintroduces cross-session merge behavior and can create large menus on busy days.
 
@@ -1267,7 +1255,7 @@ Must show:
 3. top-level add-project action
 4. per-project add-rule actions
 
-Project rules include file defaults, folder rules, and keyword rules. File rules clear `resource.default_project_id` when deleted. Folder and keyword rules support enable, disable, and delete.
+Project rules include folder rules and keyword rules. Folder and keyword rules support enable, disable, and delete.
 
 The top-level action is labeled `新增项目` and opens project creation by default. Each project card exposes `新增规则`, which opens rule creation with that project preselected.
 
@@ -1421,8 +1409,8 @@ Rules:
 6. Display all stored durations as exact `hh:mm:ss` without minute rounding.
 7. Display the current activity counter as `hh:mm:ss`.
 8. Persisted activity durations must be monotonic: live projections, `extra_seconds`, close operations, and recovery must never reduce an already stored duration.
-9. Update visible Overview KPI durations, Time Details session/resource/detail durations, and Statistics durations every second from the current activity snapshot without requiring a full page refresh.
-10. While a new current activity is still below the 30-second history threshold, only the Overview recent-project row and Time Details project/session row temporarily carry those seconds on the previous confirmed project. The current-activity label, KPI summaries, Statistics, resource summaries, and activity details keep using the real current snapshot.
+9. Update visible Overview KPI durations, Time Details session/detail durations, and Statistics durations every second from the current activity snapshot without requiring a full page refresh.
+10. While a new current activity is still below the 30-second history threshold, only the Overview recent-project row and Time Details project/session row temporarily carry those seconds on the previous confirmed project. The current-activity label, KPI summaries, Statistics, and activity details keep using the real current snapshot.
 11. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized. Resize uses a stable content-area cover and can run one catch-up refresh before reveal. Restore uses a full-window cover, keeps the content tree mounted, reveals the complete UI first, then runs one delayed merged refresh.
 12. On Windows, rely on Tk `<Unmap>`, `<Map>`, and `<Configure>` events for minimize/restore handling. Native WndProc subclassing is disabled to avoid Python runtime/GIL crashes.
 
