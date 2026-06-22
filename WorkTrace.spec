@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_all
 
 root = Path(SPECPATH)
 
-datas = [(str(root / 'worktrace' / 'schema.sql'), 'worktrace')]
+datas = [(str(root / 'worktrace' / 'schema.sql'), 'worktrace'), (str(root / 'worktrace' / 'platforms' / 'open_files_helper.py'), 'worktrace/platforms')]
 binaries = []
 hiddenimports = ['win32timezone']
 tmp_ret = collect_all('customtkinter')

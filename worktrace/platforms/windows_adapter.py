@@ -514,17 +514,11 @@ def _get_process_open_file_paths(pid: int) -> list[str]:
 
 
 def _get_process_open_file_paths_subprocess(pid: int) -> list[str]:
-    if getattr(sys, "frozen", False):
-        logging.debug("active file path open-files lookup disabled in frozen executable")
+    helper_cmd = _open_files_helper_cmd()
+    if helper_cmd is None:
+        logging.debug("active file path open-files helper not available")
         return []
 
-    script = (
-        "import json, sys\n"
-        "import psutil\n"
-        "pid = int(sys.argv[1])\n"
-        "paths = [item.path for item in psutil.Process(pid).open_files()]\n"
-        "print(json.dumps(paths, ensure_ascii=False))\n"
-    )
     startupinfo = None
     creationflags = 0
     if sys.platform.startswith("win"):
@@ -534,7 +528,7 @@ def _get_process_open_file_paths_subprocess(pid: int) -> list[str]:
 
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", script, str(pid)],
+            [*helper_cmd, str(pid)],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -555,6 +549,24 @@ def _get_process_open_file_paths_subprocess(pid: int) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(path) for path in raw if str(path or "").strip()]
+
+
+def _open_files_helper_cmd() -> list[str] | None:
+    """Return the command prefix for the open-files helper subprocess.
+
+    In a frozen (PyInstaller) build the main executable re-enters itself
+    with ``--open-files-helper`` so the bundled Python interpreter runs
+    the helper module.  This avoids the problem that ``WorkTrace.exe -c
+    script`` is invalid.
+
+    In a normal (non-frozen) environment we use ``-m`` to invoke the
+    standalone helper module.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--open-files-helper"]
+
+    # Non-frozen: use the standalone helper module.
+    return [sys.executable, "-m", "worktrace.platforms.open_files_helper"]
 
 
 def _match_open_file_path(title_file: str, paths: list[str]) -> str | None:

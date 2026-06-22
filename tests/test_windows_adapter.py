@@ -1,3 +1,4 @@
+import sys
 import threading
 from types import SimpleNamespace
 
@@ -291,3 +292,77 @@ def test_com_failure_cooldown_skips_recently_failed_prog_id():
     assert not _is_com_available("Test.Application")
     # A different prog_id should still be available
     assert _is_com_available("Other.Application")
+
+
+def test_non_frozen_open_files_helper_returns_paths(monkeypatch):
+    """Non-frozen environment should invoke the helper and return file paths."""
+    import subprocess
+
+    fake_completed = subprocess.CompletedProcess(
+        args=[sys.executable, "-m", "worktrace.platforms.open_files_helper", "1234"],
+        returncode=0,
+        stdout='["C:\\\\Repo\\\\main.py", "C:\\\\Repo\\\\README.md"]',
+        stderr="",
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: fake_completed)
+    result = windows_adapter._get_process_open_file_paths_subprocess(1234)
+    assert result == ["C:\\Repo\\main.py", "C:\\Repo\\README.md"]
+
+
+def test_frozen_env_does_not_disable_open_files_helper(monkeypatch):
+    """Frozen environment should NOT return None for the helper command."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    cmd = windows_adapter._open_files_helper_cmd()
+    assert cmd is not None
+    assert len(cmd) >= 2
+
+
+def test_frozen_env_uses_reentry_flag(monkeypatch):
+    """Frozen environment should use --open-files-helper reentry flag."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    cmd = windows_adapter._open_files_helper_cmd()
+    assert cmd is not None
+    assert "--open-files-helper" in cmd
+
+
+def test_non_frozen_env_uses_module_invocation():
+    """Non-frozen environment should use -m module invocation."""
+    cmd = windows_adapter._open_files_helper_cmd()
+    assert cmd is not None
+    assert "-m" in cmd
+    assert "worktrace.platforms.open_files_helper" in cmd
+
+
+def test_open_files_helper_timeout_returns_safe_failure_and_cooldown(monkeypatch):
+    """Helper timeout should return None and mark PID for cooldown."""
+    pid = 505050
+    windows_adapter._open_files_failure_times.pop(pid, None)
+    monkeypatch.setattr(windows_adapter, "_com_candidates", lambda _pn: [])
+    monkeypatch.setattr(windows_adapter, "extract_file_path_from_title", lambda _t: None)
+    monkeypatch.setattr(windows_adapter, "_resolve_indexed_file_path", lambda _t: None)
+
+    def _timeout(_pid):
+        raise TimeoutError("slow handle enumeration")
+
+    monkeypatch.setattr(windows_adapter, "_get_process_open_file_paths", _timeout)
+
+    assert _resolve_active_file_path("Code.exe", "main.py - Visual Studio Code", pid) is None
+    assert not _is_open_files_available(pid)
+
+
+def test_open_files_helper_failure_raises_runtime_error(monkeypatch):
+    """Helper subprocess failure (non-zero exit) should raise RuntimeError."""
+    import subprocess
+
+    fake_completed = subprocess.CompletedProcess(
+        args=[sys.executable, "-m", "worktrace.platforms.open_files_helper", "1234"],
+        returncode=1,
+        stdout="",
+        stderr="psutil error",
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: fake_completed)
+    try:
+        windows_adapter._get_process_open_file_paths_subprocess(1234)
+        assert False, "should have raised RuntimeError"
+    except RuntimeError as exc:
+        assert "open-files helper failed" in str(exc)
