@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from importlib import resources
 import logging
 import sqlite3
 from pathlib import Path
@@ -13,6 +14,11 @@ from .constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
+
+
+def read_schema_sql() -> str:
+    return resources.files(__package__).joinpath("schema.sql").read_text(encoding="utf-8")
+
 
 _db_path: Path | None = None
 
@@ -57,9 +63,8 @@ def dict_rows(rows: Iterable[sqlite3.Row]) -> list[dict]:
 
 def initialize_database(path: str | Path | None = None) -> None:
     db_path = configure_database(path)
-    schema_path = Path(__file__).with_name("schema.sql")
     with get_connection() as conn:
-        conn.executescript(schema_path.read_text(encoding="utf-8"))
+        conn.executescript(read_schema_sql())
         migrate_schema(conn)
         seed_defaults(conn)
     logging.info("database initialized")
@@ -136,8 +141,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
 def reset_database() -> None:
     with get_connection() as conn:
         drop_all_tables(conn)
-        schema_path = Path(__file__).with_name("schema.sql")
-        conn.executescript(schema_path.read_text(encoding="utf-8"))
+        conn.executescript(read_schema_sql())
         seed_defaults(conn)
 
 

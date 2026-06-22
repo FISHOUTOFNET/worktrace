@@ -50,6 +50,27 @@ The first launch shows the privacy notice. The collector starts only after the n
 
 Closing the main window hides WorkTrace to the Windows notification area. Use the tray icon right-click menu to show the window, pause or resume recording, or exit WorkTrace cleanly.
 
+## Windows Packaging
+
+Build the single-file executable:
+
+```powershell
+python -m PyInstaller --noconfirm --clean WorkTrace.spec
+```
+
+Build the per-user installer:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
+```
+
+The build outputs are:
+
+- `dist\WorkTrace.exe`
+- `dist\WorkTrace-Setup.exe`
+
+The installer copies WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace` and creates a current-user Start Menu shortcut. It does not require administrator privileges.
+
 ## Local Paths
 
 - Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`
@@ -161,6 +182,6 @@ Also remove the project folder or packaged executable if you no longer need it.
 ## Current Limitations
 
 - Windows is the intended production platform; non-Windows runs use the fake adapter.
-- No installer, service, driver, cloud sync, login, AI, OCR, screenshots, screen recording, or automatic startup.
+- No service, driver, cloud sync, login, AI, OCR, screenshots, screen recording, or automatic startup.
 - Date inputs are plain `YYYY-MM-DD` text fields in v0.1 Lite.
 - Time Details uses plain text date fields in `YYYY-MM-DD` format.
