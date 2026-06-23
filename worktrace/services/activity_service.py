@@ -137,25 +137,32 @@ def _write_resource_in_conn(
     from ..path_utils import normalize_path_key
     from ..resources.resource_policy import safe_metadata_json
 
-    if resource is None:
-        if status == STATUS_EXCLUDED:
-            from ..constants import EXCLUDED_APP_NAME, EXCLUDED_PROCESS_NAME, EXCLUDED_WINDOW_TITLE
-            resource = DetectedResource(
-                resource_kind="system",
-                resource_subtype="excluded",
-                display_name=EXCLUDED_APP_NAME,
-                identity_key="system:excluded",
-                is_anchor=False,
-                confidence=100,
-                source="auto_excluded",
-                app_name=EXCLUDED_APP_NAME,
-                process_name=EXCLUDED_PROCESS_NAME,
-                window_title=EXCLUDED_WINDOW_TITLE,
-            )
-        else:
-            resource = _resource_from_activity_identity(
-                app_name, process_name, window_title, file_path_hint, status,
-            )
+    # Security: status=excluded always forces anonymous resource, regardless of
+    # whether the caller passed in a real resource. This guarantees that no
+    # real resource metadata is persisted for excluded activities.
+    if status == STATUS_EXCLUDED:
+        from ..constants import EXCLUDED_APP_NAME, EXCLUDED_PROCESS_NAME, EXCLUDED_WINDOW_TITLE
+        resource = DetectedResource(
+            resource_kind="system",
+            resource_subtype="excluded",
+            display_name=EXCLUDED_APP_NAME,
+            identity_key="system:excluded",
+            is_anchor=False,
+            confidence=100,
+            source="auto_excluded",
+            app_name=EXCLUDED_APP_NAME,
+            process_name=EXCLUDED_PROCESS_NAME,
+            window_title=EXCLUDED_WINDOW_TITLE,
+            path_hint=None,
+            uri_scheme=None,
+            uri_host=None,
+            uri_hint=None,
+            metadata_json=None,
+        )
+    elif resource is None:
+        resource = _resource_from_activity_identity(
+            app_name, process_name, window_title, file_path_hint, status,
+        )
     path_key = normalize_path_key(resource.path_hint) if resource.path_hint else None
     metadata = safe_metadata_json(
         _parse_metadata_json(resource.metadata_json) if resource.metadata_json else None
@@ -439,9 +446,124 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> Non
             "UPDATE activity_log SET file_path_hint = ?, updated_at = ? WHERE id = ?",
             (file_path_hint, now_str(), activity_id),
         )
+        _sync_activity_resource_after_path_update(conn, activity_id, file_path_hint)
     from .project_inference_service import assign_project_for_activity
 
     assign_project_for_activity(activity_id)
+
+
+def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_hint: str) -> None:
+    """Re-infer the resource after a path hint update and sync activity_resource.
+
+    When a real full path becomes available for an activity that previously only
+    had a name-only resource (e.g. ``合同.docx`` from the window title), we
+    re-run detection and upgrade the stored resource so that path-based
+    identity keys, ``path_hint`` and ``path_key`` are populated. Excluded
+    activities keep their anonymous resource.
+    """
+    from ..path_utils import normalize_path_key
+
+    row = conn.execute(
+        "SELECT app_name, process_name, window_title, status FROM activity_log WHERE id = ?",
+        (activity_id,),
+    ).fetchone()
+    if not row:
+        return
+    status = row["status"]
+    if status == STATUS_EXCLUDED:
+        # Excluded activities always keep their anonymous resource; never
+        # persist a real path even when one becomes available.
+        return
+
+    existing = conn.execute(
+        "SELECT resource_kind, resource_subtype, identity_key FROM activity_resource WHERE activity_id = ?",
+        (activity_id,),
+    ).fetchone()
+    if not existing:
+        # No existing resource row; create_activity / backfill will handle it.
+        return
+
+    # Re-infer the resource using the updated file_path_hint.
+    resource = _resource_from_activity_identity(
+        row["app_name"], row["process_name"], row["window_title"], file_path_hint, status,
+    )
+
+    new_path_hint = resource.path_hint
+    new_identity_key = resource.identity_key
+    new_display_name = resource.display_name
+    new_kind = resource.resource_kind
+    new_subtype = resource.resource_subtype
+
+    # If detection still produced a name-only identity (no path_hint), but we
+    # now have a real local file path, upgrade to a path-based identity so
+    # that the stored resource reflects the newly-available path. We keep the
+    # existing resource kind/subtype when the detector didn't surface a file
+    # (e.g. generic app) so that we don't accidentally downgrade a previously
+    # classified resource.
+    from ..path_utils import looks_like_local_file_path
+
+    if looks_like_local_file_path(file_path_hint) and not new_path_hint:
+        existing_kind = existing["resource_kind"]
+        existing_subtype = existing["resource_subtype"]
+        existing_identity = existing["identity_key"] or ""
+        normalized = normalize_path_key(file_path_hint)
+        # Determine the appropriate identity key prefix. Prefer the existing
+        # resource kind when it is file-like; otherwise fall back to local_file.
+        if existing_kind == "office_document":
+            new_identity_key = f"office_file:{normalized}"
+            new_kind = existing_kind
+            new_subtype = existing_subtype
+        elif existing_kind == "ide_file":
+            new_identity_key = f"ide_file:{normalized}"
+            new_kind = existing_kind
+            new_subtype = existing_subtype
+        elif existing_kind == "email":
+            new_identity_key = f"email_file:{normalized}"
+            new_kind = existing_kind
+            new_subtype = existing_subtype
+        elif existing_kind == "local_file":
+            new_identity_key = f"file_path:{normalized}"
+            new_kind = existing_kind
+            new_subtype = existing_subtype
+        elif existing_identity.startswith(("office_file_name:", "ide_file_name:", "email_file_name:", "file_name:")):
+            # Name-only file-like resource that detection didn't re-classify;
+            # upgrade to a path-based local_file identity.
+            new_identity_key = f"file_path:{normalized}"
+            new_kind = "local_file"
+            new_subtype = "unknown"
+        else:
+            # Generic app or other kind: don't force a file identity if
+            # detection didn't find one.
+            new_path_hint = None
+        if new_path_hint is not None:
+            new_path_hint = file_path_hint
+            import ntpath as _ntpath
+            new_display_name = _ntpath.basename(file_path_hint) or new_display_name
+
+    path_key = normalize_path_key(new_path_hint) if new_path_hint else None
+    conn.execute(
+        """
+        UPDATE activity_resource
+        SET path_hint = ?,
+            path_key = ?,
+            identity_key = ?,
+            display_name = ?,
+            resource_kind = ?,
+            resource_subtype = ?,
+            updated_at = ?
+        WHERE activity_id = ?
+        """,
+        (
+            new_path_hint,
+            path_key,
+            new_identity_key,
+            new_display_name,
+            new_kind,
+            new_subtype,
+            now_str(),
+            activity_id,
+        ),
+    )
 
 
 def update_activities_project(activity_ids: list[int], project_id: int, manual: bool = True) -> None:

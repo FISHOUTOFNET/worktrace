@@ -99,7 +99,7 @@ class IdeDetector:
             resource_subtype=validate_resource_subtype("ide_workspace"),
             display_name=workspace,
             identity_key=identity_key,
-            is_anchor=False,
+            is_anchor=True,
             confidence=60,
             source="ide_detector",
             app_name=active_window.app_name or "",

@@ -52,6 +52,14 @@ class CollectorStateMachine:
 
         status = STATE_TO_STATUS[state]
         payload = self._payload_for(status, active_window)
+        # Resource-aware exclusion: if a normal recording surfaces a resource
+        # that should be excluded (e.g. browser uri_host or email subject hits
+        # an exclude keyword), force the payload into the excluded state so
+        # that no real resource metadata is persisted.
+        if status == STATUS_NORMAL and self._payload_resource_is_excluded(payload):
+            payload = self._payload_for(STATUS_EXCLUDED, active_window)
+            status = STATUS_EXCLUDED
+            state = "excluded"
         signature = self._signature_for_payload(payload)
         if self._current_matches(payload, signature):
             self.recorder.observe(payload, self.recorder.current_signature or signature, transition_time)
@@ -285,6 +293,15 @@ class CollectorStateMachine:
                 if basename == name_part:
                     return True
         return False
+
+    def _payload_resource_is_excluded(self, payload: dict) -> bool:
+        resource = payload.get("resource")
+        if resource is None:
+            return False
+        try:
+            return privacy_service.is_resource_excluded(resource)
+        except Exception:
+            return False
 
     def _payload_for(self, status: str, active_window: ActiveWindow | None) -> dict:
         if status == STATUS_EXCLUDED:

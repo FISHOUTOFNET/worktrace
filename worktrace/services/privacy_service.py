@@ -65,6 +65,52 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     )
 
 
+def is_resource_excluded(resource) -> bool:
+    """Return True if a DetectedResource (or dict) should be excluded.
+
+    Inspects the same fields as :func:`is_excluded`, plus resource-specific
+    fields such as ``uri_host``, ``display_name``, ``identity_key`` and safe
+    ``metadata_json`` entries. This is used after resource detection to make
+    sure a resource that surfaces an excluded keyword (e.g. a browser host or
+    email subject) is anonymized just like an excluded active window.
+    """
+    if resource is None:
+        return False
+    if isinstance(resource, dict):
+        fields = [
+            str(resource.get("app_name") or ""),
+            str(resource.get("process_name") or ""),
+            str(resource.get("window_title") or ""),
+            str(resource.get("path_hint") or ""),
+            str(resource.get("uri_host") or ""),
+            str(resource.get("uri_hint") or ""),
+            str(resource.get("display_name") or ""),
+            str(resource.get("identity_key") or ""),
+        ]
+        metadata_raw = resource.get("metadata_json")
+        if metadata_raw:
+            fields.append(str(metadata_raw))
+    else:
+        fields = [
+            resource.app_name or "",
+            resource.process_name or "",
+            resource.window_title or "",
+            resource.path_hint or "",
+            resource.uri_host or "",
+            resource.uri_hint or "",
+            resource.display_name or "",
+            resource.identity_key or "",
+        ]
+        if resource.metadata_json:
+            fields.append(resource.metadata_json)
+    haystack = " ".join(fields).casefold()
+    if _matches_exclude_keyword(haystack):
+        return True
+    if _matches_exclude_folder(resource.path_hint if not isinstance(resource, dict) else resource.get("path_hint")):
+        return True
+    return False
+
+
 def make_excluded_activity_payload() -> dict:
     return {
         "app_name": EXCLUDED_APP_NAME,

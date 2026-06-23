@@ -24,6 +24,29 @@ EMAIL_PROCESS_NAMES = frozenset({
 EMAIL_FILE_EXTENSIONS = frozenset({".eml", ".msg"})
 
 
+_EMAIL_FILE_NAME_RE = re.compile(
+    r"(?P<name>[^\\/:*?\"<>|\r\n]+?\.(?:eml|msg))(?=$|[\s\"'）)\]】。；;，,]| - | [-–—])",
+    re.IGNORECASE,
+)
+
+
+def _extract_email_file_name_from_title(window_title: str | None) -> str | None:
+    """Extract an .eml/.msg file name from a window title.
+
+    Returns the bare file name (e.g. ``通知.eml``) without the surrounding
+    ``- Outlook`` suffix. Returns ``None`` if no email file name is found.
+    """
+    title = (window_title or "").strip()
+    if not title:
+        return None
+    matches = list(_EMAIL_FILE_NAME_RE.finditer(title))
+    if not matches:
+        return None
+    raw = matches[-1].group("name").strip()
+    cleaned = raw.strip(" -—–_|[]()（）")
+    return cleaned or None
+
+
 class EmailDetector:
     def detect(self, active_window: ActiveWindow) -> DetectedResource | None:
         process_lower = (active_window.process_name or "").strip().lower()
@@ -39,12 +62,31 @@ class EmailDetector:
             if ext.casefold() in EMAIL_FILE_EXTENSIONS:
                 email_file_path = hint
 
-        if not email_file_path and not is_email_process:
+        # Also try to extract an .eml/.msg file name from the window title.
+        # Outlook/Thunderbird often show "通知.eml - Outlook" without a full
+        # path; we should still identify this as an email_file rather than
+        # degrading to email_message.
+        email_file_name_from_title: str | None = None
+        if not email_file_path:
+            email_file_name_from_title = _extract_email_file_name_from_title(title)
+            if email_file_name_from_title:
+                # If the title also contains a full path, prefer that.
+                from ..path_utils import extract_file_path_from_title, looks_like_local_file_path
+
+                title_path = extract_file_path_from_title(title)
+                if title_path and looks_like_local_file_path(title_path):
+                    _, ext = ntpath.splitext(title_path)
+                    if ext.casefold() in EMAIL_FILE_EXTENSIONS:
+                        email_file_path = title_path
+
+        if not email_file_path and not email_file_name_from_title and not is_email_process:
             return None
 
-        # .eml/.msg file -> email_file
+        # .eml/.msg file -> email_file (path or name-only)
         if email_file_path:
             return self._make_email_file_resource(active_window, email_file_path)
+        if email_file_name_from_title:
+            return self._make_email_file_resource(active_window, email_file_name_from_title)
 
         # Email process without file -> email_message
         if is_email_process:
@@ -67,8 +109,13 @@ class EmailDetector:
 
         if looks_like_local_file_path(full_path):
             identity_key = f"email_file:{normalize_path_key(full_path)}"
+            path_hint = full_path
         else:
+            # Name-only: no full path available. Use a name-based identity so
+            # that the same file name across different folders still groups
+            # together, and never persist a fake path.
             identity_key = f"email_file_name:{normalize_file_name(file_name)}"
+            path_hint = None
 
         return DetectedResource(
             resource_kind=validate_resource_kind("email"),
@@ -81,7 +128,7 @@ class EmailDetector:
             app_name=active_window.app_name or "",
             process_name=active_window.process_name or "",
             window_title=active_window.window_title or "",
-            path_hint=full_path if looks_like_local_file_path(full_path) else None,
+            path_hint=path_hint,
         )
 
     def _make_email_message_resource(self, active_window: ActiveWindow) -> DetectedResource:

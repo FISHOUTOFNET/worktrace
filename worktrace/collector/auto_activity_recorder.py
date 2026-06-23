@@ -258,19 +258,49 @@ class AutoActivityRecorder:
             self.clear_snapshot()
             return
         elapsed = _seconds_between(self.current_start_time, at_time)
+        resource = self.current_payload.get("resource")
+        resource_display_name = ""
+        resource_kind = ""
+        resource_subtype = ""
+        resource_identity_key = ""
+        resource_path_hint: str | None = None
+        resource_uri_host: str | None = None
+        if resource is not None and isinstance(resource, DetectedResource):
+            resource_display_name = resource.display_name
+            resource_kind = resource.resource_kind
+            resource_subtype = resource.resource_subtype
+            resource_identity_key = resource.identity_key
+            resource_path_hint = resource.path_hint
+            resource_uri_host = resource.uri_host
+
+        # ActivityIdentity is only used as a fallback for display name and
+        # project inference when no resource is available.
         identity = infer_activity_identity(
             self.current_payload.get("app_name"),
             self.current_payload.get("process_name"),
             self.current_payload.get("window_title"),
             self.current_payload.get("file_path_hint"),
         )
+        activity_display_name = resource_display_name or identity.display_name
+        inferred_project_name = _snapshot_project_name(
+            identity,
+            self.current_payload,
+            self.persisted_activity_id,
+            resource=resource if resource is not None and isinstance(resource, DetectedResource) else None,
+        )
         payload = {
             "app_name": self.current_payload.get("app_name") or "",
             "process_name": self.current_payload.get("process_name") or "",
             "window_title": self.current_payload.get("window_title") or "",
             "file_path_hint": self.current_payload.get("file_path_hint"),
-            "activity_display_name": identity.display_name,
-            "inferred_project_name": _snapshot_project_name(identity, self.current_payload, self.persisted_activity_id),
+            "activity_display_name": activity_display_name,
+            "resource_kind": resource_kind,
+            "resource_subtype": resource_subtype,
+            "resource_display_name": resource_display_name,
+            "resource_identity_key": resource_identity_key,
+            "resource_path_hint": resource_path_hint,
+            "resource_uri_host": resource_uri_host,
+            "inferred_project_name": inferred_project_name,
             "status": self.current_payload.get("status") or STATUS_NORMAL,
             "start_time": self.current_start_time,
             "elapsed_seconds": elapsed,
@@ -307,13 +337,29 @@ def _activity_signature(activity: dict) -> tuple[str, str, str, str, str]:
     )
 
 
-def _snapshot_project_name(identity, activity: dict | None = None, persisted_activity_id: int | None = None) -> str:
+def _snapshot_project_name(
+    identity,
+    activity: dict | None = None,
+    persisted_activity_id: int | None = None,
+    resource: DetectedResource | None = None,
+) -> str:
     if activity and activity.get("status") in SYSTEM_STATUSES:
         return UNCATEGORIZED_PROJECT
     if persisted_activity_id is not None:
-        activity = activity_service.get_activity(persisted_activity_id)
-        if activity and activity.get("project_name") and activity["project_name"] != UNCATEGORIZED_PROJECT:
-            return activity["project_name"]
+        activity_row = activity_service.get_activity(persisted_activity_id)
+        if activity_row and activity_row.get("project_name") and activity_row["project_name"] != UNCATEGORIZED_PROJECT:
+            return activity_row["project_name"]
+    # Resource-first preview: use the full resource-first inference (which
+    # includes folder rules, keyword rules, and suggested project name) so
+    # that the snapshot reflects the same project that would be assigned on
+    # persistence. The legacy ActivityIdentity is only used as a fallback
+    # inside the inference when no resource is available.
     from ..services.project_inference_service import candidate_project_name_for_activity
 
-    return candidate_project_name_for_activity(identity, activity) or UNCATEGORIZED_PROJECT
+    # Build an activity dict that carries the detected resource's path so the
+    # inference can match folder rules even before the activity is persisted.
+    activity_for_inference = dict(activity or {})
+    if resource is not None and not activity_for_inference.get("file_path_hint") and resource.path_hint:
+        activity_for_inference["file_path_hint"] = resource.path_hint
+
+    return candidate_project_name_for_activity(identity, activity_for_inference) or UNCATEGORIZED_PROJECT

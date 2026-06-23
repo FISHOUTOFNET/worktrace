@@ -8,6 +8,10 @@ from ..resources.types import DetectedResource
 
 
 def create_or_update_activity_resource(activity_id: int, resource: DetectedResource) -> None:
+    # Security: if the activity's status is excluded, always force an anonymous
+    # resource regardless of what the caller passed in. This prevents real
+    # resource metadata from being persisted for excluded activities.
+    resource = _enforce_anonymous_if_excluded(activity_id, resource)
     ts = now_str()
     path_key = normalize_path_key(resource.path_hint) if resource.path_hint else None
     metadata = safe_metadata_json(
@@ -151,6 +155,38 @@ def backfill_missing_resources() -> int:
         create_or_update_activity_resource(int(activity["id"]), resource)
         count += 1
     return count
+
+
+def _enforce_anonymous_if_excluded(activity_id: int, resource: DetectedResource) -> DetectedResource:
+    """Return an anonymous excluded resource if the activity is excluded.
+
+    This is a safety net: even if a caller passes a real resource, we never
+    persist real resource metadata for an excluded activity.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM activity_log WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+    if not row or row["status"] != STATUS_EXCLUDED:
+        return resource
+    return DetectedResource(
+        resource_kind="system",
+        resource_subtype="excluded",
+        display_name=EXCLUDED_APP_NAME,
+        identity_key="system:excluded",
+        is_anchor=False,
+        confidence=100,
+        source="auto_excluded",
+        app_name=EXCLUDED_APP_NAME,
+        process_name=EXCLUDED_PROCESS_NAME,
+        window_title=EXCLUDED_WINDOW_TITLE,
+        path_hint=None,
+        uri_scheme=None,
+        uri_host=None,
+        uri_hint=None,
+        metadata_json=None,
+    )
 
 
 def _parse_metadata_json(value: str) -> dict | None:

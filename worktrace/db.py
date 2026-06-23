@@ -430,6 +430,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "user_paused": "false",
         "context_carry_minutes": str(DEFAULT_CONTEXT_CARRY_MINUTES),
         "clipboard_capture_enabled": "false",
+        "email_metadata_capture_enabled": "false",
     }
     for key, value in defaults.items():
         conn.execute(
