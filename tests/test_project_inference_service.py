@@ -36,11 +36,12 @@ def test_folder_rule_classifies_full_path_with_any_extension(temp_db):
 
 
 def test_non_whitelisted_full_path_does_not_auto_suggest_project_name(temp_db):
+    # Use a non-IDE, non-Office app with a non-anchor extension
     aid = activity_service.create_activity(
-        "Visual Studio Code",
-        "Code.exe",
-        "main.py - Visual Studio Code",
-        file_path_hint="D:\\Repo\\WorkTrace\\main.py",
+        "CustomApp",
+        "customapp.exe",
+        "data.xyz - CustomApp",
+        file_path_hint="D:\\Repo\\WorkTrace\\data.xyz",
         start_time="2026-06-18 09:00:00",
     )
 

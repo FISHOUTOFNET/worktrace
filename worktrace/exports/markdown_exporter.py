@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from ..formatters import format_current_duration, format_duration
+from ..formatters import format_activity_display_name, format_current_duration, format_duration, format_resource_type
 from ..services import activity_service, statistics_service
 
 
@@ -22,14 +22,18 @@ def _activity_line(row: dict) -> str:
     end = row["end_time"] or ""
     time_range = f"{start[11:16]}-{end[11:16] if end else ''}"
     project = row.get("project_name") or "未归类"
-    activity_name = activity_service.activity_display_name(row)
-    title = row.get("window_title") or ""
-    activity_text = activity_name if not title or title == activity_name else f"{activity_name}｜{title}"
+    resource_type = format_resource_type(row.get("resource_kind"), row.get("resource_subtype"))
+    activity_name = format_activity_display_name(row)
+    is_excluded = row.get("status") == "excluded"
+    path_hint = "" if is_excluded else str(row.get("resource_path_hint") or row.get("file_path_hint") or "")
+    uri_host = "" if is_excluded else str(row.get("resource_uri_host") or "")
+    location = path_hint or uri_host
+    location_text = f"｜{location}" if location else ""
     note = row.get("note") or ""
     note_text = f"；备注：{note}" if note else ""
     return (
         f"- {start[:10]} {time_range}｜{format_duration(row['duration_seconds'])}｜"
-        f"{row['status']}｜{activity_text}｜{project}{note_text}"
+        f"{row['status']}｜{resource_type}｜{activity_name}{location_text}｜{project}{note_text}"
     )
 
 

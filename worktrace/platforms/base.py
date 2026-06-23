@@ -8,6 +8,9 @@ class ActiveWindow:
     process_name: str
     window_title: str
     file_path_hint: str | None = None
+    pid: int | None = None
+    hwnd: int | None = None
+    window_class: str | None = None
 
 
 @dataclass(frozen=True)

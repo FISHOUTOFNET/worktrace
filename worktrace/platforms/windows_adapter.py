@@ -285,11 +285,19 @@ def _get_foreground_active_window() -> ActiveWindow:
         process_name = "unknown"
         app_name = "unknown"
     file_path_hint = _resolve_active_file_path(process_name, title, pid)
+    window_class = None
+    try:
+        window_class = win32gui.GetClassName(hwnd) or None
+    except Exception:
+        pass
     return ActiveWindow(
         app_name=app_name,
         process_name=process_name,
         window_title=title,
         file_path_hint=file_path_hint,
+        pid=pid,
+        hwnd=hwnd,
+        window_class=window_class,
     )
 
 

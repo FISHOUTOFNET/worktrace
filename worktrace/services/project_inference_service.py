@@ -76,7 +76,6 @@ def assign_project_for_activity(activity_id: int) -> dict:
         if not activity:
             raise ValueError(f"activity not found: {activity_id}")
         activity_dict = dict(activity)
-        identity = infer_identity_for_activity(activity_dict)
 
         existing = conn.execute(
             "SELECT * FROM activity_project_assignment WHERE activity_id = ?",
@@ -101,7 +100,8 @@ def assign_project_for_activity(activity_id: int) -> dict:
             _sync_activity_project(conn, activity_id, project_id, auto_classified=False)
             return _assignment_dict(conn, activity_id)
 
-        project_id, source, confidence, suggested_name = _infer_project(conn, activity_dict, identity)
+        resource = _resource_for_activity(conn, activity_id, activity_dict)
+        project_id, source, confidence, suggested_name = _infer_project_resource_first(conn, activity_dict, resource)
 
         _upsert_assignment(conn, activity_id, project_id, source, confidence, False, suggested_name)
         _sync_activity_project(
@@ -135,42 +135,177 @@ def process_new_activity(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
-def _infer_project(conn, activity: dict, identity: ActivityIdentity) -> tuple[int, str, int, str | None]:
-    if identity.full_path or identity.parent_dir:
-        rule = folder_rule_service.find_matching_folder_rule(identity.full_path or identity.parent_dir or "")
+# ---------------------------------------------------------------------------
+# Resource-first inference
+# ---------------------------------------------------------------------------
+
+def _resource_for_activity(conn, activity_id: int, activity: dict) -> dict:
+    """Return resource dict for activity, preferring activity_resource table."""
+    row = conn.execute(
+        "SELECT * FROM activity_resource WHERE activity_id = ?",
+        (activity_id,),
+    ).fetchone()
+    if row:
+        return dict(row)
+    from ..resources.resource_identity import infer_resource_for_activity
+    resource = infer_resource_for_activity(activity)
+    return {
+        "resource_kind": resource.resource_kind,
+        "resource_subtype": resource.resource_subtype,
+        "display_name": resource.display_name,
+        "identity_key": resource.identity_key,
+        "is_anchor": int(resource.is_anchor),
+        "app_name": resource.app_name,
+        "process_name": resource.process_name,
+        "window_title": resource.window_title,
+        "path_hint": resource.path_hint,
+        "uri_host": resource.uri_host,
+    }
+
+
+def _safe_classification_text(activity: dict, resource: dict, clipboard_text: str = "") -> str:
+    """Build safe text for keyword matching from resource and activity fields."""
+    parts = [
+        str(resource.get("display_name") or ""),
+        str(resource.get("resource_kind") or ""),
+        str(resource.get("resource_subtype") or ""),
+        str(resource.get("app_name") or ""),
+        str(resource.get("process_name") or ""),
+        str(resource.get("window_title") or ""),
+        str(resource.get("path_hint") or ""),
+        str(resource.get("uri_host") or ""),
+        str(activity.get("window_title") or ""),
+        str(activity.get("file_path_hint") or ""),
+        clipboard_text,
+    ]
+    return " ".join(parts).casefold()
+
+
+def candidate_project_name_for_resource(resource: dict) -> str | None:
+    """Generate a candidate project name from a resource dict."""
+    is_anchor = bool(resource.get("is_anchor"))
+    path_hint = str(resource.get("path_hint") or "").strip()
+    resource_kind = str(resource.get("resource_kind") or "")
+    resource_subtype = str(resource.get("resource_subtype") or "")
+
+    if not is_anchor:
+        return None
+
+    # For browser/email, don't auto-generate parent folder suggestions
+    if resource_kind in ("browser_tab", "email"):
+        return None
+
+    if path_hint:
+        parent_dir = ntpath.dirname(path_hint.rstrip("\\/"))
+        if parent_dir:
+            # For anchor file extensions, always suggest parent folder
+            if has_auto_project_extension(path_hint):
+                parent_name = ntpath.basename(parent_dir.rstrip("\\/"))
+                parent_candidate = _clean_project_candidate(parent_name)
+                if parent_candidate and parent_candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
+                    return parent_candidate
+            # For IDE code files, suggest parent folder even if not in ANCHOR_FILE_EXTENSIONS
+            if resource_kind == "ide_file" and resource_subtype == "code_file":
+                parent_name = ntpath.basename(parent_dir.rstrip("\\/"))
+                parent_candidate = _clean_project_candidate(parent_name)
+                if parent_candidate and parent_candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
+                    return parent_candidate
+
+    # For IDE workspace (no code file), use workspace name as project name
+    if resource_kind == "ide_file" and resource_subtype == "ide_workspace":
+        display = str(resource.get("display_name") or "")
+        if display:
+            candidate = _clean_project_candidate(display)
+            if candidate:
+                return candidate
+
+    return None
+
+
+def _infer_project_resource_first(
+    conn,
+    activity: dict,
+    resource: dict,
+) -> tuple[int, str, int, str | None]:
+    """Infer project using resource-first priority."""
+    path_hint = str(resource.get("path_hint") or "").strip()
+    is_anchor = bool(resource.get("is_anchor"))
+    display_name = str(resource.get("display_name") or "")
+
+    # 3. folder/file rule for local path
+    if path_hint:
+        rule = folder_rule_service.find_matching_folder_rule(path_hint)
         if rule:
             return int(rule["project_id"]), "folder_rule", 85, None
-    else:
-        file_name = identity.title_hint or extract_file_name_from_title(activity.get("window_title"))
+        # Also try parent directory
+        parent_dir = ntpath.dirname(path_hint.rstrip("\\/"))
+        if parent_dir:
+            rule = folder_rule_service.find_matching_folder_rule(parent_dir)
+            if rule:
+                return int(rule["project_id"]), "folder_rule", 85, None
+
+    # If no path_hint but anchor file with display_name, try folder index
+    if not path_hint and is_anchor and display_name:
         rule = folder_index_service.find_matching_folder_rule_for_file_name(
-            file_name,
+            display_name,
             str(activity.get("start_time") or "") or None,
         )
         if rule:
             return int(rule["project_id"]), "folder_rule", 85, None
 
-    text = " ".join(
-        [
-            str(identity.display_name or ""),
-            str(identity.title_hint or ""),
-            str(identity.app_name or ""),
-            str(identity.process_name or ""),
-            str(activity.get("window_title") or ""),
-            str(activity.get("file_path_hint") or ""),
-            clipboard_service.clipboard_text_for_activity(conn, int(activity.get("id") or 0)) if activity.get("id") else "",
-        ]
-    ).casefold()
+    # 4. resource-specific rule (placeholder for future extension)
+    # TODO: add resource-specific rules when needed
+
+    # 5. keyword rule against safe classification text
+    clipboard_text = ""
+    activity_id = activity.get("id")
+    if activity_id:
+        clipboard_text = clipboard_service.clipboard_text_for_activity(conn, int(activity_id))
+    text = _safe_classification_text(activity, resource, clipboard_text)
     for row in _enabled_keyword_rules(conn):
         pattern = row["pattern"]
         if pattern and pattern in text:
             return int(row["project_id"]), "keyword_rule", 80, None
 
-    if identity.is_anchor_file:
-        fallback_name = candidate_project_name_for_file_activity(identity)
+    # 6. suggested project name from parent folder/workspace
+    if is_anchor:
+        fallback_name = candidate_project_name_for_resource(resource)
+        if not fallback_name:
+            # Fallback to ActivityIdentity-based suggestion
+            identity = infer_identity_for_activity(activity)
+            fallback_name = candidate_project_name_for_file_activity(identity)
         if fallback_name:
             return _get_uncategorized_project_id(conn), "suggested_project_name", 40, fallback_name
 
     return _get_uncategorized_project_id(conn), "uncategorized", 0, None
+
+
+# ---------------------------------------------------------------------------
+# Legacy ActivityIdentity-based helpers (still available)
+# ---------------------------------------------------------------------------
+
+def _infer_project(conn, activity: dict, identity: ActivityIdentity) -> tuple[int, str, int, str | None]:
+    """Legacy inference using ActivityIdentity - now delegates to resource-first."""
+    resource = _resource_from_identity(identity, activity)
+    return _infer_project_resource_first(conn, activity, resource)
+
+
+def _resource_from_identity(identity: ActivityIdentity, activity: dict) -> dict:
+    """Convert ActivityIdentity to a resource-like dict for resource-first inference."""
+    from ..resources.resource_identity import infer_resource_for_activity
+    resource = infer_resource_for_activity(activity)
+    return {
+        "resource_kind": resource.resource_kind,
+        "resource_subtype": resource.resource_subtype,
+        "display_name": resource.display_name,
+        "identity_key": resource.identity_key,
+        "is_anchor": int(resource.is_anchor),
+        "app_name": resource.app_name,
+        "process_name": resource.process_name,
+        "window_title": resource.window_title,
+        "path_hint": resource.path_hint,
+        "uri_host": resource.uri_host,
+    }
 
 
 def candidate_project_name_for_file_activity(identity: ActivityIdentity | dict) -> str | None:
@@ -211,7 +346,12 @@ def candidate_project_name_for_activity(identity: ActivityIdentity, activity: di
     activity_dict.setdefault("window_title", identity.title_hint or "")
     activity_dict.setdefault("file_path_hint", identity.full_path or "")
     with get_connection() as conn:
-        project_id, source, _confidence, suggested_name = _infer_project(conn, activity_dict, identity)
+        activity_id = activity_dict.get("id")
+        if activity_id:
+            resource = _resource_for_activity(conn, int(activity_id), activity_dict)
+        else:
+            resource = _resource_from_identity(identity, activity_dict)
+        project_id, source, _confidence, suggested_name = _infer_project_resource_first(conn, activity_dict, resource)
         if source == "suggested_project_name":
             return suggested_name
         uncategorized_id = _get_uncategorized_project_id(conn)

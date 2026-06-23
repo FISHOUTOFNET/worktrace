@@ -209,5 +209,55 @@ ON activity_clipboard_event(copied_at);
 CREATE INDEX IF NOT EXISTS idx_clipboard_event_sequence
 ON activity_clipboard_event(clipboard_sequence);
 
+CREATE TABLE IF NOT EXISTS activity_resource (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    activity_id INTEGER NOT NULL,
+    resource_kind TEXT NOT NULL CHECK (
+        resource_kind IN (
+            'local_file',
+            'office_document',
+            'email',
+            'browser_tab',
+            'ide_file',
+            'app',
+            'system',
+            'unknown'
+        )
+    ),
+    resource_subtype TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    identity_key TEXT NOT NULL,
+    is_anchor INTEGER NOT NULL DEFAULT 0,
+    confidence INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL,
+    app_name TEXT NOT NULL,
+    process_name TEXT NOT NULL,
+    window_title TEXT NOT NULL,
+    path_hint TEXT,
+    path_key TEXT,
+    uri_scheme TEXT,
+    uri_host TEXT,
+    uri_hint TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (activity_id) REFERENCES activity_log(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_resource_activity
+ON activity_resource(activity_id);
+
+CREATE INDEX IF NOT EXISTS idx_activity_resource_identity
+ON activity_resource(identity_key);
+
+CREATE INDEX IF NOT EXISTS idx_activity_resource_kind
+ON activity_resource(resource_kind, resource_subtype);
+
+CREATE INDEX IF NOT EXISTS idx_activity_resource_path
+ON activity_resource(path_key);
+
+CREATE INDEX IF NOT EXISTS idx_activity_resource_host
+ON activity_resource(uri_host);
+
 CREATE INDEX IF NOT EXISTS idx_project_session_note_key
 ON project_session_note(report_date, first_activity_id);

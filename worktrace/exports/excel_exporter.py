@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from ..formatters import format_duration
+from ..formatters import format_activity_display_name, format_duration, format_resource_type
 from ..services import activity_service, statistics_service
 
 
@@ -50,16 +50,21 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
             "结束时间",
             "时长",
             "状态",
+            "资源类型",
+            "资源名称",
             "应用",
-            "活动",
-            "窗口标题",
             "项目",
+            "路径",
+            "域名",
             "备注",
         ]
     )
     for row in reversed(activity_service.get_activities_by_range(start_date, end_date)):
         if row["is_deleted"] or row["is_hidden"]:
             continue
+        is_excluded = row.get("status") == "excluded"
+        path_hint = "" if is_excluded else (row.get("resource_path_hint") or row.get("file_path_hint") or "")
+        uri_host = "" if is_excluded else (row.get("resource_uri_host") or "")
         logs.append(
             [
                 row["start_time"][:10],
@@ -67,10 +72,12 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
                 row["end_time"] or "",
                 format_duration(row["duration_seconds"] or 0),
                 row["status"],
+                format_resource_type(row.get("resource_kind"), row.get("resource_subtype")),
+                format_activity_display_name(row),
                 row["app_name"],
-                activity_service.activity_display_name(row),
-                row["window_title"],
                 row.get("project_name") or "未归类",
+                path_hint,
+                uri_host,
                 row.get("note") or "",
             ]
         )

@@ -313,7 +313,7 @@ def test_detail_area_builds_activity_detail_table_only(monkeypatch):
     TimelineView._build_detail_area(view)
 
     assert created_trees[0][0] == "details"
-    assert created_trees[0][1] == ("time", "app", "window", "duration", "project", "note")
+    assert created_trees[0][1] == ("time", "resource_type", "resource_name", "duration", "project", "note")
     assert "resource" not in created_trees[0][1]
     assert not hasattr(view, "resource_tree")
     assert hasattr(view, "session_note_text")

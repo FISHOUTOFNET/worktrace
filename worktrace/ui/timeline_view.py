@@ -8,7 +8,7 @@ from typing import Any
 import customtkinter as ctk
 
 from ..constants import UNCATEGORIZED_PROJECT
-from ..formatters import format_current_duration, format_duration, format_project_label
+from ..formatters import format_activity_display_name, format_current_duration, format_duration, format_project_label, format_resource_type
 from ..services import activity_service, project_service, timeline_service
 from ..services.live_time_service import (
     short_activity_carry_duration,
@@ -240,19 +240,19 @@ class TimelineView(ctk.CTkFrame):
         self.detail_tree = self._make_tree(
             self.detail_tree_frame,
             "details",
-            ("time", "app", "window", "duration", "project", "note"),
+            ("time", "resource_type", "resource_name", "duration", "project", "note"),
             {
                 "time": "时间",
-                "app": "应用",
-                "window": "窗口",
+                "resource_type": "资源类型",
+                "resource_name": "资源名称",
                 "duration": "时长",
                 "project": "项目",
                 "note": "备注",
             },
             {
                 "time": 120,
-                "app": 120,
-                "window": 360,
+                "resource_type": 120,
+                "resource_name": 360,
                 "duration": 90,
                 "project": 120,
                 "note": 180,
@@ -950,7 +950,13 @@ class TimelineView(ctk.CTkFrame):
             snapshot = _read_current_activity_snapshot()
         if not snapshot:
             return "当前活动：无"
-        name = snapshot.get("activity_display_name") or snapshot.get("app_name") or snapshot.get("process_name") or "未知"
+        name = (
+            snapshot.get("resource_display_name")
+            or snapshot.get("activity_display_name")
+            or snapshot.get("app_name")
+            or snapshot.get("process_name")
+            or "未知"
+        )
         project = snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT
         elapsed = format_current_duration(_current_elapsed_seconds(snapshot))
         state = "已进入历史" if snapshot.get("is_persisted") else "暂不入历史"
@@ -1060,8 +1066,8 @@ class TimelineView(ctk.CTkFrame):
         end = row.get("end_time") or ""
         return (
             f"{start[11:16] if len(start) >= 16 else start}-{end[11:16] if len(end) >= 16 else ''}",
-            str(row.get("app_name") or ""),
-            str(row.get("window_title") or ""),
+            format_resource_type(row.get("resource_kind"), row.get("resource_subtype")),
+            format_activity_display_name(row),
             format_duration(row.get("duration_seconds") or 0),
             format_project_label(row.get("project_name") or UNCATEGORIZED_PROJECT, row.get("project_description")),
             note,

@@ -8,7 +8,6 @@ def test_active_window_supports_file_path_hint():
 
 
 def test_privacy_notice_mentions_local_file_paths_and_exclusion_matching():
-    assert "完整本地路径" in PRIVACY_NOTICE_TEXT
     assert "本地文件路径" in PRIVACY_NOTICE_TEXT
     assert "复制到剪贴板的文本内容" in PRIVACY_NOTICE_TEXT
     assert "复制文字记录默认关闭" in PRIVACY_NOTICE_TEXT

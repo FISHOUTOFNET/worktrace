@@ -59,7 +59,7 @@ def test_activity_rows_include_derived_file_identity(temp_db):
     activity = activity_service.get_activity(aid)
 
     assert activity["is_anchor_file"] is True
-    assert activity["activity_identity_key"] == "file_path:d:\\casea\\合同.docx"
+    assert activity["activity_identity_key"] == "office_file:d:\\casea\\合同.docx"
     assert activity["activity_display_name"] == "合同.docx"
     assert activity["anchor_full_path"] == "D:\\CaseA\\合同.docx"
     assert activity["anchor_parent_dir"] == "D:\\CaseA"

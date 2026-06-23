@@ -13,6 +13,8 @@ from ..constants import (
 from ..db import now_str
 from ..path_utils import normalize_path_key
 from ..platforms.base import ActiveWindow, ClipboardTextEvent
+from ..resources.resource_identity import infer_resource_from_active_window
+from ..resources.types import DetectedResource
 from ..services import activity_service, clipboard_service, privacy_service, session_boundary_service
 from .auto_activity_recorder import AutoActivityRecorder
 
@@ -123,6 +125,22 @@ class CollectorStateMachine:
         return self.recorder.ensure_persisted_for_clipboard(copied_at)
 
     def _signature_for_payload(self, payload: dict) -> tuple[str, ...]:
+        resource = payload.get("resource")
+        if resource is not None and isinstance(resource, DetectedResource):
+            path_or_host = ""
+            if resource.path_hint:
+                path_or_host = normalize_path_key(resource.path_hint)
+            elif resource.uri_host:
+                path_or_host = resource.uri_host.lower().strip()
+            else:
+                path_or_host = resource.display_name
+            return (
+                str(payload.get("status") or ""),
+                resource.resource_kind,
+                resource.resource_subtype,
+                resource.identity_key,
+                path_or_host,
+            )
         return (
             str(payload.get("status") or ""),
             str(payload.get("app_name") or ""),
@@ -140,36 +158,168 @@ class CollectorStateMachine:
         current_signature = self.recorder.current_signature
         if current is None or current_signature is None:
             return False
+
+        if current_signature == signature:
+            self._supplement_path_if_needed(current, payload)
+            return True
+
+        # Check if signatures differ only because path became available
+        if self._signatures_represent_same_resource(current_signature, signature, current, payload):
+            self._supplement_path_if_needed(current, payload)
+            self.recorder.current_signature = signature
+            return True
+
+        return False
+
+    def _supplement_path_if_needed(self, current: dict, payload: dict) -> None:
+        old_path = (current.get("file_path_hint") or "").strip()
+        new_path = (payload.get("file_path_hint") or "").strip()
+        new_resource = payload.get("resource")
+
+        if not old_path and new_path:
+            current["file_path_hint"] = new_path
+            if self.recorder.persisted_activity_id is not None:
+                activity_service.update_activity_file_path_hint(self.recorder.persisted_activity_id, new_path)
+        elif not old_path and new_resource and isinstance(new_resource, DetectedResource) and new_resource.path_hint:
+            current["file_path_hint"] = new_resource.path_hint
+            if self.recorder.persisted_activity_id is not None:
+                activity_service.update_activity_file_path_hint(self.recorder.persisted_activity_id, new_resource.path_hint)
+
+    def _signatures_represent_same_resource(
+        self,
+        old_sig: tuple[str, ...],
+        new_sig: tuple[str, ...],
+        current: dict,
+        payload: dict,
+    ) -> bool:
+        # Must be same status
+        if old_sig[0] != new_sig[0]:
+            return False
+
+        old_resource = current.get("resource")
+        new_resource = payload.get("resource")
+
+        # Both have DetectedResource
+        if isinstance(old_resource, DetectedResource) and isinstance(new_resource, DetectedResource):
+            # Same kind and subtype
+            if old_resource.resource_kind != new_resource.resource_kind:
+                return False
+            if old_resource.resource_subtype != new_resource.resource_subtype:
+                return False
+            # Check if identity_keys refer to the same file
+            # e.g., office_file_name:spec.docx vs office_file:d:\casea\spec.docx
+            old_key = old_resource.identity_key
+            new_key = new_resource.identity_key
+            if old_key == new_key:
+                return True
+            # Check if one is a _name variant and the other is a _path variant of the same file
+            if self._file_name_and_path_keys_match(old_key, new_key, old_resource, new_resource):
+                return True
+            # For generic apps, identity_key should be stable
+            return False
+
+        # One has resource, one doesn't - compare old-style fields
+        if isinstance(old_resource, DetectedResource) and new_resource is None:
+            return (
+                current.get("status") == payload.get("status")
+                and current.get("app_name") == payload.get("app_name")
+                and current.get("process_name") == payload.get("process_name")
+            )
+
+        if old_resource is None and isinstance(new_resource, DetectedResource):
+            return (
+                current.get("status") == payload.get("status")
+                and current.get("app_name") == payload.get("app_name")
+                and current.get("process_name") == payload.get("process_name")
+            )
+
+        # Both without resource - old-style comparison
         base_matches = (
             current.get("status"),
             current.get("app_name"),
             current.get("process_name"),
             current.get("window_title"),
-        ) == signature[:4]
+        ) == (
+            payload.get("status"),
+            payload.get("app_name"),
+            payload.get("process_name"),
+            payload.get("window_title"),
+        )
         if not base_matches:
             return False
 
         old_path = (current.get("file_path_hint") or "").strip()
         new_path = (payload.get("file_path_hint") or "").strip()
         if not old_path and new_path:
-            current["file_path_hint"] = new_path
-            self.recorder.current_signature = signature
-            if self.recorder.persisted_activity_id is not None:
-                activity_service.update_activity_file_path_hint(self.recorder.persisted_activity_id, new_path)
             return True
         if old_path and new_path:
             return normalize_path_key(old_path) == normalize_path_key(new_path)
         return True
 
+    def _file_name_and_path_keys_match(
+        self,
+        old_key: str,
+        new_key: str,
+        old_resource: DetectedResource,
+        new_resource: DetectedResource,
+    ) -> bool:
+        # Check if old_key is a _name variant and new_key is a _path variant (or vice versa)
+        # of the same underlying file
+        import ntpath as _ntpath
+
+        for prefix_a, prefix_b in [
+            ("office_file_name:", "office_file:"),
+            ("file_name:", "file_path:"),
+        ]:
+            if old_key.startswith(prefix_a) and new_key.startswith(prefix_b):
+                name_part = old_key[len(prefix_a):]
+                path_part = new_key[len(prefix_b):]
+                # Check if the path ends with the name
+                basename = _ntpath.basename(path_part).lower().replace(" ", "-")
+                if basename == name_part:
+                    return True
+            if old_key.startswith(prefix_b) and new_key.startswith(prefix_a):
+                path_part = old_key[len(prefix_b):]
+                name_part = new_key[len(prefix_a):]
+                basename = _ntpath.basename(path_part).lower().replace(" ", "-")
+                if basename == name_part:
+                    return True
+        return False
+
     def _payload_for(self, status: str, active_window: ActiveWindow | None) -> dict:
         if status == STATUS_EXCLUDED:
-            return privacy_service.make_excluded_activity_payload()
+            payload = privacy_service.make_excluded_activity_payload()
+            payload["resource"] = DetectedResource(
+                resource_kind="system",
+                resource_subtype="excluded",
+                display_name=payload.get("app_name", "已排除"),
+                identity_key="system:excluded",
+                is_anchor=False,
+                confidence=100,
+                source="auto_excluded",
+                app_name=payload.get("app_name", ""),
+                process_name=payload.get("process_name", ""),
+                window_title=payload.get("window_title", ""),
+            )
+            return payload
         if status == STATUS_IDLE:
             return {
                 "app_name": "空闲",
                 "process_name": "idle",
                 "window_title": "用户空闲",
                 "status": STATUS_IDLE,
+                "resource": DetectedResource(
+                    resource_kind="system",
+                    resource_subtype="idle",
+                    display_name="空闲",
+                    identity_key="system:idle",
+                    is_anchor=False,
+                    confidence=100,
+                    source="auto_idle",
+                    app_name="空闲",
+                    process_name="idle",
+                    window_title="用户空闲",
+                ),
             }
         if status == STATUS_PAUSED:
             return {
@@ -177,6 +327,18 @@ class CollectorStateMachine:
                 "process_name": "paused",
                 "window_title": "采集已暂停",
                 "status": STATUS_PAUSED,
+                "resource": DetectedResource(
+                    resource_kind="system",
+                    resource_subtype="paused",
+                    display_name="已暂停",
+                    identity_key="system:paused",
+                    is_anchor=False,
+                    confidence=100,
+                    source="auto_paused",
+                    app_name="已暂停",
+                    process_name="paused",
+                    window_title="采集已暂停",
+                ),
             }
         if status == STATUS_ERROR:
             return {
@@ -184,13 +346,27 @@ class CollectorStateMachine:
                 "process_name": "error",
                 "window_title": "采集异常",
                 "status": STATUS_ERROR,
+                "resource": DetectedResource(
+                    resource_kind="system",
+                    resource_subtype="error",
+                    display_name="异常",
+                    identity_key="system:error",
+                    is_anchor=False,
+                    confidence=100,
+                    source="auto_error",
+                    app_name="异常",
+                    process_name="error",
+                    window_title="采集异常",
+                ),
             }
         if active_window is None:
             raise ValueError("active_window is required for recording state")
+        resource = infer_resource_from_active_window(active_window)
         return {
             "app_name": active_window.app_name or "unknown",
             "process_name": active_window.process_name or "unknown",
             "window_title": active_window.window_title or "",
             "file_path_hint": active_window.file_path_hint,
             "status": STATUS_NORMAL,
+            "resource": resource,
         }

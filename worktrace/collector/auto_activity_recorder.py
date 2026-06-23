@@ -18,6 +18,7 @@ from ..constants import (
 )
 from ..activity_identity import infer_activity_identity
 from ..path_utils import normalize_path_key
+from ..resources.types import DetectedResource
 from ..services import activity_service, project_service, session_boundary_service
 from ..services.settings_service import get_setting, set_setting
 
@@ -215,6 +216,9 @@ class AutoActivityRecorder:
     ) -> bool:
         target = self.resume_after_short_activity
         self.resume_after_short_activity = None
+        # Reconstruct resource info into target for signature comparison
+        if target and "resource" not in target:
+            target = self._enrich_target_with_resource(target)
         if not target or _activity_signature(target) != signature:
             return False
         start_time = str(target.get("start_time") or "")
@@ -231,6 +235,13 @@ class AutoActivityRecorder:
         self._update_persisted_progress(at_time)
         self._write_snapshot(at_time)
         return True
+
+    def _enrich_target_with_resource(self, target: dict) -> dict:
+        from ..resources.resource_identity import infer_resource_for_activity
+        enriched = dict(target)
+        resource = infer_resource_for_activity(enriched)
+        enriched["resource"] = resource
+        return enriched
 
     def _get_pending_short_seconds(self) -> int:
         raw = get_setting("pending_short_seconds", "0") or "0"
@@ -271,6 +282,22 @@ class AutoActivityRecorder:
 
 
 def _activity_signature(activity: dict) -> tuple[str, str, str, str, str]:
+    resource = activity.get("resource")
+    if resource is not None and isinstance(resource, DetectedResource):
+        path_or_host = ""
+        if resource.path_hint:
+            path_or_host = normalize_path_key(resource.path_hint)
+        elif resource.uri_host:
+            path_or_host = resource.uri_host.lower().strip()
+        else:
+            path_or_host = resource.display_name
+        return (
+            str(activity.get("status") or STATUS_NORMAL),
+            resource.resource_kind,
+            resource.resource_subtype,
+            resource.identity_key,
+            path_or_host,
+        )
     return (
         str(activity.get("status") or STATUS_NORMAL),
         str(activity.get("app_name") or ""),

@@ -16,7 +16,7 @@ from .constants import (
 )
 
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def read_schema_sql() -> str:
@@ -103,6 +103,7 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     _drop_manual_project_session_schema(conn)
     _migrate_add_missing_columns(conn)
     _migrate_rebuild_tables_if_needed(conn)
+    _migrate_create_activity_resource(conn)
     _write_schema_version(conn)
 
 
@@ -155,6 +156,73 @@ def _migrate_add_missing_columns(conn: sqlite3.Connection) -> None:
                     logging.info("migrated: added column %s.%s", table_name, col_name)
                 except Exception:
                     logging.warning("failed to add column %s.%s", table_name, col_name, exc_info=True)
+
+
+def _migrate_create_activity_resource(conn: sqlite3.Connection) -> None:
+    existing = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activity_resource'"
+    ).fetchone()
+    if existing:
+        return
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_resource (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_id INTEGER NOT NULL,
+            resource_kind TEXT NOT NULL CHECK (
+                resource_kind IN (
+                    'local_file',
+                    'office_document',
+                    'email',
+                    'browser_tab',
+                    'ide_file',
+                    'app',
+                    'system',
+                    'unknown'
+                )
+            ),
+            resource_subtype TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            identity_key TEXT NOT NULL,
+            is_anchor INTEGER NOT NULL DEFAULT 0,
+            confidence INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL,
+            app_name TEXT NOT NULL,
+            process_name TEXT NOT NULL,
+            window_title TEXT NOT NULL,
+            path_hint TEXT,
+            path_key TEXT,
+            uri_scheme TEXT,
+            uri_host TEXT,
+            uri_hint TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (activity_id) REFERENCES activity_log(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_resource_activity "
+        "ON activity_resource(activity_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_activity_resource_identity "
+        "ON activity_resource(identity_key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_activity_resource_kind "
+        "ON activity_resource(resource_kind, resource_subtype)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_activity_resource_path "
+        "ON activity_resource(path_key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_activity_resource_host "
+        "ON activity_resource(uri_host)"
+    )
+    logging.info("migrated: created activity_resource table and indexes")
 
 
 def _migrate_rebuild_tables_if_needed(conn: sqlite3.Connection) -> None:
@@ -416,6 +484,7 @@ def reset_database() -> None:
 def drop_all_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
+        DROP TABLE IF EXISTS activity_resource;
         DROP TABLE IF EXISTS folder_rule_file_index;
         DROP TABLE IF EXISTS folder_rule_index_state;
         DROP TABLE IF EXISTS project_session_note;
