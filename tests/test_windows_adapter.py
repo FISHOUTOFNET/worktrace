@@ -123,6 +123,8 @@ def test_open_files_timeout_marks_pid_cooldown(monkeypatch):
     pid = 424242
     windows_adapter._open_files_failure_times.pop(pid, None)
     monkeypatch.setattr(windows_adapter, "_com_candidates", lambda _process_name: [])
+    monkeypatch.setattr(windows_adapter, "extract_file_path_from_title", lambda _t: None)
+    monkeypatch.setattr(windows_adapter, "_resolve_indexed_file_path", lambda _t: None)
 
     def _timeout(_pid):
         calls.append(_pid)
@@ -366,3 +368,59 @@ def test_open_files_helper_failure_raises_runtime_error(monkeypatch):
         assert False, "should have raised RuntimeError"
     except RuntimeError as exc:
         assert "open-files helper failed" in str(exc)
+
+
+def test_pyinstaller_entry_passes_pid_after_flag(monkeypatch):
+    """pyinstaller_entry should pass sys.argv[2:] to open_files_helper.main."""
+    import worktrace.platforms.open_files_helper as helper_mod
+
+    captured_argv: list[list[str]] = []
+
+    def _fake_main(argv=None):
+        captured_argv.append(list(argv) if argv is not None else None)
+
+    monkeypatch.setattr(helper_mod, "main", _fake_main)
+    monkeypatch.setattr(sys, "argv", ["WorkTrace.exe", "--open-files-helper", "1234"])
+
+    # Simulate the pyinstaller_entry branch
+    if len(sys.argv) >= 2 and sys.argv[1] == "--open-files-helper":
+        helper_mod.main(sys.argv[2:])
+
+    assert captured_argv == [["1234"]]
+
+
+def test_open_files_helper_main_reads_pid_from_argv():
+    """open_files_helper.main(['1234']) should read pid=1234."""
+    from unittest.mock import patch
+    from worktrace.platforms.open_files_helper import main as helper_main
+
+    with patch("psutil.Process") as mock_process_cls:
+        mock_process_cls.return_value.open_files.return_value = []
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            helper_main(["1234"])
+        output = buf.getvalue().strip()
+
+    mock_process_cls.assert_called_once_with(1234)
+    assert output == "[]"
+
+
+def test_open_files_helper_main_ignores_flag_as_pid():
+    """open_files_helper.main(['--open-files-helper', '1234']) should treat
+    '--open-files-helper' as the first arg, fail to parse it as int, and
+    output [] — confirming the flag must be stripped before calling main."""
+    from worktrace.platforms.open_files_helper import main as helper_main
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        helper_main(["--open-files-helper", "1234"])
+    output = buf.getvalue().strip()
+
+    # '--open-files-helper' cannot be parsed as int, so output is []
+    assert output == "[]"

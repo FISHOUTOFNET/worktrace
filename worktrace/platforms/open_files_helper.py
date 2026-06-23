@@ -16,12 +16,14 @@ import json
 import sys
 
 
-def main() -> None:
-    if len(sys.argv) < 2:
+def main(argv: list[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+    if len(argv) < 1:
         print("[]", flush=True)
         return
     try:
-        pid = int(sys.argv[1])
+        pid = int(argv[0])
     except (ValueError, TypeError):
         print("[]", flush=True)
         return

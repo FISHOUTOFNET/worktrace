@@ -17,7 +17,7 @@ def _run_open_files_helper() -> None:
 
     from worktrace.platforms.open_files_helper import main
 
-    main()
+    main(sys.argv[2:])
 
 
 if __name__ == "__main__":
