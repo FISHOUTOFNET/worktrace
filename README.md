@@ -20,6 +20,8 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 
 The current implementation remains v0.1 Lite. The next-version boundary is documented in [`docs/v0.2-boundary.md`](docs/v0.2-boundary.md): all local features remain free and usable without registration, payment, or network access; paid features are limited to opt-in server-side AI classification and AI project-session note drafts; AI is off by default and must not affect local functionality.
 
+Phase 1A local security design is documented in [`docs/v0.2-local-security-design.md`](docs/v0.2-local-security-design.md). It covers the independent crypto foundation, DPAPI keyring, and `.wtbackup` format without changing the existing runtime database behavior.
+
 ## Privacy And Permissions
 
 无需注册。  
