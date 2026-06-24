@@ -88,6 +88,10 @@ The installer copies WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace` and create
 
 Build artifacts (`build/`, `dist/`, generated `.spec` files other than `WorkTrace.spec`) must not be committed to Git; `.gitignore` already excludes them. The release acceptance steps for both builds are documented in [`docs/release-checklist.md`](docs/release-checklist.md).
 
+## Release Validation
+
+Before a Windows release, use [`docs/release-validation.md`](docs/release-validation.md) as the v0.1 Lite release-candidate baseline. Run `pytest`, require GitHub Actions CI to pass, and validate both the PyInstaller exe and the per-user installer.
+
 ## Local Paths
 
 - Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`

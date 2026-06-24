@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    name: Windows tests (Python ${{ matrix.python-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest
+
+  pyinstaller-smoke:
+    name: PyInstaller build smoke
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build single-file exe
+        run: python -m PyInstaller --noconfirm --clean WorkTrace.spec
+
+      - name: Verify single-file exe
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "dist\WorkTrace.exe")) {
+            throw "dist\WorkTrace.exe was not generated"
+          }
+
+      - name: Build per-user installer
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
+
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "dist\WorkTrace-Setup.exe")) {
+            throw "dist\WorkTrace-Setup.exe was not generated"
+          }
+
+      - name: Upload release smoke artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: worktrace-windows-smoke
+          path: |
+            dist/WorkTrace.exe
+            dist/WorkTrace-Setup.exe
+          if-no-files-found: error
