@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import json
 from datetime import date
 from pathlib import Path
 from tkinter import messagebox
@@ -9,19 +8,20 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ..api import export_api, settings_api, statistics_api, timeline_api
 from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_duration, format_project_label
-from ..services import export_service, statistics_service, timeline_service
-from ..services.live_time_service import snapshot_seconds_for_date_range, snapshot_signature
-from ..services.settings_service import get_setting
 from . import design
 from .date_range import DateRange, classify_range, current_week_range, previous_week_range, shift_range, today_range
+
+# Module-level alias so tests can monkeypatch the live-seconds calculation.
+snapshot_seconds_for_date_range = timeline_api.get_snapshot_seconds_for_date_range
 
 
 class StatisticsView(ctk.CTkFrame):
     def __init__(self, master, start_var=None, end_var=None):
         super().__init__(master)
-        today = timeline_service.get_default_report_date()
+        today = timeline_api.get_default_report_date()
         self.start_var = start_var or ctk.StringVar(value=today)
         self.end_var = end_var or ctk.StringVar(value=today)
         self.range_var = ctk.StringVar(value="今日")
@@ -126,7 +126,7 @@ class StatisticsView(ctk.CTkFrame):
         self._refresh_values(ensure_context=ensure_context)
 
     def refresh_current_activity(self) -> None:
-        current_default = timeline_service.get_default_report_date()
+        current_default = timeline_api.get_default_report_date()
         if (
             self.start_var.get() == self._default_report_date
             and self.end_var.get() == self._default_report_date
@@ -139,8 +139,8 @@ class StatisticsView(ctk.CTkFrame):
             self._sync_range_buttons()
             return
         self._sync_range_buttons()
-        snapshot = _read_current_activity_snapshot()
-        signature = snapshot_signature(snapshot)
+        snapshot = settings_api.get_current_activity_snapshot()
+        signature = timeline_api.get_snapshot_signature(snapshot)
         if signature != self._current_signature:
             self._refresh_values(ensure_context=False)
             return
@@ -148,13 +148,13 @@ class StatisticsView(ctk.CTkFrame):
         self._refresh_live_values(snapshot)
 
     def _apply_today_range(self) -> None:
-        self._set_visible_range(today_range(timeline_service.get_default_report_date()))
+        self._set_visible_range(today_range(timeline_api.get_default_report_date()))
 
     def _apply_current_week_range(self) -> None:
-        self._set_visible_range(current_week_range(timeline_service.get_default_report_date()))
+        self._set_visible_range(current_week_range(timeline_api.get_default_report_date()))
 
     def _apply_previous_week_range(self) -> None:
-        self._set_visible_range(previous_week_range(timeline_service.get_default_report_date()))
+        self._set_visible_range(previous_week_range(timeline_api.get_default_report_date()))
 
     def _apply_quick_range(self, value: str) -> None:
         if value == "上周":
@@ -207,7 +207,7 @@ class StatisticsView(ctk.CTkFrame):
             self.range_var.set(self._active_range_label())
 
     def _refresh_values(self, ensure_context: bool = True) -> None:
-        summary = statistics_service.get_summary(
+        summary = statistics_api.get_summary(
             self.start_var.get(),
             self.end_var.get(),
             ensure_context=ensure_context,
@@ -224,7 +224,7 @@ class StatisticsView(ctk.CTkFrame):
             self._summary_labels[key].configure(text=format_duration(seconds))
 
         total = max(1, int(summary["effective_duration"] or summary["total_duration"] or 1))
-        rows = statistics_service.get_project_stats(
+        rows = statistics_api.get_project_stats(
             self.start_var.get(),
             self.end_var.get(),
             ensure_context=ensure_context,
@@ -254,8 +254,8 @@ class StatisticsView(ctk.CTkFrame):
             self._update_project_stat_row(widgets, row, total)
 
     def _store_live_baseline(self, summary: dict, rows: list[dict]) -> None:
-        self._current_snapshot = _read_current_activity_snapshot()
-        self._current_signature = snapshot_signature(self._current_snapshot)
+        self._current_snapshot = settings_api.get_current_activity_snapshot()
+        self._current_signature = timeline_api.get_snapshot_signature(self._current_snapshot)
         self._base_summary_values = {
             "total": int(summary.get("total_duration") or 0),
             "effective": int(summary.get("effective_duration") or 0),
@@ -347,7 +347,7 @@ class StatisticsView(ctk.CTkFrame):
         return "\n".join(lines)
 
     def _active_range_label(self) -> str:
-        today = timeline_service.get_default_report_date()
+        today = timeline_api.get_default_report_date()
         current = DateRange(self.start_var.get(), self.end_var.get(), classify_range(self.start_var.get(), self.end_var.get()))
         if current == previous_week_range(today):
             return "上周"
@@ -369,7 +369,7 @@ class StatisticsView(ctk.CTkFrame):
             self.empty_label.grid_remove()
 
     def _export_path(self, suffix: str) -> Path:
-        export_dir = Path(get_setting("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
+        export_dir = Path(settings_api.get_setting_value("export_path", str(Path.home() / "Documents" / "WorkTrace Exports")))
         return export_dir / f"worktrace_{self.start_var.get()}_{self.end_var.get()}.{suffix}"
 
     def _validate_dates(self) -> bool:
@@ -393,20 +393,9 @@ class StatisticsView(ctk.CTkFrame):
 
     def export_excel(self) -> None:
         try:
-            path = export_service.export_excel(self.start_var.get(), self.end_var.get(), str(self._export_path("xlsx")))
+            path = export_api.export_excel(self.start_var.get(), self.end_var.get(), str(self._export_path("xlsx")))
             messagebox.showinfo("导出完成", path)
             self.refresh()
         except Exception as exc:
             logging.exception("excel export failed")
             messagebox.showerror("导出失败", str(exc))
-
-
-def _read_current_activity_snapshot() -> dict | None:
-    raw = get_setting("current_activity_snapshot", "") or ""
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None

@@ -6,7 +6,7 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from ..services import folder_rule_service, project_service, rule_service
+from ..api import project_api, rule_api
 from . import design
 
 
@@ -47,7 +47,7 @@ def open_project_rule_dialog(
 
 
 def save_folder_rule_with_confirmation(folder: str, project_id: int, recursive: bool) -> bool:
-    preview = folder_rule_service.preview_folder_rule_conflicts(folder, project_id)
+    preview = rule_api.preview_folder_rule_conflicts(folder, project_id)
     if any(int(preview[key]) for key in preview):
         message = (
             f"下级已有不同项目的文件夹规则：{preview['child_folder_rule_conflicts']}\n"
@@ -57,9 +57,9 @@ def save_folder_rule_with_confirmation(folder: str, project_id: int, recursive: 
         )
         if not messagebox.askyesno("规则冲突预览", message):
             return False
-    rule_id = folder_rule_service.create_or_update_folder_rule(folder, project_id, recursive=recursive)
+    rule_id = rule_api.create_or_update_folder_rule(folder, project_id, recursive=recursive)
     if messagebox.askyesno("已保存", "文件夹规则已保存。是否执行 safe 历史回填？"):
-        result = folder_rule_service.backfill_folder_rule(rule_id, mode="safe")
+        result = rule_api.backfill_folder_rule(rule_id, mode="safe")
         messagebox.showinfo("回填完成", f"已更新 {result['updated_activity_count']} 条记录")
     return True
 
@@ -80,10 +80,10 @@ class ProjectRuleDialog(ctk.CTkToplevel):
     ):
         super().__init__(master)
         self.on_saved = on_saved
-        self.edit_project = project_service.get_project(edit_project_id) if edit_project_id is not None else None
+        self.edit_project = project_api.get_project(edit_project_id) if edit_project_id is not None else None
         if self.edit_project and self.edit_project.get("created_by") == "system":
             raise ValueError("system project cannot be edited")
-        self.projects = project_service.list_rule_target_projects()
+        self.projects = project_api.list_rule_target_projects()
         project_names = [project["name"] for project in self.projects]
         initial_type = initial_type if initial_type in RULE_TYPE_LABELS else "folder"
         initial_project_name = initial_project_name if initial_project_name in project_names else None
@@ -337,21 +337,21 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         if self.edit_project:
             project_id = int(self.edit_project["id"])
             name = self.new_project_var.get().strip()
-            project_service.update_project(project_id, name, self.description_var.get().strip())
-            self.edit_project = project_service.get_project(project_id) or {"id": project_id, "name": name}
+            project_api.update_project(project_id, name, self.description_var.get().strip())
+            self.edit_project = project_api.get_project(project_id) or {"id": project_id, "name": name}
             return project_id, name, False
 
         if self.project_mode_var.get() == PROJECT_MODE_NEW:
             name = self.new_project_var.get().strip()
             if not name:
                 raise ValueError("请输入项目名称")
-            existing = project_service.get_project_by_name(name)
+            existing = project_api.get_project_by_name(name)
             if existing:
                 return int(existing["id"]), str(existing["name"]), False
-            project_id = project_service.create_project(name, self.description_var.get().strip())
+            project_id = project_api.create_project(name, self.description_var.get().strip())
             return project_id, name, True
 
-        project = project_service.get_project_by_name(self.selected_project_var.get())
+        project = project_api.get_project_by_name(self.selected_project_var.get())
         if not project:
             raise ValueError("请选择有效项目")
         return int(project["id"]), str(project["name"]), False
@@ -361,7 +361,7 @@ class ProjectRuleDialog(ctk.CTkToplevel):
         if kind == "folder":
             return save_folder_rule_with_confirmation(target, project_id, bool(self.recursive_var.get()))
         else:
-            rule_service.create_rule(target, project_id)
+            rule_api.create_keyword_rule(target, project_id)
         return True
 
     def _dialog_title(self) -> str:

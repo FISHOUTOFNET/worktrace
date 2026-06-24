@@ -1,3 +1,4 @@
+from worktrace.api import app_api
 from worktrace.services import settings_service
 from worktrace.ui.app import LIVE_TICK_MS, SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, WM_SIZE, WM_SYSCOMMAND, WorkTraceApp
 
@@ -65,14 +66,6 @@ class FakeCopyPage(FakePage):
         return "page summary"
 
 
-class FakeEvent:
-    def __init__(self):
-        self.set_calls = 0
-
-    def set(self):
-        self.set_calls += 1
-
-
 class FakeTray:
     def __init__(self, actions=None):
         self.actions = list(actions or [])
@@ -100,7 +93,6 @@ def _app_stub():
     app.nav_buttons = {"overview": FakeButton(), "timeline": FakeButton()}
     app.active_page = "overview"
     app.collector_started = True
-    app.start_collector_callback = lambda: None
     app._sync_sidebar_status = lambda: None
     app._tray = None
     app._tray_enabled = False
@@ -381,36 +373,36 @@ def test_shell_close_hides_window_when_tray_is_available():
     assert app._exiting is False
 
 
-def test_shell_tray_exit_stops_tray_and_destroys_window():
+def test_shell_tray_exit_stops_tray_and_destroys_window(monkeypatch):
     app = _app_stub()
     tray = FakeTray()
-    stop_event = FakeEvent()
     calls = []
     app._tray = tray
     app._tray_enabled = True
-    app.stop_event = stop_event
     app._restore_native_window_hook = lambda: calls.append("restore_hook")
     app.destroy = lambda: calls.append("destroy")
+    shutdown_calls = []
+    monkeypatch.setattr(app_api, "request_shutdown", lambda: shutdown_calls.append("shutdown"))
 
     WorkTraceApp.exit_from_tray(app)
 
     assert tray.stopped == 1
-    assert stop_event.set_calls == 1
+    assert shutdown_calls == ["shutdown"]
     assert calls == ["restore_hook", "destroy"]
     assert app._exiting is True
 
 
-def test_shell_close_exits_normally_when_tray_is_unavailable():
+def test_shell_close_exits_normally_when_tray_is_unavailable(monkeypatch):
     app = _app_stub()
-    stop_event = FakeEvent()
     calls = []
-    app.stop_event = stop_event
     app._restore_native_window_hook = lambda: calls.append("restore_hook")
     app.destroy = lambda: calls.append("destroy")
+    shutdown_calls = []
+    monkeypatch.setattr(app_api, "request_shutdown", lambda: shutdown_calls.append("shutdown"))
 
     WorkTraceApp.on_close(app)
 
-    assert stop_event.set_calls == 1
+    assert shutdown_calls == ["shutdown"]
     assert calls == ["restore_hook", "destroy"]
 
 

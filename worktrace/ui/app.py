@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import logging
-import threading
 import time
 import tkinter as tk
 from typing import Any, Callable
 
 import customtkinter as ctk
 
-from ..services import timeline_service
-from ..services.settings_service import get_bool_setting, get_int_setting, get_setting, set_setting
+from ..api import app_api, settings_api, timeline_api
 from . import design
 from .first_run_dialog import FirstRunDialog
 from .tray import create_tray_controller
@@ -24,13 +22,11 @@ LIVE_TICK_MS = 250
 
 
 class WorkTraceApp(ctk.CTk):
-    def __init__(self, start_collector_callback, stop_event: threading.Event):
+    def __init__(self):
         super().__init__()
-        self.start_collector_callback = start_collector_callback
-        self.stop_event = stop_event
         self.collector_started = False
         self.active_page = "overview"
-        default_report_date = timeline_service.get_default_report_date()
+        default_report_date = timeline_api.get_default_report_date()
         self.shared_start_var = ctk.StringVar(value=default_report_date)
         self.shared_end_var = ctk.StringVar(value=default_report_date)
         self.nav_buttons: dict[str, ctk.CTkButton] = {}
@@ -217,19 +213,19 @@ class WorkTraceApp(ctk.CTk):
         return page
 
     def _startup_privacy_gate(self) -> None:
-        if get_bool_setting("first_run_notice_accepted", False):
+        if settings_api.first_run_notice_accepted():
             self._start_collector_once()
         else:
             FirstRunDialog(self, self._accept_notice)
 
     def _accept_notice(self) -> None:
-        set_setting("first_run_notice_accepted", "true")
+        settings_api.accept_first_run_notice()
         self._start_collector_once()
 
     def _start_collector_once(self) -> None:
         if not self.collector_started:
             self.collector_started = True
-            self.start_collector_callback()
+            app_api.start_collector()
 
     def _initialize_tray(self) -> None:
         try:
@@ -299,7 +295,7 @@ class WorkTraceApp(ctk.CTk):
         session_id: str | None = None,
         target_date: str | None = None,
     ) -> None:
-        target = target_date or timeline_service.get_default_report_date()
+        target = target_date or timeline_api.get_default_report_date()
         timeline = getattr(self, "timeline", None) or self._ensure_page("timeline")
         if timeline is None:
             return
@@ -325,7 +321,7 @@ class WorkTraceApp(ctk.CTk):
                 self._refresh_page(self.active_page)
         else:
             self._refresh_after_resize = True
-        refresh_ms = max(5, get_int_setting("ui_refresh_seconds", 10)) * 1000
+        refresh_ms = max(5, settings_api.get_ui_refresh_seconds()) * 1000
         self.after(refresh_ms, self.refresh_current_tab)
 
     def _refresh_page(self, key: str, allow_visual_suspend: bool = False) -> None:
@@ -687,8 +683,8 @@ class WorkTraceApp(ctk.CTk):
 
     def _sync_sidebar_status(self) -> None:
         status = self._status_text()
-        raw_status = get_setting("collector_status", "stopped")
-        paused = get_bool_setting("user_paused", False) or raw_status == "paused"
+        raw_status = settings_api.get_collector_status()
+        paused = settings_api.is_user_paused() or raw_status == "paused"
         self.sidebar_status_label.configure(text=status)
         if raw_status == "running" and not paused:
             self.sidebar_status_label.configure(text_color=design.SUCCESS)
@@ -719,14 +715,14 @@ class WorkTraceApp(ctk.CTk):
         tray = self.__dict__.get("_tray")
         if tray is None:
             return
-        raw = raw_status if raw_status is not None else get_setting("collector_status", "stopped")
-        is_paused = paused if paused is not None else get_bool_setting("user_paused", False) or raw == "paused"
+        raw = raw_status if raw_status is not None else settings_api.get_collector_status()
+        is_paused = paused if paused is not None else settings_api.is_user_paused() or raw == "paused"
         text = status_text or self._status_text()
         tray.update_state(text, raw == "running" and not is_paused, bool(is_paused))
 
     def _status_text(self) -> str:
-        status = get_setting("collector_status", "stopped")
-        paused = get_bool_setting("user_paused", False)
+        status = settings_api.get_collector_status()
+        paused = settings_api.is_user_paused()
         if paused or status == "paused":
             return "已暂停"
         if status == "running":
@@ -736,15 +732,15 @@ class WorkTraceApp(ctk.CTk):
         return "采集器未运行"
 
     def toggle_pause(self) -> None:
-        status = get_setting("collector_status", "stopped")
-        paused = get_bool_setting("user_paused", False) or status == "paused"
+        status = settings_api.get_collector_status()
+        paused = settings_api.is_user_paused() or status == "paused"
         if paused or status != "running":
-            set_setting("user_paused", "false")
+            settings_api.set_user_paused(False)
             self._start_collector_once()
         else:
-            set_setting("user_paused", "true")
-            set_setting("collector_status", "paused")
-            set_setting("current_activity_snapshot", "")
+            settings_api.set_user_paused(True)
+            settings_api.set_collector_status("paused")
+            settings_api.set_current_activity_snapshot("")
         self._sync_sidebar_status()
         if self.active_page == "timeline":
             timeline = getattr(self, "timeline", None) or self.pages.get("timeline")
@@ -811,5 +807,5 @@ class WorkTraceApp(ctk.CTk):
             except Exception:
                 logging.exception("failed to stop tray")
         self._restore_native_window_hook()
-        self.stop_event.set()
+        app_api.request_shutdown()
         self.destroy()

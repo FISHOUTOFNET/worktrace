@@ -1,25 +1,14 @@
 from __future__ import annotations
 
-import json
 from datetime import date
 from tkinter import messagebox, ttk
 from typing import Any
 
 import customtkinter as ctk
 
+from ..api import settings_api, timeline_api
 from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_activity_display_name, format_current_duration, format_duration, format_project_label, format_resource_type
-from ..services import activity_service, project_service, timeline_service
-from ..services.live_time_service import (
-    short_activity_carry_duration,
-    snapshot_elapsed_seconds,
-    snapshot_extra_seconds,
-    snapshot_persisted_id,
-    snapshot_seconds_for_date_range,
-    snapshot_signature,
-    sync_short_activity_carry,
-)
-from ..services.settings_service import get_setting
 from . import design
 from .copy_support import bind_copy_menu, bind_tree_copy_menu
 from .date_range import DateRange, classify_range, current_week_range, previous_week_range, shift_range, today_range
@@ -36,7 +25,7 @@ TREE_ROWHEIGHT = 36
 class TimelineView(ctk.CTkFrame):
     def __init__(self, master, start_var=None, end_var=None):
         super().__init__(master, fg_color="transparent")
-        today = timeline_service.get_default_report_date()
+        today = timeline_api.get_default_report_date()
         self.start_var = start_var or ctk.StringVar(value=today)
         self.end_var = end_var or ctk.StringVar(value=today)
         self.date_var = self.start_var
@@ -339,14 +328,14 @@ class TimelineView(ctk.CTkFrame):
     def refresh(self, ensure_context: bool = True) -> None:
         self._flush_session_note_if_dirty()
         self._ensure_range_vars()
-        self._current_snapshot = _read_current_activity_snapshot()
-        self._current_signature = snapshot_signature(self._current_snapshot)
+        self._current_snapshot = settings_api.get_current_activity_snapshot()
+        self._current_signature = timeline_api.get_snapshot_signature(self._current_snapshot)
         self._sync_status(self._current_snapshot)
         if not self._valid_range():
             return
         self._sync_range_buttons()
         self._refresh_projects()
-        sessions = timeline_service.get_project_sessions_by_range(
+        sessions = timeline_api.get_project_sessions_by_range(
             self.start_var.get(),
             self.end_var.get(),
             ensure_context=ensure_context,
@@ -423,7 +412,7 @@ class TimelineView(ctk.CTkFrame):
         display_session = self._session_with_short_activity_carry(session, getattr(self, "_current_snapshot", None))
         self._sync_selected_session_summary(display_session)
         self._sync_details(
-            timeline_service.get_session_activity_details(
+            timeline_api.get_session_activity_details(
                 session["activity_ids"],
                 report_date=session.get("report_date"),
                 ensure_context=ensure_context,
@@ -568,7 +557,7 @@ class TimelineView(ctk.CTkFrame):
         if not report_date or not first_activity_id:
             return
         note = self._current_session_note()
-        timeline_service.update_session_note(report_date, first_activity_id, note)
+        timeline_api.update_session_note(report_date, first_activity_id, note)
         session["session_note"] = note.strip()
         self._session_note_dirty = False
         if not note.strip() and not self._widget_has_focus(self.session_note_text):
@@ -631,11 +620,11 @@ class TimelineView(ctk.CTkFrame):
         if project_id is None:
             messagebox.showerror("保存失败", "请选择有效项目")
             return
-        preview = timeline_service.preview_session_project_update(session["activity_ids"], project_id)
+        preview = timeline_api.preview_session_project_update(session["activity_ids"], project_id)
         if any(preview.values()):
             if not messagebox.askyesno("锚点文件归属提示", self._format_session_project_preview(preview)):
                 return
-        timeline_service.update_session_project(session["activity_ids"], project_id)
+        timeline_api.update_session_project(session["activity_ids"], project_id)
         self._session_project_dirty = False
         self.refresh()
 
@@ -687,7 +676,7 @@ class TimelineView(ctk.CTkFrame):
         session = self._sessions_by_id.get(self._selected_session_id or "")
         if not session:
             return ""
-        folders = timeline_service.get_session_anchor_folders(session["activity_ids"])
+        folders = timeline_api.get_session_anchor_folders(session["activity_ids"])
         return folders[0] if folders else ""
 
     def _load_activity_editor(self, activity_id: int) -> None:
@@ -782,13 +771,13 @@ class TimelineView(ctk.CTkFrame):
             self.adjustment_hint_label.configure(text="请选择有效项目")
             return
         if int(adjustment.get("project_id") or 0) != int(project_id):
-            timeline_service.update_activity_group_project(activity_ids, int(project_id))
+            timeline_api.update_activity_group_project(activity_ids, int(project_id))
         if adjustment.get("kind") == "activity":
             activity_id = activity_ids[0]
             row = self._details_by_id.get(activity_id) or {}
             note = self.note_text.get("1.0", "end-1c")
             if (row.get("note") or "") != note:
-                activity_service.update_activity_note(activity_id, note)
+                timeline_api.update_activity_note(activity_id, note)
             self._editor_dirty = False
             self._focus_activity_after_refresh(activity_id)
             return
@@ -803,7 +792,7 @@ class TimelineView(ctk.CTkFrame):
         if len(activity_ids) > 1 and not messagebox.askyesno("删除活动", "将删除当前会话中这组活动记录。是否继续？"):
             return
         for activity_id in activity_ids:
-            activity_service.soft_delete_activity(activity_id)
+            timeline_api.soft_delete_activity(activity_id)
         self._selected_activity_id = None
         self._active_adjustment = None
         self._editor_dirty = False
@@ -823,7 +812,7 @@ class TimelineView(ctk.CTkFrame):
             self._load_activity_editor(activity_id)
 
     def _find_session_containing_activity(self, activity_id: int) -> dict | None:
-        sessions = timeline_service.get_project_sessions_by_range(
+        sessions = timeline_api.get_project_sessions_by_range(
             self.start_var.get(),
             self.end_var.get(),
             include_hidden=True,
@@ -841,7 +830,7 @@ class TimelineView(ctk.CTkFrame):
         return None
 
     def _refresh_projects(self) -> None:
-        projects = project_service.list_selectable_projects()
+        projects = timeline_api.list_selectable_projects()
         self._project_by_name = {p["name"]: int(p["id"]) for p in projects}
         self._project_name_by_id = {int(p["id"]): p["name"] for p in projects}
         names = list(self._project_by_name)
@@ -858,8 +847,8 @@ class TimelineView(ctk.CTkFrame):
 
     def refresh_current_activity(self) -> None:
         self._ensure_range_vars()
-        snapshot = _read_current_activity_snapshot()
-        signature = snapshot_signature(snapshot)
+        snapshot = settings_api.get_current_activity_snapshot()
+        signature = timeline_api.get_snapshot_signature(snapshot)
         self._sync_short_activity_carry(snapshot)
         self.current_activity_label.configure(text=self._current_activity_text(snapshot))
         if signature != self._current_signature:
@@ -952,7 +941,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _current_activity_text(self, snapshot: dict | None = None) -> str:
         if snapshot is None:
-            snapshot = _read_current_activity_snapshot()
+            snapshot = settings_api.get_current_activity_snapshot()
         if not snapshot:
             return "当前活动：无"
         name = (
@@ -963,7 +952,11 @@ class TimelineView(ctk.CTkFrame):
             or "未知"
         )
         project = snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT
-        elapsed = format_current_duration(_current_elapsed_seconds(snapshot))
+        elapsed_seconds = (
+            timeline_api.get_snapshot_elapsed_seconds(snapshot)
+            + timeline_api.get_snapshot_extra_seconds(snapshot)
+        )
+        elapsed = format_current_duration(elapsed_seconds)
         state = "已进入历史" if snapshot.get("is_persisted") else "暂不入历史"
         if snapshot.get("status") == "idle":
             name = "空闲中"
@@ -985,7 +978,7 @@ class TimelineView(ctk.CTkFrame):
 
     def _sync_short_activity_carry(self, snapshot: dict | None) -> None:
         previous = getattr(self, "_current_snapshot", None)
-        self._short_activity_carry = sync_short_activity_carry(
+        self._short_activity_carry = timeline_api.sync_short_activity_carry_value(
             getattr(self, "_short_activity_carry", None),
             previous,
             snapshot,
@@ -1005,7 +998,7 @@ class TimelineView(ctk.CTkFrame):
     def _short_activity_carry_duration(self, session: dict, snapshot: dict | None) -> int | None:
         carry = getattr(self, "_short_activity_carry", None)
         report_date = str(session.get("report_date") or session.get("start_time") or "")[:10]
-        return short_activity_carry_duration(
+        return timeline_api.get_short_activity_carry_duration(
             carry,
             [int(value) for value in session.get("activity_ids") or []],
             int(session.get("duration_seconds") or 0),
@@ -1044,12 +1037,12 @@ class TimelineView(ctk.CTkFrame):
         return item
 
     def _activity_ids_live_seconds(self, activity_ids: list[int], report_date: str, snapshot: dict | None) -> int:
-        persisted_id = snapshot_persisted_id(snapshot)
+        persisted_id = timeline_api.get_snapshot_persisted_id(snapshot)
         if persisted_id is None or persisted_id not in {int(activity_id) for activity_id in activity_ids}:
             return 0
         if not report_date:
             return 0
-        return snapshot_seconds_for_date_range(snapshot, report_date, report_date)
+        return timeline_api.get_snapshot_seconds_for_date_range(snapshot, report_date, report_date)
 
     def _selected_session_report_date(self) -> str:
         session = getattr(self, "_sessions_by_id", {}).get(getattr(self, "_selected_session_id", None) or "")
@@ -1249,13 +1242,13 @@ class TimelineView(ctk.CTkFrame):
         return self.start_var.get() != self.end_var.get()
 
     def _apply_today_range(self) -> None:
-        self._set_visible_range(today_range(timeline_service.get_default_report_date()))
+        self._set_visible_range(today_range(timeline_api.get_default_report_date()))
 
     def _apply_current_week_range(self) -> None:
-        self._set_visible_range(current_week_range(timeline_service.get_default_report_date()))
+        self._set_visible_range(current_week_range(timeline_api.get_default_report_date()))
 
     def _apply_previous_week_range(self) -> None:
-        self._set_visible_range(previous_week_range(timeline_service.get_default_report_date()))
+        self._set_visible_range(previous_week_range(timeline_api.get_default_report_date()))
 
     def _apply_quick_range(self, value: str) -> None:
         if value == "上周":
@@ -1290,7 +1283,7 @@ class TimelineView(ctk.CTkFrame):
             self.range_var.set(self._active_range_label())
 
     def _active_range_label(self) -> str:
-        today = timeline_service.get_default_report_date()
+        today = timeline_api.get_default_report_date()
         current = DateRange(self.start_var.get(), self.end_var.get(), classify_range(self.start_var.get(), self.end_var.get()))
         if current == previous_week_range(today):
             return "上周"
@@ -1322,7 +1315,7 @@ class TimelineView(ctk.CTkFrame):
             if hasattr(self, "date_var"):
                 self.start_var = self.date_var
             else:
-                self.start_var = ctk.StringVar(value=timeline_service.get_default_report_date())
+                self.start_var = ctk.StringVar(value=timeline_api.get_default_report_date())
         if not hasattr(self, "end_var"):
             self.end_var = self.start_var
         if not hasattr(self, "date_var"):
@@ -1418,18 +1411,3 @@ class _MemoryTextbox:
 
     def cget(self, key):
         return self.config.get(key, "")
-
-
-def _current_elapsed_seconds(snapshot: dict) -> int:
-    return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
-
-
-def _read_current_activity_snapshot() -> dict | None:
-    raw = get_setting("current_activity_snapshot", "") or ""
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None

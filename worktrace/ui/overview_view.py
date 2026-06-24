@@ -1,30 +1,21 @@
 from __future__ import annotations
 
-import json
 import time
 from datetime import date, timedelta
 from typing import Callable, Any
 
 import customtkinter as ctk
 
+from ..api import settings_api, statistics_api, timeline_api
 from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_current_duration, format_duration, format_project_label
-from ..services.live_time_service import (
-    is_unconfirmed_snapshot,
-    short_activity_carry_duration,
-    snapshot_elapsed_seconds,
-    snapshot_extra_seconds,
-    snapshot_persisted_id,
-    snapshot_seconds_for_date_range,
-    snapshot_signature,
-    sync_short_activity_carry,
-)
-from ..services import statistics_service, timeline_service
-from ..services.settings_service import get_setting
 from . import design
 
 TODAY_SCOPE = "今日概览"
 WEEK_SCOPE = "本周概览"
+
+# Module-level alias so tests can monkeypatch the live-seconds calculation.
+snapshot_seconds_for_date_range = timeline_api.get_snapshot_seconds_for_date_range
 
 
 class OverviewView(ctk.CTkFrame):
@@ -148,9 +139,9 @@ class OverviewView(ctk.CTkFrame):
         self._last_data_refresh_monotonic = time.monotonic()
         start, end = self._scope_dates()
         self._last_scope_range = (start, end)
-        self._current_snapshot = _read_current_activity_snapshot()
-        self._current_signature = snapshot_signature(self._current_snapshot)
-        summary = statistics_service.get_summary(start, end, include_live=True)
+        self._current_snapshot = settings_api.get_current_activity_snapshot()
+        self._current_signature = timeline_api.get_snapshot_signature(self._current_snapshot)
+        summary = statistics_api.get_summary(start, end, include_live=True)
         self._store_kpi_baseline(summary, start, end)
         self.kpi_value_labels["total"].configure(text=format_duration(summary["total_duration"]))
         self.kpi_value_labels["classified"].configure(text=format_duration(summary["classified_duration"]))
@@ -173,7 +164,7 @@ class OverviewView(ctk.CTkFrame):
             self.subtitle_label.configure(text="把今天的工作轨迹整理成可确认、可导出的工作记忆。")
 
     def _scope_dates(self) -> tuple[str, str]:
-        today = date.fromisoformat(timeline_service.get_default_report_date())
+        today = date.fromisoformat(timeline_api.get_default_report_date())
         if self.scope_var.get() == WEEK_SCOPE:
             start = today - timedelta(days=today.weekday())
             return start.isoformat(), today.isoformat()
@@ -220,7 +211,7 @@ class OverviewView(ctk.CTkFrame):
         current = start_date
         while current <= end_date:
             sessions.extend(
-                timeline_service.get_project_sessions_by_date(
+                timeline_api.get_project_sessions_by_date(
                     current.isoformat(),
                     include_hidden=False,
                     ensure_context=ensure_context,
@@ -255,12 +246,12 @@ class OverviewView(ctk.CTkFrame):
             "subtitle": subtitle_label,
             "duration": duration_label,
             "session_id": session_id,
-            "target_date": timeline_service.get_default_report_date(),
+            "target_date": timeline_api.get_default_report_date(),
         }
         command = lambda item=widgets: self._open_timeline(
             False,
             session_id=str(item.get("session_id") or ""),
-            target_date=str(item.get("target_date") or timeline_service.get_default_report_date()),
+            target_date=str(item.get("target_date") or timeline_api.get_default_report_date()),
         )
         for widget in (row, time_label, title_label, subtitle_label, duration_label):
             self._bind_click(widget, command)
@@ -290,7 +281,7 @@ class OverviewView(ctk.CTkFrame):
             self.open_timeline_callback(
                 only_uncategorized=only_uncategorized,
                 session_id=session_id,
-                target_date=target_date or timeline_service.get_default_report_date(),
+                target_date=target_date or timeline_api.get_default_report_date(),
             )
 
     def _open_statistics(self) -> None:
@@ -326,8 +317,8 @@ class OverviewView(ctk.CTkFrame):
         return "\n".join(line for line in lines if line is not None)
 
     def refresh_current_activity(self) -> None:
-        snapshot = _read_current_activity_snapshot()
-        signature = snapshot_signature(snapshot)
+        snapshot = settings_api.get_current_activity_snapshot()
+        signature = timeline_api.get_snapshot_signature(snapshot)
         self._sync_short_activity_carry(snapshot)
         if signature != self._current_signature:
             self.refresh()
@@ -366,8 +357,8 @@ class OverviewView(ctk.CTkFrame):
         self._refresh_recent_live_durations(snapshot)
 
     def _sync_current_activity_from_store(self) -> None:
-        self._current_snapshot = _read_current_activity_snapshot()
-        self._current_signature = snapshot_signature(self._current_snapshot)
+        self._current_snapshot = settings_api.get_current_activity_snapshot()
+        self._current_signature = timeline_api.get_snapshot_signature(self._current_snapshot)
         self.current_activity_label.configure(text=current_activity_text_from_snapshot(self._current_snapshot))
 
     def _store_kpi_baseline(self, summary: dict, start: str, end: str) -> None:
@@ -379,7 +370,7 @@ class OverviewView(ctk.CTkFrame):
         self._kpi_base_live_seconds = snapshot_seconds_for_date_range(self._current_snapshot, start, end)
 
     def _session_live_seconds(self, session: dict, snapshot: dict | None) -> int:
-        persisted_id = snapshot_persisted_id(snapshot)
+        persisted_id = timeline_api.get_snapshot_persisted_id(snapshot)
         if persisted_id is None or persisted_id not in set(session.get("activity_ids") or []):
             return 0
         report_date = str(session.get("report_date") or session.get("start_time") or "")[:10]
@@ -388,7 +379,7 @@ class OverviewView(ctk.CTkFrame):
         return snapshot_seconds_for_date_range(snapshot, report_date, report_date)
 
     def _refresh_recent_live_durations(self, snapshot: dict | None) -> None:
-        persisted_id = snapshot_persisted_id(snapshot)
+        persisted_id = timeline_api.get_snapshot_persisted_id(snapshot)
         if persisted_id is not None:
             for widgets in self._recent_rows.values():
                 activity_ids = set(widgets.get("activity_ids") or [])
@@ -405,7 +396,7 @@ class OverviewView(ctk.CTkFrame):
 
     def _sync_short_activity_carry(self, snapshot: dict | None) -> None:
         previous = getattr(self, "_current_snapshot", None)
-        self._short_activity_carry = sync_short_activity_carry(
+        self._short_activity_carry = timeline_api.sync_short_activity_carry_value(
             getattr(self, "_short_activity_carry", None),
             previous,
             snapshot,
@@ -413,12 +404,12 @@ class OverviewView(ctk.CTkFrame):
 
     def _refresh_recent_short_activity_carry(self, snapshot: dict | None) -> None:
         carry = getattr(self, "_short_activity_carry", None)
-        if not carry or not is_unconfirmed_snapshot(snapshot):
+        if not carry or not timeline_api.is_snapshot_unconfirmed(snapshot):
             return
         for widgets in self._recent_rows.values():
             activity_ids = {int(value) for value in widgets.get("activity_ids") or []}
             target_date = str(widgets.get("target_date") or "")[:10]
-            duration = short_activity_carry_duration(
+            duration = timeline_api.get_short_activity_carry_duration(
                 carry,
                 list(activity_ids),
                 int(widgets.get("base_duration_seconds") or 0),
@@ -439,21 +430,11 @@ class OverviewView(ctk.CTkFrame):
 
 
 def current_activity_text() -> str:
-    return current_activity_text_from_snapshot(_read_current_activity_snapshot())
-
-
-def _read_current_activity_snapshot() -> dict | None:
-    raw = get_setting("current_activity_snapshot", "") or ""
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return None
+    return current_activity_text_from_snapshot(settings_api.get_current_activity_snapshot())
 
 
 def _snapshot_signature(snapshot: dict | None) -> tuple | None:
-    return snapshot_signature(snapshot)
+    return timeline_api.get_snapshot_signature(snapshot)
 
 
 def current_activity_text_from_snapshot(snapshot: dict | None) -> str:
@@ -475,11 +456,14 @@ def current_activity_text_from_snapshot(snapshot: dict | None) -> str:
 
 
 def _current_elapsed_seconds(snapshot: dict) -> int:
-    return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
+    return (
+        timeline_api.get_snapshot_elapsed_seconds(snapshot)
+        + timeline_api.get_snapshot_extra_seconds(snapshot)
+    )
 
 
 def _is_unconfirmed_snapshot(snapshot: dict | None) -> bool:
-    return is_unconfirmed_snapshot(snapshot)
+    return timeline_api.is_snapshot_unconfirmed(snapshot)
 
 
 def _session_time(session: dict, include_date: bool = False) -> str:

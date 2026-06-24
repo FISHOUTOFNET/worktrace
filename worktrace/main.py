@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import logging
-import sys
-import threading
 
-from . import config, db
-from .collector.collector import run_collector
-from .collector.single_instance import acquire_single_instance, release_single_instance
-from .services import activity_service, folder_index_service, recovery_service
-from .services.settings_service import set_setting
+from . import config
+from .api import app_api
+from .runtime.app_runtime import AppRuntime
 from .ui.app import WorkTraceApp
 
 
@@ -21,57 +17,21 @@ def setup_logging(log_path) -> None:
     )
 
 
-def choose_adapter():
-    if sys.platform.startswith("win"):
-        from .platforms.windows_adapter import WindowsAdapter
-
-        return WindowsAdapter()
-    from .platforms.fake_adapter import FakeAdapter
-
-    return FakeAdapter()
-
-
 def main() -> int:
     paths = config.resolve_paths()
     config.ensure_directories(paths)
     setup_logging(paths.log_path)
     logging.info("app startup")
-    db.initialize_database(paths.db_path)
 
-    owns_collector = acquire_single_instance()
-    if not owns_collector:
-        logging.warning("single instance collector lock not acquired; UI will start without collector")
-
-    recovery_service.recover_unclosed_records()
-    stop_event = threading.Event()
-    index_thread = folder_index_service.start_folder_index_worker(stop_event)
-    collector_thread: threading.Thread | None = None
-
-    def start_collector() -> None:
-        nonlocal collector_thread
-        if not owns_collector or collector_thread is not None:
-            return
-        collector_thread = threading.Thread(
-            target=run_collector,
-            args=(choose_adapter(), stop_event),
-            name="WorkTraceCollector",
-            daemon=True,
-        )
-        collector_thread.start()
+    runtime = AppRuntime(paths)
+    runtime.initialize()
+    app_api.set_runtime(runtime)
 
     try:
-        app = WorkTraceApp(start_collector, stop_event)
+        app = WorkTraceApp()
         app.mainloop()
     finally:
-        stop_event.set()
-        if index_thread:
-            index_thread.join(timeout=5)
-        if collector_thread:
-            collector_thread.join(timeout=5)
-        activity_service.close_current_open_record()
-        set_setting("collector_status", "stopped")
-        release_single_instance()
-        logging.info("app shutdown")
+        runtime.shutdown()
     return 0
 
 

@@ -4,9 +4,9 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
+from ..api import project_api, rule_api
 from ..constants import EXCLUDED_PROJECT
 from ..formatters import format_project_label
-from ..services import folder_rule_service, project_service, rule_service
 from . import design
 from .project_rule_dialog import PROJECT_MODE_NEW, RULE_TYPE_LABELS, open_project_rule_dialog
 
@@ -52,7 +52,7 @@ class ProjectRulesView(ctk.CTkFrame):
 
     def copy_page_text(self) -> str:
         lines = ["项目规则"]
-        for project in project_service.list_project_bindings():
+        for project in project_api.list_project_bindings():
             state = "已启用" if bool(int(project.get("enabled", 1))) else "已禁用"
             lines.append(f"{format_project_label(project.get('name'), project.get('description'))}｜{state}｜{_project_rule_summary(project)}")
             for rule in _rules_for_project(project):
@@ -64,7 +64,7 @@ class ProjectRulesView(ctk.CTkFrame):
             self._project_widgets = {}
         if not hasattr(self, "_empty_widget"):
             self._empty_widget = None
-        projects = project_service.list_project_bindings()
+        projects = project_api.list_project_bindings()
         signature = tuple(_project_signature(project) for project in projects)
         if signature == self._rules_signature:
             return
@@ -235,7 +235,7 @@ class ProjectRulesView(ctk.CTkFrame):
 
     def _combined_rules(self) -> list[dict]:
         rules: list[dict] = []
-        for project in project_service.list_project_bindings():
+        for project in project_api.list_project_bindings():
             rules.extend(_rules_for_project(project))
         return rules
 
@@ -282,9 +282,9 @@ class ProjectRulesView(ctk.CTkFrame):
 
     def set_rule_enabled(self, rule: dict) -> None:
         if rule["kind"] == "folder":
-            folder_rule_service.set_folder_rule_enabled(int(rule["id"]), not bool(rule.get("enabled")))
+            rule_api.set_folder_rule_enabled(int(rule["id"]), not bool(rule.get("enabled")))
         elif rule["kind"] == "keyword":
-            rule_service.set_rule_enabled(int(rule["id"]), not bool(rule.get("enabled")))
+            rule_api.set_keyword_rule_enabled(int(rule["id"]), not bool(rule.get("enabled")))
         self._invalidate()
         self.refresh()
 
@@ -292,9 +292,9 @@ class ProjectRulesView(ctk.CTkFrame):
         if not messagebox.askyesno("删除规则", "只删除规则本身，不会改写历史 activity。是否继续？"):
             return
         if rule["kind"] == "folder":
-            folder_rule_service.delete_folder_rule(int(rule["id"]))
+            rule_api.delete_folder_rule(int(rule["id"]))
         elif rule["kind"] == "keyword":
-            rule_service.delete_rule(int(rule["id"]))
+            rule_api.delete_keyword_rule(int(rule["id"]))
         self._invalidate()
         self.refresh()
 
@@ -306,7 +306,7 @@ class ProjectRulesView(ctk.CTkFrame):
         if not messagebox.askyesno("删除", message):
             return
         try:
-            project_service.delete_project(int(project["id"]))
+            project_api.delete_project(int(project["id"]))
         except Exception as exc:
             messagebox.showerror("删除失败", str(exc))
             return
@@ -315,7 +315,7 @@ class ProjectRulesView(ctk.CTkFrame):
 
     def set_project_enabled(self, project: dict) -> None:
         try:
-            project_service.set_project_enabled(int(project["id"]), not bool(int(project.get("enabled", 1))))
+            project_api.set_project_enabled(int(project["id"]), not bool(int(project.get("enabled", 1))))
         except Exception as exc:
             messagebox.showerror("操作失败", str(exc))
             return
@@ -323,7 +323,7 @@ class ProjectRulesView(ctk.CTkFrame):
         self.refresh()
 
     def set_folder_rule_enabled(self, rule_id: int, enabled: bool) -> None:
-        folder_rule_service.set_folder_rule_enabled(rule_id, enabled)
+        rule_api.set_folder_rule_enabled(rule_id, enabled)
         self._invalidate()
         self.refresh()
 

@@ -4,8 +4,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from ..services import export_service
-from ..services.settings_service import get_bool_setting, get_setting, set_setting
+from ..api import settings_api
 from . import design
 from .first_run_dialog import PrivacyNoticeDialog
 
@@ -35,7 +34,7 @@ class SettingsView(ctk.CTkFrame):
         self.scroll.grid_columnconfigure(0, weight=1)
 
         self.entries: dict[str, ctk.CTkEntry] = {}
-        self.clipboard_capture_var = ctk.BooleanVar(value=get_bool_setting("clipboard_capture_enabled", False))
+        self.clipboard_capture_var = ctk.BooleanVar(value=settings_api.get_bool_setting_value("clipboard_capture_enabled", False))
         form = design.card(self.scroll)
         form.grid(row=0, column=0, sticky="ew", pady=(0, 14))
         form.grid_columnconfigure(1, weight=1)
@@ -50,7 +49,7 @@ class SettingsView(ctk.CTkFrame):
                 row=row_index, column=0, sticky="w", padx=(18, 14), pady=7
             )
             entry = design.entry(form)
-            entry.insert(0, get_setting(key, "") or "")
+            entry.insert(0, settings_api.get_setting_value(key, "") or "")
             entry.grid(row=row_index, column=1, sticky="ew", pady=7)
             self.entries[key] = entry
             design.button(form, text="浏览", variant="subtle", width=72, command=self.choose_export_path).grid(
@@ -100,9 +99,9 @@ class SettingsView(ctk.CTkFrame):
     def refresh(self) -> None:
         for key, entry in self.entries.items():
             entry.delete(0, "end")
-            entry.insert(0, get_setting(key, "") or "")
+            entry.insert(0, settings_api.get_setting_value(key, "") or "")
         if hasattr(self, "clipboard_capture_var"):
-            self.clipboard_capture_var.set(get_bool_setting("clipboard_capture_enabled", False))
+            self.clipboard_capture_var.set(settings_api.get_bool_setting_value("clipboard_capture_enabled", False))
 
     def copy_page_text(self) -> str:
         export_path = self.entries.get("export_path").get() if "export_path" in self.entries else ""
@@ -118,12 +117,12 @@ class SettingsView(ctk.CTkFrame):
 
     def save(self) -> None:
         for key, entry in self.entries.items():
-            set_setting(key, entry.get())
+            settings_api.set_setting_value(key, entry.get())
         self.refresh()
         messagebox.showinfo("已保存", "设置已保存")
 
     def save_clipboard_capture(self) -> None:
-        set_setting("clipboard_capture_enabled", "true" if self.clipboard_capture_var.get() else "false")
+        settings_api.set_setting_value("clipboard_capture_enabled", "true" if self.clipboard_capture_var.get() else "false")
 
     def choose_export_path(self) -> None:
         folder = filedialog.askdirectory(title="选择导出目录")
@@ -138,6 +137,6 @@ class SettingsView(ctk.CTkFrame):
     def clear_all(self) -> None:
         message = "此操作将删除本机保存的所有工作轨迹、项目、规则和设置。删除后无法恢复。是否继续？"
         if messagebox.askyesno("确认清空", message):
-            export_service.clear_all_local_data(confirm=True)
+            settings_api.clear_all_local_data(confirm=True)
             messagebox.showinfo("已清空", "本地数据已清空并重建默认设置")
             self.refresh()
