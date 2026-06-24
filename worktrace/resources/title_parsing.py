@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from ..constants import ANCHOR_FILE_EXTENSIONS
 from ..path_utils import has_auto_project_extension
 
 _FILE_RE = re.compile(
