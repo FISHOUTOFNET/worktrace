@@ -6,7 +6,7 @@ import time
 
 from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL
 from ..db import get_connection, get_db_path, now_str
-from ..path_utils import has_auto_project_extension
+from ..path_utils import has_auto_project_extension, looks_like_local_file_path
 from . import clipboard_service, folder_index_service, folder_rule_service
 
 GENERIC_FILE_PROJECT_NAMES = {

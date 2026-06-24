@@ -36,6 +36,15 @@ _EXT_TO_SUBTYPE: dict[str, str] = {
     ".csv": "csv_file",
 }
 
+# Office document extensions are claimed by OfficeWpsDetector (for office apps)
+# and FallbackFileDetector (for any app) with dedicated subtypes
+# (word_document, spreadsheet, presentation). LocalFileDetector defers these
+# even on full paths so they keep their specific subtypes instead of degrading
+# to "unknown".
+_OFFICE_DOCUMENT_EXTENSIONS = frozenset({
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+})
+
 
 class LocalFileDetector:
     def detect(self, active_window: ActiveWindow) -> DetectedResource | None:
@@ -53,13 +62,36 @@ class LocalFileDetector:
         file_name = display_name_from_path_or_name(file_path)
         _, ext = ntpath.splitext(file_name)
         ext_lower = ext.casefold()
+        is_full_local_path = looks_like_local_file_path(file_path)
 
-        if ext_lower not in _LOCAL_FILE_EXTENSIONS:
+        # Bare file names must still be gated by the extension whitelist so
+        # that ordinary window titles are not mistaken for file names. Full
+        # local paths are trusted regardless of extension — once the complete
+        # path is known the file is a valid anchor even for extensions like
+        # .dwg, .psd, .ai, .indd, .sldprt, images, archives, etc.
+        # Office document extensions are the one exception on full paths: they
+        # are handled by OfficeWpsDetector / FallbackFileDetector with dedicated
+        # subtypes (word_document, spreadsheet, presentation), so deferring them
+        # preserves those subtypes instead of degrading to "unknown".
+        if not is_full_local_path:
+            if ext_lower not in _LOCAL_FILE_EXTENSIONS:
+                return None
+        elif ext_lower in _OFFICE_DOCUMENT_EXTENSIONS:
             return None
 
         subtype = _EXT_TO_SUBTYPE.get(ext_lower)
         if subtype is None:
-            subtype = "code_file" if ext_lower in _CODE_EXTENSIONS else "text_file"
+            if ext_lower in _CODE_EXTENSIONS:
+                subtype = "code_file"
+            elif ext_lower in _LOCAL_FILE_EXTENSIONS:
+                # Whitelisted extension without a dedicated subtype
+                # (e.g. .json, .yaml, .html).
+                subtype = "text_file"
+            else:
+                # Unknown extension on a full local path — still a valid file
+                # anchor, but we have no more specific subtype. Reuse the
+                # existing "unknown" subtype instead of adding a schema value.
+                subtype = "unknown"
 
         identity_key = build_path_or_name_identity(file_path, "file_path", "file_name")
 
@@ -74,5 +106,5 @@ class LocalFileDetector:
             app_name=active_window.app_name or "",
             process_name=active_window.process_name or "",
             window_title=active_window.window_title or "",
-            path_hint=file_path if looks_like_local_file_path(file_path) else None,
+            path_hint=file_path if is_full_local_path else None,
         )
