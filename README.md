@@ -16,6 +16,10 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 - Collector heartbeat and startup recovery for unclosed records.
 - Single-instance collector protection.
 
+## v0.2 Boundary
+
+The current implementation remains v0.1 Lite. The next-version boundary is documented in [`docs/v0.2-boundary.md`](docs/v0.2-boundary.md): all local features remain free and usable without registration, payment, or network access; paid features are limited to opt-in server-side AI classification and AI project-session note drafts; AI is off by default and must not affect local functionality.
+
 ## Privacy And Permissions
 
 无需注册。  
