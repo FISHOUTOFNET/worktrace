@@ -2,6 +2,8 @@ import sys
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from worktrace.platforms import windows_adapter
 from worktrace.platforms.windows_adapter import (
     _all_com_catalog_entries,
@@ -167,6 +169,7 @@ def test_user_com_catalog_file_is_loaded(tmp_path, monkeypatch):
 
 def test_ensure_com_initialized_succeeds_on_main_thread():
     """CoInitialize should succeed on the main thread (already initialized by Python)."""
+    pytest.importorskip("pythoncom")
     result = _ensure_com_initialized()
     assert result is True
     _uninitialize_com()
@@ -178,6 +181,7 @@ def test_ensure_com_initialized_succeeds_on_background_thread():
     This is the core fix for the bug where the collector thread failed to
     resolve WPS file paths because COM was not initialized.
     """
+    pytest.importorskip("pythoncom")
     bg_result = [None]
 
     def _worker():
@@ -383,6 +387,7 @@ def test_pyinstaller_entry_passes_pid_after_flag(monkeypatch):
 
 def test_open_files_helper_main_reads_pid_from_argv():
     """open_files_helper.main(['1234']) should read pid=1234."""
+    pytest.importorskip("psutil")
     from unittest.mock import patch
     from worktrace.platforms.open_files_helper import main as helper_main
 
