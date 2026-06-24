@@ -454,61 +454,22 @@ Rules:
 
 `schema.sql` is the single source of truth for the local database structure. The project is pre-release, so database initialization does not run old-version migrations. If the schema changes, delete the local database or use the Settings page to clear and rebuild it.
 
-Create `schema.sql` with the following schema.
+The embedded schema snippet that used to live here has been removed to avoid drift with `schema.sql`. Refer to `schema.sql` directly for column definitions, constraints, and indexes.
 
-```sql
-CREATE TABLE IF NOT EXISTS project (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    description TEXT,
-    is_archived INTEGER NOT NULL DEFAULT 0,
-    created_by TEXT NOT NULL DEFAULT 'user' CHECK (
-        created_by IN ('system', 'user')
-    ),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
+Core tables:
 
-CREATE TABLE IF NOT EXISTS activity_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    start_time TEXT NOT NULL,
-    end_time TEXT,
-    duration_seconds INTEGER,
-    app_name TEXT NOT NULL,
-    process_name TEXT NOT NULL,
-    window_title TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (
-        status IN ('normal', 'idle', 'paused', 'excluded', 'error')
-    ),
-    source TEXT NOT NULL CHECK (
-        source IN ('auto', 'manual', 'system')
-    ),
-    is_deleted INTEGER NOT NULL DEFAULT 0,
-    is_hidden INTEGER NOT NULL DEFAULT 0,
-    auto_classified INTEGER NOT NULL DEFAULT 0,
-    manual_override INTEGER NOT NULL DEFAULT 0,
-    project_id INTEGER,
-    note TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES project(id)
-);
-
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_activity_time
-ON activity_log(start_time, end_time);
-
-CREATE INDEX IF NOT EXISTS idx_activity_status
-ON activity_log(status);
-
-CREATE INDEX IF NOT EXISTS idx_activity_project
-ON activity_log(project_id);
-```
+- `project` — projects (user-created or system-seeded) used for classification.
+- `activity_log` — one row per recorded activity interval (collector output).
+- `activity_resource` — persistence table for the resource-first model. Each row stores the `DetectedResource` inferred for an activity (`resource_kind`, `resource_subtype`, `display_name`, `identity_key`, `is_anchor`, `path_hint`, `path_key`, URI fields, `metadata_json`).
+- `settings` — key/value application settings.
+- `session_boundary` — session boundary markers used by timeline grouping.
+- `folder_project_rule` — folder → project mapping rules.
+- `folder_rule_index_state` — per-rule index build status for the folder index service.
+- `folder_rule_file_index` — cached file-path index entries used to resolve name-only resources back to full paths.
+- `project_rule` — keyword → project mapping rules.
+- `activity_project_assignment` — per-activity project assignment with source/confidence/manual flag.
+- `activity_clipboard_event` — clipboard capture events linked to activities.
+- `project_session_note` — user notes attached to project sessions.
 
 Seed default settings:
 

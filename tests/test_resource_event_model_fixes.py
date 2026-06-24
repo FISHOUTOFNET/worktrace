@@ -412,6 +412,7 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         assert resource is not None
         assert resource["resource_kind"] == "office_document"
         assert resource["path_hint"] is None
+        assert resource["path_key"] is None
         assert resource["identity_key"].startswith("office_file_name:")
 
         # Now supplement with a full path
@@ -420,6 +421,8 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         resource = get_resource_for_activity(aid)
         assert resource is not None
         assert resource["path_hint"] == "D:\\Docs\\合同.docx"
+        assert resource["path_key"] is not None
+        assert resource["path_key"] != ""
         assert resource["identity_key"].startswith("office_file:")
         assert resource["display_name"] == "合同.docx"
         assert resource["resource_kind"] == "office_document"
@@ -438,5 +441,6 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         assert resource["resource_kind"] == "system"
         assert resource["resource_subtype"] == "excluded"
         assert resource["path_hint"] is None
+        assert resource["path_key"] is None
         assert resource["display_name"] == EXCLUDED_APP_NAME
 

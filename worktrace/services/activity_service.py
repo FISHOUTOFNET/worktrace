@@ -339,7 +339,7 @@ def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_
     from ..path_utils import normalize_path_key
 
     row = conn.execute(
-        "SELECT app_name, process_name, window_title, status FROM activity_log WHERE id = ?",
+        "SELECT app_name, process_name, window_title, status, start_time FROM activity_log WHERE id = ?",
         (activity_id,),
     ).fetchone()
     if not row:
