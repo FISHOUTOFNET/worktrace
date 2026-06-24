@@ -1,0 +1,9 @@
+# Build/packaging dependencies for WorkTrace v0.1 Lite.
+# Install on top of requirements.txt only when producing Windows builds:
+#     pip install -r requirements-dev.txt
+#
+# This file covers both the single-file exe (WorkTrace.spec) and the
+# per-user installer (scripts/build_windows_installer.ps1), since the
+# installer script also drives PyInstaller to wrap the installer payload.
+-r requirements.txt
+pyinstaller>=6.0

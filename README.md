@@ -56,13 +56,24 @@ Closing the main window hides WorkTrace to the Windows notification area. Use th
 
 ## Windows Packaging
 
+Packaging is optional and only needed when producing distributable Windows builds. It relies on extra build dependencies that are not part of the runtime requirements.
+
+Install the runtime dependencies first, then add the build dependencies only when packaging:
+
+```powershell
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+```
+
+`requirements-dev.txt` extends `requirements.txt` with `pyinstaller`. The same build dependency set covers both the single-file executable and the per-user installer, because `scripts\build_windows_installer.ps1` also drives PyInstaller to wrap the installer payload.
+
 Build the single-file executable:
 
 ```powershell
 python -m PyInstaller --noconfirm --clean WorkTrace.spec
 ```
 
-Build the per-user installer:
+Build the per-user installer (run after the single-file executable has been built, since the installer wraps `dist\WorkTrace.exe` as its payload):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
@@ -70,10 +81,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 
 The build outputs are:
 
-- `dist\WorkTrace.exe`
-- `dist\WorkTrace-Setup.exe`
+- `dist\WorkTrace.exe` — single-file application.
+- `dist\WorkTrace-Setup.exe` — current-user installer.
 
-The installer copies WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace` and creates a current-user Start Menu shortcut. It does not require administrator privileges.
+The installer copies WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace` and creates a current-user Start Menu shortcut. It installs per-user only: it does not write to `Program Files` and does not request administrator privileges.
+
+Build artifacts (`build/`, `dist/`, generated `.spec` files other than `WorkTrace.spec`) must not be committed to Git; `.gitignore` already excludes them. The release acceptance steps for both builds are documented in [`docs/release-checklist.md`](docs/release-checklist.md).
 
 ## Local Paths
 
