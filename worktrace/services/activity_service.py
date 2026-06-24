@@ -7,12 +7,14 @@ from ..constants import (
     SOURCE_AUTO,
     STATUS_ERROR,
     STATUS_EXCLUDED,
+    STATUS_IDLE,
     STATUS_NORMAL,
+    STATUS_PAUSED,
     TIME_FORMAT,
 )
-from ..activity_identity import attach_activity_identity
 from ..db import dict_rows, get_connection, now_str
 from ..platforms.base import ActiveWindow
+from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
 from .project_service import get_or_create_uncategorized_project
 from .resource_service import attach_resource, create_or_update_activity_resource
@@ -96,7 +98,7 @@ def create_activity(
                 ts,
             ),
         )
-        _write_resource_in_conn(conn, activity_id, app_name, process_name, window_title, file_path_hint, status, resource, ts)
+        _write_resource_in_conn(conn, activity_id, app_name, process_name, window_title, file_path_hint, status, resource, start)
         return activity_id
 
 
@@ -132,166 +134,39 @@ def _write_resource_in_conn(
     file_path_hint: str | None,
     status: str,
     resource: DetectedResource | None,
-    ts: str,
+    start_time: str | None = None,
 ) -> None:
-    from ..path_utils import normalize_path_key
-    from ..resources.resource_policy import safe_metadata_json
-
-    # Security: status=excluded always forces anonymous resource, regardless of
-    # whether the caller passed in a real resource. This guarantees that no
-    # real resource metadata is persisted for excluded activities.
-    if status == STATUS_EXCLUDED:
-        from ..constants import EXCLUDED_APP_NAME, EXCLUDED_PROCESS_NAME, EXCLUDED_WINDOW_TITLE
-        resource = DetectedResource(
-            resource_kind="system",
-            resource_subtype="excluded",
-            display_name=EXCLUDED_APP_NAME,
-            identity_key="system:excluded",
-            is_anchor=False,
-            confidence=100,
-            source="auto_excluded",
-            app_name=EXCLUDED_APP_NAME,
-            process_name=EXCLUDED_PROCESS_NAME,
-            window_title=EXCLUDED_WINDOW_TITLE,
-            path_hint=None,
-            uri_scheme=None,
-            uri_host=None,
-            uri_hint=None,
-            metadata_json=None,
+    # Excluded activities: let resource_service's anonymisation safety net
+    # handle them — never persist real resource metadata.
+    if resource is None and status != STATUS_EXCLUDED:
+        resource = _detect_resource_for_activity(
+            app_name, process_name, window_title, file_path_hint, status, start_time,
         )
-    elif resource is None:
-        resource = _resource_from_activity_identity(
-            app_name, process_name, window_title, file_path_hint, status,
-        )
-    path_key = normalize_path_key(resource.path_hint) if resource.path_hint else None
-    metadata = safe_metadata_json(
-        _parse_metadata_json(resource.metadata_json) if resource.metadata_json else None
-    )
-    conn.execute(
-        """
-        INSERT INTO activity_resource(
-            activity_id, resource_kind, resource_subtype, display_name, identity_key,
-            is_anchor, confidence, source, app_name, process_name, window_title,
-            path_hint, path_key, uri_scheme, uri_host, uri_hint, metadata_json,
-            created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(activity_id) DO UPDATE SET
-            resource_kind = excluded.resource_kind,
-            resource_subtype = excluded.resource_subtype,
-            display_name = excluded.display_name,
-            identity_key = excluded.identity_key,
-            is_anchor = excluded.is_anchor,
-            confidence = excluded.confidence,
-            source = excluded.source,
-            app_name = excluded.app_name,
-            process_name = excluded.process_name,
-            window_title = excluded.window_title,
-            path_hint = excluded.path_hint,
-            path_key = excluded.path_key,
-            uri_scheme = excluded.uri_scheme,
-            uri_host = excluded.uri_host,
-            uri_hint = excluded.uri_hint,
-            metadata_json = excluded.metadata_json,
-            updated_at = excluded.updated_at
-        """,
-        (
-            activity_id,
-            resource.resource_kind,
-            resource.resource_subtype,
-            resource.display_name,
-            resource.identity_key,
-            int(resource.is_anchor),
-            resource.confidence,
-            resource.source,
-            resource.app_name,
-            resource.process_name,
-            resource.window_title,
-            resource.path_hint,
-            path_key,
-            resource.uri_scheme,
-            resource.uri_host,
-            resource.uri_hint,
-            metadata,
-            ts,
-            ts,
-        ),
-    )
+    create_or_update_activity_resource(activity_id, resource, conn=conn)
 
 
-def _resource_from_activity_identity(
+def _detect_resource_for_activity(
     app_name: str,
     process_name: str,
     window_title: str,
     file_path_hint: str | None,
     status: str,
+    start_time: str | None = None,
 ) -> DetectedResource:
-    from ..constants import STATUS_IDLE, STATUS_PAUSED, STATUS_ERROR
+    """Build a DetectedResource for a new activity using resource-first detection."""
     from ..resources.detectors import detect_resource
 
-    if status == STATUS_IDLE:
-        return DetectedResource(
-            resource_kind="system", resource_subtype="idle",
-            display_name="空闲", identity_key="system:idle",
-            is_anchor=False, confidence=100, source="auto_idle",
-            app_name=app_name, process_name=process_name, window_title=window_title,
-        )
-    if status == STATUS_PAUSED:
-        return DetectedResource(
-            resource_kind="system", resource_subtype="paused",
-            display_name="已暂停", identity_key="system:paused",
-            is_anchor=False, confidence=100, source="auto_paused",
-            app_name=app_name, process_name=process_name, window_title=window_title,
-        )
-    if status == STATUS_ERROR:
-        return DetectedResource(
-            resource_kind="system", resource_subtype="error",
-            display_name="异常", identity_key="system:error",
-            is_anchor=False, confidence=100, source="auto_error",
-            app_name=app_name, process_name=process_name, window_title=window_title,
-        )
+    if status in (STATUS_IDLE, STATUS_PAUSED, STATUS_ERROR):
+        return make_system_resource(status, app_name, process_name, window_title)
 
     active_window = ActiveWindow(
         app_name=app_name,
         process_name=process_name,
         window_title=window_title,
         file_path_hint=file_path_hint,
+        activity_start_time=start_time,
     )
-    resource = detect_resource(active_window)
-
-    # If the detector returned a non-generic result, use it directly
-    if resource.resource_kind != "app" or resource.resource_subtype != "generic_app":
-        return resource
-
-    # Fall back to activity_identity for anchor file detection from title
-    from ..activity_identity import infer_activity_identity
-    identity = infer_activity_identity(app_name, process_name, window_title, file_path_hint)
-
-    if identity.is_anchor_file:
-        return DetectedResource(
-            resource_kind="local_file",
-            resource_subtype="unknown",
-            display_name=identity.display_name,
-            identity_key=identity.identity_key,
-            is_anchor=True,
-            confidence=80,
-            source="activity_identity",
-            app_name=identity.app_name or app_name,
-            process_name=identity.process_name or process_name,
-            window_title=identity.title_hint or window_title,
-            path_hint=identity.full_path,
-        )
-
-    return resource
-
-
-def _parse_metadata_json(value: str) -> dict | None:
-    import json
-    try:
-        result = json.loads(value)
-        return result if isinstance(result, dict) else None
-    except (json.JSONDecodeError, TypeError):
-        return None
+    return detect_resource(active_window)
 
 
 def close_activity(activity_id: int, end_time: str, duration_seconds: int | None = None) -> None:
@@ -480,12 +355,13 @@ def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_
         (activity_id,),
     ).fetchone()
     if not existing:
-        # No existing resource row; create_activity / backfill will handle it.
+        # No existing resource row; create_activity will handle it.
         return
 
     # Re-infer the resource using the updated file_path_hint.
-    resource = _resource_from_activity_identity(
+    resource = _detect_resource_for_activity(
         row["app_name"], row["process_name"], row["window_title"], file_path_hint, status,
+        row["start_time"],
     )
 
     new_path_hint = resource.path_hint

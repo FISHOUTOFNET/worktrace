@@ -4,7 +4,15 @@ from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow, ClipboardTextEvent
-from worktrace.services import activity_service, folder_rule_service, privacy_service, project_service, settings_service
+from worktrace.services import activity_service, folder_rule_service, project_service, rule_service, settings_service
+
+
+def _enable_excluded_project_with_keyword(keyword: str) -> int:
+    """Enable the 排除规则 project and add a keyword rule. Returns the project id."""
+    excluded_project = project_service.get_or_create_excluded_project()
+    project_service.set_project_enabled(excluded_project, True)
+    rule_service.create_rule(keyword, excluded_project)
+    return excluded_project
 
 
 def _snapshot():
@@ -29,7 +37,7 @@ def test_state_transitions_persist_when_segment_reaches_threshold(temp_db):
 
 
 def test_excluded_transition_anonymizes_snapshot_title(temp_db):
-    privacy_service.set_exclude_keywords(["银行"])
+    _enable_excluded_project_with_keyword("银行")
     machine = CollectorStateMachine()
     machine.transition_to(
         "excluded",
@@ -226,7 +234,7 @@ def test_clipboard_event_forces_short_activity_into_history(temp_db):
 
 
 def test_clipboard_event_for_excluded_window_is_not_recorded(temp_db):
-    privacy_service.set_exclude_keywords(["Secret"])
+    _enable_excluded_project_with_keyword("Secret")
     machine = CollectorStateMachine()
     window = ActiveWindow("Edge", "msedge.exe", "Secret page")
     machine.transition_to("recording", window, at_time="2026-06-18 09:00:00")

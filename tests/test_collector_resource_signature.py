@@ -4,8 +4,16 @@ from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_APP_NAME, EXCLUDED_PROCESS_NAME, EXCLUDED_WINDOW_TITLE
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import activity_service, privacy_service
+from worktrace.services import activity_service, project_service, rule_service
 from worktrace.services.resource_service import get_resource_for_activity
+
+
+def _enable_excluded_project_with_keyword(keyword: str) -> int:
+    """Enable the 排除规则 project and add a keyword rule. Returns the project id."""
+    excluded_project = project_service.get_or_create_excluded_project()
+    project_service.set_project_enabled(excluded_project, True)
+    rule_service.create_rule(keyword, excluded_project)
+    return excluded_project
 
 
 class TestSameDocxTitleVariationSameSignature:
@@ -108,7 +116,7 @@ class TestExcludedNoDuplicatesAndAnonymous:
     """5. excluded consecutive transitions don't produce multiple records, and resource is anonymous."""
 
     def test_excluded_no_duplicates(self, temp_db):
-        privacy_service.set_exclude_keywords(["银行"])
+        _enable_excluded_project_with_keyword("银行")
         machine = CollectorStateMachine()
         machine.transition_to(
             "excluded",
@@ -136,7 +144,7 @@ class TestExcludedNoDuplicatesAndAnonymous:
         assert total_excluded <= 1
 
     def test_excluded_resource_is_anonymous(self, temp_db):
-        privacy_service.set_exclude_keywords(["银行"])
+        _enable_excluded_project_with_keyword("银行")
         machine = CollectorStateMachine()
         machine.transition_to(
             "excluded",

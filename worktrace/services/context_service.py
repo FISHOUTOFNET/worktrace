@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..constants import (
+    ANCHOR_FILE_EXTENSIONS,
     CLIPBOARD_TRANSITION_SECONDS,
     DEFAULT_CONTEXT_CARRY_MINUTES,
     STATUS_ERROR,
@@ -12,10 +13,10 @@ from ..constants import (
     STATUS_PAUSED,
     TIME_FORMAT,
 )
-from ..activity_identity import attach_activity_identity
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from . import clipboard_service, session_boundary_service
 from .project_inference_service import assign_project_for_activity
+from .resource_service import attach_resource
 from .settings_service import get_int_setting
 
 INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED}
@@ -48,7 +49,7 @@ def recompute_context_assignments_for_date(date: str) -> None:
             continue
         if row.get("assignment_source") in DIRECT_ASSIGNMENT_SOURCES | {"clipboard_transition_context"}:
             continue
-        if row.get("is_anchor_file"):
+        if _is_context_anchor(row):
             continue
         if int(row["manual_override"] or 0) or int(row["assignment_is_manual"] or 0):
             continue
@@ -162,7 +163,7 @@ def _load_rows(start: str, end: str) -> list[dict]:
             """,
             (start, end),
         ).fetchall()
-    return [attach_activity_identity(row) for row in dict_rows(rows)]
+    return [attach_resource(row) for row in dict_rows(rows)]
 
 
 def _ensure_assignments(rows: list[dict]) -> bool:
@@ -179,7 +180,7 @@ def _recompute_anchor_rows(rows: list[dict]) -> bool:
     for row in rows:
         if row["status"] == STATUS_NORMAL and row.get("assignment_source") == "midnight_anchor":
             continue
-        if row["status"] == STATUS_NORMAL and row.get("is_anchor_file"):
+        if _is_context_anchor(row):
             if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
                 continue
             assignment = assign_project_for_activity(int(row["id"]))
@@ -346,10 +347,33 @@ def _row_project_id(row: dict) -> int:
     return int(row.get("assignment_project_id") or row.get("project_id") or 0)
 
 
+_ANCHOR_EXT_SET = frozenset(ext.casefold() for ext in ANCHOR_FILE_EXTENSIONS)
+
+
 def _is_context_anchor(row: dict) -> bool:
-    return row["status"] == STATUS_NORMAL and (
-        row.get("is_anchor_file") or row.get("assignment_source") == "midnight_anchor"
-    )
+    if row["status"] != STATUS_NORMAL:
+        return False
+    if row.get("assignment_source") == "midnight_anchor":
+        return True
+    if not row.get("resource_is_anchor"):
+        return False
+    # Only file-based anchors with ANCHOR_FILE_EXTENSIONS are context anchors.
+    # Browser tabs, email messages, and code files (.py, .js, etc.) are
+    # resource anchors for identity but should be auxiliary for context carry.
+    if row.get("resource_kind") in ("browser_tab", "email"):
+        return False
+    display_name = str(row.get("resource_display_name") or "").strip()
+    if display_name:
+        _, ext = _split_ext(display_name)
+        if ext and ext.casefold() in _ANCHOR_EXT_SET:
+            return True
+    return False
+
+
+def _split_ext(name: str) -> tuple[str, str]:
+    import ntpath
+    _, ext = ntpath.splitext(name)
+    return name, ext
 
 
 def _anchor_context_time(row: dict) -> str:

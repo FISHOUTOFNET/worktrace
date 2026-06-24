@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 
 from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS
-from ..activity_identity import infer_identity_for_activity
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import (
     is_path_under_folder,
@@ -135,9 +134,12 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
             SELECT
                 a.*,
                 COALESCE(apa.project_id, a.project_id) AS effective_project_id,
-                COALESCE(apa.is_manual, 0) AS is_manual
+                COALESCE(apa.is_manual, 0) AS is_manual,
+                ar.path_hint AS resource_path_hint,
+                ar.is_anchor AS resource_is_anchor
             FROM activity_log a
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            LEFT JOIN activity_resource ar ON ar.activity_id = a.id
             WHERE a.is_deleted = 0
             """
         ).fetchall())
@@ -178,8 +180,12 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict:
             raise ValueError(f"folder rule not found: {rule_id}")
         rows = conn.execute(
             """
-            SELECT a.*
+            SELECT
+                a.*,
+                ar.path_hint AS resource_path_hint,
+                ar.is_anchor AS resource_is_anchor
             FROM activity_log a
+            LEFT JOIN activity_resource ar ON ar.activity_id = a.id
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             WHERE a.is_deleted = 0
               AND a.manual_override = 0
@@ -220,26 +226,19 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict:
 
 
 def _activity_matches_folder(activity: dict, folder_path: str, recursive: bool = True, rule_id: int | None = None) -> bool:
-    identity = infer_identity_for_activity(activity)
-    if not identity.is_anchor_file:
-        if rule_id is None:
-            return False
+    # Resource-first: check both resource_path_hint and file_path_hint.
+    # A non-anchor resource may store a name-only path_hint (e.g. "floorplan.dwg")
+    # while file_path_hint holds the full drive path — check each independently.
+    for key in ("resource_path_hint", "file_path_hint"):
+        path_hint = str(activity.get(key) or "").strip()
+        if path_hint and looks_like_anchor_file_path(path_hint):
+            return is_path_under_folder(path_hint, folder_path, recursive)
+    # No concrete path: try folder index lookup.
+    if rule_id is not None:
         from .folder_index_service import activity_matches_rule_by_index
 
         return activity_matches_rule_by_index(activity, rule_id)
-    full_path = identity.full_path or ""
-    parent_dir = identity.parent_dir or ""
-    if full_path:
-        return is_path_under_folder(full_path, folder_path, recursive)
-    if not parent_dir:
-        if rule_id is not None:
-            from .folder_index_service import activity_matches_rule_by_index
-
-            return activity_matches_rule_by_index(activity, rule_id)
-        return False
-    if normalize_folder_key(parent_dir) == normalize_folder_key(folder_path):
-        return True
-    return bool(recursive and is_path_under_folder(parent_dir, folder_path, True))
+    return False
 
 
 def _target_matches_rule(target: str, rule: dict) -> bool:

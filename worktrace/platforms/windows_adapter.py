@@ -17,7 +17,6 @@ from functools import lru_cache
 from urllib.parse import unquote, urlparse
 
 from .. import config
-from ..activity_identity import extract_anchor_file_name, extract_file_name_from_title
 from ..constants import TIME_FORMAT
 from ..path_utils import (
     extract_file_path_from_title,
@@ -25,6 +24,7 @@ from ..path_utils import (
     normalize_path_key,
     split_file_path,
 )
+from ..resources.title_parsing import extract_anchor_file_name, extract_file_name_from_title
 from .base import ActiveWindow, ClipboardTextEvent
 
 
@@ -398,24 +398,6 @@ def _resolve_active_file_path(process_name: str, window_title: str, pid: int | N
         logging.debug("active file path resolved from folder rule index")
         return indexed
     return None
-
-
-def _office_candidates(process_name: str) -> list[tuple[str, str]]:
-    office_names = {
-        "Microsoft Word",
-        "Microsoft Excel",
-        "Microsoft PowerPoint",
-        "WPS Writer",
-        "WPS Spreadsheets",
-        "WPS Presentation",
-    }
-    return [
-        (prog_id, expression)
-        for entry in _BUILTIN_COM_PATH_CATALOG
-        if entry.name in office_names and _process_matches_entry(process_name, entry)
-        for prog_id in entry.prog_ids
-        for expression in entry.path_expressions
-    ]
 
 
 def _com_candidates(process_name: str) -> list[tuple[str, str]]:

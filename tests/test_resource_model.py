@@ -115,11 +115,11 @@ class TestRegistry:
 
 
 # ---------------------------------------------------------------------------
-# 4. attach_resource_identity fills resource_* and legacy activity_* fields
+# 4. attach_resource_identity fills resource_* and activity_* fields
 # ---------------------------------------------------------------------------
 
 class TestAttachResourceIdentity:
-    def test_attaches_resource_fields(self):
+    def test_attaches_resource_fields_for_generic_app(self):
         row = {
             "app_name": "微信",
             "process_name": "WeChat.exe",
@@ -134,7 +134,7 @@ class TestAttachResourceIdentity:
         assert result["resource_path_hint"] is None
         assert result["resource_uri_host"] is None
 
-    def test_attaches_legacy_fields(self):
+    def test_attaches_resource_fields_for_browser_tab(self):
         row = {
             "app_name": "Chrome",
             "process_name": "chrome.exe",
@@ -143,8 +143,9 @@ class TestAttachResourceIdentity:
         result = attach_resource_identity(row)
         assert result["activity_display_name"] == result["resource_display_name"]
         assert result["activity_identity_key"] == result["resource_identity_key"]
-        assert result["is_anchor_file"] == result["resource_is_anchor"]
-        assert result["anchor_full_path"] == ""
+        # Browser tabs are anchor resources in the resource-first model.
+        assert result["resource_is_anchor"] is True
+        assert result["resource_path_hint"] is None
 
     def test_system_row_attaches_correctly(self):
         row = {
@@ -157,7 +158,7 @@ class TestAttachResourceIdentity:
         assert result["resource_subtype"] == "idle"
         assert result["resource_display_name"] == "空闲"
         assert result["activity_display_name"] == "空闲"
-        assert result["is_anchor_file"] is False
+        assert result["resource_is_anchor"] is False
 
     def test_does_not_mutate_original(self):
         row = {

@@ -16,7 +16,7 @@ from worktrace.platforms.base import ActiveWindow
 from worktrace.resources.email_detector import EmailDetector
 from worktrace.resources.ide_detector import IdeDetector
 from worktrace.resources.types import DetectedResource
-from worktrace.services import activity_service, privacy_service, settings_service
+from worktrace.services import activity_service, folder_rule_service, privacy_service, project_service, rule_service, settings_service
 from worktrace.services.project_inference_service import (
     assign_project_for_activity,
     candidate_project_name_for_resource,
@@ -25,6 +25,14 @@ from worktrace.services.resource_service import (
     create_or_update_activity_resource,
     get_resource_for_activity,
 )
+
+
+def _enable_excluded_project_with_keyword(keyword: str) -> int:
+    """Enable the 排除规则 project and add a keyword rule. Returns the project id."""
+    excluded_project = project_service.get_or_create_excluded_project()
+    project_service.set_project_enabled(excluded_project, True)
+    rule_service.create_rule(keyword, excluded_project)
+    return excluded_project
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +114,7 @@ class TestExcludedResourceForcedAnonymous:
 
 class TestResourceExclusion:
     def test_resource_exclusion_browser_host(self, temp_db):
-        privacy_service.set_exclude_keywords(["secretbank.com"])
+        _enable_excluded_project_with_keyword("secretbank.com")
         resource = DetectedResource(
             resource_kind="browser_tab",
             resource_subtype="browser_page",
@@ -138,7 +146,7 @@ class TestResourceExclusion:
         assert privacy_service.is_resource_excluded(safe_resource) is False
 
     def test_resource_exclusion_email_title(self, temp_db):
-        privacy_service.set_exclude_keywords(["机密邮件"])
+        _enable_excluded_project_with_keyword("机密邮件")
         resource = DetectedResource(
             resource_kind="email",
             resource_subtype="email_message",
@@ -154,7 +162,7 @@ class TestResourceExclusion:
         assert privacy_service.is_resource_excluded(resource) is True
 
     def test_resource_exclusion_ide_workspace(self, temp_db):
-        privacy_service.set_exclude_keywords(["SecretProject"])
+        _enable_excluded_project_with_keyword("SecretProject")
         resource = DetectedResource(
             resource_kind="ide_file",
             resource_subtype="ide_workspace",
@@ -169,8 +177,27 @@ class TestResourceExclusion:
         )
         assert privacy_service.is_resource_excluded(resource) is True
 
+    def test_resource_exclusion_folder_rule_anonymizes_file_path(self, temp_db):
+        excluded_project = project_service.get_or_create_excluded_project()
+        project_service.set_project_enabled(excluded_project, True)
+        folder_rule_service.create_or_update_folder_rule("D:\\PrivateFolder", excluded_project)
+        resource = DetectedResource(
+            resource_kind="office_document",
+            resource_subtype="word_document",
+            display_name="机密合同.docx",
+            identity_key="office_file:d:\\privatefolder\\机密合同.docx",
+            is_anchor=True,
+            confidence=90,
+            source="office_wps_detector",
+            app_name="Word",
+            process_name="winword.exe",
+            window_title="机密合同.docx - Word",
+            path_hint="D:\\PrivateFolder\\机密合同.docx",
+        )
+        assert privacy_service.is_resource_excluded(resource) is True
+
     def test_collector_anonymizes_resource_with_excluded_browser_host(self, temp_db):
-        privacy_service.set_exclude_keywords(["secretbank.com"])
+        _enable_excluded_project_with_keyword("secretbank.com")
         machine = CollectorStateMachine()
         machine.transition_to(
             "recording",
@@ -413,16 +440,3 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         assert resource["path_hint"] is None
         assert resource["display_name"] == EXCLUDED_APP_NAME
 
-
-# ---------------------------------------------------------------------------
-# 7. email_metadata_capture_enabled default is seeded
-# ---------------------------------------------------------------------------
-
-
-class TestEmailMetadataCaptureDefaultSeeded:
-    def test_email_metadata_capture_default_seeded(self, temp_db):
-        value = settings_service.get_setting("email_metadata_capture_enabled")
-        assert value == "false"
-
-    def test_email_metadata_capture_default_disabled_via_helper(self, temp_db):
-        assert EmailDetector.is_email_metadata_capture_enabled() is False

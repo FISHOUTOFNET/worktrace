@@ -16,7 +16,6 @@ from worktrace.platforms.windows_adapter import (
     _mark_open_files_failed,
     _match_open_file_path,
     _normalize_com_file_path,
-    _office_candidates,
     _resolve_active_file_path,
     _run_with_timeout,
     _uninitialize_com,
@@ -33,13 +32,6 @@ def test_office_com_path_is_accepted_when_title_matches_file_name():
 
 def test_com_path_accepts_non_whitelisted_extension_when_title_matches():
     assert _is_valid_com_path("D:\\Images\\hero.psd", "hero.psd - Adobe Photoshop")
-
-
-def test_wps_candidates_include_kingsoft_prog_ids():
-    candidates = _office_candidates("wps.exe")
-    assert ("KWps.Application", "ActiveDocument.FullName") in candidates
-    assert ("KET.Application", "ActiveWorkbook.FullName") in candidates
-    assert ("KWPP.Application", "ActivePresentation.FullName") in candidates
 
 
 def test_open_file_match_returns_unique_exact_file_name():

@@ -7,7 +7,6 @@ from worktrace.resources.types import DetectedResource
 from worktrace.services import activity_service
 from worktrace.services.resource_service import (
     attach_resource,
-    backfill_missing_resources,
     create_or_update_activity_resource,
     get_resource_for_activity,
 )
@@ -83,7 +82,7 @@ class TestGetActivityReturnsResourceFields:
         assert activity["resource_display_name"] == "微信"
         assert activity["resource_identity_key"].startswith("app:")
 
-    def test_get_activity_includes_legacy_fields(self, temp_db):
+    def test_get_activity_includes_resource_fields(self, temp_db):
         aid = activity_service.create_activity(
             "微信", "WeChat.exe", "聊天",
             start_time="2026-06-23 09:00:00",
@@ -92,8 +91,8 @@ class TestGetActivityReturnsResourceFields:
         assert activity is not None
         assert activity["activity_display_name"] == "微信"
         assert activity["activity_identity_key"] == activity["resource_identity_key"]
-        assert activity["is_anchor_file"] == activity["resource_is_anchor"]
-        assert activity["anchor_full_path"] == ""
+        assert activity["resource_is_anchor"] is False
+        assert activity["resource_path_hint"] is None
 
     def test_get_activities_by_range_includes_resource(self, temp_db):
         activity_service.create_activity(
@@ -108,65 +107,7 @@ class TestGetActivityReturnsResourceFields:
 
 
 # ---------------------------------------------------------------------------
-# 3. backfill_missing_resources generates resources for old records
-# ---------------------------------------------------------------------------
-
-class TestBackfillMissingResources:
-    def test_backfill_creates_resources_for_existing_activities(self, temp_db):
-        from worktrace.db import get_connection
-
-        # Insert activity_log directly, bypassing create_activity to simulate old data
-        with get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO activity_log(
-                    start_time, end_time, duration_seconds, app_name, process_name,
-                    window_title, status, source, is_deleted, is_hidden,
-                    auto_classified, manual_override, project_id, note,
-                    created_at, updated_at
-                )
-                VALUES ('2026-06-23 08:00:00', '2026-06-23 08:30:00', 1800,
-                        '微信', 'WeChat.exe', '聊天', 'normal', 'auto',
-                        0, 0, 0, 0, 1, NULL, '2026-06-23 08:00:00', '2026-06-23 08:00:00')
-                """
-            )
-
-        count = backfill_missing_resources()
-        assert count == 1
-
-        # Verify resource was created
-        with get_connection() as conn:
-            row = conn.execute("SELECT * FROM activity_resource").fetchone()
-        assert row is not None
-        assert row["resource_kind"] == "app"
-        assert row["display_name"] == "微信"
-
-    def test_backfill_is_idempotent(self, temp_db):
-        from worktrace.db import get_connection
-
-        with get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO activity_log(
-                    start_time, end_time, duration_seconds, app_name, process_name,
-                    window_title, status, source, is_deleted, is_hidden,
-                    auto_classified, manual_override, project_id, note,
-                    created_at, updated_at
-                )
-                VALUES ('2026-06-23 08:00:00', '2026-06-23 08:30:00', 1800,
-                        '微信', 'WeChat.exe', '聊天', 'normal', 'auto',
-                        0, 0, 0, 0, 1, NULL, '2026-06-23 08:00:00', '2026-06-23 08:00:00')
-                """
-            )
-
-        count1 = backfill_missing_resources()
-        count2 = backfill_missing_resources()
-        assert count1 == 1
-        assert count2 == 0
-
-
-# ---------------------------------------------------------------------------
-# 4. Excluded records do not save real resource metadata
+# 3. Excluded records do not save real resource metadata
 # ---------------------------------------------------------------------------
 
 class TestExcludedResourcePrivacy:
@@ -187,39 +128,9 @@ class TestExcludedResourcePrivacy:
         assert resource["path_hint"] is None
         assert resource["uri_host"] is None
 
-    def test_backfill_excluded_uses_anonymous_resource(self, temp_db):
-        from worktrace.db import get_connection
-
-        with get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO activity_log(
-                    start_time, end_time, duration_seconds, app_name, process_name,
-                    window_title, status, source, is_deleted, is_hidden,
-                    auto_classified, manual_override, project_id, note,
-                    created_at, updated_at
-                )
-                VALUES ('2026-06-23 08:00:00', '2026-06-23 08:30:00', 1800,
-                        '已排除', 'excluded', '已排除窗口', 'excluded', 'auto',
-                        0, 0, 0, 0, 1, NULL, '2026-06-23 08:00:00', '2026-06-23 08:00:00')
-                """
-            )
-
-        backfill_missing_resources()
-
-        with get_connection() as conn:
-            row = conn.execute("SELECT * FROM activity_resource").fetchone()
-        assert row is not None
-        assert row["resource_kind"] == "system"
-        assert row["resource_subtype"] == "excluded"
-        assert row["display_name"] == EXCLUDED_APP_NAME
-        assert row["app_name"] == EXCLUDED_APP_NAME
-        assert row["window_title"] == EXCLUDED_WINDOW_TITLE
-        assert row["path_hint"] is None
-
 
 # ---------------------------------------------------------------------------
-# 5. Duplicate create_or_update does not create duplicate rows
+# 4. Duplicate create_or_update does not create duplicate rows
 # ---------------------------------------------------------------------------
 
 class TestNoDuplicateResourceRows:

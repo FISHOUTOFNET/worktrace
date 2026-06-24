@@ -3,13 +3,14 @@ from __future__ import annotations
 import ntpath
 import re
 
-from ..activity_identity import extract_file_name_from_title, normalize_file_name
-from ..path_utils import (
-    looks_like_local_file_path,
-    normalize_path_key,
-    split_file_path,
-)
+from ..path_utils import looks_like_local_file_path
 from ..platforms.base import ActiveWindow
+from .resource_helpers import (
+    build_path_or_name_identity,
+    display_name_from_path_or_name,
+    extract_file_name_from_title,
+    normalize_for_key,
+)
 from .resource_policy import validate_resource_kind, validate_resource_subtype
 from .types import DetectedResource
 
@@ -41,39 +42,44 @@ class IdeDetector:
         if process_lower not in IDE_PROCESS_NAMES:
             return None
 
-        # 1. Try file_path_hint for code file
+        # 1. Try file_path_hint or title for a code file
         hint = (active_window.file_path_hint or "").strip()
+        title = (active_window.window_title or "").strip()
+
+        code_file_path: str | None = None
         if hint:
             _, ext = ntpath.splitext(hint)
             if ext.casefold() in IDE_CODE_EXTENSIONS:
-                return self._make_code_file_resource(active_window, hint)
+                code_file_path = hint
+            else:
+                # hint present but not a code extension; still trust it as a
+                # full path if it looks like one, so title-based detection can
+                # try next.
+                pass
 
-        # 2. Try extracting code file from window title
-        title = (active_window.window_title or "").strip()
-        file_name = extract_file_name_from_title(title)
-        if file_name:
-            _, ext = ntpath.splitext(file_name)
-            if ext.casefold() in IDE_CODE_EXTENSIONS:
-                # Try to get full path from hint or title
-                full_path = hint if hint and looks_like_local_file_path(hint) else file_name
-                return self._make_code_file_resource(active_window, full_path)
+        if code_file_path is None:
+            file_name = extract_file_name_from_title(title)
+            if file_name:
+                _, ext = ntpath.splitext(file_name)
+                if ext.casefold() in IDE_CODE_EXTENSIONS:
+                    # Prefer a full path from hint when available, else the
+                    # bare file name from the title.
+                    code_file_path = hint if hint and looks_like_local_file_path(hint) else file_name
 
-        # 3. Try to identify workspace/project from title
+        if code_file_path:
+            return self._make_code_file_resource(active_window, code_file_path)
+
+        # 2. Try to identify workspace/project from title
         workspace = self._extract_workspace(title, process_lower)
         if workspace:
             return self._make_workspace_resource(active_window, workspace)
 
-        # 4. No file or workspace identified - let GenericAppDetector handle it
+        # 3. No file or workspace identified - let GenericAppDetector handle it
         return None
 
     def _make_code_file_resource(self, active_window: ActiveWindow, file_path: str) -> DetectedResource:
-        full_path, parent_dir, file_stem = split_file_path(file_path)
-        file_name = ntpath.basename(full_path)
-
-        if looks_like_local_file_path(full_path):
-            identity_key = f"ide_file:{normalize_path_key(full_path)}"
-        else:
-            identity_key = f"ide_file_name:{normalize_file_name(file_name)}"
+        file_name = display_name_from_path_or_name(file_path)
+        identity_key = build_path_or_name_identity(file_path, "ide_file", "ide_file_name")
 
         return DetectedResource(
             resource_kind=validate_resource_kind("ide_file"),
@@ -86,12 +92,12 @@ class IdeDetector:
             app_name=active_window.app_name or "",
             process_name=active_window.process_name or "",
             window_title=active_window.window_title or "",
-            path_hint=full_path if looks_like_local_file_path(full_path) else None,
+            path_hint=file_path if looks_like_local_file_path(file_path) else None,
         )
 
     def _make_workspace_resource(self, active_window: ActiveWindow, workspace: str) -> DetectedResource:
         process_lower = (active_window.process_name or "").strip().lower()
-        normalized_ws = _normalize_for_key(workspace)
+        normalized_ws = normalize_for_key(workspace)
         identity_key = f"ide_workspace:{process_lower}:{normalized_ws}"
 
         return DetectedResource(
@@ -144,10 +150,3 @@ class IdeDetector:
             if candidate and len(candidate) >= 2 and not self._IDE_NAME_PATTERNS.match(candidate):
                 return candidate
         return None
-
-
-def _normalize_for_key(value: str) -> str:
-    value = value.strip().lower()
-    value = re.sub(r"\s+", "-", value)
-    value = re.sub(r"[^a-z0-9._\-\u4e00-\u9fff]+", "-", value)
-    return value.strip("-") or "unknown"

@@ -3,13 +3,16 @@ from __future__ import annotations
 import ntpath
 import re
 
-from ..activity_identity import extract_file_name_from_title, normalize_file_name
 from ..path_utils import (
+    extract_file_path_from_title,
     looks_like_local_file_path,
-    normalize_path_key,
-    split_file_path,
 )
 from ..platforms.base import ActiveWindow
+from .resource_helpers import (
+    build_path_or_name_identity,
+    display_name_from_path_or_name,
+    normalize_for_key,
+)
 from .resource_policy import validate_resource_kind, validate_resource_subtype
 from .types import DetectedResource
 
@@ -71,8 +74,6 @@ class EmailDetector:
             email_file_name_from_title = _extract_email_file_name_from_title(title)
             if email_file_name_from_title:
                 # If the title also contains a full path, prefer that.
-                from ..path_utils import extract_file_path_from_title, looks_like_local_file_path
-
                 title_path = extract_file_path_from_title(title)
                 if title_path and looks_like_local_file_path(title_path):
                     _, ext = ntpath.splitext(title_path)
@@ -94,28 +95,10 @@ class EmailDetector:
 
         return None
 
-    @staticmethod
-    def is_email_metadata_capture_enabled() -> bool:
-        """Check if deep email metadata capture is enabled. Default: False."""
-        try:
-            from ..services.settings_service import get_setting
-            return get_setting("email_metadata_capture_enabled", "false").lower() == "true"
-        except Exception:
-            return False
-
     def _make_email_file_resource(self, active_window: ActiveWindow, file_path: str) -> DetectedResource:
-        full_path, parent_dir, file_stem = split_file_path(file_path)
-        file_name = ntpath.basename(full_path)
-
-        if looks_like_local_file_path(full_path):
-            identity_key = f"email_file:{normalize_path_key(full_path)}"
-            path_hint = full_path
-        else:
-            # Name-only: no full path available. Use a name-based identity so
-            # that the same file name across different folders still groups
-            # together, and never persist a fake path.
-            identity_key = f"email_file_name:{normalize_file_name(file_name)}"
-            path_hint = None
+        file_name = display_name_from_path_or_name(file_path)
+        identity_key = build_path_or_name_identity(file_path, "email_file", "email_file_name")
+        path_hint = file_path if looks_like_local_file_path(file_path) else None
 
         return DetectedResource(
             resource_kind=validate_resource_kind("email"),
@@ -137,8 +120,8 @@ class EmailDetector:
         display_name = subject or title or active_window.app_name or "邮件"
         process_name = (active_window.process_name or "").strip()
 
-        normalized_subject = _normalize_for_key(subject or display_name)
-        normalized_process = _normalize_for_key(process_name)
+        normalized_subject = normalize_for_key(subject or display_name)
+        normalized_process = normalize_for_key(process_name)
         identity_key = f"email_subject:{normalized_subject}|{normalized_process}"
 
         return DetectedResource(
@@ -169,10 +152,3 @@ class EmailDetector:
         # Remove status indicators like "(HTML)", "(Plain Text)", etc.
         cleaned = re.sub(r"\s*\((?:HTML|Plain\s*Text|RTF)\)\s*", "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip()
-
-
-def _normalize_for_key(value: str) -> str:
-    value = value.strip().lower()
-    value = re.sub(r"\s+", "-", value)
-    value = re.sub(r"[^a-z0-9._\-\u4e00-\u9fff@]+", "-", value)
-    return value.strip("-") or "unknown"

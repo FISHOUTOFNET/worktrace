@@ -5,7 +5,6 @@ from pathlib import Path
 
 from ..db import get_connection, now_str, reset_database
 from ..exports.excel_exporter import export_excel_file
-from ..exports.markdown_exporter import export_markdown_file
 
 
 def export_excel(start_date: str, end_date: str, path: str) -> str:
@@ -15,16 +14,6 @@ def export_excel(start_date: str, end_date: str, path: str) -> str:
         return result
     except Exception:
         logging.exception("excel export error")
-        raise
-
-
-def export_markdown(start_date: str, end_date: str, path: str) -> str:
-    try:
-        result = export_markdown_file(start_date, end_date, path)
-        logging.info("markdown export success")
-        return result
-    except Exception:
-        logging.exception("markdown export error")
         raise
 
 
@@ -39,6 +28,7 @@ def export_all_local_data(path: str) -> str:
     with get_connection() as conn:
         for table in [
             "activity_log",
+            "activity_resource",
             "activity_project_assignment",
             "activity_clipboard_event",
             "project",
@@ -63,13 +53,12 @@ def clear_all_local_data(confirm: bool) -> None:
         raise ValueError("confirmation is required")
     reset_database()
     from .folder_rule_service import invalidate_folder_rule_cache
-    from .privacy_service import clear_exclude_keywords_cache, clear_exclude_rules_cache
+    from .privacy_service import clear_exclude_rules_cache
     from .project_inference_service import invalidate_keyword_rule_cache
     from .project_service import invalidate_uncategorized_project_cache
     from .settings_service import clear_settings_cache
 
     clear_settings_cache()
-    clear_exclude_keywords_cache()
     clear_exclude_rules_cache()
     invalidate_uncategorized_project_cache()
     invalidate_folder_rule_cache()

@@ -1,24 +1,36 @@
 from __future__ import annotations
 
-from ..constants import EXCLUDED_APP_NAME, EXCLUDED_PROCESS_NAME, EXCLUDED_WINDOW_TITLE, STATUS_EXCLUDED
+import sqlite3
+
+from ..constants import STATUS_EXCLUDED
 from ..db import get_connection, now_str
 from ..path_utils import normalize_path_key
+from ..resources.resource_builders import make_system_resource, parse_metadata_json
 from ..resources.resource_policy import safe_metadata_json
 from ..resources.types import DetectedResource
 
 
-def create_or_update_activity_resource(activity_id: int, resource: DetectedResource) -> None:
-    # Security: if the activity's status is excluded, always force an anonymous
-    # resource regardless of what the caller passed in. This prevents real
-    # resource metadata from being persisted for excluded activities.
-    resource = _enforce_anonymous_if_excluded(activity_id, resource)
+def create_or_update_activity_resource(
+    activity_id: int,
+    resource: DetectedResource,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Upsert the ``activity_resource`` row for *activity_id*.
+
+    This is the single write entry point for activity resources.  When the
+    activity is excluded the resource is always replaced by an anonymous
+    system/excluded resource, regardless of what the caller passed in.
+
+    An open connection may be supplied via *conn* so that the upsert
+    participates in the caller's transaction (e.g. ``activity_service.create_activity``).
+    """
+    resource = _enforce_anonymous_if_excluded(activity_id, resource, conn)
     ts = now_str()
     path_key = normalize_path_key(resource.path_hint) if resource.path_hint else None
-    metadata = safe_metadata_json(
-        _parse_metadata_json(resource.metadata_json) if resource.metadata_json else None
-    )
-    with get_connection() as conn:
-        conn.execute(
+    metadata = safe_metadata_json(parse_metadata_json(resource.metadata_json))
+
+    def _upsert(c: sqlite3.Connection) -> None:
+        c.execute(
             """
             INSERT INTO activity_resource(
                 activity_id, resource_kind, resource_subtype, display_name, identity_key,
@@ -69,6 +81,12 @@ def create_or_update_activity_resource(activity_id: int, resource: DetectedResou
             ),
         )
 
+    if conn is not None:
+        _upsert(conn)
+    else:
+        with get_connection() as c:
+            _upsert(c)
+
 
 def get_resource_for_activity(activity_id: int) -> dict | None:
     with get_connection() as conn:
@@ -80,12 +98,36 @@ def get_resource_for_activity(activity_id: int) -> dict | None:
 
 
 def attach_resource(row: dict) -> dict:
+    """Attach resource-first display fields to *row*.
+
+    Uses ``activity_resource`` as the source of truth.  When no persisted
+    resource exists, falls back to ``detect_resource(active_window)`` to
+    produce a temporary resource for display purposes only.
+    """
     item = dict(row)
     activity_id = item.get("id")
     if activity_id is None:
         return item
     resource = get_resource_for_activity(int(activity_id))
-    if resource is not None:
+    if resource is None:
+        # No persisted resource — derive a temporary one for display.
+        from ..platforms.base import ActiveWindow
+        from ..resources.detectors import detect_resource
+        active_window = ActiveWindow(
+            app_name=item.get("app_name") or "",
+            process_name=item.get("process_name") or "",
+            window_title=item.get("window_title") or "",
+            file_path_hint=item.get("file_path_hint"),
+        )
+        detected = detect_resource(active_window)
+        item["resource_kind"] = detected.resource_kind
+        item["resource_subtype"] = detected.resource_subtype
+        item["resource_display_name"] = detected.display_name
+        item["resource_identity_key"] = detected.identity_key
+        item["resource_is_anchor"] = bool(detected.is_anchor)
+        item["resource_path_hint"] = detected.path_hint
+        item["resource_uri_host"] = detected.uri_host
+    else:
         item["resource_kind"] = resource["resource_kind"]
         item["resource_subtype"] = resource["resource_subtype"]
         item["resource_display_name"] = resource["display_name"]
@@ -93,106 +135,34 @@ def attach_resource(row: dict) -> dict:
         item["resource_is_anchor"] = bool(resource["is_anchor"])
         item["resource_path_hint"] = resource.get("path_hint")
         item["resource_uri_host"] = resource.get("uri_host")
-        # Derive legacy path fields from resource path_hint
-        path_hint = resource.get("path_hint")
-        if path_hint:
-            from ..path_utils import split_file_path
-            full_path, parent_dir, file_stem = split_file_path(path_hint)
-            item["anchor_parent_dir"] = parent_dir
-            item["anchor_file_stem"] = file_stem
-            item["anchor_title_hint"] = resource.get("display_name") or ""
-        else:
-            item["anchor_parent_dir"] = ""
-            item["anchor_file_stem"] = ""
-            item["anchor_title_hint"] = resource.get("display_name") or ""
-    else:
-        from ..activity_identity import attach_activity_identity
-        item = attach_activity_identity(item)
-    item["activity_display_name"] = item.get("resource_display_name") or item.get("activity_display_name") or item.get("app_name", "")
-    item["activity_identity_key"] = item.get("resource_identity_key") or item.get("activity_identity_key") or ""
-    item["is_anchor_file"] = item.get("resource_is_anchor") if item.get("resource_is_anchor") is not None else item.get("is_anchor_file", False)
-    item["anchor_full_path"] = item.get("resource_path_hint") or item.get("anchor_full_path") or ""
+    item["activity_display_name"] = item.get("resource_display_name") or item.get("app_name", "")
+    item["activity_identity_key"] = item.get("resource_identity_key") or ""
     return item
 
 
-def backfill_missing_resources() -> int:
-    count = 0
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.id, a.app_name, a.process_name, a.window_title,
-                   a.file_path_hint, a.status
-            FROM activity_log a
-            LEFT JOIN activity_resource r ON r.activity_id = a.id
-            WHERE r.id IS NULL
-            ORDER BY a.id
-            """
-        ).fetchall()
-    for row in rows:
-        activity = dict(row)
-        if activity.get("status") == STATUS_EXCLUDED:
-            resource = DetectedResource(
-                resource_kind="system",
-                resource_subtype="excluded",
-                display_name=EXCLUDED_APP_NAME,
-                identity_key="system:excluded",
-                is_anchor=False,
-                confidence=100,
-                source="backfill_excluded",
-                app_name=EXCLUDED_APP_NAME,
-                process_name=EXCLUDED_PROCESS_NAME,
-                window_title=EXCLUDED_WINDOW_TITLE,
-            )
-        else:
-            from ..services.activity_service import _resource_from_activity_identity
-            resource = _resource_from_activity_identity(
-                activity.get("app_name", ""),
-                activity.get("process_name", ""),
-                activity.get("window_title", ""),
-                activity.get("file_path_hint"),
-                activity.get("status", "normal"),
-            )
-        create_or_update_activity_resource(int(activity["id"]), resource)
-        count += 1
-    return count
-
-
-def _enforce_anonymous_if_excluded(activity_id: int, resource: DetectedResource) -> DetectedResource:
+def _enforce_anonymous_if_excluded(
+    activity_id: int,
+    resource: DetectedResource,
+    conn: sqlite3.Connection | None = None,
+) -> DetectedResource:
     """Return an anonymous excluded resource if the activity is excluded.
 
-    This is a safety net: even if a caller passes a real resource, we never
-    persist real resource metadata for an excluded activity.
+    This is the single anonymisation safety net: even if a caller passes a real
+    resource, we never persist real resource metadata for an excluded activity.
     """
-    with get_connection() as conn:
-        row = conn.execute(
+    def _get_status(c: sqlite3.Connection) -> str | None:
+        row = c.execute(
             "SELECT status FROM activity_log WHERE id = ?",
             (activity_id,),
         ).fetchone()
-    if not row or row["status"] != STATUS_EXCLUDED:
+        return row["status"] if row else None
+
+    if conn is not None:
+        status = _get_status(conn)
+    else:
+        with get_connection() as c:
+            status = _get_status(c)
+
+    if status != STATUS_EXCLUDED:
         return resource
-    return DetectedResource(
-        resource_kind="system",
-        resource_subtype="excluded",
-        display_name=EXCLUDED_APP_NAME,
-        identity_key="system:excluded",
-        is_anchor=False,
-        confidence=100,
-        source="auto_excluded",
-        app_name=EXCLUDED_APP_NAME,
-        process_name=EXCLUDED_PROCESS_NAME,
-        window_title=EXCLUDED_WINDOW_TITLE,
-        path_hint=None,
-        uri_scheme=None,
-        uri_host=None,
-        uri_hint=None,
-        metadata_json=None,
-    )
-
-
-def _parse_metadata_json(value: str) -> dict | None:
-    import json
-    try:
-        result = json.loads(value)
-        return result if isinstance(result, dict) else None
-    except (json.JSONDecodeError, TypeError):
-        return None
+    return make_system_resource(STATUS_EXCLUDED)

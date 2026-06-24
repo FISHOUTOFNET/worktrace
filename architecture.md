@@ -102,16 +102,15 @@ Implement:
 12. Project time statistics.
 13. Date-range statistics.
 14. Excel export.
-15. Markdown weekly draft export service/API.
-16. Pause / resume collection.
-17. Collector heartbeat display.
-18. Single-instance protection.
-19. Recovery of unclosed records after abnormal shutdown.
-20. Local data clearing.
-21. Local data export.
-22. First-run privacy notice.
-23. Local logging.
-24. Windows notification-area tray lifecycle.
+15. Pause / resume collection.
+16. Collector heartbeat display.
+17. Single-instance protection.
+18. Recovery of unclosed records after abnormal shutdown.
+19. Local data clearing.
+20. Local data export.
+21. First-run privacy notice.
+22. Local logging.
+23. Windows notification-area tray lifecycle.
 
 ### 3.2 Out of Scope
 
@@ -234,7 +233,7 @@ On Windows, the UI owns a notification-area tray icon:
 2. A monochrome tray icon means collection is paused, stopped, or in error.
 3. Closing the main window hides it; it does not stop collection.
 4. The tray menu must provide show, pause/resume, and exit actions.
-5. If tray initialization fails, the app must not hide the window and may keep the legacy close-to-exit behavior.
+5. If tray initialization fails, the app must not hide the window and may keep the direct close-to-exit behavior.
 
 On app exit:
 
@@ -415,11 +414,7 @@ worktrace/
 │
 ├── exports/
 │   ├── __init__.py
-│   ├── excel_exporter.py
-│   └── markdown_exporter.py
-│
-├── templates/
-│   └── weekly_report.md
+│   └── excel_exporter.py
 │
 └── tests/
     ├── test_state_machine.py
@@ -456,6 +451,8 @@ Rules:
 ---
 
 ## 12. Database Schema
+
+`schema.sql` is the single source of truth for the local database structure. The project is pre-release, so database initialization does not run old-version migrations. If the schema changes, delete the local database or use the Settings page to clear and rebuild it.
 
 Create `schema.sql` with the following schema.
 
@@ -766,7 +763,7 @@ Normal to excluded:
 
 ```text
 normal Word record open
-→ active window matches exclude keyword
+→ active window matches 排除规则
 → close Word record
 → open excluded anonymous record
 ```
@@ -874,6 +871,26 @@ settings.poll_interval_seconds
 default = 3
 ```
 
+### 17.1 Resource-First Data Flow
+
+The collector follows a resource-first main path:
+
+```text
+collector loop
+→ adapter.get_active_window() returns ActiveWindow
+→ detect_resource(active_window) returns DetectedResource
+→ activity_log row written with file_path_hint
+→ activity_resource row written with resource_kind, identity_key, is_anchor, path_hint, uri_host
+→ project_inference_service assigns project via folder rules, keyword rules, anchor context, or clipboard context
+→ timeline / statistics / export read activity_log + activity_resource
+```
+
+`resource_kind` values: `local_file`, `office_document`, `email`, `browser_tab`, `ide_file`, `app`, `system`, `unknown`.
+
+Folder rules, keyword rules, and exclusion rules match against safe metadata only: resource path, path hint, display name, uri_host, app name, process name, window title. The collector does not read file contents, email bodies, or browser history.
+
+`fake_adapter.py` is used in tests and non-Windows development environments so the full resource-first path can be exercised without a real Windows foreground window.
+
 ---
 
 ## 18. Single Instance Control
@@ -938,7 +955,7 @@ On startup:
 
 ### 20.1 Special Project
 
-WorkTrace seeds a disabled system project named `排除规则`. It is displayed on the Project Rules page and supports the same three rule kinds as ordinary projects. It starts with no default rules; users enable it and add any file, folder, or keyword exclusions they want.
+`排除规则` is the single exclusion entry point. WorkTrace seeds it as a disabled system project. It is displayed on the Project Rules page and supports the same three rule kinds as ordinary projects. It starts with no default rules; users enable it and add any file, folder, or keyword exclusions they want.
 
 ```text
 folder
@@ -1156,7 +1173,6 @@ set_list_setting(key: str, values: list[str]) -> None
 ```
 
 `settings_service` may keep a short TTL in-memory cache, but cache keys must include the active database path. `set_setting` must update the cache for the written key.
-Privacy exclusion keywords may cache the parsed list by database path; `set_exclude_keywords` must update or invalidate that cache.
 
 ### 23.5 statistics_service.py
 
@@ -1188,9 +1204,9 @@ mark_record_error(activity_id: int, reason: str) -> None
 Required functions:
 
 ```python
-get_exclude_keywords() -> list[str]
-set_exclude_keywords(keywords: list[str]) -> None
+clear_exclude_rules_cache() -> None
 is_excluded(active_window: ActiveWindow) -> bool
+is_resource_excluded(resource) -> bool
 make_excluded_activity_payload() -> dict
 ```
 
@@ -1200,7 +1216,6 @@ Required functions:
 
 ```python
 export_excel(start_date: str, end_date: str, path: str) -> str
-export_markdown(start_date: str, end_date: str, path: str) -> str
 export_all_local_data(path: str) -> str
 clear_all_local_data(confirm: bool) -> None
 ```
@@ -1342,7 +1357,7 @@ Record Count
 ```
 
 Summary durations are formatted as `hh:mm:ss` and use project statistics after reporting context merge.
-Shared duration formatting must live in `worktrace.formatters`; UI modules must not import `markdown_exporter` just to format durations. `markdown_exporter` may re-export the formatter functions for compatibility.
+Shared duration formatting must live in `worktrace.formatters`.
 
 Sheet 2: `Activity Logs`
 
@@ -1371,40 +1386,6 @@ Default export filtering:
 5. exclude `is_deleted = 1`;
 6. exclude `is_hidden = 1`;
 
-### 25.2 Markdown Weekly Draft
-
-Use template:
-
-```markdown
-# WorkTrace 周报草稿
-
-周期：{{ start_date }} 至 {{ end_date }}
-
-## 一、本周时间概览
-
-总记录时长：{{ total_duration }}  
-有效工作时长：{{ effective_duration }}  
-空闲时间：{{ idle_duration }}  
-排除时间：{{ excluded_duration }}  
-未归类时间：{{ uncategorized_duration }}  
-
-## 二、项目投入情况
-
-{{ project_summary }}
-
-## 三、项目明细
-
-{{ project_details }}
-
-- 未归类记录：
-{{ uncategorized_records }}
-
-- 已排除时间：
-{{ excluded_summary }}
-
-- 下周计划：
-```
-
 ---
 
 ## 26. Data Clearing and Local Data Export
@@ -1427,7 +1408,7 @@ Implementation may delete and recreate the SQLite database or clear all tables a
 
 ### 26.2 Export All Local Data
 
-The UI does not expose export-all-local-data. Settings only supports clearing all local records; reporting views expose range Excel export. The Markdown exporter remains available as a service/API helper.
+The UI does not expose export-all-local-data. Settings only supports clearing all local records; reporting views expose range Excel export.
 
 ---
 
@@ -1526,8 +1507,7 @@ The app is acceptable if:
 14. It allows notes.
 15. It summarizes time by project.
 16. It exports Excel.
-17. It keeps Markdown export available outside the visible UI.
-20. It supports exclude keywords.
+17. It supports the 排除规则 project as the single exclusion entry point.
 21. It supports pause / resume.
 22. It supports soft delete.
 23. It supports local data clearing.
@@ -1587,11 +1567,10 @@ Implement pytest tests for:
 8. privacy keyword matching
 9. statistics aggregation
 10. Excel export file creation
-11. Markdown service export content
-12. settings read / write
-13. single-instance lock behavior where feasible
-14. collector loop using fake adapter
-15. UI-independent service behavior
+11. settings read / write
+12. single-instance lock behavior where feasible
+13. collector loop using fake adapter
+14. UI-independent service behavior
 
 Tests must not require real Windows foreground windows. Use `fake_adapter.py`.
 
@@ -1632,7 +1611,6 @@ classify records into projects,
 add notes,
 view project statistics,
 export an Excel timesheet from the UI,
-generate a Markdown weekly draft through the service/API,
 and clear or export all local data,
 without registration, network access, administrator privileges, screenshots, keyboard logging, content reading, or data upload.
 ```

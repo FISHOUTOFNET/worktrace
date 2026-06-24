@@ -400,15 +400,6 @@ class StatisticsView(ctk.CTkFrame):
             logging.exception("excel export failed")
             messagebox.showerror("导出失败", str(exc))
 
-    def export_markdown(self) -> None:
-        try:
-            path = export_service.export_markdown(self.start_var.get(), self.end_var.get(), str(self._export_path("md")))
-            messagebox.showinfo("导出完成", path)
-            self.refresh()
-        except Exception as exc:
-            logging.exception("markdown export failed")
-            messagebox.showerror("导出失败", str(exc))
-
 
 def _read_current_activity_snapshot() -> dict | None:
     raw = get_setting("current_activity_snapshot", "") or ""

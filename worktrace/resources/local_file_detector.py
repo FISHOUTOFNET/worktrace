@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import ntpath
 
-from ..activity_identity import extract_file_name_from_title, normalize_file_name
-from ..path_utils import (
-    extract_file_path_from_title,
-    looks_like_local_file_path,
-    normalize_path_key,
-    split_file_path,
-)
+from ..path_utils import looks_like_local_file_path
 from ..platforms.base import ActiveWindow
+from .resource_helpers import (
+    build_path_or_name_identity,
+    display_name_from_path_or_name,
+    resolve_file_candidate,
+)
 from .resource_policy import validate_resource_kind, validate_resource_subtype
 from .types import DetectedResource
 
@@ -40,12 +39,18 @@ _EXT_TO_SUBTYPE: dict[str, str] = {
 
 class LocalFileDetector:
     def detect(self, active_window: ActiveWindow) -> DetectedResource | None:
-        file_path = self._resolve_file_path(active_window)
+        file_path = resolve_file_candidate(
+            active_window,
+            allowed_extensions=_LOCAL_FILE_EXTENSIONS,
+            prefer_hint=True,
+            allow_title_path=True,
+            allow_title_file=True,
+            use_folder_index=True,
+        )
         if file_path is None:
             return None
 
-        full_path, parent_dir, file_stem = split_file_path(file_path)
-        file_name = ntpath.basename(full_path)
+        file_name = display_name_from_path_or_name(file_path)
         _, ext = ntpath.splitext(file_name)
         ext_lower = ext.casefold()
 
@@ -56,10 +61,7 @@ class LocalFileDetector:
         if subtype is None:
             subtype = "code_file" if ext_lower in _CODE_EXTENSIONS else "text_file"
 
-        if looks_like_local_file_path(full_path):
-            identity_key = f"file_path:{normalize_path_key(full_path)}"
-        else:
-            identity_key = f"file_name:{normalize_file_name(file_name)}"
+        identity_key = build_path_or_name_identity(file_path, "file_path", "file_name")
 
         return DetectedResource(
             resource_kind=validate_resource_kind("local_file"),
@@ -72,38 +74,5 @@ class LocalFileDetector:
             app_name=active_window.app_name or "",
             process_name=active_window.process_name or "",
             window_title=active_window.window_title or "",
-            path_hint=full_path if looks_like_local_file_path(full_path) else None,
+            path_hint=file_path if looks_like_local_file_path(file_path) else None,
         )
-
-    def _resolve_file_path(self, active_window: ActiveWindow) -> str | None:
-        # 1. Prefer file_path_hint
-        hint = active_window.file_path_hint
-        if hint and hint.strip():
-            if looks_like_local_file_path(hint):
-                return hint
-            return hint
-
-        # 2. Extract full path from window title
-        title = active_window.window_title or ""
-        title_path = extract_file_path_from_title(title)
-        if title_path:
-            return title_path
-
-        # 3. Extract file name from title
-        file_name = extract_file_name_from_title(title)
-        if file_name:
-            _, ext = ntpath.splitext(file_name)
-            if ext.casefold() in _LOCAL_FILE_EXTENSIONS:
-                indexed = self._resolve_indexed_path(title)
-                if indexed:
-                    return indexed
-                return file_name
-
-        return None
-
-    def _resolve_indexed_path(self, window_title: str | None) -> str | None:
-        try:
-            from ..services.folder_index_service import resolve_unique_path_from_title
-            return resolve_unique_path_from_title(window_title, include_excluded=True)
-        except Exception:
-            return None

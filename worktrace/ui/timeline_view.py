@@ -753,8 +753,13 @@ class TimelineView(ctk.CTkFrame):
         return row.get("official_project_name") or UNCATEGORIZED_PROJECT
 
     def _adjustment_from_activity(self, row: dict) -> dict[str, Any]:
-        is_anchor_file = bool(row.get("is_anchor_file"))
-        folder_target = row.get("anchor_parent_dir") or ""
+        is_anchor = bool(row.get("resource_is_anchor"))
+        folder_target = ""
+        path_hint = row.get("resource_path_hint") or ""
+        if path_hint:
+            from ..path_utils import split_file_path
+            _, parent_dir, _ = split_file_path(path_hint)
+            folder_target = parent_dir
         target = folder_target or row.get("activity_display_name") or row.get("window_title") or ""
         return {
             "kind": "activity",
@@ -762,7 +767,7 @@ class TimelineView(ctk.CTkFrame):
             "project_id": int(row.get("project_id") or 0),
             "project_name": row.get("official_project_name") or UNCATEGORIZED_PROJECT,
             "label": f"正在调整：{self._detail_values(row)[0]}｜{row.get('app_name') or ''}",
-            "rule_type": "folder" if is_anchor_file and folder_target else "keyword",
+            "rule_type": "folder" if is_anchor and folder_target else "keyword",
             "rule_target": str(target),
             "note": row.get("note") or "",
         }

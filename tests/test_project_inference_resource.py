@@ -164,8 +164,6 @@ class TestNonNormalNotClassified:
         assert assignment["source"] == "uncategorized"
 
     def test_excluded_not_classified(self, temp_db):
-        from worktrace.services import privacy_service
-        privacy_service.set_exclude_keywords(["银行"])
         pid = project_service.create_project("BankWork")
         rule_service.create_rule("银行", pid)
         aid = activity_service.create_activity(

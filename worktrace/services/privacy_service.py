@@ -13,40 +13,13 @@ from ..constants import (
 from ..db import dict_rows, get_connection, get_db_path
 from ..path_utils import is_path_under_folder, normalize_folder_key, normalize_path_key
 from ..platforms.base import ActiveWindow
-from .settings_service import get_list_setting, set_list_setting
 
-_EXCLUDE_KEYWORD_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
-_EXCLUDE_KEYWORD_CACHE: dict[str, tuple[float, list[str]]] = {}
 _EXCLUDE_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
 _EXCLUDE_RULE_CACHE: dict[str, tuple[float, dict[str, list[dict]]]] = {}
 
 
-def clear_exclude_keywords_cache() -> None:
-    _EXCLUDE_KEYWORD_CACHE.pop(str(get_db_path().resolve()), None)
-
-
 def clear_exclude_rules_cache() -> None:
     _EXCLUDE_RULE_CACHE.pop(str(get_db_path().resolve()), None)
-
-
-def get_exclude_keywords() -> list[str]:
-    cache_key = str(get_db_path().resolve())
-    now = time.monotonic()
-    cached = _EXCLUDE_KEYWORD_CACHE.get(cache_key)
-    if cached is not None and cached[0] >= now:
-        return list(cached[1])
-    keywords = get_list_setting("exclude_keywords", [])
-    _EXCLUDE_KEYWORD_CACHE[cache_key] = (now + _EXCLUDE_KEYWORD_CACHE_TTL_SECONDS, keywords)
-    return list(keywords)
-
-
-def set_exclude_keywords(keywords: list[str]) -> None:
-    cleaned = [item.strip() for item in keywords if item.strip()]
-    set_list_setting("exclude_keywords", cleaned)
-    _EXCLUDE_KEYWORD_CACHE[str(get_db_path().resolve())] = (
-        time.monotonic() + _EXCLUDE_KEYWORD_CACHE_TTL_SECONDS,
-        cleaned,
-    )
 
 
 def is_excluded(active_window: ActiveWindow) -> bool:
@@ -182,8 +155,7 @@ def _matches_exclude_keyword(haystack: str) -> bool:
         str(row.get("keyword") or "").strip().casefold()
         for row in _exclude_rules()["keywords"]
     ]
-    legacy_keywords = [keyword.casefold() for keyword in get_exclude_keywords()]
-    return any(keyword and keyword in haystack for keyword in [*rule_keywords, *legacy_keywords])
+    return any(keyword and keyword in haystack for keyword in rule_keywords)
 
 
 def _matches_exclude_folder(file_path_hint: str | None) -> bool:

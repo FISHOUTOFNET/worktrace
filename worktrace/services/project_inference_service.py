@@ -4,7 +4,6 @@ import ntpath
 import re
 import time
 
-from ..activity_identity import ActivityIdentity, extract_file_name_from_title, infer_identity_for_activity
 from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL
 from ..db import get_connection, get_db_path, now_str
 from ..path_utils import has_auto_project_extension
@@ -270,28 +269,36 @@ def _infer_project_resource_first(
     # 6. suggested project name from parent folder/workspace
     if is_anchor:
         fallback_name = candidate_project_name_for_resource(resource)
-        if not fallback_name:
-            # Fallback to ActivityIdentity-based suggestion
-            identity = infer_identity_for_activity(activity)
-            fallback_name = candidate_project_name_for_file_activity(identity)
         if fallback_name:
             return _get_uncategorized_project_id(conn), "suggested_project_name", 40, fallback_name
 
     return _get_uncategorized_project_id(conn), "uncategorized", 0, None
 
 
-# ---------------------------------------------------------------------------
-# Legacy ActivityIdentity-based helpers (still available)
-# ---------------------------------------------------------------------------
+def candidate_project_name_for_activity(
+    activity: dict,
+    resource: dict | None = None,
+) -> str | None:
+    """Return the display project name that automatic inference would use without writing to DB."""
+    activity_dict = dict(activity or {})
+    with get_connection() as conn:
+        activity_id = activity_dict.get("id")
+        if activity_id:
+            resolved_resource = _resource_for_activity(conn, int(activity_id), activity_dict)
+        else:
+            resolved_resource = resource or _resource_from_activity_dict(activity_dict)
+        project_id, source, _confidence, suggested_name = _infer_project_resource_first(conn, activity_dict, resolved_resource)
+        if source == "suggested_project_name":
+            return suggested_name
+        uncategorized_id = _get_uncategorized_project_id(conn)
+        if int(project_id) == int(uncategorized_id):
+            return None
+        row = conn.execute("SELECT name FROM project WHERE id = ?", (project_id,)).fetchone()
+        return str(row["name"]) if row and row["name"] else None
 
-def _infer_project(conn, activity: dict, identity: ActivityIdentity) -> tuple[int, str, int, str | None]:
-    """Legacy inference using ActivityIdentity - now delegates to resource-first."""
-    resource = _resource_from_identity(identity, activity)
-    return _infer_project_resource_first(conn, activity, resource)
 
-
-def _resource_from_identity(identity: ActivityIdentity, activity: dict) -> dict:
-    """Convert ActivityIdentity to a resource-like dict for resource-first inference."""
+def _resource_from_activity_dict(activity: dict) -> dict:
+    """Build a resource dict from an activity dict using resource-first detection."""
     from ..resources.resource_identity import infer_resource_for_activity
     resource = infer_resource_for_activity(activity)
     return {
@@ -306,59 +313,6 @@ def _resource_from_identity(identity: ActivityIdentity, activity: dict) -> dict:
         "path_hint": resource.path_hint,
         "uri_host": resource.uri_host,
     }
-
-
-def candidate_project_name_for_file_activity(identity: ActivityIdentity | dict) -> str | None:
-    if isinstance(identity, dict):
-        is_anchor = bool(identity.get("is_anchor_file"))
-        parent_dir = str(identity.get("parent_dir") or identity.get("anchor_parent_dir") or "").strip()
-        file_name_or_path = str(
-            identity.get("full_path")
-            or identity.get("anchor_full_path")
-            or identity.get("title_hint")
-            or identity.get("anchor_title_hint")
-            or identity.get("display_name")
-            or identity.get("activity_display_name")
-            or ""
-        )
-    else:
-        is_anchor = identity.is_anchor_file
-        parent_dir = str(identity.parent_dir or "").strip()
-        file_name_or_path = str(identity.full_path or identity.title_hint or identity.display_name or "")
-    if not is_anchor:
-        return None
-    if not parent_dir:
-        return None
-    if not has_auto_project_extension(file_name_or_path):
-        return None
-    parent_name = ntpath.basename(parent_dir.rstrip("\\/")) if parent_dir else ""
-    parent_candidate = _clean_project_candidate(parent_name)
-    if parent_candidate and parent_candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
-        return parent_candidate
-    return None
-
-
-def candidate_project_name_for_activity(identity: ActivityIdentity, activity: dict | None = None) -> str | None:
-    """Return the display project name that automatic inference would use without writing to DB."""
-    activity_dict = dict(activity or {})
-    activity_dict.setdefault("app_name", identity.app_name or "")
-    activity_dict.setdefault("process_name", identity.process_name or "")
-    activity_dict.setdefault("window_title", identity.title_hint or "")
-    activity_dict.setdefault("file_path_hint", identity.full_path or "")
-    with get_connection() as conn:
-        activity_id = activity_dict.get("id")
-        if activity_id:
-            resource = _resource_for_activity(conn, int(activity_id), activity_dict)
-        else:
-            resource = _resource_from_identity(identity, activity_dict)
-        project_id, source, _confidence, suggested_name = _infer_project_resource_first(conn, activity_dict, resource)
-        if source == "suggested_project_name":
-            return suggested_name
-        uncategorized_id = _get_uncategorized_project_id(conn)
-        if int(project_id) == int(uncategorized_id):
-            return None
-        row = conn.execute("SELECT name FROM project WHERE id = ?", (project_id,)).fetchone()
-        return str(row["name"]) if row and row["name"] else None
 
 
 def _clean_project_candidate(value: str | None) -> str | None:

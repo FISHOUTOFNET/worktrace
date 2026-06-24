@@ -756,9 +756,9 @@ def test_activity_rule_dialog_prefills_selected_anchor_activity(monkeypatch):
         "app_name": "Word",
         "window_title": "Spec.docx",
         "duration_seconds": 300,
-        "is_anchor_file": True,
+        "resource_is_anchor": True,
         "activity_display_name": "Spec.docx",
-        "anchor_parent_dir": "D:\\Client",
+        "resource_path_hint": "D:\\Client\\Spec.docx",
     }
     captured = {}
     monkeypatch.setattr("worktrace.ui.timeline_view.open_project_rule_dialog", lambda *_args, **kwargs: captured.update(kwargs))
@@ -783,7 +783,7 @@ def test_activity_rule_dialog_prefills_keyword_for_auxiliary_activity(monkeypatc
         "app_name": "Edge",
         "window_title": "Research",
         "duration_seconds": 300,
-        "is_anchor_file": False,
+        "resource_is_anchor": False,
         "activity_display_name": "Research",
     }
     captured = {}
@@ -796,7 +796,7 @@ def test_activity_rule_dialog_prefills_keyword_for_auxiliary_activity(monkeypatc
     assert captured["initial_target"] == "Research"
 
 
-def test_session_rule_dialog_prefills_folder_from_activity_identity(temp_db, monkeypatch):
+def test_session_rule_dialog_prefills_folder_from_activity_resource(temp_db, monkeypatch):
     project = project_service.create_project("Client")
     activity = activity_service.create_activity(
         "Word",

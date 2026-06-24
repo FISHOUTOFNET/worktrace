@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from ..platforms.base import ActiveWindow
+from .resource_helpers import normalize_for_key
 from .resource_policy import validate_resource_kind, validate_resource_subtype
 from .types import DetectedResource
 
@@ -64,7 +65,7 @@ class BrowserDetector:
                 window_title=active_window.window_title or "",
             )
 
-        normalized_title = _normalize_for_key(cleaned_title)
+        normalized_title = normalize_for_key(cleaned_title)
         if uri_host:
             identity_key = f"browser_host_title:{uri_host.lower()}:{normalized_title}"
         else:
@@ -109,10 +110,3 @@ class BrowserDetector:
         if not title:
             return True
         return bool(_BLANK_PAGE_PATTERNS.match(title.strip()))
-
-
-def _normalize_for_key(value: str) -> str:
-    value = value.strip().lower()
-    value = re.sub(r"\s+", "-", value)
-    value = re.sub(r"[^a-z0-9._\-\u4e00-\u9fff]+", "-", value)
-    return value.strip("-") or "unknown"

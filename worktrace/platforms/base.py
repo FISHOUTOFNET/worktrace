@@ -11,6 +11,7 @@ class ActiveWindow:
     pid: int | None = None
     hwnd: int | None = None
     window_class: str | None = None
+    activity_start_time: str | None = None
 
 
 @dataclass(frozen=True)

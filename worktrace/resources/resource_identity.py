@@ -31,6 +31,4 @@ def attach_resource_identity(row: dict) -> dict:
     item["resource_uri_host"] = resource.uri_host
     item["activity_display_name"] = resource.display_name
     item["activity_identity_key"] = resource.identity_key
-    item["is_anchor_file"] = resource.is_anchor
-    item["anchor_full_path"] = resource.path_hint or ""
     return item

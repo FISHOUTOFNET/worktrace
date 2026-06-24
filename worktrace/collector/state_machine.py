@@ -13,6 +13,7 @@ from ..constants import (
 from ..db import now_str
 from ..path_utils import normalize_path_key
 from ..platforms.base import ActiveWindow, ClipboardTextEvent
+from ..resources.resource_builders import make_system_resource, resource_signature
 from ..resources.resource_identity import infer_resource_from_active_window
 from ..resources.types import DetectedResource
 from ..services import activity_service, clipboard_service, privacy_service, session_boundary_service
@@ -54,7 +55,7 @@ class CollectorStateMachine:
         payload = self._payload_for(status, active_window)
         # Resource-aware exclusion: if a normal recording surfaces a resource
         # that should be excluded (e.g. browser uri_host or email subject hits
-        # an exclude keyword), force the payload into the excluded state so
+        # a 排除规则 rule), force the payload into the excluded state so
         # that no real resource metadata is persisted.
         if status == STATUS_NORMAL and self._payload_resource_is_excluded(payload):
             payload = self._payload_for(STATUS_EXCLUDED, active_window)
@@ -134,27 +135,13 @@ class CollectorStateMachine:
 
     def _signature_for_payload(self, payload: dict) -> tuple[str, ...]:
         resource = payload.get("resource")
-        if resource is not None and isinstance(resource, DetectedResource):
-            path_or_host = ""
-            if resource.path_hint:
-                path_or_host = normalize_path_key(resource.path_hint)
-            elif resource.uri_host:
-                path_or_host = resource.uri_host.lower().strip()
-            else:
-                path_or_host = resource.display_name
-            return (
-                str(payload.get("status") or ""),
-                resource.resource_kind,
-                resource.resource_subtype,
-                resource.identity_key,
-                path_or_host,
-            )
-        return (
+        return resource_signature(
             str(payload.get("status") or ""),
+            resource if isinstance(resource, DetectedResource) else None,
             str(payload.get("app_name") or ""),
             str(payload.get("process_name") or ""),
             str(payload.get("window_title") or ""),
-            normalize_path_key(str(payload.get("file_path_hint") or "")),
+            payload.get("file_path_hint"),
         )
 
     def _current_matches(
@@ -306,18 +293,7 @@ class CollectorStateMachine:
     def _payload_for(self, status: str, active_window: ActiveWindow | None) -> dict:
         if status == STATUS_EXCLUDED:
             payload = privacy_service.make_excluded_activity_payload()
-            payload["resource"] = DetectedResource(
-                resource_kind="system",
-                resource_subtype="excluded",
-                display_name=payload.get("app_name", "已排除"),
-                identity_key="system:excluded",
-                is_anchor=False,
-                confidence=100,
-                source="auto_excluded",
-                app_name=payload.get("app_name", ""),
-                process_name=payload.get("process_name", ""),
-                window_title=payload.get("window_title", ""),
-            )
+            payload["resource"] = make_system_resource(STATUS_EXCLUDED)
             return payload
         if status == STATUS_IDLE:
             return {
@@ -325,18 +301,7 @@ class CollectorStateMachine:
                 "process_name": "idle",
                 "window_title": "用户空闲",
                 "status": STATUS_IDLE,
-                "resource": DetectedResource(
-                    resource_kind="system",
-                    resource_subtype="idle",
-                    display_name="空闲",
-                    identity_key="system:idle",
-                    is_anchor=False,
-                    confidence=100,
-                    source="auto_idle",
-                    app_name="空闲",
-                    process_name="idle",
-                    window_title="用户空闲",
-                ),
+                "resource": make_system_resource(STATUS_IDLE),
             }
         if status == STATUS_PAUSED:
             return {
@@ -344,18 +309,7 @@ class CollectorStateMachine:
                 "process_name": "paused",
                 "window_title": "采集已暂停",
                 "status": STATUS_PAUSED,
-                "resource": DetectedResource(
-                    resource_kind="system",
-                    resource_subtype="paused",
-                    display_name="已暂停",
-                    identity_key="system:paused",
-                    is_anchor=False,
-                    confidence=100,
-                    source="auto_paused",
-                    app_name="已暂停",
-                    process_name="paused",
-                    window_title="采集已暂停",
-                ),
+                "resource": make_system_resource(STATUS_PAUSED),
             }
         if status == STATUS_ERROR:
             return {
@@ -363,18 +317,7 @@ class CollectorStateMachine:
                 "process_name": "error",
                 "window_title": "采集异常",
                 "status": STATUS_ERROR,
-                "resource": DetectedResource(
-                    resource_kind="system",
-                    resource_subtype="error",
-                    display_name="异常",
-                    identity_key="system:error",
-                    is_anchor=False,
-                    confidence=100,
-                    source="auto_error",
-                    app_name="异常",
-                    process_name="error",
-                    window_title="采集异常",
-                ),
+                "resource": make_system_resource(STATUS_ERROR),
             }
         if active_window is None:
             raise ValueError("active_window is required for recording state")

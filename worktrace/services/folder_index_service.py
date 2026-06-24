@@ -6,10 +6,10 @@ import threading
 import time
 from pathlib import Path
 
-from ..activity_identity import extract_file_name_from_title, normalize_file_name
 from ..constants import EXCLUDED_PROJECT
 from ..db import dict_rows, get_connection, get_db_path, now_str
-from ..path_utils import is_path_under_folder, normalize_folder_key, normalize_path_key
+from ..path_utils import normalize_path_key
+from ..resources.title_parsing import extract_file_name_from_title, normalize_file_name
 
 INDEX_STATUS_PENDING = "pending"
 INDEX_STATUS_INDEXING = "indexing"
@@ -576,8 +576,7 @@ def _validate_rule_index(rule_id: int, stop_event: threading.Event | None = None
 
 def _activity_file_name(activity: dict) -> str | None:
     for value in (
-        activity.get("title_hint"),
-        activity.get("anchor_title_hint"),
+        activity.get("resource_display_name"),
         activity.get("activity_display_name"),
         activity.get("window_title"),
     ):

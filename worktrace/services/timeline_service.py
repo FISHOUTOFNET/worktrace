@@ -4,6 +4,7 @@ from bisect import bisect_left
 from datetime import date as date_type, datetime, time as datetime_time, timedelta
 
 from ..constants import (
+    ANCHOR_FILE_EXTENSIONS,
     DEFAULT_CONTEXT_CARRY_MINUTES,
     DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
     REPORT_CONTEXT_SHORT_MERGE_SECONDS,
@@ -15,13 +16,15 @@ from ..constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
-from ..activity_identity import attach_activity_identity, extract_anchor_file_name
 from ..db import dict_rows, get_connection
+from ..path_utils import split_file_path
+from ..resources.title_parsing import extract_anchor_file_name
 from . import folder_rule_service, session_boundary_service, session_note_service
 from .activity_service import update_activities_project
 from .context_service import recompute_context_assignments_for_date
 from .live_time_service import snapshot_elapsed_seconds, snapshot_extra_seconds
 from .project_service import get_or_create_uncategorized_project
+from .resource_service import attach_resource
 from .settings_service import get_int_setting
 
 def get_project_sessions_by_date(date: str, include_hidden: bool = True, ensure_context: bool = True) -> list[dict]:
@@ -116,12 +119,14 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
             activity_ids,
         ).fetchall()
     folders = []
-    for row in [attach_activity_identity(item) for item in dict_rows(rows)]:
-        if not row.get("is_anchor_file"):
+    for row in [attach_resource(item) for item in dict_rows(rows)]:
+        if not row.get("resource_is_anchor"):
             continue
-        folder = (row.get("anchor_parent_dir") or "").strip()
-        if not folder and row.get("anchor_full_path"):
-            folder = str(row["anchor_full_path"]).rsplit("\\", 1)[0]
+        path_hint = (row.get("resource_path_hint") or "").strip()
+        folder = ""
+        if path_hint:
+            full_path, parent_dir, _ = split_file_path(path_hint)
+            folder = parent_dir
         if folder and folder not in folders:
             folders.append(folder)
     return folders
@@ -159,7 +164,7 @@ def preview_session_project_update(session_activity_ids: list[int], project_id: 
     placeholders = ",".join("?" for _ in session_activity_ids)
     with get_connection() as conn:
         rows = [
-            attach_activity_identity(row)
+            attach_resource(row)
             for row in dict_rows(
                 conn.execute(
                     f"""
@@ -177,9 +182,12 @@ def preview_session_project_update(session_activity_ids: list[int], project_id: 
     folder_rule_conflicts = []
     unassigned_anchor_files = []
     for row in rows:
-        if not row.get("is_anchor_file"):
+        if not row.get("resource_is_anchor"):
             continue
-        target_path = row.get("anchor_full_path") or row.get("anchor_parent_dir") or ""
+        target_path = row.get("resource_path_hint") or ""
+        if target_path:
+            _, parent_dir, _ = split_file_path(target_path)
+            target_path = target_path or parent_dir
         rule = folder_rule_service.find_matching_folder_rule(target_path)
         if rule:
             if int(rule["project_id"]) != int(project_id):
@@ -220,7 +228,7 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
             """,
             (load_start, load_start, load_end, int(include_hidden)),
         ).fetchall()
-    return [attach_activity_identity(row) for row in dict_rows(rows)]
+    return [attach_resource(row) for row in dict_rows(rows)]
 
 
 def _load_session_rows(
@@ -264,7 +272,7 @@ def _load_session_rows(
             activity_ids,
         ).fetchall()
     return _with_display_projects(
-        [attach_activity_identity(row) for row in dict_rows(rows)],
+        [attach_resource(row) for row in dict_rows(rows)],
         get_or_create_uncategorized_project(),
     )
 
@@ -429,12 +437,28 @@ def _find_short_context_merge(
     return None
 
 
+_PROJECT_ANCHOR_EXT_SET = frozenset(ext.casefold() for ext in ANCHOR_FILE_EXTENSIONS)
+
+
 def _is_project_anchor(row: dict) -> bool:
-    return (
-        row.get("status") == STATUS_NORMAL
-        and (row.get("is_anchor_file") or row.get("assignment_source") == "midnight_anchor")
-        and (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
-    )
+    if row.get("status") != STATUS_NORMAL:
+        return False
+    if row.get("assignment_source") == "midnight_anchor":
+        return (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
+    if not row.get("resource_is_anchor"):
+        return False
+    # Only file-based anchors with ANCHOR_FILE_EXTENSIONS are project anchors
+    # for session merge.  Browser tabs, email messages, and code files are
+    # resource anchors for identity but should be auxiliary for merge purposes.
+    if row.get("resource_kind") in ("browser_tab", "email"):
+        return False
+    display_name = str(row.get("resource_display_name") or row.get("activity_display_name") or "").strip()
+    if display_name:
+        import ntpath
+        _, ext = ntpath.splitext(display_name)
+        if ext and ext.casefold() in _PROJECT_ANCHOR_EXT_SET:
+            return (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
+    return False
 
 
 def _is_same_report_project_normal(row: dict, anchor_key: str) -> bool:
@@ -536,11 +560,15 @@ def _attach_display_project(row: dict, uncategorized_id: int) -> None:
 
 
 def _anchor_preview_item(row: dict, current_project_name: str | None) -> dict:
+    path_hint = row.get("resource_path_hint") or ""
+    parent_dir = ""
+    if path_hint:
+        _, parent_dir, _ = split_file_path(path_hint)
     return {
         "activity_id": int(row["id"]),
         "display_name": row.get("activity_display_name") or "未知文件",
-        "full_path": row.get("anchor_full_path") or "",
-        "parent_dir": row.get("anchor_parent_dir") or "",
+        "full_path": path_hint,
+        "parent_dir": parent_dir,
         "current_project_name": current_project_name or "",
     }
 
@@ -579,7 +607,7 @@ def _status_summary(rows: list[dict]) -> str:
 
 def _activity_summary_label(row: dict) -> str:
     activity_name = str(row.get("activity_display_name") or "").strip()
-    if row.get("is_anchor_file") and activity_name:
+    if row.get("resource_is_anchor") and activity_name:
         return activity_name
     title_file = extract_anchor_file_name(row.get("window_title"))
     if title_file:

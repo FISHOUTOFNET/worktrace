@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from openpyxl import load_workbook
 
@@ -31,8 +30,6 @@ def test_single_auto_activity_29_seconds_has_snapshot_but_no_history_stats_or_ex
     assert _rows() == []
     assert statistics_service.get_summary("2026-06-18", "2026-06-18")["total_duration"] == 0
 
-    md_path = export_service.export_markdown("2026-06-18", "2026-06-18", str(tmp_path / "out.md"))
-    assert "Doc" not in Path(md_path).read_text(encoding="utf-8")
     xlsx_path = export_service.export_excel("2026-06-18", "2026-06-18", str(tmp_path / "out.xlsx"))
     assert load_workbook(xlsx_path)["Activity Logs"].max_row == 1
 

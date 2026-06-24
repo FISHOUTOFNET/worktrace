@@ -116,34 +116,3 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone() is not None
         assert conn.execute("SELECT id FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone() is not None
 
-
-def test_seed_defaults_removes_only_old_system_exclude_keywords(temp_db):
-    from worktrace.services import project_service, rule_service
-
-    excluded_id = project_service.get_or_create_excluded_project()
-    user_rule_id = rule_service.create_rule("银行", excluded_id)
-    with db.get_connection() as conn:
-        for keyword in ["微信", "银行", "密码", "个人"]:
-            conn.execute(
-                """
-                INSERT INTO project_rule(project_id, rule_type, pattern, enabled, created_by, created_at, updated_at)
-                VALUES (?, 'keyword', ?, 1, 'system', '2026-06-18 09:00:00', '2026-06-18 09:00:00')
-                """,
-                (excluded_id, keyword),
-            )
-
-    with db.get_connection() as conn:
-        db.seed_defaults(conn)
-
-    with db.get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, pattern, created_by
-            FROM project_rule
-            WHERE project_id = ?
-            ORDER BY id
-            """,
-            (excluded_id,),
-        ).fetchall()
-
-    assert [(row["id"], row["pattern"], row["created_by"]) for row in rows] == [(user_rule_id, "银行", "user")]

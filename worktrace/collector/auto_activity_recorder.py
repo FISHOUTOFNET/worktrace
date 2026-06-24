@@ -16,8 +16,7 @@ from ..constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
-from ..activity_identity import infer_activity_identity
-from ..path_utils import normalize_path_key
+from ..resources.resource_builders import resource_signature
 from ..resources.types import DetectedResource
 from ..services import activity_service, project_service, session_boundary_service
 from ..services.settings_service import get_setting, set_setting
@@ -273,17 +272,15 @@ class AutoActivityRecorder:
             resource_path_hint = resource.path_hint
             resource_uri_host = resource.uri_host
 
-        # ActivityIdentity is only used as a fallback for display name and
-        # project inference when no resource is available.
-        identity = infer_activity_identity(
-            self.current_payload.get("app_name"),
-            self.current_payload.get("process_name"),
-            self.current_payload.get("window_title"),
-            self.current_payload.get("file_path_hint"),
-        )
-        activity_display_name = resource_display_name or identity.display_name
+        # activity_display_name prefers resource.display_name, then app/process.
+        activity_display_name = resource_display_name
+        if not activity_display_name:
+            activity_display_name = (
+                self.current_payload.get("app_name")
+                or self.current_payload.get("process_name")
+                or ""
+            )
         inferred_project_name = _snapshot_project_name(
-            identity,
             self.current_payload,
             self.persisted_activity_id,
             resource=resource if resource is not None and isinstance(resource, DetectedResource) else None,
@@ -311,34 +308,19 @@ class AutoActivityRecorder:
         set_setting("current_activity_snapshot", json.dumps(payload, ensure_ascii=False))
 
 
-def _activity_signature(activity: dict) -> tuple[str, str, str, str, str]:
+def _activity_signature(activity: dict) -> tuple[str, ...]:
     resource = activity.get("resource")
-    if resource is not None and isinstance(resource, DetectedResource):
-        path_or_host = ""
-        if resource.path_hint:
-            path_or_host = normalize_path_key(resource.path_hint)
-        elif resource.uri_host:
-            path_or_host = resource.uri_host.lower().strip()
-        else:
-            path_or_host = resource.display_name
-        return (
-            str(activity.get("status") or STATUS_NORMAL),
-            resource.resource_kind,
-            resource.resource_subtype,
-            resource.identity_key,
-            path_or_host,
-        )
-    return (
+    return resource_signature(
         str(activity.get("status") or STATUS_NORMAL),
+        resource if isinstance(resource, DetectedResource) else None,
         str(activity.get("app_name") or ""),
         str(activity.get("process_name") or ""),
         str(activity.get("window_title") or ""),
-        normalize_path_key(str(activity.get("file_path_hint") or "")),
+        activity.get("file_path_hint"),
     )
 
 
 def _snapshot_project_name(
-    identity,
     activity: dict | None = None,
     persisted_activity_id: int | None = None,
     resource: DetectedResource | None = None,
@@ -352,8 +334,7 @@ def _snapshot_project_name(
     # Resource-first preview: use the full resource-first inference (which
     # includes folder rules, keyword rules, and suggested project name) so
     # that the snapshot reflects the same project that would be assigned on
-    # persistence. The legacy ActivityIdentity is only used as a fallback
-    # inside the inference when no resource is available.
+    # persistence.
     from ..services.project_inference_service import candidate_project_name_for_activity
 
     # Build an activity dict that carries the detected resource's path so the
@@ -362,4 +343,19 @@ def _snapshot_project_name(
     if resource is not None and not activity_for_inference.get("file_path_hint") and resource.path_hint:
         activity_for_inference["file_path_hint"] = resource.path_hint
 
-    return candidate_project_name_for_activity(identity, activity_for_inference) or UNCATEGORIZED_PROJECT
+    resource_dict = None
+    if resource is not None:
+        resource_dict = {
+            "resource_kind": resource.resource_kind,
+            "resource_subtype": resource.resource_subtype,
+            "display_name": resource.display_name,
+            "identity_key": resource.identity_key,
+            "is_anchor": int(resource.is_anchor),
+            "app_name": resource.app_name,
+            "process_name": resource.process_name,
+            "window_title": resource.window_title,
+            "path_hint": resource.path_hint,
+            "uri_host": resource.uri_host,
+        }
+
+    return candidate_project_name_for_activity(activity_for_inference, resource_dict) or UNCATEGORIZED_PROJECT

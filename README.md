@@ -12,7 +12,7 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 - First-run privacy notice before any collection starts.
 - Project creation, manual project assignment, notes, and soft delete.
 - File, folder, and keyword project rules, including the special local `排除规则`.
-- Excel export from the UI. The Markdown weekly draft exporter remains available as a service/API helper.
+- Excel export from the UI and all-local-data export from Settings.
 - Collector heartbeat and startup recovery for unclosed records.
 - Single-instance collector protection.
 
@@ -80,6 +80,8 @@ The installer copies WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace` and create
 
 The app writes to user-local folders and does not require administrator privileges.
 
+`schema.sql` is the single source of truth for the local database structure. The project is in pre-release development, so old databases are not guaranteed to be compatible. If the schema changes, delete the local database file or use the Settings page to clear and rebuild all data.
+
 ## Performance And Memory
 
 WorkTrace keeps the startup path small by creating only the Overview page at launch. Time Details, Statistics/Export, Project Rules, and Settings/Privacy are created on first use and then kept mounted for smooth switching.
@@ -93,6 +95,8 @@ The default full-page data refresh interval is 10 seconds. A lightweight 1-secon
 Time Details no longer supports manual session splitting, merging same-name project segments, or moving an activity into another session. Project corrections operate on the selected project session or selected detail activity only. The detail table is the only activity-level view; file identity is derived from the activity's app, process, window title, and file path hint at runtime. Project-session notes live in the selected session summary area: an empty note shows the generated summary as light placeholder text, and user text is saved automatically without a separate save button.
 
 ## Project Classification
+
+Each activity record first generates a `DetectedResource` from the active window's app name, process name, window title, and file path hint. The `resource_kind` is one of `local_file`, `office_document`, `email`, `browser_tab`, `ide_file`, `app`, `system`, or `unknown`. Folder rules, keyword rules, and the `排除规则` project match against safe metadata only: resource path, path hint, display name, uri_host, app name, process name, and window title. WorkTrace does not read file contents, email bodies, or browser history.
 
 Folder project rules prefer a recognizable full local file path, and WorkTrace also keeps a local file-name/path index for bound folders so title-only file windows can still match the correct rule. Any full local file path can be an anchor regardless of extension, and the folder index also covers all file extensions, so rules can match source code, CAD drawings, design files, images, PDFs, and Office documents. Keyword rules match activity app names, process names, window titles, known local file paths, and copied text when clipboard recording is enabled. The special `排除规则` project supports folder and keyword rules, starts disabled with no default rules, and records matches anonymously as `已排除窗口` only after the user enables it. Disabled projects remain visible but no longer participate in automatic classification.
 
@@ -156,7 +160,7 @@ The Settings page saves the clipboard text recording toggle immediately when it 
 此操作将删除本机保存的所有工作轨迹、项目、规则和设置。删除后无法恢复。是否继续？
 ```
 
-Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, but no default exclusion keywords. The all-data export includes clipboard events and project session notes, and intentionally excludes folder index tables because they are derived caches that may contain many local file paths.
+Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, with the `排除规则` project starting disabled and empty. The all-data export includes clipboard events and project session notes, and intentionally excludes folder index tables because they are derived caches that may contain many local file paths.
 
 ## Tests
 

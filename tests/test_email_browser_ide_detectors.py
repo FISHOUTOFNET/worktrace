@@ -99,9 +99,6 @@ class TestEmailDetector:
         detector = EmailDetector()
         assert detector.detect(aw) is None
 
-    def test_email_metadata_capture_default_disabled(self):
-        assert EmailDetector.is_email_metadata_capture_enabled() is False
-
 
 # ---------------------------------------------------------------------------
 # 4. chrome.exe 标题 -> browser_tab/browser_page
