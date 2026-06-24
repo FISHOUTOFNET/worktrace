@@ -1,8 +1,9 @@
 """Boundary tests enforcing the UI <-> backend API contract.
 
 The UI layer must talk to the backend exclusively through ``worktrace.api``.
-Direct imports of ``worktrace.services``, ``worktrace.db`` or
-``worktrace.collector`` from any module under ``worktrace/ui`` are forbidden.
+Direct imports of ``worktrace.services``, ``worktrace.db``,
+``worktrace.collector``, or ``worktrace.security`` from any module under
+``worktrace/ui`` are forbidden.
 
 Allowed UI dependencies:
 - ``worktrace.api`` (the facade layer)
@@ -30,10 +31,13 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"^\s*from\s+worktrace\.db(\s|\.)", re.MULTILINE),
     re.compile(r"^\s*from\s+\.\.collector(\s|\.)", re.MULTILINE),
     re.compile(r"^\s*from\s+worktrace\.collector(\s|\.)", re.MULTILINE),
+    re.compile(r"^\s*from\s+\.\.security(\s|\.)", re.MULTILINE),
+    re.compile(r"^\s*from\s+worktrace\.security(\s|\.)", re.MULTILINE),
     # ``import worktrace.services`` / ``import worktrace.db`` style
     re.compile(r"^\s*import\s+worktrace\.services(\s|$)", re.MULTILINE),
     re.compile(r"^\s*import\s+worktrace\.db(\s|$)", re.MULTILINE),
     re.compile(r"^\s*import\s+worktrace\.collector(\s|$)", re.MULTILINE),
+    re.compile(r"^\s*import\s+worktrace\.security(\s|$)", re.MULTILINE),
 ]
 
 FORBIDDEN_LABELS = [
@@ -43,9 +47,12 @@ FORBIDDEN_LABELS = [
     "from worktrace.db",
     "from ..collector",
     "from worktrace.collector",
+    "from ..security",
+    "from worktrace.security",
     "import worktrace.services",
     "import worktrace.db",
     "import worktrace.collector",
+    "import worktrace.security",
 ]
 
 

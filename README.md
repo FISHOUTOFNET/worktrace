@@ -22,6 +22,8 @@ The current implementation remains v0.1 Lite. The next-version boundary is docum
 
 Phase 1A local security design is documented in [`docs/v0.2-local-security-design.md`](docs/v0.2-local-security-design.md). It covers the independent crypto foundation, DPAPI keyring, and `.wtbackup` format without changing the existing runtime database behavior.
 
+Phase 1B extends the v0.2 local security foundation with encrypted `.wtbackup` export/import. A `.wtbackup` file is a local encrypted file created on the user's request; WorkTrace never uploads it. The backup passphrase is chosen by the user at export time and is not recoverable if forgotten. See [`docs/v0.2-local-security-design.md`](docs/v0.2-local-security-design.md) for the full Phase 1B scope, payload format, and import semantics.
+
 ## Privacy And Permissions
 
 无需注册。  
@@ -184,6 +186,8 @@ The Settings page saves the clipboard text recording toggle immediately when it 
 ```
 
 Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, with the `排除规则` project starting disabled and empty. The all-data export includes clipboard events and project session notes, and intentionally excludes folder index tables because they are derived caches that may contain many local file paths.
+
+The Settings/Privacy page also offers encrypted `.wtbackup` export and import. A `.wtbackup` file is a local encrypted backup created on the user's request; WorkTrace never uploads it. The backup may include copied text if clipboard recording was enabled, so the UI warns before export. Import is replace-only (or import into an empty profile); a wrong passphrase, corrupted backup, or unsupported version never damages the current database. The backup passphrase is not recoverable if forgotten.
 
 ## Tests
 
