@@ -32,6 +32,16 @@ write path for project reclassification and session-note editing. They go
 through ``worktrace.api`` only, validate input, and never return tracebacks
 or sensitive raw fields. The session note returned by ``get_timeline`` is
 the user-authored note (the editing target), not captured metadata.
+
+Phase 3B.1 adds the minimal time-correction foundation:
+``update_timeline_activity_time`` and ``update_timeline_session_time`` are
+the production write path for correcting a single closed activity's
+``start_time``/``end_time``. Session-level correction is only supported for
+single-activity sessions; multi-activity sessions return a clear Chinese
+message directing the user to per-activity editing. In-progress activities
+cannot be edited (their displayed ``end_time`` may be a projected value).
+Errors are mapped from stable ``TimelineTimeEditError`` codes to Chinese
+messages without echoing tracebacks, SQL, or internal field names.
 """
 
 from __future__ import annotations
@@ -41,6 +51,7 @@ import re
 from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
+from ..api.timeline_api import TimelineTimeEditError
 from ..formatters import (
     format_duration,
     format_project_label,
@@ -57,6 +68,21 @@ _RECENT_LIMIT = 20
 # the user a clearer "日期无效" message instead of the generic "操作失败"
 # when the date string is obviously malformed.
 _DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Lightweight ``YYYY-MM-DD HH:MM:SS`` shape check at the bridge layer. The
+# API layer performs the full ``datetime.strptime`` validation; this guard
+# gives the user a clearer "时间无效" message for obviously malformed input.
+_DATETIME_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+# Maps ``TimelineTimeEditError.code`` to stable Chinese user-facing messages.
+# Unknown codes collapse to the generic "操作失败" so internal details are
+# never surfaced.
+_TIME_ERROR_MESSAGES = {
+    "in_progress": "进行中记录暂不支持时间修正",
+    "multi_activity": "多活动 session 暂不支持整体时间修改",
+    "invalid_time": "时间无效",
+    "invalid_id": "操作失败",
+}
 
 
 class WebViewBridge:
@@ -244,6 +270,7 @@ class WebViewBridge:
                 end_time = str(row.get("end_time") or "")
                 activities.append(
                     {
+                        "activity_id": int(row.get("id") or 0),
                         "start_time": start_time,
                         "end_time": end_time,
                         "duration": format_duration(row.get("duration_seconds") or 0),
@@ -371,6 +398,86 @@ class WebViewBridge:
             logger.exception("webview bridge update_timeline_note failed")
             return dict(_GENERIC_ERROR)
 
+    # --- Phase 3B.1: Timeline time correction (single-activity foundation) ---
+
+    def update_timeline_activity_time(
+        self,
+        activity_id: int,
+        start_time: str,
+        end_time: str,
+    ) -> dict[str, Any]:
+        """Correct a single activity's ``start_time`` and ``end_time``.
+
+        ``activity_id`` must be a positive int (``bool`` rejected).
+        ``start_time`` and ``end_time`` must be ``YYYY-MM-DD HH:MM:SS``
+        strings with ``start_time < end_time``. In-progress activities
+        (``end_time IS NULL``) cannot be edited.
+
+        Returns ``{"ok": true}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure. Known
+        failure modes map to clear Chinese messages; unknown failures
+        collapse to ``"操作失败"``. Tracebacks, SQL errors, file paths,
+        window titles, and notes are never surfaced.
+        """
+        try:
+            if isinstance(activity_id, bool):
+                return {"ok": False, "error": "操作失败"}
+            try:
+                aid = int(activity_id)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "操作失败"}
+            if aid <= 0:
+                return {"ok": False, "error": "操作失败"}
+            msg = _validate_datetime_inputs(start_time, end_time)
+            if msg is not None:
+                return {"ok": False, "error": msg}
+            timeline_api.update_timeline_activity_time(aid, start_time, end_time)
+            return {"ok": True}
+        except TimelineTimeEditError as exc:
+            return {"ok": False, "error": _TIME_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge update_timeline_activity_time failed")
+            return dict(_GENERIC_ERROR)
+
+    def update_timeline_session_time(
+        self,
+        activity_ids: list[int],
+        start_time: str,
+        end_time: str,
+    ) -> dict[str, Any]:
+        """Apply a session-level time correction.
+
+        ``activity_ids`` is the session's full activity id list. Phase 3B.1
+        only supports sessions that resolve to a single activity (after
+        deduplication); multi-activity sessions return a clear Chinese
+        message directing the user to per-activity editing.
+
+        Returns ``{"ok": true}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "请选择有效的活动"}
+            msg = _validate_datetime_inputs(start_time, end_time)
+            if msg is not None:
+                return {"ok": False, "error": msg}
+            # Multi-activity check at the bridge layer so the user gets a
+            # clear message without a round-trip through the API.
+            if len(ids) > 1:
+                return {"ok": False, "error": "多活动 session 暂不支持整体时间修改"}
+            timeline_api.update_timeline_session_time(ids, start_time, end_time)
+            return {"ok": True}
+        except TimelineTimeEditError as exc:
+            return {"ok": False, "error": _TIME_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge update_timeline_session_time failed")
+            return dict(_GENERIC_ERROR)
+
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
     """Validate and normalize the ``activity_ids`` argument from JS.
@@ -399,6 +506,24 @@ def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
         seen.add(value)
         ids.append(value)
     return ids if ids else None
+
+
+def _validate_datetime_inputs(start_time: str, end_time: str) -> str | None:
+    """Bridge-level guard for ``start_time`` / ``end_time`` inputs.
+
+    Returns ``None`` if both values pass the lightweight shape check, or a
+    Chinese error message string otherwise. The API layer performs the full
+    ``datetime.strptime`` validation and the ``start < end`` ordering check;
+    this guard just gives the user a clearer ``"时间无效"`` message for
+    obviously malformed input (non-strings, empty, wrong shape).
+    """
+    if not isinstance(start_time, str) or not isinstance(end_time, str):
+        return "时间无效"
+    if not start_time or not end_time:
+        return "时间无效"
+    if not _DATETIME_SHAPE_RE.match(start_time) or not _DATETIME_SHAPE_RE.match(end_time):
+        return "时间无效"
+    return None
 
 
 def _safe_resource_display_name(row: dict[str, Any]) -> str:

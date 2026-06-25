@@ -953,3 +953,102 @@ and clearer under real use after the hardening changes.
 - The default entry point no longer starts the WebView UI, or a Tkinter
   fallback is restored.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.1 Validation
+
+Phase 3B.1 implements the **Timeline time correction foundation** — the
+minimal usable time-correction capability for the WebView Timeline. It
+adds single-activity `start_time` / `end_time` editing, single-activity
+session-level time correction, strict time validation, post-save
+Timeline refresh, and independent saving states. It does **not** add
+multi-activity session whole-time correction, split, merge, deletion,
+batch editing, auto-rule creation, or complex correction pages.
+
+### Automated Checklist
+
+| Check | Command |
+|-------|---------|
+| Full test suite | `python -m pytest` |
+| PyInstaller build | `python -m PyInstaller --noconfirm --clean WorkTrace.spec` |
+
+### Validation Items
+
+#### AP. API Time Correction
+
+- `update_timeline_activity_time` rejects non-positive `activity_id`,
+  `bool` `activity_id`, nonexistent `activity_id`, deleted activity,
+  non-string time, bad time format, `start_time >= end_time`, and
+  in-progress activities.
+- `update_timeline_activity_time` succeeds for valid inputs and
+  recomputes `duration_seconds`.
+- `update_timeline_session_time` succeeds for single-activity sessions
+  and raises `TimelineTimeEditError("multi_activity")` for multi-activity
+  sessions.
+- Cross-day activity modification is correctly projected by
+  `timeline_service` onto both `report_date`s.
+- No partial writes occur on validation failure.
+
+#### AQ. Bridge Time Correction
+
+- `update_timeline_activity_time` and `update_timeline_session_time`
+  return `{"ok": true}` on success.
+- Invalid inputs return `{"ok": false, "error": "<chinese message>"}`.
+- Multi-activity sessions return `"多活动 session 暂不支持整体时间修改"`.
+- In-progress activities return `"进行中记录暂不支持时间修正"`.
+- Malformed time returns `"时间无效"`.
+- Error results do not contain tracebacks, SQL errors, file paths,
+  window titles, or clipboard data.
+- The bridge does not import `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.runtime`, `worktrace.security`, or
+  `worktrace.config`.
+
+#### AR. Frontend Time Correction
+
+- `index.html` has a time-correction section with `datetime-local`
+  inputs and a save button.
+- `app.js` calls `update_timeline_activity_time` and
+  `update_timeline_session_time` bridge methods.
+- `app.js` has `backendToDatetimeLocal` / `datetimeLocalToBackend`
+  conversion helpers using fixed-format string replacement.
+- `app.js` has independent saving states (`timeSaving`,
+  `activityTimeSaving`, `editSaving`).
+- `app.js` refreshes the Timeline after a successful time save.
+- `app.js` preserves user input on save failure.
+- `app.js` disables / prompts in-progress activity time correction.
+- `app.js` disables multi-activity session whole-time correction.
+- `app.js` does not contain split / merge / delete / batch / auto-rule
+  handlers.
+- Frontend resources have no CDN, external links, Google Fonts, or
+  browser storage usage.
+- Frontend resources do not contain traceback display logic.
+
+#### AS. Privacy And Boundary Regression
+
+- Overview tests continue to pass.
+- Timeline read-only tests continue to pass.
+- Phase 2.1 privacy boundary tests continue to pass.
+- Phase 3A / 3A.1 basic editing tests continue to pass.
+- Default WebView entry tests continue to pass.
+- PyInstaller resource path tests continue to pass.
+
+### Phase 3B.1 Release Blockers
+
+- `pytest` fails.
+- The API accepts `bool` for `activity_id` (silently coercing `True` to
+  `1`).
+- The API allows editing a deleted or in-progress activity.
+- `duration_seconds` is not recomputed after a time correction.
+- Multi-activity session whole-time correction is performed instead of
+  rejected.
+- The bridge exposes tracebacks, SQL errors, file paths, window titles,
+  or clipboard data in error results.
+- The bridge imports `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.runtime`, `worktrace.security`, or
+  `worktrace.config`.
+- The frontend introduces split, merge, delete, batch edit, or
+  auto-rule creation UI.
+- The frontend uses browser storage, external links, CDN, or Google
+  Fonts.
+- The default entry point no longer starts the WebView UI, or a Tkinter
+  fallback is restored.
+- Any new DB schema is introduced.

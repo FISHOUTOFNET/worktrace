@@ -7,8 +7,10 @@ and the pure live-time helpers from ``live_time_service``.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
+from ..constants import TIME_FORMAT
 from ..services import activity_service, project_service, timeline_service
 from ..services.live_time_service import (
     is_unconfirmed_snapshot,
@@ -20,6 +22,23 @@ from ..services.live_time_service import (
     snapshot_signature,
     sync_short_activity_carry,
 )
+
+
+class TimelineTimeEditError(ValueError):
+    """Raised by the Phase 3B.1 time-correction methods for known,
+    user-facing failure modes.
+
+    The ``code`` attribute is a stable token the WebView bridge maps to a
+    Chinese user-facing message. Using a dedicated exception (instead of
+    echoing ``ValueError`` text) keeps internal field names, ids, and SQL
+    details out of bridge responses. The bridge catches this separately from
+    generic ``ValueError`` so unknown validation failures still collapse to
+    the generic ``"操作失败"`` message.
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
 
 
 # --- timeline / sessions -------------------------------------------------
@@ -159,6 +178,97 @@ def update_timeline_session_note(
     timeline_service.update_session_note(date, first_id, text)
 
 
+# --- Phase 3B.1: Timeline time correction (single-activity foundation) ---
+#
+# Phase 3B.1 implements the minimal time-correction foundation:
+#
+# - ``update_timeline_activity_time`` corrects a single closed activity's
+#   ``start_time`` and ``end_time`` and recomputes ``duration_seconds``.
+# - ``update_timeline_session_time`` exposes a session-level write but only
+#   supports sessions that resolve to a single activity. Multi-activity
+#   sessions raise ``TimelineTimeEditError("multi_activity")`` so the user
+#   is pointed to per-activity editing instead.
+#
+# Data semantics (see docs/ui-webview-migration.md):
+# - ``start_time`` and ``end_time`` must be ``YYYY-MM-DD HH:MM:SS`` strings.
+# - ``start_time < end_time`` (zero and negative durations are rejected).
+# - In-progress activities (``end_time IS NULL``) cannot be edited: their
+#   displayed ``end_time`` may be a projected value and must not be
+#   persisted. The API reads the raw ``end_time`` from the row to decide.
+# - Deleted activities cannot be edited.
+# - Cross-day results are handled by ``timeline_service`` projection
+#   (``_split_calendar_report_rows``); the API/bridge never copies rows.
+# - Overlap detection is NOT performed in Phase 3B.1; it is deferred to a
+#   later phase.
+
+
+def update_timeline_activity_time(
+    activity_id: int,
+    start_time: str,
+    end_time: str,
+) -> None:
+    """Validate and apply a time correction to a single activity.
+
+    Validation:
+    - ``activity_id`` must be a positive integer (``bool`` rejected); it must
+      reference an existing, non-deleted, non-in-progress activity.
+    - ``start_time`` and ``end_time`` must be ``YYYY-MM-DD HH:MM:SS`` strings.
+    - ``start_time < end_time`` (zero and negative durations rejected).
+
+    Raises ``TimelineTimeEditError`` with a stable ``code`` for known
+    failure modes (``invalid_id``, ``invalid_time``, ``in_progress``). The
+    write is a single atomic UPDATE; no partial writes are possible.
+    """
+    aid = _validate_activity_id_for_time_edit(activity_id)
+    start = _validate_time_string(start_time)
+    end = _validate_time_string(end_time)
+    _validate_time_order(start, end)
+    activity_service.update_activity_time(aid, start, end)
+
+
+def update_timeline_session_time(
+    activity_ids: list[int],
+    start_time: str,
+    end_time: str,
+) -> None:
+    """Validate and apply a session-level time correction.
+
+    A session is an aggregate of one or more activities; it is not an
+    independent DB record. Phase 3B.1 supports whole-session time
+    correction only when the session resolves to a single activity (after
+    deduplication), in which case the call is equivalent to
+    ``update_timeline_activity_time`` on that activity. Multi-activity
+    sessions raise ``TimelineTimeEditError("multi_activity")`` — the
+    frontend must direct the user to per-activity editing instead.
+
+    Validation:
+    - ``activity_ids`` must be a non-empty list of positive integers
+      (``bool`` rejected); every id must reference an existing, non-deleted
+      activity. Duplicate ids are deduplicated.
+    - After deduplication, exactly one id must remain; otherwise
+      ``multi_activity`` is raised.
+    - The single activity must not be in-progress.
+    - ``start_time`` and ``end_time`` must be ``YYYY-MM-DD HH:MM:SS`` strings
+      with ``start_time < end_time``.
+
+    Raises ``TimelineTimeEditError`` with a stable ``code``. No partial
+    writes are performed: validation completes before any UPDATE.
+    """
+    ids = _validate_activity_ids(activity_ids)
+    start = _validate_time_string(start_time)
+    end = _validate_time_string(end_time)
+    _validate_time_order(start, end)
+    if len(ids) > 1:
+        raise TimelineTimeEditError("multi_activity")
+    # Single activity: re-check in-progress (existence/deleted already done
+    # by _validate_activity_ids, but the in-progress check is specific to
+    # time editing and must not be skipped).
+    activity = activity_service.get_activity(ids[0])
+    if activity.get("end_time") is None:
+        raise TimelineTimeEditError("in_progress")
+    activity_service.update_activity_time(ids[0], start, end)
+
+
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
     # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
     # not silently coerced to ``1``/``0``.
@@ -248,6 +358,61 @@ def _validate_note(note: str) -> str:
     return note
 
 
+# --- Phase 3B.1 time-correction validators --------------------------------
+
+
+def _validate_activity_id_for_time_edit(activity_id: int) -> int:
+    """Validate a single ``activity_id`` for time correction.
+
+    Returns the validated positive int. Raises ``TimelineTimeEditError``:
+    - ``invalid_id`` — not a positive int, ``bool``, missing, or deleted.
+    - ``in_progress`` — the activity is still open (``end_time IS NULL``).
+
+    The in-progress check reads the raw ``end_time`` from the row (not a
+    projected display value), so it correctly reflects the DB state.
+    """
+    if isinstance(activity_id, bool):
+        raise TimelineTimeEditError("invalid_id")
+    try:
+        aid = int(activity_id)
+    except (TypeError, ValueError):
+        raise TimelineTimeEditError("invalid_id")
+    if aid <= 0:
+        raise TimelineTimeEditError("invalid_id")
+    activity = activity_service.get_activity(aid)
+    if not activity or int(activity.get("is_deleted") or 0):
+        raise TimelineTimeEditError("invalid_id")
+    if activity.get("end_time") is None:
+        raise TimelineTimeEditError("in_progress")
+    return aid
+
+
+def _validate_time_string(value: str) -> str:
+    """Validate a ``YYYY-MM-DD HH:MM:SS`` time string.
+
+    Raises ``TimelineTimeEditError("invalid_time")`` if the value is not a
+    non-empty string or does not parse against ``TIME_FORMAT``.
+    """
+    if not isinstance(value, str) or not value:
+        raise TimelineTimeEditError("invalid_time")
+    try:
+        datetime.strptime(value, TIME_FORMAT)
+    except ValueError:
+        raise TimelineTimeEditError("invalid_time")
+    return value
+
+
+def _validate_time_order(start_time: str, end_time: str) -> None:
+    """Ensure ``start_time < end_time`` (zero and negative durations rejected).
+
+    Both arguments must already be validated ``YYYY-MM-DD HH:MM:SS`` strings.
+    """
+    start_dt = datetime.strptime(start_time, TIME_FORMAT)
+    end_dt = datetime.strptime(end_time, TIME_FORMAT)
+    if end_dt <= start_dt:
+        raise TimelineTimeEditError("invalid_time")
+
+
 # --- activity editing ----------------------------------------------------
 
 def update_activity_note(activity_id: int, note: str) -> None:
@@ -320,6 +485,7 @@ def is_snapshot_unconfirmed(snapshot: dict[str, Any] | None) -> bool:
 
 __all__ = [
     "TIMELINE_NOTE_MAX_LENGTH",
+    "TimelineTimeEditError",
     "get_default_report_date",
     "get_project_sessions_by_date",
     "get_project_sessions_by_range",
@@ -341,5 +507,7 @@ __all__ = [
     "update_activity_note",
     "update_session_note",
     "update_session_project",
+    "update_timeline_activity_time",
     "update_timeline_session_note",
+    "update_timeline_session_time",
 ]

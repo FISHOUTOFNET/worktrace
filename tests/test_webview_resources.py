@@ -329,21 +329,22 @@ def test_index_html_timeline_has_save_cancel_buttons():
     assert 'id="edit-status"' in source
 
 
-def test_index_html_timeline_edit_panel_has_no_time_edit_inputs():
-    """Phase 3A: the edit panel must not contain time editing inputs
-    (start time, end time). Only project and note are editable."""
+def test_index_html_timeline_edit_panel_has_no_split_merge_delete_batch():
+    """Phase 3B.1: the edit panel now contains time-correction inputs
+    (``edit-start-time`` / ``edit-end-time``), but must still not contain
+    split, merge, delete, or batch controls."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    # Extract the edit panel section
-    start = source.find('id="timeline-edit-panel"')
-    assert start != -1, "edit panel must exist"
-    end = source.find("</div>", source.find("</div>", source.find("</div>", source.find("</div>", source.find("</div>", start) + 1) + 1) + 1) + 1)
-    panel = source[start:end]
-    assert "edit-start-time" not in panel
-    assert "edit-end-time" not in panel
-    assert "split" not in panel.lower()
-    assert "merge" not in panel.lower()
-    assert "delete" not in panel.lower()
-    assert "batch" not in panel.lower()
+    # Phase 3B.1 now provides time-correction inputs in the edit panel.
+    assert 'id="edit-start-time"' in source
+    assert 'id="edit-end-time"' in source
+    assert 'id="edit-time-save-btn"' in source
+    # Split / merge / delete / batch / auto-rule must still be absent from
+    # the entire HTML (these controls must never appear anywhere).
+    assert "split" not in source.lower()
+    assert "merge" not in source.lower()
+    assert "delete" not in source.lower()
+    assert "batch" not in source.lower()
+    assert "auto-rule" not in source.lower()
 
 
 def test_app_js_has_edit_panel_functions():
@@ -507,18 +508,24 @@ def test_styles_css_has_edit_panel_responsive_rules():
 
 
 def test_app_js_still_has_no_forbidden_edit_handlers_after_hardening():
-    """Phase 3A.1: the hardening must not introduce any forbidden edit
-    handlers (time editing, split, merge, delete, batch, auto-rule)."""
+    """Phase 3B.1: time correction is now a supported feature, but the
+    frontend must still not contain split, merge, delete, batch, or
+    auto-rule handlers."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
-    assert "edit_activity" not in source
+    # Phase 3B.1 now provides time correction; the following forbidden
+    # handlers must still be absent.
     assert "delete_activity" not in source
-    assert "correct_activity" not in source
     assert "split_session" not in source
     assert "merge_session" not in source
     assert "batch_edit" not in source
     assert "auto_rule" not in source
-    assert "edit_start_time" not in source
-    assert "edit_end_time" not in source
+    # Split/merge/delete buttons must not exist in the HTML either.
+    html_source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8").lower()
+    assert "split" not in html_source
+    assert "merge" not in html_source
+    assert "delete" not in html_source
+    assert "batch" not in html_source
+    assert "auto-rule" not in html_source
 
 
 def test_app_js_still_no_browser_storage_after_hardening():
@@ -730,3 +737,189 @@ def test_webview_main_check_pywebview_missing_gives_clear_error(monkeypatch):
     msg = str(exc_info.value)
     assert "pywebview" in msg
     assert "未安装" in msg
+
+
+# --- Phase 3B.1: Timeline time correction frontend tests ------------------
+
+
+def test_index_html_has_time_correction_section():
+    """Phase 3B.1: index.html must have a time-correction section in the
+    edit panel with start/end inputs and a save button."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="edit-time-section"' in source
+    assert 'id="edit-time-single"' in source
+    assert 'id="edit-time-multi"' in source
+    assert 'id="edit-start-time"' in source
+    assert 'id="edit-end-time"' in source
+    assert 'id="edit-time-save-btn"' in source
+    assert 'id="edit-time-status"' in source
+    # Must use datetime-local inputs for time correction
+    assert 'type="datetime-local"' in source
+
+
+def test_app_js_calls_time_correction_bridge_methods():
+    """Phase 3B.1: app.js must call the new bridge methods for time
+    correction."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "update_timeline_activity_time" in source
+    assert "update_timeline_session_time" in source
+
+
+def test_app_js_has_datetime_conversion_helpers():
+    """Phase 3B.1: app.js must have helpers to convert between the backend
+    ``YYYY-MM-DD HH:MM:SS`` format and the ``datetime-local`` input's
+    ``YYYY-MM-DDTHH:MM:SS`` format."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "backendToDatetimeLocal" in source
+    assert "datetimeLocalToBackend" in source
+    # The conversion must use fixed-format string replacement (space <-> T),
+    # not Date parsing (which would interpret as local time and shift values).
+    assert ".replace" in source
+
+
+def test_app_js_has_time_saving_state():
+    """Phase 3B.1: app.js must track independent saving states for
+    session-level and per-activity time correction so they do not pollute
+    the project/note saving state."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "timeSaving" in source
+    assert "activityTimeSaving" in source
+    assert "setTimeSaving" in source
+    assert "setActivityTimeSaving" in source
+    # The session-level saving state must be separate from editSaving
+    assert "editSaving" in source
+
+
+def test_app_js_has_session_time_functions():
+    """Phase 3B.1: app.js must define the session-level time correction
+    lifecycle functions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "populateSessionTimeSection" in source
+    assert "resetSessionTimeSection" in source
+    assert "saveSessionTime" in source
+    assert "showTimeStatus" in source
+
+
+def test_app_js_has_per_activity_inline_editor_functions():
+    """Phase 3B.1: app.js must define the per-activity inline time editor
+    lifecycle functions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "openActivityTimeEditor" in source
+    assert "closeActivityTimeEditor" in source
+    assert "saveActivityTime" in source
+    assert "editingActivityId" in source
+
+
+def test_app_js_refreshes_timeline_after_time_save():
+    """Phase 3B.1: after a successful time correction, app.js must refresh
+    the Timeline so the new times are reflected."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # saveSessionTime and saveActivityTime must both call refreshTimelineAfterEdit
+    save_session_pos = source.find("function saveSessionTime")
+    assert save_session_pos != -1
+    save_activity_pos = source.find("function saveActivityTime")
+    assert save_activity_pos != -1
+    # Check that refreshTimelineAfterEdit is called within both functions
+    refresh_pos = source.find("function refreshTimelineAfterEdit")
+    assert refresh_pos != -1
+
+
+def test_app_js_disables_in_progress_activity_time_edit():
+    """Phase 3B.1: in-progress activities must have their '编辑时间' button
+    disabled, and the session-level time section must show a hint."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "进行中记录暂不支持时间修正" in source
+
+
+def test_app_js_disables_multi_activity_session_time_edit():
+    """Phase 3B.1: multi-activity sessions must show the 'multi-activity
+    not supported' hint instead of the time inputs."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "多活动 session 暂不支持整体时间修改" in source
+
+
+def test_app_js_preserves_input_on_save_failure():
+    """Phase 3B.1: when a time save fails, the user's input must be
+    preserved (not cleared) and an error message shown."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The save functions must call setTimeSaving(false) on error to
+    # re-enable the button without clearing the input values. The .catch
+    # handler and the `result.ok === false` branch must both re-enable
+    # without resetting the input .value.
+    assert "setTimeSaving(false)" in source or "setTimeSaving(row, false)" in source
+    # The error path must show an error message, not clear the inputs.
+    assert "保存时间失败" in source
+
+
+def test_app_js_time_edit_uses_is_in_progress_not_end_time_emptiness():
+    """Phase 3B.1: the frontend must use the ``is_in_progress`` flag to
+    decide whether time editing is allowed, NOT infer it from whether
+    ``end_time`` is empty (because the displayed ``end_time`` may be a
+    projected value for open activities)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # populateSessionTimeSection must check is_in_progress, not end_time
+    populate_pos = source.find("function populateSessionTimeSection")
+    assert populate_pos != -1
+    # Find the end of the function (next 'function' at the same indent level)
+    next_func = source.find("\n    function ", populate_pos + 1)
+    body = source[populate_pos:next_func]
+    assert "is_in_progress" in body
+
+
+def test_app_js_time_edit_buttons_have_no_split_merge_delete():
+    """Phase 3B.1: the per-activity time editor must not include split,
+    merge, or delete buttons."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    # The renderSessionDetails function must not generate split/merge/delete buttons
+    render_pos = source.find("function rendersessiondetails")
+    assert render_pos != -1
+    # Find the next function to bound the search
+    next_func = source.find("\n    function ", render_pos + 1)
+    body = source[render_pos:next_func] if next_func != -1 else source[render_pos:]
+    assert "split" not in body
+    assert "merge" not in body
+    assert "delete" not in body
+    assert "batch" not in body
+
+
+def test_app_js_has_no_traceback_display_in_time_edit():
+    """Phase 3B.1: the time correction code must not display tracebacks."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "traceback" not in source.lower()
+
+
+def test_styles_css_has_time_correction_styles():
+    """Phase 3B.1: styles.css must style the time correction UI elements."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".edit-time-section" in source
+    assert ".edit-time-input" in source
+    assert ".edit-time-save-btn" in source
+    assert ".detail-time-editor" in source
+    assert ".detail-time-input" in source
+    assert ".detail-time-save-btn" in source
+
+
+def test_frontend_resources_still_no_external_links():
+    """Phase 3B.1: the time correction additions must not introduce
+    external links, CDN, or Google Fonts."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{filename} must not contain http:// or https:// links"
+        )
+        assert not re.search(r"cdn", source, re.IGNORECASE), (
+            f"{filename} must not reference CDN"
+        )
+        assert not re.search(r"google\s*fonts", source, re.IGNORECASE), (
+            f"{filename} must not reference Google Fonts"
+        )
+
+
+def test_frontend_resources_still_no_browser_storage():
+    """Phase 3B.1: the time correction additions must not use browser
+    storage APIs."""
+    for filename in ["index.html", "app.js"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"localStorage|sessionStorage", source), (
+            f"{filename} must not use localStorage or sessionStorage"
+        )

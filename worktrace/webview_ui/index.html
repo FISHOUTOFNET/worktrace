@@ -113,6 +113,26 @@
                                 <button id="edit-cancel-btn" class="edit-btn edit-cancel-btn" type="button" disabled>取消</button>
                             </div>
                             <div id="edit-status" class="edit-status" hidden></div>
+                            <div class="edit-field edit-time-section" id="edit-time-section">
+                                <div class="edit-label">时间修正</div>
+                                <div id="edit-time-single" hidden>
+                                    <div class="edit-time-row">
+                                        <label for="edit-start-time" class="edit-time-label">开始</label>
+                                        <input type="datetime-local" id="edit-start-time" class="edit-time-input" step="1" disabled>
+                                    </div>
+                                    <div class="edit-time-row">
+                                        <label for="edit-end-time" class="edit-time-label">结束</label>
+                                        <input type="datetime-local" id="edit-end-time" class="edit-time-input" step="1" disabled>
+                                    </div>
+                                    <div class="edit-time-actions">
+                                        <button id="edit-time-save-btn" class="edit-btn edit-time-save-btn" type="button" disabled>保存时间</button>
+                                    </div>
+                                </div>
+                                <div id="edit-time-multi" class="edit-time-hint" hidden>
+                                    多活动 session 暂不支持整体时间修改，请在活动详情中修改单条活动时间。
+                                </div>
+                                <div id="edit-time-status" class="edit-status" hidden></div>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -525,6 +525,39 @@ def update_activity_note(activity_id: int, note: str) -> None:
         )
 
 
+def update_activity_time(activity_id: int, start_time: str, end_time: str) -> None:
+    """Atomically update an activity's ``start_time``, ``end_time``, and
+    ``duration_seconds``.
+
+    This is the low-level write used by the Phase 3B.1 Timeline time-correction
+    path. The caller (the API layer) is responsible for input validation
+    (format, existence, not-deleted, not-in-progress, ``start < end``); this
+    method defensively re-derives ``duration_seconds`` from the new range and
+    restricts the UPDATE to non-deleted, already-closed rows so a stale or
+    racing call cannot mutate a deleted or in-progress record.
+
+    ``start_time`` and ``end_time`` must already be validated
+    ``YYYY-MM-DD HH:MM:SS`` strings with ``start_time < end_time``.
+    """
+    start_dt = _parse_time(start_time)
+    end_dt = _parse_time(end_time)
+    duration = int((end_dt - start_dt).total_seconds())
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET start_time = ?,
+                end_time = ?,
+                duration_seconds = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND is_deleted = 0
+              AND end_time IS NOT NULL
+            """,
+            (start_time, end_time, duration, now_str(), activity_id),
+        )
+
+
 def soft_delete_activity(activity_id: int) -> None:
     with get_connection() as conn:
         conn.execute(

@@ -2,10 +2,11 @@
 
 ## Status
 
-- Current phase: 3A.1 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
-  and session-note editing — implemented and hardened; WebView is the
-  default and only shipping UI).
+  and session-note editing — implemented and hardened; Timeline time
+  correction foundation — single-activity start/end time editing —
+  implemented; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -194,9 +195,19 @@ The migration is phased so each step is independently shippable:
   panel has narrow-viewport responsive rules; documentation is cleaned up
   to stop describing the Timeline as "read-only". Time editing, session
   split/merge, deletion, batch editing, auto-rule creation, and complex
-  correction pages remain out of scope. **Current phase.**
-- Phase 3B: Timeline advanced editing (time correction, split, merge,
-  delete, batch editing, correction page) — not yet started.
+  correction pages remain out of scope.
+- Phase 3B.1: **Timeline time correction foundation.** Implements the
+  minimal usable time-correction capability: single-activity
+  `start_time` / `end_time` editing with strict validation,
+  `duration_seconds` recomputation, in-progress rejection,
+  single-activity session-level time correction, post-save Timeline
+  refresh with session regroup / cross-day projection handling, and
+  independent saving states for project/note and time edits. Multi-
+  activity session whole-time correction, session split/merge, deletion,
+  batch editing, auto-rule creation, and complex correction pages remain
+  out of scope. **Current phase.**
+- Phase 3B: Timeline advanced editing (split, merge, delete, batch
+  editing, correction page) — not yet started.
 - Phase 4: Statistics / Export.
 - Phase 5: Rules.
 - Phase 6: Settings / Privacy / Encrypted Backup.
@@ -719,6 +730,121 @@ remain out of scope until Phase 3B:
 - Batch editing;
 - Auto-rule creation;
 - Complex correction page.
+
+## Phase 3B.1 Implemented Scope
+
+Phase 3B.1 implements the **minimal usable time-correction foundation**
+for the WebView Timeline. It is the first phase that allows the user to
+modify activity times.
+
+### Data Semantics
+
+- Activity time correction updates `start_time`, `end_time`, and
+  `duration_seconds` on a single `activity_log` row.
+- `start_time` and `end_time` must be `YYYY-MM-DD HH:MM:SS` strings.
+- `start_time < end_time` (zero and negative durations are rejected).
+- `duration_seconds` is recomputed from the new range by the service
+  layer; the API never accepts a caller-supplied duration.
+- Deleted activities (`is_deleted = 1`) cannot be edited.
+- In-progress activities (`end_time IS NULL`) cannot be edited. The
+  check reads the raw DB `end_time`, not the projected display value.
+  The service-layer UPDATE includes `WHERE end_time IS NOT NULL` as a
+  defensive guard against racing calls.
+- Cross-day activities are handled by `timeline_service` projection
+  (`_split_calendar_report_rows`); the API, bridge, and frontend never
+  copy cross-day records. An activity modified to span midnight is
+  automatically split across the correct `report_date`(s) on the next
+  Timeline read.
+- Overlap detection is **not** performed in Phase 3B.1; it is deferred
+  to a later phase.
+
+### Session-Level Time Correction
+
+- A session is an aggregate of one or more activities; it is not an
+  independent DB record.
+- Phase 3B.1 supports whole-session time correction only when the
+  session resolves to a single activity (after deduplication). The
+  write is equivalent to `update_timeline_activity_time` on that
+  activity.
+- Multi-activity sessions raise `TimelineTimeEditError("multi_activity")`.
+  The frontend shows a clear Chinese hint directing the user to
+  per-activity editing instead.
+
+### API Layer
+
+- `update_timeline_activity_time(activity_id, start_time, end_time)`:
+  validates and applies a single-activity time correction.
+- `update_timeline_session_time(activity_ids, start_time, end_time)`:
+  validates and applies a session-level time correction; multi-activity
+  sessions raise `TimelineTimeEditError("multi_activity")`.
+- `TimelineTimeEditError(ValueError)` carries a stable `code` attribute
+  (`invalid_id`, `invalid_time`, `in_progress`, `multi_activity`) that
+  the bridge maps to Chinese user-facing messages. Internal field names,
+  ids, and SQL details never leak.
+- All validation completes before any write; no partial writes are
+  possible.
+
+### Bridge Layer
+
+- `update_timeline_activity_time(activity_id, start_time, end_time)`:
+  bridge method that only calls `worktrace.api.timeline_api`.
+- `update_timeline_session_time(activity_ids, start_time, end_time)`:
+  bridge method that only calls `worktrace.api.timeline_api`. The
+  multi-activity check is performed at the bridge layer so the user
+  gets a clear message without a round-trip through the API.
+- Bridge-level datetime shape check (`YYYY-MM-DD HH:MM:SS`) gives a
+  clearer `"时间无效"` message before the API's full validation.
+- Error results return `{"ok": false, "error": "<chinese message>"}`;
+  tracebacks, SQL errors, file paths, window titles, and notes are
+  never surfaced.
+- The bridge still does not import `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.runtime`, `worktrace.security`, or
+  `worktrace.config`.
+
+### Frontend
+
+- The edit panel has a "时间修正" section with `datetime-local` inputs
+  for start/end time and a "保存时间" button.
+- For single-activity, closed sessions: the inputs are enabled and
+  pre-filled with the session's times.
+- For multi-activity sessions: the inputs are hidden and a hint is
+  shown: "多活动 session 暂不支持整体时间修改，请在活动详情中修改单条
+  活动时间。"
+- For in-progress sessions: the inputs are hidden and a hint is shown:
+  "进行中记录暂不支持时间修正。"
+- Each activity detail row has an "编辑时间" button (disabled for
+  in-progress activities) that opens an inline time editor with
+  `datetime-local` inputs, save/cancel buttons, and a status area.
+  Only one inline editor can be open at a time.
+- `datetime-local` ↔ backend format conversion uses fixed-format
+  string replacement (space ↔ T), not `Date` parsing (which would
+  interpret as local time and shift values).
+- Independent saving states: `timeSaving` (session-level),
+  `activityTimeSaving` (per-activity), and `editSaving` (project/note)
+  are separate so the three save flows do not pollute each other.
+- On save success: the baseline is updated, dirty state clears, and
+  the Timeline is refreshed. The current date and selected session are
+  preserved when possible; if the session regroups or crosses day
+  boundaries and the selected session disappears, the selection and
+  edit panel are cleared gracefully.
+- On save failure: the user's input is preserved, the saving state is
+  cleared, and a Chinese error message is shown. No traceback is
+  displayed.
+- Auto-refresh does not overwrite unsaved time edits (session-level or
+  per-activity) — the `isEditDirty` check covers time inputs.
+
+## Phase 3B.1 Not Implemented
+
+The following remain out of scope until a later phase:
+
+- Multi-activity session whole-time correction;
+- Session split;
+- Session merge;
+- Activity/session deletion;
+- Batch editing;
+- Auto-rule creation;
+- Complex correction page;
+- Overlap detection between activities on the same timeline.
 
 ## Legacy Tkinter UI Handling
 

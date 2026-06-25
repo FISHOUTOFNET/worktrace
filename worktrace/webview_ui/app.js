@@ -45,6 +45,16 @@
     var editingSession = null;
     var editSaving = false;
 
+    // --- Phase 3B.1: Timeline time-correction state ---------------------
+    // timeSaving guards the session-level "保存时间" button. activityTimeSaving
+    // guards the per-activity inline editor. editingActivityId is the activity
+    // id whose inline time editor is currently open (null = none). These are
+    // intentionally separate from editSaving so the project/note and time
+    // save flows do not pollute each other's state.
+    var timeSaving = false;
+    var editingActivityId = null;
+    var activityTimeSaving = false;
+
     // --- Bridge helper --------------------------------------------------
 
     function callBridge(method) {
@@ -257,7 +267,18 @@
                 }
             }
             if (found) {
-                loadSessionDetails(found.activity_ids, data.date);
+                // Phase 3B.1: skip the detail reload when the user has
+                // unsaved edits (project, note, session-level time, or
+                // per-activity inline time editor). Auto-refresh must not
+                // wipe in-progress edits. After a successful save the
+                // baseline is updated so isEditDirty() returns false and
+                // the reload proceeds normally.
+                var skipDetailReload = editingSession
+                    && editingSession.session_id === found.session_id
+                    && isEditDirty();
+                if (!skipDetailReload) {
+                    loadSessionDetails(found.activity_ids, data.date);
+                }
                 // Only re-populate the edit panel if the user is not mid-edit.
                 // Auto-refresh must not overwrite unsaved edits.
                 if (!editingSession || editingSession.session_id !== found.session_id || !isEditDirty()) {
@@ -346,7 +367,17 @@
             var displayName = a.resource_name || a.app_name || "未知";
             var cls = "detail-item";
             if (a.is_in_progress) cls += " in-progress";
-            html += '<div class="' + cls + '">'
+            // Per-activity inline time editor (Phase 3B.1). The button is
+            // disabled for in-progress activities because their displayed
+            // end_time may be a projected value. The editor container is
+            // hidden by default and only shown when the user clicks the
+            // button. Only one inline editor can be open at a time.
+            var aid = a.activity_id || 0;
+            var editBtnDisabled = a.is_in_progress || !aid;
+            var editBtnTitle = a.is_in_progress
+                ? "进行中记录暂不支持时间修正"
+                : (aid ? "编辑该活动时间" : "活动 ID 缺失，无法编辑");
+            html += '<div class="' + cls + '" data-activity-id="' + escapeHtml(String(aid)) + '">'
                 + '<div class="detail-item-time">' + escapeHtml(timeRange) + '</div>'
                 + '<div class="detail-item-name" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</div>'
                 + '<div class="detail-item-meta">'
@@ -355,9 +386,233 @@
                 + '</div>'
                 + '<div class="detail-item-project" title="' + escapeHtml(a.project_name || "未归类") + '">' + escapeHtml(a.project_name || "未归类") + '</div>'
                 + '<div class="detail-item-duration">' + escapeHtml(a.duration) + '</div>'
+                + '<div class="detail-item-actions">'
+                + '<button type="button" class="detail-edit-time-btn"'
+                + ' data-activity-id="' + escapeHtml(String(aid)) + '"'
+                + ' data-start="' + escapeHtml(a.start_time || "") + '"'
+                + ' data-end="' + escapeHtml(a.end_time || "") + '"'
+                + (editBtnDisabled ? ' disabled' : '')
+                + ' title="' + escapeHtml(editBtnTitle) + '"'
+                + '>编辑时间</button>'
+                + '</div>'
+                + '<div class="detail-time-editor" hidden>'
+                + '<div class="detail-time-row">'
+                + '<label>开始</label>'
+                + '<input type="datetime-local" class="detail-time-input detail-time-start" step="1">'
+                + '</div>'
+                + '<div class="detail-time-row">'
+                + '<label>结束</label>'
+                + '<input type="datetime-local" class="detail-time-input detail-time-end" step="1">'
+                + '</div>'
+                + '<div class="detail-time-actions">'
+                + '<button type="button" class="detail-time-save-btn">保存</button>'
+                + '<button type="button" class="detail-time-cancel-btn">取消</button>'
+                + '</div>'
+                + '<div class="detail-time-status edit-status" hidden></div>'
+                + '</div>'
                 + '</div>';
         }
         detailsList.innerHTML = html;
+
+        // Bind per-activity "编辑时间" button handlers. Event delegation is
+        // used so re-rendering the list does not leak listeners.
+        var editBtns = detailsList.querySelectorAll(".detail-edit-time-btn");
+        for (var j = 0; j < editBtns.length; j++) {
+            (function (btn) {
+                btn.addEventListener("click", function () {
+                    if (btn.disabled) return;
+                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
+                    var startVal = btn.getAttribute("data-start") || "";
+                    var endVal = btn.getAttribute("data-end") || "";
+                    openActivityTimeEditor(id, startVal, endVal, btn);
+                });
+            })(editBtns[j]);
+        }
+
+        // If an inline editor was open for an activity that still exists,
+        // re-open it with the refreshed values so the user's editing context
+        // is preserved across auto-refresh. If the activity disappeared, the
+        // editor state is cleared below.
+        if (editingActivityId !== null) {
+            var stillOpen = false;
+            var refreshedBtn = null;
+            for (var k = 0; k < editBtns.length; k++) {
+                if (parseInt(editBtns[k].getAttribute("data-activity-id"), 10) === editingActivityId) {
+                    stillOpen = true;
+                    refreshedBtn = editBtns[k];
+                    break;
+                }
+            }
+            if (stillOpen && refreshedBtn && !refreshedBtn.disabled && !activityTimeSaving) {
+                openActivityTimeEditor(
+                    editingActivityId,
+                    refreshedBtn.getAttribute("data-start") || "",
+                    refreshedBtn.getAttribute("data-end") || "",
+                    refreshedBtn
+                );
+            } else if (!stillOpen) {
+                // Activity disappeared (e.g. session regroup). Reset state.
+                editingActivityId = null;
+                activityTimeSaving = false;
+            }
+        }
+    }
+
+    // --- Phase 3B.1: per-activity inline time editor -------------------
+
+    function openActivityTimeEditor(activityId, startVal, endVal, btn) {
+        if (!btn) return;
+        // Close any other open inline editor first so only one is visible
+        // at a time. This keeps the editing context unambiguous.
+        closeAllActivityTimeEditors(activityId);
+        editingActivityId = activityId;
+        var row = btn.closest(".detail-item");
+        if (!row) return;
+        var editor = row.querySelector(".detail-time-editor");
+        if (!editor) return;
+        var startInput = editor.querySelector(".detail-time-start");
+        var endInput = editor.querySelector(".detail-time-end");
+        if (startInput) startInput.value = backendToDatetimeLocal(startVal);
+        if (endInput) endInput.value = backendToDatetimeLocal(endVal);
+        if (startInput) startInput.disabled = false;
+        if (endInput) endInput.disabled = false;
+        var saveBtn = editor.querySelector(".detail-time-save-btn");
+        var cancelBtn = editor.querySelector(".detail-time-cancel-btn");
+        if (saveBtn) saveBtn.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+        editor.hidden = false;
+        setActivityTimeStatus(row, "", false);
+        // Wire up save/cancel for this editor instance. Re-binding is safe
+        // because we replace the listener by cloning is unnecessary — we
+        // simply attach and rely on the editor being hidden after close.
+        if (saveBtn) {
+            saveBtn.onclick = function () { saveActivityTime(row); };
+        }
+        if (cancelBtn) {
+            cancelBtn.onclick = function () { closeActivityTimeEditor(row); };
+        }
+    }
+
+    function closeActivityTimeEditor(row) {
+        if (!row) return;
+        var editor = row.querySelector(".detail-time-editor");
+        if (!editor) return;
+        var startInput = editor.querySelector(".detail-time-start");
+        var endInput = editor.querySelector(".detail-time-end");
+        if (startInput) { startInput.value = ""; startInput.disabled = true; }
+        if (endInput) { endInput.value = ""; endInput.disabled = true; }
+        var saveBtn = editor.querySelector(".detail-time-save-btn");
+        var cancelBtn = editor.querySelector(".detail-time-cancel-btn");
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.onclick = null; }
+        if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.onclick = null; }
+        editor.hidden = true;
+        setActivityTimeStatus(row, "", false);
+        // Only clear editingActivityId if it matches the row being closed,
+        // so closing one editor does not wipe state for a different one.
+        var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
+        if (editingActivityId === rowAid) {
+            editingActivityId = null;
+        }
+    }
+
+    function closeAllActivityTimeEditors(exceptActivityId) {
+        var rows = document.querySelectorAll("#timeline-details-list .detail-item");
+        for (var i = 0; i < rows.length; i++) {
+            var aid = parseInt(rows[i].getAttribute("data-activity-id"), 10);
+            if (aid !== exceptActivityId) {
+                closeActivityTimeEditor(rows[i]);
+            }
+        }
+    }
+
+    function setActivityTimeStatus(row, message, isError) {
+        if (!row) return;
+        var statusEl = row.querySelector(".detail-time-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "detail-time-status edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "detail-time-status edit-status "
+            + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function setActivityTimeSaving(row, saving) {
+        if (!row) return;
+        activityTimeSaving = saving;
+        var editor = row.querySelector(".detail-time-editor");
+        if (!editor) return;
+        var saveBtn = editor.querySelector(".detail-time-save-btn");
+        var cancelBtn = editor.querySelector(".detail-time-cancel-btn");
+        var startInput = editor.querySelector(".detail-time-start");
+        var endInput = editor.querySelector(".detail-time-end");
+        if (saveBtn) {
+            saveBtn.disabled = saving;
+            saveBtn.textContent = saving ? "保存中…" : "保存";
+        }
+        if (cancelBtn) cancelBtn.disabled = saving;
+        if (startInput) startInput.disabled = saving;
+        if (endInput) endInput.disabled = saving;
+    }
+
+    function saveActivityTime(row) {
+        if (!row || activityTimeSaving) return;
+        var aid = parseInt(row.getAttribute("data-activity-id"), 10);
+        if (!aid || isNaN(aid)) {
+            setActivityTimeStatus(row, "活动 ID 无效", true);
+            return;
+        }
+        var editor = row.querySelector(".detail-time-editor");
+        if (!editor) return;
+        var startInput = editor.querySelector(".detail-time-start");
+        var endInput = editor.querySelector(".detail-time-end");
+        if (!startInput || !endInput) return;
+        var startVal = datetimeLocalToBackend(startInput.value);
+        var endVal = datetimeLocalToBackend(endInput.value);
+        if (!startVal || !endVal) {
+            setActivityTimeStatus(row, "时间无效", true);
+            return;
+        }
+        if (endVal <= startVal) {
+            setActivityTimeStatus(row, "结束时间必须晚于开始时间", true);
+            return;
+        }
+
+        setActivityTimeSaving(row, true);
+        setActivityTimeStatus(row, "", false);
+        callBridge("update_timeline_activity_time", aid, startVal, endVal).then(function (result) {
+            if (!result || result.ok === false) {
+                setActivityTimeSaving(row, false);
+                setActivityTimeStatus(
+                    row,
+                    result && result.error ? result.error : "保存时间失败",
+                    true
+                );
+                return;
+            }
+            // Update the button's baseline so a subsequent auto-refresh
+            // does not revert the editor inputs to the pre-save values.
+            var btn = row.querySelector(".detail-edit-time-btn");
+            if (btn) {
+                btn.setAttribute("data-start", startVal);
+                btn.setAttribute("data-end", endVal);
+            }
+            setActivityTimeStatus(row, "时间已更新", false);
+            // Keep the editor open but re-enable inputs so the user can see
+            // the saved values. The next auto-refresh will re-render with
+            // the new server data.
+            setActivityTimeSaving(row, false);
+            if (startInput) startInput.value = backendToDatetimeLocal(startVal);
+            if (endInput) endInput.value = backendToDatetimeLocal(endVal);
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setActivityTimeSaving(row, false);
+            setActivityTimeStatus(row, "保存时间失败", true);
+        });
     }
 
     // --- Phase 3A: Timeline editing (project reclassification + note) ----
@@ -416,6 +671,14 @@
             clearEditPanel();
             return;
         }
+        // Phase 3B.1: when switching to a different session, reset the
+        // per-activity inline editor state so a stale editingActivityId
+        // from the previous session does not leak into the new one. The
+        // detail list DOM will be rebuilt by renderSessionDetails.
+        if (editingSession && editingSession.session_id !== session.session_id) {
+            editingActivityId = null;
+            activityTimeSaving = false;
+        }
         editingSession = session;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = false;
@@ -450,6 +713,9 @@
         if (cancelBtn) cancelBtn.disabled = false;
         if (noteEl) updateNoteCount();
 
+        // Phase 3B.1: populate the session-level time-correction section.
+        populateSessionTimeSection(session);
+
         // Clear any prior status message
         showEditStatus("", false);
     }
@@ -457,6 +723,13 @@
     function clearEditPanel() {
         editingSession = null;
         editSaving = false;
+        timeSaving = false;
+        // Phase 3B.1: reset per-activity inline editor state. The detail
+        // list DOM is typically rebuilt by renderSessionDetails, but the
+        // tracking variables must be cleared so a stale editingActivityId
+        // does not leak into the next session.
+        editingActivityId = null;
+        activityTimeSaving = false;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
         var noteEl = document.getElementById("edit-note-text");
@@ -474,6 +747,8 @@
         if (saveBtn) saveBtn.disabled = true;
         if (cancelBtn) cancelBtn.disabled = true;
         showEditStatus("", false);
+        // Phase 3B.1: reset the session-level time-correction section.
+        resetSessionTimeSection();
     }
 
     function isEditDirty() {
@@ -489,6 +764,47 @@
             var currentProjectId = select.value;
             var originalProjectId = String(editingSession.project_id || 0);
             if (currentProjectId !== originalProjectId) return true;
+        }
+        // Phase 3B.1: session-level time inputs. If the user has modified
+        // either the start or end time, the edit panel is dirty so
+        // auto-refresh does not revert the inputs to the server values.
+        var startEl = document.getElementById("edit-start-time");
+        var endEl = document.getElementById("edit-end-time");
+        if (startEl && !startEl.disabled) {
+            var currentStart = datetimeLocalToBackend(startEl.value);
+            var originalStart = editingSession.start_time || "";
+            if (currentStart !== originalStart) return true;
+        }
+        if (endEl && !endEl.disabled) {
+            var currentEnd = datetimeLocalToBackend(endEl.value);
+            var originalEnd = editingSession.end_time || "";
+            if (currentEnd !== originalEnd) return true;
+        }
+        // Phase 3B.1: per-activity inline editor. If an editor is open and
+        // the user has modified the inputs, treat the panel as dirty so the
+        // detail list is not re-rendered (which would lose the edits).
+        if (editingActivityId !== null) {
+            var editorRow = document.querySelector(
+                '#timeline-details-list .detail-item[data-activity-id="'
+                + editingActivityId + '"]'
+            );
+            if (editorRow) {
+                var editor = editorRow.querySelector(".detail-time-editor");
+                if (editor && !editor.hidden) {
+                    var actStart = editor.querySelector(".detail-time-start");
+                    var actEnd = editor.querySelector(".detail-time-end");
+                    var actBtn = editorRow.querySelector(".detail-edit-time-btn");
+                    if (actStart && actEnd && actBtn) {
+                        var curActStart = datetimeLocalToBackend(actStart.value);
+                        var curActEnd = datetimeLocalToBackend(actEnd.value);
+                        var origActStart = actBtn.getAttribute("data-start") || "";
+                        var origActEnd = actBtn.getAttribute("data-end") || "";
+                        if (curActStart !== origActStart || curActEnd !== origActEnd) {
+                            return true;
+                        }
+                    }
+                }
+            }
         }
         return false;
     }
@@ -684,6 +1000,140 @@
         populateEditPanel(editingSession);
     }
 
+    // --- Phase 3B.1: session-level time correction ---------------------
+
+    function populateSessionTimeSection(session) {
+        var singleEl = document.getElementById("edit-time-single");
+        var multiEl = document.getElementById("edit-time-multi");
+        var startEl = document.getElementById("edit-start-time");
+        var endEl = document.getElementById("edit-end-time");
+        var saveBtn = document.getElementById("edit-time-save-btn");
+        if (!singleEl || !multiEl) return;
+
+        var activityIds = session.activity_ids || [];
+        var isMulti = activityIds.length > 1;
+        var inProgress = !!session.is_in_progress;
+
+        if (isMulti) {
+            singleEl.hidden = true;
+            multiEl.hidden = false;
+            multiEl.textContent = "多活动 session 暂不支持整体时间修改，请在活动详情中修改单条活动时间。";
+            showTimeStatus("", false);
+            return;
+        }
+        if (inProgress) {
+            // Single-activity but still open: the displayed end_time may be a
+            // projected value, so editing is not safe. Show the hint instead.
+            singleEl.hidden = true;
+            multiEl.hidden = false;
+            multiEl.textContent = "进行中记录暂不支持时间修正。";
+            showTimeStatus("", false);
+            return;
+        }
+        // Single closed activity: show the inputs.
+        singleEl.hidden = false;
+        multiEl.hidden = true;
+        if (startEl) startEl.value = backendToDatetimeLocal(session.start_time);
+        if (endEl) endEl.value = backendToDatetimeLocal(session.end_time);
+        if (startEl) startEl.disabled = false;
+        if (endEl) endEl.disabled = false;
+        if (saveBtn) saveBtn.disabled = false;
+        showTimeStatus("", false);
+    }
+
+    function resetSessionTimeSection() {
+        timeSaving = false;
+        var singleEl = document.getElementById("edit-time-single");
+        var multiEl = document.getElementById("edit-time-multi");
+        var startEl = document.getElementById("edit-start-time");
+        var endEl = document.getElementById("edit-end-time");
+        var saveBtn = document.getElementById("edit-time-save-btn");
+        if (singleEl) singleEl.hidden = true;
+        if (multiEl) {
+            multiEl.hidden = true;
+            multiEl.textContent = "多活动 session 暂不支持整体时间修改，请在活动详情中修改单条活动时间。";
+        }
+        if (startEl) { startEl.value = ""; startEl.disabled = true; }
+        if (endEl) { endEl.value = ""; endEl.disabled = true; }
+        if (saveBtn) saveBtn.disabled = true;
+        showTimeStatus("", false);
+    }
+
+    function showTimeStatus(message, isError) {
+        var statusEl = document.getElementById("edit-time-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "edit-status " + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function setTimeSaving(saving) {
+        timeSaving = saving;
+        var saveBtn = document.getElementById("edit-time-save-btn");
+        var startEl = document.getElementById("edit-start-time");
+        var endEl = document.getElementById("edit-end-time");
+        if (saveBtn) {
+            saveBtn.disabled = saving;
+            saveBtn.textContent = saving ? "保存中…" : "保存时间";
+        }
+        if (startEl) startEl.disabled = saving;
+        if (endEl) endEl.disabled = saving;
+    }
+
+    function saveSessionTime() {
+        if (!editingSession || timeSaving) return;
+        var activityIds = editingSession.activity_ids || [];
+        if (activityIds.length !== 1) {
+            showTimeStatus("多活动 session 暂不支持整体时间修改", true);
+            return;
+        }
+        if (editingSession.is_in_progress) {
+            showTimeStatus("进行中记录暂不支持时间修正", true);
+            return;
+        }
+        var startEl = document.getElementById("edit-start-time");
+        var endEl = document.getElementById("edit-end-time");
+        if (!startEl || !endEl) return;
+        var startVal = datetimeLocalToBackend(startEl.value);
+        var endVal = datetimeLocalToBackend(endEl.value);
+        if (!startVal || !endVal) {
+            showTimeStatus("时间无效", true);
+            return;
+        }
+        if (endVal <= startVal) {
+            showTimeStatus("结束时间必须晚于开始时间", true);
+            return;
+        }
+
+        setTimeSaving(true);
+        showTimeStatus("", false);
+        callBridge("update_timeline_session_time", activityIds, startVal, endVal).then(function (result) {
+            if (!result || result.ok === false) {
+                setTimeSaving(false);
+                showTimeStatus(result && result.error ? result.error : "保存时间失败", true);
+                return;
+            }
+            // Update the baseline so a subsequent auto-refresh does not
+            // revert the inputs to the pre-save values, and dirty checks
+            // reflect the saved state.
+            if (editingSession) {
+                editingSession.start_time = startVal;
+                editingSession.end_time = endVal;
+            }
+            showTimeStatus("时间已更新", false);
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setTimeSaving(false);
+            showTimeStatus("保存时间失败", true);
+        });
+    }
+
     // --- Timeline loading -----------------------------------------------
 
     function loadTimeline(date) {
@@ -778,6 +1228,20 @@
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;");
+    }
+
+    // Backend stores time as "YYYY-MM-DD HH:MM:SS". <input type="datetime-local">
+    // uses "YYYY-MM-DDTHH:MM:SS" (T separator). These helpers convert between
+    // the two fixed formats without relying on Date parsing (which would
+    // interpret the value as local time and could shift it).
+    function backendToDatetimeLocal(value) {
+        if (!value || typeof value !== "string") return "";
+        return value.replace(" ", "T");
+    }
+
+    function datetimeLocalToBackend(value) {
+        if (!value || typeof value !== "string") return "";
+        return value.replace("T", " ");
     }
 
     // --- Refresh orchestration ------------------------------------------
@@ -914,6 +1378,13 @@
         var noteEl = document.getElementById("edit-note-text");
         if (noteEl) {
             noteEl.addEventListener("input", updateNoteCount);
+        }
+        // Phase 3B.1: session-level time correction handler. Per-activity
+        // inline editor buttons are bound inside renderSessionDetails because
+        // they are recreated on each render.
+        var sessionTimeSaveBtn = document.getElementById("edit-time-save-btn");
+        if (sessionTimeSaveBtn) {
+            sessionTimeSaveBtn.addEventListener("click", saveSessionTime);
         }
     }
 

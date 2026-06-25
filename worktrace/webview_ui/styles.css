@@ -768,3 +768,198 @@ body {
     color: #15803d;
     border: 1px solid #bbf7d0;
 }
+
+/* --- Phase 3B.1: Timeline time correction ---------------------------- */
+
+/* The time-correction section is visually separated from the project/note
+   edit fields so the user can tell the two independent save flows apart. */
+.edit-time-section {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px dashed #e2e8f0;
+}
+
+.edit-time-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.edit-time-label {
+    flex: 0 0 40px;
+    font-size: 12px;
+    color: #64748b;
+}
+
+.edit-time-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 6px 8px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #1e293b;
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
+}
+
+.edit-time-input:disabled {
+    background: #f1f5f9;
+    cursor: not-allowed;
+}
+
+.edit-time-input:focus {
+    outline: none;
+    border-color: #818cf8;
+    box-shadow: 0 0 0 2px #e0e7ff;
+}
+
+.edit-time-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.edit-time-save-btn {
+    background: #4338ca;
+    color: #ffffff;
+    border-color: #4338ca;
+}
+
+.edit-time-save-btn:hover:not(:disabled) {
+    background: #3730a3;
+}
+
+.edit-time-save-btn:disabled {
+    background: #a5b4fc;
+    border-color: #a5b4fc;
+    color: #ffffff;
+}
+
+.edit-time-hint {
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.5;
+    padding: 6px 8px;
+    background: #f1f5f9;
+    border-radius: 4px;
+}
+
+/* Per-activity inline time editor inside the detail list. */
+.detail-item-actions {
+    grid-row: 2;
+    grid-column: 1;
+    margin-top: 4px;
+}
+
+.detail-edit-time-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #475569;
+    cursor: pointer;
+}
+
+.detail-edit-time-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.detail-edit-time-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+}
+
+.detail-time-editor {
+    grid-row: 3;
+    grid-column: 1 / -1;
+    margin-top: 8px;
+    padding: 8px;
+    background: #f1f5f9;
+    border-radius: 6px;
+}
+
+.detail-time-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.detail-time-row label {
+    flex: 0 0 40px;
+    font-size: 11px;
+    color: #64748b;
+}
+
+.detail-time-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 4px 6px;
+    font-size: 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #1e293b;
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
+}
+
+.detail-time-input:focus {
+    outline: none;
+    border-color: #818cf8;
+    box-shadow: 0 0 0 2px #e0e7ff;
+}
+
+.detail-time-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.detail-time-actions button {
+    padding: 3px 10px;
+    font-size: 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.detail-time-save-btn {
+    background: #4338ca;
+    color: #ffffff;
+    border-color: #4338ca;
+}
+
+.detail-time-save-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    background: #a5b4fc;
+    border-color: #a5b4fc;
+}
+
+.detail-time-cancel-btn {
+    background: #ffffff;
+    color: #334155;
+}
+
+.detail-time-status {
+    margin-top: 6px;
+    font-size: 11px;
+}
+
+@media (max-width: 900px) {
+    .edit-time-row {
+        flex-wrap: wrap;
+    }
+    .detail-item-actions {
+        grid-row: 3;
+        grid-column: 1;
+    }
+    .detail-time-editor {
+        grid-row: 4;
+    }
+}
