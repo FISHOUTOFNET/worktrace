@@ -578,9 +578,16 @@ def split_activity(activity_id: int, split_time: str) -> dict:
       ``manual_override``, ``project_id``, ``is_hidden``, ``is_deleted`` from
       the original row. These are DB-internal fields required for record
       integrity and classification; they are never surfaced to the bridge.
+    - ``created_at`` and ``updated_at`` are set to the current write time
+      (``now_str()``) for the new activity — they are NOT copied from the
+      original. The new row is a new record, so its creation timestamp
+      reflects when the split was performed. The original activity's
+      ``updated_at`` is also refreshed to the write time (its ``end_time``
+      and ``duration_seconds`` changed); its ``created_at`` is untouched.
     - ``activity_project_assignment`` is copied to the new activity so manual
       and automatic assignments are preserved. The new activity does not
-      become "未归类" unless the original was.
+      become "未归类" unless the original was. If the original has no
+      assignment row, no assignment is created for the new activity either.
     - ``activity_resource`` is copied to the new activity (a new row with the
       same ``identity_key``, ``display_name``, ``path_hint`` etc.) so the
       resource display name is preserved on both halves. Excluded activities
@@ -672,6 +679,13 @@ def split_activity(activity_id: int, split_time: str) -> dict:
             ),
         )
         new_activity_id = int(new_cur.lastrowid)
+        if new_activity_id <= 0:
+            # Defensive guard: the INSERT did not return a valid row id.
+            # This should never happen under normal sqlite3 operation, but
+            # if it does we must not proceed with assignment/resource copies
+            # that would reference a non-existent activity id. Raise so the
+            # transaction rolls back and the original activity is restored.
+            raise ValueError("activity_split_insert_returned_no_id")
 
         # 3) Copy the project assignment row so the new activity keeps the
         # same effective project (manual or automatic).

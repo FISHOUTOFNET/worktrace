@@ -402,14 +402,19 @@ def split_timeline_session(activity_ids: list[int], split_time: str) -> dict:
 
 
 def _validate_activity_id_for_split(activity_id: int) -> int:
-    """Validate a single ``activity_id`` for split.
+    """Validate a single ``activity_id`` for split (existence and deleted
+    state only).
 
     Returns the validated positive int. Raises ``TimelineSplitError``:
     - ``invalid_id`` — not a positive int, ``bool``, missing, or deleted.
-    - ``in_progress`` — the activity is still open (``end_time IS NULL``).
 
-    The in-progress check reads the raw ``end_time`` from the row (not a
-    projected display value), so it correctly reflects the DB state.
+    The in-progress check (``end_time IS NULL``) is deliberately performed
+    in ``split_timeline_activity`` / ``split_timeline_session`` after this
+    validator returns, because those callers also need to fetch the
+    activity row for the split-range check. Performing the in-progress
+    check there avoids a double fetch and reads the raw ``end_time`` from
+    the row (not a projected display value), so it correctly reflects the
+    DB state.
     """
     if isinstance(activity_id, bool):
         raise TimelineSplitError("invalid_id")

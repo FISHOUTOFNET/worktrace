@@ -671,3 +671,294 @@ def test_service_split_activity_atomic_rollback_on_zero_row_update(temp_db):
     # restored too. The key invariant is that no NEW activity row was
     # created.
     assert _count_activities() == before_count
+
+
+# --- Phase 3B.2.1: hardening tests ---------------------------------------
+
+
+def test_split_activity_no_assignment_does_not_create_assignment(temp_db):
+    """If the original activity has no ``activity_project_assignment`` row,
+    the split must NOT create an assignment for the new activity either.
+    This prevents the new back-half from getting a spurious assignment row
+    that the original did not have."""
+    aid = _seed_closed_activity()
+    # Remove any assignment row that create_activity may have created so we
+    # can verify the split does not fabricate one.
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM activity_project_assignment WHERE activity_id = ?",
+            (aid,),
+        )
+    assert _get_assignment(aid) is None
+    result = timeline_api.split_timeline_activity(aid, "2026-06-25 09:15:00")
+    # The new activity must also have no assignment row.
+    assert _get_assignment(result["new_activity_id"]) is None
+
+
+def test_split_activity_auto_assignment_inherited(temp_db):
+    """An automatic (non-manual) project assignment on the original activity
+    must be copied to the new activity with ``is_manual=0`` preserved."""
+    from worktrace.services import project_service
+
+    project = project_service.create_project("AutoProj")
+    aid = _seed_closed_activity()
+    # Insert an auto (non-manual) assignment directly.
+    from worktrace.db import now_str
+
+    ts = now_str()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO activity_project_assignment(
+                activity_id, project_id, confidence, source, is_manual,
+                suggested_project_name, created_at, updated_at
+            )
+            VALUES (?, ?, 60, 'keyword_rule', 0, NULL, ?, ?)
+            ON CONFLICT(activity_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                confidence = excluded.confidence,
+                source = excluded.source,
+                is_manual = excluded.is_manual,
+                updated_at = excluded.updated_at
+            """,
+            (aid, project, ts, ts),
+        )
+    orig = _get_assignment(aid)
+    assert int(orig["is_manual"]) == 0
+    assert orig["source"] == "keyword_rule"
+    result = timeline_api.split_timeline_activity(aid, "2026-06-25 09:15:00")
+    back = _get_assignment(result["new_activity_id"])
+    assert back is not None
+    assert int(back["project_id"]) == project
+    assert int(back["is_manual"]) == 0
+    assert back["source"] == "keyword_rule"
+
+
+def test_split_activity_created_at_not_copied(temp_db):
+    """The new activity's ``created_at`` must reflect the write time (now),
+    not the original activity's creation time. The original's ``created_at``
+    must remain unchanged."""
+    aid = _seed_closed_activity()
+    before = activity_service.get_activity(aid)
+    orig_created = before["created_at"]
+    result = timeline_api.split_timeline_activity(aid, "2026-06-25 09:15:00")
+    front = activity_service.get_activity(aid)
+    back = activity_service.get_activity(result["new_activity_id"])
+    # Original created_at is untouched.
+    assert front["created_at"] == orig_created
+    # New activity created_at is the write time (>= original created_at).
+    assert back["created_at"] >= orig_created
+
+
+def test_service_split_activity_lastrowid_guard(temp_db):
+    """If the INSERT returns ``lastrowid <= 0`` (should not happen under
+    normal sqlite3, but is a defensive guard), the service must raise
+    ``ValueError`` and the transaction must roll back so the original
+    activity is unchanged and no new activity is persisted."""
+    aid = _seed_closed_activity(start="09:00:00", end="09:30:00")
+    before_count = _count_activities()
+    original = activity_service.get_activity(aid)
+    orig_end = original["end_time"]
+    orig_duration = int(original["duration_seconds"])
+    real_get_connection = activity_service.get_connection
+
+    class _ZeroLastrowidCursor:
+        """Fake cursor whose ``lastrowid`` is always 0."""
+
+        def __init__(self, real_cursor):
+            self._real = real_cursor
+
+        @property
+        def lastrowid(self):
+            return 0
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    class _ZeroLastrowidConn:
+        """Wraps a real connection. The INSERT into ``activity_log`` inside
+        ``split_activity`` returns a ``_ZeroLastrowidCursor`` so the guard
+        fires. All other statements delegate to the real connection."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, params=()):
+            stripped = " ".join(sql.split())
+            if "INSERT INTO activity_log" in stripped:
+                cur = self._real.execute(sql, params)
+                return _ZeroLastrowidCursor(cur)
+            return self._real.execute(sql, params)
+
+        def __enter__(self):
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._real.__exit__(*args)
+
+    def patched_get_connection():
+        return _ZeroLastrowidConn(real_get_connection())
+
+    with patch.object(
+        activity_service, "get_connection", side_effect=patched_get_connection
+    ):
+        with pytest.raises(ValueError):
+            activity_service.split_activity(aid, "2026-06-25 09:15:00")
+    # The transaction must have rolled back: no new activity, original
+    # unchanged.
+    assert _count_activities() == before_count
+    after = activity_service.get_activity(aid)
+    assert after["end_time"] == orig_end
+    assert int(after["duration_seconds"]) == orig_duration
+
+
+def test_service_split_activity_insert_failure_rolls_back(temp_db):
+    """If the INSERT statement raises (e.g. a constraint error), the
+    transaction must roll back so the original activity's end_time and
+    duration_seconds are restored and no new activity is persisted."""
+    aid = _seed_closed_activity(start="09:00:00", end="09:30:00")
+    before_count = _count_activities()
+    original = activity_service.get_activity(aid)
+    orig_end = original["end_time"]
+    orig_duration = int(original["duration_seconds"])
+    real_get_connection = activity_service.get_connection
+
+    class _FailingInsertConn:
+        """Wraps a real connection. The INSERT into ``activity_log`` inside
+        ``split_activity`` raises ``sqlite3.OperationalError`` so the
+        transaction rolls back. All other statements (SELECT, UPDATE)
+        delegate to the real connection."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, params=()):
+            stripped = " ".join(sql.split())
+            if "INSERT INTO activity_log" in stripped:
+                import sqlite3
+
+                raise sqlite3.OperationalError("simulated insert failure")
+            return self._real.execute(sql, params)
+
+        def __enter__(self):
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._real.__exit__(*args)
+
+    def patched_get_connection():
+        return _FailingInsertConn(real_get_connection())
+
+    with patch.object(
+        activity_service, "get_connection", side_effect=patched_get_connection
+    ):
+        with pytest.raises(Exception):
+            activity_service.split_activity(aid, "2026-06-25 09:15:00")
+    # The transaction must have rolled back: no new activity, original
+    # unchanged.
+    assert _count_activities() == before_count
+    after = activity_service.get_activity(aid)
+    assert after["end_time"] == orig_end
+    assert int(after["duration_seconds"]) == orig_duration
+
+
+def test_service_split_activity_assignment_copy_failure_rolls_back(temp_db):
+    """If copying the ``activity_project_assignment`` row fails, the
+    transaction must roll back so the original activity is unchanged and
+    no new activity (or half-created assignment) is persisted."""
+    aid = _seed_closed_activity(start="09:00:00", end="09:30:00")
+    before_count = _count_activities()
+    original = activity_service.get_activity(aid)
+    orig_end = original["end_time"]
+    orig_duration = int(original["duration_seconds"])
+    real_get_connection = activity_service.get_connection
+
+    class _FailingAssignmentCopyConn:
+        """Wraps a real connection. The INSERT into
+        ``activity_project_assignment`` inside ``split_activity`` raises so
+        the transaction rolls back. All other statements delegate."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, params=()):
+            stripped = " ".join(sql.split())
+            if "INSERT INTO activity_project_assignment" in stripped:
+                import sqlite3
+
+                raise sqlite3.OperationalError("simulated assignment copy failure")
+            return self._real.execute(sql, params)
+
+        def __enter__(self):
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._real.__exit__(*args)
+
+    def patched_get_connection():
+        return _FailingAssignmentCopyConn(real_get_connection())
+
+    with patch.object(
+        activity_service, "get_connection", side_effect=patched_get_connection
+    ):
+        with pytest.raises(Exception):
+            activity_service.split_activity(aid, "2026-06-25 09:15:00")
+    # The transaction must have rolled back: no new activity, original
+    # unchanged.
+    assert _count_activities() == before_count
+    after = activity_service.get_activity(aid)
+    assert after["end_time"] == orig_end
+    assert int(after["duration_seconds"]) == orig_duration
+
+
+def test_service_split_activity_resource_copy_failure_rolls_back(temp_db):
+    """If copying the ``activity_resource`` row fails, the transaction must
+    roll back so the original activity is unchanged and no new activity (or
+    half-created resource) is persisted."""
+    aid = _seed_closed_activity(start="09:00:00", end="09:30:00")
+    before_count = _count_activities()
+    original = activity_service.get_activity(aid)
+    orig_end = original["end_time"]
+    orig_duration = int(original["duration_seconds"])
+    real_get_connection = activity_service.get_connection
+
+    class _FailingResourceCopyConn:
+        """Wraps a real connection. The INSERT into ``activity_resource``
+        inside ``split_activity`` raises so the transaction rolls back. All
+        other statements delegate."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, params=()):
+            stripped = " ".join(sql.split())
+            if "INSERT INTO activity_resource" in stripped:
+                import sqlite3
+
+                raise sqlite3.OperationalError("simulated resource copy failure")
+            return self._real.execute(sql, params)
+
+        def __enter__(self):
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._real.__exit__(*args)
+
+    def patched_get_connection():
+        return _FailingResourceCopyConn(real_get_connection())
+
+    with patch.object(
+        activity_service, "get_connection", side_effect=patched_get_connection
+    ):
+        with pytest.raises(Exception):
+            activity_service.split_activity(aid, "2026-06-25 09:15:00")
+    # The transaction must have rolled back: no new activity, original
+    # unchanged.
+    assert _count_activities() == before_count
+    after = activity_service.get_activity(aid)
+    assert after["end_time"] == orig_end
+    assert int(after["duration_seconds"]) == orig_duration

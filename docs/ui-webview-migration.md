@@ -2,13 +2,13 @@
 
 ## Status
 
-- Current phase: 3B.2 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.2.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
   implemented and hardened; Timeline activity split foundation — single
-  closed activity split into two closed activities — implemented; WebView
-  is the default and only shipping UI).
+  closed activity split into two closed activities — implemented and
+  hardened; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -251,6 +251,18 @@ The migration is phased so each step is independently shippable:
   editing, auto-rule creation, complex correction pages, multi-activity
   session whole-split, and overlap detection remain out of scope.
   **Completed.**
+- Phase 3B.2.1: **Timeline activity split hardening.** No new features.
+  Hardens the Phase 3B.2 split write path: adds a defensive
+  ``lastrowid <= 0`` guard after the new-activity INSERT (raises
+  ``ValueError`` and rolls back the transaction so the original activity
+  is unchanged); clarifies the ``created_at`` / ``updated_at`` inheritance
+  semantics (the new activity gets the write time for both, not the
+  original's timestamps); fixes the ``_validate_activity_id_for_split``
+  docstring to accurately reflect that the in-progress check is performed
+  in the caller (not the validator); adds tests for no-assignment
+  inheritance, auto-assignment inheritance, ``created_at`` not copied,
+  INSERT failure rollback, assignment-copy failure rollback, and
+  resource-copy failure rollback. **Completed.**
 - Phase 3B: Timeline advanced editing (merge, delete, batch editing,
   correction page) — not yet started.
 - Phase 4: Statistics / Export.
@@ -1103,6 +1115,75 @@ The following remain out of scope until a later phase:
 - Auto-rule creation;
 - Complex correction page;
 - Overlap detection between activities on the same timeline.
+
+## Phase 3B.2.1 Hardening Scope
+
+Phase 3B.2.1 is a **hardening phase only** — it adds no new features. It
+strengthens the Phase 3B.2 split write path so that failure modes are more
+predictable and the transaction boundary is fully defensible.
+
+### Service Layer Hardening
+
+- **``lastrowid`` guard**: after the INSERT that creates the new back-half
+  activity, the service checks ``lastrowid <= 0``. If the INSERT did not
+  return a valid row id (should not happen under normal sqlite3 operation),
+  the service raises ``ValueError`` so the transaction rolls back and the
+  original activity is restored. No assignment or resource copy proceeds
+  against a non-existent activity id.
+- **``created_at`` / ``updated_at`` semantics clarified**: the new
+  activity's ``created_at`` and ``updated_at`` are both set to the current
+  write time (``now_str()``), NOT copied from the original. The new row is
+  a new record. The original activity's ``updated_at`` is refreshed to the
+  write time (its ``end_time`` and ``duration_seconds`` changed); its
+  ``created_at`` is untouched. The docstring now documents this explicitly.
+- **No-assignment inheritance**: if the original activity has no
+  ``activity_project_assignment`` row, the split does NOT create a spurious
+  assignment for the new activity. This matches the original state.
+- **Auto-assignment inheritance**: automatic (non-manual) assignments are
+  copied with ``is_manual=0`` and the original ``source`` (e.g.
+  ``keyword_rule``) preserved. This was already implemented in Phase 3B.2
+  but is now explicitly tested.
+
+### API Layer Hardening
+
+- **``_validate_activity_id_for_split`` docstring fixed**: the docstring
+  previously claimed it raises ``in_progress``, but the implementation
+  only checks existence and deleted state. The in-progress check is
+  deliberately performed in ``split_timeline_activity`` /
+  ``split_timeline_session`` after the validator returns, because those
+  callers also need to fetch the activity row for the split-range check.
+  The docstring now accurately reflects this.
+
+### Transaction Rollback Verification
+
+Phase 3B.2.1 adds explicit tests verifying that every write step inside
+``split_activity`` rolls back on failure:
+
+- **UPDATE rowcount == 0** (race condition): already tested in Phase 3B.2.
+- **INSERT ``lastrowid <= 0``**: new test verifies the guard fires, the
+  transaction rolls back, and the original activity is unchanged.
+- **INSERT raises** (e.g. constraint error): new test verifies the
+  transaction rolls back, no new activity is persisted, and the original
+  activity's ``end_time`` / ``duration_seconds`` are restored.
+- **Assignment copy raises**: new test verifies the transaction rolls back,
+  no new activity or half-created assignment is persisted, and the
+  original activity is unchanged.
+- **Resource copy raises**: new test verifies the transaction rolls back,
+  no new activity or half-created resource is persisted, and the original
+  activity is unchanged.
+
+### What Phase 3B.2.1 Does NOT Change
+
+- No new features, no new UI controls, no new API methods.
+- No DB schema changes.
+- No change to the bridge layer or frontend.
+- No change to the privacy/security boundary.
+- No change to the field inheritance semantics (``note`` still not copied,
+  ``project_session_note`` still not auto-copied, project/resource still
+  inherited).
+- Multi-activity session whole-split, merge, delete/hide, batch editing,
+  auto-rule creation, complex correction pages, and overlap detection
+  remain out of scope.
 
 ## Legacy Tkinter UI Handling
 

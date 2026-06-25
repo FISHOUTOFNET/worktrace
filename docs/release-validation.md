@@ -1249,3 +1249,74 @@ creation, complex correction pages, or overlap detection.
 - The default entry point no longer starts the WebView UI, or a Tkinter
   fallback is restored.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.2.1 Validation
+
+Phase 3B.2.1 is a **hardening phase** for the Phase 3B.2 activity split.
+It adds no new features. It strengthens the split write path with a
+defensive ``lastrowid`` guard, clarifies the ``created_at`` /
+``updated_at`` inheritance semantics, fixes a docstring mismatch, and adds
+explicit rollback tests for every write step inside the transaction.
+
+### Automated Checklist
+
+| Check | Command |
+|-------|---------|
+| Full test suite | `python -m pytest` |
+| PyInstaller build | `python -m PyInstaller --noconfirm --clean WorkTrace.spec` |
+
+### Validation Items
+
+#### BB. Service Layer Hardening
+
+- The ``lastrowid <= 0`` guard fires when the INSERT does not return a
+  valid row id: the service raises ``ValueError``, the transaction rolls
+  back, and the original activity is unchanged.
+- If the INSERT statement raises (e.g. constraint error), the transaction
+  rolls back: no new activity is persisted, and the original activity's
+  ``end_time`` / ``duration_seconds`` are restored.
+- If the assignment-copy INSERT raises, the transaction rolls back: no new
+  activity or half-created assignment is persisted.
+- If the resource-copy INSERT raises, the transaction rolls back: no new
+  activity or half-created resource is persisted.
+- The new activity's ``created_at`` reflects the write time (not the
+  original's creation time); the original's ``created_at`` is untouched.
+- If the original activity has no ``activity_project_assignment`` row, the
+  split does not create a spurious assignment for the new activity.
+- An automatic (non-manual) assignment is copied with ``is_manual=0`` and
+  the original ``source`` preserved.
+
+#### BC. API Layer Hardening
+
+- The ``_validate_activity_id_for_split`` docstring accurately reflects
+  that it checks existence and deleted state only; the in-progress check
+  is performed in the caller after fetching the activity for range
+  validation.
+- No change to the stable error codes (``invalid_id``, ``invalid_time``,
+  ``outside_range``, ``in_progress``, ``multi_activity``,
+  ``operation_failed``).
+- No change to the bridge error mapping.
+
+#### BD. Regression
+
+- All Phase 3B.2 split tests continue to pass.
+- All Phase 3B.1 / 3B.1.1 time-correction tests continue to pass.
+- All Phase 3A / 3A.1 editing tests continue to pass.
+- All Phase 2.1 privacy boundary tests continue to pass.
+- Overview and Timeline read-only tests continue to pass.
+- Default WebView entry tests continue to pass.
+- PyInstaller resource path tests continue to pass.
+
+### Phase 3B.2.1 Release Blockers
+
+- The ``lastrowid <= 0`` guard is missing or does not raise.
+- A write-step failure (INSERT, assignment copy, resource copy) does not
+  roll back the transaction.
+- The new activity's ``created_at`` is copied from the original instead of
+  using the write time.
+- A spurious ``activity_project_assignment`` row is created for the new
+  activity when the original had none.
+- An auto assignment is copied with ``is_manual=1`` instead of
+  ``is_manual=0``.
+- Any Phase 3B.2 regression.
+- Any new DB schema is introduced.
