@@ -223,7 +223,13 @@ def update_timeline_activity_time(
     start = _validate_time_string(start_time)
     end = _validate_time_string(end_time)
     _validate_time_order(start, end)
-    activity_service.update_activity_time(aid, start, end)
+    try:
+        activity_service.update_activity_time(aid, start, end)
+    except ValueError:
+        # Defensive: the activity was deleted or reopened between validation
+        # and write (race condition). Treat as invalid_id so the bridge
+        # returns a clear message instead of silently succeeding.
+        raise TimelineTimeEditError("invalid_id")
 
 
 def update_timeline_session_time(
@@ -266,7 +272,11 @@ def update_timeline_session_time(
     activity = activity_service.get_activity(ids[0])
     if activity.get("end_time") is None:
         raise TimelineTimeEditError("in_progress")
-    activity_service.update_activity_time(ids[0], start, end)
+    try:
+        activity_service.update_activity_time(ids[0], start, end)
+    except ValueError:
+        # Defensive: race condition between validation and write.
+        raise TimelineTimeEditError("invalid_id")
 
 
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:

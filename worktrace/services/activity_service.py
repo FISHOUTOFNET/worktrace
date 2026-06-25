@@ -543,7 +543,7 @@ def update_activity_time(activity_id: int, start_time: str, end_time: str) -> No
     end_dt = _parse_time(end_time)
     duration = int((end_dt - start_dt).total_seconds())
     with get_connection() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE activity_log
             SET start_time = ?,
@@ -556,6 +556,13 @@ def update_activity_time(activity_id: int, start_time: str, end_time: str) -> No
             """,
             (start_time, end_time, duration, now_str(), activity_id),
         )
+        if cur.rowcount == 0:
+            # Defensive guard: the row was deleted or reopened between the
+            # API-layer validation and this write (a race condition), or the
+            # caller bypassed validation. Raise so the API can map this to a
+            # controlled ``TimelineTimeEditError`` instead of silently
+            # succeeding with 0 rows written.
+            raise ValueError("activity_time_update_affected_zero_rows")
 
 
 def soft_delete_activity(activity_id: int) -> None:

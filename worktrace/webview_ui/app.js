@@ -964,6 +964,10 @@
                 }
             }
             showEditStatus("保存成功", false);
+            // Reset the saving state before refreshing so the button is
+            // re-enabled regardless of whether the refresh succeeds. The
+            // save itself succeeded; a refresh failure is a separate concern.
+            setEditSaving(false);
             refreshTimelineAfterEdit();
         });
     }
@@ -977,15 +981,12 @@
             if (token !== timelineRequestToken) return;
             var data = handleResult(result, function (msg) {
                 showTimelineError(msg || "刷新时间详情失败，请稍后重试。");
-                setEditSaving(false);
             });
             if (!data) return;
-            setEditSaving(false);
             showTimeline(data);
             clearTimelineError();
         }).catch(function () {
             if (token !== timelineRequestToken) return;
-            setEditSaving(false);
             showTimelineError("刷新时间详情失败，请稍后重试。");
         });
     }
@@ -1126,6 +1127,11 @@
                 editingSession.start_time = startVal;
                 editingSession.end_time = endVal;
             }
+            // Reset the saving state before refreshing so the button is
+            // re-enabled regardless of whether the refresh succeeds. The
+            // save itself succeeded; a refresh failure is a separate concern
+            // surfaced via the error banner.
+            setTimeSaving(false);
             showTimeStatus("时间已更新", false);
             refreshTimelineAfterEdit();
         }).catch(function () {

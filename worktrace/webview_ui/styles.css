@@ -962,4 +962,7 @@ body {
     .detail-time-editor {
         grid-row: 4;
     }
+    .detail-time-row {
+        flex-wrap: wrap;
+    }
 }

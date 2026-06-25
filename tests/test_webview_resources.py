@@ -923,3 +923,295 @@ def test_frontend_resources_still_no_browser_storage():
         assert not re.search(r"localStorage|sessionStorage", source), (
             f"{filename} must not use localStorage or sessionStorage"
         )
+
+
+# --- Phase 3B.1.1: time correction hardening tests -----------------------
+
+
+def test_refresh_timeline_after_edit_does_not_reset_edit_saving():
+    """Phase 3B.1.1: ``refreshTimelineAfterEdit`` must NOT call
+    ``setEditSaving(false)``. The three independent save flows (project/note,
+    session-time, per-activity-time) must each reset their own saving state
+    before calling the shared refresh function, so a refresh triggered by one
+    flow does not prematurely reset another flow's saving state."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # Extract the refreshTimelineAfterEdit function body by brace matching.
+    start = source.find("function refreshTimelineAfterEdit(")
+    assert start != -1, "refreshTimelineAfterEdit must exist"
+    brace_start = source.find("{", start)
+    assert brace_start != -1
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "setEditSaving" not in body, (
+        "refreshTimelineAfterEdit must not call setEditSaving — each save "
+        "flow must reset its own saving state before refreshing"
+    )
+    assert "setTimeSaving" not in body, (
+        "refreshTimelineAfterEdit must not call setTimeSaving — each save "
+        "flow must reset its own saving state before refreshing"
+    )
+
+
+def test_save_session_time_resets_saving_before_refresh():
+    """Phase 3B.1.1: ``saveSessionTime`` must call ``setTimeSaving(false)``
+    BEFORE ``refreshTimelineAfterEdit`` on the success path, so the save
+    button is re-enabled regardless of whether the refresh succeeds."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function saveSessionTime(")
+    assert start != -1, "saveSessionTime must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    reset_pos = body.find("setTimeSaving(false)")
+    refresh_pos = body.find("refreshTimelineAfterEdit()")
+    assert reset_pos != -1, "saveSessionTime must call setTimeSaving(false) on success"
+    assert refresh_pos != -1, "saveSessionTime must call refreshTimelineAfterEdit on success"
+    assert reset_pos < refresh_pos, (
+        "saveSessionTime must reset timeSaving BEFORE refreshing so the "
+        "button is re-enabled even if the refresh fails"
+    )
+
+
+def test_save_edit_resets_saving_before_refresh():
+    """Phase 3B.1.1: ``saveEdit`` must call ``setEditSaving(false)`` BEFORE
+    ``refreshTimelineAfterEdit`` on the success path."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function saveEdit(")
+    assert start != -1, "saveEdit must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    # Find the success-path setEditSaving(false) — it must appear before the
+    # refreshTimelineAfterEdit call. (There may also be an error-path
+    # setEditSaving(false) earlier; we need at least one before the refresh.)
+    refresh_pos = body.find("refreshTimelineAfterEdit()")
+    assert refresh_pos != -1, "saveEdit must call refreshTimelineAfterEdit on success"
+    # Search for setEditSaving(false) before the refresh call.
+    pre_refresh = body[:refresh_pos]
+    assert "setEditSaving(false)" in pre_refresh, (
+        "saveEdit must call setEditSaving(false) BEFORE refreshTimelineAfterEdit "
+        "so the button is re-enabled even if the refresh fails"
+    )
+
+
+def test_save_activity_time_resets_saving_before_refresh():
+    """Phase 3B.1.1: ``saveActivityTime`` must call
+    ``setActivityTimeSaving(row, false)`` BEFORE ``refreshTimelineAfterEdit``
+    on the success path."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function saveActivityTime(")
+    assert start != -1, "saveActivityTime must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    refresh_pos = body.find("refreshTimelineAfterEdit()")
+    assert refresh_pos != -1, "saveActivityTime must call refreshTimelineAfterEdit on success"
+    pre_refresh = body[:refresh_pos]
+    assert "setActivityTimeSaving(row, false)" in pre_refresh, (
+        "saveActivityTime must call setActivityTimeSaving(row, false) BEFORE "
+        "refreshTimelineAfterEdit so the inputs are re-enabled even if the "
+        "refresh fails"
+    )
+
+
+def test_is_edit_dirty_covers_session_level_time_inputs():
+    """Phase 3B.1.1: ``isEditDirty`` must check the session-level time inputs
+    (``edit-start-time`` / ``edit-end-time``) so auto-refresh does not
+    overwrite unsaved time edits."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function isEditDirty(")
+    assert start != -1, "isEditDirty must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "edit-start-time" in body, (
+        "isEditDirty must check edit-start-time for unsaved time edits"
+    )
+    assert "edit-end-time" in body, (
+        "isEditDirty must check edit-end-time for unsaved time edits"
+    )
+
+
+def test_is_edit_dirty_covers_per_activity_inline_editor():
+    """Phase 3B.1.1: ``isEditDirty`` must also check the per-activity inline
+    time editor so auto-refresh does not re-render the detail list and lose
+    unsaved inline edits."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function isEditDirty(")
+    assert start != -1
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "editingActivityId" in body, (
+        "isEditDirty must check editingActivityId so an open inline editor "
+        "is treated as dirty and auto-refresh does not wipe it"
+    )
+
+
+def test_auto_refresh_skips_detail_reload_when_edit_dirty():
+    """Phase 3B.1.1: the Timeline auto-refresh path must call ``isEditDirty``
+    to decide whether to skip the detail reload / edit-panel repopulation,
+    so unsaved time edits are not overwritten."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The showTimeline function (or its session-matching branch) must call
+    # isEditDirty() before repopulating the edit panel.
+    assert "isEditDirty()" in source, (
+        "auto-refresh must call isEditDirty() to avoid overwriting unsaved edits"
+    )
+    # The skipDetailReload guard must exist.
+    assert "skipDetailReload" in source, (
+        "auto-refresh must use a skipDetailReload guard based on isEditDirty"
+    )
+
+
+def test_styles_css_has_detail_time_row_responsive_wrap():
+    """Phase 3B.1.1: styles.css must wrap ``.detail-time-row`` on narrow
+    viewports so the inline time editor does not break the layout."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    # There may be multiple @media (max-width: 900px) blocks; scan all of
+    # them and confirm at least one contains .detail-time-row with flex-wrap.
+    found = False
+    search_from = 0
+    while True:
+        media_start = source.find("@media (max-width: 900px)", search_from)
+        if media_start == -1:
+            break
+        brace_start = source.find("{", media_start)
+        if brace_start == -1:
+            break
+        depth = 0
+        end = brace_start
+        for i in range(brace_start, len(source)):
+            ch = source[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        media_body = source[media_start:end]
+        if ".detail-time-row" in media_body and "flex-wrap" in media_body:
+            found = True
+            break
+        search_from = end
+    assert found, (
+        "at least one @media (max-width: 900px) block must include "
+        ".detail-time-row with flex-wrap"
+    )
+
+
+def test_save_session_time_updates_baseline_on_success():
+    """Phase 3B.1.1: ``saveSessionTime`` must update the
+    ``editingSession.start_time`` / ``end_time`` baseline on success so a
+    subsequent auto-refresh does not revert the inputs to pre-save values."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function saveSessionTime(")
+    assert start != -1
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "editingSession.start_time = startVal" in body, (
+        "saveSessionTime must update editingSession.start_time baseline on success"
+    )
+    assert "editingSession.end_time = endVal" in body, (
+        "saveSessionTime must update editingSession.end_time baseline on success"
+    )
+
+
+def test_save_activity_time_updates_baseline_on_success():
+    """Phase 3B.1.1: ``saveActivityTime`` must update the button's
+    ``data-start`` / ``data-end`` attributes on success so a subsequent
+    auto-refresh does not revert the editor inputs to pre-save values."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function saveActivityTime(")
+    assert start != -1
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert 'setAttribute("data-start"' in body, (
+        "saveActivityTime must update data-start baseline on success"
+    )
+    assert 'setAttribute("data-end"' in body, (
+        "saveActivityTime must update data-end baseline on success"
+    )

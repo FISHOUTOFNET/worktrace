@@ -1052,3 +1052,64 @@ batch editing, auto-rule creation, or complex correction pages.
 - The default entry point no longer starts the WebView UI, or a Tkinter
   fallback is restored.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.1.1 Validation
+
+Phase 3B.1.1 is a **hardening phase** for the Phase 3B.1 time-correction
+path. It adds no new features. It strengthens the service-layer write
+(rowcount check), the API-layer error handling (race-condition mapping),
+and the frontend saving-state lifecycle (session-time save button no
+longer stuck disabled; save flows fully decoupled).
+
+### Automated Checklist
+
+| Check | Command |
+|-------|---------|
+| Full test suite | `python -m pytest` |
+| PyInstaller build | `python -m PyInstaller --noconfirm --clean WorkTrace.spec` |
+
+### Validation Items
+
+#### AT. Service Layer Race-Condition Guard
+
+- `activity_service.update_activity_time` raises `ValueError` when the
+  UPDATE affects 0 rows (activity deleted or reopened between validation
+  and write).
+- The UPDATE still includes `WHERE is_deleted = 0 AND end_time IS NOT
+  NULL` as a defensive guard.
+
+#### AU. API Layer Race-Condition Mapping
+
+- `update_timeline_activity_time` catches the service-layer `ValueError`
+  and raises `TimelineTimeEditError("invalid_id")`.
+- `update_timeline_session_time` does the same.
+- No silent success when 0 rows are written.
+
+#### AV. Frontend Saving-State Hardening
+
+- `saveSessionTime` resets `timeSaving` on success (button re-enabled).
+- `refreshTimelineAfterEdit` does not call `setEditSaving` (decoupled).
+- `saveEdit` resets `editSaving` on success before refresh.
+- `saveActivityTime` resets `activityTimeSaving` on success before
+  refresh (unchanged from Phase 3B.1, verified).
+
+#### AW. Regression
+
+- Overview tests continue to pass.
+- Timeline read-only tests continue to pass.
+- Phase 2.1 privacy boundary tests continue to pass.
+- Phase 3A / 3A.1 basic editing tests continue to pass.
+- Phase 3B.1 time-correction tests continue to pass.
+- Default WebView entry tests continue to pass.
+- PyInstaller resource path tests continue to pass.
+
+### Phase 3B.1.1 Release Blockers
+
+- `pytest` fails.
+- `update_activity_time` silently succeeds when 0 rows are updated.
+- `saveSessionTime` leaves the save button disabled after success.
+- `refreshTimelineAfterEdit` resets `editSaving` (coupling between save
+  flows).
+- Any new DB schema is introduced.
+- Any new feature (split, merge, delete, batch, auto-rule, complex
+  correction page, overlap detection) is introduced.

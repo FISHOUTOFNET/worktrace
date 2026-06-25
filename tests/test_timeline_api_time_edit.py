@@ -371,3 +371,175 @@ def test_update_activity_time_reread_timeline_reflects_change(temp_db):
             found = True
             break
     assert found, "modified activity must still appear in the timeline"
+
+
+# --- Phase 3B.1.1: hardening tests -------------------------------------
+
+
+def test_update_activity_time_t_separator_rejected(temp_db):
+    """The ISO ``T`` separator must be rejected; only ``YYYY-MM-DD HH:MM:SS``
+    (space separator) is accepted."""
+    aid = _seed_closed_activity()
+    with pytest.raises(TimelineTimeEditError) as exc:
+        timeline_api.update_timeline_activity_time(
+            aid, "2026-06-25T09:00:00", "2026-06-25 09:30:00"
+        )
+    assert exc.value.code == "invalid_time"
+    with pytest.raises(TimelineTimeEditError) as exc2:
+        timeline_api.update_timeline_activity_time(
+            aid, "2026-06-25 09:00:00", "2026-06-25T09:30:00"
+        )
+    assert exc2.value.code == "invalid_time"
+
+
+def test_update_activity_time_timezone_string_rejected(temp_db):
+    """Timezone suffixes must be rejected; only naive ``YYYY-MM-DD HH:MM:SS``
+    is accepted."""
+    aid = _seed_closed_activity()
+    with pytest.raises(TimelineTimeEditError) as exc:
+        timeline_api.update_timeline_activity_time(
+            aid, "2026-06-25 09:00:00+08:00", "2026-06-25 09:30:00"
+        )
+    assert exc.value.code == "invalid_time"
+    with pytest.raises(TimelineTimeEditError) as exc2:
+        timeline_api.update_timeline_activity_time(
+            aid, "2026-06-25 09:00:00Z", "2026-06-25 09:30:00"
+        )
+    assert exc2.value.code == "invalid_time"
+
+
+def test_update_activity_time_duration_precisely_equals_second_diff(temp_db):
+    """``duration_seconds`` must exactly equal the second difference between
+    ``end_time`` and ``start_time``."""
+    aid = _seed_closed_activity(start="09:00:00", end="09:30:00")
+    # 1 hour 23 minutes 45 seconds = 5025 seconds
+    timeline_api.update_timeline_activity_time(
+        aid, "2026-06-25 10:00:00", "2026-06-25 11:23:45"
+    )
+    activity = activity_service.get_activity(aid)
+    assert int(activity["duration_seconds"]) == 5025
+
+
+def test_service_update_activity_time_raises_on_deleted_activity(temp_db):
+    """The service layer must raise when the UPDATE hits 0 rows because the
+    activity was deleted (race condition defense)."""
+    aid = _seed_closed_activity()
+    activity_service.soft_delete_activity(aid)
+    with pytest.raises(ValueError):
+        activity_service.update_activity_time(
+            aid, "2026-06-25 10:00:00", "2026-06-25 10:45:00"
+        )
+
+
+def test_service_update_activity_time_raises_on_in_progress_activity(temp_db):
+    """The service layer must raise when the UPDATE hits 0 rows because the
+    activity was reopened (``end_time IS NULL``)."""
+    aid = _seed_closed_activity()
+    activity_service.reopen_activity(aid)
+    with pytest.raises(ValueError):
+        activity_service.update_activity_time(
+            aid, "2026-06-25 10:00:00", "2026-06-25 10:45:00"
+        )
+
+
+def test_api_update_activity_time_handles_race_condition(temp_db):
+    """If the activity is deleted between API validation and the service
+    write, the API must raise ``TimelineTimeEditError("invalid_id")``
+    instead of silently succeeding."""
+    from unittest.mock import patch
+
+    aid = _seed_closed_activity()
+    original_update = activity_service.update_activity_time
+
+    def racing_update(activity_id, start_time, end_time):
+        # Simulate the activity being deleted between validation and write
+        activity_service.soft_delete_activity(activity_id)
+        return original_update(activity_id, start_time, end_time)
+
+    with patch.object(
+        activity_service, "update_activity_time", side_effect=racing_update
+    ):
+        with pytest.raises(TimelineTimeEditError) as exc:
+            timeline_api.update_timeline_activity_time(
+                aid, "2026-06-25 10:00:00", "2026-06-25 10:45:00"
+            )
+    assert exc.value.code == "invalid_id"
+
+
+def test_api_update_session_time_handles_race_condition(temp_db):
+    """If the single activity is deleted between API validation and the
+    service write, ``update_timeline_session_time`` must raise
+    ``TimelineTimeEditError("invalid_id")``."""
+    from unittest.mock import patch
+
+    aid = _seed_closed_activity()
+    original_update = activity_service.update_activity_time
+
+    def racing_update(activity_id, start_time, end_time):
+        activity_service.soft_delete_activity(activity_id)
+        return original_update(activity_id, start_time, end_time)
+
+    with patch.object(
+        activity_service, "update_activity_time", side_effect=racing_update
+    ):
+        with pytest.raises(TimelineTimeEditError) as exc:
+            timeline_api.update_timeline_session_time(
+                [aid], "2026-06-25 10:00:00", "2026-06-25 10:45:00"
+            )
+    assert exc.value.code == "invalid_id"
+
+
+def test_update_activity_time_validation_failure_leaves_original_unchanged(temp_db):
+    """If validation fails, the original ``start_time``, ``end_time``, and
+    ``duration_seconds`` must be untouched."""
+    aid = _seed_closed_activity(start="09:00:00", end="09:30:00")
+    original = activity_service.get_activity(aid)
+    orig_start = original["start_time"]
+    orig_end = original["end_time"]
+    orig_duration = int(original["duration_seconds"])
+    # Bad time format
+    with pytest.raises(TimelineTimeEditError):
+        timeline_api.update_timeline_activity_time(
+            aid, "not-a-time", "2026-06-25 10:45:00"
+        )
+    after = activity_service.get_activity(aid)
+    assert after["start_time"] == orig_start
+    assert after["end_time"] == orig_end
+    assert int(after["duration_seconds"]) == orig_duration
+    # start >= end
+    with pytest.raises(TimelineTimeEditError):
+        timeline_api.update_timeline_activity_time(
+            aid, "2026-06-25 10:45:00", "2026-06-25 10:00:00"
+        )
+    after2 = activity_service.get_activity(aid)
+    assert after2["start_time"] == orig_start
+    assert after2["end_time"] == orig_end
+    assert int(after2["duration_seconds"]) == orig_duration
+
+
+def test_cross_day_activity_slice_duration_reasonable(temp_db):
+    """A cross-day activity must produce reasonable duration slices on both
+    report_dates when read back through timeline_service."""
+    aid = _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25")
+    # Modify to span midnight: 2026-06-25 23:00 -> 2026-06-26 01:00 (2h total)
+    timeline_api.update_timeline_activity_time(
+        aid, "2026-06-25 23:00:00", "2026-06-26 01:00:00"
+    )
+    sessions_day1 = timeline_api.get_project_sessions_by_date(
+        "2026-06-25", include_hidden=False, ensure_context=True
+    )
+    sessions_day2 = timeline_api.get_project_sessions_by_date(
+        "2026-06-26", include_hidden=False, ensure_context=True
+    )
+    day1_duration = 0
+    day2_duration = 0
+    for s in sessions_day1:
+        if aid in (s.get("activity_ids") or []):
+            day1_duration = int(s.get("duration_seconds") or 0)
+    for s in sessions_day2:
+        if aid in (s.get("activity_ids") or []):
+            day2_duration = int(s.get("duration_seconds") or 0)
+    # Day 1 slice: 23:00-24:00 = 3600 seconds (1 hour)
+    assert day1_duration == 3600, f"day1 slice should be 3600s, got {day1_duration}"
+    # Day 2 slice: 00:00-01:00 = 3600 seconds (1 hour)
+    assert day2_duration == 3600, f"day2 slice should be 3600s, got {day2_duration}"

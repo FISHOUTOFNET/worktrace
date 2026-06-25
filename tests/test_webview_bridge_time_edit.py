@@ -221,6 +221,51 @@ def test_update_activity_time_error_has_no_sensitive_keys(bridge):
     _assert_no_sensitive_keys(result)
 
 
+# --- Phase 3B.1.1: race-condition hardening ------------------------------
+
+
+def test_update_activity_time_race_condition_returns_generic_error(bridge):
+    """Phase 3B.1.1: when the API raises ``TimelineTimeEditError("invalid_id")``
+    because the activity was deleted/reopened between validation and write
+    (race condition), the bridge must return the generic ``操作失败`` message
+    without exposing that a race occurred or any internal detail."""
+    from worktrace.api.timeline_api import TimelineTimeEditError
+
+    aid = _seed_closed_activity()
+    with patch(
+        "worktrace.webview_ui.bridge.timeline_api.update_timeline_activity_time",
+        side_effect=TimelineTimeEditError("invalid_id"),
+    ):
+        result = bridge.update_timeline_activity_time(
+            aid, "2026-06-25 10:00:00", "2026-06-25 10:45:00"
+        )
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    # Must not expose race-condition details or internal codes.
+    assert "race" not in str(result).lower()
+    assert "invalid_id" not in str(result)
+    assert "deleted" not in str(result).lower()
+
+
+def test_update_session_time_race_condition_returns_generic_error(bridge):
+    """Phase 3B.1.1: session-level time correction race condition must also
+    return the generic ``操作失败`` message."""
+    from worktrace.api.timeline_api import TimelineTimeEditError
+
+    aid = _seed_closed_activity()
+    with patch(
+        "worktrace.webview_ui.bridge.timeline_api.update_timeline_session_time",
+        side_effect=TimelineTimeEditError("invalid_id"),
+    ):
+        result = bridge.update_timeline_session_time(
+            [aid], "2026-06-25 10:00:00", "2026-06-25 10:45:00"
+        )
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    assert "race" not in str(result).lower()
+    assert "invalid_id" not in str(result)
+
+
 # --- update_timeline_session_time ----------------------------------------
 
 

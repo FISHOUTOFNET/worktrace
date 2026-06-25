@@ -2,11 +2,11 @@
 
 ## Status
 
-- Current phase: 3B.1 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.1.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
-  implemented; WebView is the default and only shipping UI).
+  implemented and hardened; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -205,7 +205,24 @@ The migration is phased so each step is independently shippable:
   independent saving states for project/note and time edits. Multi-
   activity session whole-time correction, session split/merge, deletion,
   batch editing, auto-rule creation, and complex correction pages remain
-  out of scope. **Current phase.**
+  out of scope. **Completed.**
+- Phase 3B.1.1: **Timeline time correction hardening.** No new features.
+  Hardens the Phase 3B.1 time-correction path so it is more stable and
+  predictable under real use. Specifically: the service-layer
+  `update_activity_time` now checks `cur.rowcount` and raises if 0 rows
+  were updated (defense against race conditions where the activity is
+  deleted or reopened between API validation and the write); the API
+  layer catches this and raises `TimelineTimeEditError("invalid_id")` so
+  the bridge returns a clear message instead of silently succeeding; the
+  frontend `saveSessionTime` now resets `timeSaving` on success (the save
+  button was previously left disabled after a successful session-level
+  time save); `refreshTimelineAfterEdit` no longer calls
+  `setEditSaving(false)` so the project/note, session-time, and
+  per-activity-time save flows are fully decoupled; each caller resets
+  its own saving state before refreshing. Multi-activity session
+  whole-time correction, session split/merge, deletion, batch editing,
+  auto-rule creation, complex correction pages, and overlap detection
+  remain out of scope. **Current phase.**
 - Phase 3B: Timeline advanced editing (split, merge, delete, batch
   editing, correction page) — not yet started.
 - Phase 4: Statistics / Export.
@@ -845,6 +862,58 @@ The following remain out of scope until a later phase:
 - Auto-rule creation;
 - Complex correction page;
 - Overlap detection between activities on the same timeline.
+
+## Phase 3B.1.1 Hardening Details
+
+Phase 3B.1.1 is a hardening phase. It adds **no new features**. It
+strengthens the Phase 3B.1 time-correction write path so it is more
+stable, safe, and predictable under real use.
+
+### Service Layer
+
+- `activity_service.update_activity_time` now checks `cur.rowcount`
+  after the atomic UPDATE. If 0 rows were updated (the activity was
+  deleted or reopened between API validation and the write — a race
+  condition), it raises `ValueError` instead of silently succeeding.
+  The UPDATE still includes `WHERE id = ? AND is_deleted = 0 AND
+  end_time IS NOT NULL` as a defensive guard.
+
+### API Layer
+
+- `update_timeline_activity_time` and `update_timeline_session_time`
+  wrap the service call in `try/except ValueError`. If the service
+  raises (0 rows updated), the API raises
+  `TimelineTimeEditError("invalid_id")` so the bridge returns a clear
+  Chinese message instead of a silent success.
+
+### Frontend
+
+- `saveSessionTime` now calls `setTimeSaving(false)` on the success
+  path before `refreshTimelineAfterEdit()`. Previously the saving
+  state was never reset on success, leaving the "保存时间" button
+  permanently disabled with "保存中…" text after a successful
+  session-level time save.
+- `refreshTimelineAfterEdit` no longer calls `setEditSaving(false)`.
+  Each caller now resets its own saving state before refreshing:
+  `saveEdit` resets `editSaving`, `saveSessionTime` resets
+  `timeSaving`, and `saveActivityTime` resets `activityTimeSaving`.
+  This decouples the three independent save flows so a refresh
+  triggered by one save path cannot prematurely reset the saving
+  state of another.
+- `saveEdit` success path now calls `setEditSaving(false)` before
+  `refreshTimelineAfterEdit()` (previously relied on the refresh
+  function to do this).
+
+### What Phase 3B.1.1 Does Not Change
+
+- No new DB schema.
+- No new features (no split, merge, delete, batch edit, auto-rule, or
+  complex correction page).
+- No overlap detection (still deferred).
+- No change to the `is_in_progress` semantics (still based on raw DB
+  `end_time IS NULL`, not projected display values).
+- No change to the bridge import boundary.
+- No change to the privacy/security boundary.
 
 ## Legacy Tkinter UI Handling
 
