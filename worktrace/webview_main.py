@@ -24,6 +24,10 @@ from . import config
 from .api import app_api
 from .runtime.app_runtime import AppRuntime
 from .webview_ui.bridge import WebViewBridge
+from .webview_ui.runtime_check import (
+    detect_webview2_runtime,
+    missing_runtime_message,
+)
 
 
 def setup_logging(log_path) -> None:
@@ -38,9 +42,9 @@ def setup_logging(log_path) -> None:
 def resource_path(relative: str) -> Path:
     """Resolve a webview_ui resource path.
 
-    Works for source runs. PyInstaller packaging will be handled in Phase 0C
-    via ``sys._MEIPASS``; the helper is written to prefer that base when
-    present so the packaged exe can locate bundled resources.
+    Works for source runs and PyInstaller-packaged runs. When frozen,
+    ``sys._MEIPASS`` is the bundle root and the resources are bundled under
+    ``worktrace/webview_ui/`` (see WorkTrace.spec).
     """
     base = getattr(sys, "_MEIPASS", None)
     if base:
@@ -65,13 +69,34 @@ def _check_pywebview_available() -> Any:
         ) from exc
 
 
+def _report_runtime_missing() -> int:
+    """Print a clear message when WebView2 Runtime is missing and exit.
+
+    Does not raise; returns a non-zero exit code so the caller can surface the
+    message to the user (console or a Tkinter fallback prompt).
+    """
+    msg = missing_runtime_message()
+    print(msg, file=sys.stderr)
+    logging.error("webview startup aborted: WebView2 Runtime missing")
+    return 2
+
+
 def main() -> int:
     paths = config.resolve_paths()
     config.ensure_directories(paths)
     setup_logging(paths.log_path)
     logging.info("webview ui startup")
 
-    webview = _check_pywebview_available()
+    # Pre-flight: if we can confidently detect the runtime is missing on
+    # Windows, fail fast with a clear message instead of a pywebview traceback.
+    if detect_webview2_runtime() == "missing":
+        return _report_runtime_missing()
+
+    try:
+        webview = _check_pywebview_available()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     runtime = AppRuntime(paths)
     runtime.initialize()
@@ -90,6 +115,13 @@ def main() -> int:
             min_size=(800, 540),
         )
         webview.start()
+    except Exception:
+        # pywebview raises when the WebView2 backend cannot initialize even
+        # though the registry check passed (e.g. corrupt install). Surface a
+        # clear message without a traceback.
+        logging.exception("webview start failed")
+        print(missing_runtime_message(), file=sys.stderr)
+        return 2
     finally:
         runtime.shutdown()
     return 0

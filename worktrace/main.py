@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import sys
+from typing import Sequence
 
 from . import config
 from .api import app_api
@@ -17,7 +19,19 @@ def setup_logging(log_path) -> None:
     )
 
 
-def main() -> int:
+def _wants_webview(argv: Sequence[str]) -> bool:
+    return "--webview" in argv
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if _wants_webview(args):
+        # Delegate to the optional WebView entry point. Default Tkinter UI is
+        # unchanged; --webview is an explicit opt-in for the spike.
+        from .webview_main import main as webview_main
+
+        return webview_main()
+
     paths = config.resolve_paths()
     config.ensure_directories(paths)
     setup_logging(paths.log_path)

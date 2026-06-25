@@ -366,7 +366,7 @@ The Tkinter UI remains the default. The WebView entry point is an opt-in spike. 
 
 ### Automated Checklist
 
-- [ ] `pytest` passes, including the `test_ui_backend_boundary.py` WebView boundary tests, `test_webview_bridge.py`, and `test_webview_resources.py`.
+- [ ] `pytest` passes, including the `test_ui_backend_boundary.py` WebView boundary tests, `test_webview_bridge.py`, `test_webview_resources.py`, and `test_webview_packaging.py`.
 - [ ] `pywebview>=5.0` is declared in `requirements.txt` (added in Phase 0B).
 - [ ] No new network dependency.
 - [ ] No new administrator-permission requirement.
@@ -374,21 +374,21 @@ The Tkinter UI remains the default. The WebView entry point is an opt-in spike. 
 ### Validation Items
 
 1. [ ] (0A) `python -m worktrace.main` still starts the existing Tkinter UI.
-2. [ ] (0B) `python -m worktrace.webview_main` starts the WebView UI.
+2. [ ] (0B) `python -m worktrace.main --webview` starts the WebView UI.
 3. [ ] (0A) WebView frontend resources do not contain `http://` or `https://` external links.
 4. [ ] (0A) The WebView bridge does not import `worktrace.services`, `worktrace.db`, `worktrace.collector`, or `worktrace.security`.
 5. [ ] (0B) Closing the WebView window triggers `AppRuntime.shutdown` and leaves no collector thread, folder-index worker, or database lock resident.
 6. [ ] (0C) The PyInstaller build passes with the WebView entry point and resources bundled.
 7. [ ] (0C) The per-user installer build passes and installs without administrator privileges.
 8. [ ] (0C) The packaged `dist\WorkTrace.exe` defaults to the Tkinter UI and starts normally.
-9. [ ] (0C) The packaged exe's WebView entry point can start.
+9. [ ] (0C) The packaged exe's WebView entry point (`WorkTrace.exe --webview`) can start.
 10. [ ] (0C) When WebView2 Runtime is missing, WorkTrace shows a clear error or falls back to the Tkinter UI.
 
 ### Manual Validation Checklist
 
 #### V. WebView Shell Startup (Phase 0B)
 
-- [ ] Run `python -m worktrace.webview_main` from the source tree.
+- [ ] Run `python -m worktrace.main --webview` from the source tree.
 - [ ] A WorkTrace window opens showing the Overview page.
 - [ ] The sidebar shows collector status (记录中 / 已暂停 / 采集器未运行).
 - [ ] The pause/resume button toggles the status label.
@@ -401,13 +401,48 @@ The Tkinter UI remains the default. The WebView entry point is an opt-in spike. 
 
 #### W. WebView Window Close And Runtime Shutdown (Phase 0B)
 
-- [ ] Start `python -m worktrace.webview_main` and let the collector run for a few seconds.
+- [ ] Start `python -m worktrace.main --webview` and let the collector run for a few seconds.
 - [ ] Close the WebView window.
 - [ ] The process exits cleanly (no lingering Python process in Task Manager).
 - [ ] The collector thread is joined (no `WorkTraceCollector` thread resident).
 - [ ] The single-instance lock is released (a second launch can acquire it).
 - [ ] The `collector_status` setting is `stopped` after exit.
 - [ ] No `activity_log` row has `end_time IS NULL` after a clean exit.
+
+#### X. Phase 0C Source Run Validation
+
+- [ ] `python -m worktrace.main` starts the Tkinter UI (default unchanged).
+- [ ] `python -m worktrace.main --webview` starts the WebView UI.
+- [ ] On a machine without WebView2 Runtime, `--webview` prints the clear missing-runtime message and exits with code 2.
+
+#### Y. Phase 0C PyInstaller Build Validation
+
+- [ ] `python -m PyInstaller --noconfirm --clean WorkTrace.spec` completes without error.
+- [ ] `dist\WorkTrace.exe` exists.
+- [ ] `dist\WorkTrace.exe` (no args) starts the Tkinter UI.
+- [ ] `dist\WorkTrace.exe --webview` starts the WebView UI.
+- [ ] The bundle includes `worktrace/webview_ui/index.html`, `app.js`, `styles.css` (verified by build success and runtime resource resolution).
+
+#### Z. Phase 0C Installer Build Validation
+
+- [ ] `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1` completes without error.
+- [ ] `dist\WorkTrace-Setup.exe` exists.
+- [ ] Installing with `WorkTrace-Setup.exe` does not prompt for administrator privileges (per-user install to `%LOCALAPPDATA%\Programs\WorkTrace`).
+- [ ] The Start Menu shortcut launches the Tkinter UI by default.
+- [ ] Running the installed `WorkTrace.exe --webview` launches the WebView UI.
+- [ ] The installer does not download the WebView2 Runtime.
+
+#### AA. Phase 0C WebView2 Runtime Missing Fallback
+
+- [ ] On a Windows machine without the WebView2 Runtime, `WorkTrace.exe --webview` shows the message: "此功能需要 Microsoft Edge WebView2 Runtime。请安装 WebView2 Runtime，或继续使用默认 Tkinter UI。"
+- [ ] No Python traceback is shown to the user.
+- [ ] `WorkTrace.exe` (default Tkinter) still works on that machine.
+
+#### AB. Phase 0C Post-Close Residual Validation
+
+- [ ] After closing `WorkTrace.exe --webview`, no `WorkTrace.exe` process remains in Task Manager.
+- [ ] No database lock file remains.
+- [ ] A second launch of `WorkTrace.exe --webview` succeeds (single-instance lock released).
 
 ### Phase 0A/0B/0C Release Blockers
 

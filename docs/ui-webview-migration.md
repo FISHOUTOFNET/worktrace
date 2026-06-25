@@ -2,10 +2,10 @@
 
 ## Status
 
-- Current phase: 0B (minimal shell + bridge implemented).
+- Current phase: 0C (packaging, installer, and WebView2 validation).
 - Default UI: Tkinter / CustomTkinter (unchanged).
 - This document is a spike plan, not a commitment to ship a WebView UI.
-- The WebView entry point `python -m worktrace.webview_main` is an opt-in spike;
+- The WebView entry point `python -m worktrace.main --webview` is an opt-in spike;
   the default `python -m worktrace.main` is unchanged.
 
 ## 1. Why A WebView Spike
@@ -146,7 +146,7 @@ The migration is phased so each step is independently revertible:
   page shows real data; other pages show a migration placeholder. **Completed.**
 - Phase 0C: PyInstaller / installer / WebView2 Runtime packaging verification.
   Confirm the packaged exe and the per-user installer work with the WebView entry
-  point, including the WebView2-missing fallback. **Next.**
+  point, including the WebView2-missing fallback. **Completed.**
 - Phase 1: Overview page.
 - Phase 2: Timeline read-only.
 - Phase 3: Timeline editing.
@@ -225,15 +225,21 @@ new runtime dependency introduced by the WebView spike.
 - If the spike is abandoned, removing `pywebview` from `requirements.txt` and
   deleting `worktrace/webview_ui/` and `worktrace/webview_main.py` restores the
   Tkinter-only build with no other changes.
-- Phase 0C must still confirm `pywebview` bundles cleanly under PyInstaller and
-  the per-user installer.
+- Phase 0C confirmed `pywebview` bundles cleanly under PyInstaller
+  (`collect_all('webview')`) and the per-user installer builds without
+  administrator privileges.
 
 ## Entry Points
 
 - `python -m worktrace.main` — existing Tkinter UI (default, unchanged).
-- `python -m worktrace.webview_main` — WebView spike entry point (implemented in
-  Phase 0B). Starts a minimal pywebview shell that talks to `worktrace.api`
-  through `worktrace.webview_ui.bridge.WebViewBridge`.
+- `python -m worktrace.main --webview` — WebView spike entry point (Phase 0C).
+  Delegates to `worktrace.webview_main.main()`. The `--webview` flag is the
+  single opt-in; without it the Tkinter UI starts.
+- `python -m worktrace.webview_main` — equivalent direct WebView entry point,
+  retained for development convenience.
+- `WorkTrace.exe` (packaged) — defaults to Tkinter. `WorkTrace.exe --webview`
+  starts the WebView shell; the PyInstaller entry script forwards `--webview`
+  to `worktrace.main.main`.
 
 ## Phase 0B Implemented Scope
 
@@ -270,5 +276,53 @@ Tkinter UI:
 - Single-instance UI behavior (the WebView entry point does not add a second
   tray; the collector single-instance lock is still enforced by `AppRuntime`).
 
-The next step is Phase 0C: PyInstaller / installer / WebView2 Runtime packaging
-verification.
+## Phase 0C Implemented Scope
+
+Phase 0C validated the packaging and distribution chain for the optional
+WebView entry point:
+
+- `WorkTrace.spec` bundles `worktrace/webview_ui/index.html`, `app.js`,
+  `styles.css` and collects `pywebview` via `collect_all('webview')`. The
+  existing `schema.sql`, `open_files_helper.py`, `customtkinter`, and
+  `win32timezone` entries are retained.
+- `python -m worktrace.main --webview` routes to the WebView entry point. The
+  default `python -m worktrace.main` (no flag) still starts the Tkinter UI.
+- `scripts/pyinstaller_entry.py` forwards `--webview` to `worktrace.main.main`,
+  so the packaged `WorkTrace.exe --webview` starts the WebView shell.
+- `worktrace/webview_ui/runtime_check.py` detects the WebView2 Runtime via the
+  EdgeUpdate registry keys on Windows. It never downloads anything, never raises,
+  and returns `unknown` on non-Windows so tests are not blocked.
+- When the runtime is missing, `worktrace.webview_main.main` prints a clear
+  Chinese message and exits with code 2 instead of showing a traceback.
+
+### WebView2 Runtime Handling Strategy
+
+- Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most Windows
+  11 machines need no action.
+- Some Windows 10 machines do not have the runtime. WorkTrace detects this via
+  the registry pre-flight and shows:
+  "此功能需要 Microsoft Edge WebView2 Runtime。请安装 WebView2 Runtime，或继续使用默认 Tkinter UI。"
+- WorkTrace never auto-downloads the WebView2 Runtime. Users install it manually
+  from Microsoft, or simply continue using the default Tkinter UI.
+- If the registry check passes but pywebview still fails to initialize (e.g.
+  corrupt install), the exception is caught and the same clear message is shown.
+
+### Phase 0C Stop-Loss Judgment
+
+Phase 0C passes the stop-loss conditions:
+
+- PyInstaller build succeeds with `webview_ui` resources and `pywebview` bundled.
+- The per-user installer builds without administrator privileges.
+- The WebView2 Runtime missing case produces a clear error message, not a crash.
+- The `--webview` flag is forwarded through the packaged entry script.
+- The default Tkinter entry point is unchanged.
+
+### Next Step
+
+Phase 0C passes. The next step is **WebView Phase 1: Overview page migration**
+(moving the real Overview data rendering fully into the WebView, replacing the
+current minimal shell Overview).
+
+If Phase 0C had failed, the recommendation would have been to pause the WebView
+migration, record the failure reason, and either fix Tkinter or re-evaluate
+Tauri. Since it passes, no rollback of the `pywebview` dependency is needed.
