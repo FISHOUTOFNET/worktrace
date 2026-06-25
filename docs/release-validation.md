@@ -426,11 +426,19 @@ The Tkinter UI remains the default. The WebView entry point is an opt-in spike. 
 #### Z. Phase 0C Installer Build Validation
 
 - [ ] `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1` completes without error.
+- [ ] The standard installer command above passes directly, without bypassing the script or running an equivalent PyInstaller command by hand.
 - [ ] `dist\WorkTrace-Setup.exe` exists.
 - [ ] Installing with `WorkTrace-Setup.exe` does not prompt for administrator privileges (per-user install to `%LOCALAPPDATA%\Programs\WorkTrace`).
 - [ ] The Start Menu shortcut launches the Tkinter UI by default.
 - [ ] Running the installed `WorkTrace.exe --webview` launches the WebView UI.
 - [ ] The installer does not download the WebView2 Runtime.
+
+> Phase 0C.1 fixed the installer script's stderr handling. Under
+> `$ErrorActionPreference = "Stop"`, PyInstaller's stderr INFO logs were
+> previously wrapped as `NativeCommandError`, which falsely terminated the
+> script even when PyInstaller exited 0. The script now locally relaxes the
+> preference around the native call, still checks `$LASTEXITCODE`, and still
+> throws on non-zero exit codes. The standard command must now pass directly.
 
 #### AA. Phase 0C WebView2 Runtime Missing Fallback
 

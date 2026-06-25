@@ -317,6 +317,39 @@ Phase 0C passes the stop-loss conditions:
 - The `--webview` flag is forwarded through the packaged entry script.
 - The default Tkinter entry point is unchanged.
 
+### Phase 0C.1 Installer Script Hardening (Stop-Loss Supplement)
+
+Phase 0C surfaced one release-validation blocker that did not stop the
+packaging spike but did stop the standard installer command from passing
+directly:
+
+- `scripts/build_windows_installer.ps1` sets `$ErrorActionPreference = "Stop"`
+  globally. PyInstaller writes INFO logs to stderr, and PowerShell wraps
+  native-command stderr as `NativeCommandError`, which under `Stop` becomes a
+  terminating error. The script therefore falsely failed even when PyInstaller
+  exited 0, and Phase 0C worked around it by running an equivalent PyInstaller
+  command directly.
+
+Phase 0C.1 fixed this without weakening global error handling:
+
+- The global `$ErrorActionPreference = "Stop"` is retained so
+  `Resolve-Path`, `Get-Command`, `New-Item`, and `Get-Item` failures still
+  terminate.
+- Around the native PyInstaller call, the script saves the old preference,
+  locally sets `$ErrorActionPreference = "Continue"`, invokes PyInstaller,
+  captures `$LASTEXITCODE`, and restores the preference in a `finally` block.
+- A non-zero `$LASTEXITCODE` still throws.
+
+Stop-loss conclusion after Phase 0C.1:
+
+- 0C.1 fixed installer script stderr handling.
+- The standard installer command
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1`
+  now passes directly.
+- It is no longer necessary to bypass the script and run an equivalent
+  PyInstaller command by hand.
+- Static invariants are guarded by `tests/test_windows_installer_script.py`.
+
 ### Next Step
 
 Phase 0C passes. The next step is **WebView Phase 1: Overview page migration**
