@@ -4,7 +4,7 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 
 ## Core Features
 
-- WebView desktop UI (pywebview + Microsoft Edge WebView2 Runtime) is the default and only shipping UI as of Phase 1. The Overview page is fully migrated; Time Details, Statistics/Export, Project Rules, and Settings/Privacy remain on the legacy Tkinter / CustomTkinter code pending per-page migration.
+- WebView desktop UI (pywebview + Microsoft Edge WebView2 Runtime) is the default and only shipping UI as of Phase 1. The Overview page is fully migrated (Phase 1); the Timeline / Time Details page is migrated as a read-only page (Phase 2); Statistics/Export, Project Rules, and Settings/Privacy remain on the legacy Tkinter / CustomTkinter code pending per-page migration. Timeline editing, correction, and reclassification are not yet available in the WebView UI.
 - SQLite local storage at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
 - Background collector thread using pywin32/psutil on Windows.
 - Idle, paused, excluded, normal, and error activity states.

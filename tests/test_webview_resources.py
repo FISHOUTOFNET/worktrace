@@ -167,6 +167,131 @@ def test_app_js_does_not_expose_tracebacks():
     assert "traceback" not in source.lower()
 
 
+# --- Phase 2: Timeline read-only page tests -----------------------------
+
+
+def test_index_html_timeline_page_is_not_placeholder():
+    """Phase 2: the Timeline page must be a production page, not a
+    migration placeholder. The placeholder text must not appear inside the
+    timeline section."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    # Extract the timeline section
+    start = source.find('id="page-timeline"')
+    end = source.find('</section>', start)
+    assert start != -1, "timeline section must exist"
+    timeline_section = source[start:end]
+    assert "WebView 迁移中" not in timeline_section, (
+        "Timeline page must not be a placeholder"
+    )
+
+
+def test_index_html_timeline_page_has_date_navigation():
+    """Phase 2: the Timeline page must have prev/today/next date navigation."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="timeline-prev-btn"' in source
+    assert 'id="timeline-next-btn"' in source
+    assert 'id="timeline-today-btn"' in source
+    assert 'id="timeline-date-display"' in source
+
+
+def test_index_html_timeline_page_has_sessions_and_details_containers():
+    """Phase 2: the Timeline page must have a sessions list container and a
+    details list container for the master-detail layout."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="timeline-sessions-list"' in source
+    assert 'id="timeline-details-list"' in source
+    assert 'id="timeline-details-header"' in source
+
+
+def test_index_html_timeline_page_has_error_and_empty_and_loading_states():
+    """Phase 2: the Timeline page must have an error banner, an empty state
+    element, and a loading indicator."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="timeline-error"' in source
+    assert 'id="timeline-loading"' in source
+    assert "timeline-empty" in source
+
+
+def test_index_html_timeline_page_has_total_and_current():
+    """Phase 2: the Timeline page must show the daily total duration and a
+    current activity summary."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="timeline-total"' in source
+    assert 'id="timeline-current"' in source
+
+
+def test_index_html_unmigrated_pages_still_have_placeholders():
+    """Phase 2: Statistics, Rules, and Settings pages are not yet migrated
+    and must still show the placeholder text."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for page_id in ["statistics", "rules", "settings"]:
+        start = source.find('id="page-{}"'.format(page_id))
+        assert start != -1, f"{page_id} section must exist"
+        end = source.find('</section>', start)
+        section = source[start:end]
+        assert "WebView 迁移中" in section, (
+            f"{page_id} page should still be a placeholder in Phase 2"
+        )
+
+
+def test_app_js_has_timeline_load_function():
+    """Phase 2: app.js must have a loadTimeline function that calls the
+    get_timeline bridge method."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "loadTimeline" in source
+    assert "get_timeline" in source
+
+
+def test_app_js_has_timeline_session_details_load():
+    """Phase 2: app.js must load session details via
+    get_timeline_session_details bridge method."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "get_timeline_session_details" in source
+    assert "loadSessionDetails" in source
+
+
+def test_app_js_has_timeline_date_navigation():
+    """Phase 2: app.js must implement prev/next/today date navigation."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "goPrevDay" in source
+    assert "goNextDay" in source
+    assert "goToday" in source
+    assert "shiftDate" in source
+
+
+def test_app_js_timeline_refreshes_on_auto_refresh():
+    """Phase 2: when the Timeline page is active, refreshAll must also
+    refresh the timeline data."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "currentPage" in source
+    assert 'currentPage === "timeline"' in source
+
+
+def test_app_js_timeline_has_error_handling():
+    """Phase 2: app.js must have timeline-specific error display functions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "showTimelineError" in source
+    assert "clearTimelineError" in source
+
+
+def test_app_js_timeline_has_no_edit_buttons():
+    """Phase 2: the Timeline page is read-only. app.js must not contain
+    edit/correction/delete/reclassify handlers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    assert "edit_activity" not in source
+    assert "delete_activity" not in source
+    assert "reclassify" not in source
+    assert "correct_activity" not in source
+    assert "update_note" not in source
+    assert "update_session_project" not in source
+
+
+def test_app_js_timeline_does_not_expose_tracebacks():
+    """Phase 2: timeline error handling must not expose tracebacks."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "traceback" not in source.lower()
+
+
 # --- startup tests -------------------------------------------------------
 
 

@@ -479,3 +479,99 @@ This section is scoped to the default WebView entry point, the Overview page, th
 - The per-user installer requires administrator privileges.
 - WebView2 Runtime is missing and WorkTrace fails with no clear error, or auto-downloads the runtime.
 - A new network dependency or administrator-permission requirement is introduced.
+
+## WebView Phase 2 Validation
+
+This section is the validation framework for the Timeline read-only migration.
+Phase 2 migrates the Timeline / Time Details page as a read-only page: date
+navigation, session list, per-session activity details, current activity
+summary, daily total duration, empty/loading/error states, and auto-refresh.
+No editing, correction, reclassification, note modification, or deletion is
+exposed. The WebView-only / no Tkinter fallback principles from Phase 1
+remain in effect.
+
+### Automated Checklist
+
+- [ ] `pytest` passes, including the Timeline bridge tests in
+  `test_webview_bridge.py` and the Timeline frontend tests in
+  `test_webview_resources.py`.
+- [ ] `worktrace.webview_ui.bridge` still does not import
+  `worktrace.services`, `worktrace.db`, `worktrace.collector`,
+  `worktrace.security`, `worktrace.runtime`, or `worktrace.config`.
+- [ ] `get_timeline` and `get_timeline_session_details` return
+  JSON-serializable dicts.
+- [ ] Bridge errors return `{"ok": false, "error": "操作失败"}` without
+  tracebacks.
+- [ ] The Timeline page in `index.html` is not a placeholder.
+- [ ] `app.js` contains no edit/correction/delete/reclassify/note handlers.
+- [ ] Frontend resources contain no `http://`, `https://`, CDN, Google
+  Fonts, or `localStorage`/`sessionStorage` references.
+
+### Validation Items
+
+1. [ ] `bridge.get_timeline(date)` returns `ok`, `date`, `total_duration`,
+   `current_activity`, and `sessions`.
+2. [ ] Each session in the `sessions` list has `session_id`, `project_name`,
+   `start_time`, `end_time`, `duration`, `status`, `event_count`,
+   `is_uncategorized`, and `activity_ids`.
+3. [ ] `bridge.get_timeline_session_details(activity_ids, date)` returns
+   `ok` and `activities`.
+4. [ ] Each activity in the `activities` list has `start_time`, `end_time`,
+   `duration`, `app_name`, `resource_type`, `resource_name`, `project_name`,
+   and `status`.
+5. [ ] Neither bridge method returns `window_title`, `file_path_hint`,
+   `note`, or `traceback` in its output.
+6. [ ] `python -m worktrace.main` still defaults to the WebView UI (Phase 1
+   invariant preserved).
+7. [ ] The Timeline page in `index.html` has date navigation buttons, a
+   sessions list container, a details list container, an error banner, a
+   loading indicator, and an empty-state element.
+8. [ ] The Statistics, Rules, and Settings pages still show the migration
+   placeholder.
+
+### Manual Validation Checklist
+
+#### AC. Timeline Page Navigation And Display (Phase 2)
+
+- [ ] Run `python -m worktrace.main` and click 时间详情 in the sidebar.
+- [ ] The Timeline page loads and shows today's date.
+- [ ] The Timeline page shows the daily total duration.
+- [ ] The Timeline page shows the current activity summary or `当前活动：无`.
+- [ ] The session list shows project sessions with project name, time range,
+  duration, status, and event count.
+- [ ] Clicking a session loads its activity details in the detail panel.
+- [ ] Activity details show time range, resource name, resource type, app
+  name, project name, and duration.
+- [ ] Clicking the `今日` button returns to today's data.
+- [ ] Clicking `<` loads the previous day; clicking `>` loads the next day.
+- [ ] A day with no sessions shows the empty-state message.
+- [ ] No edit, correction, reclassify, note, or delete buttons are present.
+
+#### AD. Timeline Auto-Refresh (Phase 2)
+
+- [ ] Stay on the Timeline page and wait 8 seconds.
+- [ ] The Timeline data refreshes without full-page flicker.
+- [ ] The selected session remains selected after auto-refresh.
+- [ ] If the selected session's details are displayed, they also refresh.
+
+#### AE. Timeline Error Handling (Phase 2)
+
+- [ ] If a bridge call fails, the Timeline error banner shows a clear Chinese
+  message.
+- [ ] No Python traceback is shown in the UI.
+- [ ] The error banner clears on the next successful refresh.
+
+### Phase 2 Release Blockers
+
+- The Timeline page in `index.html` is still a placeholder.
+- `app.js` does not load or render Timeline data.
+- `get_timeline` or `get_timeline_session_details` returns tracebacks or
+  sensitive fields (`window_title`, `file_path_hint`, `note`).
+- The Timeline page exposes any edit, correction, reclassify, note, or
+  delete action.
+- Auto-refresh does not refresh the Timeline when it is the active page.
+- The selected session is lost after auto-refresh.
+- The session list flickers visibly (full clear then rebuild) during refresh.
+- The default entry point no longer starts the WebView UI.
+- Any new network dependency, CDN reference, or browser storage usage is
+  introduced.

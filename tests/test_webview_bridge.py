@@ -79,12 +79,66 @@ def test_get_recent_activities_is_json_serializable(bridge):
     json.dumps(result)
 
 
-def test_get_timeline_placeholder_returns_message(bridge):
-    result = bridge.get_timeline_placeholder()
+def test_get_timeline_returns_dict_with_sessions(bridge):
+    result = bridge.get_timeline()
     assert isinstance(result, dict)
     assert result["ok"] is True
-    assert "message" in result
-    assert "迁移中" in result["message"]
+    assert "date" in result
+    assert "total_duration" in result
+    assert "current_activity" in result
+    assert isinstance(result["sessions"], list)
+
+
+def test_get_timeline_is_json_serializable(bridge):
+    result = bridge.get_timeline()
+    json.dumps(result)
+
+
+def test_get_timeline_with_explicit_date(bridge):
+    from datetime import date as dt_date, timedelta
+
+    today = dt_date.today()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    result = bridge.get_timeline(yesterday)
+    assert result["ok"] is True
+    assert result["date"] == yesterday
+
+
+def test_get_timeline_session_details_returns_dict(bridge):
+    result = bridge.get_timeline_session_details([], None)
+    assert isinstance(result, dict)
+    assert result["ok"] is True
+    assert isinstance(result["activities"], list)
+    assert result["activities"] == []
+
+
+def test_get_timeline_session_details_is_json_serializable(bridge):
+    result = bridge.get_timeline_session_details([], None)
+    json.dumps(result)
+
+
+def test_get_timeline_no_traceback_on_error(bridge):
+    with patch(
+        "worktrace.webview_ui.bridge.timeline_api.get_default_report_date",
+        side_effect=RuntimeError("boom"),
+    ):
+        result = bridge.get_timeline()
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    assert "boom" not in str(result)
+    assert "traceback" not in str(result).lower()
+
+
+def test_get_timeline_session_details_no_traceback_on_error(bridge):
+    with patch(
+        "worktrace.webview_ui.bridge.timeline_api.get_default_report_date",
+        side_effect=RuntimeError("boom"),
+    ):
+        result = bridge.get_timeline_session_details([1], None)
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    assert "boom" not in str(result)
+    assert "traceback" not in str(result).lower()
 
 
 def test_get_status_no_traceback_on_error(bridge):

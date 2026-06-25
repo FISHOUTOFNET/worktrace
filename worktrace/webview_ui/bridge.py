@@ -14,10 +14,10 @@ Boundary rules (enforced by tests/test_ui_backend_boundary.py):
 The bridge is the only data path between JS and Python. As of Phase 1 the
 Overview page is fully migrated: ``get_status``, ``toggle_pause``,
 ``get_overview``, and ``get_recent_activities`` are the production data path
-for the Overview page, not a spike placeholder. The other pages (Timeline,
-Statistics/Export, Rules, Settings) are not yet migrated and the bridge does
-not implement editing, export, import, or settings mutations beyond
-pause/resume for them.
+for the Overview page. As of Phase 2 the Timeline page is migrated as a
+read-only page: ``get_timeline`` and ``get_timeline_session_details`` are the
+production data path for the Timeline page. The bridge does not implement
+editing, export, import, or settings mutations beyond pause/resume.
 """
 
 from __future__ import annotations
@@ -26,7 +26,12 @@ import logging
 from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
-from ..formatters import format_duration
+from ..formatters import (
+    format_activity_display_name,
+    format_duration,
+    format_project_label,
+    format_resource_type,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,12 +142,93 @@ class WebViewBridge:
             logger.exception("webview bridge get_recent_activities failed")
             return dict(_GENERIC_ERROR)
 
-    def get_timeline_placeholder(self) -> dict[str, Any]:
-        """Return a placeholder for the not-yet-migrated timeline page."""
-        return {
-            "ok": True,
-            "message": "WebView 迁移中，当前页面仍由旧 UI 支持。",
-        }
+    def get_timeline(self, date: str | None = None) -> dict[str, Any]:
+        """Return read-only timeline data for a single date.
+
+        Returns the date, total duration, current activity summary, and a
+        list of project sessions. Each session includes the ``activity_ids``
+        list needed to load detail rows via ``get_timeline_session_details``.
+        No editing, correction, or write operations are exposed.
+        """
+        try:
+            report_date = date or timeline_api.get_default_report_date()
+            sessions_raw = timeline_api.get_project_sessions_by_date(
+                report_date,
+                include_hidden=False,
+                ensure_context=True,
+            )
+            total_seconds = sum(s.get("duration_seconds") or 0 for s in sessions_raw)
+            snapshot = settings_api.get_current_activity_snapshot()
+            current = _snapshot_summary(snapshot)
+            sessions: list[dict[str, Any]] = []
+            for session in sessions_raw:
+                sessions.append(
+                    {
+                        "session_id": str(session.get("session_id") or ""),
+                        "project_name": str(session.get("project_name") or "未归类"),
+                        "project_description": str(session.get("project_description") or ""),
+                        "start_time": str(session.get("start_time") or ""),
+                        "end_time": str(session.get("end_time") or ""),
+                        "duration": format_duration(session.get("duration_seconds") or 0),
+                        "status": str(session.get("status_summary") or session.get("status") or ""),
+                        "event_count": int(session.get("event_count") or 0),
+                        "is_uncategorized": bool(session.get("is_uncategorized")),
+                        "activity_ids": list(session.get("activity_ids") or []),
+                    }
+                )
+            return {
+                "ok": True,
+                "date": report_date,
+                "total_duration": format_duration(total_seconds),
+                "current_activity": current,
+                "sessions": sessions,
+            }
+        except Exception:
+            logger.exception("webview bridge get_timeline failed")
+            return dict(_GENERIC_ERROR)
+
+    def get_timeline_session_details(
+        self,
+        activity_ids: list[int],
+        report_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Return read-only activity detail rows for a session.
+
+        Each row exposes display-safe fields only: time range, duration,
+        app name, resource type, resource display name, project name, and
+        status. Raw window titles, file paths, and notes are not surfaced.
+        """
+        try:
+            ids = [int(aid) for aid in (activity_ids or [])]
+            if not ids:
+                return {"ok": True, "activities": []}
+            date = report_date or timeline_api.get_default_report_date()
+            rows = timeline_api.get_session_activity_details(
+                ids,
+                report_date=date,
+                ensure_context=True,
+            )
+            activities: list[dict[str, Any]] = []
+            for row in rows:
+                activities.append(
+                    {
+                        "start_time": str(row.get("start_time") or ""),
+                        "end_time": str(row.get("end_time") or ""),
+                        "duration": format_duration(row.get("duration_seconds") or 0),
+                        "app_name": str(row.get("app_name") or ""),
+                        "resource_type": format_resource_type(
+                            row.get("resource_kind"),
+                            row.get("resource_subtype"),
+                        ),
+                        "resource_name": format_activity_display_name(row),
+                        "project_name": str(row.get("project_name") or "未归类"),
+                        "status": str(row.get("status") or ""),
+                    }
+                )
+            return {"ok": True, "activities": activities}
+        except Exception:
+            logger.exception("webview bridge get_timeline_session_details failed")
+            return dict(_GENERIC_ERROR)
 
 
 def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:

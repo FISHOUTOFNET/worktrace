@@ -2,8 +2,8 @@
 
 ## Status
 
-- Current phase: 1 (Overview page fully migrated; WebView is the default and
-  only shipping UI).
+- Current phase: 2 (Overview fully migrated; Timeline read-only page
+  migrated; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -134,13 +134,21 @@ The migration is phased so each step is independently shippable:
   (collector status, pause/resume, today's date, total/classified/
   uncategorized duration, project count, current activity summary, recent
   sessions, auto-refresh, in-page error banner); missing WebView2 Runtime
-  exits with a clear install prompt. **Current phase.**
-- Phase 2: Timeline read-only.
-- Phase 3: Timeline editing.
+  exits with a clear install prompt. **Completed.**
+- Phase 2: **Timeline read-only migration.** The Timeline / Time Details
+  page is migrated as a read-only page: date navigation (prev/today/next),
+  daily total duration, current activity summary, session list with project
+  name / time range / duration / status / event count, per-session activity
+  detail view (time range, duration, app name, resource type, resource
+  display name, project name, status), empty state, loading state, in-page
+  error banner, and auto-refresh when the Timeline page is active. No
+  editing, correction, reclassification, note modification, or deletion is
+  exposed. **Current phase.**
+- Phase 3: Timeline editing / correction migration.
 - Phase 4: Statistics / Export.
 - Phase 5: Rules.
 - Phase 6: Settings / Privacy / Encrypted Backup.
-- Phase 7: remove the legacy Tkinter UI. This is a cleanup phase reached
+- Cleanup: remove the legacy Tkinter UI. This is a cleanup phase reached
   after all feature pages are at parity in the WebView UI. It is not a
   fallback dependency: Phases 1–6 ship with WebView as the only supported
   runtime UI.
@@ -234,8 +242,12 @@ Phase 1 made the WebView UI the default and only shipping UI:
   WebView2 Runtime from Microsoft; it does not mention Tkinter, fallback, or
   any `继续使用默认` wording.
 - `worktrace/webview_ui/bridge.py` exposes `get_status`, `toggle_pause`,
-  `get_overview`, `get_recent_activities`, and `get_timeline_placeholder`.
-  The Overview methods are the production data path for the Overview page.
+  `get_overview`, `get_recent_activities`, `get_timeline`, and
+  `get_timeline_session_details`. The Overview methods are the production
+  data path for the Overview page; the Timeline methods are the production
+  data path for the read-only Timeline page (Phase 2). The bridge does not
+  expose editing, correction, deletion, or any write operation beyond
+  pause/resume.
 - `worktrace/webview_ui/index.html`, `app.js`, `styles.css` — local frontend
   resources with no external links, no CDN, no Google Fonts, and no browser
   storage APIs. The Overview page shows:
@@ -253,16 +265,59 @@ Phase 1 made the WebView UI the default and only shipping UI:
     tracebacks;
   - auto-refresh every 8 seconds.
 
-The Timeline, Statistics/Export, Project Rules, and Settings/Privacy pages
-show a migration placeholder. They are not migrated in Phase 1.
+The Statistics/Export, Project Rules, and Settings/Privacy pages show a
+migration placeholder. They are not migrated in Phase 2.
 
-## Phase 1 Not Implemented
+## Phase 2 Implemented Scope
 
-The following are explicitly not implemented in Phase 1 and remain on the
+Phase 2 migrated the Timeline / Time Details page as a read-only page:
+
+- `worktrace/webview_ui/bridge.py` adds two read-only Timeline methods:
+  - `get_timeline(date=None)` — returns the date, total duration, current
+    activity summary, and a list of project sessions. Each session includes
+    `session_id`, `project_name`, `project_description`, `start_time`,
+    `end_time`, `duration`, `status`, `event_count`, `is_uncategorized`, and
+    `activity_ids`.
+  - `get_timeline_session_details(activity_ids, report_date=None)` —
+    returns activity detail rows for a session. Each row exposes
+    display-safe fields only: `start_time`, `end_time`, `duration`,
+    `app_name`, `resource_type`, `resource_name`, `project_name`, and
+    `status`. Raw window titles, file paths, and notes are not surfaced.
+- `worktrace/webview_ui/index.html` — the Timeline section is a production
+  page, not a placeholder. It includes:
+  - date navigation (prev / today / next buttons + date display);
+  - daily total duration;
+  - current activity summary;
+  - a session list (master) and a detail list (detail) side by side;
+  - an in-page error banner;
+  - a loading indicator;
+  - an empty-state message.
+- `worktrace/webview_ui/app.js` — adds Timeline loading, rendering, date
+  navigation, session-detail loading, and auto-refresh logic:
+  - `loadTimeline(date)` calls `get_timeline` and renders the session list;
+  - `loadSessionDetails(activityIds, date)` calls
+    `get_timeline_session_details` and renders activity detail rows;
+  - `shiftDate(dateStr, days)` computes the prev/next date;
+  - `refreshAll` also refreshes the Timeline when it is the active page;
+  - session list HTML is built as a complete string before replacing
+    `innerHTML` to avoid flicker;
+  - the selected session is preserved across auto-refresh;
+  - no edit, correction, reclassify, note-modification, or delete handlers
+    are present.
+- `worktrace/webview_ui/styles.css` — adds Timeline page styles: date
+  navigation buttons, summary card, master-detail layout, session items,
+  detail items, empty state, loading state, and responsive stacking.
+
+## Phase 2 Not Implemented
+
+The following are explicitly not implemented in Phase 2 and remain on the
 legacy Tkinter UI (which is legacy code pending removal, not a supported
 runtime path):
 
-- Timeline (read-only and editing);
+- Timeline editing (split, merge, time correction);
+- Project reclassification from the Timeline;
+- Note modification from the Timeline;
+- Activity deletion from the Timeline;
 - Statistics and Excel export;
 - Project rules creation, editing, enable/disable;
 - Settings, privacy notice, clipboard toggle, clear data;

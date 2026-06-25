@@ -1,6 +1,5 @@
 // WorkTrace WebView frontend.
-// Phase 1: Overview page is the production default UI. Other pages remain
-// migration placeholders.
+// Phase 2: Overview and Timeline (read-only) pages are production pages.
 // Only communicates with Python through pywebview API bridge.
 // Does not persist sensitive data in browser storage APIs.
 // Does not access any external network resources.
@@ -11,12 +10,24 @@
     var REFRESH_INTERVAL_MS = 8000;
     var refreshTimer = null;
 
+    // --- Timeline state -------------------------------------------------
+    var currentPage = "overview";
+    var timelineDate = null;       // null = today (backend decides)
+    var timelineLoaded = false;    // whether timeline has been loaded at least once
+    var timelineLoading = false;   // whether a timeline load is in progress
+    var selectedSessionId = null;  // currently selected session for detail view
+
+    // --- Bridge helper --------------------------------------------------
+
     function callBridge(method) {
+        var args = Array.prototype.slice.call(arguments, 1);
         if (typeof window.pywebview === "undefined" || !window.pywebview.api) {
             return Promise.reject(new Error("bridge unavailable"));
         }
-        return window.pywebview.api[method]();
+        return window.pywebview.api[method].apply(window.pywebview.api, args);
     }
+
+    // --- Overview error banner ------------------------------------------
 
     function showError(message) {
         var banner = document.getElementById("overview-error");
@@ -34,6 +45,32 @@
         showError("");
     }
 
+    // --- Timeline error / loading ---------------------------------------
+
+    function showTimelineError(message) {
+        var banner = document.getElementById("timeline-error");
+        if (!banner) return;
+        if (!message) {
+            banner.hidden = true;
+            banner.textContent = "加载失败，请稍后重试。";
+            return;
+        }
+        banner.hidden = false;
+        banner.textContent = message;
+    }
+
+    function clearTimelineError() {
+        showTimelineError("");
+    }
+
+    function setTimelineLoading(loading) {
+        timelineLoading = loading;
+        var el = document.getElementById("timeline-loading");
+        if (el) el.hidden = !loading;
+    }
+
+    // --- Generic result handler -----------------------------------------
+
     function handleResult(result, onError) {
         if (result && result.ok === false) {
             onError(result.error || "操作失败");
@@ -41,6 +78,8 @@
         }
         return result;
     }
+
+    // --- Overview rendering ---------------------------------------------
 
     function showStatus(statusResult) {
         if (!statusResult) return;
@@ -97,6 +136,236 @@
         listEl.innerHTML = html;
     }
 
+    // --- Timeline rendering ---------------------------------------------
+
+    function showTimeline(data) {
+        if (!data) return;
+        document.getElementById("timeline-date-display").textContent = data.date || "--";
+        document.getElementById("timeline-total").textContent = data.total_duration || "00:00:00";
+        var current = data.current_activity || {};
+        var currentEl = document.getElementById("timeline-current");
+        if (current.active) {
+            currentEl.textContent = "当前活动：" + current.display;
+        } else {
+            currentEl.textContent = "当前活动：无";
+        }
+
+        var listEl = document.getElementById("timeline-sessions-list");
+        var sessions = data.sessions || [];
+        if (sessions.length === 0) {
+            listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
+            // Clear details when there are no sessions
+            document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
+            document.getElementById("timeline-details-list").innerHTML = "";
+            selectedSessionId = null;
+            return;
+        }
+
+        // Build the full HTML string before replacing to avoid flicker.
+        var html = "";
+        for (var i = 0; i < sessions.length; i++) {
+            var s = sessions[i];
+            var timeRange = (s.start_time || "").slice(11, 16) + "-" + (s.end_time || "").slice(11, 16);
+            var projectLabel = s.project_name || "未归类";
+            if (s.project_description) {
+                projectLabel += " (" + s.project_description + ")";
+            }
+            var cls = "timeline-item";
+            if (s.is_uncategorized) cls += " uncategorized";
+            if (s.session_id === selectedSessionId) cls += " selected";
+            html += '<div class="' + cls + '" data-session-id="' + escapeHtml(s.session_id) + '">'
+                + '<div class="timeline-item-main">'
+                + '<div class="timeline-item-project">' + escapeHtml(projectLabel) + '</div>'
+                + '<div class="timeline-item-time">' + escapeHtml(timeRange) + '</div>'
+                + '<div class="timeline-item-status">' + escapeHtml(s.status || "") + '</div>'
+                + '</div>'
+                + '<div class="timeline-item-side">'
+                + '<div class="timeline-item-duration">' + escapeHtml(s.duration) + '</div>'
+                + '<div class="timeline-item-count">' + escapeHtml(String(s.event_count || 0) + " 条") + '</div>'
+                + '</div>'
+                + '</div>';
+        }
+        listEl.innerHTML = html;
+
+        // Bind click handlers to session items
+        var items = listEl.querySelectorAll(".timeline-item");
+        for (var j = 0; j < items.length; j++) {
+            (function (itemEl) {
+                itemEl.addEventListener("click", function () {
+                    var sid = itemEl.getAttribute("data-session-id");
+                    selectTimelineSession(sid, sessions);
+                });
+            })(items[j]);
+        }
+
+        // If the previously selected session still exists, reload its details.
+        if (selectedSessionId !== null) {
+            var found = null;
+            for (var k = 0; k < sessions.length; k++) {
+                if (sessions[k].session_id === selectedSessionId) {
+                    found = sessions[k];
+                    break;
+                }
+            }
+            if (found) {
+                loadSessionDetails(found.activity_ids, data.date);
+            } else {
+                selectedSessionId = null;
+                document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
+                document.getElementById("timeline-details-list").innerHTML = "";
+            }
+        }
+    }
+
+    function selectTimelineSession(sessionId, sessions) {
+        selectedSessionId = sessionId;
+        // Update selected class without full re-render
+        var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
+        for (var i = 0; i < items.length; i++) {
+            items[i].classList.remove("selected");
+            if (items[i].getAttribute("data-session-id") === sessionId) {
+                items[i].classList.add("selected");
+            }
+        }
+        // Find the session to get activity_ids
+        var found = null;
+        for (var j = 0; j < sessions.length; j++) {
+            if (sessions[j].session_id === sessionId) {
+                found = sessions[j];
+                break;
+            }
+        }
+        if (found) {
+            var dateEl = document.getElementById("timeline-date-display");
+            loadSessionDetails(found.activity_ids, dateEl ? dateEl.textContent : null);
+        }
+    }
+
+    function loadSessionDetails(activityIds, date) {
+        var detailsHeader = document.getElementById("timeline-details-header");
+        var detailsList = document.getElementById("timeline-details-list");
+        detailsHeader.textContent = "加载详情…";
+        detailsList.innerHTML = "";
+
+        callBridge("get_timeline_session_details", activityIds, date).then(function (result) {
+            var data = handleResult(result, function (msg) {
+                detailsHeader.textContent = "加载详情失败";
+                detailsList.innerHTML = '<div class="timeline-empty">' + escapeHtml(msg) + '</div>';
+            });
+            if (!data) return;
+            renderSessionDetails(data);
+        }).catch(function () {
+            detailsHeader.textContent = "加载详情失败";
+            detailsList.innerHTML = '<div class="timeline-empty">无法加载详情，请稍后重试。</div>';
+        });
+    }
+
+    function renderSessionDetails(data) {
+        var detailsHeader = document.getElementById("timeline-details-header");
+        var detailsList = document.getElementById("timeline-details-list");
+        var activities = data.activities || [];
+        if (activities.length === 0) {
+            detailsHeader.textContent = "该时段暂无活动详情";
+            detailsList.innerHTML = '<div class="timeline-empty">暂无活动</div>';
+            return;
+        }
+        detailsHeader.textContent = "活动详情（" + activities.length + " 条）";
+        var html = "";
+        for (var i = 0; i < activities.length; i++) {
+            var a = activities[i];
+            var timeRange = (a.start_time || "").slice(11, 16) + "-" + (a.end_time || "").slice(11, 16);
+            html += '<div class="detail-item">'
+                + '<div class="detail-item-time">' + escapeHtml(timeRange) + '</div>'
+                + '<div class="detail-item-name">' + escapeHtml(a.resource_name || a.app_name || "未知") + '</div>'
+                + '<div class="detail-item-meta">'
+                + '<span class="detail-item-type">' + escapeHtml(a.resource_type || "") + '</span>'
+                + '<span class="detail-item-app">' + escapeHtml(a.app_name || "") + '</span>'
+                + '</div>'
+                + '<div class="detail-item-project">' + escapeHtml(a.project_name || "未归类") + '</div>'
+                + '<div class="detail-item-duration">' + escapeHtml(a.duration) + '</div>'
+                + '</div>';
+        }
+        detailsList.innerHTML = html;
+    }
+
+    // --- Timeline loading -----------------------------------------------
+
+    function loadTimeline(date) {
+        setTimelineLoading(true);
+        clearTimelineError();
+        callBridge("get_timeline", date).then(function (result) {
+            var data = handleResult(result, function (msg) {
+                showTimelineError(msg || "加载时间详情失败，请稍后重试。");
+            });
+            setTimelineLoading(false);
+            if (!data) return;
+            timelineLoaded = true;
+            showTimeline(data);
+        }).catch(function (err) {
+            setTimelineLoading(false);
+            showTimelineError(err && err.message ? err.message : "加载时间详情失败，请稍后重试。");
+        });
+    }
+
+    function refreshTimeline() {
+        // Silent refresh: do not show loading spinner, just reload data.
+        var dateEl = document.getElementById("timeline-date-display");
+        var date = timelineDate || (dateEl ? dateEl.textContent : null);
+        if (date === "--") date = null;
+        callBridge("get_timeline", date).then(function (result) {
+            var data = handleResult(result, function (msg) {
+                showTimelineError(msg || "刷新时间详情失败，请稍后重试。");
+            });
+            if (!data) return;
+            showTimeline(data);
+            clearTimelineError();
+        }).catch(function () {
+            showTimelineError("刷新时间详情失败，请稍后重试。");
+        });
+    }
+
+    // --- Timeline date navigation ---------------------------------------
+
+    function shiftDate(dateStr, days) {
+        // dateStr is "YYYY-MM-DD" or null (meaning today)
+        var base;
+        if (!dateStr || dateStr === "--") {
+            base = new Date();
+        } else {
+            var parts = dateStr.split("-");
+            base = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+        }
+        base.setDate(base.getDate() + days);
+        var y = base.getFullYear();
+        var m = String(base.getMonth() + 1).padStart(2, "0");
+        var d = String(base.getDate()).padStart(2, "0");
+        return y + "-" + m + "-" + d;
+    }
+
+    function goPrevDay() {
+        var dateEl = document.getElementById("timeline-date-display");
+        var current = timelineDate || (dateEl ? dateEl.textContent : null);
+        timelineDate = shiftDate(current, -1);
+        selectedSessionId = null;
+        loadTimeline(timelineDate);
+    }
+
+    function goNextDay() {
+        var dateEl = document.getElementById("timeline-date-display");
+        var current = timelineDate || (dateEl ? dateEl.textContent : null);
+        timelineDate = shiftDate(current, 1);
+        selectedSessionId = null;
+        loadTimeline(timelineDate);
+    }
+
+    function goToday() {
+        timelineDate = null;
+        selectedSessionId = null;
+        loadTimeline(null);
+    }
+
+    // --- Utility --------------------------------------------------------
+
     function escapeHtml(text) {
         if (text === null || text === undefined) return "";
         return String(text)
@@ -105,6 +374,8 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;");
     }
+
+    // --- Refresh orchestration ------------------------------------------
 
     function refreshAll() {
         var statusPromise = callBridge("get_status").then(function (result) {
@@ -137,7 +408,32 @@
             throw err;
         });
 
-        Promise.allSettled([statusPromise, overviewPromise, recentPromise]).then(function (results) {
+        var promises = [statusPromise, overviewPromise, recentPromise];
+
+        // If the Timeline page is currently active, also refresh it.
+        if (currentPage === "timeline" && timelineLoaded) {
+            var timelinePromise = new Promise(function (resolve, reject) {
+                var dateEl = document.getElementById("timeline-date-display");
+                var date = timelineDate || (dateEl ? dateEl.textContent : null);
+                if (date === "--") date = null;
+                callBridge("get_timeline", date).then(function (result) {
+                    var data = handleResult(result, function (msg) {
+                        showTimelineError(msg || "刷新时间详情失败，请稍后重试。");
+                        throw new Error(msg);
+                    });
+                    if (data) {
+                        showTimeline(data);
+                        clearTimelineError();
+                    }
+                    resolve();
+                }).catch(function (err) {
+                    reject(err);
+                });
+            });
+            promises.push(timelinePromise);
+        }
+
+        Promise.allSettled(promises).then(function (results) {
             var anyError = false;
             for (var i = 0; i < results.length; i++) {
                 if (results[i].status === "rejected") {
@@ -162,6 +458,8 @@
         });
     }
 
+    // --- Navigation -----------------------------------------------------
+
     function switchPage(pageId) {
         var navItems = document.querySelectorAll(".nav-item");
         var pages = document.querySelectorAll(".page");
@@ -175,6 +473,13 @@
         var pageTarget = document.getElementById("page-" + pageId);
         if (navTarget) navTarget.classList.add("active");
         if (pageTarget) pageTarget.classList.add("active");
+
+        currentPage = pageId;
+
+        // Lazy-load Timeline data when navigating to it for the first time.
+        if (pageId === "timeline" && !timelineLoaded && !timelineLoading) {
+            loadTimeline(timelineDate);
+        }
     }
 
     function initNav() {
@@ -189,6 +494,10 @@
     function initButtons() {
         document.getElementById("toggle-pause-btn").addEventListener("click", togglePause);
         document.getElementById("refresh-btn").addEventListener("click", refreshAll);
+        // Timeline date navigation
+        document.getElementById("timeline-prev-btn").addEventListener("click", goPrevDay);
+        document.getElementById("timeline-next-btn").addEventListener("click", goNextDay);
+        document.getElementById("timeline-today-btn").addEventListener("click", goToday);
     }
 
     function startAutoRefresh() {

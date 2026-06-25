@@ -63,7 +63,36 @@
                 </div>
             </section>
             <section id="page-timeline" class="page">
-                <div class="placeholder">WebView 迁移中，当前页面仍由旧 UI 支持。</div>
+                <header class="page-header">
+                    <h1>时间详情</h1>
+                    <div class="timeline-date-nav">
+                        <button id="timeline-prev-btn" class="date-nav-btn" type="button">&lt;</button>
+                        <span id="timeline-date-display" class="date-display">--</span>
+                        <button id="timeline-next-btn" class="date-nav-btn" type="button">&gt;</button>
+                        <button id="timeline-today-btn" class="date-nav-btn today-btn" type="button">今日</button>
+                    </div>
+                </header>
+                <div id="timeline-error" class="error-banner" hidden>加载失败，请稍后重试。</div>
+                <div id="timeline-loading" class="timeline-loading" hidden>加载中…</div>
+                <div class="timeline-summary">
+                    <div class="timeline-total-card">
+                        <span class="timeline-total-label">当日总时长</span>
+                        <span id="timeline-total" class="timeline-total-value">00:00:00</span>
+                    </div>
+                    <div id="timeline-current" class="timeline-current">当前活动：无</div>
+                </div>
+                <div class="timeline-layout">
+                    <div class="timeline-sessions">
+                        <div class="card-title">活动时段</div>
+                        <div id="timeline-sessions-list" class="timeline-list">
+                            <div class="timeline-empty">暂无活动</div>
+                        </div>
+                    </div>
+                    <div class="timeline-details">
+                        <div id="timeline-details-header" class="timeline-details-header">选择左侧时段查看详情</div>
+                        <div id="timeline-details-list" class="timeline-list"></div>
+                    </div>
+                </div>
             </section>
             <section id="page-statistics" class="page">
                 <div class="placeholder">WebView 迁移中，当前页面仍由旧 UI 支持。</div>
