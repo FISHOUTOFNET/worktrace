@@ -864,3 +864,92 @@ Phase 3A specifically:
   fallback is restored.
 - Any new DB schema is introduced without justification, idempotent
   migration, and tests.
+
+## WebView Phase 3A.1 Validation
+
+Phase 3A.1 is a hardening phase. It adds **no new features**. It
+validates that the Phase 3A basic editing path is more stable, safer,
+and clearer under real use after the hardening changes.
+
+### Automated Checklist
+
+- [ ] `pytest` passes, including the Phase 3A.1 hardening tests.
+- [ ] No new runtime dependency is introduced.
+- [ ] No new network dependency.
+- [ ] No new administrator-permission requirement.
+- [ ] No new DB schema.
+
+### Validation Items
+
+#### AL. API Input Validation Hardening
+
+- [ ] `reclassify_timeline_session_project` rejects `bool` inputs for
+  `activity_ids` (the list itself), `project_id`, and individual
+  activity id elements.
+- [ ] `update_timeline_session_note` rejects `bool` for
+  `first_activity_id`.
+- [ ] The API never performs a partial write when one activity_id is
+  missing or deleted.
+- [ ] The API still rejects nonexistent `project_id`, nonexistent
+  `activity_id`, notes longer than 2000 characters, and malformed
+  `report_date`.
+
+#### AM. Bridge Input Validation Hardening
+
+- [ ] `_coerce_activity_ids` rejects `bool` elements.
+- [ ] `update_timeline_project` rejects `bool` for `project_id`.
+- [ ] `update_timeline_note` returns `"日期无效"` for a malformed
+  `report_date` (not the generic `"操作失败"`).
+- [ ] Bridge errors still never include tracebacks, exception class
+  names, SQL errors, file paths, window titles, clipboard content, or
+  the note's old value.
+- [ ] `bridge.py` still imports only `worktrace.api` and
+  `worktrace.formatters`.
+
+#### AN. Frontend Save-State Hardening
+
+- [ ] On save success, `editingSession.project_id` and
+  `editingSession.session_note` are updated to the saved values so the
+  dirty state clears.
+- [ ] After save success, Cancel reverts to the saved values (not the
+  pre-save values).
+- [ ] After save success, an auto-refresh repopulates the edit panel
+  with the new server-returned baseline.
+- [ ] `updateNoteCount` disables the save button when the note exceeds
+  2000 characters.
+- [ ] `updateNoteCount` applies a red `edit-note-count-over` class when
+  the note exceeds 2000 characters.
+- [ ] `setEditSaving(false)` re-applies the note-length guard.
+- [ ] `populateEditPanel` calls `updateNoteCount` after enabling the
+  save button so the length check has the final say.
+
+#### AO. Frontend Privacy And Boundary Regression
+
+- [ ] `app.js` still uses no `localStorage` or `sessionStorage`.
+- [ ] `app.js` still contains no `http://` or `https://` links.
+- [ ] `app.js` still references no CDN or Google Fonts.
+- [ ] `app.js` still exposes no traceback display logic.
+- [ ] The edit panel still exposes no time editing, split, merge,
+  delete, batch edit, or auto-rule UI.
+- [ ] The default entry point still starts the WebView UI with no
+  Tkinter fallback.
+
+### Phase 3A.1 Release Blockers
+
+- `pytest` fails.
+- The API accepts `bool` for `activity_ids`, `project_id`, or
+  `first_activity_id` (silently coercing `True` to `1`).
+- The bridge accepts `bool` for `project_id` or `activity_ids` elements.
+- `update_timeline_note` returns the generic `"操作失败"` for a malformed
+  `report_date` instead of the clearer `"日期无效"`.
+- `app.js` does not update the `editingSession` baseline on save
+  success, causing Cancel to revert to pre-save values.
+- `updateNoteCount` does not disable the save button when the note
+  exceeds the 2000-character limit.
+- The frontend introduces any new network dependency, CDN reference,
+  Google Fonts reference, or browser storage usage.
+- The edit panel exposes time editing, split, merge, delete, batch edit,
+  or auto-rule creation UI.
+- The default entry point no longer starts the WebView UI, or a Tkinter
+  fallback is restored.
+- Any new DB schema is introduced.

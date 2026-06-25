@@ -596,6 +596,16 @@ body {
         margin-left: 0;
         margin-top: 4px;
     }
+
+    /* Phase 3A.1: keep the edit panel usable on narrow viewports. The
+       actions row wraps so save/cancel remain reachable, and the note
+       textarea keeps a sane min-height instead of collapsing. */
+    .edit-actions {
+        flex-wrap: wrap;
+    }
+    .edit-note {
+        min-height: 60px;
+    }
 }
 
 /* The "进行中" tag inside time strings reads more clearly as a chip. */
@@ -683,6 +693,11 @@ body {
     font-size: 11px;
     color: #94a3b8;
     font-variant-numeric: tabular-nums;
+}
+
+.edit-note-count-over {
+    color: #dc2626;
+    font-weight: 600;
 }
 
 .edit-actions {

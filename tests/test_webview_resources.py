@@ -408,6 +408,137 @@ def test_styles_css_has_edit_panel_styles():
     assert ".edit-status-success" in source
 
 
+# --- Phase 3A.1: Timeline editing hardening tests -----------------------
+
+
+def test_app_js_save_success_updates_edit_baseline():
+    """Phase 3A.1: on save success, app.js must update the editingSession
+    baseline to the saved values so the dirty state clears and Cancel
+    after save does not revert to pre-save values."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "editingSession.project_id = projectId" in source, (
+        "save success must update editingSession.project_id to the saved value"
+    )
+    assert "editingSession.session_note = note" in source, (
+        "save success must update editingSession.session_note to the saved value"
+    )
+
+
+def test_app_js_update_note_count_disables_save_over_limit():
+    """Phase 3A.1: updateNoteCount must disable the save button when the
+    note exceeds NOTE_MAX_LENGTH, so the user gets immediate feedback."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "edit-note-count-over" in source, (
+        "updateNoteCount must add an 'edit-note-count-over' class when over limit"
+    )
+    # The function must reference the save button and toggle its disabled
+    # state based on the length check.
+    assert "edit-save-btn" in source
+    assert "len > NOTE_MAX_LENGTH" in source or "len >= NOTE_MAX_LENGTH" in source
+
+
+def test_app_js_set_edit_saving_reapplies_length_guard():
+    """Phase 3A.1: setEditSaving(false) must call updateNoteCount to
+    re-apply the note-length guard after a save finishes."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # Find the setEditSaving function body and verify it calls
+    # updateNoteCount when saving is false.
+    assert "if (!saving && editingSession)" in source, (
+        "setEditSaving must call updateNoteCount when saving is false"
+    )
+    assert "updateNoteCount()" in source
+
+
+def test_app_js_populate_edit_panel_calls_update_note_count_last():
+    """Phase 3A.1: populateEditPanel must call updateNoteCount after
+    enabling the save button so the length check has the final say."""
+    import re
+
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # Find the populateEditPanel function body by brace matching (the body
+    # contains nested `function` expressions, so a naive `find("function ")`
+    # would truncate it too early).
+    start = source.find("function populateEditPanel(")
+    assert start != -1, "populateEditPanel must exist"
+    brace_start = source.find("{", start)
+    assert brace_start != -1, "populateEditPanel must have a body"
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    # updateNoteCount must appear after the save-button enable statement in
+    # the function body, so the length check overrides the enable. The enable
+    # may be written defensively as `if (saveBtn) saveBtn.disabled = false;`
+    # or directly as `saveBtn.disabled = false;`.
+    enable_match = re.search(r"saveBtn\.disabled\s*=\s*false", body)
+    assert enable_match is not None, "populateEditPanel must enable save button"
+    save_btn_enable_pos = enable_match.start()
+    update_note_count_pos = body.find("updateNoteCount()")
+    assert update_note_count_pos != -1, "populateEditPanel must call updateNoteCount"
+    assert update_note_count_pos > save_btn_enable_pos, (
+        "updateNoteCount must be called after saveBtn.disabled = false so the "
+        "length check has the final say"
+    )
+
+
+def test_styles_css_has_note_over_limit_style():
+    """Phase 3A.1: styles.css must style the note counter in red when the
+    note exceeds the 2000-character limit."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".edit-note-count-over" in source
+
+
+def test_styles_css_has_edit_panel_responsive_rules():
+    """Phase 3A.1: styles.css must keep the edit panel usable on narrow
+    viewports — the actions row wraps and the note textarea keeps a
+    min-height."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".edit-actions" in source
+    assert "flex-wrap" in source
+    assert "min-height" in source
+
+
+def test_app_js_still_has_no_forbidden_edit_handlers_after_hardening():
+    """Phase 3A.1: the hardening must not introduce any forbidden edit
+    handlers (time editing, split, merge, delete, batch, auto-rule)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    assert "edit_activity" not in source
+    assert "delete_activity" not in source
+    assert "correct_activity" not in source
+    assert "split_session" not in source
+    assert "merge_session" not in source
+    assert "batch_edit" not in source
+    assert "auto_rule" not in source
+    assert "edit_start_time" not in source
+    assert "edit_end_time" not in source
+
+
+def test_app_js_still_no_browser_storage_after_hardening():
+    """Phase 3A.1: the hardening must not introduce browser storage."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert not re.search(r"localStorage|sessionStorage", source)
+
+
+def test_app_js_still_no_traceback_display_after_hardening():
+    """Phase 3A.1: the hardening must not introduce traceback display."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "traceback" not in source.lower()
+
+
+def test_app_js_still_no_external_links_after_hardening():
+    """Phase 3A.1: the hardening must not introduce external links."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert not re.search(r"https?://", source, re.IGNORECASE)
+
+
 def test_app_js_timeline_does_not_expose_tracebacks():
     """Phase 2: timeline error handling must not expose tracebacks."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")

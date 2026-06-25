@@ -37,6 +37,7 @@ the user-authored note (the editing target), not captured metadata.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
@@ -50,6 +51,12 @@ logger = logging.getLogger(__name__)
 
 _GENERIC_ERROR = {"ok": False, "error": "操作失败"}
 _RECENT_LIMIT = 20
+
+# Lightweight YYYY-MM-DD shape check at the bridge layer. The API layer
+# performs the full ``date.fromisoformat`` validation; this guard just gives
+# the user a clearer "日期无效" message instead of the generic "操作失败"
+# when the date string is obviously malformed.
+_DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class WebViewBridge:
@@ -303,6 +310,10 @@ class WebViewBridge:
             ids = _coerce_activity_ids(activity_ids)
             if ids is None:
                 return {"ok": False, "error": "请选择有效的活动"}
+            # ``bool`` is a subclass of ``int``; reject it so ``True`` is
+            # not coerced to project id ``1``.
+            if isinstance(project_id, bool):
+                return {"ok": False, "error": "请选择有效的项目"}
             try:
                 pid = int(project_id)
             except (TypeError, ValueError):
@@ -346,6 +357,9 @@ class WebViewBridge:
                 return {"ok": False, "error": "备注过长"}
             if not isinstance(report_date, str) or not report_date:
                 return {"ok": False, "error": "日期无效"}
+            # Lightweight shape check; the API does the full validation.
+            if not _DATE_SHAPE_RE.match(report_date):
+                return {"ok": False, "error": "日期无效"}
             first_activity_id = ids[0]
             timeline_api.update_timeline_session_note(
                 report_date, first_activity_id, note
@@ -364,13 +378,16 @@ def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
     Returns a deduplicated list of positive ints, or ``None`` if the input
     is not a usable list of positive integers. This is a bridge-level guard
     so the API layer always receives clean ints; the API layer performs the
-    deeper existence checks.
+    deeper existence checks. ``bool`` values are rejected explicitly so
+    ``True``/``False`` are not coerced to ``1``/``0``.
     """
     if not isinstance(activity_ids, list) or not activity_ids:
         return None
     ids: list[int] = []
     seen: set[int] = set()
     for raw in activity_ids:
+        if isinstance(raw, bool):
+            return None
         try:
             value = int(raw)
         except (TypeError, ValueError):

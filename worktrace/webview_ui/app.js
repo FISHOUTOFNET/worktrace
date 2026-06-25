@@ -440,14 +440,15 @@
         if (noteEl) {
             noteEl.value = session.session_note || "";
             noteEl.disabled = false;
-            updateNoteCount();
         }
 
-        // Enable save/cancel buttons
+        // Enable save/cancel buttons first, then let updateNoteCount apply
+        // the over-limit disable so the length check has the final say.
         var saveBtn = document.getElementById("edit-save-btn");
         var cancelBtn = document.getElementById("edit-cancel-btn");
         if (saveBtn) saveBtn.disabled = false;
         if (cancelBtn) cancelBtn.disabled = false;
+        if (noteEl) updateNoteCount();
 
         // Clear any prior status message
         showEditStatus("", false);
@@ -498,6 +499,20 @@
         if (!noteEl || !countEl) return;
         var len = (noteEl.value || "").length;
         countEl.textContent = len + " / " + NOTE_MAX_LENGTH;
+        // Visual warning when over the limit.
+        if (len > NOTE_MAX_LENGTH) {
+            countEl.classList.add("edit-note-count-over");
+        } else {
+            countEl.classList.remove("edit-note-count-over");
+        }
+        // Disable the save button when the note is over the limit so the
+        // user gets immediate feedback instead of an error on click. Only
+        // toggle when not actively saving (setEditSaving controls the
+        // button during save and re-enables it on completion).
+        var saveBtn = document.getElementById("edit-save-btn");
+        if (saveBtn && !editSaving && editingSession) {
+            saveBtn.disabled = len > NOTE_MAX_LENGTH;
+        }
     }
 
     function showEditStatus(message, isError) {
@@ -527,6 +542,13 @@
         if (cancelBtn) cancelBtn.disabled = saving;
         if (select) select.disabled = saving;
         if (noteEl) noteEl.disabled = saving;
+        // When stopping a save, re-apply the note-length limit so the
+        // button stays disabled if the user typed past the limit during
+        // the save (the textarea is disabled during save, but this is a
+        // defensive guard).
+        if (!saving && editingSession) {
+            updateNoteCount();
+        }
     }
 
     function saveEdit() {
@@ -612,9 +634,19 @@
                 showEditStatus(errorMsg, true);
                 return;
             }
-            // Success: refresh the timeline so the session list and edit
-            // panel reflect the new state. Preserve the current date and
-            // try to preserve the selected session.
+            // Success: update the editingSession baseline to the saved
+            // values so isEditDirty() returns false. This clears the dirty
+            // state, lets the subsequent refresh repopulate the edit panel
+            // with the new server-returned baseline, and ensures Cancel
+            // after save does not revert to the pre-save values.
+            if (editingSession) {
+                if (projectChanged) {
+                    editingSession.project_id = projectId;
+                }
+                if (noteChanged) {
+                    editingSession.session_note = note;
+                }
+            }
             showEditStatus("保存成功", false);
             refreshTimelineAfterEdit();
         });

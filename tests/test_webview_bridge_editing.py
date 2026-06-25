@@ -316,3 +316,97 @@ def test_bridge_module_does_not_import_backend_internals():
         assert pattern not in source, (
             f"bridge.py must not contain '{pattern}'"
         )
+
+
+# --- Phase 3A.1: Bridge input validation hardening -----------------------
+
+
+def test_update_timeline_project_rejects_bool_project_id(bridge):
+    """``bool`` must not be coerced to ``1`` for ``project_id``."""
+    ids = _seed_session()
+    result = bridge.update_timeline_project(ids, True)
+    assert result["ok"] is False
+    result = bridge.update_timeline_project(ids, False)
+    assert result["ok"] is False
+
+
+def test_update_timeline_project_rejects_bool_activity_id_element(bridge):
+    """A ``bool`` element inside ``activity_ids`` must be rejected."""
+    project = project_service.create_project("P")
+    ids = _seed_session()
+    result = bridge.update_timeline_project([ids[0], True], project)
+    assert result["ok"] is False
+
+
+def test_update_timeline_note_malformed_date_returns_date_error(bridge):
+    """A malformed ``report_date`` must return ``"日期无效"`` (not the
+    generic ``"操作失败"``) so the user gets a clearer message."""
+    ids = _seed_session()
+    for malformed in ("not-a-date", "2026/06/25", "26-06-25", "20260625"):
+        result = bridge.update_timeline_note(ids, "note", malformed)
+        assert result["ok"] is False
+        assert result["error"] == "日期无效", (
+            f"expected '日期无效' for malformed date '{malformed}', "
+            f"got '{result.get('error')}'"
+        )
+
+
+def test_update_timeline_note_valid_date_passes_bridge(bridge):
+    """A valid ``YYYY-MM-DD`` date must pass the bridge shape check and
+    reach the API layer."""
+    ids = _seed_session()
+    result = bridge.update_timeline_note(ids, "note", "2026-06-25")
+    assert result["ok"] is True
+
+
+def test_bridge_does_not_log_note_content(bridge, caplog):
+    """The bridge must never log the note content, even on error."""
+    ids = _seed_session()
+    secret_note = "THIS_IS_A_SECRET_NOTE_THAT_MUST_NOT_APPEAR_IN_LOGS"
+    with patch(
+        "worktrace.webview_ui.bridge.timeline_api.update_timeline_session_note",
+        side_effect=RuntimeError("boom"),
+    ):
+        with caplog.at_level("ERROR"):
+            bridge.update_timeline_note(ids, secret_note, "2026-06-25")
+    # The note content must not appear in any log record.
+    for record in caplog.records:
+        assert secret_note not in record.getMessage()
+        assert secret_note not in str(record.exc_info or "")
+
+
+def test_bridge_update_project_does_not_log_sensitive_data(bridge, caplog):
+    """The bridge must never log window titles, file paths, or clipboard
+    content, even on error."""
+    ids = _seed_session()
+    sensitive_markers = ["window_title", "file_path_hint", "clipboard", "traceback"]
+    with patch(
+        "worktrace.webview_ui.bridge.timeline_api.reclassify_timeline_session_project",
+        side_effect=RuntimeError("boom with window_title and file_path_hint"),
+    ):
+        with caplog.at_level("ERROR"):
+            bridge.update_timeline_project(ids, 1)
+    for record in caplog.records:
+        msg = record.getMessage()
+        for marker in sensitive_markers:
+            # The exception message itself may contain these words because
+            # the test injected them; what matters is that the bridge does
+            # not add them. We only check the bridge's own log format line
+            # ("webview bridge ... failed"), not the full traceback.
+            if "webview bridge" in msg:
+                assert marker not in msg.lower()
+
+
+def test_update_timeline_note_does_not_return_old_note(bridge):
+    """The bridge success result must not include the old or new note
+    content — only ``{"ok": true}``."""
+    ids = _seed_session()
+    # First write a note.
+    bridge.update_timeline_note(ids, "first note", "2026-06-25")
+    # Overwrite with a new note.
+    result = bridge.update_timeline_note(ids, "second note", "2026-06-25")
+    assert result["ok"] is True
+    # The result must not contain the note content.
+    assert "second note" not in str(result)
+    assert "first note" not in str(result)
+    assert "note" not in result  # no "note" key at top level

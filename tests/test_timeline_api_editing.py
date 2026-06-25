@@ -224,3 +224,97 @@ def test_update_note_non_string_raises(temp_db):
     ids = _seed_session()
     with pytest.raises(ValueError):
         timeline_api.update_timeline_session_note("2026-06-25", ids[0], 12345)
+
+
+# --- Phase 3A.1: API input validation hardening --------------------------
+
+
+def test_reclassify_activity_ids_not_a_list(temp_db):
+    """``activity_ids`` must be a list, not a tuple, int, None, or str."""
+    project = project_service.create_project("P")
+    ids = _seed_session()
+    for invalid in (None, "abc", 123, (ids[0],), {"a": 1}):
+        with pytest.raises(ValueError):
+            timeline_api.reclassify_timeline_session_project(invalid, project)
+
+
+def test_reclassify_activity_ids_bool_list_rejected(temp_db):
+    """``bool`` is a subclass of ``int`` in Python; the API must reject it
+    so ``True`` is not coerced to ``1``."""
+    project = project_service.create_project("P")
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project([True, False], project)
+
+
+def test_reclassify_activity_ids_with_bool_element_rejected(temp_db):
+    """A ``bool`` element inside an otherwise-valid list must be rejected."""
+    project = project_service.create_project("P")
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project([ids[0], True], project)
+
+
+def test_reclassify_project_id_none_rejected(temp_db):
+    """``project_id=None`` must raise, not be treated as 'uncategorized'."""
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids, None)
+
+
+def test_reclassify_project_id_string_rejected(temp_db):
+    """``project_id`` must not accept a string project name."""
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids, "TestProject")
+
+
+def test_reclassify_project_id_bool_rejected(temp_db):
+    """``bool`` must not be coerced to ``1``."""
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids, True)
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids, False)
+
+
+def test_reclassify_deleted_activity_rejected(temp_db):
+    """A soft-deleted activity must fail the validation, not be silently
+    skipped."""
+    project = project_service.create_project("P")
+    ids = _seed_session()
+    activity_service.soft_delete_activity(ids[0])
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids, project)
+
+
+def test_update_note_first_activity_id_bool_rejected(temp_db):
+    """``bool`` must not be coerced to ``1`` for ``first_activity_id``."""
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note("2026-06-25", True, "note")
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note("2026-06-25", False, "note")
+
+
+def test_update_note_first_activity_id_deleted_rejected(temp_db):
+    """A soft-deleted activity must fail validation for note writing."""
+    ids = _seed_session()
+    activity_service.soft_delete_activity(ids[0])
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note("2026-06-25", ids[0], "note")
+
+
+def test_reclassify_no_partial_write_on_missing_id(temp_db):
+    """When one activity_id is missing, no write must occur. Verify by
+    checking the existing activities' project_id is unchanged."""
+    project = project_service.create_project("P")
+    ids = _seed_session()
+    original_project_ids = [
+        int(activity_service.get_activity(aid)["project_id"]) for aid in ids
+    ]
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids + [999999], project)
+    # The existing activities must be unchanged.
+    for i, aid in enumerate(ids):
+        activity = activity_service.get_activity(aid)
+        assert int(activity["project_id"]) == original_project_ids[i]

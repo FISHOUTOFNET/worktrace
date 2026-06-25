@@ -2,10 +2,10 @@
 
 ## Status
 
-- Current phase: 3A (Overview fully migrated; Timeline read-only page
+- Current phase: 3A.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
-  and session-note editing — implemented; WebView is the default and only
-  shipping UI).
+  and session-note editing — implemented and hardened; WebView is the
+  default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -177,7 +177,24 @@ The migration is phased so each step is independently shippable:
   the Timeline refreshes locally; on save failure the original data is
   preserved. Time editing, session split/merge, deletion, batch editing,
   auto-rule creation, and complex correction pages are explicitly out of
-  scope. **Current phase.**
+  scope. **Completed.**
+- Phase 3A.1: **Timeline basic editing hardening.** No new features.
+  Hardens the Phase 3A editing path so it is more stable, safer, and
+  clearer under real use. Specifically: the API rejects `bool` inputs for
+  `activity_ids`, `project_id`, and `first_activity_id` (Python treats
+  `bool` as an `int` subclass, so `True` would otherwise coerce to `1`);
+  the bridge adds a lightweight `YYYY-MM-DD` shape check on
+  `report_date` and rejects `bool` for `project_id` and `activity_ids`
+  elements; the frontend updates the `editingSession` baseline on save
+  success so the dirty state clears, auto-refresh repopulates the edit
+  panel with the new server-returned baseline, and Cancel after save does
+  not revert to pre-save values; `updateNoteCount` disables the save
+  button and shows a red counter when the note exceeds the 2000-character
+  limit; `setEditSaving(false)` re-applies the length guard; the edit
+  panel has narrow-viewport responsive rules; documentation is cleaned up
+  to stop describing the Timeline as "read-only". Time editing, session
+  split/merge, deletion, batch editing, auto-rule creation, and complex
+  correction pages remain out of scope. **Current phase.**
 - Phase 3B: Timeline advanced editing (time correction, split, merge,
   delete, batch editing, correction page) — not yet started.
 - Phase 4: Statistics / Export.
@@ -616,6 +633,92 @@ of scope until Phase 3B:
 
 Phase 3A is not Phase 3B. It does not introduce time editing, split,
 merge, delete, batch editing, or auto-rule creation.
+
+## Phase 3A.1 Implemented Scope
+
+Phase 3A.1 is a hardening phase. It adds **no new features**. It makes the
+Phase 3A basic editing path more stable, safer, and clearer under real
+use.
+
+### API layer hardening (`worktrace/api/timeline_api.py`)
+
+- `_validate_activity_ids`, `_validate_project_id`, and
+  `_validate_first_activity_id` now explicitly reject `bool` inputs.
+  Python treats `bool` as a subclass of `int`, so without this guard
+  `True` would coerce to `1` and `False` to `0`, potentially targeting
+  an unintended project or activity id.
+- The `reclassify_timeline_session_project` docstring now states
+  explicitly that no partial writes are ever performed: if any
+  `activity_id` is missing or deleted the whole call raises before any
+  database write occurs.
+
+### Bridge layer hardening (`worktrace/webview_ui/bridge.py`)
+
+- `_coerce_activity_ids` rejects `bool` elements so `True`/`False` are
+  not coerced to `1`/`0`.
+- `update_timeline_project` rejects `bool` for `project_id` before the
+  `int()` coercion.
+- `update_timeline_note` adds a lightweight `YYYY-MM-DD` shape check
+  (`_DATE_SHAPE_RE`) on `report_date` at the bridge layer. The API
+  layer still performs the full `date.fromisoformat` validation; the
+  bridge guard just gives the user a clearer `"日期无效"` message
+  instead of the generic `"操作失败"` when the date string is obviously
+  malformed.
+- Bridge errors still never include tracebacks, exception class names,
+  SQL error messages, file paths, window titles, clipboard content, or
+  the note's old value.
+
+### Frontend hardening (`worktrace/webview_ui/app.js`)
+
+- **Save-success baseline update:** on save success, `saveEdit()` now
+  updates `editingSession.project_id` and `editingSession.session_note`
+  to the saved values before refreshing. This clears the dirty state
+  (`isEditDirty()` returns `false`), so the subsequent auto-refresh
+  repopulates the edit panel with the new server-returned baseline,
+  and Cancel after save no longer reverts to the pre-save values.
+- **Note-length overflow guard:** `updateNoteCount()` now disables the
+  save button and applies a red `edit-note-count-over` CSS class when
+  the note exceeds `NOTE_MAX_LENGTH` (2000). The user gets immediate
+  feedback instead of an error on click.
+- **`setEditSaving(false)` re-applies the length guard:** when a save
+  finishes (success or failure), `setEditSaving(false)` calls
+  `updateNoteCount()` so the save button stays disabled if the note is
+  over the limit.
+- **`populateEditPanel` ordering fix:** `updateNoteCount()` is now
+  called after `saveBtn.disabled = false`, so the length check has the
+  final say on the button state instead of being overridden.
+- No time editing, split, merge, delete, batch edit, or auto-rule UI is
+  introduced.
+
+### CSS hardening (`worktrace/webview_ui/styles.css`)
+
+- `.edit-note-count-over` styles the character counter in red when the
+  note exceeds the 2000-character limit.
+- The `@media (max-width: 900px)` block now wraps the edit actions row
+  and gives the note textarea a `min-height: 60px` so the panel remains
+  usable on narrow viewports.
+
+### Documentation cleanup
+
+- The README no longer says "Timeline editing, correction, and
+  reclassification are not yet available in the WebView UI." It now
+  describes the Phase 3A basic editing capability and the Phase 3A.1
+  hardening.
+- This document's Status and Migration Order sections now list Phase 3A
+  as **Completed** and Phase 3A.1 as the **Current phase**.
+
+## Phase 3A.1 Not Implemented
+
+Phase 3A.1 does not introduce any new editing capability. The following
+remain out of scope until Phase 3B:
+
+- Time editing (start time, end time);
+- Session split;
+- Session merge;
+- Activity/session deletion;
+- Batch editing;
+- Auto-rule creation;
+- Complex correction page.
 
 ## Legacy Tkinter UI Handling
 

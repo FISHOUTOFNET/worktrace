@@ -120,7 +120,9 @@ def reclassify_timeline_session_project(
 
     Raises ``ValueError`` on any invalid input. The underlying service write
     is atomic (single transaction), so a validated call either fully
-    succeeds or fully rolls back.
+    succeeds or fully rolls back. No partial writes are ever performed:
+    if any ``activity_id`` is missing or deleted the whole call raises
+    before any database write occurs.
     """
     ids = _validate_activity_ids(activity_ids)
     pid = _validate_project_id(project_id)
@@ -158,11 +160,17 @@ def update_timeline_session_note(
 
 
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
+    # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
+    # not silently coerced to ``1``/``0``.
+    if isinstance(activity_ids, bool):
+        raise ValueError("activity_ids must be a non-empty list")
     if not isinstance(activity_ids, list) or not activity_ids:
         raise ValueError("activity_ids must be a non-empty list")
     ids: list[int] = []
     seen: set[int] = set()
     for raw in activity_ids:
+        if isinstance(raw, bool):
+            raise ValueError("activity_ids must contain integers only")
         try:
             value = int(raw)
         except (TypeError, ValueError):
@@ -187,6 +195,10 @@ def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
 
 
 def _validate_project_id(project_id: int) -> int:
+    # ``bool`` is a subclass of ``int`` in Python, so ``True`` would otherwise
+    # coerce to ``1``. Reject it explicitly to avoid surprising writes.
+    if isinstance(project_id, bool):
+        raise ValueError("project_id must be an integer")
     try:
         pid = int(project_id)
     except (TypeError, ValueError):
@@ -212,6 +224,8 @@ def _validate_report_date(report_date: str) -> str:
 
 
 def _validate_first_activity_id(first_activity_id: int) -> int:
+    if isinstance(first_activity_id, bool):
+        raise ValueError("first_activity_id must be an integer")
     try:
         first_id = int(first_activity_id)
     except (TypeError, ValueError):
