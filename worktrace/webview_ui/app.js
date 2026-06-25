@@ -55,6 +55,17 @@
     var editingActivityId = null;
     var activityTimeSaving = false;
 
+    // --- Phase 3B.2: Timeline activity-split state -----------------------
+    // sessionSplitSaving guards the session-level "拆分" button.
+    // activitySplitSaving guards the per-activity inline split editor.
+    // editingSplitActivityId is the activity id whose inline split editor is
+    // currently open (null = none). These are intentionally separate from
+    // editSaving/timeSaving/activityTimeSaving so the split save flow does
+    // not pollute the other save flows' state.
+    var sessionSplitSaving = false;
+    var editingSplitActivityId = null;
+    var activitySplitSaving = false;
+
     // --- Bridge helper --------------------------------------------------
 
     function callBridge(method) {
@@ -372,11 +383,16 @@
             // end_time may be a projected value. The editor container is
             // hidden by default and only shown when the user clicks the
             // button. Only one inline editor can be open at a time.
+            // Phase 3B.2 also adds an inline split editor with the same
+            // in-progress/missing-id disable rules.
             var aid = a.activity_id || 0;
             var editBtnDisabled = a.is_in_progress || !aid;
             var editBtnTitle = a.is_in_progress
                 ? "进行中记录暂不支持时间修正"
                 : (aid ? "编辑该活动时间" : "活动 ID 缺失，无法编辑");
+            var splitBtnTitle = a.is_in_progress
+                ? "进行中记录暂不支持拆分"
+                : (aid ? "在该时间点拆分此活动" : "活动 ID 缺失，无法拆分");
             html += '<div class="' + cls + '" data-activity-id="' + escapeHtml(String(aid)) + '">'
                 + '<div class="detail-item-time">' + escapeHtml(timeRange) + '</div>'
                 + '<div class="detail-item-name" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</div>'
@@ -394,6 +410,13 @@
                 + (editBtnDisabled ? ' disabled' : '')
                 + ' title="' + escapeHtml(editBtnTitle) + '"'
                 + '>编辑时间</button>'
+                + '<button type="button" class="detail-split-btn"'
+                + ' data-activity-id="' + escapeHtml(String(aid)) + '"'
+                + ' data-start="' + escapeHtml(a.start_time || "") + '"'
+                + ' data-end="' + escapeHtml(a.end_time || "") + '"'
+                + (editBtnDisabled ? ' disabled' : '')
+                + ' title="' + escapeHtml(splitBtnTitle) + '"'
+                + '>拆分</button>'
                 + '</div>'
                 + '<div class="detail-time-editor" hidden>'
                 + '<div class="detail-time-row">'
@@ -409,6 +432,17 @@
                 + '<button type="button" class="detail-time-cancel-btn">取消</button>'
                 + '</div>'
                 + '<div class="detail-time-status edit-status" hidden></div>'
+                + '</div>'
+                + '<div class="detail-split-editor" hidden>'
+                + '<div class="detail-time-row">'
+                + '<label>拆分点</label>'
+                + '<input type="datetime-local" class="detail-time-input detail-split-time" step="1">'
+                + '</div>'
+                + '<div class="detail-time-actions">'
+                + '<button type="button" class="detail-split-save-btn">拆分</button>'
+                + '<button type="button" class="detail-split-cancel-btn">取消</button>'
+                + '</div>'
+                + '<div class="detail-split-status edit-status" hidden></div>'
                 + '</div>'
                 + '</div>';
         }
@@ -427,6 +461,20 @@
                     openActivityTimeEditor(id, startVal, endVal, btn);
                 });
             })(editBtns[j]);
+        }
+
+        // Phase 3B.2: bind per-activity "拆分" button handlers.
+        var splitBtns = detailsList.querySelectorAll(".detail-split-btn");
+        for (var s = 0; s < splitBtns.length; s++) {
+            (function (btn) {
+                btn.addEventListener("click", function () {
+                    if (btn.disabled) return;
+                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
+                    var startVal = btn.getAttribute("data-start") || "";
+                    var endVal = btn.getAttribute("data-end") || "";
+                    openActivitySplitEditor(id, startVal, endVal, btn);
+                });
+            })(splitBtns[s]);
         }
 
         // If an inline editor was open for an activity that still exists,
@@ -456,6 +504,31 @@
                 activityTimeSaving = false;
             }
         }
+
+        // Phase 3B.2: re-open the inline split editor if it was open and the
+        // activity still exists. If the activity disappeared, reset state.
+        if (editingSplitActivityId !== null) {
+            var splitStillOpen = false;
+            var refreshedSplitBtn = null;
+            for (var m = 0; m < splitBtns.length; m++) {
+                if (parseInt(splitBtns[m].getAttribute("data-activity-id"), 10) === editingSplitActivityId) {
+                    splitStillOpen = true;
+                    refreshedSplitBtn = splitBtns[m];
+                    break;
+                }
+            }
+            if (splitStillOpen && refreshedSplitBtn && !refreshedSplitBtn.disabled && !activitySplitSaving) {
+                openActivitySplitEditor(
+                    editingSplitActivityId,
+                    refreshedSplitBtn.getAttribute("data-start") || "",
+                    refreshedSplitBtn.getAttribute("data-end") || "",
+                    refreshedSplitBtn
+                );
+            } else if (!splitStillOpen) {
+                editingSplitActivityId = null;
+                activitySplitSaving = false;
+            }
+        }
     }
 
     // --- Phase 3B.1: per-activity inline time editor -------------------
@@ -465,6 +538,9 @@
         // Close any other open inline editor first so only one is visible
         // at a time. This keeps the editing context unambiguous.
         closeAllActivityTimeEditors(activityId);
+        // Phase 3B.2: also close any open split editor so the time editor is
+        // the only inline editor visible.
+        closeAllActivitySplitEditors(activityId);
         editingActivityId = activityId;
         var row = btn.closest(".detail-item");
         if (!row) return;
@@ -615,6 +691,167 @@
         });
     }
 
+    // --- Phase 3B.2: per-activity inline split editor ------------------
+
+    function openActivitySplitEditor(activityId, startVal, endVal, btn) {
+        if (!btn) return;
+        // Close any other open inline editor first so only one is visible
+        // at a time. This keeps the editing context unambiguous.
+        closeAllActivitySplitEditors(activityId);
+        // Also close any open time editor so the split editor is the only
+        // inline editor visible.
+        closeAllActivityTimeEditors(activityId);
+        editingSplitActivityId = activityId;
+        var row = btn.closest(".detail-item");
+        if (!row) return;
+        var editor = row.querySelector(".detail-split-editor");
+        if (!editor) return;
+        var splitInput = editor.querySelector(".detail-split-time");
+        // Default the split point to the midpoint between start and end so
+        // the user has a reasonable starting value. Use the fixed-format
+        // string conversion helpers, NOT Date parsing, to avoid timezone
+        // shifts.
+        if (splitInput) {
+            var midVal = midpointTime(startVal, endVal);
+            splitInput.value = backendToDatetimeLocal(midVal);
+            splitInput.disabled = false;
+        }
+        var saveBtn = editor.querySelector(".detail-split-save-btn");
+        var cancelBtn = editor.querySelector(".detail-split-cancel-btn");
+        if (saveBtn) saveBtn.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+        editor.hidden = false;
+        setActivitySplitStatus(row, "", false);
+        if (saveBtn) {
+            saveBtn.onclick = function () { saveActivitySplit(row); };
+        }
+        if (cancelBtn) {
+            cancelBtn.onclick = function () { closeActivitySplitEditor(row); };
+        }
+    }
+
+    function closeActivitySplitEditor(row) {
+        if (!row) return;
+        var editor = row.querySelector(".detail-split-editor");
+        if (!editor) return;
+        var splitInput = editor.querySelector(".detail-split-time");
+        if (splitInput) { splitInput.value = ""; splitInput.disabled = true; }
+        var saveBtn = editor.querySelector(".detail-split-save-btn");
+        var cancelBtn = editor.querySelector(".detail-split-cancel-btn");
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.onclick = null; }
+        if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.onclick = null; }
+        editor.hidden = true;
+        setActivitySplitStatus(row, "", false);
+        // Only clear editingSplitActivityId if it matches the row being
+        // closed, so closing one editor does not wipe state for a different
+        // one.
+        var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
+        if (editingSplitActivityId === rowAid) {
+            editingSplitActivityId = null;
+        }
+    }
+
+    function closeAllActivitySplitEditors(exceptActivityId) {
+        var rows = document.querySelectorAll("#timeline-details-list .detail-item");
+        for (var i = 0; i < rows.length; i++) {
+            var aid = parseInt(rows[i].getAttribute("data-activity-id"), 10);
+            if (aid !== exceptActivityId) {
+                closeActivitySplitEditor(rows[i]);
+            }
+        }
+    }
+
+    function setActivitySplitStatus(row, message, isError) {
+        if (!row) return;
+        var statusEl = row.querySelector(".detail-split-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "detail-split-status edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "detail-split-status edit-status "
+            + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function setActivitySplitSaving(row, saving) {
+        if (!row) return;
+        activitySplitSaving = saving;
+        var editor = row.querySelector(".detail-split-editor");
+        if (!editor) return;
+        var saveBtn = editor.querySelector(".detail-split-save-btn");
+        var cancelBtn = editor.querySelector(".detail-split-cancel-btn");
+        var splitInput = editor.querySelector(".detail-split-time");
+        if (saveBtn) {
+            saveBtn.disabled = saving;
+            saveBtn.textContent = saving ? "拆分中…" : "拆分";
+        }
+        if (cancelBtn) cancelBtn.disabled = saving;
+        if (splitInput) splitInput.disabled = saving;
+    }
+
+    function saveActivitySplit(row) {
+        if (!row || activitySplitSaving) return;
+        var aid = parseInt(row.getAttribute("data-activity-id"), 10);
+        if (!aid || isNaN(aid)) {
+            setActivitySplitStatus(row, "活动 ID 无效", true);
+            return;
+        }
+        var editor = row.querySelector(".detail-split-editor");
+        if (!editor) return;
+        var splitInput = editor.querySelector(".detail-split-time");
+        if (!splitInput) return;
+        // The button's data-start/data-end attributes hold the activity's
+        // current server-returned start/end; use them for the range check so
+        // a stale editor on a re-rendered row cannot submit a bad split.
+        var btn = row.querySelector(".detail-split-btn");
+        var actStart = btn ? (btn.getAttribute("data-start") || "") : "";
+        var actEnd = btn ? (btn.getAttribute("data-end") || "") : "";
+        var splitVal = datetimeLocalToBackend(splitInput.value);
+        if (!splitVal) {
+            setActivitySplitStatus(row, "拆分时间无效", true);
+            return;
+        }
+        // Frontend range check: split must be strictly between start and end.
+        // The backend re-validates this, but the frontend check gives the
+        // user immediate feedback without a round-trip.
+        if (!actStart || !actEnd || splitVal <= actStart || splitVal >= actEnd) {
+            setActivitySplitStatus(row, "拆分时间必须在活动时间范围内", true);
+            return;
+        }
+
+        setActivitySplitSaving(row, true);
+        setActivitySplitStatus(row, "", false);
+        callBridge("split_timeline_activity", aid, splitVal).then(function (result) {
+            if (!result || result.ok === false) {
+                setActivitySplitSaving(row, false);
+                setActivitySplitStatus(
+                    row,
+                    result && result.error ? result.error : "拆分失败",
+                    true
+                );
+                return;
+            }
+            // Split succeeded. Close the editor and refresh the Timeline so
+            // the two new activities appear. Reset the saving state before
+            // refreshing so the inputs are re-enabled regardless of whether
+            // the refresh succeeds.
+            setActivitySplitSaving(row, false);
+            setActivitySplitStatus(row, "已拆分", false);
+            // The split changes the activity's end_time and creates a new
+            // activity, so the row's data-start/data-end are now stale.
+            // Closing the editor and refreshing is the cleanest path.
+            closeActivitySplitEditor(row);
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setActivitySplitSaving(row, false);
+            setActivitySplitStatus(row, "拆分失败", true);
+        });
+    }
+
     // --- Phase 3A: Timeline editing (project reclassification + note) ----
 
     function loadProjects() {
@@ -678,6 +915,9 @@
         if (editingSession && editingSession.session_id !== session.session_id) {
             editingActivityId = null;
             activityTimeSaving = false;
+            // Phase 3B.2: reset per-activity inline split editor state too.
+            editingSplitActivityId = null;
+            activitySplitSaving = false;
         }
         editingSession = session;
         var panel = document.getElementById("timeline-edit-panel");
@@ -715,6 +955,8 @@
 
         // Phase 3B.1: populate the session-level time-correction section.
         populateSessionTimeSection(session);
+        // Phase 3B.2: populate the session-level split section.
+        populateSessionSplitSection(session);
 
         // Clear any prior status message
         showEditStatus("", false);
@@ -730,6 +972,10 @@
         // does not leak into the next session.
         editingActivityId = null;
         activityTimeSaving = false;
+        // Phase 3B.2: reset per-activity inline split editor state too.
+        editingSplitActivityId = null;
+        activitySplitSaving = false;
+        sessionSplitSaving = false;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
         var noteEl = document.getElementById("edit-note-text");
@@ -749,6 +995,8 @@
         showEditStatus("", false);
         // Phase 3B.1: reset the session-level time-correction section.
         resetSessionTimeSection();
+        // Phase 3B.2: reset the session-level split section.
+        resetSessionSplitSection();
     }
 
     function isEditDirty() {
@@ -802,6 +1050,31 @@
                         if (curActStart !== origActStart || curActEnd !== origActEnd) {
                             return true;
                         }
+                    }
+                }
+            }
+        }
+        // Phase 3B.2: session-level split input. If the user has entered a
+        // split time, the edit panel is dirty so auto-refresh does not wipe
+        // the unsaved split input.
+        var splitEl = document.getElementById("edit-split-time");
+        if (splitEl && !splitEl.disabled && splitEl.value) {
+            return true;
+        }
+        // Phase 3B.2: per-activity inline split editor. If an editor is open
+        // and has a non-empty split time, treat the panel as dirty so the
+        // detail list is not re-rendered (which would lose the edit).
+        if (editingSplitActivityId !== null) {
+            var splitEditorRow = document.querySelector(
+                '#timeline-details-list .detail-item[data-activity-id="'
+                + editingSplitActivityId + '"]'
+            );
+            if (splitEditorRow) {
+                var splitEditor = splitEditorRow.querySelector(".detail-split-editor");
+                if (splitEditor && !splitEditor.hidden) {
+                    var splitInput = splitEditor.querySelector(".detail-split-time");
+                    if (splitInput && splitInput.value) {
+                        return true;
                     }
                 }
             }
@@ -969,6 +1242,137 @@
             // save itself succeeded; a refresh failure is a separate concern.
             setEditSaving(false);
             refreshTimelineAfterEdit();
+        });
+    }
+
+    // --- Phase 3B.2: session-level activity split ---------------------
+
+    function populateSessionSplitSection(session) {
+        var singleEl = document.getElementById("edit-split-single");
+        var multiEl = document.getElementById("edit-split-multi");
+        var splitEl = document.getElementById("edit-split-time");
+        var saveBtn = document.getElementById("edit-split-save-btn");
+        if (!singleEl || !multiEl) return;
+
+        var activityIds = session.activity_ids || [];
+        var isMulti = activityIds.length > 1;
+        var inProgress = !!session.is_in_progress;
+
+        if (isMulti) {
+            singleEl.hidden = true;
+            multiEl.hidden = false;
+            multiEl.textContent = "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动。";
+            showSplitStatus("", false);
+            return;
+        }
+        if (inProgress) {
+            // Single-activity but still open: splitting is not safe because
+            // the displayed end_time may be a projected value.
+            singleEl.hidden = true;
+            multiEl.hidden = false;
+            multiEl.textContent = "进行中记录暂不支持拆分。";
+            showSplitStatus("", false);
+            return;
+        }
+        // Single closed activity: show the split input. Default the split
+        // point to the midpoint between start and end.
+        singleEl.hidden = false;
+        multiEl.hidden = true;
+        if (splitEl) {
+            var midVal = midpointTime(session.start_time, session.end_time);
+            splitEl.value = backendToDatetimeLocal(midVal);
+            splitEl.disabled = false;
+        }
+        if (saveBtn) saveBtn.disabled = false;
+        showSplitStatus("", false);
+    }
+
+    function resetSessionSplitSection() {
+        sessionSplitSaving = false;
+        var singleEl = document.getElementById("edit-split-single");
+        var multiEl = document.getElementById("edit-split-multi");
+        var splitEl = document.getElementById("edit-split-time");
+        var saveBtn = document.getElementById("edit-split-save-btn");
+        if (singleEl) singleEl.hidden = true;
+        if (multiEl) {
+            multiEl.hidden = true;
+            multiEl.textContent = "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动。";
+        }
+        if (splitEl) { splitEl.value = ""; splitEl.disabled = true; }
+        if (saveBtn) saveBtn.disabled = true;
+        showSplitStatus("", false);
+    }
+
+    function showSplitStatus(message, isError) {
+        var statusEl = document.getElementById("edit-split-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "edit-status " + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function setSessionSplitSaving(saving) {
+        sessionSplitSaving = saving;
+        var saveBtn = document.getElementById("edit-split-save-btn");
+        var splitEl = document.getElementById("edit-split-time");
+        if (saveBtn) {
+            saveBtn.disabled = saving;
+            saveBtn.textContent = saving ? "拆分中…" : "拆分";
+        }
+        if (splitEl) splitEl.disabled = saving;
+    }
+
+    function saveSessionSplit() {
+        if (!editingSession || sessionSplitSaving) return;
+        var activityIds = editingSession.activity_ids || [];
+        if (activityIds.length !== 1) {
+            showSplitStatus("多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动", true);
+            return;
+        }
+        if (editingSession.is_in_progress) {
+            showSplitStatus("进行中记录暂不支持拆分", true);
+            return;
+        }
+        var splitEl = document.getElementById("edit-split-time");
+        if (!splitEl) return;
+        var splitVal = datetimeLocalToBackend(splitEl.value);
+        if (!splitVal) {
+            showSplitStatus("拆分时间无效", true);
+            return;
+        }
+        // Frontend range check: split must be strictly between start and end.
+        var startVal = editingSession.start_time || "";
+        var endVal = editingSession.end_time || "";
+        if (!startVal || !endVal || splitVal <= startVal || splitVal >= endVal) {
+            showSplitStatus("拆分时间必须在活动时间范围内", true);
+            return;
+        }
+
+        setSessionSplitSaving(true);
+        showSplitStatus("", false);
+        callBridge("split_timeline_session", activityIds, splitVal).then(function (result) {
+            if (!result || result.ok === false) {
+                setSessionSplitSaving(false);
+                showSplitStatus(result && result.error ? result.error : "拆分失败", true);
+                return;
+            }
+            // Split succeeded. Reset the saving state before refreshing so
+            // the button is re-enabled regardless of whether the refresh
+            // succeeds. The split changes the session structure, so the
+            // selected session may regroup or disappear; the refresh path
+            // handles that gracefully by clearing the selection.
+            setSessionSplitSaving(false);
+            showSplitStatus("已拆分", false);
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setSessionSplitSaving(false);
+            showSplitStatus("拆分失败", true);
         });
     }
 
@@ -1250,6 +1654,49 @@
         return value.replace("T", " ");
     }
 
+    // Compute the midpoint between two ``YYYY-MM-DD HH:MM:SS`` timestamps
+    // and return it in the same fixed format. This is used to default the
+    // split-time input to a reasonable starting value. The computation uses
+    // explicit Date.UTC construction to avoid local-timezone interpretation
+    // of the parsed components, then formats the resulting UTC seconds back
+    // into the fixed ``YYYY-MM-DD HH:MM:SS`` shape. This does NOT rely on
+    // Date's automatic string parsing (which would interpret the value as
+    // local time and could shift it).
+    function midpointTime(startVal, endVal) {
+        if (!startVal || !endVal) return "";
+        var s = parseBackendTimeParts(startVal);
+        var e = parseBackendTimeParts(endVal);
+        if (!s || !e) return "";
+        var midMs = (s.ts + e.ts) / 2;
+        var d = new Date(midMs);
+        return formatUtcParts(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(),
+            d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds());
+    }
+
+    // Parse a ``YYYY-MM-DD HH:MM:SS`` string into a UTC timestamp. Returns
+    // ``null`` on failure. Uses Date.UTC so the components are interpreted
+    // as-is without a local-timezone shift.
+    function parseBackendTimeParts(value) {
+        var m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(value || "");
+        if (!m) return null;
+        var ts = Date.UTC(
+            parseInt(m[1], 10),
+            parseInt(m[2], 10) - 1,
+            parseInt(m[3], 10),
+            parseInt(m[4], 10),
+            parseInt(m[5], 10),
+            parseInt(m[6], 10)
+        );
+        return { ts: ts };
+    }
+
+    // Format numeric UTC components into ``YYYY-MM-DD HH:MM:SS`` with
+    // zero-padding. No Date object is involved so there is no timezone risk.
+    function formatUtcParts(y, mo, d, h, mi, s) {
+        function pad(n) { return n < 10 ? "0" + n : String(n); }
+        return y + "-" + pad(mo) + "-" + pad(d) + " " + pad(h) + ":" + pad(mi) + ":" + pad(s);
+    }
+
     // --- Refresh orchestration ------------------------------------------
 
     function refreshAll() {
@@ -1391,6 +1838,12 @@
         var sessionTimeSaveBtn = document.getElementById("edit-time-save-btn");
         if (sessionTimeSaveBtn) {
             sessionTimeSaveBtn.addEventListener("click", saveSessionTime);
+        }
+        // Phase 3B.2: session-level split handler. Per-activity inline split
+        // buttons are bound inside renderSessionDetails.
+        var sessionSplitSaveBtn = document.getElementById("edit-split-save-btn");
+        if (sessionSplitSaveBtn) {
+            sessionSplitSaveBtn.addEventListener("click", saveSessionSplit);
         }
     }
 

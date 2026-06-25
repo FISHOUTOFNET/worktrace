@@ -41,6 +41,25 @@ class TimelineTimeEditError(ValueError):
         self.code = code
 
 
+class TimelineSplitError(ValueError):
+    """Raised by the Phase 3B.2 activity-split methods for known,
+    user-facing failure modes.
+
+    Stable ``code`` values mapped by the WebView bridge to Chinese messages:
+
+    - ``invalid_id`` — not a positive int, ``bool``, missing, or deleted.
+    - ``invalid_time`` — split_time is not a ``YYYY-MM-DD HH:MM:SS`` string.
+    - ``outside_range`` — split_time is not strictly between start and end.
+    - ``in_progress`` — the activity is still open (``end_time IS NULL``).
+    - ``multi_activity`` — session-level split on a multi-activity session.
+    - ``operation_failed`` — race condition or unexpected service failure.
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 # --- timeline / sessions -------------------------------------------------
 
 def get_default_report_date() -> str:
@@ -279,6 +298,163 @@ def update_timeline_session_time(
         raise TimelineTimeEditError("invalid_id")
 
 
+# --- Phase 3B.2: Timeline activity split (single-activity foundation) ---
+#
+# Phase 3B.2 implements the minimal split foundation:
+#
+# - ``split_timeline_activity`` splits a single closed activity at a given
+#   ``split_time`` into two closed activities. The original activity keeps
+#   its id and becomes the front half ``[start, split_time)``; a new activity
+#   is inserted for the back half ``[split_time, end)``.
+# - ``split_timeline_session`` exposes a session-level split but only supports
+#   sessions that resolve to a single activity. Multi-activity sessions raise
+#   ``TimelineSplitError("multi_activity")`` so the user is pointed to
+#   per-activity splitting instead.
+#
+# Data semantics (see docs/ui-webview-migration.md):
+# - ``split_time`` must be a ``YYYY-MM-DD HH:MM:SS`` string strictly between
+#   the activity's ``start_time`` and ``end_time``.
+# - In-progress activities (``end_time IS NULL``) cannot be split.
+# - Deleted activities cannot be split.
+# - The new activity inherits ``app_name``, ``process_name``, ``status``,
+#   ``source``, ``project_id``, ``activity_project_assignment``, and
+#   ``activity_resource`` from the original so it does not become
+#   "未归类" and keeps its resource display name.
+# - The ``activity_log.note`` column is NOT copied to the new activity. The
+#   primary note mechanism is ``project_session_note`` keyed by
+#   ``(report_date, first_activity_id)``; the front-half keeps the original
+#   id and thus keeps any session note.
+# - Cross-day results are handled by ``timeline_service`` projection.
+# - Overlap detection is NOT performed in Phase 3B.2; it is deferred to a
+#   later phase.
+
+
+def split_timeline_activity(activity_id: int, split_time: str) -> dict:
+    """Validate and split a single closed activity at ``split_time``.
+
+    Validation:
+    - ``activity_id`` must be a positive integer (``bool`` rejected); it must
+      reference an existing, non-deleted, non-in-progress activity.
+    - ``split_time`` must be a ``YYYY-MM-DD HH:MM:SS`` string strictly
+      between the activity's ``start_time`` and ``end_time``.
+
+    Returns ``{"original_activity_id": int, "new_activity_id": int}`` on
+    success. Raises ``TimelineSplitError`` with a stable ``code`` for known
+    failure modes. The write is a single atomic transaction; no partial
+    writes are possible.
+    """
+    aid = _validate_activity_id_for_split(activity_id)
+    split = _validate_time_string_for_split(split_time)
+    activity = activity_service.get_activity(aid)
+    # Re-check end_time after fetching (the existence/deleted check is done
+    # in _validate_activity_id_for_split, but the in-progress check must use
+    # the raw DB end_time, not a projected display value).
+    if activity.get("end_time") is None:
+        raise TimelineSplitError("in_progress")
+    start = activity["start_time"]
+    end = activity["end_time"]
+    _validate_split_range(split, start, end)
+    try:
+        return activity_service.split_activity(aid, split)
+    except ValueError:
+        # Defensive: race condition (deleted/reopened between validation and
+        # write) or split_time fell outside the range due to a concurrent
+        # time edit. Treat as operation_failed so the bridge returns a clear
+        # message without echoing internal details.
+        raise TimelineSplitError("operation_failed")
+
+
+def split_timeline_session(activity_ids: list[int], split_time: str) -> dict:
+    """Validate and apply a session-level split.
+
+    A session is an aggregate of one or more activities. Phase 3B.2 supports
+    whole-session split only when the session resolves to a single activity
+    (after deduplication), in which case the call is equivalent to
+    ``split_timeline_activity`` on that activity. Multi-activity sessions
+    raise ``TimelineSplitError("multi_activity")`` — the frontend must direct
+    the user to per-activity splitting instead.
+
+    Validation:
+    - ``activity_ids`` must be a non-empty list of positive integers
+      (``bool`` rejected); every id must reference an existing, non-deleted
+      activity. Duplicate ids are deduplicated.
+    - After deduplication, exactly one id must remain; otherwise
+      ``multi_activity`` is raised.
+    - The single activity must not be in-progress.
+    - ``split_time`` must be a ``YYYY-MM-DD HH:MM:SS`` string strictly
+      between the activity's ``start_time`` and ``end_time``.
+
+    Returns ``{"original_activity_id": int, "new_activity_id": int}`` on
+    success. Raises ``TimelineSplitError`` with a stable ``code``.
+    """
+    ids = _validate_activity_ids(activity_ids)
+    split = _validate_time_string_for_split(split_time)
+    if len(ids) > 1:
+        raise TimelineSplitError("multi_activity")
+    activity = activity_service.get_activity(ids[0])
+    if activity.get("end_time") is None:
+        raise TimelineSplitError("in_progress")
+    _validate_split_range(split, activity["start_time"], activity["end_time"])
+    try:
+        return activity_service.split_activity(ids[0], split)
+    except ValueError:
+        raise TimelineSplitError("operation_failed")
+
+
+def _validate_activity_id_for_split(activity_id: int) -> int:
+    """Validate a single ``activity_id`` for split.
+
+    Returns the validated positive int. Raises ``TimelineSplitError``:
+    - ``invalid_id`` — not a positive int, ``bool``, missing, or deleted.
+    - ``in_progress`` — the activity is still open (``end_time IS NULL``).
+
+    The in-progress check reads the raw ``end_time`` from the row (not a
+    projected display value), so it correctly reflects the DB state.
+    """
+    if isinstance(activity_id, bool):
+        raise TimelineSplitError("invalid_id")
+    try:
+        aid = int(activity_id)
+    except (TypeError, ValueError):
+        raise TimelineSplitError("invalid_id")
+    if aid <= 0:
+        raise TimelineSplitError("invalid_id")
+    activity = activity_service.get_activity(aid)
+    if not activity or int(activity.get("is_deleted") or 0):
+        raise TimelineSplitError("invalid_id")
+    return aid
+
+
+def _validate_time_string_for_split(value: str) -> str:
+    """Validate a ``YYYY-MM-DD HH:MM:SS`` split_time string.
+
+    Raises ``TimelineSplitError("invalid_time")`` if the value is not a
+    non-empty string or does not parse against ``TIME_FORMAT``.
+    """
+    if not isinstance(value, str) or not value:
+        raise TimelineSplitError("invalid_time")
+    try:
+        datetime.strptime(value, TIME_FORMAT)
+    except ValueError:
+        raise TimelineSplitError("invalid_time")
+    return value
+
+
+def _validate_split_range(split_time: str, start_time: str, end_time: str) -> None:
+    """Ensure ``start_time < split_time < end_time`` (strictly inside).
+
+    All arguments must already be validated ``YYYY-MM-DD HH:MM:SS`` strings.
+    Raises ``TimelineSplitError("outside_range")`` if the split point is not
+    strictly between start and end (equal to either boundary is rejected, as
+    it would produce a zero-duration half).
+    """
+    start_dt = datetime.strptime(start_time, TIME_FORMAT)
+    split_dt = datetime.strptime(split_time, TIME_FORMAT)
+    end_dt = datetime.strptime(end_time, TIME_FORMAT)
+    if split_dt <= start_dt or split_dt >= end_dt:
+        raise TimelineSplitError("outside_range")
+
+
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
     # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
     # not silently coerced to ``1``/``0``.
@@ -496,6 +672,7 @@ def is_snapshot_unconfirmed(snapshot: dict[str, Any] | None) -> bool:
 __all__ = [
     "TIMELINE_NOTE_MAX_LENGTH",
     "TimelineTimeEditError",
+    "TimelineSplitError",
     "get_default_report_date",
     "get_project_sessions_by_date",
     "get_project_sessions_by_range",
@@ -512,6 +689,8 @@ __all__ = [
     "preview_session_project_update",
     "reclassify_timeline_session_project",
     "soft_delete_activity",
+    "split_timeline_activity",
+    "split_timeline_session",
     "sync_short_activity_carry_value",
     "update_activity_group_project",
     "update_activity_note",

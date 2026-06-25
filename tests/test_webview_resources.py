@@ -329,18 +329,22 @@ def test_index_html_timeline_has_save_cancel_buttons():
     assert 'id="edit-status"' in source
 
 
-def test_index_html_timeline_edit_panel_has_no_split_merge_delete_batch():
-    """Phase 3B.1: the edit panel now contains time-correction inputs
-    (``edit-start-time`` / ``edit-end-time``), but must still not contain
-    split, merge, delete, or batch controls."""
+def test_index_html_timeline_edit_panel_has_no_merge_delete_batch():
+    """Phase 3B.1 / 3B.2: the edit panel now contains time-correction inputs
+    (``edit-start-time`` / ``edit-end-time``) and a split section
+    (``edit-split-section``). It must still not contain merge, delete, batch,
+    or auto-rule controls."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     # Phase 3B.1 now provides time-correction inputs in the edit panel.
     assert 'id="edit-start-time"' in source
     assert 'id="edit-end-time"' in source
     assert 'id="edit-time-save-btn"' in source
-    # Split / merge / delete / batch / auto-rule must still be absent from
-    # the entire HTML (these controls must never appear anywhere).
-    assert "split" not in source.lower()
+    # Phase 3B.2 now provides a split section in the edit panel.
+    assert 'id="edit-split-section"' in source
+    assert 'id="edit-split-time"' in source
+    assert 'id="edit-split-save-btn"' in source
+    # Merge / delete / batch / auto-rule must still be absent from the
+    # entire HTML (these controls must never appear anywhere).
     assert "merge" not in source.lower()
     assert "delete" not in source.lower()
     assert "batch" not in source.lower()
@@ -508,20 +512,19 @@ def test_styles_css_has_edit_panel_responsive_rules():
 
 
 def test_app_js_still_has_no_forbidden_edit_handlers_after_hardening():
-    """Phase 3B.1: time correction is now a supported feature, but the
-    frontend must still not contain split, merge, delete, batch, or
-    auto-rule handlers."""
+    """Phase 3B.1 / 3B.2: time correction and activity split are now
+    supported features, but the frontend must still not contain merge,
+    delete, batch, or auto-rule handlers."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
     # Phase 3B.1 now provides time correction; the following forbidden
     # handlers must still be absent.
     assert "delete_activity" not in source
-    assert "split_session" not in source
     assert "merge_session" not in source
     assert "batch_edit" not in source
     assert "auto_rule" not in source
-    # Split/merge/delete buttons must not exist in the HTML either.
+    # Merge/delete/batch buttons must not exist in the HTML either. Split
+    # buttons are added in Phase 3B.2 and are allowed.
     html_source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8").lower()
-    assert "split" not in html_source
     assert "merge" not in html_source
     assert "delete" not in html_source
     assert "batch" not in html_source
@@ -866,17 +869,17 @@ def test_app_js_time_edit_uses_is_in_progress_not_end_time_emptiness():
     assert "is_in_progress" in body
 
 
-def test_app_js_time_edit_buttons_have_no_split_merge_delete():
-    """Phase 3B.1: the per-activity time editor must not include split,
-    merge, or delete buttons."""
+def test_app_js_time_edit_buttons_have_no_merge_delete_batch():
+    """Phase 3B.1 / 3B.2: the per-activity editor area must not include
+    merge, delete, or batch buttons. Split buttons are added in Phase 3B.2
+    and are allowed."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
-    # The renderSessionDetails function must not generate split/merge/delete buttons
+    # The renderSessionDetails function must not generate merge/delete/batch buttons
     render_pos = source.find("function rendersessiondetails")
     assert render_pos != -1
     # Find the next function to bound the search
     next_func = source.find("\n    function ", render_pos + 1)
     body = source[render_pos:next_func] if next_func != -1 else source[render_pos:]
-    assert "split" not in body
     assert "merge" not in body
     assert "delete" not in body
     assert "batch" not in body
@@ -1215,3 +1218,344 @@ def test_save_activity_time_updates_baseline_on_success():
     assert 'setAttribute("data-end"' in body, (
         "saveActivityTime must update data-end baseline on success"
     )
+
+
+# --- Phase 3B.2: Timeline activity split frontend tests ------------------
+
+
+def test_index_html_has_split_section():
+    """Phase 3B.2: index.html must have a split section in the edit panel
+    with a split-time input and a save button."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="edit-split-section"' in source
+    assert 'id="edit-split-single"' in source
+    assert 'id="edit-split-multi"' in source
+    assert 'id="edit-split-time"' in source
+    assert 'id="edit-split-save-btn"' in source
+    assert 'id="edit-split-status"' in source
+    # Must use datetime-local input for the split point
+    assert 'type="datetime-local"' in source
+
+
+def test_app_js_calls_split_bridge_methods():
+    """Phase 3B.2: app.js must call the new bridge methods for splitting."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "split_timeline_activity" in source
+    assert "split_timeline_session" in source
+
+
+def test_app_js_has_split_saving_state():
+    """Phase 3B.2: app.js must track independent saving states for
+    session-level and per-activity split so they do not pollute the
+    project/note/time saving states."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "sessionSplitSaving" in source
+    assert "activitySplitSaving" in source
+    assert "editingSplitActivityId" in source
+    # The split saving states must be separate from the time saving states
+    assert "timeSaving" in source
+    assert "activityTimeSaving" in source
+
+
+def test_app_js_has_session_split_functions():
+    """Phase 3B.2: app.js must define the session-level split lifecycle
+    functions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "populateSessionSplitSection" in source
+    assert "resetSessionSplitSection" in source
+    assert "saveSessionSplit" in source
+    assert "showSplitStatus" in source
+    assert "setSessionSplitSaving" in source
+
+
+def test_app_js_has_per_activity_split_functions():
+    """Phase 3B.2: app.js must define the per-activity inline split editor
+    lifecycle functions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "openActivitySplitEditor" in source
+    assert "closeActivitySplitEditor" in source
+    assert "closeAllActivitySplitEditors" in source
+    assert "saveActivitySplit" in source
+    assert "setActivitySplitSaving" in source
+
+
+def test_app_js_refreshes_timeline_after_split_save():
+    """Phase 3B.2: after a successful split, app.js must refresh the
+    Timeline so the two new activities appear."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_session_pos = source.find("function saveSessionSplit")
+    assert save_session_pos != -1, "saveSessionSplit must exist"
+    save_activity_pos = source.find("function saveActivitySplit")
+    assert save_activity_pos != -1, "saveActivitySplit must exist"
+    # Both functions must call refreshTimelineAfterEdit on the success path.
+    # Find the function body for saveActivitySplit and verify the refresh call.
+    brace_start = source.find("{", save_activity_pos)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    activity_body = source[save_activity_pos:end]
+    assert "refreshTimelineAfterEdit()" in activity_body, (
+        "saveActivitySplit must call refreshTimelineAfterEdit on success"
+    )
+    # Same for saveSessionSplit
+    brace_start2 = source.find("{", save_session_pos)
+    depth2 = 0
+    end2 = brace_start2
+    for i in range(brace_start2, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth2 += 1
+        elif ch == "}":
+            depth2 -= 1
+            if depth2 == 0:
+                end2 = i + 1
+                break
+    session_body = source[save_session_pos:end2]
+    assert "refreshTimelineAfterEdit()" in session_body, (
+        "saveSessionSplit must call refreshTimelineAfterEdit on success"
+    )
+
+
+def test_app_js_split_save_resets_saving_before_refresh():
+    """Phase 3B.2: ``saveActivitySplit`` and ``saveSessionSplit`` must
+    reset the saving state BEFORE calling ``refreshTimelineAfterEdit`` so
+    the UI does not get stuck in the '拆分中…' state if the refresh
+    fails."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for func_name in ("saveActivitySplit", "saveSessionSplit"):
+        start = source.find(f"function {func_name}(")
+        assert start != -1, f"{func_name} must exist"
+        brace_start = source.find("{", start)
+        depth = 0
+        end = brace_start
+        for i in range(brace_start, len(source)):
+            ch = source[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        body = source[start:end]
+        refresh_pos = body.find("refreshTimelineAfterEdit()")
+        assert refresh_pos != -1, f"{func_name} must call refreshTimelineAfterEdit"
+        pre_refresh = body[:refresh_pos]
+        # At least one saving-reset call must appear before the refresh.
+        assert (
+            "setActivitySplitSaving(row, false)" in pre_refresh
+            or "setSessionSplitSaving(false)" in pre_refresh
+        ), (
+            f"{func_name} must reset the split saving state BEFORE "
+            f"refreshTimelineAfterEdit"
+        )
+
+
+def test_app_js_split_preserves_input_on_save_failure():
+    """Phase 3B.2: when a split save fails, the user's input must be
+    preserved (not cleared) and an error message shown. The save
+    functions must reset the saving state to re-enable the button without
+    wiping the input value."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The error path must reset the saving state. Both the
+    # ``result.ok === false`` branch and the ``.catch`` handler must reset.
+    assert "setActivitySplitSaving(row, false)" in source
+    assert "setSessionSplitSaving(false)" in source
+    # The error path must show an error message (split-failed).
+    assert "拆分失败" in source
+
+
+def test_app_js_split_disables_multi_activity_session():
+    """Phase 3B.2: multi-activity sessions must show the 'multi-activity
+    not supported' hint for the session-level split."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动" in source
+
+
+def test_app_js_split_disables_in_progress_activity():
+    """Phase 3B.2: in-progress activities must be disabled or show a hint
+    for splitting."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "进行中记录暂不支持拆分" in source
+
+
+def test_app_js_split_does_not_use_date_automatic_parsing():
+    """Phase 3B.2: the split-time conversion must NOT rely on JS ``Date``
+    string parsing (which interprets the value as local time and could
+    shift it). The midpoint helper must use explicit Date.UTC
+    construction."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "midpointTime" in source
+    assert "parseBackendTimeParts" in source
+    assert "formatUtcParts" in source
+    # parseBackendTimeParts must use Date.UTC so backend timestamps are
+    # interpreted as-is without a local-timezone shift.
+    parse_start = source.find("function parseBackendTimeParts(")
+    assert parse_start != -1
+    parse_brace = source.find("{", parse_start)
+    depth = 0
+    parse_end = parse_brace
+    for i in range(parse_brace, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                parse_end = i + 1
+                break
+    parse_body = source[parse_start:parse_end]
+    assert "Date.UTC" in parse_body, (
+        "parseBackendTimeParts must use Date.UTC to avoid local-timezone "
+        "interpretation of backend timestamps"
+    )
+    # The midpoint helper must not use new Date("<string>") string parsing.
+    # new Date(<number>) (epoch ms) is allowed because it is timezone-safe.
+    mid_start = source.find("function midpointTime(")
+    assert mid_start != -1
+    brace_start = source.find("{", mid_start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    mid_body = source[mid_start:end]
+    assert 'new Date("' not in mid_body, (
+        "midpointTime must not use new Date(string) parsing which would "
+        "interpret the value as local time"
+    )
+
+
+def test_app_js_split_has_no_merge_delete_batch_auto_rule_handlers():
+    """Phase 3B.2: the split code must not introduce merge, delete, batch
+    edit, or auto-rule handlers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The whole file must not contain merge/delete/batch/auto-rule handler
+    # names. (Split is allowed; merge/delete/batch/auto-rule are not.)
+    assert "mergeActivity" not in source
+    assert "deleteActivity" not in source
+    assert "batchEdit" not in source
+    assert "autoRule" not in source
+    assert "createRule" not in source
+
+
+def test_app_js_split_has_no_traceback_display():
+    """Phase 3B.2: the split code must not display tracebacks."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "traceback" not in source.lower()
+
+
+def test_app_js_is_edit_dirty_covers_split_inputs():
+    """Phase 3B.2: ``isEditDirty`` must check the session-level split input
+    and the per-activity inline split editor so auto-refresh does not wipe
+    unsaved split edits."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function isEditDirty(")
+    assert start != -1, "isEditDirty must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "edit-split-time" in body, (
+        "isEditDirty must check edit-split-time for unsaved session-level split"
+    )
+    assert "editingSplitActivityId" in body, (
+        "isEditDirty must check editingSplitActivityId so an open inline "
+        "split editor is treated as dirty"
+    )
+
+
+def test_styles_css_has_split_styles():
+    """Phase 3B.2: styles.css must style the split UI elements."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".edit-split-section" in source
+    assert ".edit-split-save-btn" in source
+    assert ".detail-split-editor" in source
+    assert ".detail-split-btn" in source
+
+
+def test_styles_css_has_split_responsive_wrap():
+    """Phase 3B.2: styles.css must handle the split editor on narrow
+    viewports (flex-wrap and grid-row adjustments inside the
+    ``@media (max-width: 900px)`` block)."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    found = False
+    search_from = 0
+    while True:
+        media_start = source.find("@media (max-width: 900px)", search_from)
+        if media_start == -1:
+            break
+        brace_start = source.find("{", media_start)
+        if brace_start == -1:
+            break
+        depth = 0
+        end = brace_start
+        for i in range(brace_start, len(source)):
+            ch = source[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        media_body = source[media_start:end]
+        if ".detail-split-editor" in media_body:
+            found = True
+            break
+        search_from = end
+    assert found, (
+        "at least one @media (max-width: 900px) block must include "
+        ".detail-split-editor for narrow-viewport support"
+    )
+
+
+def test_frontend_resources_split_still_no_external_links():
+    """Phase 3B.2: the split additions must not introduce external links,
+    CDN, or Google Fonts."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{filename} must not contain http:// or https:// links"
+        )
+        assert not re.search(r"cdn", source, re.IGNORECASE), (
+            f"{filename} must not reference CDN"
+        )
+        assert not re.search(r"google\s*fonts", source, re.IGNORECASE), (
+            f"{filename} must not reference Google Fonts"
+        )
+
+
+def test_frontend_resources_split_still_no_browser_storage():
+    """Phase 3B.2: the split additions must not use browser storage."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"localStorage", source, re.IGNORECASE), (
+            f"{filename} must not use localStorage"
+        )
+        assert not re.search(r"sessionStorage", source, re.IGNORECASE), (
+            f"{filename} must not use sessionStorage"
+        )

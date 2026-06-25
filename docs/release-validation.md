@@ -1113,3 +1113,139 @@ longer stuck disabled; save flows fully decoupled).
 - Any new DB schema is introduced.
 - Any new feature (split, merge, delete, batch, auto-rule, complex
   correction page, overlap detection) is introduced.
+
+## WebView Phase 3B.2 Validation
+
+Phase 3B.2 implements the **Timeline activity split foundation** — the
+minimal usable single-activity split capability for the WebView Timeline.
+It adds the ability to split a single closed activity at a user-supplied
+split point into two closed activities, with precise `duration_seconds`
+recomputation, project/resource inheritance, atomic transaction safety,
+and post-save Timeline refresh. It does **not** add multi-activity
+session whole-split, merge, delete/hide, batch editing, auto-rule
+creation, complex correction pages, or overlap detection.
+
+### Automated Checklist
+
+| Check | Command |
+|-------|---------|
+| Full test suite | `python -m pytest` |
+| PyInstaller build | `python -m PyInstaller --noconfirm --clean WorkTrace.spec` |
+
+### Validation Items
+
+#### AX. API / Service Split
+
+- `split_timeline_activity` rejects non-positive `activity_id`, `bool`
+  `activity_id`, nonexistent `activity_id`, deleted activity, and
+  in-progress activities.
+- `split_timeline_activity` rejects non-string `split_time`, missing
+  seconds, `T` separator, timezone suffix, `split_time <= start_time`,
+  and `split_time >= end_time`.
+- `split_timeline_activity` succeeds for valid inputs: original activity
+  keeps its id and becomes `[start, split_time)`; new activity becomes
+  `[split_time, end)` with a new id.
+- Both `duration_seconds` are precisely recomputed and sum to the
+  original duration.
+- The new activity inherits `app_name`, `process_name`, `window_title`,
+  `file_path_hint`, `status`, `source`, `is_hidden`, `auto_classified`,
+  `manual_override`, `project_id`. The `note` field is **not** copied.
+- `activity_project_assignment` rows (manual and auto) are copied to
+  the new activity id.
+- `activity_resource` rows are copied to the new activity id.
+- `project_session_note` is **not** auto-copied to the new back-half
+  activity.
+- `split_timeline_session` succeeds for single-activity sessions and
+  raises `TimelineSplitError("multi_activity")` for multi-activity
+  sessions.
+- Cross-day activity split is correctly projected by `timeline_service`
+  onto both `report_date`s.
+- No partial writes occur on validation failure: if any step fails the
+  transaction rolls back and the original activity is unchanged.
+- Race-condition (0 rows updated) raises `ValueError` at the service
+  layer and `TimelineSplitError("operation_failed")` at the API layer;
+  no new activity is inserted.
+
+#### AY. Bridge Split
+
+- `split_timeline_activity` and `split_timeline_session` return
+  `{"ok": true, "original_activity_id": int, "new_activity_id": int}`
+  on success.
+- Invalid `activity_id` (non-int, bool, nonexistent) returns
+  `{"ok": false, "error": "操作失败"}`.
+- Invalid `split_time` (non-string, empty, wrong shape, `T` separator)
+  returns `{"ok": false, "error": "拆分时间无效"}`.
+- `split_time` outside `[start_time, end_time)` returns
+  `{"ok": false, "error": "拆分时间无效"}`.
+- In-progress activities return
+  `{"ok": false, "error": "进行中记录暂不支持拆分"}`.
+- Multi-activity sessions return
+  `{"ok": false, "error": "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动"}`.
+- Error results do not contain tracebacks, SQL errors, file paths,
+  window titles, clipboard data, or notes.
+- The bridge does not import `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.runtime`, `worktrace.security`, or
+  `worktrace.config`.
+
+#### AZ. Frontend Split
+
+- `index.html` has a split section (`edit-split-section`) with a
+  `datetime-local` input and a split button.
+- `app.js` calls `split_timeline_activity` and `split_timeline_session`
+  bridge methods.
+- `app.js` has independent split saving states (`sessionSplitSaving`,
+  `activitySplitSaving`).
+- `app.js` refreshes the Timeline after a successful split save.
+- `app.js` resets the saving state before refreshing.
+- `app.js` preserves user input on split save failure.
+- `app.js` disables multi-activity session whole-split with a clear
+  Chinese hint.
+- `app.js` disables or prompts in-progress activity split.
+- `app.js` does not use JS `Date` string parsing for split-time
+  conversion (uses fixed-format string replacement or `Date.UTC`).
+- `app.js` does not contain merge / delete / batch / auto-rule
+  handlers.
+- `app.js` has no traceback display logic.
+- `isEditDirty` covers split inputs so auto-refresh does not overwrite
+  unsaved split edits.
+- `styles.css` covers split UI and narrow-viewport responsive layout.
+- Frontend resources have no CDN, external links, Google Fonts, or
+  browser storage usage.
+
+#### BA. Privacy And Boundary Regression
+
+- Overview tests continue to pass.
+- Timeline read-only tests continue to pass.
+- Phase 2.1 privacy boundary tests continue to pass.
+- Phase 3A / 3A.1 basic editing tests continue to pass.
+- Phase 3B.1 / 3B.1.1 time-correction tests continue to pass.
+- Default WebView entry tests continue to pass.
+- PyInstaller resource path tests continue to pass.
+
+### Phase 3B.2 Release Blockers
+
+- `pytest` fails.
+- The API accepts `bool` for `activity_id` (silently coercing `True` to
+  `1`).
+- The API allows splitting a deleted or in-progress activity.
+- `duration_seconds` is not recomputed after a split.
+- The two durations do not sum to the original duration.
+- The new activity does not inherit the original project assignment or
+  resource association.
+- The split is not atomic: a failure leaves the original activity
+  modified or a half-split new activity persisted.
+- Multi-activity session whole-split is performed instead of rejected.
+- The bridge exposes tracebacks, SQL errors, file paths, window titles,
+  clipboard data, or notes in error results.
+- The bridge imports `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.runtime`, `worktrace.security`, or
+  `worktrace.config`.
+- The frontend introduces merge, delete, batch edit, or auto-rule
+  creation UI.
+- The frontend uses browser storage, external links, CDN, or Google
+  Fonts.
+- The frontend uses `new Date(string)` parsing for split-time
+  conversion.
+- The default entry point no longer starts the WebView UI, or a Tkinter
+  fallback is restored.
+- Any new DB schema is introduced.

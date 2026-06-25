@@ -2,11 +2,13 @@
 
 ## Status
 
-- Current phase: 3B.1.1 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.2 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
-  implemented and hardened; WebView is the default and only shipping UI).
+  implemented and hardened; Timeline activity split foundation — single
+  closed activity split into two closed activities — implemented; WebView
+  is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -222,9 +224,35 @@ The migration is phased so each step is independently shippable:
   its own saving state before refreshing. Multi-activity session
   whole-time correction, session split/merge, deletion, batch editing,
   auto-rule creation, complex correction pages, and overlap detection
-  remain out of scope. **Current phase.**
-- Phase 3B: Timeline advanced editing (split, merge, delete, batch
-  editing, correction page) — not yet started.
+  remain out of scope. **Completed.**
+- Phase 3B.2: **Timeline activity split foundation.** Implements the
+  minimal usable single-activity split: a single closed activity is split
+  at a user-supplied split point into two closed activities. The original
+  activity keeps its id and becomes the front half
+  `[start_time, split_time)`; a new activity is inserted as the back half
+  `[split_time, end_time)`. Both `duration_seconds` are precisely
+  recomputed. The new activity inherits `app_name`, `process_name`,
+  `window_title`, `file_path_hint`, `status`, `source`, `is_hidden`,
+  `auto_classified`, `manual_override`, and `project_id` from the
+  original; it does **not** inherit the `note` field. Manual and auto
+  `activity_project_assignment` rows are copied; `activity_resource`
+  associations are copied. The `project_session_note` keyed by
+  `(report_date, first_activity_id)` is **not** auto-copied to the new
+  back-half activity — the original note stays with the original key.
+  Single-activity session-level split is supported (equivalent to
+  splitting that activity); multi-activity session-level split is
+  rejected with a clear Chinese message. In-progress and deleted
+  activities are rejected. The split is atomic: any failure rolls back
+  and leaves the original activity unchanged. Split-time validation
+  requires strict `YYYY-MM-DD HH:MM:SS` format with
+  `start_time < split_time < end_time`. After a successful split the
+  Timeline is refreshed; if the selected session regroups or disappears
+  the selection is cleared gracefully. Merge, delete/hide, batch
+  editing, auto-rule creation, complex correction pages, multi-activity
+  session whole-split, and overlap detection remain out of scope.
+  **Completed.**
+- Phase 3B: Timeline advanced editing (merge, delete, batch editing,
+  correction page) — not yet started.
 - Phase 4: Statistics / Export.
 - Phase 5: Rules.
 - Phase 6: Settings / Privacy / Encrypted Backup.
@@ -914,6 +942,167 @@ stable, safe, and predictable under real use.
   `end_time IS NULL`, not projected display values).
 - No change to the bridge import boundary.
 - No change to the privacy/security boundary.
+
+## Phase 3B.2 Implemented Scope
+
+Phase 3B.2 implements the **minimal usable single-activity split
+foundation** for the WebView Timeline. It is the first phase that allows
+the user to split an activity into two.
+
+### Data Semantics
+
+- Split operates on a single closed `activity_log` row.
+- The original activity is updated to `[start_time, split_time)` and
+  keeps its `id`. A new activity is inserted as
+  `[split_time, end_time)` and gets a new `id`.
+- Both `duration_seconds` are precisely recomputed as the second
+  difference between the respective start/end times. The two durations
+  sum to the original duration.
+- `split_time` must be a strict `YYYY-MM-DD HH:MM:SS` string with
+  `start_time < split_time < end_time`. `T` separators, timezone
+  suffixes, missing seconds, and natural-language times are rejected.
+  `split_time` equal to `start_time` or `end_time` is rejected.
+- Deleted activities (`is_deleted = 1`) cannot be split.
+- In-progress activities (`end_time IS NULL`) cannot be split. The
+  check reads the raw DB `end_time`, not the projected display value.
+- The new activity inherits: `app_name`, `process_name`,
+  `window_title`, `file_path_hint`, `status`, `source`, `is_hidden`,
+  `auto_classified`, `manual_override`, `project_id`, `created_at`,
+  `updated_at`. It does **not** inherit the `note` field (the activity
+  `note` column is not copied; the system primarily uses
+  `project_session_note` keyed by `(report_date, first_activity_id)`).
+- `activity_project_assignment` rows (manual and auto) are copied to
+  the new activity id. The new activity therefore inherits the original
+  effective project classification; it does not become uncategorized
+  unless the original was uncategorized.
+- `activity_resource` rows are copied to the new activity id so the
+  back-half retains the original resource display name and identity.
+- `project_session_note` keyed by `(report_date, first_activity_id)` is
+  **not** auto-copied. If the original activity was the
+  `first_activity_id` of a session, the note stays with the original
+  key (the front half). The back half does not receive a session note.
+- The split is atomic: the UPDATE and INSERT (plus assignment/resource
+  copies) run in a single transaction. If any step fails the whole
+  operation rolls back and the original activity is left unchanged. No
+  half-split state is ever persisted.
+- Cross-day activities are handled by `timeline_service` projection on
+  the next Timeline read; the split itself does not project cross-day
+  slices.
+- Overlap detection is **not** performed in Phase 3B.2; it is deferred
+  to a later phase.
+
+### Session-Level Split
+
+- A session is an aggregate of one or more activities; it is not an
+  independent DB record.
+- Phase 3B.2 supports session-level split only when the session
+  resolves to a single activity (after deduplication). The write is
+  equivalent to `split_timeline_activity` on that activity.
+- Multi-activity sessions raise `TimelineSplitError("multi_activity")`.
+  The frontend shows: "多活动 session 暂不支持整体拆分，请在活动详情中
+  拆分单条活动".
+
+### Service Layer (`worktrace/services/activity_service.py`)
+
+- `split_activity(activity_id, split_time) -> dict` — performs the
+  atomic split. Returns `{"original_activity_id": int,
+  "new_activity_id": int}`. Raises `ValueError` on invalid input or
+  race conditions (0 rows updated). The UPDATE includes `WHERE id = ?
+  AND is_deleted = 0 AND end_time IS NOT NULL` as a defensive guard.
+
+### API Layer (`worktrace/api/timeline_api.py`)
+
+- `split_timeline_activity(activity_id, split_time)` — validates and
+  applies a single-activity split.
+- `split_timeline_session(activity_ids, split_time)` — validates and
+  applies a session-level split; multi-activity sessions raise
+  `TimelineSplitError("multi_activity")`.
+- `TimelineSplitError(ValueError)` carries a stable `code` attribute
+  (`invalid_id`, `invalid_time`, `outside_range`, `in_progress`,
+  `multi_activity`, `operation_failed`) that the bridge maps to Chinese
+  user-facing messages. Internal field names, ids, and SQL details never
+  leak.
+- All validation completes before any write; no partial writes are
+  possible.
+
+### Bridge Layer (`worktrace/webview_ui/bridge.py`)
+
+- `split_timeline_activity(activity_id, split_time)` — bridge method
+  that only calls `worktrace.api.timeline_api`.
+- `split_timeline_session(activity_ids, split_time)` — bridge method
+  that only calls `worktrace.api.timeline_api`.
+- Bridge-level datetime shape check (`YYYY-MM-DD HH:MM:SS`) gives a
+  clearer `"拆分时间无效"` message before the API's full validation.
+- Success returns `{"ok": true, "original_activity_id": int,
+  "new_activity_id": int}`.
+- Error results return `{"ok": false, "error": "<chinese message>"}`.
+  Error mapping:
+  - `invalid_time` / `outside_range` → `"拆分时间无效"`
+  - `in_progress` → `"进行中记录暂不支持拆分"`
+  - `multi_activity` → `"多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动"`
+  - all other failures → `"操作失败"`
+- Tracebacks, SQL errors, file paths, window titles, clipboard content,
+  and notes are never surfaced.
+- The bridge still does not import `worktrace.services`,
+  `worktrace.db`, `worktrace.collector`, `worktrace.runtime`,
+  `worktrace.security`, or `worktrace.config`.
+
+### Frontend
+
+- The edit panel has a "拆分时段" section with a `datetime-local` input
+  for the split point and a "拆分" button.
+- For single-activity, closed sessions: the split input is enabled and
+  pre-filled with the midpoint of the session's start/end times
+  (computed via `Date.UTC` to avoid local-timezone shifts).
+- For multi-activity sessions: the split input is hidden and a hint is
+  shown: "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动。"
+- For in-progress sessions: the split input is hidden and a hint is
+  shown: "进行中记录暂不支持拆分。"
+- Each closed activity detail row has a "拆分" button (disabled for
+  in-progress activities) that opens an inline split editor with a
+  `datetime-local` input, save/cancel buttons, and a status area. Only
+  one inline editor (split or time) can be open at a time per activity.
+- `datetime-local` ↔ backend format conversion uses fixed-format
+  string replacement (space ↔ T), not `Date` string parsing (which
+  would interpret as local time and shift values).
+- Independent saving states: `sessionSplitSaving` (session-level),
+  `activitySplitSaving` (per-activity), `editSaving` (project/note),
+  `timeSaving` (session-level time), `activityTimeSaving` (per-activity
+  time) are all separate so the save flows do not pollute each other.
+- On save success: the saving state is reset, the inline editor is
+  closed, and the Timeline is refreshed. The current date and selected
+  session are preserved when possible; if the session regroups or the
+  selected session disappears the selection and edit panel are cleared
+  gracefully.
+- On save failure: the user's input is preserved, the saving state is
+  cleared, and a Chinese error message is shown. No traceback is
+  displayed.
+- Auto-refresh does not overwrite unsaved split edits (session-level or
+  per-activity) — the `isEditDirty` check covers split inputs.
+
+### Privacy and Security Boundary
+
+- The split feature does not expose `window_title`, `file_path_hint`,
+  `full_path`, clipboard content, tracebacks, SQL errors, internal
+  exception details, or the note's old value.
+- Notes, resource names, paths, and window titles are not written to
+  logs.
+- No browser storage is used to persist split drafts.
+- No external resources or network dependencies are introduced.
+- The bridge continues to access the backend only through
+  `worktrace.api`.
+
+## Phase 3B.2 Not Implemented
+
+The following remain out of scope until a later phase:
+
+- Multi-activity session whole-split;
+- Session merge;
+- Activity/session deletion or hide;
+- Batch editing;
+- Auto-rule creation;
+- Complex correction page;
+- Overlap detection between activities on the same timeline.
 
 ## Legacy Tkinter UI Handling
 

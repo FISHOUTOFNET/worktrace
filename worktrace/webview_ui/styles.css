@@ -779,6 +779,21 @@ body {
     border-top: 1px dashed #e2e8f0;
 }
 
+/* --- Phase 3B.2: Timeline activity split ------------------------------ */
+
+/* The split section reuses the time-correction layout (rows, inputs,
+   actions) but is visually separated so the user can tell the independent
+   save flows apart. */
+.edit-split-section {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px dashed #e2e8f0;
+}
+
+.edit-split-save-btn {
+    background: #f8fafc;
+}
+
 .edit-time-row {
     display: flex;
     align-items: center;
@@ -882,6 +897,37 @@ body {
     border-radius: 6px;
 }
 
+/* Phase 3B.2: per-activity inline split editor. Mirrors the time editor
+   layout but occupies its own grid row so both editors are not visible at
+   the same time (the JS layer closes one when the other opens). */
+.detail-split-editor {
+    grid-row: 5;
+    grid-column: 1 / -1;
+    margin-top: 8px;
+    padding: 8px;
+    background: #f1f5f9;
+    border-radius: 6px;
+}
+
+.detail-split-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #334155;
+    cursor: pointer;
+}
+
+.detail-split-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+}
+
+.detail-split-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .detail-time-row {
     display: flex;
     align-items: center;
@@ -962,6 +1008,16 @@ body {
     .detail-time-editor {
         grid-row: 4;
     }
+    .detail-time-row {
+        flex-wrap: wrap;
+    }
+    /* Phase 3B.2: split editor mirrors the time editor's narrow-viewport
+       behavior. The split row wraps so the input remains reachable and
+       the editor stays in its own grid row below the time editor. */
+    .detail-split-editor {
+        grid-row: 5;
+    }
+    .detail-split-row,
     .detail-time-row {
         flex-wrap: wrap;
     }

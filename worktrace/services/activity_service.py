@@ -565,6 +565,196 @@ def update_activity_time(activity_id: int, start_time: str, end_time: str) -> No
             raise ValueError("activity_time_update_affected_zero_rows")
 
 
+def split_activity(activity_id: int, split_time: str) -> dict:
+    """Atomically split a closed activity into two at ``split_time``.
+
+    The original activity is updated to ``[original_start, split_time)`` and a
+    new activity is inserted for ``[split_time, original_end)``. Both
+    ``duration_seconds`` values are recomputed precisely from the new ranges.
+
+    Field inheritance (conservative):
+    - The new activity copies ``app_name``, ``process_name``, ``window_title``,
+      ``file_path_hint``, ``status``, ``source``, ``auto_classified``,
+      ``manual_override``, ``project_id``, ``is_hidden``, ``is_deleted`` from
+      the original row. These are DB-internal fields required for record
+      integrity and classification; they are never surfaced to the bridge.
+    - ``activity_project_assignment`` is copied to the new activity so manual
+      and automatic assignments are preserved. The new activity does not
+      become "未归类" unless the original was.
+    - ``activity_resource`` is copied to the new activity (a new row with the
+      same ``identity_key``, ``display_name``, ``path_hint`` etc.) so the
+      resource display name is preserved on both halves. Excluded activities
+      keep their anonymous resource.
+    - ``note`` (the activity_log.note column) is NOT copied to the new
+      activity. The primary note mechanism is ``project_session_note`` keyed
+      by ``(report_date, first_activity_id)``; the front-half keeps the
+      original id and thus keeps any session note. The new back-half starts
+      without a note. See docs/ui-webview-migration.md Phase 3B.2.
+
+    The write is a single transaction; any failure rolls back so the original
+    activity is untouched and no half-created new activity remains.
+
+    Returns ``{"original_activity_id": int, "new_activity_id": int}``.
+
+    Raises ``ValueError`` if the activity is missing, deleted, in-progress, or
+    if the UPDATE affects 0 rows (race condition). The caller (API layer) is
+    responsible for input validation (format, range).
+    """
+    split_dt = _parse_time(split_time)
+    ts = now_str()
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, start_time, end_time, app_name, process_name, window_title,
+                   file_path_hint, status, source, is_deleted, is_hidden,
+                   auto_classified, manual_override, project_id
+            FROM activity_log
+            WHERE id = ?
+            """,
+            (activity_id,),
+        ).fetchone()
+        if not row or int(row["is_deleted"] or 0):
+            raise ValueError("activity_not_found_or_deleted")
+        if row["end_time"] is None:
+            raise ValueError("activity_in_progress")
+        orig_start = row["start_time"]
+        orig_end = row["end_time"]
+        first_duration = int((split_dt - _parse_time(orig_start)).total_seconds())
+        second_duration = int((_parse_time(orig_end) - split_dt).total_seconds())
+        if first_duration <= 0 or second_duration <= 0:
+            raise ValueError("split_time_out_of_range")
+
+        # 1) Update the original activity to the front half.
+        cur = conn.execute(
+            """
+            UPDATE activity_log
+            SET end_time = ?,
+                duration_seconds = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND is_deleted = 0
+              AND end_time IS NOT NULL
+            """,
+            (split_time, first_duration, ts, activity_id),
+        )
+        if cur.rowcount == 0:
+            # Race condition: deleted or reopened between the SELECT above and
+            # this UPDATE. Abort without inserting the new activity.
+            raise ValueError("activity_split_update_affected_zero_rows")
+
+        # 2) Insert the new back-half activity. ``note`` is intentionally NOT
+        # copied (see docstring).
+        new_cur = conn.execute(
+            """
+            INSERT INTO activity_log(
+                start_time, end_time, duration_seconds, app_name, process_name, window_title,
+                file_path_hint, status, source, is_deleted, is_hidden,
+                auto_classified, manual_override, project_id, note, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                split_time,
+                orig_end,
+                second_duration,
+                row["app_name"],
+                row["process_name"],
+                row["window_title"],
+                row["file_path_hint"],
+                row["status"],
+                row["source"],
+                int(row["is_hidden"] or 0),
+                int(row["auto_classified"] or 0),
+                int(row["manual_override"] or 0),
+                row["project_id"],
+                ts,
+                ts,
+            ),
+        )
+        new_activity_id = int(new_cur.lastrowid)
+
+        # 3) Copy the project assignment row so the new activity keeps the
+        # same effective project (manual or automatic).
+        assignment = conn.execute(
+            """
+            SELECT project_id, confidence, source, is_manual, suggested_project_name
+            FROM activity_project_assignment
+            WHERE activity_id = ?
+            """,
+            (activity_id,),
+        ).fetchone()
+        if assignment:
+            conn.execute(
+                """
+                INSERT INTO activity_project_assignment(
+                    activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(activity_id) DO NOTHING
+                """,
+                (
+                    new_activity_id,
+                    assignment["project_id"],
+                    int(assignment["confidence"] or 0),
+                    assignment["source"],
+                    int(assignment["is_manual"] or 0),
+                    assignment["suggested_project_name"],
+                    ts,
+                    ts,
+                ),
+            )
+
+        # 4) Copy the activity_resource row so the new activity keeps the same
+        # resource display name, identity key, and path_hint. Excluded
+        # activities copy their anonymous resource, which is already safe.
+        resource = conn.execute(
+            """
+            SELECT resource_kind, resource_subtype, display_name, identity_key,
+                   is_anchor, confidence, source, app_name, process_name, window_title,
+                   path_hint, path_key, uri_scheme, uri_host, uri_hint, metadata_json
+            FROM activity_resource
+            WHERE activity_id = ?
+            """,
+            (activity_id,),
+        ).fetchone()
+        if resource:
+            conn.execute(
+                """
+                INSERT INTO activity_resource(
+                    activity_id, resource_kind, resource_subtype, display_name, identity_key,
+                    is_anchor, confidence, source, app_name, process_name, window_title,
+                    path_hint, path_key, uri_scheme, uri_host, uri_hint, metadata_json,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(activity_id) DO NOTHING
+                """,
+                (
+                    new_activity_id,
+                    resource["resource_kind"],
+                    resource["resource_subtype"],
+                    resource["display_name"],
+                    resource["identity_key"],
+                    int(resource["is_anchor"] or 0),
+                    int(resource["confidence"] or 0),
+                    resource["source"],
+                    resource["app_name"],
+                    resource["process_name"],
+                    resource["window_title"],
+                    resource["path_hint"],
+                    resource["path_key"],
+                    resource["uri_scheme"],
+                    resource["uri_host"],
+                    resource["uri_hint"],
+                    resource["metadata_json"],
+                    ts,
+                    ts,
+                ),
+            )
+
+        return {"original_activity_id": activity_id, "new_activity_id": new_activity_id}
+
+
 def soft_delete_activity(activity_id: int) -> None:
     with get_connection() as conn:
         conn.execute(

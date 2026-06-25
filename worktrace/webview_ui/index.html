@@ -133,6 +133,22 @@
                                 </div>
                                 <div id="edit-time-status" class="edit-status" hidden></div>
                             </div>
+                            <div class="edit-field edit-split-section" id="edit-split-section">
+                                <div class="edit-label">拆分时段</div>
+                                <div id="edit-split-single" hidden>
+                                    <div class="edit-time-row">
+                                        <label for="edit-split-time" class="edit-time-label">拆分点</label>
+                                        <input type="datetime-local" id="edit-split-time" class="edit-time-input" step="1" disabled>
+                                    </div>
+                                    <div class="edit-time-actions">
+                                        <button id="edit-split-save-btn" class="edit-btn edit-split-save-btn" type="button" disabled>拆分</button>
+                                    </div>
+                                </div>
+                                <div id="edit-split-multi" class="edit-time-hint" hidden>
+                                    多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动。
+                                </div>
+                                <div id="edit-split-status" class="edit-status" hidden></div>
+                            </div>
                         </div>
                     </div>
                 </div>

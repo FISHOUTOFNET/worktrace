@@ -42,6 +42,17 @@ message directing the user to per-activity editing. In-progress activities
 cannot be edited (their displayed ``end_time`` may be a projected value).
 Errors are mapped from stable ``TimelineTimeEditError`` codes to Chinese
 messages without echoing tracebacks, SQL, or internal field names.
+
+Phase 3B.2 adds the minimal activity-split foundation:
+``split_timeline_activity`` and ``split_timeline_session`` are the production
+write path for splitting a single closed activity into two at a given
+``split_time``. The original activity keeps its id and becomes the front
+half; a new activity is inserted for the back half. Session-level split is
+only supported for single-activity sessions; multi-activity sessions return
+a clear Chinese message directing the user to per-activity splitting.
+In-progress activities cannot be split. Errors are mapped from stable
+``TimelineSplitError`` codes to Chinese messages without echoing
+tracebacks, SQL, or internal field names.
 """
 
 from __future__ import annotations
@@ -51,7 +62,7 @@ import re
 from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
-from ..api.timeline_api import TimelineTimeEditError
+from ..api.timeline_api import TimelineSplitError, TimelineTimeEditError
 from ..formatters import (
     format_duration,
     format_project_label,
@@ -82,6 +93,18 @@ _TIME_ERROR_MESSAGES = {
     "multi_activity": "多活动 session 暂不支持整体时间修改",
     "invalid_time": "时间无效",
     "invalid_id": "操作失败",
+}
+
+# Maps ``TimelineSplitError.code`` to stable Chinese user-facing messages for
+# the Phase 3B.2 activity split. Unknown codes collapse to the generic
+# "操作失败" so internal details are never surfaced.
+_SPLIT_ERROR_MESSAGES = {
+    "in_progress": "进行中记录暂不支持拆分",
+    "multi_activity": "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动",
+    "invalid_time": "拆分时间无效",
+    "outside_range": "拆分时间无效",
+    "invalid_id": "操作失败",
+    "operation_failed": "操作失败",
 }
 
 
@@ -478,6 +501,93 @@ class WebViewBridge:
             logger.exception("webview bridge update_timeline_session_time failed")
             return dict(_GENERIC_ERROR)
 
+    # --- Phase 3B.2: Timeline activity split (single-activity foundation) ---
+
+    def split_timeline_activity(
+        self,
+        activity_id: int,
+        split_time: str,
+    ) -> dict[str, Any]:
+        """Split a single closed activity into two at ``split_time``.
+
+        ``activity_id`` must be a positive int (``bool`` rejected).
+        ``split_time`` must be a ``YYYY-MM-DD HH:MM:SS`` string strictly
+        between the activity's ``start_time`` and ``end_time``. In-progress
+        activities (``end_time IS NULL``) cannot be split.
+
+        Returns ``{"ok": true, "original_activity_id": int, "new_activity_id": int}``
+        on success or ``{"ok": false, "error": "<chinese message>"}`` on
+        failure. Known failure modes map to clear Chinese messages; unknown
+        failures collapse to ``"操作失败"``. Tracebacks, SQL errors, file
+        paths, window titles, and notes are never surfaced.
+        """
+        try:
+            if isinstance(activity_id, bool):
+                return {"ok": False, "error": "操作失败"}
+            try:
+                aid = int(activity_id)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "操作失败"}
+            if aid <= 0:
+                return {"ok": False, "error": "操作失败"}
+            msg = _validate_split_time_input(split_time)
+            if msg is not None:
+                return {"ok": False, "error": msg}
+            result = timeline_api.split_timeline_activity(aid, split_time)
+            return {
+                "ok": True,
+                "original_activity_id": int(result.get("original_activity_id") or 0),
+                "new_activity_id": int(result.get("new_activity_id") or 0),
+            }
+        except TimelineSplitError as exc:
+            return {"ok": False, "error": _SPLIT_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge split_timeline_activity failed")
+            return dict(_GENERIC_ERROR)
+
+    def split_timeline_session(
+        self,
+        activity_ids: list[int],
+        split_time: str,
+    ) -> dict[str, Any]:
+        """Apply a session-level split.
+
+        ``activity_ids`` is the session's full activity id list. Phase 3B.2
+        only supports sessions that resolve to a single activity (after
+        deduplication); multi-activity sessions return a clear Chinese
+        message directing the user to per-activity splitting.
+
+        Returns ``{"ok": true, "original_activity_id": int, "new_activity_id": int}``
+        on success or ``{"ok": false, "error": "<chinese message>"}`` on
+        failure.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "请选择有效的活动"}
+            msg = _validate_split_time_input(split_time)
+            if msg is not None:
+                return {"ok": False, "error": msg}
+            # Multi-activity check at the bridge layer so the user gets a
+            # clear message without a round-trip through the API.
+            if len(ids) > 1:
+                return {"ok": False, "error": "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动"}
+            result = timeline_api.split_timeline_session(ids, split_time)
+            return {
+                "ok": True,
+                "original_activity_id": int(result.get("original_activity_id") or 0),
+                "new_activity_id": int(result.get("new_activity_id") or 0),
+            }
+        except TimelineSplitError as exc:
+            return {"ok": False, "error": _SPLIT_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge split_timeline_session failed")
+            return dict(_GENERIC_ERROR)
+
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
     """Validate and normalize the ``activity_ids`` argument from JS.
@@ -523,6 +633,22 @@ def _validate_datetime_inputs(start_time: str, end_time: str) -> str | None:
         return "时间无效"
     if not _DATETIME_SHAPE_RE.match(start_time) or not _DATETIME_SHAPE_RE.match(end_time):
         return "时间无效"
+    return None
+
+
+def _validate_split_time_input(split_time: str) -> str | None:
+    """Bridge-level guard for the ``split_time`` input.
+
+    Returns ``None`` if the value passes the lightweight shape check, or a
+    Chinese error message string otherwise. The API layer performs the full
+    ``datetime.strptime`` validation and the strict range check; this guard
+    just gives the user a clearer ``"拆分时间无效"`` message for obviously
+    malformed input (non-string, empty, wrong shape).
+    """
+    if not isinstance(split_time, str) or not split_time:
+        return "拆分时间无效"
+    if not _DATETIME_SHAPE_RE.match(split_time):
+        return "拆分时间无效"
     return None
 
 
