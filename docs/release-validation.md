@@ -357,3 +357,43 @@ This section validates the Phase 1B.1 hardening of the encrypted backup import p
 - Export/import logs contain the backup path or sensitive content.
 - The UI allows concurrent imports.
 - PyInstaller exe or installer-installed WorkTrace does not exhibit the guard behavior.
+
+## WebView Phase 0A/0B/0C Validation
+
+This section is the validation framework for the optional WebView UI spike documented in [`docs/ui-webview-migration.md`](ui-webview-migration.md). It is scoped to the shell, bridge, runtime, and packaging only. It does not validate any feature page, does not migrate the Tkinter UI, and does not introduce field-level encryption, SQLCipher, AI, server, payment, license, token, or subscription features.
+
+The Tkinter UI remains the default. The WebView entry point is an opt-in spike. Items marked Phase 0B or 0C are listed here as pending and are validated when those phases are implemented.
+
+### Automated Checklist
+
+- [ ] `pytest` passes, including the `test_ui_backend_boundary.py` WebView boundary tests.
+- [ ] No new runtime dependency is added in Phase 0A. (`pywebview` is not in `requirements.txt` in Phase 0A.)
+- [ ] No new network dependency.
+- [ ] No new administrator-permission requirement.
+
+### Validation Items
+
+1. [ ] (0A) `python -m worktrace.main` still starts the existing Tkinter UI.
+2. [ ] (0B) `python -m worktrace.webview_main` starts the WebView UI.
+3. [ ] (0A) WebView frontend resources do not contain `http://` or `https://` external links.
+4. [ ] (0A) The WebView bridge does not import `worktrace.services`, `worktrace.db`, `worktrace.collector`, or `worktrace.security`.
+5. [ ] (0B) Closing the WebView window triggers `AppRuntime.shutdown` and leaves no collector thread, folder-index worker, or database lock resident.
+6. [ ] (0C) The PyInstaller build passes with the WebView entry point and resources bundled.
+7. [ ] (0C) The per-user installer build passes and installs without administrator privileges.
+8. [ ] (0C) The packaged `dist\WorkTrace.exe` defaults to the Tkinter UI and starts normally.
+9. [ ] (0C) The packaged exe's WebView entry point can start.
+10. [ ] (0C) When WebView2 Runtime is missing, WorkTrace shows a clear error or falls back to the Tkinter UI.
+
+### Phase 0A/0B/0C Release Blockers
+
+- `python -m worktrace.main` no longer starts the Tkinter UI.
+- The WebView bridge imports `worktrace.services`, `worktrace.db`, `worktrace.collector`, or `worktrace.security`.
+- WebView frontend resources contain `http://`, `https://`, CDN, or Google Fonts references.
+- The frontend stores sensitive data in `localStorage` or `sessionStorage`.
+- The bridge returns tracebacks to JS.
+- The bridge logs window titles, file paths, notes, or copied text.
+- Closing the WebView window leaves the collector thread or database lock resident.
+- PyInstaller cannot bundle the WebView entry point and resources.
+- The per-user installer requires administrator privileges.
+- WebView2 Runtime is missing and WorkTrace fails with no clear error or fallback.
+- A new network dependency or administrator-permission requirement is introduced.

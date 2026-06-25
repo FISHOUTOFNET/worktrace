@@ -24,6 +24,8 @@ Phase 1A local security design is documented in [`docs/v0.2-local-security-desig
 
 Phase 1B extends the v0.2 local security foundation with encrypted `.wtbackup` export/import. A `.wtbackup` file is a local encrypted file created on the user's request; WorkTrace never uploads it. The backup passphrase is chosen by the user at export time and is not recoverable if forgotten. See [`docs/v0.2-local-security-design.md`](docs/v0.2-local-security-design.md) for the full Phase 1B scope, payload format, and import semantics.
 
+v0.2 is also evaluating an optional WebView UI spike. The existing Tkinter / CustomTkinter UI remains the default entry point and is not affected. The WebView is a spike only: it does not migrate any page, does not introduce an account, server, or network dependency, and does not change current functionality. See [`docs/ui-webview-migration.md`](docs/ui-webview-migration.md) for the Phase 0A scope, boundaries, and stop-loss conditions.
+
 ## Privacy And Permissions
 
 无需注册。  
