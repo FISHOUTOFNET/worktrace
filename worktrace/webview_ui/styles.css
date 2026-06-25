@@ -604,3 +604,152 @@ body {
 .recent-item-time {
     word-break: keep-all;
 }
+
+/* --- Phase 3A: Timeline edit panel ---------------------------------- */
+
+.timeline-edit-panel {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+}
+
+.edit-panel-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
+    margin-bottom: 12px;
+}
+
+.edit-field {
+    margin-bottom: 12px;
+}
+
+.edit-label {
+    display: block;
+    font-size: 12px;
+    color: #64748b;
+    margin-bottom: 4px;
+}
+
+.edit-select {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #1e293b;
+    cursor: pointer;
+}
+
+.edit-select:disabled {
+    background: #f1f5f9;
+    cursor: not-allowed;
+}
+
+.edit-note {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #1e293b;
+    resize: vertical;
+    font-family: inherit;
+    line-height: 1.5;
+}
+
+.edit-note:disabled {
+    background: #f1f5f9;
+    cursor: not-allowed;
+}
+
+.edit-note:focus,
+.edit-select:focus {
+    outline: none;
+    border-color: #818cf8;
+    box-shadow: 0 0 0 2px #e0e7ff;
+}
+
+.edit-note-meta {
+    margin-top: 4px;
+    text-align: right;
+}
+
+.edit-note-count {
+    font-size: 11px;
+    color: #94a3b8;
+    font-variant-numeric: tabular-nums;
+}
+
+.edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.edit-btn {
+    padding: 6px 18px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.edit-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.edit-save-btn {
+    background: #4338ca;
+    color: #ffffff;
+    border-color: #4338ca;
+}
+
+.edit-save-btn:hover:not(:disabled) {
+    background: #3730a3;
+}
+
+.edit-save-btn:disabled {
+    background: #a5b4fc;
+    border-color: #a5b4fc;
+    color: #ffffff;
+}
+
+.edit-cancel-btn {
+    background: #ffffff;
+    color: #334155;
+}
+
+.edit-cancel-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+}
+
+.edit-status {
+    margin-top: 10px;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 4px;
+}
+
+.edit-status:empty {
+    padding: 0;
+    margin: 0;
+}
+
+.edit-status-error {
+    background: #fef2f2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+}
+
+.edit-status-success {
+    background: #f0fdf4;
+    color: #15803d;
+    border: 1px solid #bbf7d0;
+}

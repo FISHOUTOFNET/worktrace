@@ -711,3 +711,156 @@ Phase 2.1 specifically:
 - Any new network dependency, CDN reference, Google Fonts reference, or
   browser storage usage is introduced.
 - The frontend displays a Python traceback anywhere.
+
+## WebView Phase 3A Validation
+
+Phase 3A adds minimal write capability to the Timeline page: project
+reclassification and session-note editing. It does **not** implement time
+editing, session split/merge, deletion, batch editing, auto-rule creation,
+or a complex correction page.
+
+Phase 3A specifically:
+
+- Adds `reclassify_timeline_session_project` and
+  `update_timeline_session_note` to `worktrace.api.timeline_api` with
+  explicit input validation (non-empty activity_ids, existence checks,
+  project_id existence, date format, note length ≤ 2000).
+- Adds `list_projects_for_timeline`, `update_timeline_project`, and
+  `update_timeline_note` to `worktrace.webview_ui.bridge.WebViewBridge`.
+  The bridge validates input, calls the API, and returns generic errors
+  without tracebacks or sensitive raw fields.
+- Adds an edit panel to the Timeline details area with a project
+  `<select>`, a note `<textarea>` with character counter, and save/cancel
+  buttons with saving/error/success states.
+- On save success, the Timeline refreshes locally (preserving the current
+  date and selected session if possible). On save failure, the original
+  data is preserved and a Chinese error is shown.
+- The bridge still imports only `worktrace.api` and `worktrace.formatters`.
+- The frontend still uses no CDN, no external links, no Google Fonts, no
+  `localStorage`/`sessionStorage`, and no traceback display.
+
+### Automated Checklist
+
+- [ ] `pytest` passes, including the Phase 3A tests in
+      `tests/test_timeline_api_editing.py`,
+      `tests/test_webview_bridge_editing.py`, and the updated
+      `tests/test_webview_resources.py`.
+- [ ] No new runtime dependency is introduced.
+- [ ] No new network dependency.
+- [ ] No new administrator-permission requirement.
+- [ ] No new DB schema (Phase 3A reuses `activity_project_assignment`,
+      `activity_log`, and `project_session_note`).
+
+### Validation Items
+
+- [ ] `reclassify_timeline_session_project` validates `activity_ids`
+      (non-empty, positive ints, existence, deduplication) and
+      `project_id` (positive int, existence).
+- [ ] `update_timeline_session_note` validates `report_date`
+      (`YYYY-MM-DD`), `first_activity_id` (positive int, existence), and
+      `note` (string, length ≤ 2000).
+- [ ] `list_projects_for_timeline` returns a JSON-serializable list
+      including the "未归类" system project, with only `id`/`name`/
+      `description` fields.
+- [ ] `update_timeline_project` and `update_timeline_note` return
+      `{"ok": true}` on success and `{"ok": false, "error": "..."}`
+      on failure.
+- [ ] Bridge errors never include tracebacks, exception class names, SQL
+      errors, file paths, window titles, clipboard content, or the note's
+      old value.
+- [ ] The edit panel has a project `<select>`, a note `<textarea>` with
+      character counter, and save/cancel buttons.
+- [ ] The edit panel does not contain time editing, split, merge, delete,
+      batch edit, or auto-rule UI.
+- [ ] `app.js` tracks a saving state (`editSaving`, `setEditSaving`,
+      `保存中…`).
+- [ ] `app.js` preserves original data on save failure and shows a
+      Chinese error.
+- [ ] `app.js` refreshes the Timeline on save success.
+- [ ] Frontend resources still contain no CDN, external links, Google
+      Fonts, `localStorage`/`sessionStorage`, or traceback display logic.
+
+### Manual Validation Checklist
+
+#### AH. Phase 3A Project Reclassification
+
+- [ ] Start WorkTrace with a database that contains at least two projects
+      and several activities on the current day.
+- [ ] Open the Timeline page.
+- [ ] Select a session in the session list.
+- [ ] The edit panel appears below the activity details.
+- [ ] The project `<select>` shows the current project and all selectable
+      projects including "未归类".
+- [ ] Change the project to a different project.
+- [ ] Click "保存".
+- [ ] The button shows "保存中…" then the Timeline refreshes.
+- [ ] The session list shows the new project name.
+- [ ] The session may have regrouped (merged with another session for the
+      same project) or the `session_id` may have disappeared; the selection
+      clears gracefully if so.
+- [ ] Change the project to "未归类".
+- [ ] Click "保存".
+- [ ] The session now shows "未归类" as the project name.
+
+#### AI. Phase 3A Session Note Editing
+
+- [ ] Select a session in the Timeline.
+- [ ] The note `<textarea>` shows the existing note (empty if none).
+- [ ] The character counter shows `0 / 2000` (or the current length).
+- [ ] Type a note with multiple lines.
+- [ ] The character counter updates as you type.
+- [ ] Click "保存".
+- [ ] The button shows "保存中…" then a success message appears.
+- [ ] The Timeline refreshes and the note is persisted.
+- [ ] Select the same session again; the note `<textarea>` shows the saved
+      note with newlines preserved.
+- [ ] Clear the note (or enter whitespace only) and save.
+- [ ] The note is deleted (the `<textarea>` is empty on reload).
+
+#### AJ. Phase 3A Save Failure Handling
+
+- [ ] Select a session and modify the note.
+- [ ] Simulate a bridge error (e.g. by stopping the collector or corrupting
+      the database connection if possible in a test env).
+- [ ] Click "保存".
+- [ ] An error message appears in the edit status area.
+- [ ] The original data is still in the form (not cleared).
+- [ ] The UI is not stuck in "保存中…" state.
+- [ ] No traceback, SQL error, file path, or window title is shown.
+
+#### AK. Phase 3A Privacy Boundary
+
+- [ ] The edit panel only shows the project select and note textarea.
+- [ ] No raw `window_title`, `file_path_hint`, `clipboard`, or `full_path`
+      appears in the edit panel or any bridge return value.
+- [ ] The note `<textarea>` only shows the user-authored session note, not
+      captured activity notes or other metadata.
+- [ ] Logs do not contain the note content, resource names, full paths, or
+      window titles.
+
+### Phase 3A Release Blockers
+
+- `pytest` fails.
+- The bridge `update_timeline_project` or `update_timeline_note` returns
+  a traceback, exception class name, SQL error, file path, window title,
+  clipboard content, or the note's old value on any error path.
+- `bridge.py` imports `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.security`, `worktrace.runtime`, or
+  `worktrace.config` directly.
+- The API layer performs a partial write (some activities reclassified,
+  others not) when one activity_id is invalid.
+- The API layer accepts a nonexistent `project_id` or `activity_id`.
+- The API layer accepts a note longer than 2000 characters.
+- The edit panel exposes time editing, split, merge, delete, batch edit,
+  or auto-rule creation UI.
+- The frontend allows free-form `project_id` input instead of selecting
+  from the bridge-returned project list.
+- `app.js` clears the form on save failure instead of preserving the
+  original data.
+- `app.js` gets stuck in the "保存中…" state after a save failure.
+- The frontend introduces any new network dependency, CDN reference,
+  Google Fonts reference, or browser storage usage.
+- The default entry point no longer starts the WebView UI, or a Tkinter
+  fallback is restored.
+- Any new DB schema is introduced without justification, idempotent
+  migration, and tests.

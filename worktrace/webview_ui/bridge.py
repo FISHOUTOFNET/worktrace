@@ -24,8 +24,14 @@ The timeline service marks ``is_in_progress`` before projecting or replacing
 an open activity's ``end_time`` for display; the API and bridge only pass
 this flag through. Consumers must not infer in-progress state from the
 displayed ``end_time``, because open activities may carry a projected
-display ``end_time``. The bridge does not implement editing, export,
-import, or settings mutations beyond pause/resume.
+display ``end_time``.
+
+Phase 3A adds minimal Timeline editing: ``list_projects_for_timeline``,
+``update_timeline_project``, and ``update_timeline_note`` are the production
+write path for project reclassification and session-note editing. They go
+through ``worktrace.api`` only, validate input, and never return tracebacks
+or sensitive raw fields. The session note returned by ``get_timeline`` is
+the user-authored note (the editing target), not captured metadata.
 """
 
 from __future__ import annotations
@@ -176,6 +182,7 @@ class WebViewBridge:
                         "session_id": str(session.get("session_id") or ""),
                         "project_name": str(session.get("project_name") or "未归类"),
                         "project_description": str(session.get("project_description") or ""),
+                        "project_id": int(session.get("project_id") or 0),
                         "start_time": start_time,
                         "end_time": end_time,
                         "duration": format_duration(session.get("duration_seconds") or 0),
@@ -184,6 +191,8 @@ class WebViewBridge:
                         "is_uncategorized": bool(session.get("is_uncategorized")),
                         "is_in_progress": bool(session.get("is_in_progress")),
                         "activity_ids": list(session.get("activity_ids") or []),
+                        "first_activity_id": int(session.get("first_activity_id") or 0) or None,
+                        "session_note": str(session.get("session_note") or ""),
                     }
                 )
             return {
@@ -246,6 +255,133 @@ class WebViewBridge:
         except Exception:
             logger.exception("webview bridge get_timeline_session_details failed")
             return dict(_GENERIC_ERROR)
+
+    # --- Phase 3A: Timeline basic editing (project reclassification + note) ---
+
+    def list_projects_for_timeline(self) -> dict[str, Any]:
+        """Return the list of projects selectable for Timeline reclassification.
+
+        Returns only display-safe fields (``id``, ``name``, ``description``).
+        The "未归类" system project is included so the frontend can represent
+        "uncategorized" without inventing a sentinel value. No sensitive
+        fields are surfaced.
+        """
+        try:
+            projects = project_api.list_selectable_projects()
+            items: list[dict[str, Any]] = []
+            for project in projects:
+                items.append(
+                    {
+                        "id": int(project.get("id") or 0),
+                        "name": str(project.get("name") or ""),
+                        "description": str(project.get("description") or ""),
+                    }
+                )
+            return {"ok": True, "projects": items}
+        except Exception:
+            logger.exception("webview bridge list_projects_for_timeline failed")
+            return dict(_GENERIC_ERROR)
+
+    def update_timeline_project(
+        self,
+        activity_ids: list[int],
+        project_id: int,
+    ) -> dict[str, Any]:
+        """Reclassify a Timeline session's activities to a project.
+
+        ``activity_ids`` is the session's full activity id list (all
+        activities move together, matching the legacy Tkinter behavior).
+        ``project_id`` must be one of the ids returned by
+        ``list_projects_for_timeline``; the frontend must never pass a
+        free-form value.
+
+        Returns ``{"ok": true}`` on success or
+        ``{"ok": false, "error": "操作失败"}`` on any failure. Errors never
+        include tracebacks, SQL messages, file paths, or window titles.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "请选择有效的活动"}
+            try:
+                pid = int(project_id)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "请选择有效的项目"}
+            timeline_api.reclassify_timeline_session_project(ids, pid)
+            return {"ok": True}
+        except ValueError:
+            # Input validation failed. Return a generic message without
+            # echoing the underlying ValueError text, which could reveal
+            # internal field names or ids.
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge update_timeline_project failed")
+            return dict(_GENERIC_ERROR)
+
+    def update_timeline_note(
+        self,
+        activity_ids: list[int],
+        note: str,
+        report_date: str,
+    ) -> dict[str, Any]:
+        """Write the session note for a Timeline session.
+
+        ``activity_ids`` is the session's activity id list; the first id is
+        used as the session-note key (``first_activity_id``). ``note`` is the
+        new note text. ``report_date`` is the ``YYYY-MM-DD`` date being
+        viewed. The note is stored in ``project_session_note`` (the same
+        model the legacy Tkinter Timeline uses). Legitimate newlines inside
+        the note are preserved; whitespace-only notes delete the row.
+
+        Returns ``{"ok": true}`` on success or
+        ``{"ok": false, "error": "操作失败"}`` on any failure.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "请选择有效的活动"}
+            if not isinstance(note, str):
+                return {"ok": False, "error": "备注内容无效"}
+            if len(note) > timeline_api.TIMELINE_NOTE_MAX_LENGTH:
+                return {"ok": False, "error": "备注过长"}
+            if not isinstance(report_date, str) or not report_date:
+                return {"ok": False, "error": "日期无效"}
+            first_activity_id = ids[0]
+            timeline_api.update_timeline_session_note(
+                report_date, first_activity_id, note
+            )
+            return {"ok": True}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge update_timeline_note failed")
+            return dict(_GENERIC_ERROR)
+
+
+def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
+    """Validate and normalize the ``activity_ids`` argument from JS.
+
+    Returns a deduplicated list of positive ints, or ``None`` if the input
+    is not a usable list of positive integers. This is a bridge-level guard
+    so the API layer always receives clean ints; the API layer performs the
+    deeper existence checks.
+    """
+    if not isinstance(activity_ids, list) or not activity_ids:
+        return None
+    ids: list[int] = []
+    seen: set[int] = set()
+    for raw in activity_ids:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        if value in seen:
+            continue
+        seen.add(value)
+        ids.append(value)
+    return ids if ids else None
 
 
 def _safe_resource_display_name(row: dict[str, Any]) -> str:

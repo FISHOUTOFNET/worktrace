@@ -93,6 +93,27 @@
                         <div id="timeline-details-list" class="timeline-list">
                             <div class="timeline-empty">暂无详情</div>
                         </div>
+                        <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
+                            <div class="edit-panel-title">编辑当前时段</div>
+                            <div class="edit-field">
+                                <label for="edit-project-select" class="edit-label">项目</label>
+                                <select id="edit-project-select" class="edit-select" disabled>
+                                    <option value="">加载中…</option>
+                                </select>
+                            </div>
+                            <div class="edit-field">
+                                <label for="edit-note-text" class="edit-label">备注</label>
+                                <textarea id="edit-note-text" class="edit-note" rows="3" placeholder="为该时段添加备注" disabled></textarea>
+                                <div class="edit-note-meta">
+                                    <span id="edit-note-count" class="edit-note-count">0 / 2000</span>
+                                </div>
+                            </div>
+                            <div class="edit-actions">
+                                <button id="edit-save-btn" class="edit-btn edit-save-btn" type="button" disabled>保存</button>
+                                <button id="edit-cancel-btn" class="edit-btn edit-cancel-btn" type="button" disabled>取消</button>
+                            </div>
+                            <div id="edit-status" class="edit-status" hidden></div>
+                        </div>
                     </div>
                 </div>
             </section>

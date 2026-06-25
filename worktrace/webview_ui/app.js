@@ -1,5 +1,6 @@
 // WorkTrace WebView frontend.
-// Phase 2.1: Overview and Timeline (read-only) pages are production pages.
+// Phase 3A: Overview and Timeline pages are production pages. The Timeline
+// page supports minimal editing (project reclassification + session note).
 // Only communicates with Python through pywebview API bridge.
 // Does not persist sensitive data in browser storage APIs.
 // Does not access any external network resources.
@@ -7,11 +8,15 @@
 // selected session is preserved across auto-refresh, in-progress sessions
 // are clearly marked, long text is truncated with safe tooltips, and
 // bridge errors keep the prior data visible instead of clearing it.
+// Phase 3A editing: project reclassification and session-note editing go
+// through the bridge only; saving state, error state, and post-save
+// refresh preserve the Phase 2.1 privacy boundaries.
 
 (function () {
     "use strict";
 
     var REFRESH_INTERVAL_MS = 8000;
+    var NOTE_MAX_LENGTH = 2000;
     var refreshTimer = null;
 
     // --- Timeline state -------------------------------------------------
@@ -27,6 +32,18 @@
     // applied to the DOM.
     var timelineRequestToken = 0;
     var detailsRequestToken = 0;
+
+    // --- Phase 3A: Timeline editing state -------------------------------
+    // projectsCache holds the selectable projects list (id/name/description)
+    // loaded once from the bridge. currentSessions holds the latest session
+    // list so the edit panel can look up the selected session's fields.
+    // editingSession holds the session object currently loaded into the edit
+    // form. editSaving guards the save button against double-submits.
+    var projectsCache = null;
+    var projectsLoading = false;
+    var currentSessions = [];
+    var editingSession = null;
+    var editSaving = false;
 
     // --- Bridge helper --------------------------------------------------
 
@@ -179,12 +196,14 @@
 
         var listEl = document.getElementById("timeline-sessions-list");
         var sessions = data.sessions || [];
+        currentSessions = sessions;
         if (sessions.length === 0) {
             listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
             // Clear details when there are no sessions
             document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
             document.getElementById("timeline-details-list").innerHTML = "";
             selectedSessionId = null;
+            clearEditPanel();
             return;
         }
 
@@ -239,12 +258,18 @@
             }
             if (found) {
                 loadSessionDetails(found.activity_ids, data.date);
+                // Only re-populate the edit panel if the user is not mid-edit.
+                // Auto-refresh must not overwrite unsaved edits.
+                if (!editingSession || editingSession.session_id !== found.session_id || !isEditDirty()) {
+                    populateEditPanel(found);
+                }
             } else {
                 // Selected session disappeared (e.g. session ended and was
                 // re-grouped). Clear selection gracefully without throwing.
                 selectedSessionId = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
                 document.getElementById("timeline-details-list").innerHTML = "";
+                clearEditPanel();
             }
         }
     }
@@ -270,6 +295,10 @@
         if (found) {
             var dateEl = document.getElementById("timeline-date-display");
             loadSessionDetails(found.activity_ids, dateEl ? dateEl.textContent : null);
+            // Populate the edit panel with the selected session's fields.
+            // A manual click always repopulates, even if a prior auto-refresh
+            // had skipped repopulation due to unsaved edits.
+            populateEditPanel(found);
         }
     }
 
@@ -329,6 +358,298 @@
                 + '</div>';
         }
         detailsList.innerHTML = html;
+    }
+
+    // --- Phase 3A: Timeline editing (project reclassification + note) ----
+
+    function loadProjects() {
+        // Load the selectable projects list once and cache it. Subsequent
+        // calls reuse the cache so we do not hit the bridge every time the
+        // user selects a session.
+        if (projectsCache || projectsLoading) {
+            return Promise.resolve(projectsCache);
+        }
+        projectsLoading = true;
+        return callBridge("list_projects_for_timeline").then(function (result) {
+            projectsLoading = false;
+            if (result && result.ok !== false && result.projects) {
+                projectsCache = result.projects;
+            }
+            return projectsCache;
+        }).catch(function () {
+            projectsLoading = false;
+            return null;
+        });
+    }
+
+    function renderProjectSelect(projects, currentProjectId) {
+        var select = document.getElementById("edit-project-select");
+        if (!select) return;
+        select.innerHTML = "";
+        if (!projects || projects.length === 0) {
+            var failOpt = document.createElement("option");
+            failOpt.value = "";
+            failOpt.textContent = "项目列表加载失败";
+            select.appendChild(failOpt);
+            select.disabled = true;
+            return;
+        }
+        for (var i = 0; i < projects.length; i++) {
+            var p = projects[i];
+            var option = document.createElement("option");
+            option.value = String(p.id);
+            var label = p.name || "";
+            if (p.description) {
+                label += " (" + p.description + ")";
+            }
+            option.textContent = label;
+            if (currentProjectId && String(p.id) === String(currentProjectId)) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        }
+        select.disabled = false;
+    }
+
+    function populateEditPanel(session) {
+        if (!session) {
+            clearEditPanel();
+            return;
+        }
+        editingSession = session;
+        var panel = document.getElementById("timeline-edit-panel");
+        if (panel) panel.hidden = false;
+
+        // Project select: load projects lazily on first use, then reuse cache.
+        var select = document.getElementById("edit-project-select");
+        if (select && !projectsCache) {
+            select.innerHTML = '<option value="">加载中…</option>';
+            select.disabled = true;
+            loadProjects().then(function (projects) {
+                // Only render if we are still editing the same session.
+                if (editingSession && editingSession.session_id === session.session_id) {
+                    renderProjectSelect(projects, session.project_id);
+                }
+            });
+        } else if (select && projectsCache) {
+            renderProjectSelect(projectsCache, session.project_id);
+        }
+
+        // Note textarea: load existing note (the editing target only).
+        var noteEl = document.getElementById("edit-note-text");
+        if (noteEl) {
+            noteEl.value = session.session_note || "";
+            noteEl.disabled = false;
+            updateNoteCount();
+        }
+
+        // Enable save/cancel buttons
+        var saveBtn = document.getElementById("edit-save-btn");
+        var cancelBtn = document.getElementById("edit-cancel-btn");
+        if (saveBtn) saveBtn.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+
+        // Clear any prior status message
+        showEditStatus("", false);
+    }
+
+    function clearEditPanel() {
+        editingSession = null;
+        editSaving = false;
+        var panel = document.getElementById("timeline-edit-panel");
+        if (panel) panel.hidden = true;
+        var noteEl = document.getElementById("edit-note-text");
+        if (noteEl) {
+            noteEl.value = "";
+            noteEl.disabled = true;
+        }
+        var select = document.getElementById("edit-project-select");
+        if (select) {
+            select.innerHTML = '<option value="">加载中…</option>';
+            select.disabled = true;
+        }
+        var saveBtn = document.getElementById("edit-save-btn");
+        var cancelBtn = document.getElementById("edit-cancel-btn");
+        if (saveBtn) saveBtn.disabled = true;
+        if (cancelBtn) cancelBtn.disabled = true;
+        showEditStatus("", false);
+    }
+
+    function isEditDirty() {
+        if (!editingSession) return false;
+        var noteEl = document.getElementById("edit-note-text");
+        var select = document.getElementById("edit-project-select");
+        if (noteEl) {
+            var currentNote = noteEl.value || "";
+            var originalNote = editingSession.session_note || "";
+            if (currentNote !== originalNote) return true;
+        }
+        if (select && select.value) {
+            var currentProjectId = select.value;
+            var originalProjectId = String(editingSession.project_id || 0);
+            if (currentProjectId !== originalProjectId) return true;
+        }
+        return false;
+    }
+
+    function updateNoteCount() {
+        var noteEl = document.getElementById("edit-note-text");
+        var countEl = document.getElementById("edit-note-count");
+        if (!noteEl || !countEl) return;
+        var len = (noteEl.value || "").length;
+        countEl.textContent = len + " / " + NOTE_MAX_LENGTH;
+    }
+
+    function showEditStatus(message, isError) {
+        var statusEl = document.getElementById("edit-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "edit-status " + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function setEditSaving(saving) {
+        editSaving = saving;
+        var saveBtn = document.getElementById("edit-save-btn");
+        var cancelBtn = document.getElementById("edit-cancel-btn");
+        var select = document.getElementById("edit-project-select");
+        var noteEl = document.getElementById("edit-note-text");
+        if (saveBtn) {
+            saveBtn.disabled = saving;
+            saveBtn.textContent = saving ? "保存中…" : "保存";
+        }
+        if (cancelBtn) cancelBtn.disabled = saving;
+        if (select) select.disabled = saving;
+        if (noteEl) noteEl.disabled = saving;
+    }
+
+    function saveEdit() {
+        if (!editingSession || editSaving) return;
+        var activityIds = editingSession.activity_ids;
+        if (!activityIds || activityIds.length === 0) {
+            showEditStatus("无法保存：缺少活动信息", true);
+            return;
+        }
+        var select = document.getElementById("edit-project-select");
+        var noteEl = document.getElementById("edit-note-text");
+        if (!select || !noteEl) return;
+
+        var projectIdStr = select.value;
+        if (!projectIdStr) {
+            showEditStatus("请选择项目", true);
+            return;
+        }
+        var projectId = parseInt(projectIdStr, 10);
+        if (!projectId || projectId <= 0) {
+            showEditStatus("请选择有效的项目", true);
+            return;
+        }
+        var note = noteEl.value || "";
+        if (note.length > NOTE_MAX_LENGTH) {
+            showEditStatus("备注过长", true);
+            return;
+        }
+
+        // Determine what changed so we only call the bridges that are needed.
+        var originalProjectId = String(editingSession.project_id || 0);
+        var originalNote = editingSession.session_note || "";
+        var projectChanged = projectIdStr !== originalProjectId;
+        var noteChanged = note !== originalNote;
+
+        if (!projectChanged && !noteChanged) {
+            showEditStatus("没有需要保存的更改", false);
+            return;
+        }
+
+        var dateEl = document.getElementById("timeline-date-display");
+        var reportDate = timelineDate || (dateEl ? dateEl.textContent : null);
+        if (reportDate === "--") reportDate = null;
+        if (noteChanged && !reportDate) {
+            showEditStatus("无法保存备注：日期无效", true);
+            return;
+        }
+
+        setEditSaving(true);
+        showEditStatus("", false);
+
+        var promises = [];
+        if (projectChanged) {
+            promises.push(callBridge("update_timeline_project", activityIds, projectId).then(function (result) {
+                if (!result || result.ok === false) {
+                    throw new Error(result && result.error ? result.error : "保存项目失败");
+                }
+            }));
+        }
+        if (noteChanged) {
+            promises.push(callBridge("update_timeline_note", activityIds, note, reportDate).then(function (result) {
+                if (!result || result.ok === false) {
+                    throw new Error(result && result.error ? result.error : "保存备注失败");
+                }
+            }));
+        }
+
+        Promise.allSettled(promises).then(function (results) {
+            var hasError = false;
+            var errorMsg = "";
+            for (var i = 0; i < results.length; i++) {
+                if (results[i].status === "rejected") {
+                    hasError = true;
+                    errorMsg = results[i].reason && results[i].reason.message
+                        ? results[i].reason.message
+                        : "保存失败";
+                    break;
+                }
+            }
+            if (hasError) {
+                // Keep original data in the form; do not clear.
+                setEditSaving(false);
+                showEditStatus(errorMsg, true);
+                return;
+            }
+            // Success: refresh the timeline so the session list and edit
+            // panel reflect the new state. Preserve the current date and
+            // try to preserve the selected session.
+            showEditStatus("保存成功", false);
+            refreshTimelineAfterEdit();
+        });
+    }
+
+    function refreshTimelineAfterEdit() {
+        var dateEl = document.getElementById("timeline-date-display");
+        var date = timelineDate || (dateEl ? dateEl.textContent : null);
+        if (date === "--") date = null;
+        var token = ++timelineRequestToken;
+        callBridge("get_timeline", date).then(function (result) {
+            if (token !== timelineRequestToken) return;
+            var data = handleResult(result, function (msg) {
+                showTimelineError(msg || "刷新时间详情失败，请稍后重试。");
+                setEditSaving(false);
+            });
+            if (!data) return;
+            setEditSaving(false);
+            showTimeline(data);
+            clearTimelineError();
+        }).catch(function () {
+            if (token !== timelineRequestToken) return;
+            setEditSaving(false);
+            showTimelineError("刷新时间详情失败，请稍后重试。");
+        });
+    }
+
+    function cancelEdit() {
+        if (editSaving) return;
+        if (!editingSession) {
+            clearEditPanel();
+            return;
+        }
+        // Revert to original values from the session object.
+        populateEditPanel(editingSession);
     }
 
     // --- Timeline loading -----------------------------------------------
@@ -555,6 +876,13 @@
         document.getElementById("timeline-prev-btn").addEventListener("click", goPrevDay);
         document.getElementById("timeline-next-btn").addEventListener("click", goNextDay);
         document.getElementById("timeline-today-btn").addEventListener("click", goToday);
+        // Phase 3A: Timeline editing handlers
+        document.getElementById("edit-save-btn").addEventListener("click", saveEdit);
+        document.getElementById("edit-cancel-btn").addEventListener("click", cancelEdit);
+        var noteEl = document.getElementById("edit-note-text");
+        if (noteEl) {
+            noteEl.addEventListener("input", updateNoteCount);
+        }
     }
 
     function startAutoRefresh() {

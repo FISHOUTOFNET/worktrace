@@ -2,8 +2,10 @@
 
 ## Status
 
-- Current phase: 2.1 (Overview fully migrated; Timeline read-only page
-  migrated and hardened; WebView is the default and only shipping UI).
+- Current phase: 3A (Overview fully migrated; Timeline read-only page
+  migrated and hardened; Timeline basic editing — project reclassification
+  and session-note editing — implemented; WebView is the default and only
+  shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -160,8 +162,24 @@ The migration is phased so each step is independently shippable:
   a refresh fails; long resource/project names are truncated with safe
   tooltips; the layout remains usable on narrow viewports. No editing,
   correction, reclassification, note modification, or deletion is
-  introduced. **Current phase.**
-- Phase 3: Timeline editing / correction migration.
+  introduced. **Completed.**
+- Phase 3A: **Timeline basic editing.** Adds minimal write capability to
+  the Timeline page: project reclassification (move all activities in a
+  session to a different project, including "未归类") and session-note
+  editing (write/overwrite/delete the note keyed by
+  `(report_date, first_activity_id)`). Both write paths go through
+  `worktrace.api` → `worktrace.services` with explicit input validation.
+  The bridge exposes `list_projects_for_timeline`,
+  `update_timeline_project`, and `update_timeline_note`; it returns generic
+  errors without tracebacks or sensitive raw fields. The frontend provides
+  a project `<select>`, a note `<textarea>` with character counter, and
+  save/cancel buttons with saving/error/success states. On save success
+  the Timeline refreshes locally; on save failure the original data is
+  preserved. Time editing, session split/merge, deletion, batch editing,
+  auto-rule creation, and complex correction pages are explicitly out of
+  scope. **Current phase.**
+- Phase 3B: Timeline advanced editing (time correction, split, merge,
+  delete, batch editing, correction page) — not yet started.
 - Phase 4: Statistics / Export.
 - Phase 5: Rules.
 - Phase 6: Settings / Privacy / Encrypted Backup.
@@ -262,9 +280,12 @@ Phase 1 made the WebView UI the default and only shipping UI:
   `get_overview`, `get_recent_activities`, `get_timeline`, and
   `get_timeline_session_details`. The Overview methods are the production
   data path for the Overview page; the Timeline methods are the production
-  data path for the read-only Timeline page (Phase 2). The bridge does not
-  expose editing, correction, deletion, or any write operation beyond
-  pause/resume.
+  data path for the read-only Timeline page (Phase 2). As of Phase 3A the
+  bridge also exposes `list_projects_for_timeline`,
+  `update_timeline_project`, and `update_timeline_note` for minimal
+  Timeline editing (project reclassification and session-note editing).
+  The bridge does not expose time editing, session split/merge, deletion,
+  batch editing, auto-rule creation, or complex correction.
 - `worktrace/webview_ui/index.html`, `app.js`, `styles.css` — local frontend
   resources with no external links, no CDN, no Google Fonts, and no browser
   storage APIs. The Overview page shows:
@@ -446,6 +467,155 @@ supported runtime path):
   `AppRuntime`).
 
 Phase 2.1 is not Phase 3. It does not introduce any write capability.
+
+## Phase 3A Implemented Scope
+
+Phase 3A adds minimal write capability to the Timeline page: project
+reclassification and session-note editing. It does **not** implement time
+editing, session split/merge, deletion, batch editing, auto-rule creation,
+or a complex correction page.
+
+### Data semantics
+
+- **Project reclassification** operates on all `activity_ids` in a session.
+  All activities move together to the target project, matching the legacy
+  Tkinter `update_session_project` behavior. The write is a manual
+  assignment (`manual=True`), so it overwrites both auto-recommended and
+  prior manual assignments via `ON CONFLICT DO UPDATE` in
+  `activity_project_assignment`.
+- **"未归类"** is represented by the existing system `UNCATEGORIZED_PROJECT`
+  row id (surfaced via `list_selectable_projects`). It is a real project
+  row, not a `None` sentinel. The frontend selects it from the project
+  list; it never passes a free-form `project_id`.
+- **Session note** is stored in `project_session_note` keyed by
+  `(report_date, first_activity_id)`, the same model the legacy Tkinter
+  Timeline uses. `first_activity_id` is the first activity id of the
+  session (`activity_ids[0]`). Whitespace-only notes delete the existing
+  note row (matching `set_session_note` behavior). Legitimate newlines
+  inside the note are preserved.
+- **Session regrouping after write:** after a project reclassification,
+  sessions may regroup (e.g. two sessions for the same project may merge).
+  The frontend handles the case where the previously selected `session_id`
+  disappears by clearing the selection gracefully, reusing the Phase 2.1
+  logic.
+
+### API layer (`worktrace/api/timeline_api.py`)
+
+- `reclassify_timeline_session_project(activity_ids, project_id)` —
+  validates `activity_ids` (non-empty list of positive ints, each
+  referencing an existing non-deleted activity; deduplicates), validates
+  `project_id` (positive int referencing an existing project), then calls
+  `timeline_service.update_session_project`. Raises `ValueError` on any
+  invalid input; no partial write.
+- `update_timeline_session_note(report_date, first_activity_id, note)` —
+  validates `report_date` (`YYYY-MM-DD`), `first_activity_id` (positive
+  int, existing non-deleted activity), `note` (string, length ≤
+  `TIMELINE_NOTE_MAX_LENGTH` = 2000), then calls
+  `timeline_service.update_session_note`. Raises `ValueError` on any
+  invalid input.
+- Both methods go through `worktrace.api` → `worktrace.services` only. The
+  API layer does not depend on WebView or UI code.
+
+### Bridge layer (`worktrace/webview_ui/bridge.py`)
+
+- `list_projects_for_timeline()` — returns
+  `{"ok": true, "projects": [{"id", "name", "description"}]}` from
+  `project_api.list_selectable_projects()`. Includes the "未归类" system
+  project. Only display-safe fields are surfaced.
+- `update_timeline_project(activity_ids, project_id)` — validates
+  `activity_ids` via `_coerce_activity_ids` (list of positive ints,
+  deduplicated), validates `project_id` (int), calls
+  `timeline_api.reclassify_timeline_session_project`. Returns
+  `{"ok": true}` on success or `{"ok": false, "error": "..."}` on failure.
+  `ValueError` from the API is caught and returned as a generic
+  `"操作失败"` error without echoing the underlying message.
+- `update_timeline_note(activity_ids, note, report_date)` — validates
+  `activity_ids`, `note` (string, length ≤ 2000), `report_date` (non-empty
+  string), uses `ids[0]` as `first_activity_id`, calls
+  `timeline_api.update_timeline_session_note`. Returns the same
+  success/error shape.
+- The bridge imports only `worktrace.api` and `worktrace.formatters`. It
+  does not import `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.security`, `worktrace.runtime`, or
+  `worktrace.config`.
+- Bridge errors never include tracebacks, exception class names, SQL error
+  messages, file paths, window titles, clipboard content, or the note's
+  old value. Logs record only the operation name, result, and exception
+  type.
+- The `get_timeline` session dict now also includes `project_id`,
+  `first_activity_id`, and `session_note` (the user-authored note, which
+  is the editing target — not captured metadata).
+
+### Frontend (`worktrace/webview_ui/index.html`, `app.js`, `styles.css`)
+
+- The Timeline details area includes an edit panel (`#timeline-edit-panel`)
+  with:
+  - a project `<select>` (`#edit-project-select`) populated from
+    `list_projects_for_timeline()`;
+  - a note `<textarea>` (`#edit-note-text`) with a character counter
+    (`#edit-note-count`, `0 / 2000`);
+  - save (`#edit-save-btn`) and cancel (`#edit-cancel-btn`) buttons;
+  - a status area (`#edit-status`) for success/error messages.
+- `populateEditPanel(session)` loads the session's current `project_id`
+  into the select and `session_note` into the textarea. Projects are
+  loaded lazily on first use and cached.
+- `isEditDirty()` checks whether the user has unsaved changes so
+  auto-refresh does not overwrite them.
+- `saveEdit()` calls `update_timeline_project` and/or `update_timeline_note`
+  (only the changed fields), shows a saving state (`保存中…`), and on
+  success refreshes the Timeline via `refreshTimelineAfterEdit()`. On
+  failure it keeps the original data in the form and shows a Chinese
+  error message. It never shows tracebacks.
+- `cancelEdit()` reverts the form to the session's original values.
+- The frontend still uses no CDN, no external links, no Google Fonts, no
+  `localStorage`/`sessionStorage`, and no traceback display logic.
+- No time editing, split, merge, delete, batch edit, or auto-rule UI is
+  present.
+
+### Tests
+
+- `tests/test_timeline_api_editing.py` — 18 API tests covering validation
+  (empty ids, nonexistent ids, invalid project_id, invalid date, note
+  length), successful writes, multi-activity consistency, note overwrite,
+  whitespace-only deletion, newline preservation, and re-reading the
+  timeline after a write.
+- `tests/test_webview_bridge_editing.py` — 21 bridge tests covering
+  JSON-serializability, successful writes, invalid input, generic error
+  responses without tracebacks/sensitive fields, and the bridge import
+  boundary.
+- `tests/test_webview_resources.py` — 12 new frontend resource tests
+  covering the edit panel DOM, project select, note textarea, save/cancel
+  buttons, absence of forbidden edit handlers, saving state, save-failure
+  data preservation, save-success timeline refresh, and edit panel styles.
+  The old `test_app_js_timeline_has_no_edit_buttons` test was replaced
+  with `test_app_js_timeline_has_no_forbidden_edit_handlers` to reflect
+  that Phase 3A allows project reclassification and note editing but
+  still forbids time editing, split, merge, delete, batch edit, and
+  auto-rule creation.
+
+## Phase 3A Not Implemented
+
+The following are explicitly not implemented in Phase 3A and remain out
+of scope until Phase 3B:
+
+- Time editing (start time, end time);
+- Session split;
+- Session merge;
+- Activity/session deletion;
+- Batch editing;
+- Auto-rule creation;
+- Complex correction page;
+- Statistics and Excel export;
+- Project rules creation, editing, enable/disable;
+- Settings, privacy notice, clipboard toggle, clear data;
+- Encrypted `.wtbackup` export/import;
+- Tray icon;
+- Single-instance UI behavior (the WebView entry point does not add a
+  tray; the collector single-instance lock is still enforced by
+  `AppRuntime`).
+
+Phase 3A is not Phase 3B. It does not introduce time editing, split,
+merge, delete, batch editing, or auto-rule creation.
 
 ## Legacy Tkinter UI Handling
 

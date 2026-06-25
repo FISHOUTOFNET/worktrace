@@ -274,16 +274,138 @@ def test_app_js_timeline_has_error_handling():
     assert "clearTimelineError" in source
 
 
-def test_app_js_timeline_has_no_edit_buttons():
-    """Phase 2: the Timeline page is read-only. app.js must not contain
-    edit/correction/delete/reclassify handlers."""
+def test_app_js_timeline_has_no_forbidden_edit_handlers():
+    """Phase 3A: the Timeline page allows project reclassification and
+    session-note editing only. app.js must not contain handlers for time
+    editing, session split/merge, deletion, batch editing, auto-rule
+    creation, or complex correction."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    # Forbidden operations (not part of Phase 3A scope)
     assert "edit_activity" not in source
     assert "delete_activity" not in source
-    assert "reclassify" not in source
     assert "correct_activity" not in source
-    assert "update_note" not in source
-    assert "update_session_project" not in source
+    assert "split_session" not in source
+    assert "merge_session" not in source
+    assert "batch_edit" not in source
+    assert "auto_rule" not in source
+    assert "edit_start_time" not in source
+    assert "edit_end_time" not in source
+
+
+# --- Phase 3A: Timeline editing UI tests -------------------------------
+
+
+def test_index_html_timeline_has_edit_panel():
+    """Phase 3A: the Timeline details area must contain an edit panel for
+    project reclassification and session-note editing."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="timeline-edit-panel"' in source
+    assert "timeline-edit-panel" in source
+
+
+def test_index_html_timeline_has_project_select():
+    """Phase 3A: the edit panel must have a project <select> so the user
+    can reclassify. The frontend must not allow free-form project_id input."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="edit-project-select"' in source
+    assert "<select" in source
+    # No free-form text input for project_id
+    assert 'id="edit-project-input"' not in source
+
+
+def test_index_html_timeline_has_note_textarea():
+    """Phase 3A: the edit panel must have a <textarea> for note editing."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="edit-note-text"' in source
+    assert "<textarea" in source
+    assert 'id="edit-note-count"' in source
+
+
+def test_index_html_timeline_has_save_cancel_buttons():
+    """Phase 3A: the edit panel must have save and cancel buttons."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="edit-save-btn"' in source
+    assert 'id="edit-cancel-btn"' in source
+    assert 'id="edit-status"' in source
+
+
+def test_index_html_timeline_edit_panel_has_no_time_edit_inputs():
+    """Phase 3A: the edit panel must not contain time editing inputs
+    (start time, end time). Only project and note are editable."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    # Extract the edit panel section
+    start = source.find('id="timeline-edit-panel"')
+    assert start != -1, "edit panel must exist"
+    end = source.find("</div>", source.find("</div>", source.find("</div>", source.find("</div>", source.find("</div>", start) + 1) + 1) + 1) + 1)
+    panel = source[start:end]
+    assert "edit-start-time" not in panel
+    assert "edit-end-time" not in panel
+    assert "split" not in panel.lower()
+    assert "merge" not in panel.lower()
+    assert "delete" not in panel.lower()
+    assert "batch" not in panel.lower()
+
+
+def test_app_js_has_edit_panel_functions():
+    """Phase 3A: app.js must define the edit panel lifecycle functions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "populateEditPanel" in source
+    assert "clearEditPanel" in source
+    assert "isEditDirty" in source
+    assert "loadProjects" in source
+    assert "saveEdit" in source
+    assert "cancelEdit" in source
+    assert "updateNoteCount" in source
+    assert "showEditStatus" in source
+
+
+def test_app_js_calls_editing_bridge_methods():
+    """Phase 3A: app.js must call the Phase 3A bridge methods for project
+    reclassification, note editing, and project list loading."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "list_projects_for_timeline" in source
+    assert "update_timeline_project" in source
+    assert "update_timeline_note" in source
+
+
+def test_app_js_has_saving_state():
+    """Phase 3A: app.js must track a saving state to prevent double-submit
+    and show '保存中…' feedback."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "editSaving" in source
+    assert "setEditSaving" in source
+    assert "保存中" in source
+
+
+def test_app_js_edit_save_failure_preserves_data():
+    """Phase 3A: when a save fails, app.js must keep the original data in
+    the form and display an error, not clear the form or leave it in a
+    'saving' state."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # On error, setEditSaving(false) is called and showEditStatus shows error
+    assert "setEditSaving(false)" in source
+    assert "showEditStatus(errorMsg, true)" in source
+
+
+def test_app_js_edit_save_success_refreshes_timeline():
+    """Phase 3A: on save success, app.js must refresh the Timeline so the
+    session list and edit panel reflect the new state."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "refreshTimelineAfterEdit" in source
+    assert "保存成功" in source
+
+
+def test_styles_css_has_edit_panel_styles():
+    """Phase 3A: styles.css must style the edit panel, project select,
+    note textarea, save/cancel buttons, and status messages."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".timeline-edit-panel" in source
+    assert ".edit-select" in source
+    assert ".edit-note" in source
+    assert ".edit-save-btn" in source
+    assert ".edit-cancel-btn" in source
+    assert ".edit-status-error" in source
+    assert ".edit-status-success" in source
 
 
 def test_app_js_timeline_does_not_expose_tracebacks():

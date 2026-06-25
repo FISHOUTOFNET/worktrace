@@ -1,0 +1,226 @@
+"""Tests for the Phase 3A Timeline editing API layer.
+
+Covers ``worktrace.api.timeline_api.reclassify_timeline_session_project``
+and ``worktrace.api.timeline_api.update_timeline_session_note``:
+
+- input validation (empty ids, nonexistent ids, invalid project_id,
+  invalid date, note length);
+- successful writes (project reclassification, note write, whitespace-only
+  note deletion);
+- multi-activity session consistency;
+- re-reading the timeline after a write reflects the change.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from worktrace.api import timeline_api
+from worktrace.services import activity_service, project_service
+
+
+def _activity(app, process, title, start, project_id=None, status="normal"):
+    aid = activity_service.create_activity(
+        app,
+        process,
+        title,
+        start_time=f"2026-06-25 {start}",
+        project_id=project_id,
+        status=status,
+    )
+    activity_service.finalize_created_activity(aid)
+    return aid
+
+
+def _seed_session(project_id=None):
+    """Seed a simple two-activity session on 2026-06-25."""
+    a1 = _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_id)
+    a2 = _activity("Word", "winword.exe", "A2.docx", "09:10:00", project_id)
+    activity_service.close_activity(a2, "2026-06-25 09:30:00")
+    return [a1, a2]
+
+
+# --- reclassify_timeline_session_project ---------------------------------
+
+
+def test_reclassify_success(temp_db):
+    project = project_service.create_project("TestProject")
+    ids = _seed_session()
+    timeline_api.reclassify_timeline_session_project(ids, project)
+    # Verify the activities were reclassified
+    for aid in ids:
+        activity = activity_service.get_activity(aid)
+        assert int(activity["project_id"]) == project
+
+
+def test_reclassify_empty_activity_ids(temp_db):
+    project = project_service.create_project("TestProject")
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project([], project)
+
+
+def test_reclassify_nonexistent_activity_id(temp_db):
+    project = project_service.create_project("TestProject")
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids + [999999], project)
+
+
+def test_reclassify_invalid_project_id(temp_db):
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids, 0)
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids, -1)
+
+
+def test_reclassify_nonexistent_project_id(temp_db):
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.reclassify_timeline_session_project(ids, 999999)
+
+
+def test_reclassify_to_uncategorized(temp_db):
+    """Setting to the uncategorized system project should succeed."""
+    ids = _seed_session()
+    uncat_id = project_service.get_or_create_uncategorized_project()
+    timeline_api.reclassify_timeline_session_project(ids, uncat_id)
+    for aid in ids:
+        activity = activity_service.get_activity(aid)
+        assert int(activity["project_id"]) == uncat_id
+
+
+def test_reclassify_dedupes_activity_ids(temp_db):
+    """Duplicate activity_ids should be deduplicated without error."""
+    project = project_service.create_project("Dup")
+    ids = _seed_session()
+    timeline_api.reclassify_timeline_session_project([ids[0], ids[0], ids[1]], project)
+    for aid in ids:
+        activity = activity_service.get_activity(aid)
+        assert int(activity["project_id"]) == project
+
+
+def test_reclassify_multi_activity_session_consistent(temp_db):
+    """All activities in a session must move together to the same project."""
+    project = project_service.create_project("Group")
+    ids = _seed_session()
+    timeline_api.reclassify_timeline_session_project(ids, project)
+    project_ids = set()
+    for aid in ids:
+        activity = activity_service.get_activity(aid)
+        project_ids.add(int(activity["project_id"]))
+    assert project_ids == {project}
+
+
+def test_reclassify_then_reread_timeline_reflects_change(temp_db):
+    """After reclassification, re-reading the timeline must show the new
+    project in the session list."""
+    project = project_service.create_project("NewProject")
+    ids = _seed_session()
+    timeline_api.reclassify_timeline_session_project(ids, project)
+    sessions = timeline_api.get_project_sessions_by_date(
+        "2026-06-25", include_hidden=False, ensure_context=True
+    )
+    assert any(s["project_name"] == "NewProject" for s in sessions)
+
+
+# --- update_timeline_session_note ----------------------------------------
+
+
+def test_update_note_success(temp_db):
+    ids = _seed_session()
+    timeline_api.update_timeline_session_note("2026-06-25", ids[0], "test note")
+    sessions = timeline_api.get_project_sessions_by_date(
+        "2026-06-25", include_hidden=False, ensure_context=True
+    )
+    # Find the session containing our activities
+    note_found = ""
+    for s in sessions:
+        if ids[0] in (s.get("activity_ids") or []):
+            note_found = s.get("session_note") or ""
+            break
+    assert note_found == "test note"
+
+
+def test_update_note_preserves_newlines(temp_db):
+    """Legitimate newlines inside the note must be preserved."""
+    ids = _seed_session()
+    note = "line one\nline two"
+    timeline_api.update_timeline_session_note("2026-06-25", ids[0], note)
+    sessions = timeline_api.get_project_sessions_by_date(
+        "2026-06-25", include_hidden=False, ensure_context=True
+    )
+    for s in sessions:
+        if ids[0] in (s.get("activity_ids") or []):
+            assert s.get("session_note") == "line one\nline two"
+            break
+
+
+def test_update_note_whitespace_only_deletes(temp_db):
+    """A whitespace-only note should delete the existing note row (matching
+    legacy set_session_note behavior)."""
+    ids = _seed_session()
+    # First set a real note
+    timeline_api.update_timeline_session_note("2026-06-25", ids[0], "real note")
+    # Then overwrite with whitespace-only
+    timeline_api.update_timeline_session_note("2026-06-25", ids[0], "   \n  ")
+    sessions = timeline_api.get_project_sessions_by_date(
+        "2026-06-25", include_hidden=False, ensure_context=True
+    )
+    for s in sessions:
+        if ids[0] in (s.get("activity_ids") or []):
+            assert s.get("session_note") == ""
+            break
+
+
+def test_update_note_too_long(temp_db):
+    ids = _seed_session()
+    long_note = "x" * (timeline_api.TIMELINE_NOTE_MAX_LENGTH + 1)
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note("2026-06-25", ids[0], long_note)
+
+
+def test_update_note_at_max_length_succeeds(temp_db):
+    ids = _seed_session()
+    note = "x" * timeline_api.TIMELINE_NOTE_MAX_LENGTH
+    timeline_api.update_timeline_session_note("2026-06-25", ids[0], note)
+    sessions = timeline_api.get_project_sessions_by_date(
+        "2026-06-25", include_hidden=False, ensure_context=True
+    )
+    for s in sessions:
+        if ids[0] in (s.get("activity_ids") or []):
+            assert len(s.get("session_note") or "") == timeline_api.TIMELINE_NOTE_MAX_LENGTH
+            break
+
+
+def test_update_note_invalid_date(temp_db):
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note("not-a-date", ids[0], "note")
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note("", ids[0], "note")
+
+
+def test_update_note_nonexistent_activity(temp_db):
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note("2026-06-25", 999999, "note")
+
+
+def test_update_note_overwrites_existing(temp_db):
+    """Writing a new note should overwrite the previous one (upsert)."""
+    ids = _seed_session()
+    timeline_api.update_timeline_session_note("2026-06-25", ids[0], "first note")
+    timeline_api.update_timeline_session_note("2026-06-25", ids[0], "second note")
+    sessions = timeline_api.get_project_sessions_by_date(
+        "2026-06-25", include_hidden=False, ensure_context=True
+    )
+    for s in sessions:
+        if ids[0] in (s.get("activity_ids") or []):
+            assert s.get("session_note") == "second note"
+            break
+
+
+def test_update_note_non_string_raises(temp_db):
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note("2026-06-25", ids[0], 12345)
