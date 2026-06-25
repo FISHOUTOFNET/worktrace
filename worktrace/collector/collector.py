@@ -8,6 +8,7 @@ from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
 from ..services import clipboard_service, privacy_service, recovery_service
+from ..services.secure_backup_service import is_secure_import_in_progress
 from ..services.settings_service import get_bool_setting, get_int_setting, set_setting
 from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
@@ -47,6 +48,17 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 continue
 
             if get_bool_setting("user_paused", False):
+                set_setting("collector_status", "paused")
+                machine.pause(at_time=now)
+                _sleep_poll(stop_event)
+                last_loop_time = now
+                continue
+
+            # Secure backup import guard: when an encrypted backup import is
+            # in progress, skip all active-window polling and recording so the
+            # collector cannot write to the DB mid-replacement. The guard is
+            # set by ``secure_backup_service._secure_import_guard``.
+            if is_secure_import_in_progress():
                 set_setting("collector_status", "paused")
                 machine.pause(at_time=now)
                 _sleep_poll(stop_event)

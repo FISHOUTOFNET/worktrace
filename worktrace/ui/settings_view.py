@@ -102,8 +102,10 @@ class SettingsView(ctk.CTkFrame):
         ).grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 12))
         backup_actions = ctk.CTkFrame(backup, fg_color="transparent")
         backup_actions.grid(row=3, column=0, sticky="w", padx=18, pady=(0, 18))
-        design.button(backup_actions, text="导出加密备份", command=self.export_encrypted_backup).pack(side="left")
-        design.button(backup_actions, text="导入加密备份", variant="subtle", command=self.import_encrypted_backup).pack(side="left", padx=(8, 0))
+        self.export_backup_button = design.button(backup_actions, text="导出加密备份", command=self.export_encrypted_backup)
+        self.export_backup_button.pack(side="left")
+        self.import_backup_button = design.button(backup_actions, text="导入加密备份", variant="subtle", command=self.import_encrypted_backup)
+        self.import_backup_button.pack(side="left", padx=(8, 0))
 
         danger = design.card(self.scroll)
         danger.grid(row=3, column=0, sticky="ew")
@@ -169,62 +171,95 @@ class SettingsView(ctk.CTkFrame):
             self.refresh()
 
     def export_encrypted_backup(self) -> None:
-        passphrase = self._ask_new_passphrase()
-        if not passphrase:
-            return
-        default_name = "WorkTrace-Backup-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".wtbackup"
-        path = filedialog.asksaveasfilename(
-            title="导出加密备份",
-            defaultextension=".wtbackup",
-            filetypes=[("WorkTrace 加密备份", "*.wtbackup"), ("所有文件", "*.*")],
-            initialfile=default_name,
-        )
-        if not path:
+        if not self._set_backup_buttons_enabled(False):
             return
         try:
-            backup_api.export_encrypted_backup(path, passphrase)
-        except Exception:
-            messagebox.showerror("导出失败", "导出加密备份时出错，请重试。")
-            return
-        messagebox.showinfo("导出成功", f"加密备份已导出到：\n{path}")
+            passphrase = self._ask_new_passphrase()
+            if not passphrase:
+                return
+            default_name = "WorkTrace-Backup-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".wtbackup"
+            path = filedialog.asksaveasfilename(
+                title="导出加密备份",
+                defaultextension=".wtbackup",
+                filetypes=[("WorkTrace 加密备份", "*.wtbackup"), ("所有文件", "*.*")],
+                initialfile=default_name,
+            )
+            if not path:
+                return
+            try:
+                backup_api.export_encrypted_backup(path, passphrase)
+            except Exception:
+                messagebox.showerror("导出失败", "导出加密备份时出错，请重试。")
+                return
+            messagebox.showinfo("导出成功", f"加密备份已导出到：\n{path}")
+        finally:
+            self._set_backup_buttons_enabled(True)
 
     def import_encrypted_backup(self) -> None:
-        confirm_message = (
-            "导入将替换当前本机 WorkTrace 数据。\n"
-            "建议先导出当前数据进行备份。\n"
-            "错误密码不会导入。\n"
-            "忘记密码无法恢复备份。\n\n"
-            "是否继续？"
-        )
-        if not messagebox.askyesno("确认导入加密备份", confirm_message):
-            return
-        path = filedialog.askopenfilename(
-            title="选择加密备份文件",
-            filetypes=[("WorkTrace 加密备份", "*.wtbackup"), ("所有文件", "*.*")],
-        )
-        if not path:
-            return
-        passphrase = simpledialog.askstring(
-            "输入备份密码", "请输入备份密码：", show="*", parent=self
-        )
-        if not passphrase:
+        if not self._set_backup_buttons_enabled(False):
             return
         try:
-            backup_api.import_encrypted_backup(path, passphrase, mode="replace")
-        except backup_api.BackupDecryptionError:
-            messagebox.showerror("导入失败", "无法解密备份或密码错误。")
-            return
-        except backup_api.BackupCorruptedError:
-            messagebox.showerror("导入失败", "备份文件无效或已损坏。")
-            return
-        except backup_api.BackupVersionNotSupportedError:
-            messagebox.showerror("导入失败", "备份版本不受支持。")
-            return
-        except Exception:
-            messagebox.showerror("导入失败", "导入加密备份时出错。")
-            return
-        messagebox.showinfo("导入成功", "加密备份已导入并替换当前本地数据。")
-        self.refresh()
+            confirm_message = (
+                "导入将替换当前本机 WorkTrace 数据。\n"
+                "建议先导出当前数据进行备份。\n"
+                "导入期间将暂停记录。\n"
+                "导入成功后将保持暂停，请确认数据后手动恢复记录。\n"
+                "错误密码不会导入。\n"
+                "忘记密码无法恢复备份。\n\n"
+                "是否继续？"
+            )
+            if not messagebox.askyesno("确认导入加密备份", confirm_message):
+                return
+            path = filedialog.askopenfilename(
+                title="选择加密备份文件",
+                filetypes=[("WorkTrace 加密备份", "*.wtbackup"), ("所有文件", "*.*")],
+            )
+            if not path:
+                return
+            passphrase = simpledialog.askstring(
+                "输入备份密码", "请输入备份密码：", show="*", parent=self
+            )
+            if not passphrase:
+                return
+            try:
+                backup_api.import_encrypted_backup(path, passphrase, mode="replace")
+            except backup_api.BackupImportInProgressError:
+                messagebox.showerror("导入失败", "另一个导入操作正在进行中，请稍后再试。")
+                return
+            except backup_api.BackupDecryptionError:
+                messagebox.showerror("导入失败", "无法解密备份或密码错误。")
+                return
+            except backup_api.BackupCorruptedError:
+                messagebox.showerror("导入失败", "备份文件无效或已损坏。")
+                return
+            except backup_api.BackupVersionNotSupportedError:
+                messagebox.showerror("导入失败", "备份版本不受支持。")
+                return
+            except Exception:
+                messagebox.showerror("导入失败", "导入加密备份时出错。")
+                return
+            messagebox.showinfo(
+                "导入成功",
+                "加密备份已导入，记录已保持暂停，请确认数据后手动恢复记录。",
+            )
+            self.refresh()
+        finally:
+            self._set_backup_buttons_enabled(True)
+
+    def _set_backup_buttons_enabled(self, enabled: bool) -> bool:
+        """Toggle the backup buttons. Returns False if a guard blocks the action."""
+        if enabled and backup_api.is_secure_import_in_progress():
+            # Do not re-enable while an import is still running.
+            return False
+        if not enabled and backup_api.is_secure_import_in_progress():
+            # An import is already in progress; refuse to start another.
+            messagebox.showerror("操作进行中", "加密备份导入正在进行中，请稍后再试。")
+            return False
+        if hasattr(self, "export_backup_button"):
+            self.export_backup_button.configure(state="normal" if enabled else "disabled")
+        if hasattr(self, "import_backup_button"):
+            self.import_backup_button.configure(state="normal" if enabled else "disabled")
+        return True
 
     def _ask_new_passphrase(self) -> str | None:
         passphrase = simpledialog.askstring(

@@ -291,3 +291,69 @@ This section validates the encrypted `.wtbackup` export/import introduced in Pha
 - Administrator privileges are required for export or import.
 - Network access is required for export or import.
 - Logs contain passphrase, decrypted payload, window title, path, note, copied text, or full ciphertext.
+
+## v0.2 Phase 1B.1 Encrypted Import Safety Hardening
+
+This section validates the Phase 1B.1 hardening of the encrypted backup import path. It ensures imports cannot conflict with concurrent collector writes and that logs do not record sensitive local paths.
+
+### Automated Checklist
+
+- [ ] `pytest` passes, including the Phase 1B.1 guard and logging tests.
+- [ ] No new runtime dependency is introduced.
+- [ ] No new network dependency.
+- [ ] No new administrator-permission requirement.
+
+### Manual Validation Checklist
+
+#### Q. Import Guard During Active Recording
+
+- [ ] Start WorkTrace with the collector actively recording.
+- [ ] Open Settings/Privacy and start an encrypted backup import.
+- [ ] During the import, no new `activity_log`, `activity_resource`, or `activity_clipboard_event` rows are created.
+- [ ] No real window title or file path is stored during the import.
+- [ ] After a successful import, `collector_status` is `paused` and `user_paused` is `true`.
+- [ ] The user can manually resume recording from the tray or Settings after verifying the imported data.
+- [ ] After resuming, the collector records normally.
+
+#### R. Import Failure State Restoration
+
+- [ ] Start an import with a wrong passphrase.
+- [ ] The import fails with a generic "could not decrypt backup or wrong passphrase" message.
+- [ ] `user_paused`, `collector_status`, and `current_activity_snapshot` are restored to their pre-import values.
+- [ ] Database row counts are unchanged.
+- [ ] `secure_import_in_progress` is `false` after the failure.
+- [ ] Repeat with a corrupted backup; same restoration behavior.
+- [ ] Repeat with an unsupported-version backup; same restoration behavior.
+
+#### S. Concurrent Import Rejection
+
+- [ ] While an import is in progress, attempt to start a second import.
+- [ ] The second import is rejected with a clear error message.
+- [ ] The first import is not interrupted.
+
+#### T. Logging Hygiene
+
+- [ ] Export success log does not contain the backup file path.
+- [ ] Import success log does not contain the input file path.
+- [ ] Failure logs do not contain the passphrase.
+- [ ] Failure logs do not contain sensitive test marker strings (project name, window title, file path, note, copied text).
+- [ ] Logs contain only operation name, result, exception type, table count, or boolean flags.
+
+#### U. Packaged Builds
+
+- [ ] `dist\WorkTrace.exe` exhibits the same guard behavior.
+- [ ] The installer-installed WorkTrace exhibits the same guard behavior.
+- [ ] Neither requires administrator privileges or network access for the guard behavior.
+
+### Phase 1B.1 Release Blockers
+
+- An import does not set `secure_import_in_progress` during DB replacement.
+- An import does not clear `secure_import_in_progress` after success or failure.
+- A successful import does not leave the app paused.
+- A failed import does not restore the prior pause/status state.
+- A failed import alters database row counts.
+- An existing `secure_import_in_progress=true` does not reject a new import.
+- The collector writes real activity rows while the guard is active.
+- Export/import logs contain the backup path or sensitive content.
+- The UI allows concurrent imports.
+- PyInstaller exe or installer-installed WorkTrace does not exhibit the guard behavior.

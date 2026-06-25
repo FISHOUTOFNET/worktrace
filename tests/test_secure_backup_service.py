@@ -1,8 +1,13 @@
-"""Tests for the Phase 1B encrypted local backup export/import service."""
+"""Tests for the Phase 1B encrypted local backup export/import service.
+
+Includes Phase 1B.1 import guard, DB safety, and logging hygiene tests.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -13,8 +18,14 @@ from worktrace.services import secure_backup_service
 from worktrace.services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
+    BackupImportInProgressError,
     BackupVersionNotSupportedError,
     SecureBackupError,
+)
+from worktrace.services.settings_service import (
+    get_bool_setting,
+    get_setting,
+    set_setting,
 )
 from worktrace.security.backup_format import (
     MAGIC,
@@ -622,3 +633,304 @@ def test_export_uses_atomic_write(temp_db, tmp_path):
     tmp = out.with_suffix(out.suffix + ".tmp")
     assert not tmp.exists()
     assert out.exists()
+
+
+# =========================================================================
+# Phase 1B.1: Encrypted Import Safety Hardening tests
+# =========================================================================
+#
+# These tests verify the secure import guard, DB safety on failure,
+# collector write-path protection, and logging hygiene introduced in
+# Phase 1B.1. See docs/v0.2-local-security-design.md.
+
+
+# --- helpers -------------------------------------------------------------
+
+
+def _reset_guard_and_pause_state() -> None:
+    """Clear the import guard and pause/status settings to a clean baseline."""
+    set_setting("secure_import_in_progress", "false")
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "stopped")
+    set_setting("current_activity_snapshot", "")
+
+
+def _make_backup(tmp_path: Path, passphrase: str = "correct-passphrase") -> Path:
+    """Create a valid encrypted backup from the current DB."""
+    _seed_test_data()
+    out = tmp_path / "guard-test.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, passphrase)
+    return out
+
+
+def _corrupt_backup(out: Path) -> None:
+    """Flip a byte in the ciphertext region of a backup file."""
+    blob = bytearray(out.read_bytes())
+    blob[-5] = blob[-5] ^ 0xFF
+    out.write_bytes(bytes(blob))
+
+
+# --- import guard service tests ------------------------------------------
+
+
+def test_import_sets_secure_import_in_progress_during_replacement(temp_db, tmp_path, monkeypatch):
+    """While the DB replacement is running, the guard flag must be true."""
+    out = _make_backup(tmp_path)
+    _reset_guard_and_pause_state()
+
+    captured = {}
+
+    original_replace = secure_backup_service._replace_import
+
+    def spy_replace(data):
+        captured["guard_during_replace"] = get_bool_setting("secure_import_in_progress", False)
+        captured["user_paused_during_replace"] = get_bool_setting("user_paused", False)
+        captured["collector_status_during_replace"] = get_setting("collector_status", "")
+        captured["snapshot_during_replace"] = get_setting("current_activity_snapshot", "")
+        return original_replace(data)
+
+    monkeypatch.setattr(secure_backup_service, "_replace_import", spy_replace)
+
+    secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
+
+    assert captured["guard_during_replace"] is True
+    assert captured["user_paused_during_replace"] is True
+    assert captured["collector_status_during_replace"] == "paused"
+    assert captured["snapshot_during_replace"] == ""
+
+
+def test_import_clears_secure_import_in_progress_after_success(temp_db, tmp_path):
+    out = _make_backup(tmp_path)
+    _reset_guard_and_pause_state()
+
+    secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
+
+    assert get_bool_setting("secure_import_in_progress", False) is False
+
+
+def test_import_clears_secure_import_in_progress_after_failure(temp_db, tmp_path):
+    out = _make_backup(tmp_path)
+    _reset_guard_and_pause_state()
+
+    with pytest.raises(BackupDecryptionError):
+        secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
+
+    assert get_bool_setting("secure_import_in_progress", False) is False
+
+
+def test_import_success_leaves_user_paused_and_collector_status_paused(temp_db, tmp_path):
+    out = _make_backup(tmp_path)
+    _reset_guard_and_pause_state()
+
+    secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
+
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status", "") == "paused"
+
+
+def test_wrong_passphrase_restores_prior_pause_status(temp_db, tmp_path):
+    out = _make_backup(tmp_path)
+    # Set a distinctive prior state.
+    set_setting("secure_import_in_progress", "false")
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+    set_setting("current_activity_snapshot", '{"app":"prior-snapshot-marker"}')
+
+    with pytest.raises(BackupDecryptionError):
+        secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
+
+    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert get_bool_setting("user_paused", False) is False
+    assert get_setting("collector_status", "") == "running"
+    assert get_setting("current_activity_snapshot", "") == '{"app":"prior-snapshot-marker"}'
+
+
+def test_corrupted_backup_restores_prior_pause_status(temp_db, tmp_path):
+    out = _make_backup(tmp_path)
+    _corrupt_backup(out)
+    set_setting("secure_import_in_progress", "false")
+    set_setting("user_paused", "true")
+    set_setting("collector_status", "stopped")
+    set_setting("current_activity_snapshot", '{"app":"corrupt-prior-marker"}')
+
+    with pytest.raises((BackupCorruptedError, BackupDecryptionError)):
+        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
+
+    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status", "") == "stopped"
+    assert get_setting("current_activity_snapshot", "") == '{"app":"corrupt-prior-marker"}'
+
+
+def test_existing_secure_import_in_progress_rejects_new_import(temp_db, tmp_path):
+    out = _make_backup(tmp_path)
+    set_setting("secure_import_in_progress", "true")
+
+    with pytest.raises(BackupImportInProgressError):
+        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
+
+    # The guard should still be true (the rejected call did not clear it).
+    assert get_bool_setting("secure_import_in_progress", False) is True
+
+
+def test_current_activity_snapshot_cleared_during_import(temp_db, tmp_path, monkeypatch):
+    out = _make_backup(tmp_path)
+    _reset_guard_and_pause_state()
+    set_setting("current_activity_snapshot", '{"app":"snapshot-before-import"}')
+
+    captured = {}
+    original_replace = secure_backup_service._replace_import
+
+    def spy_replace(data):
+        captured["snapshot_during"] = get_setting("current_activity_snapshot", "")
+        return original_replace(data)
+
+    monkeypatch.setattr(secure_backup_service, "_replace_import", spy_replace)
+
+    secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
+
+    assert captured["snapshot_during"] == ""
+
+
+# --- DB safety tests -----------------------------------------------------
+
+
+def test_wrong_passphrase_does_not_alter_row_counts(temp_db, tmp_path):
+    out = _make_backup(tmp_path)
+    counts_before = _row_counts()
+
+    with pytest.raises(BackupDecryptionError):
+        secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
+
+    assert _row_counts() == counts_before
+
+
+def test_corrupted_backup_does_not_alter_row_counts(temp_db, tmp_path):
+    out = _make_backup(tmp_path)
+    _corrupt_backup(out)
+    counts_before = _row_counts()
+
+    with pytest.raises((BackupCorruptedError, BackupDecryptionError)):
+        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
+
+    assert _row_counts() == counts_before
+
+
+def test_simulated_db_failure_during_replace_rolls_back(temp_db, tmp_path, monkeypatch):
+    out = _make_backup(tmp_path)
+    counts_before = _row_counts()
+
+    def failing_replace(data):
+        raise sqlite3.OperationalError("simulated DB failure during replace")
+
+    monkeypatch.setattr(secure_backup_service, "_replace_import", failing_replace)
+
+    with pytest.raises(sqlite3.OperationalError):
+        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
+
+    assert _row_counts() == counts_before
+
+
+def test_after_rollback_import_guard_cleared(temp_db, tmp_path, monkeypatch):
+    out = _make_backup(tmp_path)
+
+    def failing_replace(data):
+        raise sqlite3.OperationalError("simulated DB failure during replace")
+
+    monkeypatch.setattr(secure_backup_service, "_replace_import", failing_replace)
+
+    with pytest.raises(sqlite3.OperationalError):
+        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
+
+    assert get_bool_setting("secure_import_in_progress", False) is False
+
+
+def test_after_rollback_previous_pause_status_restored(temp_db, tmp_path, monkeypatch):
+    out = _make_backup(tmp_path)
+    set_setting("secure_import_in_progress", "false")
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+    set_setting("current_activity_snapshot", '{"app":"rollback-prior-marker"}')
+
+    def failing_replace(data):
+        raise sqlite3.OperationalError("simulated DB failure during replace")
+
+    monkeypatch.setattr(secure_backup_service, "_replace_import", failing_replace)
+
+    with pytest.raises(sqlite3.OperationalError):
+        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
+
+    assert get_bool_setting("user_paused", False) is False
+    assert get_setting("collector_status", "") == "running"
+    assert get_setting("current_activity_snapshot", "") == '{"app":"rollback-prior-marker"}'
+
+
+# --- logging hygiene tests ------------------------------------------------
+
+
+def test_export_success_log_does_not_contain_output_path(temp_db, tmp_path, caplog):
+    _seed_test_data()
+    out = tmp_path / "log-export-path.wtbackup"
+
+    with caplog.at_level(logging.INFO):
+        secure_backup_service.export_encrypted_backup(out, "passphrase")
+
+    full_log = "\n".join(record.getMessage() for record in caplog.records)
+    assert str(out) not in full_log
+    assert out.name not in full_log
+
+
+def test_import_success_log_does_not_contain_input_path(temp_db, tmp_path, caplog):
+    out = _make_backup(tmp_path)
+    _reset_guard_and_pause_state()
+
+    with caplog.at_level(logging.INFO):
+        secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
+
+    full_log = "\n".join(record.getMessage() for record in caplog.records)
+    assert str(out) not in full_log
+    assert out.name not in full_log
+
+
+def test_failure_log_does_not_contain_passphrase(temp_db, tmp_path, caplog):
+    out = _make_backup(tmp_path)
+    secret_passphrase = "SecretPassphrase-Log-Leak-Test-9Z"
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(BackupDecryptionError):
+            secure_backup_service.import_encrypted_backup(out, secret_passphrase)
+
+    full_log = "\n".join(record.getMessage() for record in caplog.records)
+    assert secret_passphrase not in full_log
+
+
+def test_failure_log_does_not_contain_sensitive_markers(temp_db, tmp_path, caplog):
+    _seed_test_data()
+    out = tmp_path / "log-markers.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, "passphrase")
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(BackupDecryptionError):
+            secure_backup_service.import_encrypted_backup(out, "wrong")
+
+    full_log = "\n".join(record.getMessage() for record in caplog.records)
+    for marker in [TEST_PROJECT_NAME, TEST_WINDOW_TITLE, TEST_FILE_PATH, TEST_NOTE, TEST_COPIED_TEXT]:
+        assert marker not in full_log, f"sensitive marker {marker!r} leaked into log"
+
+
+def test_logs_contain_only_safe_counts(temp_db, tmp_path, caplog):
+    out = _make_backup(tmp_path)
+    _reset_guard_and_pause_state()
+
+    with caplog.at_level(logging.INFO):
+        secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
+
+    # The success log should mention operation name, mode, and table count.
+    import_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if "encrypted backup import" in record.getMessage()
+    ]
+    assert any("success" in msg for msg in import_logs), "expected a success log entry"
+    assert any("mode=replace" in msg for msg in import_logs), "expected mode in log"
+    assert any("tables=" in msg for msg in import_logs), "expected table count in log"

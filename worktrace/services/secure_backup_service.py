@@ -25,10 +25,11 @@ import json
 import logging
 import os
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterator
 
 from ..constants import APP_VERSION
 from ..db import get_connection, now_str, seed_defaults
@@ -39,6 +40,12 @@ from ..security.backup_format import (
     create_encrypted_backup,
     decrypt_encrypted_backup,
     parse_backup_manifest,
+)
+from ..services.settings_service import (
+    clear_settings_cache,
+    get_bool_setting,
+    get_setting,
+    set_setting,
 )
 
 
@@ -75,8 +82,12 @@ NON_MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
         "last_collector_heartbeat",
         "last_shutdown_at",
         "user_paused",
+        "secure_import_in_progress",
     }
 )
+
+# Setting key used to block collector writes during a secure import.
+SECURE_IMPORT_GUARD_KEY = "secure_import_in_progress"
 
 # Delete order (children first) to respect foreign keys.
 _DELETE_ORDER: tuple[str, ...] = (
@@ -109,6 +120,10 @@ class BackupCorruptedError(SecureBackupError):
 
 class BackupVersionNotSupportedError(SecureBackupError):
     """The backup version is not supported by this WorkTrace build."""
+
+
+class BackupImportInProgressError(SecureBackupError):
+    """Another secure import is already in progress."""
 
 
 @dataclass(frozen=True)
@@ -158,7 +173,8 @@ def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
     blob = create_encrypted_backup(payload, passphrase, APP_VERSION)
 
     _atomic_write_bytes(out, blob)
-    logging.info("encrypted backup export success path=%s", out)
+    # Do not log the full path: it may contain sensitive folder names.
+    logging.info("encrypted backup export success suffix=%s", BACKUP_FILE_SUFFIX)
     return out
 
 
@@ -169,9 +185,12 @@ def import_encrypted_backup(
 ) -> ImportResult:
     """Import an encrypted ``.wtbackup`` file into the current local database.
 
-    Phase 1B supports only ``mode="replace"``. Decryption and payload validation
-    happen before any database mutation, so a wrong passphrase, corrupted
-    backup, or unsupported version never damages the current database.
+    Phase 1B supports only ``mode="replace"``. The import runs inside a
+    ``secure_import_guard`` that pauses the collector and blocks collector
+    writes for the duration of the DB replacement. Decryption and payload
+    validation happen inside the guard so that, even on failure, the collector
+    cannot write to the DB mid-import; on failure the prior pause/status
+    state is restored and the DB is left untouched.
     """
     if not passphrase:
         raise SecureBackupError("passphrase is required")
@@ -179,13 +198,23 @@ def import_encrypted_backup(
         raise SecureBackupError(f"unsupported import mode: {mode}")
 
     blob = Path(input_path).read_bytes()
-    payload = _read_and_decrypt(blob, passphrase)
-    data = _parse_and_validate_payload(payload)
 
-    imported_counts = _replace_import(data)
+    with _secure_import_guard() as guard:
+        # Decrypt and validate inside the guard so the collector is already
+        # blocked. If decryption fails, the guard restores prior state on exit.
+        payload = _read_and_decrypt(blob, passphrase)
+        data = _parse_and_validate_payload(payload)
+        imported_counts = _replace_import(data)
+        # Mark the import as succeeded so the guard leaves the app paused
+        # instead of restoring the prior state.
+        guard.mark_succeeded()
 
     _invalidate_caches()
-    logging.info("encrypted backup import success mode=%s tables=%d", mode, len(imported_counts))
+    logging.info(
+        "encrypted backup import success mode=%s tables=%d",
+        mode,
+        len(imported_counts),
+    )
     return ImportResult(mode=mode, imported_tables=imported_counts, folder_index_reset=True)
 
 
@@ -203,6 +232,107 @@ def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInf
 
 
 # --- payload construction ------------------------------------------------
+
+
+@dataclass
+class _ImportGuardState:
+    """Mutable state held by the secure import guard.
+
+    ``succeeded`` is set to True only after the DB replacement commits. On
+    exit, the guard uses this flag to decide whether to leave the app paused
+    (success) or restore the prior pause/status (failure).
+    """
+
+    prior_user_paused: bool
+    prior_collector_status: str
+    prior_snapshot: str
+    succeeded: bool = False
+
+    def mark_succeeded(self) -> None:
+        self.succeeded = True
+
+
+@contextmanager
+def _secure_import_guard() -> Iterator[_ImportGuardState]:
+    """Context manager that blocks collector writes during a secure import.
+
+    On enter:
+      - reject if another import is already in progress;
+      - snapshot the current ``user_paused``, ``collector_status`` and
+        ``current_activity_snapshot`` values;
+      - force ``user_paused=true``, ``collector_status=paused``,
+        ``current_activity_snapshot=""`` and
+        ``secure_import_in_progress=true`` so the collector loop skips its
+        normal write path.
+
+    On exit (always):
+      - clear ``secure_import_in_progress`` so the collector can resume;
+      - clear the settings cache so subsequent reads see the new values.
+
+    On success (``guard.mark_succeeded()`` was called):
+      - leave ``user_paused=true`` and ``collector_status=paused`` so the
+        user must manually resume recording after verifying the imported data.
+
+    On failure (exception propagated out of the ``with`` block):
+      - restore ``user_paused``, ``collector_status`` and
+        ``current_activity_snapshot`` to their prior values so the app
+        returns to its pre-import state.
+
+    The guard never logs passphrase, payload, window title, path, note, or
+    copied text. It only logs the operation name, result, and exception type.
+    """
+    if get_bool_setting(SECURE_IMPORT_GUARD_KEY, False):
+        logging.warning("encrypted backup import rejected: already in progress")
+        raise BackupImportInProgressError("another encrypted backup import is already in progress")
+
+    prior_user_paused = get_bool_setting("user_paused", False)
+    prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
+    prior_snapshot = get_setting("current_activity_snapshot", "") or ""
+
+    set_setting("user_paused", "true")
+    set_setting("collector_status", "paused")
+    set_setting("current_activity_snapshot", "")
+    set_setting(SECURE_IMPORT_GUARD_KEY, "true")
+    clear_settings_cache()
+
+    state = _ImportGuardState(
+        prior_user_paused=prior_user_paused,
+        prior_collector_status=prior_collector_status,
+        prior_snapshot=prior_snapshot,
+    )
+
+    try:
+        yield state
+    except Exception as exc:
+        # Restore prior state on failure. Do not log the exception message:
+        # it may contain sensitive details from upstream layers.
+        logging.warning(
+            "encrypted backup import failed exc_type=%s", type(exc).__name__
+        )
+        set_setting("user_paused", "true" if prior_user_paused else "false")
+        set_setting("collector_status", prior_collector_status)
+        set_setting("current_activity_snapshot", prior_snapshot)
+        raise
+    else:
+        # On success, leave the app paused so the user can verify the imported
+        # data before resuming recording. The DB replacement above re-seeds
+        # default settings (including user_paused/collector_status), so we must
+        # explicitly re-assert the paused state here.
+        set_setting("user_paused", "true")
+        set_setting("collector_status", "paused")
+        logging.info("encrypted backup import guard completed paused=true")
+    finally:
+        set_setting(SECURE_IMPORT_GUARD_KEY, "false")
+        clear_settings_cache()
+
+
+def is_secure_import_in_progress() -> bool:
+    """True when a secure backup import is currently in progress.
+
+    Collector and write paths check this to skip writes that would conflict
+    with an in-progress DB replacement.
+    """
+    return get_bool_setting(SECURE_IMPORT_GUARD_KEY, False)
 
 
 def _build_export_payload() -> bytes:
@@ -407,13 +537,16 @@ __all__ = [
     "BACKUP_FILE_SUFFIX",
     "BackupCorruptedError",
     "BackupDecryptionError",
+    "BackupImportInProgressError",
     "BackupManifestInfo",
     "BackupVersionNotSupportedError",
     "EXCLUDED_TABLES",
     "EXPORT_TABLES",
     "ImportResult",
+    "SECURE_IMPORT_GUARD_KEY",
     "SecureBackupError",
     "export_encrypted_backup",
     "import_encrypted_backup",
+    "is_secure_import_in_progress",
     "parse_encrypted_backup_manifest",
 ]

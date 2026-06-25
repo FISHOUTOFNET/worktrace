@@ -187,7 +187,7 @@ The Settings page saves the clipboard text recording toggle immediately when it 
 
 Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, with the `排除规则` project starting disabled and empty. The all-data export includes clipboard events and project session notes, and intentionally excludes folder index tables because they are derived caches that may contain many local file paths.
 
-The Settings/Privacy page also offers encrypted `.wtbackup` export and import. A `.wtbackup` file is a local encrypted backup created on the user's request; WorkTrace never uploads it. The backup may include copied text if clipboard recording was enabled, so the UI warns before export. Import is replace-only (or import into an empty profile); a wrong passphrase, corrupted backup, or unsupported version never damages the current database. The backup passphrase is not recoverable if forgotten.
+The Settings/Privacy page also offers encrypted `.wtbackup` export and import. A `.wtbackup` file is a local encrypted backup created on the user's request; WorkTrace never uploads it. The backup may include copied text if clipboard recording was enabled, so the UI warns before export. Import is replace-only (or import into an empty profile); a wrong passphrase, corrupted backup, or unsupported version never damages the current database. The backup passphrase is not recoverable if forgotten. Encrypted import pauses recording during replacement and keeps recording paused after a successful import.
 
 ## Tests
 
