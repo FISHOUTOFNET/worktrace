@@ -366,8 +366,8 @@ The Tkinter UI remains the default. The WebView entry point is an opt-in spike. 
 
 ### Automated Checklist
 
-- [ ] `pytest` passes, including the `test_ui_backend_boundary.py` WebView boundary tests.
-- [ ] No new runtime dependency is added in Phase 0A. (`pywebview` is not in `requirements.txt` in Phase 0A.)
+- [ ] `pytest` passes, including the `test_ui_backend_boundary.py` WebView boundary tests, `test_webview_bridge.py`, and `test_webview_resources.py`.
+- [ ] `pywebview>=5.0` is declared in `requirements.txt` (added in Phase 0B).
 - [ ] No new network dependency.
 - [ ] No new administrator-permission requirement.
 
@@ -383,6 +383,31 @@ The Tkinter UI remains the default. The WebView entry point is an opt-in spike. 
 8. [ ] (0C) The packaged `dist\WorkTrace.exe` defaults to the Tkinter UI and starts normally.
 9. [ ] (0C) The packaged exe's WebView entry point can start.
 10. [ ] (0C) When WebView2 Runtime is missing, WorkTrace shows a clear error or falls back to the Tkinter UI.
+
+### Manual Validation Checklist
+
+#### V. WebView Shell Startup (Phase 0B)
+
+- [ ] Run `python -m worktrace.webview_main` from the source tree.
+- [ ] A WorkTrace window opens showing the Overview page.
+- [ ] The sidebar shows collector status (记录中 / 已暂停 / 采集器未运行).
+- [ ] The pause/resume button toggles the status label.
+- [ ] The Overview page shows today's date, total duration, and project count.
+- [ ] The Overview page shows the current activity summary or "当前活动：无".
+- [ ] The Overview page shows up to 20 recent sessions.
+- [ ] The page auto-refreshes every 8 seconds without manual interaction.
+- [ ] Clicking 时间详情, 统计与导出, 项目规则, 设置与隐私 shows the migration placeholder.
+- [ ] Clicking 概览 returns to the Overview page.
+
+#### W. WebView Window Close And Runtime Shutdown (Phase 0B)
+
+- [ ] Start `python -m worktrace.webview_main` and let the collector run for a few seconds.
+- [ ] Close the WebView window.
+- [ ] The process exits cleanly (no lingering Python process in Task Manager).
+- [ ] The collector thread is joined (no `WorkTraceCollector` thread resident).
+- [ ] The single-instance lock is released (a second launch can acquire it).
+- [ ] The `collector_status` setting is `stopped` after exit.
+- [ ] No `activity_log` row has `end_time IS NULL` after a clean exit.
 
 ### Phase 0A/0B/0C Release Blockers
 

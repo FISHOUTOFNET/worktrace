@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorkTrace</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="sidebar-brand">WorkTrace</div>
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-page="overview">概览</button>
+                <button class="nav-item" data-page="timeline">时间详情</button>
+                <button class="nav-item" data-page="statistics">统计与导出</button>
+                <button class="nav-item" data-page="rules">项目规则</button>
+                <button class="nav-item" data-page="settings">设置与隐私</button>
+            </nav>
+            <div class="sidebar-status">
+                <div id="status-display" class="status-display">采集器未运行</div>
+                <button id="toggle-pause-btn" class="toggle-btn">开始记录</button>
+            </div>
+        </aside>
+        <main class="content">
+            <section id="page-overview" class="page active">
+                <header class="page-header">
+                    <h1>今日概览</h1>
+                    <button id="refresh-btn" class="refresh-btn">刷新</button>
+                </header>
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-label">今日日期</div>
+                        <div id="kpi-date" class="kpi-value">--</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">今日总时长</div>
+                        <div id="kpi-total" class="kpi-value">00:00:00</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">今日项目数</div>
+                        <div id="kpi-projects" class="kpi-value">0</div>
+                    </div>
+                </div>
+                <div class="current-card">
+                    <div class="card-title">当前活动</div>
+                    <div id="current-activity" class="current-text">当前活动：无</div>
+                </div>
+                <div class="recent-card">
+                    <div class="card-title">最近活动</div>
+                    <div id="recent-list" class="recent-list">
+                        <div class="recent-empty">暂无活动</div>
+                    </div>
+                </div>
+            </section>
+            <section id="page-timeline" class="page">
+                <div class="placeholder">WebView 迁移中，当前页面仍由旧 UI 支持。</div>
+            </section>
+            <section id="page-statistics" class="page">
+                <div class="placeholder">WebView 迁移中，当前页面仍由旧 UI 支持。</div>
+            </section>
+            <section id="page-rules" class="page">
+                <div class="placeholder">WebView 迁移中，当前页面仍由旧 UI 支持。</div>
+            </section>
+            <section id="page-settings" class="page">
+                <div class="placeholder">WebView 迁移中，当前页面仍由旧 UI 支持。</div>
+            </section>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

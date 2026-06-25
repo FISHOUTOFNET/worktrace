@@ -2,10 +2,11 @@
 
 ## Status
 
-- Current phase: 0A (design and boundary preparation only).
+- Current phase: 0B (minimal shell + bridge implemented).
 - Default UI: Tkinter / CustomTkinter (unchanged).
 - This document is a spike plan, not a commitment to ship a WebView UI.
-- No WebView code is wired into the default entry point in this phase.
+- The WebView entry point `python -m worktrace.webview_main` is an opt-in spike;
+  the default `python -m worktrace.main` is unchanged.
 
 ## 1. Why A WebView Spike
 
@@ -139,12 +140,13 @@ The migration is phased so each step is independently revertible:
 
 - Phase 0A: design and boundary preparation (this document, placeholder
   `worktrace/webview_ui` package, boundary tests). No WebView page, no entry
-  point change.
+  point change. **Completed.**
 - Phase 0B: minimal WebView shell. A window opens, the bridge calls
-  `worktrace.api`, and `AppRuntime` lifecycle is exercised. No feature page.
+  `worktrace.api`, and `AppRuntime` lifecycle is exercised. Only the Overview
+  page shows real data; other pages show a migration placeholder. **Completed.**
 - Phase 0C: PyInstaller / installer / WebView2 Runtime packaging verification.
   Confirm the packaged exe and the per-user installer work with the WebView entry
-  point, including the WebView2-missing fallback.
+  point, including the WebView2-missing fallback. **Next.**
 - Phase 1: Overview page.
 - Phase 2: Timeline read-only.
 - Phase 3: Timeline editing.
@@ -213,17 +215,60 @@ The WebView spike keeps the existing local-first security posture:
 
 ## Dependency Handling
 
-`pywebview` is not added to `requirements.txt` in Phase 0A.
+`pywebview>=5.0` was added to `requirements.txt` in Phase 0B. It is the only
+new runtime dependency introduced by the WebView spike.
 
-- Phase 0B or 0C will add `pywebview` once the bridge and packaging path are
-  proven.
-- Before being added to `requirements.txt`, `pywebview` must pass the PyInstaller
-  build and the per-user installer validation.
-- When added, it must be documented as an optional WebView spike dependency so
-  the Tkinter-only path remains buildable if the spike is abandoned.
+- The Tkinter-only path (`python -m worktrace.main`) does not import `pywebview`
+  at module load time; `pywebview` is imported lazily inside
+  `worktrace.webview_main._check_pywebview_available`, so a missing `pywebview`
+  does not break the default Tkinter entry point.
+- If the spike is abandoned, removing `pywebview` from `requirements.txt` and
+  deleting `worktrace/webview_ui/` and `worktrace/webview_main.py` restores the
+  Tkinter-only build with no other changes.
+- Phase 0C must still confirm `pywebview` bundles cleanly under PyInstaller and
+  the per-user installer.
 
 ## Entry Points
 
 - `python -m worktrace.main` — existing Tkinter UI (default, unchanged).
-- `python -m worktrace.webview_main` — future WebView spike entry point (not
-  implemented in Phase 0A; documented here for the release validation framework).
+- `python -m worktrace.webview_main` — WebView spike entry point (implemented in
+  Phase 0B). Starts a minimal pywebview shell that talks to `worktrace.api`
+  through `worktrace.webview_ui.bridge.WebViewBridge`.
+
+## Phase 0B Implemented Scope
+
+Phase 0B implemented the minimal shell only:
+
+- `worktrace/webview_ui/bridge.py` — `WebViewBridge` with `get_status`,
+  `toggle_pause`, `get_overview`, `get_recent_activities`, and
+  `get_timeline_placeholder`. The bridge only imports `worktrace.api`.
+- `worktrace/webview_ui/index.html`, `app.js`, `styles.css` — local frontend
+  resources with no external links, no CDN, no Google Fonts, and no browser
+  storage APIs.
+- `worktrace/webview_main.py` — entry point that reuses `AppRuntime`,
+  `config`, and `app_api`, creates the bridge, and starts pywebview. Importing
+  the module does not start the GUI.
+
+The Overview page shows real data: collector status, pause/resume button, today's
+date, total duration, project count, current activity summary, and up to 20
+recent sessions. The page auto-refreshes every 8 seconds.
+
+The Timeline, Statistics/Export, Project Rules, and Settings/Privacy pages show a
+migration placeholder. They are not migrated in Phase 0B.
+
+## Phase 0B Not Implemented
+
+The following are explicitly not implemented in Phase 0B and remain on the old
+Tkinter UI:
+
+- Timeline (read-only and editing);
+- Statistics and Excel export;
+- Project rules creation, editing, enable/disable;
+- Settings, privacy notice, clipboard toggle, clear data;
+- Encrypted `.wtbackup` export/import;
+- Tray icon;
+- Single-instance UI behavior (the WebView entry point does not add a second
+  tray; the collector single-instance lock is still enforced by `AppRuntime`).
+
+The next step is Phase 0C: PyInstaller / installer / WebView2 Runtime packaging
+verification.

@@ -3,4 +3,5 @@ cryptography>=42.0
 pywin32>=306; platform_system == "Windows"
 psutil>=5.9
 openpyxl>=3.1
+pywebview>=5.0
 pytest>=8.0
