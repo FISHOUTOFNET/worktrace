@@ -591,8 +591,12 @@ Phase 2.1 specifically:
   column (which can contain file paths, URLs, or email subjects). It uses a
   safe chain: `resource_display_name` → `activity_display_name` →
   `app_name` → `process_name` → `"未知"`.
-- The bridge exposes `is_in_progress` for sessions/activities with no
-  `end_time` so the frontend can mark open records distinctly.
+- The bridge passes through an explicit `is_in_progress` flag for
+  sessions/activities. The timeline service sets this flag before
+  projecting a display `end_time` for open activities, so the flag
+  reflects the original open-activity state rather than the displayed
+  (possibly projected) `end_time`. The frontend consumes this flag to
+  mark open records distinctly.
 - The frontend uses request tokens to prevent stale bridge responses from
   overwriting newer data when the user rapidly switches dates or sessions.
 - The frontend preserves the selected session across auto-refresh and
@@ -616,7 +620,9 @@ Phase 2.1 specifically:
   contain `window_title`, `file_path_hint`, `note`, `clipboard`,
   `traceback`, `exception`, `stack`, or `full_path` at any level.
 - [ ] `get_timeline` and `get_timeline_session_details` expose
-  `is_in_progress` for sessions/activities with no `end_time`.
+  `is_in_progress` as an explicit flag passed through from the timeline
+  service (not inferred from the displayed `end_time`, which may be
+  projected for open activities).
 - [ ] `app.js` defines `timelineRequestToken` and `detailsRequestToken`
   guards against stale responses.
 - [ ] `app.js` preserves the selected session across auto-refresh and

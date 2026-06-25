@@ -150,8 +150,10 @@ The migration is phased so each step is independently shippable:
   `resource_name` no longer falls back to the raw `window_title` column
   (it uses a safe chain `resource_display_name` →
   `activity_display_name` → `app_name` → `process_name` → `"未知"`); the
-  bridge exposes `is_in_progress` for sessions/activities with no
-  `end_time`; the frontend uses request tokens to prevent stale bridge
+  bridge passes through an explicit `is_in_progress` flag (set by the
+  timeline service before projecting a display `end_time` for open
+  activities) so the frontend can mark open records distinctly; the
+  frontend uses request tokens to prevent stale bridge
   responses from overwriting newer data; the frontend preserves the
   selected session across auto-refresh and clears it gracefully if it
   disappears; the frontend keeps the previously loaded data visible when
@@ -359,10 +361,15 @@ and maintainability under real user use.
   `resource_display_name` → `activity_display_name` → `app_name` →
   `process_name` → `"未知"`, skipping `window_title`, `file_path_hint`,
   and `note` entirely.
-- `get_timeline` exposes `is_in_progress` (`not bool(end_time)`) on each
-  session so the frontend can mark open sessions distinctly.
+- `get_timeline` exposes `is_in_progress` on each session so the frontend
+  can mark open sessions distinctly. The flag is not derived from the
+  displayed `end_time`: the timeline service marks `is_in_progress` before
+  projecting or replacing an open activity's `end_time` for display, and
+  the API/bridge pass this explicit flag through. Consumers must not infer
+  in-progress state from the displayed `end_time`, because open activities
+  may carry a projected display `end_time`.
 - `get_timeline_session_details` exposes `is_in_progress` on each
-  activity row.
+  activity row, using the same explicit flag from the timeline service.
 - The bridge output remains JSON-serializable and continues to return
   `{"ok": false, "error": "操作失败"}` on exceptions without surfacing
   tracebacks or internal exception details.

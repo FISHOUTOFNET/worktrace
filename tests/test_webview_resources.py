@@ -363,8 +363,11 @@ def test_app_js_marks_in_progress_activities():
 
 
 def test_app_js_uses_in_progress_label_in_time_range():
-    """Phase 2.1: when end_time is empty (in-progress), app.js must show a
-    clear '进行中' label in the time range instead of an empty 'HH:MM-'."""
+    """Phase 2.1: when the ``is_in_progress`` flag is true, app.js must show
+    a clear '进行中' label in the time range instead of an empty 'HH:MM-'.
+    The frontend consumes the explicit ``is_in_progress`` flag (not the
+    emptiness of the displayed ``end_time``, which may be projected for
+    open activities)."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
     assert "进行中" in source, (
         "app.js must show '进行中' for in-progress time ranges"

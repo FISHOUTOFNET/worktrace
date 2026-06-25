@@ -6,8 +6,9 @@ The bridge must:
 - only import worktrace.api (enforced by test_ui_backend_boundary.py).
 - never surface sensitive raw fields (window_title, file_path_hint, note,
   clipboard) in Timeline output (Phase 2.1).
-- expose ``is_in_progress`` for sessions/activities with no ``end_time``
-  (Phase 2.1).
+- expose ``is_in_progress`` as an explicit flag passed through from the
+  timeline service (not inferred from the displayed ``end_time``, which
+  may be projected for open activities) (Phase 2.1).
 - build ``resource_name`` from sanitized display fields only, never falling
   back to the raw ``window_title`` column (Phase 2.1).
 """

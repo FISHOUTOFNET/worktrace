@@ -18,10 +18,14 @@ for the Overview page. As of Phase 2 the Timeline page is migrated as a
 read-only page: ``get_timeline`` and ``get_timeline_session_details`` are the
 production data path for the Timeline page. Phase 2.1 hardens the Timeline
 bridge so the ``resource_name`` never falls back to the raw ``window_title``
-column (which can contain file paths, URLs, or email subjects) and adds an
-``is_in_progress`` flag for sessions/activities with no ``end_time``. The
-bridge does not implement editing, export, import, or settings mutations
-beyond pause/resume.
+column (which can contain file paths, URLs, or email subjects) and passes
+through an explicit ``is_in_progress`` flag for open sessions/activities.
+The timeline service marks ``is_in_progress`` before projecting or replacing
+an open activity's ``end_time`` for display; the API and bridge only pass
+this flag through. Consumers must not infer in-progress state from the
+displayed ``end_time``, because open activities may carry a projected
+display ``end_time``. The bridge does not implement editing, export,
+import, or settings mutations beyond pause/resume.
 """
 
 from __future__ import annotations
