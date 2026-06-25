@@ -575,3 +575,133 @@ remain in effect.
 - The default entry point no longer starts the WebView UI.
 - Any new network dependency, CDN reference, or browser storage usage is
   introduced.
+
+## WebView Phase 2.1 Validation
+
+This section is the validation framework for the Timeline read-only
+validation hardening. Phase 2.1 does **not** introduce editing, correction,
+reclassification, note modification, or deletion. It hardens the Phase 2
+read-only page so that it is reliable, readable, secure, and maintainable
+under real user use. The WebView-only / no Tkinter fallback principles from
+Phase 1 remain in effect.
+
+Phase 2.1 specifically:
+
+- The bridge `resource_name` no longer falls back to the raw `window_title`
+  column (which can contain file paths, URLs, or email subjects). It uses a
+  safe chain: `resource_display_name` → `activity_display_name` →
+  `app_name` → `process_name` → `"未知"`.
+- The bridge exposes `is_in_progress` for sessions/activities with no
+  `end_time` so the frontend can mark open records distinctly.
+- The frontend uses request tokens to prevent stale bridge responses from
+  overwriting newer data when the user rapidly switches dates or sessions.
+- The frontend preserves the selected session across auto-refresh and
+  clears the selection gracefully if the session disappears.
+- The frontend keeps the previously loaded data visible when a refresh
+  fails, instead of clearing the page.
+- Long resource/project names are truncated with safe tooltips; the layout
+  remains usable on narrow viewports.
+- Empty state, error state, and loading state are clearly differentiated.
+
+### Automated Checklist
+
+- [ ] `pytest` passes, including the Phase 2.1 tests in
+  `test_webview_bridge.py` and `test_webview_resources.py`.
+- [ ] `worktrace.webview_ui.bridge` still does not import
+  `worktrace.services`, `worktrace.db`, `worktrace.collector`,
+  `worktrace.security`, `worktrace.runtime`, or `worktrace.config`.
+- [ ] `bridge.py` does not import `format_activity_display_name` (it falls
+  back to the raw `window_title` column).
+- [ ] `get_timeline` and `get_timeline_session_details` outputs do not
+  contain `window_title`, `file_path_hint`, `note`, `clipboard`,
+  `traceback`, `exception`, `stack`, or `full_path` at any level.
+- [ ] `get_timeline` and `get_timeline_session_details` expose
+  `is_in_progress` for sessions/activities with no `end_time`.
+- [ ] `app.js` defines `timelineRequestToken` and `detailsRequestToken`
+  guards against stale responses.
+- [ ] `app.js` preserves the selected session across auto-refresh and
+  clears it gracefully when the session disappears.
+- [ ] `app.js` keeps the previously loaded data visible when a refresh
+  fails (the `lastTimelineData` cache).
+- [ ] `app.js` shows `进行中` for in-progress time ranges.
+- [ ] `app.js` does not use `localStorage` or `sessionStorage`.
+- [ ] Frontend resources contain no `http://`, `https://`, CDN, Google
+  Fonts, or traceback display logic.
+
+### Manual Validation Checklist
+
+#### AF. Phase 2.1 Real-Run Acceptance
+
+- [ ] Run `python -m worktrace.main` from the source tree.
+- [ ] Run the packaged `dist\WorkTrace.exe` separately.
+- [ ] Open the Overview page, confirm collector status, pause/resume, and
+  today's total duration render normally.
+- [ ] Open the Timeline page, confirm today's sessions render with project
+  name, time range, duration, status, and event count.
+- [ ] Wait 3–5 minutes with the collector running. Confirm the current
+  activity and the in-progress session duration keep growing.
+- [ ] Confirm the in-progress session is visually marked (blue tint) and
+  its time range shows `HH:MM-进行中`.
+- [ ] Click `<`, `今日`, `>` in sequence. Confirm each date loads the
+  correct data; rapid clicking does not let an older response overwrite a
+  newer date.
+- [ ] Navigate to a date with no activity. Confirm the empty-state message
+  `当日暂无活动记录` appears, with no JS error in the dev console.
+- [ ] Navigate to a long resource name (e.g. a long browser title or long
+  file name). Confirm the name is truncated with an ellipsis, the layout
+  is not stretched, and hovering shows the safe display name tooltip
+  (never a full file path or raw window title).
+- [ ] Click a session, wait for auto-refresh. Confirm the selected session
+  remains selected and its details refresh in place without flicker.
+- [ ] While a session is selected, force a bridge error (e.g. temporarily
+  rename the database file). Confirm the error banner appears, the prior
+  data remains visible, and no traceback is shown. Restore the database
+  file and confirm the next refresh succeeds.
+- [ ] Close WorkTrace and restart. Confirm historical sessions from the
+  previous run still appear on the Timeline page.
+- [ ] On a machine without WebView2 Runtime, confirm `python -m
+  worktrace.main` still only prints the install prompt and exits with a
+  non-zero code; no Tkinter UI is started.
+- [ ] Inspect `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`. Confirm the
+  log does not contain window titles, full file paths, notes, clipboard
+  text, or tracebacks.
+
+#### AG. Phase 2.1 Privacy Boundary
+
+- [ ] Inspect the JSON returned by `bridge.get_timeline_session_details`
+  for an activity whose raw row has `window_title`, `file_path_hint`,
+  and `note` populated. Confirm none of those fields appear in the
+  bridge output at any level.
+- [ ] Confirm `resource_name` is the sanitized basename / display name,
+  not the raw window title.
+- [ ] Confirm `index.html`, `app.js`, and `styles.css` contain no
+  `http://`, `https://`, CDN, Google Fonts, or `localStorage` /
+  `sessionStorage` references.
+- [ ] Confirm `app.js` contains no code that parses or displays a Python
+  traceback.
+
+### Phase 2.1 Release Blockers
+
+- The bridge `resource_name` falls back to the raw `window_title` column
+  for any activity.
+- `get_timeline` or `get_timeline_session_details` output contains
+  `window_title`, `file_path_hint`, `note`, `clipboard`, `traceback`,
+  `exception`, `stack`, or `full_path` at any level.
+- `bridge.py` imports `format_activity_display_name` (the unsafe helper).
+- `bridge.py` imports `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.security`, `worktrace.runtime`, or
+  `worktrace.config` directly.
+- `app.js` lacks request token guards, so rapid date switching lets a
+  stale response overwrite newer data.
+- `app.js` clears the page on refresh failure instead of keeping the
+  prior data visible.
+- `app.js` loses the selected session on every auto-refresh.
+- `app.js` shows `HH:MM-` (empty end) for in-progress sessions instead
+  of a clear `进行中` label.
+- The Timeline page exposes any edit, correction, reclassify, note, or
+  delete action.
+- The default entry point no longer starts the WebView UI, or a Tkinter
+  fallback is restored.
+- Any new network dependency, CDN reference, Google Fonts reference, or
+  browser storage usage is introduced.
+- The frontend displays a Python traceback anywhere.

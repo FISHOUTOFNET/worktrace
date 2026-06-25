@@ -16,8 +16,12 @@ Overview page is fully migrated: ``get_status``, ``toggle_pause``,
 ``get_overview``, and ``get_recent_activities`` are the production data path
 for the Overview page. As of Phase 2 the Timeline page is migrated as a
 read-only page: ``get_timeline`` and ``get_timeline_session_details`` are the
-production data path for the Timeline page. The bridge does not implement
-editing, export, import, or settings mutations beyond pause/resume.
+production data path for the Timeline page. Phase 2.1 hardens the Timeline
+bridge so the ``resource_name`` never falls back to the raw ``window_title``
+column (which can contain file paths, URLs, or email subjects) and adds an
+``is_in_progress`` flag for sessions/activities with no ``end_time``. The
+bridge does not implement editing, export, import, or settings mutations
+beyond pause/resume.
 """
 
 from __future__ import annotations
@@ -27,7 +31,6 @@ from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
 from ..formatters import (
-    format_activity_display_name,
     format_duration,
     format_project_label,
     format_resource_type,
@@ -162,17 +165,20 @@ class WebViewBridge:
             current = _snapshot_summary(snapshot)
             sessions: list[dict[str, Any]] = []
             for session in sessions_raw:
+                start_time = str(session.get("start_time") or "")
+                end_time = str(session.get("end_time") or "")
                 sessions.append(
                     {
                         "session_id": str(session.get("session_id") or ""),
                         "project_name": str(session.get("project_name") or "未归类"),
                         "project_description": str(session.get("project_description") or ""),
-                        "start_time": str(session.get("start_time") or ""),
-                        "end_time": str(session.get("end_time") or ""),
+                        "start_time": start_time,
+                        "end_time": end_time,
                         "duration": format_duration(session.get("duration_seconds") or 0),
                         "status": str(session.get("status_summary") or session.get("status") or ""),
                         "event_count": int(session.get("event_count") or 0),
                         "is_uncategorized": bool(session.get("is_uncategorized")),
+                        "is_in_progress": bool(session.get("is_in_progress")),
                         "activity_ids": list(session.get("activity_ids") or []),
                     }
                 )
@@ -196,7 +202,11 @@ class WebViewBridge:
 
         Each row exposes display-safe fields only: time range, duration,
         app name, resource type, resource display name, project name, and
-        status. Raw window titles, file paths, and notes are not surfaced.
+        status. The ``resource_name`` is built from sanitized display fields
+        (``resource_display_name`` → ``activity_display_name`` → ``app_name``
+        → ``process_name``) and **never** falls back to the raw
+        ``window_title`` column, which can contain file paths, URLs, or email
+        subjects. Raw window titles, file paths, and notes are not surfaced.
         """
         try:
             ids = [int(aid) for aid in (activity_ids or [])]
@@ -210,25 +220,59 @@ class WebViewBridge:
             )
             activities: list[dict[str, Any]] = []
             for row in rows:
+                start_time = str(row.get("start_time") or "")
+                end_time = str(row.get("end_time") or "")
                 activities.append(
                     {
-                        "start_time": str(row.get("start_time") or ""),
-                        "end_time": str(row.get("end_time") or ""),
+                        "start_time": start_time,
+                        "end_time": end_time,
                         "duration": format_duration(row.get("duration_seconds") or 0),
                         "app_name": str(row.get("app_name") or ""),
                         "resource_type": format_resource_type(
                             row.get("resource_kind"),
                             row.get("resource_subtype"),
                         ),
-                        "resource_name": format_activity_display_name(row),
+                        "resource_name": _safe_resource_display_name(row),
                         "project_name": str(row.get("project_name") or "未归类"),
                         "status": str(row.get("status") or ""),
+                        "is_in_progress": bool(row.get("is_in_progress")),
                     }
                 )
             return {"ok": True, "activities": activities}
         except Exception:
             logger.exception("webview bridge get_timeline_session_details failed")
             return dict(_GENERIC_ERROR)
+
+
+def _safe_resource_display_name(row: dict[str, Any]) -> str:
+    """Return a display-safe resource name for a Timeline detail row.
+
+    The fallback chain is intentionally ordered to surface the most
+    sanitized field first:
+
+    1. ``resource_display_name`` — already sanitized by the resource
+       service (basename for files, cleaned title for browsers, app name
+       for generic apps).
+    2. ``activity_display_name`` — set to ``resource_display_name`` or
+       ``app_name`` by the resource service, so still safe.
+    3. ``app_name`` — application name only, no path or window title.
+    4. ``process_name`` — process executable name only.
+
+    The raw ``window_title`` column is **deliberately skipped** because it
+    can contain full file paths, URLs, or email subjects. ``file_path_hint``
+    and ``note`` are also skipped. If all safe fields are empty the row
+    falls back to ``"未知"`` rather than leaking sensitive metadata.
+    """
+    for key in (
+        "resource_display_name",
+        "activity_display_name",
+        "app_name",
+        "process_name",
+    ):
+        val = str(row.get(key) or "").strip()
+        if val:
+            return val
+    return "未知"
 
 
 def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:

@@ -539,3 +539,68 @@ body {
         flex-direction: column;
     }
 }
+
+/* --- Phase 2.1 hardening --------------------------------------------- */
+
+/* In-progress sessions/activities are tinted so the user can tell the
+   current open record from closed history at a glance. */
+.timeline-item.in-progress {
+    border-color: #93c5fd;
+    background: #eff6ff;
+}
+
+.timeline-item.in-progress:hover {
+    background: #dbeafe;
+}
+
+.timeline-item.in-progress .timeline-item-status {
+    color: #1d4ed8;
+    font-weight: 600;
+}
+
+.detail-item.in-progress {
+    border-color: #93c5fd;
+    background: #eff6ff;
+}
+
+.detail-item.in-progress .detail-item-time {
+    color: #1d4ed8;
+    font-weight: 600;
+}
+
+/* Long resource/project names wrap instead of stretching the layout on
+   narrow viewports. The single-line ellipsis is preserved on wide
+   viewports through the existing rules above. */
+.detail-item-name,
+.detail-item-project,
+.timeline-item-project {
+    max-width: 100%;
+}
+
+@media (max-width: 900px) {
+    .detail-item {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto auto;
+    }
+    .detail-item-time { grid-row: 1; grid-column: 1; }
+    .detail-item-name { grid-row: 2; grid-column: 1; }
+    .detail-item-meta { grid-row: 3; grid-column: 1; }
+    .detail-item-project { grid-row: 4; grid-column: 1; text-align: left; }
+    .detail-item-duration { grid-row: 1; grid-column: 1; text-align: right; }
+
+    .timeline-item {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .timeline-item-side {
+        margin-left: 0;
+        margin-top: 4px;
+    }
+}
+
+/* The "进行中" tag inside time strings reads more clearly as a chip. */
+.timeline-item-time,
+.detail-item-time,
+.recent-item-time {
+    word-break: keep-all;
+}

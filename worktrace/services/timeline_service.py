@@ -99,6 +99,13 @@ def get_session_activity_details(
         item["project_description"] = row.get("display_project_description") or ""
         item["official_project_name"] = row.get("effective_project_name") or UNCATEGORIZED_PROJECT
         item["activity_display_name"] = row.get("activity_display_name") or row.get("app_name") or "未知活动"
+        # Ensure is_in_progress is set for both paths:
+        # - Report path: already set by _split_calendar_report_rows based on
+        #   the original (pre-projection) end_time.
+        # - Direct path (report_date is None): compute from the raw end_time,
+        #   which is NULL for open activities.
+        if "is_in_progress" not in item:
+            item["is_in_progress"] = _parse_row_time(row.get("end_time")) is None
         details.append(item)
     return details
 
@@ -297,6 +304,12 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     activity_ids = [int(row["id"]) for row in rows]
     status_summary = _status_summary(rows)
     session_id = f"{first['id']}-{last['id']}"
+    # A session is in-progress if its last row is still open (no real
+    # end_time in the DB). The is_in_progress flag is set by
+    # _split_calendar_report_rows based on the original (pre-projection)
+    # end_time, so it correctly reflects the DB state rather than the
+    # projected end_time used for display.
+    is_in_progress = bool(last.get("is_in_progress"))
     return {
         "session_id": session_id,
         "project_id": project_id,
@@ -315,6 +328,7 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "status_summary": status_summary,
         "is_uncategorized": project_id == int(uncategorized_id),
         "is_suggested_project": bool(first.get("report_is_suggested_project", first.get("is_suggested_project"))),
+        "is_in_progress": is_in_progress,
     }
 
 
@@ -353,14 +367,22 @@ def _split_calendar_report_rows(row: dict) -> list[dict]:
     if start_dt is None:
         return []
     duration = _display_duration(row)
+    # Detect in-progress activities (original end_time is NULL) BEFORE the
+    # projection below overwrites end_time with a live value. This flag is
+    # preserved on every split row so downstream consumers (sessions,
+    # detail rows, bridge) can distinguish open activities from closed ones
+    # even though the projected end_time is non-null.
+    raw_end_dt = _parse_row_time(row.get("end_time"))
+    is_in_progress = raw_end_dt is None
     if duration <= 0:
         item = dict(row)
         item["report_date"] = start_dt.date().isoformat()
         item["report_duration_seconds"] = 0
         item["report_slice"] = False
+        item["is_in_progress"] = is_in_progress
         return [item]
 
-    end_dt = _parse_row_time(row.get("end_time"))
+    end_dt = raw_end_dt
     if end_dt is None or end_dt < start_dt:
         end_dt = start_dt + timedelta(seconds=duration)
 
@@ -379,6 +401,7 @@ def _split_calendar_report_rows(row: dict) -> list[dict]:
         item["report_date"] = current_start.date().isoformat()
         item["report_duration_seconds"] = seconds
         item["report_slice"] = True
+        item["is_in_progress"] = is_in_progress
         rows.append(item)
         current_start = current_end
     return rows

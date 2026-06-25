@@ -2,8 +2,8 @@
 
 ## Status
 
-- Current phase: 2 (Overview fully migrated; Timeline read-only page
-  migrated; WebView is the default and only shipping UI).
+- Current phase: 2.1 (Overview fully migrated; Timeline read-only page
+  migrated and hardened; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -143,7 +143,22 @@ The migration is phased so each step is independently shippable:
   display name, project name, status), empty state, loading state, in-page
   error banner, and auto-refresh when the Timeline page is active. No
   editing, correction, reclassification, note modification, or deletion is
-  exposed. **Current phase.**
+  exposed. **Completed.**
+- Phase 2.1: **Timeline read-only validation hardening.** Hardens the
+  Phase 2 Timeline page so it is reliable, readable, secure, and
+  maintainable under real user use. Specifically: the bridge
+  `resource_name` no longer falls back to the raw `window_title` column
+  (it uses a safe chain `resource_display_name` →
+  `activity_display_name` → `app_name` → `process_name` → `"未知"`); the
+  bridge exposes `is_in_progress` for sessions/activities with no
+  `end_time`; the frontend uses request tokens to prevent stale bridge
+  responses from overwriting newer data; the frontend preserves the
+  selected session across auto-refresh and clears it gracefully if it
+  disappears; the frontend keeps the previously loaded data visible when
+  a refresh fails; long resource/project names are truncated with safe
+  tooltips; the layout remains usable on narrow viewports. No editing,
+  correction, reclassification, note modification, or deletion is
+  introduced. **Current phase.**
 - Phase 3: Timeline editing / correction migration.
 - Phase 4: Statistics / Export.
 - Phase 5: Rules.
@@ -326,6 +341,104 @@ runtime path):
 - Single-instance UI behavior (the WebView entry point does not add a
   tray; the collector single-instance lock is still enforced by
   `AppRuntime`).
+
+## Phase 2.1 Implemented Scope
+
+Phase 2.1 hardens the Phase 2 Timeline read-only page. It does **not**
+introduce editing, correction, reclassification, note modification, or
+deletion. The hardening is scoped to reliability, readability, security,
+and maintainability under real user use.
+
+### Bridge hardening (`worktrace/webview_ui/bridge.py`)
+
+- `get_timeline_session_details` no longer uses
+  `format_activity_display_name` to build `resource_name`. That helper
+  falls back to the raw `window_title` column, which can contain full
+  file paths, URLs, or email subjects. The bridge now uses a local
+  `_safe_resource_display_name(row)` helper that walks the safe chain
+  `resource_display_name` → `activity_display_name` → `app_name` →
+  `process_name` → `"未知"`, skipping `window_title`, `file_path_hint`,
+  and `note` entirely.
+- `get_timeline` exposes `is_in_progress` (`not bool(end_time)`) on each
+  session so the frontend can mark open sessions distinctly.
+- `get_timeline_session_details` exposes `is_in_progress` on each
+  activity row.
+- The bridge output remains JSON-serializable and continues to return
+  `{"ok": false, "error": "操作失败"}` on exceptions without surfacing
+  tracebacks or internal exception details.
+- The bridge still imports only `worktrace.api` and `worktrace.formatters`
+  helpers; it does not import `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.security`, `worktrace.runtime`, or
+  `worktrace.config`.
+
+### Frontend hardening (`worktrace/webview_ui/app.js`)
+
+- `timelineRequestToken` guards `loadTimeline` and `refreshTimeline` so
+  a stale bridge response cannot overwrite newer data when the user
+  rapidly switches dates.
+- `detailsRequestToken` guards `loadSessionDetails` so a stale detail
+  response cannot overwrite a newer session's details.
+- `lastTimelineData` caches the last successfully rendered Timeline
+  payload. On refresh failure, the page keeps showing the prior data
+  alongside the error banner, instead of clearing the list.
+- The selected session is preserved across auto-refresh by matching
+  `session_id`. If the session disappears (e.g. it ended and was
+  re-grouped), the selection clears gracefully without throwing.
+- In-progress sessions and activities get the `in-progress` CSS class.
+- The time range for in-progress items shows `HH:MM-进行中` instead of
+  `HH:MM-` (empty end).
+- Long resource/project names use the existing `text-overflow: ellipsis`
+  rule and now carry a `title` attribute with the same safe display name
+  so the user can read the full name on hover. The tooltip is built with
+  `escapeHtml` to avoid attribute injection.
+
+### Frontend state lifecycle
+
+- All new state-tracking variables (`timelineRequestToken`,
+  `detailsRequestToken`, `lastTimelineData`) are in-memory only. They are
+  not persisted to `localStorage` or `sessionStorage`. The frontend does
+  not store any sensitive data in browser storage APIs.
+- `loadSessionDetails` no longer flashes an empty panel on refresh; it
+  keeps the previous details visible while the new data loads.
+- `renderSessionDetails` shows `暂无详情` (instead of `暂无活动`) when a
+  session has no detail rows, so the empty state is unambiguous.
+- The Recent Activities list on the Overview page also uses the
+  `formatTimeRange` helper so in-progress recent sessions show
+  `HH:MM-进行中`.
+
+### Layout hardening (`worktrace/webview_ui/index.html`, `styles.css`)
+
+- The Timeline details panel ships with an initial `暂无详情` empty-state
+  child so the panel is never visually empty on first load.
+- `.timeline-item.in-progress` and `.detail-item.in-progress` get a blue
+  tint so the user can tell the current open record from closed history
+  at a glance.
+- On narrow viewports (`max-width: 900px`), `.detail-item` switches to a
+  single-column grid and `.timeline-item` stacks vertically so long
+  resource names wrap instead of stretching the layout horizontally.
+- `.timeline-item-time`, `.detail-item-time`, and `.recent-item-time`
+  use `word-break: keep-all` so the `进行中` tag stays on one line.
+
+## Phase 2.1 Not Implemented
+
+The following are explicitly not implemented in Phase 2.1 and remain on
+the legacy Tkinter UI (which is legacy code pending removal, not a
+supported runtime path):
+
+- Timeline editing (split, merge, time correction);
+- Project reclassification from the Timeline;
+- Note modification from the Timeline;
+- Activity deletion from the Timeline;
+- Statistics and Excel export;
+- Project rules creation, editing, enable/disable;
+- Settings, privacy notice, clipboard toggle, clear data;
+- Encrypted `.wtbackup` export/import;
+- Tray icon;
+- Single-instance UI behavior (the WebView entry point does not add a
+  tray; the collector single-instance lock is still enforced by
+  `AppRuntime`).
+
+Phase 2.1 is not Phase 3. It does not introduce any write capability.
 
 ## Legacy Tkinter UI Handling
 

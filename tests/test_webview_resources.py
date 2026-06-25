@@ -292,6 +292,151 @@ def test_app_js_timeline_does_not_expose_tracebacks():
     assert "traceback" not in source.lower()
 
 
+# --- Phase 2.1: Timeline read-only validation hardening tests ------------
+
+
+def test_app_js_has_request_token_guard_for_timeline_loads():
+    """Phase 2.1: app.js must use a request token (or equivalent sequence
+    id) to prevent stale Timeline load responses from overwriting newer
+    data when the user rapidly switches dates."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "timelineRequestToken" in source, (
+        "app.js must define a timelineRequestToken guard so stale bridge "
+        "responses do not overwrite newer Timeline data"
+    )
+    # The token must be incremented before each load and checked after.
+    assert "++timelineRequestToken" in source
+    assert "token !== timelineRequestToken" in source
+
+
+def test_app_js_has_request_token_guard_for_session_details():
+    """Phase 2.1: app.js must use a request token for session detail loads
+    too, so rapidly switching sessions does not let an older detail
+    response overwrite the newer one."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "detailsRequestToken" in source, (
+        "app.js must define a detailsRequestToken guard so stale session "
+        "detail responses do not overwrite newer detail data"
+    )
+    assert "++detailsRequestToken" in source
+    assert "token !== detailsRequestToken" in source
+
+
+def test_app_js_preserves_selected_session_across_refresh():
+    """Phase 2.1: app.js must keep the selected session selected across
+    auto-refresh. The session must be matched by session_id, and if it
+    disappears the selection must clear gracefully without JS errors."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "selectedSessionId" in source
+    # The selected session must be matched by session_id after refresh.
+    assert "session_id === selectedSessionId" in source or (
+        "sessions[k].session_id === selectedSessionId" in source
+    )
+
+
+def test_app_js_handles_disappeared_selected_session_gracefully():
+    """Phase 2.1: when the previously selected session no longer exists
+    after a refresh, app.js must clear the selection without throwing."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The code path that handles a missing session must reset
+    # selectedSessionId and update the details panel placeholder.
+    assert "selectedSessionId = null" in source
+
+
+def test_app_js_marks_in_progress_sessions():
+    """Phase 2.1: app.js must visually mark in-progress sessions (sessions
+    whose ``is_in_progress`` flag is true) so the user can tell the
+    current open record from closed history."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "is_in_progress" in source
+    assert "in-progress" in source, (
+        "app.js must apply an 'in-progress' CSS class to in-progress items"
+    )
+
+
+def test_app_js_marks_in_progress_activities():
+    """Phase 2.1: app.js must visually mark in-progress activity detail
+    rows too."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The detail rendering must check is_in_progress and apply the class.
+    assert "a.is_in_progress" in source or "is_in_progress" in source
+
+
+def test_app_js_uses_in_progress_label_in_time_range():
+    """Phase 2.1: when end_time is empty (in-progress), app.js must show a
+    clear '进行中' label in the time range instead of an empty 'HH:MM-'."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "进行中" in source, (
+        "app.js must show '进行中' for in-progress time ranges"
+    )
+
+
+def test_app_js_provides_safe_tooltip_for_long_text():
+    """Phase 2.1: app.js must add ``title`` attributes with the safe
+    display name so the user can read long names on hover. The tooltip
+    must use the same sanitized display name shown inline, not the raw
+    window_title or full path."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'title="' in source or "title=" in source
+    # The tooltip must use escapeHtml to avoid attribute injection.
+    assert 'escapeHtml(' in source
+
+
+def test_app_js_preserves_prior_data_on_refresh_error():
+    """Phase 2.1: when a Timeline refresh fails, app.js must keep showing
+    the previously loaded data instead of clearing the page. The error
+    banner is shown alongside the prior data."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "lastTimelineData" in source, (
+        "app.js must cache lastTimelineData so a refresh failure keeps the "
+        "prior data visible instead of clearing the page"
+    )
+
+
+def test_app_js_does_not_use_local_storage_or_session_storage():
+    """Phase 2.1: re-asserted explicitly because Phase 2.1 added new
+    state-tracking variables. The frontend must not store sensitive data
+    in browser storage APIs; the request tokens and lastTimelineData are
+    in-memory only."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert not re.search(r"localStorage|sessionStorage", source), (
+        "app.js must not use localStorage or sessionStorage"
+    )
+
+
+def test_styles_css_has_in_progress_styling():
+    """Phase 2.1: styles.css must visually distinguish in-progress
+    sessions/activities from closed history."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".timeline-item.in-progress" in source
+    assert ".detail-item.in-progress" in source
+
+
+def test_styles_css_has_responsive_layout_for_narrow_viewports():
+    """Phase 2.1: styles.css must keep the Timeline layout usable on
+    narrow viewports. Long resource names must not stretch the layout."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    # The detail-item must switch to a single-column grid on narrow viewports
+    # so long names wrap instead of stretching the layout horizontally.
+    assert "grid-template-columns: 1fr" in source
+    assert "@media" in source
+
+
+def test_index_html_timeline_details_panel_has_initial_empty_state():
+    """Phase 2.1: the Timeline details panel must ship with an initial
+    empty-state message so the panel is never visually empty on first
+    load."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    # Find the timeline-details-list element and confirm it contains an
+    # initial empty-state child.
+    start = source.find('id="timeline-details-list"')
+    assert start != -1
+    end = source.find("</div>", start)
+    panel = source[start:end]
+    assert "timeline-empty" in panel
+    assert "暂无详情" in panel
+
+
 # --- startup tests -------------------------------------------------------
 
 

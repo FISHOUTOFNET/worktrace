@@ -1,8 +1,12 @@
 // WorkTrace WebView frontend.
-// Phase 2: Overview and Timeline (read-only) pages are production pages.
+// Phase 2.1: Overview and Timeline (read-only) pages are production pages.
 // Only communicates with Python through pywebview API bridge.
 // Does not persist sensitive data in browser storage APIs.
 // Does not access any external network resources.
+// Phase 2.1 hardening: request token guards against stale responses,
+// selected session is preserved across auto-refresh, in-progress sessions
+// are clearly marked, long text is truncated with safe tooltips, and
+// bridge errors keep the prior data visible instead of clearing it.
 
 (function () {
     "use strict";
@@ -16,6 +20,13 @@
     var timelineLoaded = false;    // whether timeline has been loaded at least once
     var timelineLoading = false;   // whether a timeline load is in progress
     var selectedSessionId = null;  // currently selected session for detail view
+
+    // Request tokens prevent stale bridge responses from overwriting newer
+    // data when the user rapidly switches dates. Each load increments the
+    // token; only the response whose token equals the current value is
+    // applied to the DOM.
+    var timelineRequestToken = 0;
+    var detailsRequestToken = 0;
 
     // --- Bridge helper --------------------------------------------------
 
@@ -123,7 +134,8 @@
         var html = "";
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
-            var timeRange = (item.start_time || "").slice(11, 16) + "-" + (item.end_time || "").slice(11, 16);
+            var inProgress = !item.end_time;
+            var timeRange = formatTimeRange(item.start_time, item.end_time, inProgress);
             html += '<div class="recent-item">'
                 + '<div>'
                 + '<div class="recent-item-project">' + escapeHtml(item.project_name) + '</div>'
@@ -138,8 +150,23 @@
 
     // --- Timeline rendering ---------------------------------------------
 
+    // Last successfully rendered Timeline payload. When a refresh fails, the
+    // page keeps showing this data instead of clearing, so the user is never
+    // left looking at an empty list with only an error banner.
+    var lastTimelineData = null;
+
+    function formatTimeRange(start, end, inProgress) {
+        var startTxt = (start || "").slice(11, 16);
+        var endTxt = (end || "").slice(11, 16);
+        if (inProgress || !endTxt) {
+            return startTxt + "-进行中";
+        }
+        return startTxt + "-" + endTxt;
+    }
+
     function showTimeline(data) {
         if (!data) return;
+        lastTimelineData = data;
         document.getElementById("timeline-date-display").textContent = data.date || "--";
         document.getElementById("timeline-total").textContent = data.total_duration || "00:00:00";
         var current = data.current_activity || {};
@@ -165,15 +192,18 @@
         var html = "";
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
-            var timeRange = (s.start_time || "").slice(11, 16) + "-" + (s.end_time || "").slice(11, 16);
+            var timeRange = formatTimeRange(s.start_time, s.end_time, s.is_in_progress);
             var projectLabel = s.project_name || "未归类";
             if (s.project_description) {
                 projectLabel += " (" + s.project_description + ")";
             }
             var cls = "timeline-item";
             if (s.is_uncategorized) cls += " uncategorized";
+            if (s.is_in_progress) cls += " in-progress";
             if (s.session_id === selectedSessionId) cls += " selected";
-            html += '<div class="' + cls + '" data-session-id="' + escapeHtml(s.session_id) + '">'
+            html += '<div class="' + cls + '" data-session-id="' + escapeHtml(s.session_id) + '"'
+                + ' title="' + escapeHtml(projectLabel) + '｜' + escapeHtml(timeRange) + '｜' + escapeHtml(s.duration) + '"'
+                + '>'
                 + '<div class="timeline-item-main">'
                 + '<div class="timeline-item-project">' + escapeHtml(projectLabel) + '</div>'
                 + '<div class="timeline-item-time">' + escapeHtml(timeRange) + '</div>'
@@ -210,6 +240,8 @@
             if (found) {
                 loadSessionDetails(found.activity_ids, data.date);
             } else {
+                // Selected session disappeared (e.g. session ended and was
+                // re-grouped). Clear selection gracefully without throwing.
                 selectedSessionId = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
                 document.getElementById("timeline-details-list").innerHTML = "";
@@ -244,10 +276,17 @@
     function loadSessionDetails(activityIds, date) {
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
-        detailsHeader.textContent = "加载详情…";
-        detailsList.innerHTML = "";
+        // Only show the "loading" placeholder when the panel is empty. If
+        // we already have details on screen, keep them visible while the
+        // new data loads so a refresh does not flash an empty panel.
+        if (!detailsList.innerHTML.trim()) {
+            detailsHeader.textContent = "加载详情…";
+            detailsList.innerHTML = "";
+        }
 
+        var token = ++detailsRequestToken;
         callBridge("get_timeline_session_details", activityIds, date).then(function (result) {
+            if (token !== detailsRequestToken) return;  // stale response
             var data = handleResult(result, function (msg) {
                 detailsHeader.textContent = "加载详情失败";
                 detailsList.innerHTML = '<div class="timeline-empty">' + escapeHtml(msg) + '</div>';
@@ -255,6 +294,7 @@
             if (!data) return;
             renderSessionDetails(data);
         }).catch(function () {
+            if (token !== detailsRequestToken) return;  // stale response
             detailsHeader.textContent = "加载详情失败";
             detailsList.innerHTML = '<div class="timeline-empty">无法加载详情，请稍后重试。</div>';
         });
@@ -266,22 +306,25 @@
         var activities = data.activities || [];
         if (activities.length === 0) {
             detailsHeader.textContent = "该时段暂无活动详情";
-            detailsList.innerHTML = '<div class="timeline-empty">暂无活动</div>';
+            detailsList.innerHTML = '<div class="timeline-empty">暂无详情</div>';
             return;
         }
         detailsHeader.textContent = "活动详情（" + activities.length + " 条）";
         var html = "";
         for (var i = 0; i < activities.length; i++) {
             var a = activities[i];
-            var timeRange = (a.start_time || "").slice(11, 16) + "-" + (a.end_time || "").slice(11, 16);
-            html += '<div class="detail-item">'
+            var timeRange = formatTimeRange(a.start_time, a.end_time, a.is_in_progress);
+            var displayName = a.resource_name || a.app_name || "未知";
+            var cls = "detail-item";
+            if (a.is_in_progress) cls += " in-progress";
+            html += '<div class="' + cls + '">'
                 + '<div class="detail-item-time">' + escapeHtml(timeRange) + '</div>'
-                + '<div class="detail-item-name">' + escapeHtml(a.resource_name || a.app_name || "未知") + '</div>'
+                + '<div class="detail-item-name" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</div>'
                 + '<div class="detail-item-meta">'
                 + '<span class="detail-item-type">' + escapeHtml(a.resource_type || "") + '</span>'
                 + '<span class="detail-item-app">' + escapeHtml(a.app_name || "") + '</span>'
                 + '</div>'
-                + '<div class="detail-item-project">' + escapeHtml(a.project_name || "未归类") + '</div>'
+                + '<div class="detail-item-project" title="' + escapeHtml(a.project_name || "未归类") + '">' + escapeHtml(a.project_name || "未归类") + '</div>'
                 + '<div class="detail-item-duration">' + escapeHtml(a.duration) + '</div>'
                 + '</div>';
         }
@@ -293,7 +336,9 @@
     function loadTimeline(date) {
         setTimelineLoading(true);
         clearTimelineError();
+        var token = ++timelineRequestToken;
         callBridge("get_timeline", date).then(function (result) {
+            if (token !== timelineRequestToken) return;  // stale response
             var data = handleResult(result, function (msg) {
                 showTimelineError(msg || "加载时间详情失败，请稍后重试。");
             });
@@ -302,6 +347,7 @@
             timelineLoaded = true;
             showTimeline(data);
         }).catch(function (err) {
+            if (token !== timelineRequestToken) return;  // stale response
             setTimelineLoading(false);
             showTimelineError(err && err.message ? err.message : "加载时间详情失败，请稍后重试。");
         });
@@ -309,10 +355,14 @@
 
     function refreshTimeline() {
         // Silent refresh: do not show loading spinner, just reload data.
+        // On error, keep showing the previous data so the user is not left
+        // looking at an empty list; only the error banner is shown.
         var dateEl = document.getElementById("timeline-date-display");
         var date = timelineDate || (dateEl ? dateEl.textContent : null);
         if (date === "--") date = null;
+        var token = ++timelineRequestToken;
         callBridge("get_timeline", date).then(function (result) {
+            if (token !== timelineRequestToken) return;  // stale response
             var data = handleResult(result, function (msg) {
                 showTimelineError(msg || "刷新时间详情失败，请稍后重试。");
             });
@@ -320,6 +370,8 @@
             showTimeline(data);
             clearTimelineError();
         }).catch(function () {
+            if (token !== timelineRequestToken) return;  // stale response
+            // Only show error banner; keep lastTimelineData on screen.
             showTimelineError("刷新时间详情失败，请稍后重试。");
         });
     }
@@ -416,7 +468,9 @@
                 var dateEl = document.getElementById("timeline-date-display");
                 var date = timelineDate || (dateEl ? dateEl.textContent : null);
                 if (date === "--") date = null;
+                var token = ++timelineRequestToken;
                 callBridge("get_timeline", date).then(function (result) {
+                    if (token !== timelineRequestToken) { resolve(); return; }  // stale
                     var data = handleResult(result, function (msg) {
                         showTimelineError(msg || "刷新时间详情失败，请稍后重试。");
                         throw new Error(msg);
@@ -427,6 +481,9 @@
                     }
                     resolve();
                 }).catch(function (err) {
+                    if (token !== timelineRequestToken) { resolve(); return; }  // stale
+                    // Keep lastTimelineData on screen; just surface the error.
+                    showTimelineError("刷新时间详情失败，请稍后重试。");
                     reject(err);
                 });
             });
