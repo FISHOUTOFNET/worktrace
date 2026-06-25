@@ -50,7 +50,16 @@ def test_corrupted_ciphertext_fails() -> None:
     key = os.urandom(32)
     envelope = encrypt_aead(b"secret", b"aad", key)
     payload = _decode_envelope_payload(envelope)
-    payload["ct"] = payload["ct"][:-1] + ("A" if payload["ct"][-1] != "A" else "B")
+
+    # Corrupt a real decoded ciphertext byte, not a base64url character.
+    # Flipping a single base64url char only perturbs 6 bits and may land on
+    # padding bits or leave the underlying AES-GCM tag/ciphertext unchanged,
+    # making this test flaky. XORing the first decoded byte guarantees the
+    # ciphertext bytes change, so AES-GCM must reject the tag.
+    ct_bytes = bytearray(_decode_b64url(payload["ct"]))
+    assert ct_bytes, "AES-GCM ciphertext+tag must not be empty"
+    ct_bytes[0] ^= 0x01
+    payload["ct"] = _encode_b64url(bytes(ct_bytes))
     corrupted = "wtenc1:" + _encode_envelope_payload(payload)
 
     with pytest.raises(CryptoError):
@@ -89,3 +98,13 @@ def _decode_envelope_payload(envelope: str) -> dict[str, str]:
 def _encode_envelope_payload(payload: dict[str, str]) -> str:
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_b64url(value: str) -> bytes:
+    """Decode a base64url string without padding to bytes."""
+    return base64.urlsafe_b64decode((value + "=" * (-len(value) % 4)).encode("ascii"))
+
+
+def _encode_b64url(value: bytes) -> str:
+    """Encode bytes to a base64url string without padding."""
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
