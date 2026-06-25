@@ -4,15 +4,14 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It run
 
 ## Core Features
 
-- CustomTkinter desktop UI with Overview, Time Details, Statistics/Export, Project Rules, and Settings/Privacy pages.
-- Windows notification-area tray icon; closing the window keeps WorkTrace running, and exit is available from the tray menu.
+- WebView desktop UI (pywebview + Microsoft Edge WebView2 Runtime) is the default and only shipping UI as of Phase 1. The Overview page is fully migrated; Time Details, Statistics/Export, Project Rules, and Settings/Privacy remain on the legacy Tkinter / CustomTkinter code pending per-page migration.
 - SQLite local storage at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
 - Background collector thread using pywin32/psutil on Windows.
 - Idle, paused, excluded, normal, and error activity states.
 - First-run privacy notice before any collection starts.
 - Project creation, manual project assignment, notes, and soft delete.
 - File, folder, and keyword project rules, including the special local `排除规则`.
-- Excel export from the UI and all-local-data export from Settings.
+- Excel export from the legacy UI and all-local-data export from Settings.
 - Collector heartbeat and startup recovery for unclosed records.
 - Single-instance collector protection.
 
@@ -24,7 +23,11 @@ Phase 1A local security design is documented in [`docs/v0.2-local-security-desig
 
 Phase 1B extends the v0.2 local security foundation with encrypted `.wtbackup` export/import. A `.wtbackup` file is a local encrypted file created on the user's request; WorkTrace never uploads it. The backup passphrase is chosen by the user at export time and is not recoverable if forgotten. See [`docs/v0.2-local-security-design.md`](docs/v0.2-local-security-design.md) for the full Phase 1B scope, payload format, and import semantics.
 
-v0.2 is also evaluating an optional WebView UI spike. The existing Tkinter / CustomTkinter UI remains the default entry point and is not affected. The packaged `WorkTrace.exe` defaults to the Tkinter UI; the WebView shell can be tried with `WorkTrace.exe --webview` (or `python -m worktrace.main --webview` from source). If the Microsoft Edge WebView2 Runtime is missing, WorkTrace shows a clear message and the default Tkinter UI remains usable. The WebView is a spike only: it does not migrate any page, does not introduce an account, server, or network dependency, and does not change current functionality. See [`docs/ui-webview-migration.md`](docs/ui-webview-migration.md) for the Phase 0C scope, packaging conclusions, and stop-loss conditions.
+WebView Phase 1 is a destructive UI migration: the WebView UI is now the default and only shipping UI. `python -m worktrace.main` (and the packaged `WorkTrace.exe`) start the WebView UI directly. The legacy `--webview` flag is accepted as a no-op compatibility flag and does not change behavior. The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only as legacy code pending per-page migration and removal; it is not a supported runtime path and is not started by the default entry point.
+
+WorkTrace requires the Microsoft Edge WebView2 Runtime on Windows. When the runtime is missing, WorkTrace prints a clear install prompt and exits with a non-zero code; it does not auto-download the runtime and does not fall back to Tkinter. Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; some Windows 10 machines need a manual install from Microsoft.
+
+See [`docs/ui-webview-migration.md`](docs/ui-webview-migration.md) for the Phase 1 scope, destructive-migration principles, packaging conclusions, and stop-loss conditions.
 
 ## Privacy And Permissions
 
@@ -58,7 +61,7 @@ python -m worktrace.main
 
 The first launch shows the privacy notice. The collector starts only after the notice is accepted.
 
-Closing the main window hides WorkTrace to the Windows notification area. Use the tray icon right-click menu to show the window, pause or resume recording, or exit WorkTrace cleanly.
+As of Phase 1, the default UI is WebView. Closing the WebView window exits WorkTrace cleanly (the collector thread, folder-index worker, and single-instance lock are released). The legacy Tkinter tray-icon behavior is not part of the default runtime path; it remains in the legacy `worktrace/ui` package pending removal.
 
 ## Windows Packaging
 
@@ -167,7 +170,7 @@ The collector writes `collector_status` and `last_collector_heartbeat` into the 
 - `采集器未运行` when stopped
 - `状态异常` on collector errors
 
-The tray icon mirrors the same state: color means WorkTrace is recording, while the monochrome icon means recording is paused, stopped, or in an error state.
+The tray icon mirrors the same state on the legacy Tkinter UI only: color means WorkTrace is recording, while the monochrome icon means recording is paused, stopped, or in an error state. The default WebView UI does not implement a tray icon in Phase 1; the status label in the Overview sidebar mirrors the same `记录中 / 已暂停 / 采集器未运行 / 状态异常` states.
 
 ## Abnormal Recovery
 
@@ -203,7 +206,7 @@ Tests use `worktrace.platforms.fake_adapter.FakeAdapter`.
 
 ## Uninstall
 
-Exit WorkTrace from the notification-area tray menu, then delete:
+Exit WorkTrace from the WebView window close button (the default UI does not implement a tray icon in Phase 1), then delete:
 
 ```text
 %LOCALAPPDATA%\WorkTrace

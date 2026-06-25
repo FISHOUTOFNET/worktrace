@@ -156,6 +156,12 @@ body {
     margin-bottom: 20px;
 }
 
+@media (min-width: 1100px) {
+    .kpi-grid {
+        grid-template-columns: repeat(5, 1fr);
+    }
+}
+
 .kpi-card {
     background: #ffffff;
     border: 1px solid #e2e8f0;
@@ -223,6 +229,12 @@ body {
     color: #64748b;
 }
 
+.recent-item-status {
+    font-size: 12px;
+    color: #94a3b8;
+    margin-top: 2px;
+}
+
 .recent-item-duration {
     font-size: 13px;
     color: #334155;
@@ -234,6 +246,16 @@ body {
     color: #94a3b8;
     text-align: center;
     padding: 16px;
+}
+
+.error-banner {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #b91c1c;
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 16px;
 }
 
 .placeholder {

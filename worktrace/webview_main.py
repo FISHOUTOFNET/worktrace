@@ -1,8 +1,10 @@
-"""Optional WebView UI entry point (Phase 0B spike).
+"""WebView UI entry point (Phase 1: default and only shipping UI).
 
-Starts a minimal pywebview shell that talks to ``worktrace.api`` through
-``worktrace.webview_ui.bridge.WebViewBridge``. The default entry point
-``python -m worktrace.main`` (Tkinter UI) is unchanged.
+Starts a pywebview shell that talks to ``worktrace.api`` through
+``worktrace.webview_ui.bridge.WebViewBridge``. As of Phase 1, this is the
+default entry point used by ``python -m worktrace.main`` and by the packaged
+``WorkTrace.exe``. There is no Tkinter fallback: a missing WebView2 Runtime
+or pywebview dependency is a blocking error that exits with a non-zero code.
 
 This module mirrors the startup shape of ``worktrace.main``: resolve paths,
 initialize logging, create and initialize ``AppRuntime``, register it with
@@ -72,8 +74,9 @@ def _check_pywebview_available() -> Any:
 def _report_runtime_missing() -> int:
     """Print a clear message when WebView2 Runtime is missing and exit.
 
-    Does not raise; returns a non-zero exit code so the caller can surface the
-    message to the user (console or a Tkinter fallback prompt).
+    Does not raise; returns a non-zero exit code so the caller can surface
+    the message to the user. As of Phase 1 WorkTrace ships only the WebView
+    UI: the user must install the WebView2 Runtime and restart WorkTrace.
     """
     msg = missing_runtime_message()
     print(msg, file=sys.stderr)

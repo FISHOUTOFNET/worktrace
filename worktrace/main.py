@@ -4,11 +4,6 @@ import logging
 import sys
 from typing import Sequence
 
-from . import config
-from .api import app_api
-from .runtime.app_runtime import AppRuntime
-from .ui.app import WorkTraceApp
-
 
 def setup_logging(log_path) -> None:
     logging.basicConfig(
@@ -19,34 +14,28 @@ def setup_logging(log_path) -> None:
     )
 
 
-def _wants_webview(argv: Sequence[str]) -> bool:
+def _has_webview_compat_flag(argv: Sequence[str]) -> bool:
+    """Detect the legacy ``--webview`` opt-in flag.
+
+    Phase 1 made WebView the default UI, so the flag is now a no-op kept only
+    for backwards compatibility. It must not change behavior: ``main([])``
+    and ``main(["--webview"])`` both start the WebView UI.
+    """
     return "--webview" in argv
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if _wants_webview(args):
-        # Delegate to the optional WebView entry point. Default Tkinter UI is
-        # unchanged; --webview is an explicit opt-in for the spike.
-        from .webview_main import main as webview_main
+    # ``--webview`` is accepted as a harmless compatibility flag and does not
+    # alter behavior. WebView is the only shipping UI as of Phase 1.
+    _has_webview_compat_flag(args)
 
-        return webview_main()
+    # WebView is the sole shipping UI. There is no Tkinter fallback: a missing
+    # WebView2 Runtime or pywebview dependency is a blocking error that exits
+    # with a non-zero status and a clear message.
+    from .webview_main import main as webview_main
 
-    paths = config.resolve_paths()
-    config.ensure_directories(paths)
-    setup_logging(paths.log_path)
-    logging.info("app startup")
-
-    runtime = AppRuntime(paths)
-    runtime.initialize()
-    app_api.set_runtime(runtime)
-
-    try:
-        app = WorkTraceApp()
-        app.mainloop()
-    finally:
-        runtime.shutdown()
-    return 0
+    return webview_main()
 
 
 if __name__ == "__main__":

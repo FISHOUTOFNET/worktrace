@@ -1,4 +1,6 @@
-// WorkTrace WebView frontend - Phase 0B minimal shell.
+// WorkTrace WebView frontend.
+// Phase 1: Overview page is the production default UI. Other pages remain
+// migration placeholders.
 // Only communicates with Python through pywebview API bridge.
 // Does not persist sensitive data in browser storage APIs.
 // Does not access any external network resources.
@@ -14,6 +16,22 @@
             return Promise.reject(new Error("bridge unavailable"));
         }
         return window.pywebview.api[method]();
+    }
+
+    function showError(message) {
+        var banner = document.getElementById("overview-error");
+        if (!banner) return;
+        if (!message) {
+            banner.hidden = true;
+            banner.textContent = "加载失败，请稍后重试。";
+            return;
+        }
+        banner.hidden = false;
+        banner.textContent = message;
+    }
+
+    function clearError() {
+        showError("");
     }
 
     function handleResult(result, onError) {
@@ -45,6 +63,8 @@
         if (!overview) return;
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-total").textContent = overview.total_duration || "00:00:00";
+        document.getElementById("kpi-classified").textContent = overview.classified_duration || "00:00:00";
+        document.getElementById("kpi-uncategorized").textContent = overview.uncategorized_duration || "00:00:00";
         document.getElementById("kpi-projects").textContent = String(overview.project_count || 0);
         var current = overview.current_activity || {};
         var currentEl = document.getElementById("current-activity");
@@ -69,6 +89,7 @@
                 + '<div>'
                 + '<div class="recent-item-project">' + escapeHtml(item.project_name) + '</div>'
                 + '<div class="recent-item-time">' + escapeHtml(timeRange) + '</div>'
+                + '<div class="recent-item-status">' + escapeHtml(item.status || "") + '</div>'
                 + '</div>'
                 + '<div class="recent-item-duration">' + escapeHtml(item.duration) + '</div>'
                 + '</div>';
@@ -86,27 +107,59 @@
     }
 
     function refreshAll() {
-        callBridge("get_status").then(function (result) {
-            var status = handleResult(result, function () {});
+        var statusPromise = callBridge("get_status").then(function (result) {
+            var status = handleResult(result, function (msg) {
+                throw new Error(msg);
+            });
             showStatus(status);
-        }).catch(function () {});
+        }).catch(function (err) {
+            showError(err && err.message ? err.message : "无法连接采集器状态，请稍后重试。");
+            throw err;
+        });
 
-        callBridge("get_overview").then(function (result) {
-            var overview = handleResult(result, function () {});
+        var overviewPromise = callBridge("get_overview").then(function (result) {
+            var overview = handleResult(result, function (msg) {
+                throw new Error(msg);
+            });
             showOverview(overview);
-        }).catch(function () {});
+        }).catch(function (err) {
+            showError(err && err.message ? err.message : "加载今日概览失败，请稍后重试。");
+            throw err;
+        });
 
-        callBridge("get_recent_activities").then(function (result) {
-            var recent = handleResult(result, function () {});
+        var recentPromise = callBridge("get_recent_activities").then(function (result) {
+            var recent = handleResult(result, function (msg) {
+                throw new Error(msg);
+            });
             showRecent(recent);
-        }).catch(function () {});
+        }).catch(function (err) {
+            showError(err && err.message ? err.message : "加载最近活动失败，请稍后重试。");
+            throw err;
+        });
+
+        Promise.allSettled([statusPromise, overviewPromise, recentPromise]).then(function (results) {
+            var anyError = false;
+            for (var i = 0; i < results.length; i++) {
+                if (results[i].status === "rejected") {
+                    anyError = true;
+                    break;
+                }
+            }
+            if (!anyError) {
+                clearError();
+            }
+        });
     }
 
     function togglePause() {
         callBridge("toggle_pause").then(function (result) {
-            var status = handleResult(result, function () {});
+            var status = handleResult(result, function (msg) {
+                showError(msg);
+            });
             showStatus(status);
-        }).catch(function () {});
+        }).catch(function () {
+            showError("切换暂停状态失败，请稍后重试。");
+        });
     }
 
     function switchPage(pageId) {

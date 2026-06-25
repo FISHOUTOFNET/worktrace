@@ -1,8 +1,11 @@
-"""Optional WebView UI spike package.
+"""WebView UI package (Phase 1: default and only shipping UI).
 
-Phase 0B: minimal shell + bridge. The default entry point remains
-``python -m worktrace.main`` (Tkinter UI). The WebView entry point
-``python -m worktrace.webview_main`` starts an optional spike shell.
+As of Phase 1, the WebView shell started by ``worktrace.webview_main`` is the
+default and only shipping UI for WorkTrace. The default entry point
+``python -m worktrace.main`` starts the WebView UI; the packaged
+``WorkTrace.exe`` defaults to the WebView UI as well. The legacy
+``worktrace.ui`` (Tkinter / CustomTkinter) package is retained only as legacy
+code pending removal, not as a supported runtime path.
 
 Boundary rules (enforced by tests/test_ui_backend_boundary.py):
 

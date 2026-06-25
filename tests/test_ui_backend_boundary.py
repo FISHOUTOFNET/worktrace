@@ -5,13 +5,19 @@ Direct imports of ``worktrace.services``, ``worktrace.db``,
 ``worktrace.collector``, or ``worktrace.security`` from any module under
 ``worktrace/ui`` are forbidden.
 
-The same boundary applies to the optional WebView spike package
-``worktrace/webview_ui``. In addition, the WebView bridge (``bridge.py``) must
-not import ``worktrace.runtime`` or ``worktrace.config`` either: it may only
-reach the backend through ``worktrace.api``. The WebView entry point
+The same boundary applies to the WebView UI package
+``worktrace/webview_ui`` (the default and only shipping UI as of Phase 1).
+In addition, the WebView bridge (``bridge.py``) must not import
+``worktrace.runtime`` or ``worktrace.config`` either: it may only reach the
+backend through ``worktrace.api``. The WebView entry point
 (``worktrace/webview_main.py``) is allowed to import ``AppRuntime``,
 ``config``, and ``db`` initialization helpers, mirroring ``worktrace/main.py``,
 but still must not import ``services``, ``collector``, or ``security``.
+
+The legacy ``worktrace/ui`` (Tkinter / CustomTkinter) package is retained in
+the source tree as legacy code pending removal, not as a supported runtime
+path. Its boundary rules are still enforced so it cannot become a backdoor
+into the backend while it remains in the tree.
 
 Allowed UI / WebView dependencies:
 - ``worktrace.api`` (the facade layer)
@@ -148,7 +154,7 @@ def webview_ui_files() -> list[Path]:
 
 def test_webview_ui_directory_exists() -> None:
     assert WEBVIEW_UI_DIR.is_dir(), (
-        "worktrace/webview_ui directory must exist (Phase 0A placeholder)"
+        "worktrace/webview_ui directory must exist (Phase 1 default UI package)"
     )
 
 
@@ -183,7 +189,7 @@ def test_webview_bridge_has_no_runtime_or_config_imports() -> None:
     """The bridge module must only use worktrace.api, not runtime/config/db."""
     bridge_path = WEBVIEW_UI_DIR / "bridge.py"
     if not bridge_path.is_file():
-        pytest.skip("bridge.py not implemented yet (Phase 0B)")
+        pytest.skip("bridge.py not implemented yet (Phase 1)")
     source = bridge_path.read_text(encoding="utf-8")
     violations: list[str] = []
     for pattern, label in zip(BRIDGE_FORBIDDEN_PATTERNS, BRIDGE_FORBIDDEN_LABELS):
@@ -222,7 +228,7 @@ def test_webview_frontend_resources_have_no_external_links() -> None:
     or Google Fonts references."""
     resource_dir = WEBVIEW_UI_DIR / "static"
     if not resource_dir.is_dir():
-        pytest.skip("static/ resource directory not created yet (Phase 0B)")
+        pytest.skip("static/ resource directory not created yet (Phase 1)")
     forbidden_patterns = [
         re.compile(r'https?://', re.IGNORECASE),
         re.compile(r'cdn', re.IGNORECASE),

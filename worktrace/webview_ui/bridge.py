@@ -11,8 +11,13 @@ Boundary rules (enforced by tests/test_ui_backend_boundary.py):
   without tracebacks.
 - Methods do not log window titles, file paths, notes, or copied text.
 
-The bridge is the only data path between JS and Python. It does not implement
-editing, export, import, or settings mutations beyond pause/resume.
+The bridge is the only data path between JS and Python. As of Phase 1 the
+Overview page is fully migrated: ``get_status``, ``toggle_pause``,
+``get_overview``, and ``get_recent_activities`` are the production data path
+for the Overview page, not a spike placeholder. The other pages (Timeline,
+Statistics/Export, Rules, Settings) are not yet migrated and the bridge does
+not implement editing, export, import, or settings mutations beyond
+pause/resume for them.
 """
 
 from __future__ import annotations

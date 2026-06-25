@@ -28,6 +28,7 @@
                     <h1>今日概览</h1>
                     <button id="refresh-btn" class="refresh-btn">刷新</button>
                 </header>
+                <div id="overview-error" class="error-banner" hidden>加载失败，请稍后重试。</div>
                 <div class="kpi-grid">
                     <div class="kpi-card">
                         <div class="kpi-label">今日日期</div>
@@ -40,6 +41,14 @@
                     <div class="kpi-card">
                         <div class="kpi-label">今日项目数</div>
                         <div id="kpi-projects" class="kpi-value">0</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">已归类时长</div>
+                        <div id="kpi-classified" class="kpi-value">00:00:00</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">未归类时长</div>
+                        <div id="kpi-uncategorized" class="kpi-value">00:00:00</div>
                     </div>
                 </div>
                 <div class="current-card">

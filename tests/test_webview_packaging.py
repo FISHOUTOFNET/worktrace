@@ -1,13 +1,21 @@
-"""Phase 0C packaging, startup --webview, and WebView2 runtime detection tests.
+"""Phase 1 packaging, default WebView entry, and WebView2 runtime detection tests.
 
-Covers:
+Phase 1 made the WebView UI the default and only shipping UI. These tests
+cover:
+
 - WorkTrace.spec bundles webview_ui static resources + retains schema.sql,
-  open_files_helper, customtkinter, win32timezone;
-- pyinstaller_entry.py forwards --webview (does not strip it);
-- ``python -m worktrace.main`` defaults to Tkinter and does not start GUI on import;
-- ``--webview`` routes to the WebView entry point;
+  open_files_helper, customtkinter (legacy), win32timezone;
+- pyinstaller_entry.py forwards to worktrace.main.main (which now defaults
+  to WebView);
+- ``python -m worktrace.main`` defaults to the WebView entry point and does
+  not instantiate the legacy Tkinter ``WorkTraceApp``;
+- the legacy ``--webview`` flag is accepted as a no-op compatibility flag
+  and does not alter behavior;
+- importing worktrace.main does not start the GUI;
 - WebView2 runtime_check is importable, never raises, and does not block
   non-Windows;
+- the missing-runtime message does not mention Tkinter, fallback, or any
+  ``继续使用默认`` wording;
 - boundary: runtime_check stays inside webview_ui and does not import backend.
 """
 
@@ -24,6 +32,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = REPO_ROOT / "WorkTrace.spec"
 ENTRY_PATH = REPO_ROOT / "scripts" / "pyinstaller_entry.py"
+MAIN_PATH = REPO_ROOT / "worktrace" / "main.py"
 
 
 def _read(path: Path) -> str:
@@ -61,6 +70,9 @@ def test_spec_retains_open_files_helper():
 
 
 def test_spec_retains_customtkinter():
+    """customtkinter is still bundled because the legacy worktrace.ui package
+    remains in the source tree pending removal. The default WebView runtime
+    path does not import it."""
     spec = _read(SPEC_PATH)
     assert "collect_all('customtkinter')" in spec or 'collect_all("customtkinter")' in spec
 
@@ -70,30 +82,75 @@ def test_spec_retains_win32timezone():
     assert "win32timezone" in spec
 
 
-def test_entry_script_forwards_webview_flag():
-    """The entry script must not strip --webview before calling main()."""
+def test_entry_script_forwards_to_worktrace_main():
+    """The entry script must fall through to worktrace.main.main for the
+    default invocation. ``--webview`` is no longer required to opt in (the
+    default is WebView as of Phase 1), but it must still be tolerated as a
+    no-op compatibility flag."""
     source = _read(ENTRY_PATH)
-    # The only argv branch is --open-files-helper; everything else falls
-    # through to main(), which reads sys.argv. So --webview is preserved.
     assert "--open-files-helper" in source
     assert "from worktrace.main import main" in source
-    # No code path that consumes/ignores --webview explicitly.
-    assert "--webview" not in source or source.count("--webview") == 0
 
 
 # --- startup tests ------------------------------------------------------
 
 
-def test_main_wants_webview_flag_detected():
-    from worktrace.main import _wants_webview
+def test_main_module_does_not_import_worktrace_app():
+    """main.py must not import or instantiate the legacy Tkinter WorkTraceApp.
 
-    assert _wants_webview(["--webview"]) is True
-    assert _wants_webview([]) is False
-    assert _wants_webview(["--foo"]) is False
+    As of Phase 1 the default path is the WebView UI. The legacy
+    ``worktrace.ui.app`` module may still exist in the tree, but the default
+    entry point must not depend on it.
+    """
+    source = _read(MAIN_PATH)
+    assert "WorkTraceApp" not in source, (
+        "worktrace.main must not import or reference WorkTraceApp; "
+        "WebView is the default UI as of Phase 1."
+    )
+    assert "from .ui.app" not in source
+    assert "from worktrace.ui.app" not in source
 
 
-def test_main_routes_to_webview_when_flag_present():
-    """When --webview is passed, main() delegates to webview_main.main()."""
+def test_main_webview_compat_flag_detected():
+    """``--webview`` is accepted as a no-op compatibility flag.
+
+    Phase 1 made WebView the default, so the flag does not change behavior;
+    it is retained only so existing scripts that pass ``--webview`` keep
+    working.
+    """
+    from worktrace.main import _has_webview_compat_flag
+
+    assert _has_webview_compat_flag(["--webview"]) is True
+    assert _has_webview_compat_flag([]) is False
+    assert _has_webview_compat_flag(["--foo"]) is False
+
+
+def test_main_defaults_to_webview_without_flag():
+    """``main([])`` must delegate to ``webview_main.main()``.
+
+    This is the core Phase 1 invariant: the default entry point starts the
+    WebView UI. There is no Tkinter path in ``main``.
+    """
+    import worktrace.main as main_mod
+
+    called = {"count": 0}
+
+    def fake_webview_main():
+        called["count"] += 1
+        return 0
+
+    with patch("worktrace.webview_main.main", fake_webview_main):
+        result = main_mod.main([])
+    assert result == 0
+    assert called["count"] == 1
+
+
+def test_main_routes_to_webview_with_compat_flag():
+    """``main(["--webview"])`` delegates to ``webview_main.main()`` too.
+
+    The legacy opt-in flag is now a no-op: both ``main([])`` and
+    ``main(["--webview"])`` start the WebView UI.
+    """
     import worktrace.main as main_mod
 
     called = {"count": 0}
@@ -108,32 +165,36 @@ def test_main_routes_to_webview_when_flag_present():
     assert called["count"] == 1
 
 
-def test_main_does_not_route_to_webview_without_flag():
-    """Without --webview, main() must not call webview_main.main()."""
+def test_main_does_not_instantiate_worktrace_app_on_default_path():
+    """The default ``main([])`` path must not instantiate WorkTraceApp.
+
+    Even if webview_main raises, the main module must not catch the error and
+    instantiate the Tkinter UI as a fallback. We assert that WorkTraceApp is
+    never imported by main.py (covered by
+    ``test_main_module_does_not_import_worktrace_app``) and that main()
+    returns whatever webview_main returns, including non-zero codes.
+    """
     import worktrace.main as main_mod
 
-    called = {"count": 0}
+    def fake_webview_main_returning_nonzero():
+        return 2
 
-    def fake_webview_main():
-        called["count"] += 1
-        return 0
+    with patch("worktrace.webview_main.main", fake_webview_main_returning_nonzero):
+        result = main_mod.main([])
+    assert result == 2
 
-    with patch("worktrace.webview_main.main", fake_webview_main):
-        # main() without --webview tries to start Tkinter; intercept before
-        # that by patching WorkTraceApp to a no-op.
-        with patch("worktrace.main.WorkTraceApp") as fake_app:
-            fake_app.return_value.mainloop.return_value = None
-            with patch("worktrace.main.config") as fake_config:
-                fake_config.resolve_paths.return_value = type(
-                    "P", (), {"log_path": "nul"}
-                )()
-                fake_config.ensure_directories.return_value = None
-                with patch("worktrace.main.AppRuntime") as fake_runtime:
-                    fake_runtime.return_value.initialize.return_value = None
-                    fake_runtime.return_value.shutdown.return_value = None
-                    with patch("worktrace.main.app_api"):
-                        main_mod.main([])
-    assert called["count"] == 0
+
+def test_main_propagates_webview_failure_without_tkinter_fallback(monkeypatch):
+    """If webview_main.main raises, main() must propagate the exception
+    instead of catching it and starting a Tkinter UI."""
+    import worktrace.main as main_mod
+
+    def boom():
+        raise RuntimeError("webview failed to start")
+
+    monkeypatch.setattr("worktrace.webview_main.main", boom)
+    with pytest.raises(RuntimeError, match="webview failed to start"):
+        main_mod.main([])
 
 
 def test_import_main_does_not_start_gui():
@@ -237,12 +298,24 @@ def test_is_webview2_available_treats_missing_as_unavailable():
         assert is_webview2_available() is False
 
 
-def test_missing_runtime_message_is_chinese_and_mentions_runtime():
+def test_missing_runtime_message_mentions_webview2():
     from worktrace.webview_ui.runtime_check import missing_runtime_message
 
     msg = missing_runtime_message()
     assert "WebView2" in msg
-    assert "Tkinter" in msg
+    assert "Microsoft" in msg
+
+
+def test_missing_runtime_message_has_no_tkinter_or_fallback_wording():
+    """The missing-runtime message must not reference Tkinter, fallback, or
+    any ``继续使用默认`` wording. Phase 1 removed the fallback path."""
+    from worktrace.webview_ui.runtime_check import missing_runtime_message
+
+    msg = missing_runtime_message()
+    msg_lower = msg.lower()
+    assert "tkinter" not in msg_lower
+    assert "fallback" not in msg_lower
+    assert "继续使用默认" not in msg
 
 
 def test_runtime_check_does_not_import_backend():

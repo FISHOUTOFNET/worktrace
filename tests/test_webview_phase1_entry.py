@@ -1,0 +1,241 @@
+"""Phase 1 default WebView entry behavior tests.
+
+These tests cover the destructive Phase 1 migration invariants:
+
+- ``worktrace.main.main([])`` defaults to WebView, not the legacy Tkinter
+  ``WorkTraceApp``;
+- the legacy ``--webview`` flag is a no-op compatibility flag (it does not
+  change behavior, and omitting it still starts the WebView UI);
+- when the WebView2 Runtime is missing on Windows, ``webview_main.main``
+  returns a non-zero exit code, prints a clear Chinese install prompt, and
+  does not start any Tkinter UI;
+- when pywebview is missing, ``webview_main.main`` returns a non-zero exit
+  code with a clear install prompt;
+- the static resource path helper resolves ``index.html`` in both source-run
+  and PyInstaller-frozen layouts;
+- the bridge only imports ``worktrace.api`` (covered in detail by
+  ``test_ui_backend_boundary.py``);
+- Overview bridge methods return JSON-serializable data and never leak
+  tracebacks (covered in detail by ``test_webview_bridge.py``).
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_main_defaults_to_webview_without_instantiating_tkinter():
+    """``main([])`` must delegate to ``webview_main.main()`` and must not
+    reference the legacy Tkinter ``WorkTraceApp``."""
+    import worktrace.main as main_mod
+
+    called = {"count": 0}
+
+    def fake_webview_main():
+        called["count"] += 1
+        return 0
+
+    with patch("worktrace.webview_main.main", fake_webview_main):
+        result = main_mod.main([])
+    assert result == 0
+    assert called["count"] == 1
+
+    # main.py must not import WorkTraceApp at module load time.
+    source = (REPO_ROOT / "worktrace" / "main.py").read_text(encoding="utf-8")
+    assert "WorkTraceApp" not in source
+
+
+def test_main_with_webview_compat_flag_behaves_same_as_no_flag():
+    """``main(["--webview"])`` and ``main([])`` must both start the WebView
+    UI. The legacy flag is a no-op kept only for backwards compatibility."""
+    import worktrace.main as main_mod
+
+    calls = []
+
+    def fake_webview_main():
+        calls.append("webview")
+        return 0
+
+    with patch("worktrace.webview_main.main", fake_webview_main):
+        main_mod.main([])
+        main_mod.main(["--webview"])
+        main_mod.main(["--other-flag"])
+
+    assert calls == ["webview", "webview", "webview"]
+
+
+def test_webview_main_returns_nonzero_when_runtime_missing(monkeypatch, capsys):
+    """When the WebView2 Runtime is missing on Windows, ``webview_main.main``
+    must:
+    - print a clear Chinese install prompt to stderr;
+    - return a non-zero exit code;
+    - not start any Tkinter UI.
+    """
+    import worktrace.webview_main as webview_main
+
+    # Patch the reference bound in webview_main (it imports the function
+    # directly via ``from .webview_ui.runtime_check import detect_webview2_runtime``),
+    # otherwise patching the source module has no effect on the call site.
+    monkeypatch.setattr(webview_main, "detect_webview2_runtime", lambda: "missing")
+    # Guard: if any code path tries to import WorkTraceApp, fail loudly.
+    monkeypatch.setattr(
+        "worktrace.ui.app.WorkTraceApp",
+        lambda *_, **__: pytest.fail("Tkinter WorkTraceApp must not be instantiated when WebView2 is missing"),
+    )
+
+    # Stub config/setup_logging so main() can reach the pre-flight check
+    # without touching the filesystem.
+    monkeypatch.setattr("worktrace.config.resolve_paths", lambda: type("P", (), {"log_path": "nul"})())
+    monkeypatch.setattr("worktrace.config.ensure_directories", lambda _paths: None)
+    monkeypatch.setattr(webview_main, "setup_logging", lambda _log_path: None)
+
+    result = webview_main.main()
+
+    assert result != 0
+    captured = capsys.readouterr()
+    assert "WebView2" in captured.err
+    assert "Microsoft" in captured.err
+    # The prompt must not mention Tkinter or any fallback wording.
+    assert "tkinter" not in captured.err.lower()
+    assert "fallback" not in captured.err.lower()
+    assert "继续使用默认" not in captured.err
+
+
+def test_webview_main_returns_nonzero_when_pywebview_missing(monkeypatch, capsys):
+    """When pywebview is not installed, ``webview_main.main`` must return a
+    non-zero exit code with a clear install prompt and must not start any
+    Tkinter UI."""
+    import worktrace.webview_main as webview_main
+
+    # Patch the reference bound in webview_main so the pre-flight check passes
+    # and execution reaches the pywebview availability check.
+    monkeypatch.setattr(webview_main, "detect_webview2_runtime", lambda: "installed")
+    monkeypatch.setattr("worktrace.config.resolve_paths", lambda: type("P", (), {"log_path": "nul"})())
+    monkeypatch.setattr("worktrace.config.ensure_directories", lambda _paths: None)
+    monkeypatch.setattr(webview_main, "setup_logging", lambda _log_path: None)
+    # Simulate pywebview not being installed.
+    monkeypatch.setitem(sys.modules, "webview", None)
+    # Guard: Tkinter UI must not start.
+    monkeypatch.setattr(
+        "worktrace.ui.app.WorkTraceApp",
+        lambda *_, **__: pytest.fail("Tkinter WorkTraceApp must not be instantiated when pywebview is missing"),
+    )
+
+    result = webview_main.main()
+
+    assert result != 0
+    captured = capsys.readouterr()
+    assert "pywebview" in captured.err
+    assert "未安装" in captured.err
+
+
+def test_webview_main_does_not_swallow_nonzero_exit_from_pre_flight(monkeypatch):
+    """If the pre-flight check returns a non-zero code, ``main`` must
+    propagate it; the caller (``worktrace.main.main``) must not catch it
+    and start a Tkinter UI."""
+    import worktrace.main as main_mod
+    import worktrace.webview_main as webview_main
+
+    # Patch the reference bound in webview_main so the pre-flight check
+    # deterministically reports a missing runtime.
+    monkeypatch.setattr(webview_main, "detect_webview2_runtime", lambda: "missing")
+    monkeypatch.setattr("worktrace.config.resolve_paths", lambda: type("P", (), {"log_path": "nul"})())
+    monkeypatch.setattr("worktrace.config.ensure_directories", lambda _paths: None)
+    monkeypatch.setattr(webview_main, "setup_logging", lambda _log_path: None)
+
+    # main_mod.main should return the same non-zero code webview_main returns.
+    result_from_main = main_mod.main([])
+    result_from_webview = webview_main.main()
+    assert result_from_main != 0
+    assert result_from_main == result_from_webview
+
+
+def test_resource_path_resolves_index_html_in_source_run():
+    """``resource_path`` must resolve ``index.html`` to an existing file in
+    the source-run layout (no ``_MEIPASS`` set)."""
+    import worktrace.webview_main as mod
+
+    # Ensure _MEIPASS is not set so the source-run branch is exercised.
+    with patch.dict(sys.modules, {}, clear=False):
+        path = mod.resource_path("index.html")
+    assert path.name == "index.html"
+    assert path.is_file(), f"expected index.html to exist at {path}"
+
+
+def test_resource_path_resolves_index_html_in_frozen_run(monkeypatch, tmp_path):
+    """When ``sys._MEIPASS`` is set (PyInstaller frozen layout),
+    ``resource_path`` must resolve the bundled resource under
+    ``worktrace/webview_ui/``."""
+    import worktrace.webview_main as mod
+
+    fake_meipass = tmp_path / "fake_meipass"
+    (fake_meipass / "worktrace" / "webview_ui").mkdir(parents=True, exist_ok=True)
+    fake_index = fake_meipass / "worktrace" / "webview_ui" / "index.html"
+    fake_index.write_text("<html>placeholder</html>", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "_MEIPASS", str(fake_meipass), raising=False)
+    try:
+        path = mod.resource_path("index.html")
+    finally:
+        monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+
+    assert path.name == "index.html"
+    # The frozen path must point inside the fake _MEIPASS tree, under
+    # worktrace/webview_ui/.
+    assert str(fake_meipass) in str(path)
+    assert "webview_ui" in path.parts
+
+
+def test_bridge_only_imports_worktrace_api():
+    """The bridge module must only import from ``worktrace.api`` (and
+    ``worktrace.formatters``). It must not import services, db, collector,
+    security, runtime, or config directly. This complements
+    ``test_ui_backend_boundary.py`` with a focused Phase 1 assertion."""
+    bridge_path = REPO_ROOT / "worktrace" / "webview_ui" / "bridge.py"
+    source = bridge_path.read_text(encoding="utf-8")
+    forbidden = [
+        "from ..services",
+        "from worktrace.services",
+        "from ..db",
+        "from worktrace.db",
+        "from ..collector",
+        "from worktrace.collector",
+        "from ..security",
+        "from worktrace.security",
+        "from ..runtime",
+        "from worktrace.runtime",
+        "from ..config",
+        "from worktrace.config",
+    ]
+    for token in forbidden:
+        assert token not in source, f"bridge.py must not import {token}"
+    assert "from ..api import" in source or "from worktrace.api import" in source
+
+
+def test_overview_bridge_methods_return_json_serializable_no_traceback(temp_db):
+    """All Overview bridge methods must return JSON-serializable dicts and
+    must never leak tracebacks on error. This is a focused Phase 1 assertion;
+    see ``test_webview_bridge.py`` for the full per-method coverage."""
+    from worktrace.services import settings_service
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    settings_service.clear_settings_cache()
+    bridge = WebViewBridge()
+    for method_name in ("get_status", "toggle_pause", "get_overview", "get_recent_activities"):
+        method = getattr(bridge, method_name)
+        result = method()
+        assert isinstance(result, dict), f"{method_name} must return a dict"
+        # Must be JSON-serializable.
+        json.dumps(result)
+        assert "ok" in result
+        # On error, the bridge must return a generic error, not a traceback.
+        if result.get("ok") is False:
+            assert "error" in result
+            assert "traceback" not in str(result).lower()

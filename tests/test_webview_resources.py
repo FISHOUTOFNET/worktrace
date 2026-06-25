@@ -1,7 +1,11 @@
 """Tests for WebView frontend resources and startup module.
 
-Verifies:
+Phase 1: the WebView UI is the default and only shipping UI. These tests
+verify:
+
 - index.html, app.js, styles.css exist;
+- the Overview page is a production page (KPIs, current activity, recent
+  activities, error banner, pause toggle), not a spike placeholder;
 - frontend resources contain no external links, CDN, or localStorage;
 - importing worktrace.webview_main does not start the GUI;
 - worktrace.webview_main.main exists;
@@ -100,6 +104,67 @@ def test_index_html_has_sidebar_nav():
 def test_index_html_has_placeholder_for_unmigrated_pages():
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "WebView 迁移中" in source
+
+
+def test_index_html_overview_page_has_required_kpis():
+    """Phase 1: the Overview page must show the production KPI set, not a
+    spike placeholder. Required KPIs: date, total duration, project count,
+    classified duration, uncategorized duration."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="kpi-date"' in source
+    assert 'id="kpi-total"' in source
+    assert 'id="kpi-projects"' in source
+    assert 'id="kpi-classified"' in source
+    assert 'id="kpi-uncategorized"' in source
+
+
+def test_index_html_overview_page_has_current_and_recent_sections():
+    """Phase 1: the Overview page must have a current-activity section and a
+    recent-activities list."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="current-activity"' in source
+    assert 'id="recent-list"' in source
+
+
+def test_index_html_overview_page_has_error_banner():
+    """Phase 1: the Overview page must have an in-page error banner so bridge
+    errors are surfaced to the user without exposing tracebacks."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="overview-error"' in source
+
+
+def test_index_html_overview_page_has_pause_toggle():
+    """Phase 1: the Overview page must support pause/resume through the
+    sidebar toggle button."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="toggle-pause-btn"' in source
+    assert 'id="status-display"' in source
+
+
+def test_app_js_displays_classified_and_uncategorized_durations():
+    """Phase 1: app.js must render classified_duration and
+    uncategorized_duration returned by the bridge, not just total duration."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "kpi-classified" in source
+    assert "kpi-uncategorized" in source
+    assert "classified_duration" in source
+    assert "uncategorized_duration" in source
+
+
+def test_app_js_surfaces_bridge_errors_in_page():
+    """Phase 1: app.js must show bridge errors in the in-page error banner
+    instead of silently swallowing them."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "overview-error" in source
+    assert "showError" in source
+    assert "clearError" in source
+
+
+def test_app_js_does_not_expose_tracebacks():
+    """The frontend must not attempt to parse or display Python tracebacks.
+    It only shows the generic error string returned by the bridge."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "traceback" not in source.lower()
 
 
 # --- startup tests -------------------------------------------------------
