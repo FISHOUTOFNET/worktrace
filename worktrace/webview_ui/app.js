@@ -66,6 +66,15 @@
     var editingSplitActivityId = null;
     var activitySplitSaving = false;
 
+    // --- Phase 3B.3: Timeline activity-merge state -----------------------
+    // mergeSaving guards the per-activity "与下一条合并" button. It is
+    // intentionally separate from editSaving/timeSaving/activityTimeSaving/
+    // activitySplitSaving/sessionSplitSaving so the merge save flow does
+    // not pollute the other save flows' state. mergingActivityId is the
+    // activity id whose merge button is currently saving (null = none).
+    var mergeSaving = false;
+    var mergingActivityId = null;
+
     // --- Bridge helper --------------------------------------------------
 
     function callBridge(method) {
@@ -393,6 +402,23 @@
             var splitBtnTitle = a.is_in_progress
                 ? "进行中记录暂不支持拆分"
                 : (aid ? "在该时间点拆分此活动" : "活动 ID 缺失，无法拆分");
+            // Phase 3B.3: per-activity "与下一条合并" button. The button is
+            // disabled when there is no next activity, when either the
+            // current or next activity is in-progress, or when the current
+            // activity id is missing. The backend re-validates all merge
+            // preconditions (project, resource, status, adjacency).
+            var hasNext = i < activities.length - 1;
+            var nextInProgress = hasNext && activities[i + 1].is_in_progress;
+            var mergeBtnDisabled = !aid || a.is_in_progress || !hasNext || nextInProgress;
+            var mergeBtnTitle = !aid
+                ? "活动 ID 缺失，无法合并"
+                : (a.is_in_progress
+                    ? "进行中记录暂不支持合并"
+                    : (!hasNext
+                        ? "已是最后一条活动，没有下一条可合并"
+                        : (nextInProgress
+                            ? "下一条活动进行中，暂不支持合并"
+                            : "将此活动与下一条活动合并")));
             html += '<div class="' + cls + '" data-activity-id="' + escapeHtml(String(aid)) + '">'
                 + '<div class="detail-item-time">' + escapeHtml(timeRange) + '</div>'
                 + '<div class="detail-item-name" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</div>'
@@ -417,6 +443,12 @@
                 + (editBtnDisabled ? ' disabled' : '')
                 + ' title="' + escapeHtml(splitBtnTitle) + '"'
                 + '>拆分</button>'
+                + '<button type="button" class="detail-merge-btn"'
+                + ' data-activity-id="' + escapeHtml(String(aid)) + '"'
+                + ' data-next-activity-id="' + escapeHtml(String(hasNext ? (activities[i + 1].activity_id || 0) : 0)) + '"'
+                + (mergeBtnDisabled ? ' disabled' : '')
+                + ' title="' + escapeHtml(mergeBtnTitle) + '"'
+                + '>与下一条合并</button>'
                 + '</div>'
                 + '<div class="detail-time-editor" hidden>'
                 + '<div class="detail-time-row">'
@@ -444,6 +476,7 @@
                 + '</div>'
                 + '<div class="detail-split-status edit-status" hidden></div>'
                 + '</div>'
+                + '<div class="detail-merge-status edit-status" hidden></div>'
                 + '</div>';
         }
         detailsList.innerHTML = html;
@@ -475,6 +508,40 @@
                     openActivitySplitEditor(id, startVal, endVal, btn);
                 });
             })(splitBtns[s]);
+        }
+
+        // Phase 3B.3: bind per-activity "与下一条合并" button handlers.
+        var mergeBtns = detailsList.querySelectorAll(".detail-merge-btn");
+        for (var mIdx = 0; mIdx < mergeBtns.length; mIdx++) {
+            (function (btn) {
+                btn.addEventListener("click", function () {
+                    if (btn.disabled || mergeSaving) return;
+                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
+                    var nextId = parseInt(btn.getAttribute("data-next-activity-id"), 10);
+                    if (!id || !nextId) return;
+                    saveActivityMerge(btn, id, nextId);
+                });
+            })(mergeBtns[mIdx]);
+        }
+
+        // Phase 3B.3: if a merge save is in progress for an activity that
+        // still exists, re-apply the saving state to the refreshed button so
+        // the user sees consistent "合并中…" feedback across auto-refresh.
+        // If the activity disappeared (session regroup), reset the merge
+        // state so the UI does not get stuck.
+        if (mergingActivityId !== null && mergeSaving) {
+            var mergeStillThere = false;
+            for (var mCheck = 0; mCheck < mergeBtns.length; mCheck++) {
+                if (parseInt(mergeBtns[mCheck].getAttribute("data-activity-id"), 10) === mergingActivityId) {
+                    mergeStillThere = true;
+                    setMergeSaving(mergeBtns[mCheck], true);
+                    break;
+                }
+            }
+            if (!mergeStillThere) {
+                mergingActivityId = null;
+                mergeSaving = false;
+            }
         }
 
         // If an inline editor was open for an activity that still exists,
@@ -852,6 +919,76 @@
         });
     }
 
+    // --- Phase 3B.3: per-activity merge with next activity ------------
+
+    function setMergeStatus(btn, message, isError) {
+        if (!btn) return;
+        var row = btn.closest(".detail-item");
+        if (!row) return;
+        var statusEl = row.querySelector(".detail-merge-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "detail-merge-status edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "detail-merge-status edit-status "
+            + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function setMergeSaving(btn, saving) {
+        mergeSaving = saving;
+        mergingActivityId = saving ? parseInt(btn.getAttribute("data-activity-id"), 10) : null;
+        if (btn) {
+            btn.disabled = saving;
+            btn.textContent = saving ? "合并中…" : "与下一条合并";
+        }
+        // Also disable the other action buttons on the same row during a
+        // merge so the user cannot start a conflicting edit.
+        var row = btn ? btn.closest(".detail-item") : null;
+        if (row) {
+            var editBtn = row.querySelector(".detail-edit-time-btn");
+            var splitBtn = row.querySelector(".detail-split-btn");
+            if (editBtn) editBtn.disabled = saving || editBtn.disabled;
+            if (splitBtn) splitBtn.disabled = saving || splitBtn.disabled;
+        }
+    }
+
+    function saveActivityMerge(btn, activityId, nextActivityId) {
+        if (!btn || mergeSaving) return;
+        if (!activityId || !nextActivityId) {
+            setMergeStatus(btn, "活动 ID 无效", true);
+            return;
+        }
+        setMergeSaving(btn, true);
+        setMergeStatus(btn, "", false);
+        callBridge("merge_timeline_activities", [activityId, nextActivityId]).then(function (result) {
+            if (!result || result.ok === false) {
+                setMergeSaving(btn, false);
+                setMergeStatus(
+                    btn,
+                    result && result.error ? result.error : "合并失败",
+                    true
+                );
+                return;
+            }
+            // Merge succeeded. Reset saving state before refreshing so the
+            // button is re-enabled regardless of whether the refresh
+            // succeeds. The merge changes the activity's end_time and
+            // soft-deletes the next activity, so the detail list must be
+            // refreshed.
+            setMergeSaving(btn, false);
+            setMergeStatus(btn, "已合并", false);
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setMergeSaving(btn, false);
+            setMergeStatus(btn, "合并失败", true);
+        });
+    }
+
     // --- Phase 3A: Timeline editing (project reclassification + note) ----
 
     function loadProjects() {
@@ -976,6 +1113,9 @@
         editingSplitActivityId = null;
         activitySplitSaving = false;
         sessionSplitSaving = false;
+        // Phase 3B.3: reset per-activity merge state too.
+        mergeSaving = false;
+        mergingActivityId = null;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
         var noteEl = document.getElementById("edit-note-text");

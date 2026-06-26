@@ -2,13 +2,15 @@
 
 ## Status
 
-- Current phase: 3B.2.1 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.3 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
   implemented and hardened; Timeline activity split foundation — single
   closed activity split into two closed activities — implemented and
-  hardened; WebView is the default and only shipping UI).
+  hardened; Timeline activity merge foundation — two closed activities
+  merged into one — implemented; WebView is the default and only shipping
+  UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -263,7 +265,26 @@ The migration is phased so each step is independently shippable:
   inheritance, auto-assignment inheritance, ``created_at`` not copied,
   INSERT failure rollback, assignment-copy failure rollback, and
   resource-copy failure rollback. **Completed.**
-- Phase 3B: Timeline advanced editing (merge, delete, batch editing,
+- Phase 3B.3: **Timeline activity merge foundation.** Implements the
+  minimal usable two-activity merge: two closed, adjacent, same-project /
+  same-resource / same-status / same-source activities are merged into
+  one. The earlier activity (by ``start_time``, then ``id``) keeps its
+  ``id`` and ``start_time``; its ``end_time`` is extended to the later
+  activity's ``end_time`` and its ``duration_seconds`` is precisely
+  recomputed. The later activity is soft-deleted (``is_deleted = 1``),
+  not physically removed. The earlier activity's ``note`` is preserved;
+  the later activity's ``note`` is **not** copied or concatenated.
+  ``project_session_note`` is **not** migrated. Assignment and resource
+  rows are left in place (no complex merge). Only two activities can be
+  merged per call; arbitrary-length batch merge and multi-activity
+  session whole-merge are rejected. In-progress and deleted activities
+  are rejected. The merge is atomic: any failure rolls back and leaves
+  both activities unchanged. After a successful merge the Timeline is
+  refreshed; if the selected session regroups or disappears the selection
+  is cleared gracefully. Delete/hide, batch editing, auto-rule creation,
+  complex correction pages, and overlap detection remain out of scope.
+  **Completed.**
+- Phase 3B: Timeline advanced editing (delete, batch editing,
   correction page) — not yet started.
 - Phase 4: Statistics / Export.
 - Phase 5: Rules.
@@ -1184,6 +1205,151 @@ Phase 3B.2.1 adds explicit tests verifying that every write step inside
 - Multi-activity session whole-split, merge, delete/hide, batch editing,
   auto-rule creation, complex correction pages, and overlap detection
   remain out of scope.
+
+## Phase 3B.3 Implemented Scope
+
+Phase 3B.3 implements the **minimal usable two-activity merge foundation**
+for the WebView Timeline. It is the first phase that allows the user to
+merge two activities into one.
+
+### Data Semantics
+
+- Merge operates on exactly two closed `activity_log` rows. The API
+  accepts a list of exactly two activity ids; arbitrary-length batch
+  merge is rejected with `TimelineMergeError("invalid_selection")`.
+- The earlier activity (by `start_time`, then `id`) is the **kept**
+  activity. The later activity is the **merged** (soft-deleted) activity.
+- The kept activity's `start_time` is unchanged. Its `end_time` is
+  extended to the merged activity's `end_time`. Its `duration_seconds` is
+  precisely recomputed as `merged_end - kept_start` in seconds.
+- The kept activity's `created_at` is untouched. Its `updated_at` is
+  refreshed to the write time.
+- The merged activity is soft-deleted (`is_deleted = 1`,
+  `updated_at` refreshed). It is **not** physically removed. Timeline
+  reads exclude it via `is_deleted = 0` filtering.
+- Both activities must satisfy all preconditions:
+  - Both exist and are not deleted (`is_deleted = 0`).
+  - Both are closed (raw DB `end_time IS NOT NULL`). The in-progress
+    check reads the raw DB `end_time`, not the projected display value.
+  - Both have the same effective `project_id`. Different projects are
+    rejected with `TimelineMergeError("different_project")`.
+  - Both have the same resource `identity_key` (from `activity_resource`).
+    Different resources are rejected with
+    `TimelineMergeError("different_resource")`.
+  - Both have the same `status` and `source`. Different status/source is
+    rejected with `TimelineMergeError("incompatible_activity")`.
+  - The two activities must not overlap (overlap is rejected with
+    `TimelineMergeError("invalid_time")`).
+  - The two activities must be adjacent or within
+    `MERGE_GAP_TOLERANCE_SECONDS` (2 seconds). A larger gap is rejected
+    with `TimelineMergeError("not_adjacent")`. The tolerance accounts
+    for real collector data where close/create may introduce a 1–2
+    second gap; long gaps are never swallowed.
+- The kept activity's `note` is preserved. The merged activity's `note`
+  is **not** copied or concatenated.
+- `project_session_note` keyed by `(report_date, first_activity_id)` is
+  **not** migrated. If the merged activity was a `first_activity_id`,
+  the note row remains keyed to the (now-deleted) activity id. Phase
+  3B.3 does not perform session-note merge.
+- `activity_project_assignment` and `activity_resource` rows belonging
+  to the merged activity are left in place (not physically deleted). No
+  complex assignment/resource merge is performed. The kept activity's
+  rows are unchanged.
+- The merge is atomic: both UPDATEs (kept end_time/duration and merged
+  soft-delete) run in a single transaction. If any step fails the whole
+  operation rolls back and both activities are left unchanged. No
+  half-merge state is ever persisted.
+- Cross-day adjacent activities are supported: the merge itself does
+  not project cross-day slices; `timeline_service` projection on the
+  next Timeline read handles the display.
+
+### Race-Condition Safety
+
+- The kept-activity UPDATE uses
+  `WHERE id = ? AND is_deleted = 0 AND end_time IS NOT NULL`. If the
+  rowcount is 0 (the activity was deleted or re-opened between validation
+  and write), the service raises `ValueError` and the transaction rolls
+  back.
+- The merged-activity soft-delete UPDATE uses the same WHERE guard. If
+  the rowcount is 0, the service raises `ValueError` and the transaction
+  rolls back (the kept-activity UPDATE is also rolled back).
+- Both race-condition failures map to
+  `TimelineMergeError("operation_failed")` at the API layer and
+  `"操作失败"` at the bridge layer.
+
+### API Layer
+
+- `merge_timeline_activities(activity_ids: list[int]) -> dict` is the
+  production write path. It validates the input list, delegates to
+  `activity_service.merge_activities`, and maps service-layer
+  `ValueError` codes to stable `TimelineMergeError` codes.
+- Stable error codes: `invalid_selection`, `invalid_id`, `in_progress`,
+  `different_project`, `different_resource`, `incompatible_activity`,
+  `not_adjacent`, `invalid_time`, `operation_failed`.
+- The API does not return raw rows, `window_title`, `file_path_hint`,
+  `note`, or any internal field. It returns
+  `{"kept_activity_id": int, "merged_activity_id": int}`.
+
+### Bridge Layer
+
+- `WebViewBridge.merge_timeline_activities(activity_ids)` is the only
+  frontend-facing entry point. It calls
+  `timeline_api.merge_timeline_activities` and maps error codes to
+  Chinese messages.
+- Bridge error messages: `请选择两个活动进行合并`, `操作失败`,
+  `进行中记录暂不支持合并`, `项目不同，暂不支持合并`,
+  `资源不同，暂不支持合并`, `活动类型不同，暂不支持合并`,
+  `活动时间不连续，暂不支持合并`, `时间无效`.
+- The bridge does not return tracebacks, SQL errors, file paths, window
+  titles, notes, or clipboard data. Unknown errors collapse to
+  `"操作失败"`.
+
+### Frontend UI
+
+- Each activity detail row gets a "与下一条合并" button that merges the
+  current activity with the next activity in the detail list.
+- The button is disabled when: there is no next activity, either
+  activity is in-progress, or the activity id is missing. The backend
+  re-validates all merge preconditions.
+- The merge saving state (`mergeSaving` / `mergingActivityId`) is
+  independent from the project/note, time, and split saving states so
+  the flows do not pollute each other.
+- On success: the saving state is reset, "已合并" is shown briefly, and
+  the Timeline is refreshed. If the selected session regroups or
+  disappears the selection is cleared gracefully.
+- On failure: the saving state is reset, "合并失败" is shown, and the
+  detail list is left intact. No traceback is displayed.
+- Auto-refresh preserves an in-flight merge: if the merge button's
+  activity is still present after refresh, the saving state is
+  re-applied; if it disappeared, the merge state is reset.
+- No delete, batch, auto-rule, or complex-correction controls are
+  introduced.
+
+### Privacy / Security
+
+- The merge does not expose `window_title`, `file_path_hint`,
+  `full_path`, `clipboard`, tracebacks, SQL errors, or internal
+  exception details.
+- Notes, resource names, paths, and window titles are not written to
+  logs.
+- No browser storage is used to persist merge drafts.
+- No external resources or network dependencies are introduced.
+- The bridge continues to access the backend only through
+  `worktrace.api`.
+
+## Phase 3B.3 Not Implemented
+
+The following remain out of scope until a later phase:
+
+- Arbitrary-length batch merge (more than two activities);
+- Multi-activity session whole-merge;
+- Activity/session deletion or hide;
+- Batch editing;
+- Auto-rule creation;
+- Complex correction page;
+- Overlap detection between activities on the same timeline (the merge
+  itself rejects overlap between the two activities being merged, but
+  global overlap detection is not implemented).
 
 ## Legacy Tkinter UI Handling
 

@@ -1320,3 +1320,135 @@ explicit rollback tests for every write step inside the transaction.
   ``is_manual=0``.
 - Any Phase 3B.2 regression.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.3 Validation
+
+Phase 3B.3 implements the **Timeline activity merge foundation** — the
+minimal usable two-activity merge. Two closed, adjacent, same-project /
+same-resource / same-status / same-source activities are merged into one.
+The earlier activity keeps its id and start_time; its end_time is extended
+to the later activity's end_time. The later activity is soft-deleted.
+
+### Automated Checklist
+
+| Check | Command |
+|-------|---------|
+| Full test suite | `python -m pytest` |
+| PyInstaller build | `python -m PyInstaller --noconfirm --clean WorkTrace.spec` |
+
+### Validation Items
+
+#### BE. Service Layer
+
+- ``merge_activities`` rejects the same id for both arguments.
+- ``merge_activities`` rejects nonexistent or deleted activities.
+- ``merge_activities`` rejects in-progress activities (raw DB
+  ``end_time IS NULL``).
+- The kept activity is the earlier one (by ``start_time``, then ``id``),
+  regardless of argument order.
+- The kept activity's ``start_time`` and ``created_at`` are unchanged.
+- The kept activity's ``end_time`` is extended to the later activity's
+  ``end_time``.
+- The kept activity's ``duration_seconds`` is precisely recomputed as
+  ``merged_end - kept_start`` in seconds.
+- The kept activity's ``updated_at`` is refreshed.
+- The later activity is soft-deleted (``is_deleted = 1``), not physically
+  removed. Its row still exists in ``activity_log``.
+- Different ``project_id`` is rejected.
+- Different resource ``identity_key`` is rejected.
+- Different ``status`` is rejected.
+- Different ``source`` is rejected.
+- Overlap is rejected.
+- A gap larger than ``MERGE_GAP_TOLERANCE_SECONDS`` (2 seconds) is
+  rejected.
+- A gap within the tolerance (≤ 2 seconds) is allowed.
+- Cross-day adjacent activities merge successfully and project via
+  ``timeline_service``.
+- The kept activity's ``note`` is preserved; the later activity's note is
+  not copied or concatenated.
+- ``project_session_note`` is not migrated.
+- Assignment and resource rows are not complex-merged (the later
+  activity's rows are left in place).
+- If the kept-activity UPDATE affects 0 rows (race condition), the service
+  raises ``ValueError`` and the later activity is NOT soft-deleted.
+- If the merged-activity soft-delete UPDATE affects 0 rows (race
+  condition), the service raises ``ValueError`` and the kept activity's
+  ``end_time`` is rolled back.
+- No partial writes occur on validation failure.
+
+#### BF. API Layer
+
+- ``merge_timeline_activities`` accepts a list of exactly two positive
+  integers (``bool`` rejected).
+- Non-list, empty, single, three+, bool, non-positive, duplicate, and
+  nonexistent ids are rejected with the appropriate stable error codes.
+- Service-layer ``ValueError`` codes map to stable
+  ``TimelineMergeError`` codes: ``invalid_selection``, ``invalid_id``,
+  ``in_progress``, ``different_project``, ``different_resource``,
+  ``incompatible_activity``, ``not_adjacent``, ``invalid_time``,
+  ``operation_failed``.
+- The API returns ``{"kept_activity_id": int, "merged_activity_id": int}``
+  and does not leak raw rows, ``window_title``, ``file_path_hint``,
+  ``note``, or internal fields.
+
+#### BG. Bridge Layer
+
+- ``merge_timeline_activities`` returns
+  ``{"ok": true, "kept_activity_id": int, "merged_activity_id": int}``
+  on success.
+- Error results return ``{"ok": false, "error": "<chinese message>"}``
+  with clear messages for each known failure mode.
+- Unknown failures collapse to ``"操作失败"``.
+- Error results do not contain tracebacks, SQL errors, ``window_title``,
+  ``file_path_hint``, ``full_path``, ``clipboard``, or ``note``.
+- The bridge does not import ``worktrace.services``, ``worktrace.db``,
+  ``worktrace.collector``, ``worktrace.runtime``, ``worktrace.security``,
+  or ``worktrace.config``.
+
+#### BH. Frontend
+
+- app.js calls ``merge_timeline_activities`` bridge method.
+- app.js has a "与下一条合并" button per activity detail row.
+- app.js has independent ``mergeSaving`` / ``mergingActivityId`` state.
+- app.js resets the saving state BEFORE refreshing the Timeline on
+  success.
+- app.js preserves the detail list on failure and shows "合并失败".
+- app.js disables the merge button for in-progress activities.
+- app.js does not contain delete, batch, auto-rule, or
+  multi-activity-session-merge handlers.
+- app.js does not display tracebacks or raw sensitive fields.
+- styles.css styles the merge button and status, with responsive layout
+  for narrow viewports.
+- No external links, CDN, Google Fonts, or browser storage introduced.
+
+#### BI. Regression
+
+- All Phase 3B.2 / 3B.2.1 split tests continue to pass.
+- All Phase 3B.1 / 3B.1.1 time-correction tests continue to pass.
+- All Phase 3A / 3A.1 editing tests continue to pass.
+- All Phase 2.1 privacy boundary tests continue to pass.
+- Overview and Timeline read-only tests continue to pass.
+- Default WebView entry tests continue to pass.
+- PyInstaller resource path tests continue to pass.
+
+### Phase 3B.3 Release Blockers
+
+- The merge is not atomic (a failure leaves one activity modified and the
+  other not soft-deleted).
+- The kept activity's ``start_time`` or ``created_at`` is modified.
+- The kept activity's ``duration_seconds`` is not precisely recomputed.
+- The later activity is physically deleted instead of soft-deleted.
+- A race condition (UPDATE rowcount 0) does not roll back the transaction.
+- In-progress or deleted activities can be merged.
+- Different project / resource / status / source activities can be merged.
+- Overlapping activities can be merged.
+- A gap larger than the tolerance can be merged.
+- The bridge exposes tracebacks, SQL errors, ``window_title``,
+  ``file_path_hint``, ``full_path``, ``clipboard``, or ``note``.
+- The bridge imports backend internals (services/db/collector/runtime/
+  security/config).
+- The frontend introduces delete, batch, auto-rule, or
+  multi-activity-session-merge controls.
+- The frontend uses browser storage or external resources.
+- Any Phase 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any new DB schema is introduced.

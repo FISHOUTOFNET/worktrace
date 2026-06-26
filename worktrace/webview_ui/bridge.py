@@ -53,6 +53,16 @@ a clear Chinese message directing the user to per-activity splitting.
 In-progress activities cannot be split. Errors are mapped from stable
 ``TimelineSplitError`` codes to Chinese messages without echoing
 tracebacks, SQL, or internal field names.
+
+Phase 3B.3 adds the minimal activity-merge foundation:
+``merge_timeline_activities`` is the production write path for merging
+exactly two closed, adjacent, same-project/same-resource/same-status
+activities into one. The earlier activity keeps its id and start_time; its
+end_time is extended to the later activity's end_time. The later activity
+is soft-deleted. Only two activities can be merged per call; arbitrary-
+length batch merge and multi-activity session whole-merge are NOT
+supported. Errors are mapped from stable ``TimelineMergeError`` codes to
+Chinese messages without echoing tracebacks, SQL, or internal field names.
 """
 
 from __future__ import annotations
@@ -62,7 +72,7 @@ import re
 from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
-from ..api.timeline_api import TimelineSplitError, TimelineTimeEditError
+from ..api.timeline_api import TimelineMergeError, TimelineSplitError, TimelineTimeEditError
 from ..formatters import (
     format_duration,
     format_project_label,
@@ -104,6 +114,21 @@ _SPLIT_ERROR_MESSAGES = {
     "invalid_time": "拆分时间无效",
     "outside_range": "拆分时间无效",
     "invalid_id": "操作失败",
+    "operation_failed": "操作失败",
+}
+
+# Maps ``TimelineMergeError.code`` to stable Chinese user-facing messages for
+# the Phase 3B.3 activity merge. Unknown codes collapse to the generic
+# "操作失败" so internal details are never surfaced.
+_MERGE_ERROR_MESSAGES = {
+    "invalid_selection": "请选择两个活动进行合并",
+    "invalid_id": "操作失败",
+    "in_progress": "进行中记录暂不支持合并",
+    "different_project": "项目不同，暂不支持合并",
+    "different_resource": "资源不同，暂不支持合并",
+    "incompatible_activity": "活动类型不同，暂不支持合并",
+    "not_adjacent": "活动时间不连续，暂不支持合并",
+    "invalid_time": "时间无效",
     "operation_failed": "操作失败",
 }
 
@@ -586,6 +611,51 @@ class WebViewBridge:
             return {"ok": False, "error": "操作失败"}
         except Exception:
             logger.exception("webview bridge split_timeline_session failed")
+            return dict(_GENERIC_ERROR)
+
+    # --- Phase 3B.3: Timeline activity merge (two-activity foundation) ---
+
+    def merge_timeline_activities(self, activity_ids) -> dict[str, Any]:
+        """Merge exactly two closed activities into one.
+
+        ``activity_ids`` must be a list of exactly two positive integers
+        (``bool`` rejected). The earlier activity (by start_time, then id)
+        is kept: its start_time is unchanged and its end_time is extended
+        to the later activity's end_time. The later activity is
+        soft-deleted.
+
+        The two activities must be closed, non-overlapping, adjacent
+        (within ``MERGE_GAP_TOLERANCE_SECONDS``), and share the same
+        project, resource, status, and source. In-progress activities
+        cannot be merged.
+
+        Returns ``{"ok": true, "kept_activity_id": int, "merged_activity_id": int}``
+        on success or ``{"ok": false, "error": "<chinese message>"}`` on
+        failure. Known failure modes map to clear Chinese messages; unknown
+        failures collapse to ``"操作失败"``. Tracebacks, SQL errors, file
+        paths, window titles, and notes are never surfaced.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "请选择两个活动进行合并"}
+            # Exactly two ids required after dedup. This check at the
+            # bridge layer gives the user an immediate clear message
+            # without a round-trip through the API.
+            if len(ids) != 2:
+                return {"ok": False, "error": "请选择两个活动进行合并"}
+            result = timeline_api.merge_timeline_activities(ids)
+            return {
+                "ok": True,
+                "kept_activity_id": int(result.get("kept_activity_id") or 0),
+                "merged_activity_id": int(result.get("merged_activity_id") or 0),
+            }
+        except TimelineMergeError as exc:
+            return {"ok": False, "error": _MERGE_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge merge_timeline_activities failed")
             return dict(_GENERIC_ERROR)
 
 

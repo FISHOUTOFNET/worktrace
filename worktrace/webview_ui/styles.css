@@ -865,8 +865,11 @@ body {
 /* Per-activity inline time editor inside the detail list. */
 .detail-item-actions {
     grid-row: 2;
-    grid-column: 1;
+    grid-column: 1 / -1;
     margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
 }
 
 .detail-edit-time-btn {
@@ -926,6 +929,34 @@ body {
 .detail-split-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* Phase 3B.3: per-activity "与下一条合并" button. Mirrors the split button
+   styling so the action row looks consistent. */
+.detail-merge-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #334155;
+    cursor: pointer;
+}
+
+.detail-merge-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+}
+
+.detail-merge-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.detail-merge-status {
+    grid-row: 6;
+    grid-column: 1 / -1;
+    margin-top: 4px;
+    font-size: 11px;
 }
 
 .detail-time-row {
@@ -1020,5 +1051,17 @@ body {
     .detail-split-row,
     .detail-time-row {
         flex-wrap: wrap;
+    }
+    /* Phase 3B.3: merge status mirrors the split editor's narrow-viewport
+       grid row so the status text stays below the action buttons without
+       overlapping the split editor. */
+    .detail-merge-status {
+        grid-row: 6;
+    }
+    /* Phase 3B.3: action buttons wrap on narrow viewports so the merge
+       button remains reachable alongside the edit/split buttons. */
+    .detail-item-actions {
+        flex-wrap: wrap;
+        gap: 4px;
     }
 }

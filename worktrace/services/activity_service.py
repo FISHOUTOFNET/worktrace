@@ -769,6 +769,188 @@ def split_activity(activity_id: int, split_time: str) -> dict:
         return {"original_activity_id": activity_id, "new_activity_id": new_activity_id}
 
 
+# Maximum gap (in seconds) tolerated between two activities being merged.
+# Real collector data may have a 1-2 second gap between adjacent activities
+# due to close/create timing; allowing a small tolerance makes merge usable
+# without opening the door to merging activities that are far apart in time.
+# A gap larger than this is rejected as ``not_adjacent`` by the API layer.
+MERGE_GAP_TOLERANCE_SECONDS = 2
+
+
+def merge_activities(first_activity_id: int, second_activity_id: int) -> dict:
+    """Atomically merge two closed activities into one.
+
+    The earlier activity (by ``start_time``, then ``id``) is kept: its
+    ``start_time`` is unchanged, its ``end_time`` becomes the later
+    activity's ``end_time``, and its ``duration_seconds`` is recomputed
+    precisely from the merged range. The later activity is soft-deleted
+    (``is_deleted = 1``); it is NOT physically removed.
+
+    Conservative preconditions (the API layer validates most of these before
+    calling; the service re-checks the critical DB state guards so a race
+    between validation and write cannot corrupt data):
+
+    - The two ids must be different.
+    - Both activities must exist and ``is_deleted = 0``.
+    - Both must be closed (raw ``end_time IS NOT NULL``).
+    - The two activities must not overlap: ``earlier.end_time <= later.start_time``.
+    - The two activities must be adjacent within ``MERGE_GAP_TOLERANCE_SECONDS``:
+      ``later.start_time - earlier.end_time <= tolerance``.
+    - Both must have the same ``project_id``.
+    - Both must have the same ``activity_resource.identity_key``.
+    - Both must have the same ``status``.
+    - Both must have the same ``source``.
+
+    Field inheritance (conservative):
+    - The kept (earlier) activity keeps its ``id``, ``start_time``,
+      ``created_at``, ``app_name``, ``process_name``, ``window_title``,
+      ``file_path_hint``, ``status``, ``source``, ``project_id``, ``note``,
+      and all other fields. Only ``end_time``, ``duration_seconds``, and
+      ``updated_at`` change.
+    - The merged (later) activity is soft-deleted (``is_deleted = 1``) and
+      its ``updated_at`` is refreshed. Its assignment / resource rows are
+      left in place (not physically deleted); timeline reads exclude it via
+      ``is_deleted = 0`` filtering.
+    - ``activity_log.note`` is NOT copied or concatenated from the later
+      activity; the kept activity's note is preserved as-is.
+    - ``project_session_note`` is NOT migrated. If the later activity was a
+      ``first_activity_id`` for a session note, that note row remains keyed
+      to the now-deleted activity id. Timeline sessions are rebuilt by
+      ``timeline_service`` from live (non-deleted) activities, so the
+      orphaned note does not surface in the UI. See
+      docs/ui-webview-migration.md Phase 3B.3.
+
+    The write is a single transaction; any failure rolls back so both
+    activities keep their original state.
+
+    Returns ``{"kept_activity_id": int, "merged_activity_id": int}`` where
+    ``kept_activity_id`` is the earlier activity's id and
+    ``merged_activity_id`` is the later (now soft-deleted) activity's id.
+
+    Raises ``ValueError`` with a stable code suffix for known failure modes:
+    - ``activity_merge_same_id`` — the two ids are identical.
+    - ``activity_merge_not_found_or_deleted`` — either activity is missing
+      or already deleted.
+    - ``activity_merge_in_progress`` — either activity is still open.
+    - ``activity_merge_overlap`` — the two activities overlap in time.
+    - ``activity_merge_not_adjacent`` — the gap exceeds tolerance.
+    - ``activity_merge_different_project`` — project_id differs.
+    - ``activity_merge_different_resource`` — resource identity_key differs.
+    - ``activity_merge_incompatible_activity`` — status or source differs.
+    - ``activity_merge_update_affected_zero_rows`` — race condition: a row
+      was deleted/reopened between the SELECT and the UPDATE.
+    """
+    if first_activity_id == second_activity_id:
+        raise ValueError("activity_merge_same_id")
+    ts = now_str()
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, start_time, end_time, app_name, process_name, window_title,
+                   file_path_hint, status, source, is_deleted, is_hidden,
+                   auto_classified, manual_override, project_id, note, created_at
+            FROM activity_log
+            WHERE id IN (?, ?)
+            """,
+            (first_activity_id, second_activity_id),
+        ).fetchall()
+        if len(rows) != 2:
+            raise ValueError("activity_merge_not_found_or_deleted")
+        # Sort by start_time, then id, to determine kept (earlier) and
+        # merged (later). This does NOT trust the caller's argument order.
+        sorted_rows = sorted(rows, key=lambda r: (r["start_time"], r["id"]))
+        kept_row = sorted_rows[0]
+        merged_row = sorted_rows[1]
+        if int(kept_row["is_deleted"] or 0) or int(merged_row["is_deleted"] or 0):
+            raise ValueError("activity_merge_not_found_or_deleted")
+        if kept_row["end_time"] is None or merged_row["end_time"] is None:
+            raise ValueError("activity_merge_in_progress")
+
+        kept_start_dt = _parse_time(kept_row["start_time"])
+        kept_end_dt = _parse_time(kept_row["end_time"])
+        merged_start_dt = _parse_time(merged_row["start_time"])
+        merged_end_dt = _parse_time(merged_row["end_time"])
+
+        # Overlap check: earlier.end_time > later.start_time means overlap.
+        if kept_end_dt > merged_start_dt:
+            raise ValueError("activity_merge_overlap")
+        # Adjacency check: gap must be within tolerance.
+        gap_seconds = int((merged_start_dt - kept_end_dt).total_seconds())
+        if gap_seconds > MERGE_GAP_TOLERANCE_SECONDS:
+            raise ValueError("activity_merge_not_adjacent")
+
+        # Project consistency check.
+        if kept_row["project_id"] != merged_row["project_id"]:
+            raise ValueError("activity_merge_different_project")
+
+        # Resource consistency check via identity_key.
+        kept_res = conn.execute(
+            "SELECT identity_key FROM activity_resource WHERE activity_id = ?",
+            (kept_row["id"],),
+        ).fetchone()
+        merged_res = conn.execute(
+            "SELECT identity_key FROM activity_resource WHERE activity_id = ?",
+            (merged_row["id"],),
+        ).fetchone()
+        kept_identity = kept_res["identity_key"] if kept_res else None
+        merged_identity = merged_res["identity_key"] if merged_res else None
+        if kept_identity != merged_identity:
+            raise ValueError("activity_merge_different_resource")
+
+        # Status / source consistency check.
+        if kept_row["status"] != merged_row["status"]:
+            raise ValueError("activity_merge_incompatible_activity")
+        if kept_row["source"] != merged_row["source"]:
+            raise ValueError("activity_merge_incompatible_activity")
+
+        # All preconditions passed. Perform the atomic write.
+        new_end = merged_row["end_time"]
+        new_duration = int((merged_end_dt - kept_start_dt).total_seconds())
+
+        # 1) Update the kept (earlier) activity: extend end_time to the
+        #    later activity's end_time and recompute duration_seconds.
+        kept_cur = conn.execute(
+            """
+            UPDATE activity_log
+            SET end_time = ?,
+                duration_seconds = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND is_deleted = 0
+              AND end_time IS NOT NULL
+            """,
+            (new_end, new_duration, ts, kept_row["id"]),
+        )
+        if kept_cur.rowcount == 0:
+            # Race condition: kept activity was deleted or reopened between
+            # the SELECT and the UPDATE. Abort without touching the merged
+            # activity.
+            raise ValueError("activity_merge_update_affected_zero_rows")
+
+        # 2) Soft-delete the merged (later) activity. The WHERE clause
+        #    re-checks is_deleted and end_time so a race cannot corrupt a
+        #    concurrently-modified row.
+        merged_cur = conn.execute(
+            """
+            UPDATE activity_log
+            SET is_deleted = 1,
+                updated_at = ?
+            WHERE id = ?
+              AND is_deleted = 0
+              AND end_time IS NOT NULL
+            """,
+            (ts, merged_row["id"]),
+        )
+        if merged_cur.rowcount == 0:
+            # Race condition: merged activity was deleted or reopened.
+            raise ValueError("activity_merge_update_affected_zero_rows")
+
+        return {
+            "kept_activity_id": int(kept_row["id"]),
+            "merged_activity_id": int(merged_row["id"]),
+        }
+
+
 def soft_delete_activity(activity_id: int) -> None:
     with get_connection() as conn:
         conn.execute(

@@ -60,6 +60,30 @@ class TimelineSplitError(ValueError):
         self.code = code
 
 
+class TimelineMergeError(ValueError):
+    """Raised by the Phase 3B.3 activity-merge methods for known,
+    user-facing failure modes.
+
+    Stable ``code`` values mapped by the WebView bridge to Chinese messages:
+
+    - ``invalid_selection`` — activity_ids is not exactly two after dedup.
+    - ``invalid_id`` — not a positive int, ``bool``, missing, or deleted.
+    - ``in_progress`` — either activity is still open (``end_time IS NULL``).
+    - ``different_project`` — the two activities have different project_id.
+    - ``different_resource`` — the two activities have different resource
+      identity_key.
+    - ``incompatible_activity`` — status or source differs.
+    - ``not_adjacent`` — the gap between the two activities exceeds
+      ``MERGE_GAP_TOLERANCE_SECONDS``.
+    - ``invalid_time`` — the two activities overlap in time.
+    - ``operation_failed`` — race condition or unexpected service failure.
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 # --- timeline / sessions -------------------------------------------------
 
 def get_default_report_date() -> str:
@@ -460,6 +484,135 @@ def _validate_split_range(split_time: str, start_time: str, end_time: str) -> No
         raise TimelineSplitError("outside_range")
 
 
+# --- Phase 3B.3: Timeline activity merge (two-activity foundation) ---
+#
+# Phase 3B.3 implements the minimal merge foundation:
+#
+# - ``merge_timeline_activities`` merges exactly two closed activities into
+#   one. The earlier activity (by start_time, then id) is kept: its
+#   start_time is unchanged, its end_time becomes the later activity's
+#   end_time, and duration_seconds is recomputed. The later activity is
+#   soft-deleted.
+# - Only two activities can be merged per call. Arbitrary-length batch
+#   merge is NOT supported.
+# - Multi-activity session whole-merge is NOT supported; the frontend
+#   directs the user to merge pairs of adjacent activities one at a time.
+#
+# Data semantics (see docs/ui-webview-migration.md):
+# - Both activities must be closed (raw ``end_time IS NOT NULL``).
+# - Both must not be deleted.
+# - The two activities must not overlap and must be adjacent within
+#   ``MERGE_GAP_TOLERANCE_SECONDS`` (2 seconds).
+# - Both must have the same project_id, resource identity_key, status, and
+#   source.
+# - The kept activity's note is preserved; the later activity's note is NOT
+#   copied or concatenated.
+# - project_session_note is NOT migrated.
+# - The write is a single atomic transaction; any failure rolls back.
+# - Overlap detection is NOT performed as a global feature; only the two
+#   activities being merged are checked for overlap against each other.
+
+
+def merge_timeline_activities(activity_ids: list[int]) -> dict:
+    """Validate and merge exactly two closed activities into one.
+
+    Validation:
+    - ``activity_ids`` must be a list of positive integers (``bool``
+      rejected); every id must reference an existing, non-deleted activity.
+      Duplicate ids are deduplicated.
+    - After deduplication, exactly two ids must remain; otherwise
+      ``invalid_selection`` is raised.
+    - Both activities must be closed (``end_time IS NOT NULL``); otherwise
+      ``in_progress`` is raised.
+    - The two activities must not overlap and must be adjacent within
+      ``MERGE_GAP_TOLERANCE_SECONDS``; otherwise ``invalid_time`` (overlap)
+      or ``not_adjacent`` (gap too large) is raised.
+    - Both must have the same project_id; otherwise ``different_project``.
+    - Both must have the same resource identity_key; otherwise
+      ``different_resource``.
+    - Both must have the same status and source; otherwise
+      ``incompatible_activity``.
+
+    Returns ``{"kept_activity_id": int, "merged_activity_id": int}`` on
+    success. Raises ``TimelineMergeError`` with a stable ``code`` for known
+    failure modes. The write is a single atomic transaction; no partial
+    writes are possible.
+    """
+    ids = _validate_merge_activity_ids(activity_ids)
+    if len(ids) != 2:
+        raise TimelineMergeError("invalid_selection")
+    try:
+        return activity_service.merge_activities(ids[0], ids[1])
+    except ValueError as exc:
+        code = str(exc)
+        # Map service-layer ValueError codes to stable TimelineMergeError
+        # codes. The service raises ValueError with a descriptive suffix;
+        # we map each known suffix to its stable code so internal details
+        # never surface to the bridge.
+        if code == "activity_merge_same_id":
+            # After dedup this should not happen, but handle defensively.
+            raise TimelineMergeError("invalid_selection")
+        if code == "activity_merge_not_found_or_deleted":
+            raise TimelineMergeError("invalid_id")
+        if code == "activity_merge_in_progress":
+            raise TimelineMergeError("in_progress")
+        if code == "activity_merge_overlap":
+            raise TimelineMergeError("invalid_time")
+        if code == "activity_merge_not_adjacent":
+            raise TimelineMergeError("not_adjacent")
+        if code == "activity_merge_different_project":
+            raise TimelineMergeError("different_project")
+        if code == "activity_merge_different_resource":
+            raise TimelineMergeError("different_resource")
+        if code == "activity_merge_incompatible_activity":
+            raise TimelineMergeError("incompatible_activity")
+        # ``activity_merge_update_affected_zero_rows`` or any unexpected
+        # ValueError collapses to ``operation_failed`` so the bridge returns
+        # a clear generic message without echoing internal details.
+        raise TimelineMergeError("operation_failed")
+
+
+def _validate_merge_activity_ids(activity_ids: list[int]) -> list[int]:
+    """Validate the ``activity_ids`` list for merge.
+
+    Returns a deduplicated list of positive ints. Raises
+    ``TimelineMergeError``:
+    - ``invalid_selection`` — not a list, empty, or contains non-int /
+      bool / non-positive values.
+    - ``invalid_id`` — any id does not reference an existing, non-deleted
+      activity.
+
+    The caller (``merge_timeline_activities``) checks that exactly two ids
+    remain after dedup.
+    """
+    if isinstance(activity_ids, bool) or not isinstance(activity_ids, list):
+        raise TimelineMergeError("invalid_selection")
+    if not activity_ids:
+        raise TimelineMergeError("invalid_selection")
+    ids: list[int] = []
+    seen: set[int] = set()
+    for raw in activity_ids:
+        if isinstance(raw, bool):
+            raise TimelineMergeError("invalid_selection")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            raise TimelineMergeError("invalid_selection")
+        if value <= 0:
+            raise TimelineMergeError("invalid_selection")
+        if value in seen:
+            continue
+        seen.add(value)
+        ids.append(value)
+    # Verify every id references an existing, non-deleted activity before
+    # any write happens. A missing id fails the whole call (no partial write).
+    for aid in ids:
+        activity = activity_service.get_activity(aid)
+        if not activity or int(activity.get("is_deleted") or 0):
+            raise TimelineMergeError("invalid_id")
+    return ids
+
+
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
     # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
     # not silently coerced to ``1``/``0``.
@@ -678,6 +831,7 @@ __all__ = [
     "TIMELINE_NOTE_MAX_LENGTH",
     "TimelineTimeEditError",
     "TimelineSplitError",
+    "TimelineMergeError",
     "get_default_report_date",
     "get_project_sessions_by_date",
     "get_project_sessions_by_range",
@@ -691,6 +845,7 @@ __all__ = [
     "get_snapshot_signature",
     "is_snapshot_unconfirmed",
     "list_selectable_projects",
+    "merge_timeline_activities",
     "preview_session_project_update",
     "reclassify_timeline_session_project",
     "soft_delete_activity",

@@ -329,11 +329,13 @@ def test_index_html_timeline_has_save_cancel_buttons():
     assert 'id="edit-status"' in source
 
 
-def test_index_html_timeline_edit_panel_has_no_merge_delete_batch():
-    """Phase 3B.1 / 3B.2: the edit panel now contains time-correction inputs
-    (``edit-start-time`` / ``edit-end-time``) and a split section
-    (``edit-split-section``). It must still not contain merge, delete, batch,
-    or auto-rule controls."""
+def test_index_html_timeline_edit_panel_has_no_delete_batch():
+    """Phase 3B.1 / 3B.2 / 3B.3: the edit panel contains time-correction
+    inputs (``edit-start-time`` / ``edit-end-time``) and a split section
+    (``edit-split-section``). Phase 3B.3 adds the per-activity merge button
+    in the rendered detail rows (not in the static edit panel), so "merge"
+    may appear in app.js but the static index.html must still not contain
+    merge, delete, batch, or auto-rule controls."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     # Phase 3B.1 now provides time-correction inputs in the edit panel.
     assert 'id="edit-start-time"' in source
@@ -343,9 +345,10 @@ def test_index_html_timeline_edit_panel_has_no_merge_delete_batch():
     assert 'id="edit-split-section"' in source
     assert 'id="edit-split-time"' in source
     assert 'id="edit-split-save-btn"' in source
-    # Merge / delete / batch / auto-rule must still be absent from the
-    # entire HTML (these controls must never appear anywhere).
-    assert "merge" not in source.lower()
+    # Delete / batch / auto-rule must still be absent from the entire HTML
+    # (these controls must never appear anywhere). Merge is now rendered
+    # dynamically by app.js (Phase 3B.3) so it may appear in the HTML as a
+    # class name or label, but not as a standalone control.
     assert "delete" not in source.lower()
     assert "batch" not in source.lower()
     assert "auto-rule" not in source.lower()
@@ -512,20 +515,23 @@ def test_styles_css_has_edit_panel_responsive_rules():
 
 
 def test_app_js_still_has_no_forbidden_edit_handlers_after_hardening():
-    """Phase 3B.1 / 3B.2: time correction and activity split are now
-    supported features, but the frontend must still not contain merge,
-    delete, batch, or auto-rule handlers."""
+    """Phase 3B.1 / 3B.2 / 3B.3: time correction, activity split, and
+    two-activity merge are now supported features, but the frontend must
+    still not contain delete, batch, or auto-rule handlers. ``merge_session``
+    (multi-activity session whole-merge) is also forbidden — only the
+    two-activity ``merge_timeline_activities`` bridge call is allowed."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
-    # Phase 3B.1 now provides time correction; the following forbidden
+    # Phase 3B.1 now provides time correction; Phase 3B.2 provides split;
+    # Phase 3B.3 provides two-activity merge. The following forbidden
     # handlers must still be absent.
     assert "delete_activity" not in source
     assert "merge_session" not in source
     assert "batch_edit" not in source
     assert "auto_rule" not in source
-    # Merge/delete/batch buttons must not exist in the HTML either. Split
-    # buttons are added in Phase 3B.2 and are allowed.
+    # Delete/batch buttons must not exist in the HTML either. Merge is now
+    # allowed in app.js (Phase 3B.3) but still must not appear in the static
+    # index.html (the merge button is rendered dynamically by app.js).
     html_source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8").lower()
-    assert "merge" not in html_source
     assert "delete" not in html_source
     assert "batch" not in html_source
     assert "auto-rule" not in html_source
@@ -869,18 +875,18 @@ def test_app_js_time_edit_uses_is_in_progress_not_end_time_emptiness():
     assert "is_in_progress" in body
 
 
-def test_app_js_time_edit_buttons_have_no_merge_delete_batch():
-    """Phase 3B.1 / 3B.2: the per-activity editor area must not include
-    merge, delete, or batch buttons. Split buttons are added in Phase 3B.2
-    and are allowed."""
+def test_app_js_time_edit_buttons_have_no_delete_batch():
+    """Phase 3B.1 / 3B.2 / 3B.3: the per-activity editor area must not
+    include delete or batch buttons. Split buttons are added in Phase 3B.2
+    and merge buttons are added in Phase 3B.3; both are allowed."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
-    # The renderSessionDetails function must not generate merge/delete/batch buttons
+    # The renderSessionDetails function must not generate delete/batch buttons.
+    # Merge buttons (Phase 3B.3) and split buttons (Phase 3B.2) are allowed.
     render_pos = source.find("function rendersessiondetails")
     assert render_pos != -1
     # Find the next function to bound the search
     next_func = source.find("\n    function ", render_pos + 1)
     body = source[render_pos:next_func] if next_func != -1 else source[render_pos:]
-    assert "merge" not in body
     assert "delete" not in body
     assert "batch" not in body
 
@@ -1551,6 +1557,260 @@ def test_frontend_resources_split_still_no_external_links():
 
 def test_frontend_resources_split_still_no_browser_storage():
     """Phase 3B.2: the split additions must not use browser storage."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"localStorage", source, re.IGNORECASE), (
+            f"{filename} must not use localStorage"
+        )
+        assert not re.search(r"sessionStorage", source, re.IGNORECASE), (
+            f"{filename} must not use sessionStorage"
+        )
+
+
+# --- Phase 3B.3: Timeline activity merge frontend tests ------------------
+
+
+def test_app_js_calls_merge_bridge_method():
+    """Phase 3B.3: app.js must call the new bridge method for merging two
+    activities."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "merge_timeline_activities" in source
+
+
+def test_app_js_has_merge_saving_state():
+    """Phase 3B.3: app.js must track an independent saving state for merge
+    so it does not pollute the project/note/time/split saving states."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "mergeSaving" in source
+    assert "mergingActivityId" in source
+    # The merge saving state must be separate from the other saving states
+    assert "editSaving" in source
+    assert "timeSaving" in source
+    assert "activitySplitSaving" in source
+
+
+def test_app_js_has_merge_functions():
+    """Phase 3B.3: app.js must define the merge lifecycle functions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "saveActivityMerge" in source
+    assert "setMergeSaving" in source
+    assert "setMergeStatus" in source
+
+
+def test_app_js_has_merge_button_in_detail_rows():
+    """Phase 3B.3: the renderSessionDetails function must generate a merge
+    button (与下一条合并) for each closed activity."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "detail-merge-btn" in source
+    assert "与下一条合并" in source
+
+
+def test_app_js_merge_save_resets_saving_before_refresh():
+    """Phase 3B.3: ``saveActivityMerge`` must reset the saving state BEFORE
+    calling ``refreshTimelineAfterEdit`` on the success path so the UI
+    does not get stuck in the '合并中…' state if the refresh fails."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function saveActivityMerge(")
+    assert start != -1, "saveActivityMerge must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    refresh_pos = body.find("refreshTimelineAfterEdit()")
+    assert refresh_pos != -1, "saveActivityMerge must call refreshTimelineAfterEdit on success"
+    pre_refresh = body[:refresh_pos]
+    assert "setMergeSaving(btn, false)" in pre_refresh, (
+        "saveActivityMerge must reset mergeSaving BEFORE refreshTimelineAfterEdit "
+        "so the button is re-enabled even if the refresh fails"
+    )
+
+
+def test_app_js_merge_preserves_state_on_save_failure():
+    """Phase 3B.3: when a merge save fails, the saving state must be reset
+    and an error message shown. The detail list must not be cleared."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function saveActivityMerge(")
+    assert start != -1
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    # Error path must reset saving state
+    assert "setMergeSaving(btn, false)" in body
+    # Error path must show an error message
+    assert "合并失败" in body
+
+
+def test_app_js_merge_disables_in_progress_activity():
+    """Phase 3B.3: in-progress activities must have their merge button
+    disabled."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The merge button disabled logic must check is_in_progress
+    start = source.find("function renderSessionDetails(")
+    assert start != -1
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "is_in_progress" in body
+    assert "mergeBtnDisabled" in body
+
+
+def test_app_js_merge_has_no_delete_batch_auto_rule_handlers():
+    """Phase 3B.3: the merge code must not introduce delete, batch edit,
+    or auto-rule handlers. Multi-activity session whole-merge
+    (``merge_session``) is also forbidden."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "deleteActivity" not in source
+    assert "batchEdit" not in source
+    assert "autoRule" not in source
+    assert "createRule" not in source
+    assert "merge_session" not in source
+
+
+def test_app_js_merge_has_no_traceback_display():
+    """Phase 3B.3: the merge code must not display tracebacks."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "traceback" not in source.lower()
+
+
+def test_app_js_merge_has_no_raw_field_exposure():
+    """Phase 3B.3: the merge code must not reference raw window_title,
+    file_path_hint, full_path, or clipboard fields."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    # The merge functions must not access raw sensitive fields
+    start = source.find("function saveactivitymerge(")
+    assert start != -1
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "window_title" not in body
+    assert "file_path_hint" not in body
+    assert "full_path" not in body
+    assert "clipboard" not in body
+
+
+def test_app_js_merge_state_reset_in_clear_edit_panel():
+    """Phase 3B.3: clearEditPanel must reset the merge saving state so a
+    stale merge does not leak into a new session selection."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function clearEditPanel(")
+    assert start != -1, "clearEditPanel must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "mergeSaving = false" in body, (
+        "clearEditPanel must reset mergeSaving to false"
+    )
+
+
+def test_styles_css_has_merge_styles():
+    """Phase 3B.3: styles.css must style the merge button and status."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".detail-merge-btn" in source
+    assert ".detail-merge-status" in source
+
+
+def test_styles_css_has_merge_responsive_wrap():
+    """Phase 3B.3: styles.css must handle the merge button on narrow
+    viewports inside a ``@media (max-width: 900px)`` block."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    found = False
+    search_from = 0
+    while True:
+        media_start = source.find("@media (max-width: 900px)", search_from)
+        if media_start == -1:
+            break
+        brace_start = source.find("{", media_start)
+        if brace_start == -1:
+            break
+        depth = 0
+        end = brace_start
+        for i in range(brace_start, len(source)):
+            ch = source[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        media_body = source[media_start:end]
+        if ".detail-merge" in media_body:
+            found = True
+            break
+        search_from = end
+    assert found, (
+        "at least one @media (max-width: 900px) block must include "
+        ".detail-merge styles for narrow-viewport support"
+    )
+
+
+def test_frontend_resources_merge_still_no_external_links():
+    """Phase 3B.3: the merge additions must not introduce external links,
+    CDN, or Google Fonts."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{filename} must not contain http:// or https:// links"
+        )
+        assert not re.search(r"cdn", source, re.IGNORECASE), (
+            f"{filename} must not reference CDN"
+        )
+        assert not re.search(r"google\s*fonts", source, re.IGNORECASE), (
+            f"{filename} must not reference Google Fonts"
+        )
+
+
+def test_frontend_resources_merge_still_no_browser_storage():
+    """Phase 3B.3: the merge additions must not use browser storage."""
     for filename in ["index.html", "app.js", "styles.css"]:
         source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
         assert not re.search(r"localStorage", source, re.IGNORECASE), (
