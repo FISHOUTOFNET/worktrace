@@ -95,6 +95,7 @@
                         </div>
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
                             <div class="edit-panel-title">编辑当前时段</div>
+                            <div class="edit-section-label">项目与备注</div>
                             <div class="edit-field">
                                 <label for="edit-project-select" class="edit-label">项目</label>
                                 <select id="edit-project-select" class="edit-select" disabled>
@@ -114,7 +115,7 @@
                             </div>
                             <div id="edit-status" class="edit-status" hidden></div>
                             <div class="edit-field edit-time-section" id="edit-time-section">
-                                <div class="edit-label">时间修正</div>
+                                <div class="edit-section-label">时间修正</div>
                                 <div id="edit-time-single" hidden>
                                     <div class="edit-time-row">
                                         <label for="edit-start-time" class="edit-time-label">开始</label>
@@ -134,7 +135,7 @@
                                 <div id="edit-time-status" class="edit-status" hidden></div>
                             </div>
                             <div class="edit-field edit-split-section" id="edit-split-section">
-                                <div class="edit-label">拆分时段</div>
+                                <div class="edit-section-label">拆分</div>
                                 <div id="edit-split-single" hidden>
                                     <div class="edit-time-row">
                                         <label for="edit-split-time" class="edit-time-label">拆分点</label>
@@ -150,14 +151,14 @@
                                 <div id="edit-split-status" class="edit-status" hidden></div>
                             </div>
                             <div class="edit-field edit-visibility-section" id="edit-visibility-section">
-                                <div class="edit-label">隐藏 / 删除</div>
+                                <div class="edit-section-label">可见性</div>
                                 <div id="edit-visibility-single" hidden>
                                     <div class="edit-time-actions">
                                         <button id="edit-visibility-hide-btn" class="edit-btn edit-visibility-hide-btn" type="button" disabled>隐藏此 session</button>
                                         <button id="edit-visibility-delete-btn" class="edit-btn edit-visibility-delete-btn" type="button" disabled>删除此 session</button>
                                     </div>
                                     <div class="edit-time-hint">
-                                        删除后将从 Timeline 隐藏；本阶段不会物理删除数据。
+                                        隐藏后将从默认 Timeline 隐藏；删除为软删除，本阶段不会物理删除数据。
                                     </div>
                                 </div>
                                 <div id="edit-visibility-multi" class="edit-time-hint" hidden>

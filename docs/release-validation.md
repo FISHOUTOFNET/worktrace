@@ -1802,3 +1802,66 @@ write path is more predictable and semantically clearer.
   or ``note``.
 - Any Phase 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.5A Validation
+
+Phase 3B.5A is a **consolidation / polish / consistency** phase for the
+Timeline correction actions already implemented in Phase 3B.1 /
+3B.2 / 3B.3 / 3B.4. It adds **no new backend write capability**, **no
+new DB schema**, and **no new correction action**. It only reorganizes
+the existing per-activity correction buttons into action groups, unifies
+dirty-state guards and refresh semantics, unifies destructive-action
+copy, and unifies session-level edit-panel section labels.
+
+### Phase 3B.5A Scope
+
+- The five per-activity correction buttons (编辑时间, 拆分, 与下一条合并,
+  隐藏, 删除) are wrapped in three action groups:
+  `.detail-action-edit-group`, `.detail-action-merge-group`,
+  `.detail-action-danger-group`.
+- The action order is stable: `编辑时间 → 拆分 → 与下一条合并 → 隐藏 →
+  删除`.
+- The merge button carries an indigo accent; the danger group has a
+  red-tinted left border.
+- `saveActivityMerge` now carries the same `isEditDirty()` guard and
+  row-id consistency check as hide / delete.
+- Destructive-action copy is unified: hide `已隐藏` / `隐藏失败`; delete
+  `已删除` / `删除失败`; dirty-state refusal `请先保存或取消当前编辑`;
+  delete confirmation still says `本阶段不会物理删除数据`.
+- Session-level edit-panel section labels are unified: `项目与备注`,
+  `时间修正`, `拆分`, `可见性`.
+- `clearEditPanel` resets all transient action state;
+  `populateEditPanel` populates all correction sections.
+- Auto-refresh preserves dirty inputs and re-applies in-flight saving
+  state to refreshed buttons.
+
+### Phase 3B.5A Verification
+
+- `python -m pytest` passes (all Phase 3B.5A frontend resource / state
+  consistency tests pass; all prior phase tests continue to pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- The bridge still imports only `worktrace.api` / `worktrace.formatters`
+  (no `services` / `db` / `collector` / `security` / `runtime` /
+  `config`).
+- No frontend resource contains `localStorage`, `sessionStorage`, CDN,
+  external links, or Google Fonts.
+- No frontend resource contains traceback display logic.
+- No frontend resource contains batch / restore / permanent-delete /
+  auto-rule / complex-correction-page handlers.
+
+### Phase 3B.5A Release Blockers
+
+- Any new feature (batch edit, batch hide, batch delete, undo / restore,
+  permanent delete, auto-rule, complex correction page, overlap
+  detection, multi-activity session whole-hide / whole-delete,
+  arbitrary-length merge) is introduced.
+- The stable action order changes (编辑时间 → 拆分 → 与下一条合并 → 隐藏
+  → 删除).
+- Any destructive action loses its `isEditDirty()` guard or row-id
+  consistency check.
+- The delete confirmation wording claims permanent deletion.
+- Any bridge error payload leaks tracebacks, SQL errors,
+  ``window_title``, ``file_path_hint``, ``full_path``, ``clipboard``,
+  or ``note``.
+- Any Phase 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any new DB schema is introduced.

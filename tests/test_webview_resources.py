@@ -2223,3 +2223,448 @@ def test_frontend_resources_visibility_still_no_browser_storage():
         assert not re.search(r"sessionStorage", source, re.IGNORECASE), (
             f"{filename} must not use sessionStorage"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3B.5A: Timeline correction action consolidation
+# ---------------------------------------------------------------------------
+# These tests verify the consolidation / polish / consistency work: the
+# per-activity correction buttons are grouped into edit / merge / danger
+# groups with a stable order; merge now carries the same isEditDirty guard
+# and row-id check as hide / delete; destructive-action copy is unified;
+# session-level edit-panel section labels are unified; clearEditPanel
+# resets all action state; no batch / restore / permanent-delete /
+# auto-rule / complex-correction-page handlers are introduced; and the
+# frontend resources still contain no localStorage / sessionStorage / CDN /
+# external links / Google Fonts / traceback display logic.
+
+
+def test_app_js_has_action_group_wrappers_in_detail_rows():
+    """Phase 3B.5A: renderSessionDetails must wrap the per-activity
+    correction buttons in three action groups (edit / merge / danger) so
+    destructive actions are visually separated from edits."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function renderSessionDetails(")
+    assert start != -1, "renderSessionDetails must exist"
+    next_func = source.find("\n    function ", start + 1)
+    body = source[start:next_func] if next_func != -1 else source[start:]
+    assert "detail-action-edit-group" in body, (
+        "renderSessionDetails must wrap 编辑时间 / 拆分 in a "
+        "detail-action-edit-group"
+    )
+    assert "detail-action-merge-group" in body, (
+        "renderSessionDetails must wrap 与下一条合并 in a "
+        "detail-action-merge-group"
+    )
+    assert "detail-action-danger-group" in body, (
+        "renderSessionDetails must wrap 隐藏 / 删除 in a "
+        "detail-action-danger-group"
+    )
+
+
+def test_app_js_action_order_is_stable():
+    """Phase 3B.5A: the per-activity action order must be stable:
+    编辑时间 → 拆分 → 与下一条合并 → 隐藏 → 删除."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function renderSessionDetails(")
+    assert start != -1, "renderSessionDetails must exist"
+    next_func = source.find("\n    function ", start + 1)
+    body = source[start:next_func] if next_func != -1 else source[start:]
+    # Each action button's class must appear in the stable order.
+    pos_edit = body.find("detail-edit-time-btn")
+    pos_split = body.find("detail-split-btn")
+    pos_merge = body.find("detail-merge-btn")
+    pos_hide = body.find("detail-hide-btn")
+    pos_delete = body.find("detail-delete-btn")
+    assert pos_edit != -1 and pos_split != -1 and pos_merge != -1, (
+        "edit / split / merge buttons must all be rendered"
+    )
+    assert pos_hide != -1 and pos_delete != -1, (
+        "hide / delete buttons must all be rendered"
+    )
+    assert pos_edit < pos_split < pos_merge < pos_hide < pos_delete, (
+        "per-activity action order must be: 编辑时间 → 拆分 → 与下一条合并 "
+        "→ 隐藏 → 删除"
+    )
+
+
+def test_app_js_merge_has_dirty_state_guard():
+    """Phase 3B.5A: saveActivityMerge must refuse while there are unsaved
+    project/note/time/split inputs, consistent with hide / delete. Merge
+    triggers a refresh that would wipe those inputs."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function saveActivityMerge(")
+    assert start != -1, "saveActivityMerge must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "isEditDirty()" in body, (
+        "saveActivityMerge must call isEditDirty() to refuse merge while "
+        "there are unsaved edits"
+    )
+    assert "请先保存或取消当前编辑" in body, (
+        "saveActivityMerge must show the unified dirty-state refusal message"
+    )
+
+
+def test_app_js_merge_has_row_id_consistency_check():
+    """Phase 3B.5A: saveActivityMerge must verify the activity id still
+    matches the detail row, consistent with hide / delete, so a stale
+    button does not operate on a different session's activity."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function saveActivityMerge(")
+    assert start != -1, "saveActivityMerge must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert 'btn.closest(".detail-item")' in body, (
+        "saveActivityMerge must locate the closest detail-item row"
+    )
+    assert "rowAid !== activityId" in body, (
+        "saveActivityMerge must compare the row's activity id with the "
+        "passed activity id and bail out if they differ"
+    )
+
+
+def test_app_js_dirty_state_refusal_message_is_unified():
+    """Phase 3B.5A: the dirty-state refusal message must be unified across
+    merge / hide / delete (per-activity and session-level)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    refusal = "请先保存或取消当前编辑"
+    # Must appear in saveActivityMerge, saveActivityHide, saveActivityDelete,
+    # saveSessionHide, saveSessionDelete.
+    for func_name in (
+        "saveActivityMerge",
+        "saveActivityHide",
+        "saveActivityDelete",
+        "saveSessionHide",
+        "saveSessionDelete",
+    ):
+        start = source.find("function " + func_name + "(")
+        assert start != -1, f"{func_name} must exist"
+        brace_start = source.find("{", start)
+        depth = 0
+        end = brace_start
+        for i in range(brace_start, len(source)):
+            ch = source[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        body = source[start:end]
+        assert refusal in body, (
+            f"{func_name} must use the unified dirty-state refusal message"
+        )
+
+
+def test_app_js_destructive_action_copy_is_unified():
+    """Phase 3B.5A: hide / delete success and failure copy must be
+    unified. Hide: 已隐藏 / 隐藏失败. Delete: 已删除 / 删除失败."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # Per-activity hide
+    assert "已隐藏" in source and "隐藏失败" in source, (
+        "hide must succeed with 已隐藏 and fail with 隐藏失败"
+    )
+    # Per-activity delete
+    assert "已删除" in source and "删除失败" in source, (
+        "delete must succeed with 已删除 and fail with 删除失败"
+    )
+    # Delete confirmation must still say soft delete
+    assert "本阶段不会物理删除数据" in source, (
+        "delete confirmation must still say 本阶段不会物理删除数据"
+    )
+
+
+def test_index_html_has_unified_section_labels():
+    """Phase 3B.5A: the session-level edit panel sections must be labeled
+    consistently: 项目与备注 / 时间修正 / 拆分 / 可见性."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "项目与备注" in source, (
+        "edit panel must have a 项目与备注 section label"
+    )
+    assert "时间修正" in source, (
+        "edit panel must have a 时间修正 section label"
+    )
+    assert "拆分" in source, (
+        "edit panel must have a 拆分 section label"
+    )
+    assert "可见性" in source, (
+        "edit panel must have a 可见性 section label"
+    )
+    # The old section titles must be gone (拆分时段 / 隐藏 / 删除 as a
+    # section label is replaced by 可见性).
+    assert "拆分时段" not in source, (
+        "old section title 拆分时段 must be replaced by 拆分"
+    )
+
+
+def test_index_html_visibility_hint_mentions_hide_and_soft_delete():
+    """Phase 3B.5A: the visibility section hint must mention both hide and
+    soft-delete semantics so the user understands neither physically
+    deletes data."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    # Find the visibility section
+    start = source.find('id="edit-visibility-section"')
+    assert start != -1, "edit-visibility-section must exist"
+    # Find the end of the section (next </div> at the section level is hard
+    # to find reliably, so just search forward for the hint text).
+    section = source[start:start + 1200]
+    assert "隐藏" in section, (
+        "visibility hint must mention 隐藏"
+    )
+    assert "软删除" in section or "不会物理删除数据" in section, (
+        "visibility hint must mention soft delete / no physical deletion"
+    )
+
+
+def test_styles_css_has_action_group_styles():
+    """Phase 3B.5A: styles.css must style the three action groups and
+    visually separate the danger group from the edit / merge groups."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".detail-action-edit-group" in source, (
+        "styles.css must style .detail-action-edit-group"
+    )
+    assert ".detail-action-merge-group" in source, (
+        "styles.css must style .detail-action-merge-group"
+    )
+    assert ".detail-action-danger-group" in source, (
+        "styles.css must style .detail-action-danger-group"
+    )
+    # The danger group must have a red-tinted left border so destructive
+    # actions read as visually separated.
+    danger_start = source.find(".detail-action-danger-group")
+    danger_block = source[danger_start:danger_start + 400]
+    assert "#fca5a5" in danger_block or "border-left" in danger_block, (
+        "danger group must have a visually separating border"
+    )
+
+
+def test_styles_css_has_section_label_style():
+    """Phase 3B.5A: styles.css must style the .edit-section-label class
+    used by the unified section labels."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".edit-section-label" in source, (
+        "styles.css must style .edit-section-label"
+    )
+
+
+def test_app_js_clear_edit_panel_resets_all_action_state():
+    """Phase 3B.5A: clearEditPanel must reset all transient action state,
+    including merge / hide / delete saving state and target ids."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function clearEditPanel(")
+    assert start != -1, "clearEditPanel must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    # Project / note / time / split state
+    assert "editSaving = false" in body
+    assert "timeSaving = false" in body
+    assert "editingActivityId = null" in body
+    assert "activityTimeSaving = false" in body
+    assert "editingSplitActivityId = null" in body
+    assert "activitySplitSaving = false" in body
+    assert "sessionSplitSaving = false" in body
+    # Merge state
+    assert "mergeSaving = false" in body, (
+        "clearEditPanel must reset mergeSaving"
+    )
+    assert "mergingActivityId = null" in body, (
+        "clearEditPanel must reset mergingActivityId"
+    )
+    # Hide / delete state
+    assert "hideSaving = false" in body, (
+        "clearEditPanel must reset hideSaving"
+    )
+    assert "hidingActivityId = null" in body, (
+        "clearEditPanel must reset hidingActivityId"
+    )
+    assert "deleteSaving = false" in body, (
+        "clearEditPanel must reset deleteSaving"
+    )
+    assert "deletingActivityId = null" in body, (
+        "clearEditPanel must reset deletingActivityId"
+    )
+
+
+def test_app_js_populate_edit_panel_populates_all_correction_sections():
+    """Phase 3B.5A: populateEditPanel must populate / reset all correction
+    sections (project/note, time, split, visibility) so switching sessions
+    does not leave stale state behind."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    start = source.find("function populateEditPanel(")
+    assert start != -1, "populateEditPanel must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    # Session-level correction section populators
+    assert "populateSessionTimeSection" in body, (
+        "populateEditPanel must call populateSessionTimeSection"
+    )
+    assert "populateSessionSplitSection" in body, (
+        "populateEditPanel must call populateSessionSplitSection"
+    )
+    assert "populateSessionVisibilitySection" in body, (
+        "populateEditPanel must call populateSessionVisibilitySection"
+    )
+
+
+def test_app_js_consolidation_has_no_forbidden_handlers():
+    """Phase 3B.5A: the consolidation must not introduce batch edit,
+    batch hide, batch delete, undo / restore, permanent delete, auto-rule,
+    complex correction page, or overlap detection handlers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in (
+        "batchedit",
+        "batchhide",
+        "batchdelete",
+        "restoreactivity",
+        "restoresession",
+        "permanentdelete",
+        "autorule",
+        "complexcorrection",
+        "overlapdetection",
+        "merge_session",  # multi-activity session whole-merge
+        "deleteactivity",  # lowercase-d permanent delete handler name
+    ):
+        assert forbidden not in lowered, (
+            f"app.js must not introduce a '{forbidden}' handler"
+        )
+
+
+def test_index_html_consolidation_has_no_forbidden_controls():
+    """Phase 3B.5A: index.html must not contain batch / restore /
+    permanent-delete / auto-rule / complex-correction-page controls."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in (
+        "batch",
+        "restore",
+        "permanent",
+        "auto-rule",
+        "complex-correction",
+        "overlap",
+    ):
+        assert forbidden not in lowered, (
+            f"index.html must not contain a '{forbidden}' control"
+        )
+
+
+def test_frontend_resources_consolidation_no_external_links():
+    """Phase 3B.5A: the consolidation must not introduce external links,
+    CDN, or Google Fonts."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{filename} must not contain http:// or https:// links"
+        )
+        assert not re.search(r"cdn", source, re.IGNORECASE), (
+            f"{filename} must not reference CDN"
+        )
+        assert not re.search(r"google\s*fonts", source, re.IGNORECASE), (
+            f"{filename} must not reference Google Fonts"
+        )
+
+
+def test_frontend_resources_consolidation_no_browser_storage():
+    """Phase 3B.5A: the consolidation must not use browser storage."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"localStorage", source, re.IGNORECASE), (
+            f"{filename} must not use localStorage"
+        )
+        assert not re.search(r"sessionStorage", source, re.IGNORECASE), (
+            f"{filename} must not use sessionStorage"
+        )
+
+
+def test_frontend_resources_consolidation_no_traceback_display():
+    """Phase 3B.5A: the consolidation must not introduce traceback
+    display logic in the frontend resources."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        lowered = source.lower()
+        assert "traceback" not in lowered, (
+            f"{filename} must not contain traceback display logic"
+        )
+
+
+def test_docs_mention_phase_3b_5a():
+    """Phase 3B.5A: the migration doc and release-validation doc must
+    mention Phase 3B.5A and restate that batch edit / restore / permanent
+    delete / complex correction page are not implemented."""
+    migration = (REPO_ROOT / "docs" / "ui-webview-migration.md").read_text(
+        encoding="utf-8"
+    )
+    assert "3B.5A" in migration, (
+        "ui-webview-migration.md must mention Phase 3B.5A"
+    )
+    assert "consolidation" in migration.lower(), (
+        "ui-webview-migration.md must describe 3B.5A as a consolidation phase"
+    )
+    # Restate the unimplemented features
+    for term in ("batch", "restore", "permanent delete", "complex correction"):
+        assert term.lower() in migration.lower(), (
+            f"ui-webview-migration.md must restate that {term} is not "
+            "implemented"
+        )
+    release_val = (REPO_ROOT / "docs" / "release-validation.md").read_text(
+        encoding="utf-8"
+    )
+    assert "3B.5A" in release_val, (
+        "release-validation.md must mention Phase 3B.5A"
+    )
+
+
+def test_docs_readme_mentions_phase_3b_5a():
+    """Phase 3B.5A: the README must mention Phase 3B.5A as the
+    consolidation phase."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "3B.5A" in readme, "README.md must mention Phase 3B.5A"
+    assert "consolidation" in readme.lower(), (
+        "README.md must describe 3B.5A as a consolidation phase"
+    )

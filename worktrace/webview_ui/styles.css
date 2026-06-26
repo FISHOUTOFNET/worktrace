@@ -632,6 +632,18 @@ body {
     margin-bottom: 12px;
 }
 
+/* Phase 3B.5A: correction-section labels (项目与备注 / 时间修正 / 拆分 / 可见性).
+   Slightly more prominent than field-level .edit-label so the user can
+   scan the edit panel by section. Each section below the first also
+   carries a dashed top border (see .edit-time-section /
+   .edit-split-section / .edit-visibility-section). */
+.edit-section-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 8px;
+}
+
 .edit-field {
     margin-bottom: 12px;
 }
@@ -870,6 +882,36 @@ body {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+    align-items: center;
+}
+
+/* Phase 3B.5A: action group wrappers. The three groups (edit / merge /
+   danger) are visually separated so the user can tell destructive actions
+   apart from edits at a glance. Each group is an inline-flex sub-row so
+   its buttons stay together when the action row wraps on narrow viewports. */
+.detail-action-edit-group,
+.detail-action-merge-group,
+.detail-action-danger-group {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
+
+.detail-action-merge-group {
+    /* A thin left border separates the merge group from the edit group so
+       the user can see the merge action is a distinct operation, not just
+       another edit button. */
+    padding-left: 6px;
+    border-left: 1px solid #e2e8f0;
+}
+
+.detail-action-danger-group {
+    /* The danger group is visually separated from the merge group so hide
+       and delete read as destructive actions. The red-tinted left border
+       matches the delete button accent. */
+    padding-left: 6px;
+    border-left: 1px solid #fca5a5;
 }
 
 .detail-edit-time-btn {
@@ -931,20 +973,22 @@ body {
     cursor: not-allowed;
 }
 
-/* Phase 3B.3: per-activity "与下一条合并" button. Mirrors the split button
-   styling so the action row looks consistent. */
+/* Phase 3B.3 / 3B.5A: per-activity "与下一条合并" button. Carries an
+   indigo accent so the merge action reads as a distinct structural
+   operation (it changes the session shape), separate from the plain edit
+   buttons (编辑时间 / 拆分) and from the destructive hide / delete buttons. */
 .detail-merge-btn {
     padding: 2px 8px;
     font-size: 11px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid #c7d2fe;
     border-radius: 4px;
     background: #ffffff;
-    color: #334155;
+    color: #4338ca;
     cursor: pointer;
 }
 
 .detail-merge-btn:hover:not(:disabled) {
-    background: #f1f5f9;
+    background: #eef2ff;
 }
 
 .detail-merge-btn:disabled {
@@ -1133,11 +1177,18 @@ body {
     .detail-merge-status {
         grid-row: 6;
     }
-    /* Phase 3B.3: action buttons wrap on narrow viewports so the merge
-       button remains reachable alongside the edit/split buttons. */
+    /* Phase 3B.3 / 3B.5A: action buttons wrap on narrow viewports so the
+       merge button remains reachable alongside the edit/split buttons. The
+       group wrappers also wrap so each group's buttons stay together while
+       the groups themselves can flow to the next line. */
     .detail-item-actions {
         flex-wrap: wrap;
         gap: 4px;
+    }
+    .detail-action-edit-group,
+    .detail-action-merge-group,
+    .detail-action-danger-group {
+        flex-wrap: wrap;
     }
     /* Phase 3B.4: visibility status mirrors the merge status grid row so
        the hide/delete status text stays below the action buttons without

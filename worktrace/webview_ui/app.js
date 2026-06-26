@@ -448,7 +448,14 @@
                 + '</div>'
                 + '<div class="detail-item-project" title="' + escapeHtml(a.project_name || "未归类") + '">' + escapeHtml(a.project_name || "未归类") + '</div>'
                 + '<div class="detail-item-duration">' + escapeHtml(a.duration) + '</div>'
+                // Phase 3B.5A: per-activity correction actions are grouped
+                // into three visually distinct groups with a stable order:
+                // edit group (编辑时间 → 拆分) → merge group (与下一条合并)
+                // → danger group (隐藏 → 删除). No new actions are added;
+                // the wrappers only consolidate existing buttons so the
+                // destructive actions are clearly separated from edits.
                 + '<div class="detail-item-actions">'
+                + '<div class="detail-action-edit-group">'
                 + '<button type="button" class="detail-edit-time-btn"'
                 + ' data-activity-id="' + escapeHtml(String(aid)) + '"'
                 + ' data-start="' + escapeHtml(a.start_time || "") + '"'
@@ -463,12 +470,16 @@
                 + (editBtnDisabled ? ' disabled' : '')
                 + ' title="' + escapeHtml(splitBtnTitle) + '"'
                 + '>拆分</button>'
+                + '</div>'
+                + '<div class="detail-action-merge-group">'
                 + '<button type="button" class="detail-merge-btn"'
                 + ' data-activity-id="' + escapeHtml(String(aid)) + '"'
                 + ' data-next-activity-id="' + escapeHtml(String(hasNext ? (activities[i + 1].activity_id || 0) : 0)) + '"'
                 + (mergeBtnDisabled ? ' disabled' : '')
                 + ' title="' + escapeHtml(mergeBtnTitle) + '"'
                 + '>与下一条合并</button>'
+                + '</div>'
+                + '<div class="detail-action-danger-group">'
                 + '<button type="button" class="detail-hide-btn"'
                 + ' data-activity-id="' + escapeHtml(String(aid)) + '"'
                 + (visibilityBtnDisabled ? ' disabled' : '')
@@ -479,6 +490,7 @@
                 + (visibilityBtnDisabled ? ' disabled' : '')
                 + ' title="' + escapeHtml(visibilityBtnTitle) + '"'
                 + '>删除</button>'
+                + '</div>'
                 + '</div>'
                 + '<div class="detail-time-editor" hidden>'
                 + '<div class="detail-time-row">'
@@ -1052,6 +1064,22 @@
             setMergeStatus(btn, "活动 ID 无效", true);
             return;
         }
+        // Phase 3B.5A: guard against unsaved edits, consistent with hide /
+        // delete. Merge triggers a refresh that would wipe unsaved
+        // project/note/time/split inputs, so require the user to save or
+        // cancel first.
+        if (isEditDirty()) {
+            setMergeStatus(btn, "请先保存或取消当前编辑", true);
+            return;
+        }
+        // Verify the activity id still matches the row so a stale button
+        // (e.g. after rapid session switching) does not operate on a
+        // different session's activity. Consistent with hide / delete.
+        var row = btn.closest(".detail-item");
+        if (!row) return;
+        var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
+        if (rowAid !== activityId) return;
+
         setMergeSaving(btn, true);
         setMergeStatus(btn, "", false);
         callBridge("merge_timeline_activities", [activityId, nextActivityId]).then(function (result) {

@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3B.4.1 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.5A (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -11,7 +11,10 @@
   hardened; Timeline activity merge foundation — two closed activities
   merged into one — implemented and hardened; Timeline hide / soft delete
   foundation — single closed activity hide and soft delete — implemented
-  and hardened; WebView is the default and only shipping UI).
+  and hardened; Timeline correction action consolidation — per-activity
+  actions grouped into edit / merge / danger groups with unified
+  dirty-state guards, refresh semantics, and section labels — implemented;
+  WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -336,6 +339,31 @@ The migration is phased so each step is independently shippable:
   restore, permanent delete, auto-rule creation, complex correction
   pages, overlap detection, and multi-activity session whole-hide /
   whole-delete remain out of scope. No new DB schema. **Completed.**
+- Phase 3B.5A: **Timeline correction action consolidation.** This is a
+  consolidation / polish / consistency phase, **not** a feature expansion.
+  No new backend write capability, no new DB schema, no new actions. The
+  per-activity correction actions already implemented in Phase 3B.1 /
+  3B.2 / 3B.3 / 3B.4 (编辑时间, 拆分, 与下一条合并, 隐藏, 删除) are
+  grouped into three visually distinct action groups with a stable order:
+  edit group (编辑时间 → 拆分) → merge group (与下一条合并) → danger
+  group (隐藏 → 删除). The merge action now carries the same
+  ``isEditDirty()`` guard and row-id consistency check as hide / delete,
+  so every action that triggers a Timeline refresh refuses while there
+  are unsaved project / note / time / split inputs. The session-level
+  edit panel section labels are unified (项目与备注 / 时间修正 / 拆分 /
+  可见性). Destructive-action copy is unified: hide succeeds with "已隐藏"
+  and fails with "隐藏失败"; delete succeeds with "已删除" and fails with
+  "删除失败"; the delete confirmation still makes clear this is a soft
+  delete (本阶段不会物理删除数据). Dirty-state refusal is unified to
+  "请先保存或取消当前编辑". ``clearEditPanel`` continues to reset all
+  transient action state; ``populateEditPanel`` continues to populate
+  all correction sections. Auto-refresh continues to preserve dirty
+  inputs and to re-apply in-flight saving state to the refreshed
+  buttons. Batch edit, batch hide, batch delete, undo / restore,
+  permanent delete, auto-rule creation, complex correction page,
+  overlap detection, multi-activity session whole-hide / whole-delete,
+  and arbitrary-length merge remain out of scope. No new DB schema.
+  **Completed.**
 - Phase 3B: Timeline advanced editing (batch editing,
   correction page) — not yet started.
 - Phase 4: Statistics / Export.
@@ -1738,6 +1766,101 @@ Phase 3B.4.1 does not implement and does not start:
 - Session-note migration when the hidden / deleted activity was a
   `first_activity_id`;
 - Any new DB schema.
+
+## Phase 3B.5A Implemented Scope
+
+Phase 3B.5A is a **consolidation / polish / consistency** phase. It does
+**not** add any new backend write capability, any new DB schema, or any
+new correction action. It only reorganizes and unifies the correction
+actions already implemented in Phase 3B.1 / 3B.2 / 3B.3 / 3B.4 so the
+user experience, state handling, error handling, and documentation
+semantics are consistent across project / note / time / split / merge /
+hide / delete.
+
+Frontend UI grouping (`worktrace/webview_ui/app.js`,
+`worktrace/webview_ui/styles.css`):
+
+- The five per-activity correction buttons are wrapped in three action
+  groups inside the existing `.detail-item-actions` container:
+  - `.detail-action-edit-group` — `编辑时间`, `拆分`;
+  - `.detail-action-merge-group` — `与下一条合并`;
+  - `.detail-action-danger-group` — `隐藏`, `删除`.
+- The action order is stable: `编辑时间 → 拆分 → 与下一条合并 → 隐藏 →
+  删除`.
+- The merge button carries an indigo accent so it reads as a distinct
+  structural operation, separate from the plain edit buttons and from
+  the destructive hide / delete buttons.
+- The danger group has a red-tinted left border so destructive actions
+  are visually separated from edits and merge.
+- Narrow-viewport rules allow each group's buttons to wrap together
+  while the groups themselves can flow to the next line.
+
+Frontend state management (`worktrace/webview_ui/app.js`):
+
+- The independent saving states (`editSaving`, `timeSaving`,
+  `activityTimeSaving`, `sessionSplitSaving`, `activitySplitSaving`,
+  `mergeSaving`, `hideSaving`, `deleteSaving`) are preserved without
+  over-abstraction.
+- `saveActivityMerge` now carries the same `isEditDirty()` guard and
+  row-id consistency check as `saveActivityHide` / `saveActivityDelete`,
+  so every action that triggers a Timeline refresh refuses while there
+  are unsaved project / note / time / split inputs.
+- All action success paths reset the saving state before calling
+  `refreshTimelineAfterEdit()`; failure paths reset the saving state and
+  keep the detail list visible.
+- `clearEditPanel()` continues to reset all transient action state.
+- `populateEditPanel()` continues to populate all correction sections.
+- Auto-refresh continues to preserve dirty inputs and to re-apply
+  in-flight saving state to the refreshed buttons.
+
+Destructive-action copy (`worktrace/webview_ui/app.js`):
+
+- Hide: button `隐藏`, success `已隐藏`, failure `隐藏失败`.
+- Delete: button `删除`, success `已删除`, failure `删除失败`.
+- Delete confirmation: `确定从 Timeline 删除这条记录吗？本阶段不会物理删除数据。`
+- Dirty-state refusal (hide / delete / merge): `请先保存或取消当前编辑`.
+- Multi-activity session hints remain clear: split / time / hide / delete
+  each direct the user to per-activity editing; merge rejects
+  multi-activity session whole-merge.
+
+Correction-section labels (`worktrace/webview_ui/index.html`):
+
+- The session-level edit panel sections are labeled consistently:
+  `项目与备注`, `时间修正`, `拆分`, `可见性`.
+- The visibility section hint restates both the hide and soft-delete
+  semantics: `隐藏后将从默认 Timeline 隐藏；删除为软删除，本阶段不会物理删除数据。`
+
+Bridge / API boundary:
+
+- No new bridge method, no new API method, no new service method.
+- The bridge continues to import only `worktrace.api` /
+  `worktrace.formatters`; it does not import `services` / `db` /
+  `collector` / `security` / `runtime` / `config`.
+- Bridge error payloads continue to return generic Chinese messages
+  without tracebacks, SQL errors, `window_title`, `file_path_hint`,
+  `full_path`, `clipboard`, or `note` old values.
+
+## Phase 3B.5A Not Implemented
+
+Phase 3B.5A does not implement and does not start:
+
+- Batch edit (editing more than one activity or session per call);
+- Batch hide (hiding more than one activity per call);
+- Batch delete (soft-deleting more than one activity per call);
+- Undo / restore (reverting a hide, soft delete, split, merge, or time
+  correction);
+- Permanent delete (physically removing the DB row);
+- Auto-rule creation;
+- Complex correction page (a dedicated multi-step correction UI);
+- Global overlap detection (across the whole timeline);
+- Multi-activity session whole-hide / whole-delete;
+- Arbitrary-length merge (more than two activities per call);
+- Any new backend write capability;
+- Any new DB schema;
+- Any new third-party UI library;
+- Any dropdown / menu component that would significantly increase test
+  complexity (the phase keeps the button-based UI, only adding group
+  wrappers and style cleanup).
 
 ## Legacy Tkinter UI Handling
 
