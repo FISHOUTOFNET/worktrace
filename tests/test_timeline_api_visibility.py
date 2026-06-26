@@ -654,3 +654,170 @@ def test_service_hide_activity_in_progress_zero_rowcount(temp_db):
     activity_service.finalize_created_activity(aid)
     with pytest.raises(ValueError):
         activity_service.hide_activity(aid)
+
+
+# --- Phase 3B.4.1 service-layer hardening --------------------------------
+#
+# These tests directly exercise the service-layer ``hide_activity`` /
+# ``soft_delete_activity`` write paths to confirm the hardening invariants
+# hold at the lowest layer (not just through the API/bridge facade). They
+# cover: idempotent hide, non-idempotent soft delete, in-progress soft
+# delete rejection, and core-field preservation for both operations.
+
+
+def test_service_hide_activity_idempotent(temp_db):
+    """``hide_activity`` is idempotent at the service layer: calling it
+    twice on the same closed activity succeeds both times. The WHERE
+    clause only excludes ``is_deleted = 1`` and ``end_time IS NULL``, so
+    an already-hidden row still matches and the second UPDATE succeeds."""
+    aid = _seed_closed_activity()
+    activity_service.hide_activity(aid)
+    # Second hide at the service layer must NOT raise.
+    activity_service.hide_activity(aid)
+    activity = activity_service.get_activity(aid)
+    assert int(activity.get("is_hidden") or 0) == 1
+    assert int(activity.get("is_deleted") or 0) == 0
+
+
+def test_service_soft_delete_activity_non_idempotent(temp_db):
+    """``soft_delete_activity`` is NOT idempotent at the service layer: the
+    second call on an already-deleted activity raises ``ValueError``
+    because the WHERE clause excludes ``is_deleted = 1``."""
+    aid = _seed_closed_activity()
+    activity_service.soft_delete_activity(aid)
+    with pytest.raises(ValueError):
+        activity_service.soft_delete_activity(aid)
+    activity = activity_service.get_activity(aid)
+    assert int(activity.get("is_deleted") or 0) == 1
+
+
+def test_service_soft_delete_activity_in_progress_zero_rowcount(temp_db):
+    """``soft_delete_activity`` on an in-progress activity raises
+    ``ValueError`` (the WHERE clause excludes ``end_time IS NULL``)."""
+    aid = activity_service.create_activity(
+        "Word", "winword.exe", "A1.docx", start_time="2026-06-25 09:00:00"
+    )
+    activity_service.finalize_created_activity(aid)
+    with pytest.raises(ValueError):
+        activity_service.soft_delete_activity(aid)
+
+
+def test_service_hide_activity_does_not_modify_core_fields(temp_db):
+    """``hide_activity`` must not touch start/end/duration/project/note/
+    status/source at the service layer."""
+    aid = _seed_closed_activity()
+    before = activity_service.get_activity(aid)
+    activity_service.hide_activity(aid)
+    after = activity_service.get_activity(aid)
+    assert after["start_time"] == before["start_time"]
+    assert after["end_time"] == before["end_time"]
+    assert int(after["duration_seconds"] or 0) == int(before["duration_seconds"] or 0)
+    assert after["project_id"] == before["project_id"]
+    assert after["note"] == before["note"]
+    assert after["status"] == before["status"]
+    assert after["source"] == before["source"]
+    # is_deleted must remain unchanged.
+    assert int(after.get("is_deleted") or 0) == 0
+
+
+def test_service_soft_delete_activity_does_not_modify_core_fields(temp_db):
+    """``soft_delete_activity`` must not touch start/end/duration/project/
+    note/status/source at the service layer."""
+    aid = _seed_closed_activity()
+    before = activity_service.get_activity(aid)
+    activity_service.soft_delete_activity(aid)
+    after = activity_service.get_activity(aid)
+    assert after["start_time"] == before["start_time"]
+    assert after["end_time"] == before["end_time"]
+    assert int(after["duration_seconds"] or 0) == int(before["duration_seconds"] or 0)
+    assert after["project_id"] == before["project_id"]
+    assert after["note"] == before["note"]
+    assert after["status"] == before["status"]
+    assert after["source"] == before["source"]
+    # is_hidden must remain unchanged.
+    assert int(after.get("is_hidden") or 0) == 0
+
+
+def test_service_hide_activity_preserves_assignments(temp_db):
+    """``hide_activity`` must not delete activity_project_assignment rows."""
+    aid = _seed_closed_activity()
+    before = _count_assignments(aid)
+    assert before >= 1
+    activity_service.hide_activity(aid)
+    after = _count_assignments(aid)
+    assert after == before
+
+
+def test_service_soft_delete_activity_preserves_assignments(temp_db):
+    """``soft_delete_activity`` must not delete activity_project_assignment
+    rows."""
+    aid = _seed_closed_activity()
+    before = _count_assignments(aid)
+    assert before >= 1
+    activity_service.soft_delete_activity(aid)
+    after = _count_assignments(aid)
+    assert after == before
+
+
+def test_service_hide_activity_preserves_resources(temp_db):
+    """``hide_activity`` must not delete activity_resource rows."""
+    aid = _seed_closed_activity()
+    before = _count_resources(aid)
+    assert before >= 1
+    activity_service.hide_activity(aid)
+    after = _count_resources(aid)
+    assert after == before
+
+
+def test_service_soft_delete_activity_preserves_resources(temp_db):
+    """``soft_delete_activity`` must not delete activity_resource rows."""
+    aid = _seed_closed_activity()
+    before = _count_resources(aid)
+    assert before >= 1
+    activity_service.soft_delete_activity(aid)
+    after = _count_resources(aid)
+    assert after == before
+
+
+def test_service_hide_activity_does_not_physically_delete(temp_db):
+    """``hide_activity`` must not remove the row from ``activity_log``."""
+    aid = _seed_closed_activity()
+    before_count = _count_activities()
+    activity_service.hide_activity(aid)
+    after_count = _count_activities()
+    assert after_count == before_count
+    assert activity_service.get_activity(aid) is not None
+
+
+def test_service_soft_delete_activity_does_not_physically_delete(temp_db):
+    """``soft_delete_activity`` must not remove the row from
+    ``activity_log``."""
+    aid = _seed_closed_activity()
+    before_count = _count_activities()
+    activity_service.soft_delete_activity(aid)
+    after_count = _count_activities()
+    assert after_count == before_count
+    # The row is still retrievable by direct id lookup (the service's
+    # ``get_activity`` does not filter on ``is_deleted``).
+    assert activity_service.get_activity(aid) is not None
+
+
+def test_service_hide_activity_does_not_modify_is_deleted(temp_db):
+    """``hide_activity`` must leave ``is_deleted`` at 0."""
+    aid = _seed_closed_activity()
+    activity_service.hide_activity(aid)
+    activity = activity_service.get_activity(aid)
+    assert int(activity.get("is_deleted") or 0) == 0
+    assert int(activity.get("is_hidden") or 0) == 1
+
+
+def test_service_soft_delete_activity_does_not_modify_is_hidden(temp_db):
+    """``soft_delete_activity`` must leave ``is_hidden`` unchanged (if the
+    activity was previously hidden, ``is_hidden`` stays 1)."""
+    aid = _seed_closed_activity()
+    # Hide first, then soft delete. ``is_hidden`` must remain 1.
+    activity_service.hide_activity(aid)
+    activity_service.soft_delete_activity(aid)
+    activity = activity_service.get_activity(aid)
+    assert int(activity.get("is_hidden") or 0) == 1
+    assert int(activity.get("is_deleted") or 0) == 1

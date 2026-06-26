@@ -511,3 +511,99 @@ def test_soft_delete_timeline_session_multi_activity_error_has_no_raw_fields(bri
     assert "sql" not in payload_str.lower()
     assert "a1.docx" not in payload_str.lower()
     assert "winword" not in payload_str.lower()
+
+
+# --- Phase 3B.4.1 bridge-layer hardening ---------------------------------
+
+
+def test_hide_timeline_session_multi_activity_does_not_call_api(bridge):
+    """The bridge must short-circuit a multi-activity session hide without
+    invoking the underlying API write path. The bridge-level guard gives
+    the user an immediate clear message and avoids a needless round-trip
+    through the API/service layer."""
+    ids = _seed_two_closed_activities()
+    with patch.object(timeline_api, "hide_timeline_session") as mock_api:
+        result = bridge.hide_timeline_session(ids)
+    mock_api.assert_not_called()
+    assert result["ok"] is False
+    assert result["error"] == "多活动 session 暂不支持整体隐藏，请在活动详情中逐条处理"
+    _assert_no_sensitive_keys(result)
+
+
+def test_soft_delete_timeline_session_multi_activity_does_not_call_api(bridge):
+    """The bridge must short-circuit a multi-activity session soft delete
+    without invoking the underlying API write path."""
+    ids = _seed_two_closed_activities()
+    with patch.object(timeline_api, "soft_delete_timeline_session") as mock_api:
+        result = bridge.soft_delete_timeline_session(ids)
+    mock_api.assert_not_called()
+    assert result["ok"] is False
+    assert result["error"] == "多活动 session 暂不支持整体删除，请在活动详情中逐条处理"
+    _assert_no_sensitive_keys(result)
+
+
+def test_hide_timeline_activity_invalid_id_does_not_call_api(bridge):
+    """An invalid activity id (non-positive) must short-circuit at the
+    bridge layer without invoking the API write path."""
+    with patch.object(timeline_api, "hide_timeline_activity") as mock_api:
+        result = bridge.hide_timeline_activity(0)
+    mock_api.assert_not_called()
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    _assert_no_sensitive_keys(result)
+
+
+def test_soft_delete_timeline_activity_invalid_id_does_not_call_api(bridge):
+    """An invalid activity id (non-positive) must short-circuit at the
+    bridge layer without invoking the API write path."""
+    with patch.object(timeline_api, "soft_delete_timeline_activity") as mock_api:
+        result = bridge.soft_delete_timeline_activity(0)
+    mock_api.assert_not_called()
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    _assert_no_sensitive_keys(result)
+
+
+def test_hide_timeline_activity_bool_id_does_not_call_api(bridge):
+    """A ``bool`` activity id must short-circuit at the bridge layer
+    without invoking the API write path. ``bool`` is a subclass of ``int``
+    and must not be coerced to ``1``/``0``."""
+    with patch.object(timeline_api, "hide_timeline_activity") as mock_api:
+        result = bridge.hide_timeline_activity(True)
+    mock_api.assert_not_called()
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    _assert_no_sensitive_keys(result)
+
+
+def test_soft_delete_timeline_activity_bool_id_does_not_call_api(bridge):
+    """A ``bool`` activity id must short-circuit at the bridge layer
+    without invoking the API write path."""
+    with patch.object(timeline_api, "soft_delete_timeline_activity") as mock_api:
+        result = bridge.soft_delete_timeline_activity(True)
+    mock_api.assert_not_called()
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    _assert_no_sensitive_keys(result)
+
+
+def test_hide_timeline_session_non_list_does_not_call_api(bridge):
+    """A non-list ``activity_ids`` argument must short-circuit at the bridge
+    layer without invoking the API write path."""
+    with patch.object(timeline_api, "hide_timeline_session") as mock_api:
+        result = bridge.hide_timeline_session("not a list")
+    mock_api.assert_not_called()
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    _assert_no_sensitive_keys(result)
+
+
+def test_soft_delete_timeline_session_non_list_does_not_call_api(bridge):
+    """A non-list ``activity_ids`` argument must short-circuit at the bridge
+    layer without invoking the API write path."""
+    with patch.object(timeline_api, "soft_delete_timeline_session") as mock_api:
+        result = bridge.soft_delete_timeline_session(None)
+    mock_api.assert_not_called()
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    _assert_no_sensitive_keys(result)

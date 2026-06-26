@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3B.4 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.4.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -10,8 +10,8 @@
   closed activity split into two closed activities — implemented and
   hardened; Timeline activity merge foundation — two closed activities
   merged into one — implemented and hardened; Timeline hide / soft delete
-  foundation — single closed activity hide and soft delete — implemented;
-  WebView is the default and only shipping UI).
+  foundation — single closed activity hide and soft delete — implemented
+  and hardened; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -317,6 +317,25 @@ The migration is phased so each step is independently shippable:
   hide, batch delete, undo / restore, permanent delete, auto-rule
   creation, complex correction pages, and overlap detection remain out
   of scope. No new DB schema. **Completed.**
+- Phase 3B.4.1: **Timeline hide / soft delete hardening.** Hardens the
+  Phase 3B.4 hide / soft delete write path and frontend interaction with
+  no new features. Confirms the service-layer ``hide_activity`` /
+  ``soft_delete_activity`` invariants at the lowest layer: idempotent
+  hide (second hide succeeds), non-idempotent soft delete (second soft
+  delete raises ``ValueError``), in-progress soft-delete rejection,
+  ``is_hidden`` / ``is_deleted`` independence (hide leaves
+  ``is_deleted = 0``; soft delete leaves ``is_hidden`` unchanged),
+  core-field preservation (start / end / duration / project / note /
+  status / source), assignment / resource / session-note preservation,
+  and no physical row removal. Confirms the bridge-layer multi-activity
+  and invalid-input guards short-circuit before invoking the API write
+  path (no round-trip). Restates that in-progress is determined by the
+  raw DB ``end_time IS NULL`` column, not the projected display value.
+  Restates that delete confirmation is a soft-delete confirmation, not a
+  permanent-delete confirmation. Batch hide, batch delete, undo /
+  restore, permanent delete, auto-rule creation, complex correction
+  pages, overlap detection, and multi-activity session whole-hide /
+  whole-delete remain out of scope. No new DB schema. **Completed.**
 - Phase 3B: Timeline advanced editing (batch editing,
   correction page) — not yet started.
 - Phase 4: Statistics / Export.
@@ -1631,6 +1650,94 @@ The following remain out of scope until a later phase:
 - Multi-activity session whole-hide / whole-delete;
 - Session-note migration when the hidden / deleted activity was a
   `first_activity_id`.
+
+## Phase 3B.4.1 Implemented Scope
+
+Phase 3B.4.1 is a **hardening-only** phase. It introduces **no new
+features** — no batch hide, no batch delete, no undo / restore, no
+permanent delete, no auto-rule, no complex correction page, no overlap
+detection, and no multi-activity session whole-hide / whole-delete. It
+strengthens the Phase 3B.4 hide / soft delete write path and frontend
+interaction so visibility changes are more predictable, safer, and
+semantically clearer.
+
+### Service-Layer Hardening
+
+The service-layer ``hide_activity`` / ``soft_delete_activity``
+invariants are now directly covered by tests at the lowest layer (not
+just through the API / bridge facade):
+
+- **Idempotent hide**: ``hide_activity`` called twice on the same closed
+  activity succeeds both times. The ``WHERE id = ? AND is_deleted = 0
+  AND end_time IS NOT NULL`` clause matches an already-hidden row, so
+  the second UPDATE refreshes ``updated_at`` and returns rowcount 1.
+- **Non-idempotent soft delete**: ``soft_delete_activity`` called twice
+  on the same activity raises ``ValueError`` on the second call. The
+  ``WHERE id = ? AND is_deleted = 0 AND end_time IS NOT NULL`` clause
+  excludes an already-deleted row, so the second UPDATE returns rowcount
+  0 and the service raises ``ValueError``.
+- **In-progress soft-delete rejection**: ``soft_delete_activity`` on an
+  in-progress activity (raw ``end_time IS NULL``) raises ``ValueError``
+  (the WHERE clause excludes ``end_time IS NULL``).
+- **``is_hidden`` / ``is_deleted`` independence**: ``hide_activity``
+  leaves ``is_deleted`` at 0; ``soft_delete_activity`` leaves
+  ``is_hidden`` unchanged (if the activity was previously hidden,
+  ``is_hidden`` stays 1 after a soft delete).
+- **Core-field preservation**: neither operation modifies
+  ``start_time``, ``end_time``, ``duration_seconds``, ``project_id``,
+  ``note``, ``status``, or ``source``.
+- **Assignment / resource preservation**: neither operation deletes
+  ``activity_project_assignment`` or ``activity_resource`` rows.
+- **No physical row removal**: neither operation removes the row from
+  ``activity_log``; the row is still retrievable by direct id lookup.
+
+### Bridge-Layer Hardening
+
+The bridge-layer guards are confirmed to short-circuit before invoking
+the API write path, giving the user an immediate clear message without
+a needless round-trip:
+
+- A multi-activity session hide / soft delete returns the dedicated
+  Chinese message without calling ``timeline_api.hide_timeline_session``
+  / ``timeline_api.soft_delete_timeline_session``.
+- An invalid activity id (non-positive, ``bool``, non-int) returns
+  ``"操作失败"`` without calling the API write path.
+- A non-list ``activity_ids`` argument returns ``"操作失败"`` without
+  calling the API write path.
+
+### In-Progress Semantics Restated
+
+In-progress is determined by the **raw DB ``end_time IS NULL`` column**,
+not the projected display value. An open activity may carry a projected
+display ``end_time`` for the Timeline view; consumers must not infer
+in-progress state from the displayed ``end_time``. Both the API-layer
+``_validate_activity_id_for_visibility`` and the service-layer WHERE
+clause read the raw ``end_time``.
+
+### Delete Confirmation Semantics Restated
+
+The delete confirmation is a **soft-delete confirmation**, not a
+permanent-delete confirmation. The frontend uses
+``window.confirm("确定从 Timeline 删除这条记录吗？本阶段不会物理删除数据。")``
+so the user is explicitly told the data is not physically removed.
+Confirm cancel does not call the bridge, does not enter the saving
+state, and does not refresh the Timeline.
+
+## Phase 3B.4.1 Not Implemented
+
+Phase 3B.4.1 does not implement and does not start:
+
+- Batch hide (hiding more than one activity per call);
+- Batch delete (soft-deleting more than one activity per call);
+- Undo / restore (reverting a hide or soft delete);
+- Permanent delete (physically removing the DB row);
+- Auto-rule creation;
+- Complex correction page;
+- Overlap detection (global, across the whole timeline);
+- Multi-activity session whole-hide / whole-delete;
+- Session-note migration when the hidden / deleted activity was a
+  `first_activity_id`;
+- Any new DB schema.
 
 ## Legacy Tkinter UI Handling
 

@@ -1700,3 +1700,105 @@ supported; multi-activity session whole-hide / whole-delete is rejected.
 - The frontend wipes the detail list on a hide / delete failure.
 - Any Phase 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.4.1 Validation
+
+Phase 3B.4.1 is a **hardening-only** phase for the Phase 3B.4 Timeline
+hide / soft delete foundation. It introduces **no new features** — no
+batch hide, no batch delete, no undo / restore, no permanent delete, no
+auto-rule, no complex correction page, no overlap detection, and no
+multi-activity session whole-hide / whole-delete. It strengthens the
+service, bridge, and documentation invariants so the hide / soft delete
+write path is more predictable and semantically clearer.
+
+### Automated Checklist
+
+| Check | Command |
+|-------|---------|
+| Full test suite | `python -m pytest` |
+| PyInstaller build | `python -m PyInstaller --noconfirm --clean WorkTrace.spec` |
+
+### Validation Items
+
+#### BO. Service-Layer Hardening
+
+- ``hide_activity`` is idempotent at the service layer: calling it twice
+  on the same closed activity succeeds both times (the WHERE clause
+  matches an already-hidden row).
+- ``soft_delete_activity`` is NOT idempotent at the service layer: the
+  second call on an already-deleted activity raises ``ValueError`` (the
+  WHERE clause excludes ``is_deleted = 1``).
+- ``soft_delete_activity`` on an in-progress activity (raw
+  ``end_time IS NULL``) raises ``ValueError``.
+- ``hide_activity`` leaves ``is_deleted`` at 0; ``soft_delete_activity``
+  leaves ``is_hidden`` unchanged (an already-hidden activity stays
+  hidden after a soft delete).
+- Neither operation modifies ``start_time``, ``end_time``,
+  ``duration_seconds``, ``project_id``, ``note``, ``status``, or
+  ``source`` at the service layer.
+- Neither operation deletes ``activity_project_assignment`` or
+  ``activity_resource`` rows at the service layer.
+- Neither operation physically removes the row from ``activity_log``.
+
+#### BP. Bridge-Layer Hardening
+
+- A multi-activity session hide / soft delete returns the dedicated
+  Chinese message **without** calling the API write path (the bridge
+  short-circuits).
+- An invalid activity id (non-positive, ``bool``, non-int) returns
+  ``"操作失败"`` **without** calling the API write path.
+- A non-list ``activity_ids`` argument returns ``"操作失败"``
+  **without** calling the API write path.
+- All bridge error payloads remain free of tracebacks, SQL errors,
+  ``window_title``, ``file_path_hint``, ``full_path``, ``clipboard``,
+  and ``note``.
+
+#### BQ. Semantics Restated
+
+- In-progress is determined by the **raw DB ``end_time IS NULL``
+  column**, not the projected display value.
+- The delete confirmation is a **soft-delete confirmation**, not a
+  permanent-delete confirmation. The frontend uses
+  ``window.confirm("确定从 Timeline 删除这条记录吗？本阶段不会物理删除数据。")``.
+- Hide is idempotent; soft delete is non-idempotent.
+- Hide sets ``is_hidden = 1``; soft delete sets ``is_deleted = 1``.
+- Neither physically deletes the row or touches assignment / resource /
+  note / session-note rows.
+
+#### BR. Regression
+
+- All Phase 3B.4 hide / soft delete foundation tests continue to pass.
+- All Phase 3B.3 / 3B.3.1 merge tests continue to pass.
+- All Phase 3B.2 / 3B.2.1 split tests continue to pass.
+- All Phase 3B.1 / 3B.1.1 time-correction tests continue to pass.
+- All Phase 3A / 3A.1 editing tests continue to pass.
+- All Phase 2.1 privacy boundary tests continue to pass.
+- Overview and Timeline read-only tests continue to pass.
+- Default WebView entry tests continue to pass.
+- PyInstaller resource path tests continue to pass.
+
+### Phase 3B.4.1 Release Blockers
+
+- Any new feature (batch hide, batch delete, undo / restore, permanent
+  delete, auto-rule, complex correction page, overlap detection,
+  multi-activity session whole-hide / whole-delete) is introduced.
+- ``hide_activity`` is no longer idempotent at the service layer.
+- ``soft_delete_activity`` becomes idempotent at the service layer.
+- ``hide_activity`` modifies ``is_deleted``, or ``soft_delete_activity``
+  modifies ``is_hidden``.
+- Either operation modifies ``start_time``, ``end_time``,
+  ``duration_seconds``, ``project_id``, ``note``, ``status``, or
+  ``source`` at the service layer.
+- Either operation deletes ``activity_project_assignment``,
+  ``activity_resource``, or ``project_session_note`` rows.
+- Either operation physically removes the row from ``activity_log``.
+- The bridge calls the API write path for a multi-activity session or
+  an invalid activity id instead of short-circuiting.
+- In-progress is determined by anything other than the raw DB
+  ``end_time IS NULL`` column.
+- The delete confirmation wording claims permanent deletion.
+- Any bridge error payload leaks tracebacks, SQL errors,
+  ``window_title``, ``file_path_hint``, ``full_path``, ``clipboard``,
+  or ``note``.
+- Any Phase 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any new DB schema is introduced.
