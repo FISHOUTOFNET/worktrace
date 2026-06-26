@@ -652,6 +652,151 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
         return len(ids)
 
 
+# Maximum number of activities whose note can be overwritten in a single
+# batch note edit call. This guards against accidental huge writes and
+# mirrors the batch project edit limit.
+MAX_BATCH_NOTE_EDIT_ACTIVITIES = 100
+
+# Maximum length of the note value accepted by batch note overwrite. This
+# matches the existing single-activity / session-note limit enforced by the
+# API layer (TIMELINE_NOTE_MAX_LENGTH = 2000) so batch and single writes
+# share the same bound.
+BATCH_NOTE_MAX_LENGTH = 2000
+
+
+def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
+    """Atomically overwrite the note on multiple closed activities.
+
+    Phase 3B.7 batch note editing foundation. This is the second batch
+    write capability: it overwrites ``activity_log.note`` for every
+    activity in ``activity_ids`` with the same ``note`` value within a
+    single transaction. Only the ``note`` column and ``updated_at`` are
+    touched; ``source`` is intentionally NOT modified (unlike the single
+    ``update_activity_note`` path which sets ``source = 'manual'``) so the
+    batch overwrite is a pure note-only change.
+
+    Input validation (raises ``ValueError`` with a stable code suffix on
+    any failure; no partial write is performed):
+
+    - ``activity_ids`` must be a list; after deduplication it must contain
+      at least 2 positive integers; ``bool`` elements are rejected; the
+      deduplicated count must not exceed ``MAX_BATCH_NOTE_EDIT_ACTIVITIES``.
+    - ``note`` must be a ``str`` (``None`` rejected). Empty string is
+      allowed and is used to batch-clear notes. The length must not exceed
+      ``BATCH_NOTE_MAX_LENGTH``.
+    - Each activity must exist, ``is_deleted = 0``, ``is_hidden = 0``, and
+      ``end_time IS NOT NULL`` (closed). In-progress, hidden, and deleted
+      activities are rejected.
+
+    Write guarantees:
+
+    - The write is a single transaction; any failure rolls back so no
+      activity's note changes.
+    - Each activity's ``note`` is overwritten (not appended / merged) with
+      the new value; ``updated_at`` is refreshed on every touched row.
+    - ``start_time`` / ``end_time`` / ``duration_seconds`` / ``status`` /
+      ``source`` / ``project_id`` / resource rows / assignment rows /
+      session notes / ``is_hidden`` / ``is_deleted`` are NOT modified.
+    - The old note is never read, never concatenated, and never returned.
+    - A rowcount guard ensures every UPDATE affects exactly the expected
+      number of rows; a 0-row UPDATE (race condition) raises
+      ``ValueError("note_update_failed")`` and the transaction rolls back.
+
+    Returns the number of activities successfully updated (the deduplicated
+    count). Does not return raw rows, the old note, the new note, or any
+    sensitive fields.
+
+    Raises ``ValueError`` with a stable code suffix:
+    - ``invalid_activity_ids`` — not a list, empty after dedup, < 2, or
+      contains non-int / bool / non-positive values.
+    - ``batch_too_large`` — deduplicated count exceeds the max.
+    - ``invalid_note`` — ``note`` is not a ``str`` or is ``None``.
+    - ``note_too_long`` — ``note`` exceeds ``BATCH_NOTE_MAX_LENGTH``.
+    - ``activity_not_found`` — any id does not reference an existing row.
+    - ``activity_deleted`` — any activity has ``is_deleted = 1``.
+    - ``activity_hidden`` — any activity has ``is_hidden = 1``.
+    - ``activity_in_progress`` — any activity has ``end_time IS NULL``.
+    - ``note_update_failed`` — a rowcount guard tripped (race) or an
+      unexpected write failure.
+    """
+    # --- Validate activity_ids ---
+    if isinstance(activity_ids, bool) or not isinstance(activity_ids, list):
+        raise ValueError("invalid_activity_ids")
+    ids: list[int] = []
+    seen: set[int] = set()
+    for raw in activity_ids:
+        if isinstance(raw, bool):
+            raise ValueError("invalid_activity_ids")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError("invalid_activity_ids")
+        if value <= 0:
+            raise ValueError("invalid_activity_ids")
+        if value in seen:
+            continue
+        seen.add(value)
+        ids.append(value)
+    if len(ids) < 2:
+        raise ValueError("invalid_activity_ids")
+    if len(ids) > MAX_BATCH_NOTE_EDIT_ACTIVITIES:
+        raise ValueError("batch_too_large")
+
+    # --- Validate note ---
+    if not isinstance(note, str):
+        raise ValueError("invalid_note")
+    if len(note) > BATCH_NOTE_MAX_LENGTH:
+        raise ValueError("note_too_long")
+
+    ts = now_str()
+    placeholders = ",".join("?" for _ in ids)
+    with get_connection() as conn:
+        # --- Validate every activity: exists, not deleted, not hidden, closed ---
+        rows = conn.execute(
+            f"""
+            SELECT id, is_deleted, is_hidden, end_time
+            FROM activity_log
+            WHERE id IN ({placeholders})
+            """,
+            ids,
+        ).fetchall()
+        found_ids = set()
+        for row in rows:
+            found_ids.add(int(row["id"]))
+            if int(row["is_deleted"] or 0):
+                raise ValueError("activity_deleted")
+            if int(row["is_hidden"] or 0):
+                raise ValueError("activity_hidden")
+            if row["end_time"] is None:
+                raise ValueError("activity_in_progress")
+        # Any id not found in the DB is a missing activity.
+        for aid in ids:
+            if aid not in found_ids:
+                raise ValueError("activity_not_found")
+
+        # --- Atomic write: overwrite note + refresh updated_at ---
+        cur = conn.execute(
+            f"""
+            UPDATE activity_log
+            SET note = ?,
+                updated_at = ?
+            WHERE id IN ({placeholders})
+              AND is_deleted = 0
+              AND is_hidden = 0
+              AND end_time IS NOT NULL
+            """,
+            [note, ts, *ids],
+        )
+        if cur.rowcount != len(ids):
+            # Race condition: one or more rows were deleted / hidden /
+            # reopened between validation and write. Roll back (the
+            # context manager handles this on raise) and surface a stable
+            # error.
+            raise ValueError("note_update_failed")
+
+        return len(ids)
+
+
 def apply_midnight_anchor_assignment(activity_id: int, project_id: int) -> None:
     ts = now_str()
     with get_connection() as conn:

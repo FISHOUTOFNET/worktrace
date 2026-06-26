@@ -1483,6 +1483,17 @@ body {
     pointer-events: none;
 }
 
+/* Phase 3B.7: batch note overwrite section inside the correction shell.
+   This is the second batch write capability: only note overwrite on
+   multiple closed, non-hidden, non-deleted activities. The section
+   mirrors the batch project section and reuses the same selection. The
+   textarea reuses the existing .edit-note styling so it reads as part of
+   the shell. */
+.correction-shell-batch-note-text {
+    min-height: 60px;
+    resize: vertical;
+}
+
 @media (max-width: 900px) {
     .correction-shell-header {
         flex-direction: column;

@@ -127,6 +127,30 @@ class TimelineBatchProjectError(ValueError):
         self.code = code
 
 
+class TimelineBatchNoteError(ValueError):
+    """Raised by the Phase 3B.7 batch note overwrite methods for known,
+    user-facing failure modes.
+
+    Stable ``code`` values mapped by the WebView bridge to Chinese messages:
+
+    - ``invalid_selection`` — activity_ids is not a list, contains fewer
+      than 2 ids after dedup, or contains non-int / bool / non-positive
+      values; also used when an activity is missing or already deleted.
+    - ``batch_too_large`` — the deduplicated id count exceeds
+      ``MAX_BATCH_NOTE_EDIT_ACTIVITIES`` (100).
+    - ``invalid_note`` — note is not a ``str`` or is ``None``.
+    - ``note_too_long`` — note exceeds ``BATCH_NOTE_MAX_LENGTH`` (2000).
+    - ``in_progress`` — any activity is still open (``end_time IS NULL``).
+    - ``hidden_activity`` — any activity has ``is_hidden = 1``.
+    - ``operation_failed`` — race condition or unexpected service failure
+      (e.g. a row was deleted between validation and write).
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 # --- timeline / sessions -------------------------------------------------
 
 def get_default_report_date() -> str:
@@ -987,6 +1011,139 @@ def _validate_batch_project_id(project_id: int) -> int:
     return pid
 
 
+# --- Phase 3B.7: Timeline batch note editing foundation ---
+#
+# Phase 3B.7 implements the second batch write capability: batch note
+# overwrite only.
+#
+# - ``batch_update_timeline_activities_note`` overwrites the note on
+#   multiple closed, non-hidden, non-deleted activities with the same note
+#   value in a single atomic transaction.
+# - The write semantics are note-only: only ``activity_log.note`` and
+#   ``updated_at`` are updated. ``source`` is NOT modified (unlike the
+#   single ``update_activity_note`` path). ``start_time`` / ``end_time`` /
+#   ``duration_seconds`` / ``status`` / ``project_id`` / resource rows /
+#   assignment rows / session notes / ``is_hidden`` / ``is_deleted`` are
+#   not touched.
+# - Empty string is allowed and is used to batch-clear notes.
+# - At least 2 activities are required (after dedup); the max is
+#   ``MAX_BATCH_NOTE_EDIT_ACTIVITIES`` (100).
+# - In-progress, hidden, and deleted activities are rejected.
+# - No new DB schema is introduced.
+# - This phase does NOT implement batch hide, batch delete, batch time
+#   correction, batch split, batch merge, batch note append, batch note
+#   merge, undo / restore, permanent delete, auto-rule, or global overlap
+#   detection.
+
+
+def batch_update_timeline_activities_note(
+    activity_ids: list[int],
+    note: str,
+) -> dict:
+    """Validate and apply a batch note overwrite to multiple activities.
+
+    Validation:
+    - ``activity_ids`` must be a list of positive integers (``bool``
+      rejected); duplicate ids are deduplicated. After deduplication, at
+      least 2 ids must remain and the count must not exceed
+      ``MAX_BATCH_NOTE_EDIT_ACTIVITIES``.
+    - ``note`` must be a ``str`` (``None`` rejected). Empty string is
+      allowed (used to batch-clear notes). The length must not exceed
+      ``BATCH_NOTE_MAX_LENGTH``.
+    - Every activity must exist, be non-deleted, non-hidden, and closed
+      (``end_time IS NOT NULL``).
+
+    Returns ``{"updated_count": int}`` on success. Raises
+    ``TimelineBatchNoteError`` with a stable ``code`` for known failure
+    modes. The write is a single atomic transaction; no partial writes are
+    possible.
+    """
+    ids = _validate_batch_note_activity_ids(activity_ids)
+    text = _validate_batch_note(note)
+    try:
+        count = activity_service.batch_update_activity_note(ids, text)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "invalid_activity_ids":
+            raise TimelineBatchNoteError("invalid_selection")
+        if code == "batch_too_large":
+            raise TimelineBatchNoteError("batch_too_large")
+        if code == "invalid_note":
+            raise TimelineBatchNoteError("invalid_note")
+        if code == "note_too_long":
+            raise TimelineBatchNoteError("note_too_long")
+        if code == "activity_not_found":
+            raise TimelineBatchNoteError("invalid_selection")
+        if code == "activity_deleted":
+            raise TimelineBatchNoteError("invalid_selection")
+        if code == "activity_hidden":
+            raise TimelineBatchNoteError("hidden_activity")
+        if code == "activity_in_progress":
+            raise TimelineBatchNoteError("in_progress")
+        # ``note_update_failed`` or any unexpected ValueError collapses
+        # to ``operation_failed`` so the bridge returns a clear generic
+        # message without echoing internal details.
+        raise TimelineBatchNoteError("operation_failed")
+    except Exception:
+        # A non-ValueError service exception (e.g. ``sqlite3.OperationalError``,
+        # ``RuntimeError``) must also collapse to ``operation_failed`` so the
+        # bridge returns a clear generic message without echoing internal
+        # details or tracebacks.
+        raise TimelineBatchNoteError("operation_failed")
+    return {"updated_count": int(count)}
+
+
+def _validate_batch_note_activity_ids(activity_ids: list[int]) -> list[int]:
+    """Validate the ``activity_ids`` list for batch note editing.
+
+    Returns a deduplicated list of positive ints. Raises
+    ``TimelineBatchNoteError``:
+    - ``invalid_selection`` — not a list, empty, contains non-int / bool /
+      non-positive values, or fewer than 2 ids after dedup.
+    - ``batch_too_large`` — deduplicated count exceeds the max.
+    """
+    if isinstance(activity_ids, bool) or not isinstance(activity_ids, list):
+        raise TimelineBatchNoteError("invalid_selection")
+    if not activity_ids:
+        raise TimelineBatchNoteError("invalid_selection")
+    ids: list[int] = []
+    seen: set[int] = set()
+    for raw in activity_ids:
+        if isinstance(raw, bool):
+            raise TimelineBatchNoteError("invalid_selection")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            raise TimelineBatchNoteError("invalid_selection")
+        if value <= 0:
+            raise TimelineBatchNoteError("invalid_selection")
+        if value in seen:
+            continue
+        seen.add(value)
+        ids.append(value)
+    if len(ids) < 2:
+        raise TimelineBatchNoteError("invalid_selection")
+    if len(ids) > activity_service.MAX_BATCH_NOTE_EDIT_ACTIVITIES:
+        raise TimelineBatchNoteError("batch_too_large")
+    return ids
+
+
+def _validate_batch_note(note: str) -> str:
+    """Validate ``note`` for batch note editing.
+
+    Returns the validated string. Raises ``TimelineBatchNoteError``:
+    - ``invalid_note`` — not a ``str`` or is ``None``.
+    - ``note_too_long`` — length exceeds ``BATCH_NOTE_MAX_LENGTH``.
+
+    Empty string is allowed (used to batch-clear notes).
+    """
+    if not isinstance(note, str):
+        raise TimelineBatchNoteError("invalid_note")
+    if len(note) > activity_service.BATCH_NOTE_MAX_LENGTH:
+        raise TimelineBatchNoteError("note_too_long")
+    return note
+
+
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
     # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
     # not silently coerced to ``1``/``0``.
@@ -1203,11 +1360,13 @@ def is_snapshot_unconfirmed(snapshot: dict[str, Any] | None) -> bool:
 
 __all__ = [
     "TIMELINE_NOTE_MAX_LENGTH",
+    "TimelineBatchNoteError",
     "TimelineBatchProjectError",
     "TimelineTimeEditError",
     "TimelineSplitError",
     "TimelineMergeError",
     "TimelineVisibilityError",
+    "batch_update_timeline_activities_note",
     "batch_update_timeline_activities_project",
     "get_default_report_date",
     "get_project_sessions_by_date",

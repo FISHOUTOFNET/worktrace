@@ -113,6 +113,14 @@
     var selectedBatchActivityIds = {};
     var batchProjectSaving = false;
     var batchProjectTargetId = null;
+    // Phase 3B.7: batch note overwrite state. This is the second batch
+    // write capability: only note overwrite on multiple closed, non-hidden,
+    // non-deleted activities in the current shell session. It reuses the
+    // same selectedBatchActivityIds selection as batch project so the user
+    // picks activities once and chooses either "set project" or "overwrite
+    // note". The note text lives in memory only (never persisted to browser
+    // storage). Empty string is a valid value and clears the notes.
+    var batchNoteSaving = false;
 
     // --- Bridge helper --------------------------------------------------
 
@@ -1582,6 +1590,9 @@
         // session. The reset also clears the project select / status so the
         // panel returns to a clean baseline.
         resetBatchProjectState();
+        // Phase 3B.7: reset batch note state too so a stale note textarea /
+        // saving flag does not leak into the next session.
+        resetBatchNoteState();
         // Phase 3B.5B: reset the correction shell state too so a stale
         // shell does not leak into the next session.
         resetCorrectionShellState();
@@ -1775,6 +1786,9 @@
         // does not carry over to the next shell open. selectedSessionId is
         // intentionally NOT cleared here (preserved by closeCorrectionShell).
         resetBatchProjectState();
+        // Phase 3B.7: clear the batch note textarea / saving flag too so a
+        // stale note does not carry over to the next shell open.
+        resetBatchNoteState();
         var shell = document.getElementById("timeline-correction-shell");
         if (shell) shell.hidden = true;
         var detailsCol = document.querySelector(".timeline-details");
@@ -1950,6 +1964,11 @@
         // project list (projectsCache) so no extra bridge call is needed
         // after the first load.
         renderBatchProjectSection(session, activities);
+        // --- Phase 3B.7: batch note overwrite section ---
+        // Rendered alongside the batch project section and reuses the same
+        // selectedBatchActivityIds selection. The user picks activities once
+        // and can choose either "set project" or "overwrite note".
+        renderBatchNoteSection(session, activities);
     }
 
     // Scroll to and briefly highlight a detail row so the user can locate
@@ -2130,7 +2149,7 @@
     }
 
     function toggleBatchActivity(activityId, checked) {
-        if (batchProjectSaving) return;
+        if (batchProjectSaving || batchNoteSaving) return;
         if (!activityId) return;
         var key = String(activityId);
         if (checked) {
@@ -2140,10 +2159,11 @@
         }
         updateBatchSelectionCount();
         updateBatchSaveButtonState();
+        updateBatchNoteSaveButtonState();
     }
 
     function selectAllBatchActivities() {
-        if (batchProjectSaving) return;
+        if (batchProjectSaving || batchNoteSaving) return;
         var rows = document.querySelectorAll(
             "#correction-shell-activities .correction-shell-activity-checkbox[data-batch-activity-id]:not([disabled])"
         );
@@ -2156,10 +2176,11 @@
         }
         updateBatchSelectionCount();
         updateBatchSaveButtonState();
+        updateBatchNoteSaveButtonState();
     }
 
     function clearBatchSelection() {
-        if (batchProjectSaving) return;
+        if (batchProjectSaving || batchNoteSaving) return;
         selectedBatchActivityIds = {};
         var rows = document.querySelectorAll(
             "#correction-shell-activities .correction-shell-activity-checkbox[data-batch-activity-id]"
@@ -2169,6 +2190,7 @@
         }
         updateBatchSelectionCount();
         updateBatchSaveButtonState();
+        updateBatchNoteSaveButtonState();
     }
 
     function updateBatchSelectionCount() {
@@ -2214,9 +2236,15 @@
                 checkboxes[i].disabled = saving;
             }
         }
+        // Phase 3B.7: also disable the batch note textarea / save button so
+        // the user cannot start a competing note save while a project save
+        // is in flight.
+        var noteText = document.getElementById("correction-shell-batch-note-text");
+        if (noteText) noteText.disabled = saving || batchNoteSaving;
         if (!saving) {
             // Re-apply the project/count-based gating after save ends.
             updateBatchSaveButtonState();
+            updateBatchNoteSaveButtonState();
         }
     }
 
@@ -2423,6 +2451,258 @@
                 batchProjectTargetId = select.value ? parseInt(select.value, 10) : null;
                 updateBatchSaveButtonState();
             });
+        }
+    }
+
+    // ====================================================================
+    // Phase 3B.7: Timeline batch note editing foundation
+    // ====================================================================
+    //
+    // This is the second batch write capability in the WebView Timeline. It
+    // overwrites the note on multiple closed, non-hidden, non-deleted
+    // activities with the same note value in a single atomic transaction
+    // (the bridge -> API -> service path uses a rowcount guard + rollback
+    // so no partial write is ever persisted).
+    //
+    // Scope boundaries (enforced by the backend, mirrored here):
+    // - Only note overwrite. No batch note append / merge, no batch hide /
+    //   delete / time / split / merge / undo / restore / permanent delete /
+    //   auto-rule / overlap.
+    // - Only closed activities (end_time IS NOT NULL). In-progress rows
+    //   render a disabled checkbox.
+    // - Only activities in the current shell session. Stale ids that
+    //   disappear after a refresh are pruned automatically.
+    // - Empty note is allowed and is used to batch-clear notes.
+    // - Only activity_log.note and updated_at are modified (source is not
+    //   changed, unlike single-activity note editing).
+    // - No browser storage. Note text lives in memory only.
+    // - Reuses selectedBatchActivityIds from the batch project section so
+    //   the user selects activities once and picks the write action.
+
+    function resetBatchNoteState() {
+        batchNoteSaving = false;
+        var noteText = document.getElementById("correction-shell-batch-note-text");
+        if (noteText) {
+            noteText.value = "";
+            noteText.disabled = true;
+        }
+        var saveBtn = document.getElementById("correction-shell-batch-note-save-btn");
+        if (saveBtn) saveBtn.disabled = true;
+        var countEl = document.getElementById("correction-shell-batch-note-count");
+        if (countEl) {
+            countEl.textContent = "0 / " + NOTE_MAX_LENGTH;
+            countEl.classList.remove("edit-note-count-over");
+        }
+        showBatchNoteStatus("", false);
+    }
+
+    function updateBatchNoteCount() {
+        var noteEl = document.getElementById("correction-shell-batch-note-text");
+        var countEl = document.getElementById("correction-shell-batch-note-count");
+        if (!noteEl || !countEl) return;
+        var len = (noteEl.value || "").length;
+        countEl.textContent = len + " / " + NOTE_MAX_LENGTH;
+        if (len > NOTE_MAX_LENGTH) {
+            countEl.classList.add("edit-note-count-over");
+        } else {
+            countEl.classList.remove("edit-note-count-over");
+        }
+        // Re-apply the save button gating so the user gets immediate
+        // feedback when the note exceeds the limit.
+        if (!batchNoteSaving) {
+            updateBatchNoteSaveButtonState();
+        }
+    }
+
+    function updateBatchNoteSaveButtonState() {
+        var saveBtn = document.getElementById("correction-shell-batch-note-save-btn");
+        if (!saveBtn) return;
+        var count = Object.keys(selectedBatchActivityIds).length;
+        var noteEl = document.getElementById("correction-shell-batch-note-text");
+        var overLimit = false;
+        if (noteEl) {
+            overLimit = (noteEl.value || "").length > NOTE_MAX_LENGTH;
+        }
+        saveBtn.disabled = batchNoteSaving || batchProjectSaving || count < 2 || overLimit;
+    }
+
+    function setBatchNoteSaving(saving) {
+        batchNoteSaving = saving;
+        var saveBtn = document.getElementById("correction-shell-batch-note-save-btn");
+        var noteText = document.getElementById("correction-shell-batch-note-text");
+        if (saveBtn) {
+            saveBtn.disabled = saving;
+            saveBtn.textContent = saving ? "保存中…" : "批量覆盖备注";
+        }
+        if (noteText) noteText.disabled = saving || batchProjectSaving;
+        // Disable / re-enable every batch checkbox so the user cannot
+        // change selection while a note save is in flight.
+        var checkboxes = document.querySelectorAll(
+            "#correction-shell-activities .correction-shell-activity-checkbox[data-batch-activity-id]"
+        );
+        for (var i = 0; i < checkboxes.length; i++) {
+            var eligible = checkboxes[i].hasAttribute("data-batch-activity-id");
+            if (eligible) {
+                checkboxes[i].disabled = saving || batchProjectSaving;
+            }
+        }
+        // Also keep the batch project controls in sync so the user cannot
+        // start a competing project save while a note save is in flight.
+        var projectSaveBtn = document.getElementById("correction-shell-batch-save-btn");
+        var selectAllBtn = document.getElementById("correction-shell-batch-select-all-btn");
+        var clearBtn = document.getElementById("correction-shell-batch-clear-btn");
+        var projectSelect = document.getElementById("correction-shell-batch-project-select");
+        if (projectSaveBtn) projectSaveBtn.disabled = saving || batchProjectSaving;
+        if (selectAllBtn) selectAllBtn.disabled = saving || batchProjectSaving;
+        if (clearBtn) clearBtn.disabled = saving || batchProjectSaving;
+        if (projectSelect) projectSelect.disabled = saving || batchProjectSaving;
+        if (!saving) {
+            updateBatchNoteSaveButtonState();
+            updateBatchSaveButtonState();
+        }
+    }
+
+    function showBatchNoteStatus(message, isError) {
+        var statusEl = document.getElementById("correction-shell-batch-note-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "edit-status " + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    // Render the batch note section. The section is always present in the
+    // HTML; this function enables the textarea and refreshes the count /
+    // save button state. The section is shown whenever the shell is open
+    // and reuses the same selectedBatchActivityIds selection.
+    function renderBatchNoteSection(session, activities) {
+        var section = document.getElementById("correction-shell-batch-note-section");
+        if (!section) return;
+        section.hidden = false;
+        // The textarea is enabled when the shell is open and no save is in
+        // flight. pruneStaleBatchSelection (called by renderBatchProjectSection)
+        // already keeps the selection in sync with the rendered activities.
+        var noteText = document.getElementById("correction-shell-batch-note-text");
+        if (noteText) {
+            noteText.disabled = batchNoteSaving || batchProjectSaving;
+        }
+        updateBatchNoteCount();
+        updateBatchNoteSaveButtonState();
+        showBatchNoteStatus("", false);
+    }
+
+    function saveBatchNote() {
+        if (batchNoteSaving) return;
+        // Block the batch save while there are unsaved per-session edits so
+        // the two write paths never race on the same session.
+        if (isEditDirty()) {
+            showBatchNoteStatus("请先保存或取消当前编辑", true);
+            return;
+        }
+        if (batchProjectSaving) {
+            showBatchNoteStatus("操作失败", true);
+            return;
+        }
+        var selectedIds = Object.keys(selectedBatchActivityIds);
+        if (selectedIds.length < 2) {
+            showBatchNoteStatus("请选择至少两个活动", true);
+            return;
+        }
+        var noteEl = document.getElementById("correction-shell-batch-note-text");
+        if (!noteEl) {
+            showBatchNoteStatus("操作失败", true);
+            return;
+        }
+        var note = noteEl.value || "";
+        if (typeof note !== "string") {
+            showBatchNoteStatus("请输入有效备注", true);
+            return;
+        }
+        if (note.length > NOTE_MAX_LENGTH) {
+            showBatchNoteStatus("备注过长", true);
+            return;
+        }
+        // Re-check every selected id is still present in the currently
+        // rendered shell activity rows. Stale ids (e.g. an auto-refresh
+        // removed a row between the user checking the box and clicking
+        // save) are dropped silently; if fewer than 2 remain we abort with
+        // a clear message instead of calling the bridge.
+        var renderedIds = {};
+        var rows = document.querySelectorAll(
+            "#correction-shell-activities .correction-shell-activity-checkbox[data-batch-activity-id]:not([disabled])"
+        );
+        for (var i = 0; i < rows.length; i++) {
+            var aid = rows[i].getAttribute("data-batch-activity-id");
+            if (aid) renderedIds[aid] = true;
+        }
+        var cleanIds = [];
+        for (var j = 0; j < selectedIds.length; j++) {
+            if (renderedIds[selectedIds[j]]) {
+                cleanIds.push(parseInt(selectedIds[j], 10));
+            }
+        }
+        if (cleanIds.length < 2) {
+            // Update the in-memory selection to match the rendered rows so
+            // the count display stays accurate, then abort.
+            selectedBatchActivityIds = {};
+            for (var k in renderedIds) {
+                if (renderedIds.hasOwnProperty(k)) selectedBatchActivityIds[k] = true;
+            }
+            updateBatchSelectionCount();
+            updateBatchNoteSaveButtonState();
+            showBatchNoteStatus("所选活动已失效，请重新选择", true);
+            return;
+        }
+        setBatchNoteSaving(true);
+        showBatchNoteStatus("", false);
+        callBridge("batch_update_timeline_activities_note", cleanIds, note).then(function (result) {
+            setBatchNoteSaving(false);
+            if (!result || result.ok === false) {
+                // Keep the selection / detail list / note textarea so the
+                // user can retry. The bridge returns a stable Chinese error
+                // message; we surface it verbatim without echoing internal
+                // error detail.
+                var msg = (result && result.error) ? result.error : "操作失败";
+                showBatchNoteStatus(msg, true);
+                return;
+            }
+            // Success: clear selection, clear the note textarea, refresh
+            // Timeline, keep the shell context if the session is still
+            // present.
+            var updatedCount = result.updated_count || cleanIds.length;
+            showBatchNoteStatus("已批量更新备注（共 " + updatedCount + " 条）", false);
+            selectedBatchActivityIds = {};
+            if (noteEl) noteEl.value = "";
+            updateBatchSelectionCount();
+            updateBatchNoteCount();
+            updateBatchNoteSaveButtonState();
+            updateBatchSaveButtonState();
+            // Refresh the Timeline so the new note is reflected in the
+            // sessions list and the detail list. The shell will re-render
+            // from the refreshed data if the session is still present; if
+            // the session disappeared (e.g. it was re-grouped), the
+            // auto-refresh / disappear path will close the shell safely.
+            refreshTimelineForBatchSave();
+        }).catch(function () {
+            setBatchNoteSaving(false);
+            showBatchNoteStatus("操作失败", true);
+        });
+    }
+
+    // Bind the batch note section controls. Called once during init.
+    function bindBatchNoteControls() {
+        var saveBtn = document.getElementById("correction-shell-batch-note-save-btn");
+        if (saveBtn) {
+            saveBtn.addEventListener("click", saveBatchNote);
+        }
+        var noteText = document.getElementById("correction-shell-batch-note-text");
+        if (noteText) {
+            noteText.addEventListener("input", updateBatchNoteCount);
         }
     }
 
@@ -3224,6 +3504,11 @@
         // batch_update_timeline_activities_project method; the select-all /
         // clear buttons only manipulate in-memory selection state.
         bindBatchProjectControls();
+        // Phase 3B.7: batch note overwrite controls inside the correction
+        // shell. The save button calls the bridge's
+        // batch_update_timeline_activities_note method; the textarea input
+        // updates the count / save button state in-memory only.
+        bindBatchNoteControls();
     }
 
     function startAutoRefresh() {

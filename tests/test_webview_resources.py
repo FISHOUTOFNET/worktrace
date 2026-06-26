@@ -4229,3 +4229,427 @@ def test_styles_css_has_batch_disabled_states():
     assert ".correction-shell-batch-save-btn" in source, (
         "styles.css must define .correction-shell-batch-save-btn"
     )
+
+
+# --- Phase 3B.7: Timeline batch note editing foundation -----------------
+#
+# Phase 3B.7 adds the second batch write capability: batch note overwrite
+# on multiple closed activities in the correction shell. It reuses the same
+# selectedBatchActivityIds selection as batch project so the user picks
+# activities once and chooses either "set project" or "overwrite note".
+# The service layer uses a single atomic transaction with a rowcount guard;
+# the API maps service errors to stable TimelineBatchNoteError codes; the
+# bridge maps those to Chinese messages. Only activity_log.note and
+# updated_at are modified (source is intentionally NOT changed). Empty
+# string is allowed and clears notes. No new DB schema, no batch note
+# append / merge, no batch hide / delete / time / split / merge, no
+# restore / permanent delete / auto-rule / overlap detection.
+
+
+def test_app_js_has_batch_note_saving_state():
+    """Phase 3B.7: app.js must declare the batchNoteSaving state variable."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "batchNoteSaving" in source, (
+        "app.js must declare the batchNoteSaving state variable"
+    )
+
+
+def test_app_js_has_batch_note_save_helper():
+    """Phase 3B.7: app.js must define the saveBatchNote function and
+    related helpers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function saveBatchNote" in source, (
+        "app.js must define the saveBatchNote function"
+    )
+    assert "function resetBatchNoteState" in source, (
+        "app.js must define the resetBatchNoteState function"
+    )
+    assert "function renderBatchNoteSection" in source, (
+        "app.js must define the renderBatchNoteSection function"
+    )
+    assert "function setBatchNoteSaving" in source, (
+        "app.js must define the setBatchNoteSaving function"
+    )
+    assert "function updateBatchNoteCount" in source, (
+        "app.js must define the updateBatchNoteCount function"
+    )
+    assert "function updateBatchNoteSaveButtonState" in source, (
+        "app.js must define the updateBatchNoteSaveButtonState function"
+    )
+    assert "function showBatchNoteStatus" in source, (
+        "app.js must define the showBatchNoteStatus function"
+    )
+    assert "function bindBatchNoteControls" in source, (
+        "app.js must define the bindBatchNoteControls function"
+    )
+
+
+def test_app_js_calls_batch_note_update_bridge():
+    """Phase 3B.7: app.js must call the batch_update_timeline_activities_note
+    bridge method."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "batch_update_timeline_activities_note" in source, (
+        "app.js must call the batch_update_timeline_activities_note bridge method"
+    )
+
+
+def test_index_html_has_batch_note_section():
+    """Phase 3B.7: index.html must contain the batch note section in the
+    correction shell."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "批量备注覆盖" in source, (
+        "index.html must contain the 批量备注覆盖 section title"
+    )
+    assert 'id="correction-shell-batch-note-section"' in source, (
+        "index.html must contain the batch note section container"
+    )
+    assert 'id="correction-shell-batch-note-text"' in source, (
+        "index.html must contain the batch note textarea"
+    )
+    assert 'id="correction-shell-batch-note-save-btn"' in source, (
+        "index.html must contain the batch note save button"
+    )
+    assert 'id="correction-shell-batch-note-count"' in source, (
+        "index.html must contain the batch note count display"
+    )
+    assert 'id="correction-shell-batch-note-status"' in source, (
+        "index.html must contain the batch note status display"
+    )
+
+
+def test_index_html_batch_note_hint_only_overwrite():
+    """Phase 3B.7: the batch note hint must state that only overwrite is
+    supported (no append / merge)."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "覆盖" in source, (
+        "batch note hint must mention overwrite (覆盖)"
+    )
+    assert "追加" in source or "合并" in source, (
+        "batch note hint must mention unsupported append/merge operations"
+    )
+
+
+def test_index_html_batch_note_textarea_placeholder():
+    """Phase 3B.7: the batch note textarea must have a placeholder."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "placeholder" in source, (
+        "batch note textarea must have a placeholder attribute"
+    )
+
+
+def test_index_html_no_batch_note_append_merge_controls():
+    """Phase 3B.7: index.html must not contain append / merge note mode
+    controls."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in (
+        "batch-note-append", "batch-note-merge",
+        "batchnoteappend", "batchnotemerge",
+        "append-mode", "merge-mode",
+    ):
+        assert forbidden not in lowered, (
+            "index.html must not contain a '" + forbidden + "' control"
+        )
+
+
+def test_index_html_no_batch_hide_delete_time_split_merge_controls_3b7():
+    """Phase 3B.7: index.html must not contain batch hide / delete / time /
+    split / merge control identifiers (re-asserted for Phase 3B.7)."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in (
+        "batch-hide", "batch-delete", "batch-time",
+        "batch-split", "batch-merge",
+        "batchhide", "batchdelete", "batchtime",
+        "batchsplit", "batchmerge",
+    ):
+        assert forbidden not in lowered, (
+            "index.html must not contain a '" + forbidden + "' control"
+        )
+
+
+def test_app_js_batch_note_save_disabled_for_fewer_than_two():
+    """Phase 3B.7: the batch note save button must be disabled when fewer
+    than two activities are selected."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function updateBatchNoteSaveButtonState")
+    assert save_start != -1
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "count < 2" in save_body, (
+        "updateBatchNoteSaveButtonState must check count < 2"
+    )
+
+
+def test_app_js_batch_note_save_blocked_by_dirty_edit():
+    """Phase 3B.7: saveBatchNote must block when isEditDirty() is true."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    assert save_start != -1
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "isEditDirty()" in save_body, (
+        "saveBatchNote must call isEditDirty() and block on dirty edits"
+    )
+    assert "请先保存或取消当前编辑" in save_body, (
+        "saveBatchNote must show the dirty-edit blocking message"
+    )
+
+
+def test_app_js_batch_note_success_refreshes_timeline():
+    """Phase 3B.7: a successful batch note save must refresh the Timeline."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "refreshTimelineForBatchSave" in save_body or "loadTimeline" in save_body, (
+        "saveBatchNote must call refresh/load on success"
+    )
+
+
+def test_app_js_batch_note_failure_preserves_selection():
+    """Phase 3B.7: a failed batch note save must preserve the selection,
+    detail list, and note textarea so the user can retry."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    # The error path must NOT call clearBatchSelection or resetBatchNoteState.
+    assert "clearBatchSelection" not in save_body or save_body.count("clearBatchSelection") == 0, (
+        "saveBatchNote failure must not clear the selection"
+    )
+
+
+def test_app_js_batch_note_catch_resets_saving():
+    """Phase 3B.7: the .catch path in saveBatchNote must reset saving."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    catch_start = save_body.find(".catch(")
+    assert catch_start != -1, (
+        "saveBatchNote must have a .catch handler"
+    )
+    catch_body = save_body[catch_start:]
+    assert "setBatchNoteSaving(false)" in catch_body, (
+        "saveBatchNote .catch must call setBatchNoteSaving(false)"
+    )
+
+
+def test_app_js_clear_edit_panel_resets_batch_note_state():
+    """Phase 3B.7: clearEditPanel must call resetBatchNoteState."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    clear_start = source.find("function clearEditPanel")
+    clear_end = source.find("\n    function ", clear_start + 1)
+    clear_body = source[clear_start:clear_end]
+    assert "resetBatchNoteState" in clear_body, (
+        "clearEditPanel must call resetBatchNoteState"
+    )
+
+
+def test_app_js_reset_correction_shell_resets_batch_note_state():
+    """Phase 3B.7: resetCorrectionShellState must call
+    resetBatchNoteState."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    reset_start = source.find("function resetCorrectionShellState")
+    reset_end = source.find("\n    function ", reset_start + 1)
+    reset_body = source[reset_start:reset_end]
+    assert "resetBatchNoteState" in reset_body, (
+        "resetCorrectionShellState must call resetBatchNoteState"
+    )
+
+
+def test_app_js_batch_note_rechecks_stale_ids():
+    """Phase 3B.7: saveBatchNote must re-check selected ids against the
+    currently rendered shell activity rows before calling the bridge."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "renderedIds" in save_body or "querySelectorAll" in save_body, (
+        "saveBatchNote must re-check selected ids against rendered rows"
+    )
+    assert "cleanIds" in save_body, (
+        "saveBatchNote must build a cleanIds list from rendered rows"
+    )
+
+
+def test_app_js_batch_note_empty_allowed():
+    """Phase 3B.7: the batch note save must allow empty string (to clear
+    notes). The save function must not reject an empty note."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    # The save function must NOT block on empty note (only on too-long).
+    # It must use note.length > NOTE_MAX_LENGTH, not !note or note.length === 0.
+    assert "NOTE_MAX_LENGTH" in save_body, (
+        "saveBatchNote must reference NOTE_MAX_LENGTH"
+    )
+
+
+def test_app_js_batch_note_saving_disables_controls():
+    """Phase 3B.7: setBatchNoteSaving must disable the textarea, save
+    button, and checkboxes during save."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function setBatchNoteSaving")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "correction-shell-batch-note-save-btn" in save_body, (
+        "setBatchNoteSaving must toggle the note save button"
+    )
+    assert "correction-shell-batch-note-text" in save_body, (
+        "setBatchNoteSaving must toggle the note textarea"
+    )
+    assert "checkbox" in save_body.lower(), (
+        "setBatchNoteSaving must toggle checkboxes"
+    )
+
+
+def test_app_js_batch_note_count_uses_max_length():
+    """Phase 3B.7: updateBatchNoteCount must use NOTE_MAX_LENGTH."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    count_start = source.find("function updateBatchNoteCount")
+    count_end = source.find("\n    function ", count_start + 1)
+    count_body = source[count_start:count_end]
+    assert "NOTE_MAX_LENGTH" in count_body, (
+        "updateBatchNoteCount must use NOTE_MAX_LENGTH"
+    )
+
+
+def test_app_js_batch_note_bind_controls_called_in_init():
+    """Phase 3B.7: bindBatchNoteControls must be called during init."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The bind call should be in the initButtons function (where other
+    # bind calls live).
+    buttons_start = source.find("function initButtons")
+    buttons_end = source.find("\n    function ", buttons_start + 1)
+    buttons_body = source[buttons_start:buttons_end]
+    assert "bindBatchNoteControls" in buttons_body, (
+        "bindBatchNoteControls must be called during initButtons"
+    )
+
+
+def test_app_js_batch_note_no_local_storage():
+    """Phase 3B.7: the batch note code must not use browser storage
+    (re-asserted for the whole app.js)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert not re.search(r"localStorage|sessionStorage", source), (
+        "app.js must not use localStorage or sessionStorage"
+    )
+
+
+def test_app_js_batch_note_no_external_links():
+    """Phase 3B.7: the batch note code must not introduce external links
+    (re-asserted for all frontend resources)."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{filename} must not contain http:// or https:// links"
+        )
+
+
+def test_app_js_batch_note_no_traceback_display():
+    """Phase 3B.7: the batch note code must not display tracebacks
+    (re-asserted for the whole app.js)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "traceback" not in source.lower(), (
+        "app.js must not contain traceback display logic"
+    )
+
+
+def test_app_js_batch_note_no_restore_permanent_auto_rule_overlap():
+    """Phase 3B.7: the batch note code must not introduce restore,
+    permanent delete, auto-rule, or overlap handlers (re-asserted)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("restoreActivity", "restoreSession",
+                      "permanentDelete", "autoRule", "auto_rule",
+                      "overlapDetection", "globalOverlap"):
+        assert forbidden not in source, (
+            "app.js must not contain " + forbidden + " handler"
+        )
+
+
+def test_styles_css_has_batch_note_section_styles():
+    """Phase 3B.7: styles.css must define the batch note section styles."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell-batch-note-text" in source, (
+        "styles.css must define .correction-shell-batch-note-text"
+    )
+
+
+def test_bridge_has_batch_note_update_method():
+    """Phase 3B.7: the bridge must define the
+    batch_update_timeline_activities_note method."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    assert "def batch_update_timeline_activities_note" in bridge_src, (
+        "bridge must define batch_update_timeline_activities_note"
+    )
+
+
+def test_bridge_batch_note_error_messages_dict():
+    """Phase 3B.7: the bridge must define the _BATCH_NOTE_ERROR_MESSAGES
+    dict with all stable error code -> Chinese message mappings."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    assert "_BATCH_NOTE_ERROR_MESSAGES" in bridge_src, (
+        "bridge must define _BATCH_NOTE_ERROR_MESSAGES"
+    )
+    for code in ("invalid_selection", "batch_too_large", "invalid_note",
+                 "note_too_long", "in_progress", "hidden_activity",
+                 "operation_failed"):
+        assert code in bridge_src, (
+            "bridge must map the '" + code + "' error code"
+        )
+    for msg in ("请选择至少两个活动", "一次最多修改 100 条活动",
+                "请输入有效备注", "备注过长",
+                "进行中记录暂不支持批量修改",
+                "隐藏记录暂不支持批量修改", "操作失败"):
+        assert msg in bridge_src, (
+            "bridge must contain the Chinese message: " + msg
+        )
+
+
+def test_api_has_batch_note_update_function():
+    """Phase 3B.7: the API must define the
+    batch_update_timeline_activities_note function and
+    TimelineBatchNoteError class."""
+    api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class TimelineBatchNoteError" in api_src, (
+        "timeline_api must define TimelineBatchNoteError"
+    )
+    assert "def batch_update_timeline_activities_note" in api_src, (
+        "timeline_api must define batch_update_timeline_activities_note"
+    )
+
+
+def test_service_has_batch_note_update_function():
+    """Phase 3B.7: the service must define the
+    batch_update_activity_note function and the
+    MAX_BATCH_NOTE_EDIT_ACTIVITIES / BATCH_NOTE_MAX_LENGTH constants."""
+    service_src = (REPO_ROOT / "worktrace" / "services" / "activity_service.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def batch_update_activity_note" in service_src, (
+        "activity_service must define batch_update_activity_note"
+    )
+    assert "MAX_BATCH_NOTE_EDIT_ACTIVITIES" in service_src, (
+        "activity_service must define MAX_BATCH_NOTE_EDIT_ACTIVITIES"
+    )
+    assert "BATCH_NOTE_MAX_LENGTH" in service_src, (
+        "activity_service must define BATCH_NOTE_MAX_LENGTH"
+    )
+
+
+def test_app_js_batch_note_render_called_from_render_correction_shell():
+    """Phase 3B.7: renderBatchNoteSection must be called from
+    renderCorrectionShell so the section is always populated when the shell
+    opens."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderCorrectionShell")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    assert "renderBatchNoteSection" in render_body, (
+        "renderCorrectionShell must call renderBatchNoteSection"
+    )

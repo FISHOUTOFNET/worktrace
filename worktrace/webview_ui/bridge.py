@@ -89,6 +89,20 @@ partial write is ever persisted. Errors are mapped from stable
 ``TimelineBatchProjectError`` codes to Chinese messages without echoing
 tracebacks, SQL, window titles, file paths, notes, or internal exception
 details.
+
+Phase 3B.7 adds the second batch write capability:
+``batch_update_timeline_activities_note`` overwrites the note on multiple
+closed, non-hidden, non-deleted activities with the same note value in a
+single atomic transaction. It is the production write path for batch note
+overwrite only; batch note append / merge, batch hide / delete / time
+correction / split / merge are NOT supported. Only ``activity_log.note``
+and ``updated_at`` are modified (``source`` is intentionally not changed).
+Empty string is allowed and is used to batch-clear notes. In-progress,
+hidden, and deleted activities are rejected. The service layer uses a
+rowcount guard and rollback so no partial write is ever persisted. Errors
+are mapped from stable ``TimelineBatchNoteError`` codes to Chinese
+messages without echoing tracebacks, SQL, window titles, file paths,
+notes, or internal exception details.
 """
 
 from __future__ import annotations
@@ -99,6 +113,7 @@ from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
 from ..api.timeline_api import (
+    TimelineBatchNoteError,
     TimelineBatchProjectError,
     TimelineMergeError,
     TimelineSplitError,
@@ -182,6 +197,19 @@ _BATCH_PROJECT_ERROR_MESSAGES = {
     "invalid_selection": "请选择至少两个活动",
     "batch_too_large": "一次最多修改 100 条活动",
     "invalid_project": "请选择有效的项目",
+    "in_progress": "进行中记录暂不支持批量修改",
+    "hidden_activity": "隐藏记录暂不支持批量修改",
+    "operation_failed": "操作失败",
+}
+
+# Maps ``TimelineBatchNoteError.code`` to stable Chinese user-facing
+# messages for the Phase 3B.7 batch note overwrite. Unknown codes collapse
+# to the generic "操作失败" so internal details are never surfaced.
+_BATCH_NOTE_ERROR_MESSAGES = {
+    "invalid_selection": "请选择至少两个活动",
+    "batch_too_large": "一次最多修改 100 条活动",
+    "invalid_note": "请输入有效备注",
+    "note_too_long": "备注过长",
     "in_progress": "进行中记录暂不支持批量修改",
     "hidden_activity": "隐藏记录暂不支持批量修改",
     "operation_failed": "操作失败",
@@ -873,6 +901,42 @@ class WebViewBridge:
             return {"ok": False, "error": "操作失败"}
         except Exception:
             logger.exception("webview bridge batch_update_timeline_activities_project failed")
+            return dict(_GENERIC_ERROR)
+
+    def batch_update_timeline_activities_note(self, activity_ids, note) -> dict[str, Any]:
+        """Phase 3B.7: batch overwrite the note on multiple closed activities.
+
+        ``activity_ids`` must be a list of at least two positive ints after
+        deduplication (``bool`` rejected). ``note`` must be a ``str``
+        (``None`` rejected); empty string is allowed and is used to
+        batch-clear notes. The API/service layer performs all deeper
+        validation (every activity exists / not deleted / not hidden /
+        closed).
+
+        Returns ``{"ok": true, "updated_count": n}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure. Errors are
+        mapped from stable ``TimelineBatchNoteError`` codes so tracebacks,
+        SQL, window titles, file paths, notes, and internal exception details
+        are never surfaced to JS.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "请选择至少两个活动"}
+            if len(ids) < 2:
+                return {"ok": False, "error": "请选择至少两个活动"}
+            if not isinstance(note, str):
+                return {"ok": False, "error": "请输入有效备注"}
+            if len(note) > timeline_api.TIMELINE_NOTE_MAX_LENGTH:
+                return {"ok": False, "error": "备注过长"}
+            result = timeline_api.batch_update_timeline_activities_note(ids, note)
+            return {"ok": True, "updated_count": int(result.get("updated_count", 0))}
+        except TimelineBatchNoteError as exc:
+            return {"ok": False, "error": _BATCH_NOTE_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge batch_update_timeline_activities_note failed")
             return dict(_GENERIC_ERROR)
 
 

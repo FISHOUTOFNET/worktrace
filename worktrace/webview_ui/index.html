@@ -203,6 +203,23 @@
                                 </div>
                                 <div id="correction-shell-batch-status" class="edit-status" hidden></div>
                             </div>
+                            <div class="correction-shell-batch-section" id="correction-shell-batch-note-section">
+                                <div class="edit-section-label">批量备注覆盖</div>
+                                <div class="edit-time-hint correction-shell-batch-hint">
+                                    仅支持将所选活动的备注覆盖为同一内容；暂不支持追加、合并或保留旧备注。
+                                </div>
+                                <div class="edit-field">
+                                    <label for="correction-shell-batch-note-text" class="edit-label">备注内容</label>
+                                    <textarea id="correction-shell-batch-note-text" class="edit-note correction-shell-batch-note-text" rows="3" placeholder="输入要覆盖到所选活动的备注（留空将清空所选活动备注）" disabled></textarea>
+                                    <div class="edit-note-meta">
+                                        <span id="correction-shell-batch-note-count" class="edit-note-count">0 / 2000</span>
+                                    </div>
+                                </div>
+                                <div class="edit-time-actions">
+                                    <button id="correction-shell-batch-note-save-btn" class="edit-btn correction-shell-batch-save-btn" type="button" disabled>批量覆盖备注</button>
+                                </div>
+                                <div id="correction-shell-batch-note-status" class="edit-status" hidden></div>
+                            </div>
                         </div>
                     </div>
                 </div>

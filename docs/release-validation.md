@@ -2264,3 +2264,124 @@ saving-state / selected-session-disappear paths.
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
   server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 3B.7 Validation
+
+Phase 3B.7 implements the **second batch write capability** in the WebView
+Timeline: **batch note overwrite**. Multiple closed activities selected in
+the Phase 3B.5B correction shell can have their `note` field overwritten to
+the same value through an atomic transaction. It is the **only** batch
+write capability introduced in this phase — it is **not** a general batch
+editing phase. Batch note append and batch note merge are explicitly out of
+scope. Hidden / in-progress / deleted activities are rejected. No new DB
+schema is introduced; the write reuses the existing `activity_log.note`
+and `activity_log.updated_at` columns only. Only `note` and `updated_at`
+are modified — `source` is intentionally not changed (unlike the single
+`update_activity_note`).
+
+### Phase 3B.7 Scope
+
+- Service (`worktrace/services/activity_service.py`):
+  `batch_update_activity_note(activity_ids, note) -> int`. Input validation:
+  `activity_ids` must be a list; dedup to ≥ 2 ids; each id a positive int
+  (bool rejected); count ≤ `MAX_BATCH_NOTE_EDIT_ACTIVITIES` (= 100).
+  `note` must be a `str` (not `None`); length ≤ `BATCH_NOTE_MAX_LENGTH`
+  (= 2000); empty string is allowed and is used to batch-clear notes. Each
+  activity must exist, have `is_deleted = 0`, `is_hidden = 0`, and raw DB
+  `end_time IS NOT NULL` (closed); in-progress activities are rejected.
+  The write runs in a single transaction, UPDATEs each activity's `note`
+  to the new value, refreshes `updated_at`, applies a rowcount guard (any
+  0-row UPDATE raises and rolls back), and returns the updated count. Only
+  `activity_log.note` and `updated_at` are modified; `source`,
+  `start_time`, `end_time`, `duration_seconds`, `project_id`, `status`,
+  assignment rows, resource rows, and `project_session_note` are unchanged.
+  Any validation or write failure rolls back the whole transaction. The
+  service does not read, concatenate, or return old note values.
+- API (`worktrace/api/timeline_api.py`):
+  `batch_update_timeline_activities_note(activity_ids, note) -> dict`
+  returns `{"updated_count": n}`. `TimelineBatchNoteError(ValueError)`
+  exposes stable codes: `invalid_selection`, `batch_too_large`,
+  `invalid_note`, `note_too_long`, `in_progress`, `hidden_activity`,
+  `operation_failed`. The API never returns raw rows, raw fields, old note
+  values, new note content, tracebacks, SQL errors, or internal exception
+  text.
+- Bridge (`worktrace/webview_ui/bridge.py`):
+  `batch_update_timeline_activities_note(activity_ids, note) -> dict`
+  returns `{"ok": true, "updated_count": n}` on success and
+  `{"ok": false, "error": "<中文错误>"}` on failure. Imports only
+  `worktrace.api` / `worktrace.formatters`. Rejects bool ids / non-list
+  ids / `None` note / non-str note at the boundary.
+  `_BATCH_NOTE_ERROR_MESSAGES` maps codes to Chinese user-facing messages
+  (`请选择至少两个活动` / `一次最多修改 100 条活动` / `请输入有效备注` /
+  `备注过长` / `进行中记录暂不支持批量修改` / `隐藏记录暂不支持批量修改` /
+  `操作失败`). Never returns tracebacks / SQL / `window_title` /
+  `file_path_hint` / `full_path` / clipboard / old note / new note content;
+  falls back to `操作失败` on unexpected exceptions.
+- Frontend (`worktrace/webview_ui/index.html` / `app.js` / `styles.css`):
+  the Phase 3B.5B correction shell gains a dedicated `批量备注覆盖` section
+  rendered after the `批量项目重分类` section, with a hint stating that
+  only batch note overwrite is supported (no append / merge). The section
+  **reuses** the same `selectedBatchActivityIds` selection state as the
+  batch project section. Controls: a `<textarea>` with placeholder, a note
+  count label `0 / 2000` (turns red when exceeded), and a `批量覆盖备注`
+  save button. Save disabled when < 2 selected, note too long, or while a
+  batch save is in flight. `saveBatchNote` refuses while `isEditDirty()`
+  is true (`请先保存或取消当前编辑`) and while `batchProjectSaving` is true
+  (cross-save guard). Stale ids are pruned on every render and re-checked
+  against the rendered shell rows before the bridge call. Success clears
+  the selection and note textarea and refreshes the Timeline (preserving
+  the selected session when possible). Failure preserves the selection,
+  note textarea, and detail list and shows a Chinese error. The `catch`
+  path resets `batchNoteSaving` and shows `操作失败`.
+  `clearEditPanel` / `resetCorrectionShellState` / `closeCorrectionShell`
+  / `selectTimelineSession` / date navigation all clear the selection and
+  note textarea and reset `batchNoteSaving`. Auto-refresh re-renders the
+  batch rows only when the shell is open and not dirty, prunes stale ids,
+  and never overwrites a save in flight.
+- DB schema: **no new schema**.
+- WebView-only: no Tkinter fallback, no new sidebar nav item, no React /
+  Vue / Vite / Node, no local HTTP server, no CDN / external fonts /
+  Google Fonts, no `localStorage` / `sessionStorage`.
+
+### Phase 3B.7 Verification
+
+- `python -m pytest` passes (all Phase 3B.7 service / API / bridge /
+  frontend resource tests pass; all prior phase tests continue to pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- The bridge still imports only `worktrace.api` / `worktrace.formatters`
+  (no `services` / `db` / `collector` / `security` / `runtime` /
+  `config`).
+- No frontend resource contains `localStorage`, `sessionStorage`, CDN,
+  external links, or Google Fonts.
+- No frontend resource contains batch note append / batch note merge /
+  batch hide / batch delete / batch time / batch split / batch merge /
+  restore / permanent-delete / auto-rule / overlap-detection handlers
+  (only batch note overwrite is present).
+- No new DB schema is introduced (the batch write reuses
+  `activity_log.note` / `activity_log.updated_at`).
+
+### Phase 3B.7 Release Blockers
+
+- A partial batch note write is left in the database after any validation
+  or write failure (the transaction must roll back fully).
+- Selected ids from a stale / disappeared session are sent to the bridge
+  (stale ids must be pruned before the bridge call).
+- Hidden / in-progress / deleted activities are accepted by the batch
+  write (they must be rejected with a stable error code).
+- Old note values are leaked through the API / bridge / frontend (the
+  service must not read or return old notes).
+- New note content is echoed back in the bridge error payload.
+- The bridge leaks raw `window_title` / `file_path_hint` / `full_path` /
+  clipboard / note / traceback / SQL / exception text in either success
+  or error results.
+- A new DB schema is introduced to support the batch note write.
+- The frontend introduces unintended batch note append / batch note merge
+  / batch delete / batch hide / batch time / batch split / batch merge
+  controls.
+- The bridge imports `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- Any Phase 3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A / 3B.4 / 3B.3 /
+  3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
+  server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.
