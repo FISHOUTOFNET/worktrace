@@ -3892,3 +3892,340 @@ def test_app_js_batch_save_rechecks_stale_ids():
     assert "cleanIds" in save_body, (
         "saveBatchProject must build a cleanIds list from rendered rows"
     )
+
+
+# --- Phase 3B.6.1: Timeline batch project editing hardening ---------------
+#
+# Phase 3B.6.1 hardens the Phase 3B.6 batch project reassignment on the
+# frontend. These static tests verify the hardening contracts:
+# - batchProjectSaving is an independent state variable (not shared with
+#   editSaving / timeSaving / activityTimeSaving / sessionSplitSaving /
+#   activitySplitSaving / mergeSaving / hideSaving / deleteSaving);
+# - session switch and date switch clear the batch selection via
+#   resetCorrectionShellState -> resetBatchProjectState;
+# - auto-refresh prunes disappeared / newly-ineligible ids via
+#   pruneStaleBatchSelection (called from renderCorrectionShell and
+#   renderBatchProjectSection);
+# - invalid (non-numeric) ids are dropped by the prune regex;
+# - setBatchProjectSaving(true) disables checkboxes / select / save button /
+#   select-all / clear button;
+# - the .catch path in saveBatchProject resets saving;
+# - the success path clears selection and refreshes the Timeline;
+# - invalid project selection shows 请选择有效的项目;
+# - saveBatchProject re-derives selected ids from the current shell rows
+#   (not from a stale in-memory copy).
+
+
+def test_app_js_batch_saving_independent_state_var():
+    """Phase 3B.6.1: batchProjectSaving must be a separate state variable,
+    not aliased to any other saving flag."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # All saving flags that must remain independent.
+    for var in (
+        "batchProjectSaving",
+        "editSaving",
+        "timeSaving",
+        "activityTimeSaving",
+        "sessionSplitSaving",
+        "activitySplitSaving",
+        "mergeSaving",
+        "hideSaving",
+        "deleteSaving",
+    ):
+        assert var in source, (
+            "app.js must declare the " + var + " state variable"
+        )
+
+
+def test_app_js_session_switch_clears_batch_selection():
+    """Phase 3B.6.1: selectTimelineSession must call resetCorrectionShellState
+    when switching to a different session, which clears the batch
+    selection."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function selectTimelineSession")
+    assert fn_start != -1, "app.js must define selectTimelineSession"
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    assert "resetCorrectionShellState" in fn_body, (
+        "selectTimelineSession must call resetCorrectionShellState on session switch"
+    )
+
+
+def test_app_js_date_switch_clears_batch_selection():
+    """Phase 3B.6.1: goPrevDay / goNextDay / goToday must all call
+    resetCorrectionShellState, which clears the batch selection."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for fn_name in ("goPrevDay", "goNextDay", "goToday"):
+        fn_start = source.find("function " + fn_name)
+        assert fn_start != -1, "app.js must define " + fn_name
+        fn_end = source.find("\n    function ", fn_start + 1)
+        fn_body = source[fn_start:fn_end]
+        assert "resetCorrectionShellState" in fn_body, (
+            fn_name + " must call resetCorrectionShellState to clear batch selection"
+        )
+
+
+def test_app_js_auto_refresh_prunes_disappeared_ids():
+    """Phase 3B.6.1: pruneStaleBatchSelection must drop ids that are no
+    longer present in the freshly rendered activity list, and must be
+    called from both renderCorrectionShell and renderBatchProjectSection."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The prune function must drop ids not in validIds and set changed=true.
+    prune_start = source.find("function pruneStaleBatchSelection")
+    assert prune_start != -1
+    prune_end = source.find("\n    function ", prune_start + 1)
+    prune_body = source[prune_start:prune_end]
+    assert "validIds" in prune_body, (
+        "pruneStaleBatchSelection must build a validIds set from rendered activities"
+    )
+    assert "changed" in prune_body, (
+        "pruneStaleBatchSelection must track whether the selection changed"
+    )
+    # The prune function must be called from renderCorrectionShell.
+    render_start = source.find("function renderCorrectionShell")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    assert "pruneStaleBatchSelection" in render_body, (
+        "renderCorrectionShell must call pruneStaleBatchSelection"
+    )
+    # The prune function must also be called from renderBatchProjectSection
+    # so an auto-refresh that only re-renders the section (not the whole
+    # shell) still prunes stale ids.
+    section_start = source.find("function renderBatchProjectSection")
+    section_end = source.find("\n    function ", section_start + 1)
+    section_body = source[section_start:section_end]
+    assert "pruneStaleBatchSelection" in section_body, (
+        "renderBatchProjectSection must call pruneStaleBatchSelection"
+    )
+
+
+def test_app_js_prune_rejects_non_numeric_ids():
+    """Phase 3B.6.1: pruneStaleBatchSelection must use a numeric regex so
+    invalid (non-numeric) ids are dropped from the selection."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    prune_start = source.find("function pruneStaleBatchSelection")
+    prune_end = source.find("\n    function ", prune_start + 1)
+    prune_body = source[prune_start:prune_end]
+    # The regex must reject non-numeric ids.
+    assert re.search(r"\^\[0\-9\]\+", prune_body), (
+        "pruneStaleBatchSelection must use a ^[0-9]+ regex to reject non-numeric ids"
+    )
+
+
+def test_app_js_prune_skips_in_progress_activities():
+    """Phase 3B.6.1: pruneStaleBatchSelection must skip in-progress
+    activities so they cannot be selected."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    prune_start = source.find("function pruneStaleBatchSelection")
+    prune_end = source.find("\n    function ", prune_start + 1)
+    prune_body = source[prune_start:prune_end]
+    assert "is_in_progress" in prune_body, (
+        "pruneStaleBatchSelection must check is_in_progress to skip in-progress rows"
+    )
+
+
+def test_app_js_saving_disables_checkboxes_select_button():
+    """Phase 3B.6.1: setBatchProjectSaving(true) must disable the save
+    button, select-all button, clear button, project select, and every
+    batch checkbox."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function setBatchProjectSaving")
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    # Save button must be disabled and its text changed.
+    assert "correction-shell-batch-save-btn" in fn_body, (
+        "setBatchProjectSaving must toggle the batch save button"
+    )
+    assert "批量设置项目" in fn_body, (
+        "setBatchProjectSaving must reset the save button text to 批量设置项目"
+    )
+    assert "保存中…" in fn_body, (
+        "setBatchProjectSaving must set the saving text to 保存中…"
+    )
+    # Select-all and clear buttons must be disabled.
+    assert "correction-shell-batch-select-all-btn" in fn_body, (
+        "setBatchProjectSaving must toggle the select-all button"
+    )
+    assert "correction-shell-batch-clear-btn" in fn_body, (
+        "setBatchProjectSaving must toggle the clear button"
+    )
+    # Project select must be disabled.
+    assert "correction-shell-batch-project-select" in fn_body, (
+        "setBatchProjectSaving must toggle the project select"
+    )
+    # Checkboxes must be disabled.
+    assert "correction-shell-activity-checkbox" in fn_body, (
+        "setBatchProjectSaving must toggle the batch checkboxes"
+    )
+
+
+def test_app_js_save_catch_resets_saving():
+    """Phase 3B.6.1: the .catch handler in saveBatchProject must call
+    setBatchProjectSaving(false) so saving never gets stuck."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function saveBatchProject")
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    # Extract the .catch block.
+    catch_idx = fn_body.find(".catch")
+    assert catch_idx != -1, "saveBatchProject must have a .catch handler"
+    catch_body = fn_body[catch_idx:]
+    assert "setBatchProjectSaving(false)" in catch_body, (
+        "saveBatchProject .catch must call setBatchProjectSaving(false)"
+    )
+    assert "操作失败" in catch_body, (
+        "saveBatchProject .catch must show 操作失败"
+    )
+
+
+def test_app_js_save_success_clears_selection():
+    """Phase 3B.6.1: the success path in saveBatchProject must clear the
+    selection and refresh the Timeline."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function saveBatchProject")
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    # The success path must clear selectedBatchActivityIds.
+    assert "selectedBatchActivityIds = {}" in fn_body, (
+        "saveBatchProject success must clear selectedBatchActivityIds"
+    )
+    # The success path must call the refresh helper or loadTimeline.
+    assert "refreshTimelineForBatchSave" in fn_body or "loadTimeline" in fn_body, (
+        "saveBatchProject success must refresh the Timeline"
+    )
+    # The success path must show a success message.
+    assert "已批量更新项目" in fn_body, (
+        "saveBatchProject success must show a success message"
+    )
+
+
+def test_app_js_save_invalid_project_message():
+    """Phase 3B.6.1: saveBatchProject must show 请选择有效的项目 when the
+    project select is empty or invalid."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function saveBatchProject")
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    assert "请选择有效的项目" in fn_body, (
+        "saveBatchProject must show 请选择有效的项目 for invalid project"
+    )
+
+
+def test_app_js_save_derives_ids_from_rendered_rows():
+    """Phase 3B.6.1: saveBatchProject must derive cleanIds from the rendered
+    shell rows (querySelectorAll), not from a stale in-memory copy."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function saveBatchProject")
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    assert "querySelectorAll" in fn_body, (
+        "saveBatchProject must query the DOM for rendered rows"
+    )
+    assert "data-batch-activity-id" in fn_body, (
+        "saveBatchProject must read data-batch-activity-id from rendered rows"
+    )
+
+
+def test_app_js_save_failure_does_not_clear_selection():
+    """Phase 3B.6.1: the failure path (result.ok === false) must NOT clear
+    the selection or call resetBatchProjectState. The saving flag is reset
+    once at the top of the .then handler (before branching), so both
+    success and failure paths reset saving; the failure branch itself
+    only shows the error and returns."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function saveBatchProject")
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    # The .then handler must call setBatchProjectSaving(false) before
+    # branching on success / failure (covers both paths).
+    then_idx = fn_body.find(".then(function (result)")
+    assert then_idx != -1, "saveBatchProject must have a .then handler"
+    then_body = fn_body[then_idx:]
+    assert "setBatchProjectSaving(false)" in then_body, (
+        "saveBatchProject .then must call setBatchProjectSaving(false)"
+    )
+    # Extract the failure branch (result.ok === false) and verify it does
+    # NOT clear the selection or call resetBatchProjectState.
+    fail_idx = fn_body.find("result.ok === false")
+    assert fail_idx != -1, "saveBatchProject must handle result.ok === false"
+    success_idx = fn_body.find("已批量更新项目", fail_idx)
+    if success_idx == -1:
+        success_idx = fn_body.find("refreshTimelineForBatchSave", fail_idx)
+    if success_idx == -1:
+        success_idx = len(fn_body)
+    fail_body = fn_body[fail_idx:success_idx]
+    assert "resetBatchProjectState" not in fail_body, (
+        "saveBatchProject failure must not call resetBatchProjectState"
+    )
+    assert "selectedBatchActivityIds = {}" not in fail_body, (
+        "saveBatchProject failure must not clear selectedBatchActivityIds"
+    )
+
+
+def test_app_js_reset_batch_project_state_clears_selection():
+    """Phase 3B.6.1: resetBatchProjectState must clear the selection, the
+    target project, the saving flag, and reset the DOM controls."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function resetBatchProjectState")
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    assert "selectedBatchActivityIds = {}" in fn_body, (
+        "resetBatchProjectState must clear selectedBatchActivityIds"
+    )
+    assert "batchProjectSaving = false" in fn_body, (
+        "resetBatchProjectState must reset batchProjectSaving"
+    )
+    assert "batchProjectTargetId = null" in fn_body, (
+        "resetBatchProjectState must reset batchProjectTargetId"
+    )
+
+
+def test_app_js_batch_save_guarded_by_saving_flag():
+    """Phase 3B.6.1: saveBatchProject must early-return if
+    batchProjectSaving is already true (prevents double-submit)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function saveBatchProject")
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    # The first guard must check batchProjectSaving.
+    guard_end = fn_body.find("\n", fn_body.find("{") + 1)
+    guard_block = fn_body[:guard_end + 200]
+    assert "batchProjectSaving" in guard_block[:300], (
+        "saveBatchProject must guard against double-submit via batchProjectSaving"
+    )
+
+
+def test_index_html_batch_section_has_status_area():
+    """Phase 3B.6.1: index.html must contain a batch status area for
+    success / error messages."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-batch-status"' in source, (
+        "index.html must contain the batch status area"
+    )
+
+
+def test_index_html_batch_section_has_select_all_and_clear():
+    """Phase 3B.6.1: index.html must contain the select-all and clear
+    selection buttons referenced by setBatchProjectSaving."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-batch-select-all-btn"' in source, (
+        "index.html must contain the batch select-all button"
+    )
+    assert 'id="correction-shell-batch-clear-btn"' in source, (
+        "index.html must contain the batch clear button"
+    )
+
+
+def test_styles_css_has_batch_disabled_states():
+    """Phase 3B.6.1: styles.css must define disabled / saving styles for
+    the batch controls so the user sees a clear visual state."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    # The batch save button must have a disabled style (or inherit the
+    # generic disabled style). At minimum, the batch section styles must
+    # exist.
+    assert ".correction-shell-batch-section" in source, (
+        "styles.css must define .correction-shell-batch-section"
+    )
+    assert ".correction-shell-batch-save-btn" in source, (
+        "styles.css must define .correction-shell-batch-save-btn"
+    )

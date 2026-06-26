@@ -920,6 +920,12 @@ def batch_update_timeline_activities_project(
         # to ``operation_failed`` so the bridge returns a clear generic
         # message without echoing internal details.
         raise TimelineBatchProjectError("operation_failed")
+    except Exception:
+        # Phase 3B.6.1: a non-ValueError service exception (e.g.
+        # ``sqlite3.OperationalError``, ``RuntimeError``) must also collapse
+        # to ``operation_failed`` so the bridge returns a clear generic
+        # message without echoing internal details or tracebacks.
+        raise TimelineBatchProjectError("operation_failed")
     return {"updated_count": int(count)}
 
 

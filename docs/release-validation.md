@@ -2145,3 +2145,122 @@ No new DB schema is introduced; the write reuses the existing
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
   server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 3B.6.1 Validation
+
+Phase 3B.6.1 is a **hardening-only** phase for the Phase 3B.6 batch project
+reassignment. It introduces **no new features** and **no new batch write
+types**. The hardening stabilizes the batch project reassignment across
+service transaction rollback, API error mapping, bridge error
+convergence, and frontend stale selection / auto-refresh / dirty-state /
+saving-state / selected-session-disappear paths.
+
+### Phase 3B.6.1 Scope
+
+- **Service layer hardening** (`worktrace/services/activity_service.py`):
+  `batch_update_activity_project` already used a single atomic transaction
+  with a rowcount guard. Phase 3B.6.1 verifies and tests:
+  - Mixed invalid selection rejection: one valid + one deleted / hidden /
+    in-progress / nonexistent activity rejects all activities; the valid
+    activity is not modified (no partial write).
+  - Duplicate id dedup: ids are deduped before validation; after dedup,
+    fewer than 2 ids reject, more than 100 reject.
+  - Exact max boundary: exactly 100 activities succeed.
+  - Assignment semantics match single-edit: batch confidence / source /
+    is_manual equal the values set by `update_activities_project(manual=True)`.
+  - Resource rows (`activity_resource`) unchanged: no field is modified.
+  - Session notes (`project_session_note`) unchanged: note text is not
+    modified.
+  - Mid-transaction exception rollback: assignment UPSERT failure,
+    `activity_log` UPDATE failure, and pre-write SELECT failure all roll
+    back the entire transaction so no activity's project changes.
+  - No new DB schema: table/column layout is unchanged after a batch
+    update.
+- **API layer hardening** (`worktrace/api/timeline_api.py`):
+  `batch_update_timeline_activities_project` now catches non-ValueError
+  service exceptions (e.g. `sqlite3.OperationalError`, `RuntimeError`) and
+  maps them to `operation_failed`. The error payload never contains the
+  original exception text or traceback.
+- **Bridge layer hardening** (`worktrace/webview_ui/bridge.py`): the
+  bridge already collapsed unexpected exceptions to `操作失败`.
+  Phase 3B.6.1 verifies the error payload contains no traceback / SQL /
+  `window_title` / `file_path_hint` / `full_path` / clipboard / note
+  values and that the import boundary (only `worktrace.api` /
+  `worktrace.formatters`) is preserved.
+- **Frontend hardening** (`worktrace/webview_ui/app.js` / `index.html` /
+  `styles.css`):
+  - `batchProjectSaving` is an independent state variable, separate from
+    `editSaving` / `timeSaving` / `activityTimeSaving` /
+    `sessionSplitSaving` / `activitySplitSaving` / `mergeSaving` /
+    `hideSaving` / `deleteSaving`.
+  - `setBatchProjectSaving(true)` disables the save button, select-all
+    button, clear button, project select, and every batch checkbox; the
+    save button text changes to `保存中…`.
+  - `saveBatchProject` is guarded by `batchProjectSaving` (prevents
+    double-submit), checks `isEditDirty()` before the bridge call (shows
+    `请先保存或取消当前编辑`), validates the project selection (shows
+    `请选择有效的项目`), and re-derives selected ids from the currently
+    rendered shell rows so stale ids are pruned before the bridge call.
+  - `pruneStaleBatchSelection` drops ids that disappeared from the
+    rendered activity list, skips in-progress activities, and uses a
+    `^[0-9]+` regex so invalid (non-numeric) ids are dropped. It is
+    called from both `renderCorrectionShell` and
+    `renderBatchProjectSection` so auto-refresh always prunes.
+  - The `.then` handler calls `setBatchProjectSaving(false)` before
+    branching; the failure branch does not clear the selection or call
+    `resetBatchProjectState`. The `.catch` handler resets saving and shows
+    `操作失败`.
+  - The success path clears `selectedBatchActivityIds`, resets
+    `batchProjectTargetId`, shows `已批量更新项目`, and refreshes the
+    Timeline.
+  - `selectTimelineSession` (on switch), `goPrevDay` / `goNextDay` /
+    `goToday`, `clearEditPanel`, and `resetCorrectionShellState` all call
+    `resetBatchProjectState` so the batch selection never carries over to
+    a different session or date.
+  - No `localStorage` / `sessionStorage` usage; no external links / CDN /
+    Google Fonts; no traceback display; no batch hide / delete / time /
+    split / merge UI; no restore / permanent delete / auto-rule / overlap
+    handler.
+
+### Phase 3B.6.1 Verification
+
+- `python -m pytest` passes (all Phase 3B.6.1 service / API / frontend
+  resource tests pass; all Phase 3B.6 and prior phase tests continue to
+  pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- The bridge still imports only `worktrace.api` / `worktrace.formatters`.
+- No frontend resource contains `localStorage`, `sessionStorage`, CDN,
+  external links, or Google Fonts.
+- No frontend resource contains batch hide / batch delete / batch time /
+  batch split / batch merge / restore / permanent-delete / auto-rule /
+  overlap-detection handlers.
+- No new DB schema is introduced.
+
+### Phase 3B.6.1 Release Blockers
+
+- A partial batch write is left in the database after a mid-transaction
+  exception (the transaction must roll back fully).
+- Stale ids from a disappeared / auto-refreshed session are sent to the
+  bridge (stale ids must be pruned before the bridge call).
+- Hidden / in-progress / deleted activities are accepted by the batch
+  write (they must be rejected with a stable error code).
+- A non-ValueError service exception propagates uncaught through the API
+  layer (it must collapse to `operation_failed`).
+- The bridge leaks raw `window_title` / `file_path_hint` / `full_path` /
+  clipboard / note / traceback / SQL / exception text in either success
+  or error results.
+- The frontend introduces a dirty-edit bypass (batch save while
+  `isEditDirty()` is true).
+- The saving state gets stuck (`.then` or `.catch` fails to reset
+  `batchProjectSaving`).
+- The batch selection carries over to a different session or date.
+- A new DB schema is introduced.
+- The frontend introduces unintended batch delete / batch hide / batch
+  time / batch split / batch merge controls.
+- The bridge imports `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- Any Phase 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A / 3B.4 / 3B.3 / 3B.2 / 3B.1 /
+  3A / 2.1 regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
+  server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.

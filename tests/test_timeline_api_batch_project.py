@@ -608,3 +608,330 @@ def test_service_batch_non_positive_id(temp_db):
     with pytest.raises(ValueError) as exc:
         activity_service.batch_update_activity_project([aid, 0], project)
     assert str(exc.value) == "invalid_activity_ids"
+
+
+# --- Phase 3B.6.1: batch project editing hardening ----------------------
+#
+# These tests harden the Phase 3B.6 batch project reassignment by verifying:
+# mixed invalid selection rejection (no partial write), exact max boundary
+# (100 activities), assignment confidence/source matching single-edit
+# semantics, resource rows unchanged, session notes unchanged, exception
+# rollback (assignment UPSERT / activity_log UPDATE / pre-write SELECT),
+# non-ValueError service failure mapping, API exception text non-leakage,
+# and no new DB schema introduced.
+
+
+def _seed_n_closed_activities(n, day="2026-06-25"):
+    """Seed ``n`` closed activities with 1-minute spacing, return ids."""
+    from datetime import datetime, timedelta
+
+    base = datetime.fromisoformat(f"{day} 09:00:00")
+    ids = []
+    for i in range(n):
+        start = base + timedelta(minutes=i)
+        end = start + timedelta(seconds=30)
+        aid = activity_service.create_activity(
+            "Word",
+            "winword.exe",
+            f"A{i}.docx",
+            start_time=start.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        activity_service.finalize_created_activity(aid)
+        activity_service.close_activity(aid, end.strftime("%Y-%m-%d %H:%M:%S"))
+        ids.append(aid)
+    return ids
+
+
+def _get_assignment_confidence(activity_id: int) -> int | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT confidence FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+    return int(row["confidence"]) if row else None
+
+
+def _get_resource_row(activity_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM activity_resource WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _get_session_note(report_date: str, first_activity_id: int) -> str | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT note FROM project_session_note "
+            "WHERE report_date = ? AND first_activity_id = ?",
+            (report_date, first_activity_id),
+        ).fetchone()
+    return row["note"] if row else None
+
+
+# --- Mixed selection rejection (no partial write) ---
+
+
+def test_batch_mixed_valid_and_deleted_rejects_all(temp_db):
+    """A batch with one valid + one deleted activity must reject all; the
+    valid activity must not be modified."""
+    project = project_service.create_project("TestProject")
+    ids = _seed_two_closed_activities()
+    activity_service.soft_delete_activity(ids[1])
+    original = _get_activity_project_id(ids[0])
+    with pytest.raises(TimelineBatchProjectError):
+        timeline_api.batch_update_timeline_activities_project(ids, project)
+    assert _get_activity_project_id(ids[0]) == original
+
+
+def test_batch_mixed_valid_and_in_progress_rejects_all(temp_db):
+    """A batch with one valid + one in-progress activity must reject all."""
+    project = project_service.create_project("TestProject")
+    a1 = _seed_closed_activity(end="09:30:00")
+    a2 = activity_service.create_activity(
+        "Word", "winword.exe", "A2.docx", start_time="2026-06-25 09:30:00"
+    )
+    activity_service.finalize_created_activity(a2)
+    original = _get_activity_project_id(a1)
+    with pytest.raises(TimelineBatchProjectError):
+        timeline_api.batch_update_timeline_activities_project([a1, a2], project)
+    assert _get_activity_project_id(a1) == original
+
+
+def test_batch_mixed_valid_and_nonexistent_rejects_all(temp_db):
+    """A batch with one valid + one nonexistent id must reject all."""
+    project = project_service.create_project("TestProject")
+    aid = _seed_closed_activity()
+    original = _get_activity_project_id(aid)
+    with pytest.raises(TimelineBatchProjectError):
+        timeline_api.batch_update_timeline_activities_project([aid, 999999], project)
+    assert _get_activity_project_id(aid) == original
+
+
+# --- Exact max boundary ---
+
+
+def test_batch_exact_max_100_success(temp_db):
+    """Exactly MAX_BATCH_PROJECT_EDIT_ACTIVITIES (100) activities must
+    succeed."""
+    project = project_service.create_project("TestProject")
+    ids = _seed_n_closed_activities(100)
+    result = timeline_api.batch_update_timeline_activities_project(ids, project)
+    assert result["updated_count"] == 100
+    for aid in ids:
+        assert _get_activity_project_id(aid) == project
+
+
+# --- Assignment semantics match single edit ---
+
+
+def test_batch_confidence_matches_single_edit(temp_db):
+    """Batch assignment confidence/source/is_manual must match the single
+    edit path (update_activities_project with manual=True)."""
+    project = project_service.create_project("TestProject")
+    batch_ids = _seed_two_closed_activities(
+        start1="09:00:00", end1="09:30:00",
+        start2="09:30:00", end2="10:00:00",
+    )
+    single_ids = _seed_two_closed_activities(
+        start1="10:00:00", end1="10:30:00",
+        start2="10:30:00", end2="11:00:00",
+    )
+    activity_service.update_activities_project(single_ids, project, manual=True)
+    timeline_api.batch_update_timeline_activities_project(batch_ids, project)
+    for i in range(2):
+        assert _get_assignment_confidence(batch_ids[i]) == _get_assignment_confidence(single_ids[i])
+        assert _get_assignment_source(batch_ids[i]) == _get_assignment_source(single_ids[i])
+        assert _get_assignment_is_manual(batch_ids[i]) == _get_assignment_is_manual(single_ids[i])
+
+
+# --- Resource rows unchanged ---
+
+
+def test_batch_resource_rows_unchanged(temp_db):
+    """activity_resource rows must not be modified by a batch update."""
+    project = project_service.create_project("TestProject")
+    ids = _seed_two_closed_activities()
+    originals = {aid: _get_resource_row(aid) for aid in ids}
+    assert all(v is not None for v in originals.values())
+    timeline_api.batch_update_timeline_activities_project(ids, project)
+    for aid in ids:
+        after = _get_resource_row(aid)
+        assert after is not None
+        for key in (
+            "identity_key", "display_name", "path_hint", "path_key",
+            "resource_kind", "resource_subtype", "window_title",
+        ):
+            assert after[key] == originals[aid][key]
+
+
+# --- Session note unchanged ---
+
+
+def test_batch_session_note_unchanged(temp_db):
+    """project_session_note must not be modified by a batch update."""
+    from worktrace.db import now_str
+
+    project = project_service.create_project("TestProject")
+    ids = _seed_two_closed_activities()
+    note_text = "important session note"
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO project_session_note("
+            "report_date, first_activity_id, note, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?)",
+            ("2026-06-25", ids[0], note_text, now_str(), now_str()),
+        )
+    timeline_api.batch_update_timeline_activities_project(ids, project)
+    assert _get_session_note("2026-06-25", ids[0]) == note_text
+
+
+# --- Exception rollback ---
+
+
+class _FailingConn:
+    """Wraps a real sqlite3 connection; raises ``RuntimeError`` on
+    ``execute()`` calls whose SQL contains ``fail_on_sql_contains``.
+
+    The wrapper delegates ``__enter__`` / ``__exit__`` to the real
+    connection so the sqlite3 context manager commits on success and
+    rolls back on exception. The wrapper returns ``self`` from
+    ``__enter__`` so the service code uses the wrapper's ``execute``.
+    """
+
+    def __init__(self, real, fail_on_sql_contains: str):
+        self._real = real
+        self._fail = fail_on_sql_contains
+
+    def execute(self, sql, params=None):
+        if self._fail and self._fail in sql:
+            raise RuntimeError("simulated failure")
+        return self._real.execute(sql, params)
+
+    def __enter__(self):
+        self._real.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._real.__exit__(exc_type, exc_val, exc_tb)
+
+
+def test_service_batch_assignment_upsert_exception_rollback(temp_db):
+    """If the assignment UPSERT raises, the activity_log UPDATE must roll
+    back so no activity's project changes."""
+    project = project_service.create_project("TestProject")
+    ids = _seed_two_closed_activities()
+    original_project_ids = {aid: _get_activity_project_id(aid) for aid in ids}
+    original_overrides = {aid: _get_activity_manual_override(aid) for aid in ids}
+    real_get_connection = activity_service.get_connection
+
+    def _patched():
+        return _FailingConn(
+            real_get_connection(), "INSERT INTO activity_project_assignment"
+        )
+
+    with patch.object(activity_service, "get_connection", _patched):
+        with pytest.raises(RuntimeError):
+            activity_service.batch_update_activity_project(ids, project)
+
+    for aid in ids:
+        assert _get_activity_project_id(aid) == original_project_ids[aid]
+        assert _get_activity_manual_override(aid) == original_overrides[aid]
+
+
+def test_service_batch_activity_log_update_exception_rollback(temp_db):
+    """If the activity_log UPDATE raises, no assignment is written and the
+    transaction rolls back."""
+    project = project_service.create_project("TestProject")
+    ids = _seed_two_closed_activities()
+    original_project_ids = {aid: _get_activity_project_id(aid) for aid in ids}
+    real_get_connection = activity_service.get_connection
+
+    def _patched():
+        return _FailingConn(real_get_connection(), "UPDATE activity_log")
+
+    with patch.object(activity_service, "get_connection", _patched):
+        with pytest.raises(RuntimeError):
+            activity_service.batch_update_activity_project(ids, project)
+
+    for aid in ids:
+        assert _get_activity_project_id(aid) == original_project_ids[aid]
+
+
+def test_service_batch_transaction_exception_rollback(temp_db):
+    """A pre-write exception (project validation SELECT) must not corrupt
+    any activity's project."""
+    project = project_service.create_project("TestProject")
+    ids = _seed_two_closed_activities()
+    original_project_ids = {aid: _get_activity_project_id(aid) for aid in ids}
+    real_get_connection = activity_service.get_connection
+
+    def _patched():
+        return _FailingConn(real_get_connection(), "SELECT id, is_archived")
+
+    with patch.object(activity_service, "get_connection", _patched):
+        with pytest.raises(RuntimeError):
+            activity_service.batch_update_activity_project(ids, project)
+
+    for aid in ids:
+        assert _get_activity_project_id(aid) == original_project_ids[aid]
+
+
+# --- API hardening: non-ValueError + no leak ---
+
+
+def test_batch_unknown_service_failure_mapping(temp_db):
+    """A non-ValueError service exception must map to operation_failed."""
+    project = project_service.create_project("TestProject")
+    ids = _seed_two_closed_activities()
+    with patch.object(
+        activity_service, "batch_update_activity_project",
+        side_effect=RuntimeError("unexpected boom"),
+    ):
+        with pytest.raises(TimelineBatchProjectError) as exc:
+            timeline_api.batch_update_timeline_activities_project(ids, project)
+    assert exc.value.code == "operation_failed"
+
+
+def test_batch_api_does_not_leak_exception_text(temp_db):
+    """The TimelineBatchProjectError must not contain the original exception
+    text."""
+    project = project_service.create_project("TestProject")
+    ids = _seed_two_closed_activities()
+    secret = "super_secret_internal_detail"
+    with patch.object(
+        activity_service, "batch_update_activity_project",
+        side_effect=RuntimeError(secret),
+    ):
+        with pytest.raises(TimelineBatchProjectError) as exc:
+            timeline_api.batch_update_timeline_activities_project(ids, project)
+    assert secret not in str(exc.value)
+    assert exc.value.code == "operation_failed"
+
+
+# --- No new DB schema ---
+
+
+def test_batch_no_new_db_schema(temp_db):
+    """Batch update must not introduce new tables or alter existing columns."""
+
+    def _schema_snapshot():
+        with get_connection() as conn:
+            tables = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()
+            result = {}
+            for t in tables:
+                cols = conn.execute(
+                    f"PRAGMA table_info({t['name']})"
+                ).fetchall()
+                result[t["name"]] = [(c["name"], c["type"]) for c in cols]
+            return result
+
+    before = _schema_snapshot()
+    project = project_service.create_project("TestProject")
+    ids = _seed_two_closed_activities()
+    timeline_api.batch_update_timeline_activities_project(ids, project)
+    after = _schema_snapshot()
+    assert before == after

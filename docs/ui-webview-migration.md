@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3B.6 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.6.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -25,6 +25,13 @@
   capability: multiple closed activities in the correction shell can be
   reassigned to one project via an atomic transaction with rowcount guard
   and full rollback, rejecting in-progress / hidden / deleted activities —
+  implemented; Timeline batch project editing hardening — service
+  transaction rollback on rowcount 0 / mid-transaction exception, mixed
+  invalid selection rejection, duplicate id dedup, exact max boundary,
+  assignment semantics match single-edit, resource rows and session notes
+  unchanged, API non-ValueError exception collapse, bridge error
+  convergence, frontend stale selection pruning / auto-refresh / session
+  and date switch reset / dirty-state guard / saving-state reset —
   implemented; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
@@ -2262,6 +2269,105 @@ Phase 3B.6 does not implement and does not start:
   merge);
 - Multi-activity session whole-hide / whole-delete;
 - Any new DB schema;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any Tkinter fallback path.
+
+## Phase 3B.6.1 Implemented Scope
+
+Phase 3B.6.1 is a **hardening-only** phase for the Phase 3B.6 batch project
+reassignment. It introduces **no new features** and **no new batch write
+types**. The existing batch project reassignment is hardened across the
+service transaction, API error mapping, bridge error convergence, and
+frontend stale selection / auto-refresh / dirty-state / saving-state /
+selected-session-disappear paths.
+
+Hardening changes:
+
+- **Service layer** (`worktrace/services/activity_service.py`):
+  `batch_update_activity_project` already used a single atomic transaction
+  with a rowcount guard. Phase 3B.6.1 verifies that mid-transaction
+  exceptions (assignment UPSERT failure, `activity_log` UPDATE failure,
+  pre-write SELECT failure) roll back the entire transaction so no partial
+  project assignment is left behind. Mixed invalid selections (one valid +
+  one deleted / hidden / in-progress / nonexistent) reject all activities
+  without modifying the valid one. Duplicate ids are deduped before
+  validation. The exact max boundary (100 activities) succeeds; over 100
+  rejects. Assignment confidence / source / is_manual match the single-edit
+  path (`update_activities_project(manual=True)`). Resource rows
+  (`activity_resource`) and session notes (`project_session_note`) are
+  unchanged.
+- **API layer** (`worktrace/api/timeline_api.py`):
+  `batch_update_timeline_activities_project` now catches non-ValueError
+  service exceptions (e.g. `sqlite3.OperationalError`, `RuntimeError`) and
+  maps them to `operation_failed` so the bridge returns a clear generic
+  message without echoing internal details or tracebacks. The error code
+  mapping table is unchanged: `invalid_activity_ids` / `activity_not_found`
+  / `activity_deleted` → `invalid_selection`; `batch_too_large` →
+  `batch_too_large`; `invalid_project` → `invalid_project`;
+  `activity_in_progress` → `in_progress`; `activity_hidden` →
+  `hidden_activity`; anything else → `operation_failed`.
+- **Bridge layer** (`worktrace/webview_ui/bridge.py`): the bridge already
+  collapsed unexpected exceptions to `操作失败`. Phase 3B.6.1 verifies the
+  error payload contains no traceback / SQL / `window_title` /
+  `file_path_hint` / `full_path` / clipboard / note values.
+- **Frontend** (`worktrace/webview_ui/app.js` / `index.html` /
+  `styles.css`):
+  - `batchProjectSaving` is an independent state variable, not aliased to
+    `editSaving` / `timeSaving` / `activityTimeSaving` / `sessionSplitSaving`
+    / `activitySplitSaving` / `mergeSaving` / `hideSaving` / `deleteSaving`.
+  - `setBatchProjectSaving(true)` disables the save button, select-all
+    button, clear button, project select, and every batch checkbox; the
+    save button text changes to `保存中…`.
+  - `saveBatchProject` is guarded by `batchProjectSaving` (prevents
+    double-submit), checks `isEditDirty()` before the bridge call (shows
+    `请先保存或取消当前编辑`), validates the project selection (shows
+    `请选择有效的项目`), and re-derives selected ids from the currently
+    rendered shell rows (`querySelectorAll` + `data-batch-activity-id`) so
+    stale ids are pruned before the bridge call.
+  - `pruneStaleBatchSelection` drops ids that disappeared from the rendered
+    activity list and skips in-progress activities; it uses a `^[0-9]+`
+    regex so invalid (non-numeric) ids are dropped. It is called from both
+    `renderCorrectionShell` and `renderBatchProjectSection` so auto-refresh
+    always prunes.
+  - The `.then` handler calls `setBatchProjectSaving(false)` before
+    branching; the failure branch does **not** clear the selection or call
+    `resetBatchProjectState`. The `.catch` handler resets saving and shows
+    `操作失败`.
+  - The success path clears `selectedBatchActivityIds`, resets
+    `batchProjectTargetId`, shows `已批量更新项目`, and refreshes the
+    Timeline.
+  - `selectTimelineSession` (on switch), `goPrevDay` / `goNextDay` /
+    `goToday`, `clearEditPanel`, and `resetCorrectionShellState` all call
+    `resetBatchProjectState` so the batch selection never carries over to a
+    different session or date.
+  - No `localStorage` / `sessionStorage` usage; no external links / CDN /
+  Google Fonts; no traceback display; no batch hide / delete / time /
+  split / merge UI; no restore / permanent delete / auto-rule / overlap
+  handler.
+
+DB schema: **no new schema**. The hardening does not alter any table or
+column.
+
+## Phase 3B.6.1 Not Implemented
+
+Phase 3B.6.1 does not implement and does not start:
+
+- Batch note editing;
+- Batch hide / batch delete;
+- Batch time correction;
+- Batch split;
+- Batch merge;
+- Undo / restore;
+- Permanent delete;
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge;
+- Multi-activity session whole-hide / whole-delete;
+- Any new DB schema;
+- Any new batch write type;
 - Any React / Vue / Vite / Node dependency;
 - Any local HTTP server;
 - Any CDN / external JS / CSS / font / Google Fonts usage;
