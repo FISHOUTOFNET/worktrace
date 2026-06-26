@@ -1865,3 +1865,86 @@ copy, and unifies session-level edit-panel section labels.
   or ``note``.
 - Any Phase 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.5B Validation
+
+Phase 3B.5B is a **correction shell / advanced edit layout foundation**
+phase for the Timeline page. It adds a hidden correction workspace *shell*
+inside `#page-timeline` (inside `#timeline-details`, after
+`#timeline-edit-panel`). The shell is a **read-only context + navigation
+layout**: it summarizes the selected session and its activities using
+display-safe fields only and guides the user back to the existing single
+project / note / time / split / merge / hide / delete controls. It adds
+**no new backend write capability**, **no new DB schema**, **no new
+bridge / API / service method**, and **no new correction action**. It
+does **not** implement batch editing.
+
+### Phase 3B.5B Scope
+
+- A `#timeline-correction-shell` container (class `correction-shell`,
+  `hidden` by default) is added inside the Timeline details column,
+  after the edit panel. It is **not** a new top-level sidebar nav item;
+  the sidebar remains `概览 / 时间详情 / 统计与导出 / 项目规则 /
+  设置与隐私`.
+- The shell header has title `高级纠错`, a subtitle, and a close button
+  `返回时间详情` (`#correction-shell-close-btn`).
+- The shell has status / context / activities / actions areas
+  (`#correction-shell-status`, `#correction-shell-context`,
+  `#correction-shell-activities`, `#correction-shell-actions`).
+- A session-level entry button `打开高级纠错`
+  (`#open-correction-shell-btn`) opens the shell.
+- Shell state (`correctionShellOpen`, `correctionShellSessionId`,
+  `correctionShellActivityId`, `correctionShellMode`) is declared
+  separately from the existing saving states.
+- `openCorrectionShell` refuses to open while `isEditDirty()` is true
+  (`请先保存或取消当前编辑`) and requires a selected session.
+- `closeCorrectionShell` resets shell state but preserves
+  `selectedSessionId`.
+- `clearEditPanel` and date navigation (`goPrevDay` / `goNextDay` /
+  `goToday`) reset shell state; `selectTimelineSession` closes the shell
+  on session switch; `showTimeline` resets shell state when the selected
+  session disappears.
+- `renderCorrectionShell` uses only display-safe fields and reuses the
+  existing `formatTimeRange` helper; it never reads `window_title`,
+  `file_path_hint`, `full_path`, `clipboard`, or note internals, and
+  does not parse backend times with `new Date(string)`.
+- The shell activity rows are click-to-locate (scroll to / highlight the
+  matching `.detail-item`); no write is performed from the shell.
+- The shell action area renders guidance text only (no write buttons)
+  and reiterates soft-delete semantics (`本阶段不会物理删除数据`).
+
+### Phase 3B.5B Verification
+
+- `python -m pytest` passes (all Phase 3B.5B frontend resource / state
+  consistency tests pass; all prior phase tests continue to pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- The bridge still imports only `worktrace.api` / `worktrace.formatters`
+  (no `services` / `db` / `collector` / `security` / `runtime` /
+  `config`).
+- No frontend resource contains `localStorage`, `sessionStorage`, CDN,
+  external links, or Google Fonts.
+- No frontend resource contains traceback display logic.
+- No frontend resource contains batch / restore / permanent-delete /
+  auto-rule / overlap-detection handlers.
+- No new bridge / API / service method is added.
+
+### Phase 3B.5B Release Blockers
+
+- Any new feature (batch edit, batch hide, batch delete, undo / restore,
+  permanent delete, auto-rule, complex correction page, overlap
+  detection, multi-activity session whole-hide / whole-delete,
+  arbitrary-length merge) is introduced.
+- The shell is added as a new top-level sidebar nav item.
+- The shell performs any write directly (instead of guiding back to the
+  existing controls).
+- The shell reads or displays raw `window_title`, `file_path_hint`,
+  `full_path`, `clipboard`, or note internals.
+- `openCorrectionShell` opens while `isEditDirty()` is true, or
+  `closeCorrectionShell` clears `selectedSessionId`.
+- `clearEditPanel` / date navigation / session disappear paths fail to
+  reset shell state.
+- Any bridge error payload leaks tracebacks, SQL errors,
+  ``window_title``, ``file_path_hint``, ``full_path``, ``clipboard``,
+  or ``note``.
+- Any Phase 3B.5A / 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any new DB schema is introduced.

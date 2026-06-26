@@ -95,6 +95,9 @@
                         </div>
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
                             <div class="edit-panel-title">编辑当前时段</div>
+                            <div class="edit-panel-header-actions">
+                                <button id="open-correction-shell-btn" class="edit-btn edit-shell-open-btn" type="button">打开高级纠错</button>
+                            </div>
                             <div class="edit-section-label">项目与备注</div>
                             <div class="edit-field">
                                 <label for="edit-project-select" class="edit-label">项目</label>
@@ -166,6 +169,19 @@
                                 </div>
                                 <div id="edit-visibility-status" class="edit-status" hidden></div>
                             </div>
+                        </div>
+                        <div id="timeline-correction-shell" class="correction-shell" hidden>
+                            <div class="correction-shell-header">
+                                <div class="correction-shell-title-group">
+                                    <div class="correction-shell-title">高级纠错</div>
+                                    <div id="correction-shell-subtitle" class="correction-shell-subtitle">选择一个时段后打开</div>
+                                </div>
+                                <button id="correction-shell-close-btn" class="edit-btn correction-shell-close-btn" type="button">返回时间详情</button>
+                            </div>
+                            <div id="correction-shell-status" class="edit-status" hidden></div>
+                            <div id="correction-shell-context" class="correction-shell-context"></div>
+                            <div id="correction-shell-activities" class="correction-shell-activities"></div>
+                            <div id="correction-shell-actions" class="correction-shell-actions"></div>
                         </div>
                     </div>
                 </div>

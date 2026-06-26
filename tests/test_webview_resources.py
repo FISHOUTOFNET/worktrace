@@ -2668,3 +2668,467 @@ def test_docs_readme_mentions_phase_3b_5a():
     assert "consolidation" in readme.lower(), (
         "README.md must describe 3B.5A as a consolidation phase"
     )
+
+
+# --- Phase 3B.5B: Timeline correction shell tests ---------------------
+#
+# Phase 3B.5B adds a correction workspace *shell* inside the Timeline page.
+# It is a read-only context + navigation layout that reuses the existing
+# single project / note / time / split / merge / hide / delete capability.
+# It does NOT add batch edit, batch hide / delete, undo / restore,
+# permanent delete, auto-rule, or global overlap detection.
+
+
+def test_index_html_has_correction_shell_container():
+    """Phase 3B.5B: index.html must contain a hidden correction shell
+    container inside the Timeline details column."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="timeline-correction-shell"' in source, (
+        "index.html must contain #timeline-correction-shell"
+    )
+
+
+def test_index_html_correction_shell_hidden_by_default():
+    """Phase 3B.5B: the correction shell must be hidden by default."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    start = source.find('id="timeline-correction-shell"')
+    assert start != -1, "correction shell container must exist"
+    # The opening tag must carry the `hidden` attribute.
+    tag_end = source.find(">", start)
+    opening_tag = source[start:tag_end + 1]
+    assert "hidden" in opening_tag, (
+        "correction shell must be hidden by default"
+    )
+
+
+def test_index_html_correction_shell_has_close_button():
+    """Phase 3B.5B: the correction shell must have a close button."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-close-btn"' in source, (
+        "correction shell must have a close button"
+    )
+    assert "返回时间详情" in source, (
+        "correction shell close button text must be 返回时间详情"
+    )
+
+
+def test_index_html_correction_shell_has_required_areas():
+    """Phase 3B.5B: the shell must have context / status / activity /
+    action areas."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-status"' in source
+    assert 'id="correction-shell-context"' in source
+    assert 'id="correction-shell-activities"' in source
+    assert 'id="correction-shell-actions"' in source
+
+
+def test_index_html_correction_shell_title_is_advanced_correction():
+    """Phase 3B.5B: the shell title must be 高级纠错."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "高级纠错" in source, (
+        "correction shell title must be 高级纠错"
+    )
+
+
+def test_index_html_has_session_level_open_correction_entry():
+    """Phase 3B.5B: the session-level edit panel must have a
+    打开高级纠错 entry button."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="open-correction-shell-btn"' in source, (
+        "session-level edit panel must have an open-correction-shell button"
+    )
+    assert "打开高级纠错" in source, (
+        "session-level open button text must be 打开高级纠错"
+    )
+
+
+def test_index_html_correction_shell_inside_timeline_page():
+    """Phase 3B.5B: the correction shell must live inside the Timeline
+    page, not as a new top-level sidebar nav item. The sidebar nav must
+    still be exactly 概览 / 时间详情 / 统计与导出 / 项目规则 / 设置与隐私."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    shell_pos = source.find('id="timeline-correction-shell"')
+    timeline_pos = source.find('id="page-timeline"')
+    timeline_end = source.find('</section>', timeline_pos)
+    assert shell_pos > timeline_pos, (
+        "correction shell must be inside #page-timeline"
+    )
+    assert shell_pos < timeline_end, (
+        "correction shell must be inside #page-timeline section"
+    )
+    # No new sidebar nav item was added for the shell.
+    nav_start = source.find('<nav class="sidebar-nav">')
+    nav_end = source.find('</nav>', nav_start)
+    nav_block = source[nav_start:nav_end]
+    assert "纠错" not in nav_block, (
+        "no correction-related sidebar nav item may be added"
+    )
+
+
+def test_app_js_has_open_correction_shell_helper():
+    """Phase 3B.5B: app.js must define an openCorrectionShell helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function openCorrectionShell" in source, (
+        "app.js must define openCorrectionShell"
+    )
+
+
+def test_app_js_has_close_correction_shell_helper():
+    """Phase 3B.5B: app.js must define a closeCorrectionShell helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function closeCorrectionShell" in source, (
+        "app.js must define closeCorrectionShell"
+    )
+
+
+def test_app_js_has_reset_correction_shell_state_helper():
+    """Phase 3B.5B: app.js must define a resetCorrectionShellState helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function resetCorrectionShellState" in source, (
+        "app.js must define resetCorrectionShellState"
+    )
+
+
+def test_app_js_has_render_correction_shell_helper():
+    """Phase 3B.5B: app.js must define a renderCorrectionShell helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function renderCorrectionShell" in source, (
+        "app.js must define renderCorrectionShell"
+    )
+
+
+def test_app_js_has_set_correction_shell_status_helper():
+    """Phase 3B.5B: app.js must define a setCorrectionShellStatus helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function setCorrectionShellStatus" in source, (
+        "app.js must define setCorrectionShellStatus"
+    )
+
+
+def test_app_js_has_get_selected_session_helper():
+    """Phase 3B.5B: app.js must define a getSelectedSession helper that
+    looks up the selected session from currentSessions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function getSelectedSession" in source, (
+        "app.js must define getSelectedSession"
+    )
+
+
+def test_app_js_open_correction_shell_checks_dirty_state():
+    """Phase 3B.5B: openCorrectionShell must refuse to open while there
+    are unsaved edits, using the refusal text 请先保存或取消当前编辑."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    open_start = source.find("function openCorrectionShell")
+    open_end = source.find("\n    function ", open_start + 1)
+    open_body = source[open_start:open_end]
+    assert "isEditDirty()" in open_body, (
+        "openCorrectionShell must call isEditDirty() before opening"
+    )
+    assert "请先保存或取消当前编辑" in open_body, (
+        "openCorrectionShell must use the dirty-state refusal text"
+    )
+
+
+def test_app_js_open_correction_shell_checks_selected_session():
+    """Phase 3B.5B: openCorrectionShell must verify a selected session
+    exists before opening."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    open_start = source.find("function openCorrectionShell")
+    open_end = source.find("\n    function ", open_start + 1)
+    open_body = source[open_start:open_end]
+    assert "getSelectedSession" in open_body, (
+        "openCorrectionShell must call getSelectedSession before opening"
+    )
+
+
+def test_app_js_close_correction_shell_preserves_selected_session():
+    """Phase 3B.5B: closeCorrectionShell must NOT clear selectedSessionId
+    so the user returns to the same session context."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    close_start = source.find("function closeCorrectionShell")
+    close_end = source.find("\n    function ", close_start + 1)
+    close_body = source[close_start:close_end]
+    assert "selectedSessionId = null" not in close_body, (
+        "closeCorrectionShell must not clear selectedSessionId"
+    )
+    assert "resetCorrectionShellState" in close_body, (
+        "closeCorrectionShell must reset shell state"
+    )
+
+
+def test_app_js_clear_edit_panel_resets_shell_state():
+    """Phase 3B.5B: clearEditPanel must call resetCorrectionShellState so
+    a stale shell does not leak into the next session."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    clear_start = source.find("function clearEditPanel")
+    clear_end = source.find("\n    function ", clear_start + 1)
+    clear_body = source[clear_start:clear_end]
+    assert "resetCorrectionShellState" in clear_body, (
+        "clearEditPanel must reset correction shell state"
+    )
+
+
+def test_app_js_date_navigation_closes_shell():
+    """Phase 3B.5B: goPrevDay / goNextDay / goToday must close the
+    correction shell so the shell context does not carry across dates."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for fname in ("goPrevDay", "goNextDay", "goToday"):
+        fstart = source.find("function " + fname)
+        fend = source.find("\n    function ", fstart + 1)
+        fbody = source[fstart:fend]
+        assert "resetCorrectionShellState" in fbody, (
+            fname + " must call resetCorrectionShellState"
+        )
+
+
+def test_app_js_selected_session_disappear_resets_shell():
+    """Phase 3B.5B: when the selected session disappears during a refresh,
+    the shell state must be reset (via clearEditPanel)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # Use the opening-paren form so we match showTimeline(data) and not
+    # showTimelineError(message).
+    show_start = source.find("function showTimeline(")
+    assert show_start != -1, "showTimeline function must exist"
+    show_end = source.find("\n    function ", show_start + 1)
+    show_body = source[show_start:show_end]
+    # The disappear branch clears the selection and calls clearEditPanel,
+    # which in turn resets the shell state.
+    assert "selectedSessionId = null" in show_body, (
+        "showTimeline must clear selectedSessionId when session disappears"
+    )
+    assert "clearEditPanel()" in show_body, (
+        "showTimeline must call clearEditPanel on session disappear"
+    )
+
+
+def test_app_js_session_switch_closes_shell():
+    """Phase 3B.5B: selecting a different session must close the shell so
+    the shell context does not get confused across sessions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    sel_start = source.find("function selectTimelineSession")
+    sel_end = source.find("\n    function ", sel_start + 1)
+    sel_body = source[sel_start:sel_end]
+    assert "correctionShellOpen" in sel_body, (
+        "selectTimelineSession must check correction shell state"
+    )
+    assert "resetCorrectionShellState" in sel_body, (
+        "selectTimelineSession must reset shell state on session switch"
+    )
+
+
+def test_app_js_correction_shell_state_variables_exist():
+    """Phase 3B.5B: app.js must declare the correction shell state
+    variables."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "correctionShellOpen" in source
+    assert "correctionShellSessionId" in source
+    assert "correctionShellActivityId" in source
+    assert "correctionShellMode" in source
+
+
+def test_app_js_correction_shell_no_sensitive_fields():
+    """Phase 3B.5B: the shell rendering must only use display-safe fields
+    and must never read raw window_title / file_path / clipboard / note
+    internals."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderCorrectionShell")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    for forbidden in ("window_title", "file_path", "file_path_hint",
+                      "full_path", "clipboard"):
+        assert forbidden not in render_body, (
+            "renderCorrectionShell must not read " + forbidden
+        )
+
+
+def test_app_js_get_current_detail_activities_no_sensitive_fields():
+    """Phase 3B.5B: getCurrentDetailActivities must only read display-safe
+    DOM fields, never raw sensitive fields."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    fn_start = source.find("function getCurrentDetailActivities")
+    fn_end = source.find("\n    function ", fn_start + 1)
+    fn_body = source[fn_start:fn_end]
+    for forbidden in ("window_title", "file_path", "full_path", "clipboard",
+                      "session_note"):
+        assert forbidden not in fn_body, (
+            "getCurrentDetailActivities must not read " + forbidden
+        )
+
+
+def test_app_js_correction_shell_uses_existing_string_helpers():
+    """Phase 3B.5B: the shell must not parse backend times with
+    new Date(string); it must reuse the existing fixed-format helpers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderCorrectionShell")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    assert "formatTimeRange" in render_body, (
+        "renderCorrectionShell must use formatTimeRange"
+    )
+    # No `new Date(` parsing of backend time strings inside the shell.
+    assert "new Date(" not in render_body, (
+        "renderCorrectionShell must not use new Date(string) on backend times"
+    )
+
+
+def test_app_js_correction_shell_no_browser_storage():
+    """Phase 3B.5B: the shell must not use localStorage / sessionStorage."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert not re.search(r"localStorage|sessionStorage", source), (
+        "app.js must not use browser storage"
+    )
+
+
+def test_app_js_correction_shell_no_forbidden_handlers():
+    """Phase 3B.5B: app.js must not contain batch edit / batch hide /
+    batch delete / restore / permanent delete / auto-rule / global overlap
+    detection handlers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("batchEdit", "batchHide", "batchDelete",
+                      "restoreActivity", "restoreSession",
+                      "permanentDelete", "autoRule", "auto_rule",
+                      "overlapDetection", "globalOverlap"):
+        assert forbidden not in source, (
+            "app.js must not contain " + forbidden + " handler"
+        )
+
+
+def test_index_html_correction_shell_no_forbidden_controls():
+    """Phase 3B.5B: index.html must not contain batch / restore /
+    permanent-delete / auto-rule / overlap controls in the shell."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("batch", "restore", "permanent", "auto-rule",
+                      "overlap"):
+        assert forbidden not in lowered, (
+            "index.html must not contain a '" + forbidden + "' control"
+        )
+
+
+def test_app_js_correction_shell_actions_guide_only():
+    """Phase 3B.5B: the shell action area must only guide the user back to
+    the existing controls; it must not render its own write buttons. The
+    delete guidance must remain soft-delete wording."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderCorrectionShell")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    # The shell reiterates that delete is soft, not permanent.
+    assert "不会物理删除数据" in render_body or "软操作" in render_body, (
+        "shell action guidance must restate soft-delete semantics"
+    )
+
+
+def test_styles_css_has_correction_shell_styles():
+    """Phase 3B.5B: styles.css must define correction shell styles."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell" in source
+    assert ".correction-shell-header" in source
+    assert ".correction-shell-context" in source
+    assert ".correction-shell-activities" in source
+    assert ".correction-shell-actions" in source
+    assert ".correction-shell-close-btn" in source
+
+
+def test_styles_css_correction_shell_hidden_rule():
+    """Phase 3B.5B: styles.css must hide the shell when [hidden]."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell[hidden]" in source, (
+        "styles.css must hide .correction-shell[hidden]"
+    )
+
+
+def test_bridge_no_new_write_methods_for_shell():
+    """Phase 3B.5B: the bridge must not gain new write methods for the
+    shell. The existing project / note / time / split / merge / hide /
+    delete methods must still be present."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    for required in (
+        "def update_timeline_project",
+        "def update_timeline_note",
+        "def update_timeline_activity_time",
+        "def update_timeline_session_time",
+        "def split_timeline_activity",
+        "def split_timeline_session",
+        "def merge_timeline_activities",
+        "def hide_timeline_activity",
+        "def soft_delete_timeline_activity",
+        "def hide_timeline_session",
+        "def soft_delete_timeline_session",
+        "def get_timeline",
+        "def get_timeline_session_details",
+    ):
+        assert required in bridge_src, (
+            "bridge must still define " + required
+        )
+    # No shell-specific write method is added.
+    assert "def correction_shell" not in bridge_src, (
+        "bridge must not add a correction_shell write method"
+    )
+
+
+def test_bridge_imports_only_allowed_modules():
+    """Phase 3B.5B: the bridge must continue to import only
+    worktrace.api / worktrace.formatters and must not directly import
+    services / db / collector / security / runtime / config."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    for forbidden in (
+        "import worktrace.services",
+        "import worktrace.db",
+        "import worktrace.collector",
+        "import worktrace.security",
+        "import worktrace.runtime",
+        "import worktrace.config",
+        "from worktrace.services",
+        "from worktrace.db",
+        "from worktrace.collector",
+        "from worktrace.security",
+        "from worktrace.runtime",
+        "from worktrace.config",
+    ):
+        assert forbidden not in bridge_src, (
+            "bridge must not import " + forbidden
+        )
+
+
+def test_docs_mention_phase_3b_5b():
+    """Phase 3B.5B: the migration doc and release-validation doc must
+    mention Phase 3B.5B and restate that batch edit / restore / permanent
+    delete / auto-rule / overlap detection are not implemented."""
+    migration = (REPO_ROOT / "docs" / "ui-webview-migration.md").read_text(
+        encoding="utf-8"
+    )
+    assert "3B.5B" in migration, (
+        "ui-webview-migration.md must mention Phase 3B.5B"
+    )
+    assert "correction shell" in migration.lower() or "高级纠错" in migration, (
+        "ui-webview-migration.md must describe 3B.5B as a correction shell phase"
+    )
+    for term in ("batch", "restore", "permanent delete", "auto-rule",
+                 "overlap"):
+        assert term.lower() in migration.lower(), (
+            "ui-webview-migration.md must restate that " + term + " is not "
+            "implemented"
+        )
+    release_val = (REPO_ROOT / "docs" / "release-validation.md").read_text(
+        encoding="utf-8"
+    )
+    assert "3B.5B" in release_val, (
+        "release-validation.md must mention Phase 3B.5B"
+    )
+
+
+def test_docs_readme_mentions_phase_3b_5b():
+    """Phase 3B.5B: the README must mention Phase 3B.5B as the
+    correction shell phase."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "3B.5B" in readme, "README.md must mention Phase 3B.5B"
+    assert "correction shell" in readme.lower() or "高级纠错" in readme, (
+        "README.md must describe 3B.5B as a correction shell phase"
+    )
+    # README must restate that batch edit / restore / permanent delete are
+    # not yet available.
+    for term in ("batch", "restore", "permanent delete"):
+        assert term.lower() in readme.lower(), (
+            "README.md must restate that " + term + " is not implemented"
+        )

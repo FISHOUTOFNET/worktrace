@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3B.5A (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.5B (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -14,6 +14,10 @@
   and hardened; Timeline correction action consolidation — per-activity
   actions grouped into edit / merge / danger groups with unified
   dirty-state guards, refresh semantics, and section labels — implemented;
+  Timeline correction shell / advanced edit layout — a read-only context
+  + navigation shell inside the Timeline page that reuses the existing
+  single project / note / time / split / merge / hide / delete capability
+  without adding any new backend write semantics — implemented;
   WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
@@ -1861,6 +1865,144 @@ Phase 3B.5A does not implement and does not start:
 - Any dropdown / menu component that would significantly increase test
   complexity (the phase keeps the button-based UI, only adding group
   wrappers and style cleanup).
+
+## Phase 3B.5B Implemented Scope
+
+Phase 3B.5B is a **correction shell / advanced edit layout foundation**
+phase. It adds a hidden correction workspace *shell* inside the Timeline
+page (`#page-timeline`), inside the `#timeline-details` column, after the
+existing `#timeline-edit-panel`. The shell is a **read-only context +
+navigation layout**: it summarizes the currently selected session and its
+activities using display-safe fields only, and guides the user back to the
+existing single project / note / time / split / merge / hide / delete
+controls. It does **not** add any new backend write capability, any new
+DB schema, any new bridge / API / service method, or any new correction
+action. It does **not** implement batch editing.
+
+The shell is **not** a new top-level sidebar nav item. The sidebar
+navigation remains exactly `概览 / 时间详情 / 统计与导出 / 项目规则 /
+设置与隐私`. Opening the shell keeps the user inside the Timeline page.
+
+HTML (`worktrace/webview_ui/index.html`):
+
+- A `#timeline-correction-shell` container (class `correction-shell`,
+  `hidden` by default) is placed inside `#timeline-details`, after
+  `#timeline-edit-panel`.
+- The shell header carries the title `高级纠错`, a subtitle
+  (`#correction-shell-subtitle`), and a close button
+  (`#correction-shell-close-btn`) labeled `返回时间详情`.
+- The shell has a status area (`#correction-shell-status`), a context
+  area (`#correction-shell-context`), an activity summary area
+  (`#correction-shell-activities`), and an action guidance area
+  (`#correction-shell-actions`).
+- A session-level entry button `打开高级纠错`
+  (`#open-correction-shell-btn`) is added to the edit-panel header
+  actions. No per-activity `打开纠错` entry is required by this phase.
+
+CSS (`worktrace/webview_ui/styles.css`):
+
+- `.correction-shell` and its sub-regions (`.correction-shell-header`,
+  `.correction-shell-title`, `.correction-shell-subtitle`,
+  `.correction-shell-context`, `.correction-shell-activities`,
+  `.correction-shell-actions`, `.correction-shell-close-btn`) are styled
+  consistently with the existing Timeline card / edit-panel style.
+- `.correction-shell[hidden]` is `display: none`.
+- When the shell is open, a `shell-open` class on `.timeline-details`
+  de-emphasizes (opacity) the edit panel and details list so the shell
+  reads as the focus area. The elements are **not** removed, because the
+  shell only guides the user back to the existing controls.
+- `.detail-item.shell-target` briefly highlights a detail row when the
+  user clicks the corresponding shell activity row.
+- Narrow-viewport rules stack the shell header and activity rows
+  vertically. No external fonts / icons are used.
+
+Frontend state (`worktrace/webview_ui/app.js`):
+
+- New shell state variables (`correctionShellOpen`,
+  `correctionShellSessionId`, `correctionShellActivityId`,
+  `correctionShellMode`) are declared separately from the existing
+  `editSaving` / `timeSaving` / `activityTimeSaving` /
+  `sessionSplitSaving` / `activitySplitSaving` / `mergeSaving` /
+  `hideSaving` / `deleteSaving` states so shell state never pollutes
+  them.
+- Helpers: `getSelectedSession()`, `getCurrentDetailActivities()`,
+  `setCorrectionShellStatus(message, isError)`,
+  `resetCorrectionShellState()`,
+  `renderCorrectionShell(session, activities, mode, activityId)`,
+  `highlightDetailRow(activityId)`, `openCorrectionShell(mode,
+  activityId)`, `closeCorrectionShell()`.
+- `openCorrectionShell` refuses to open while `isEditDirty()` is true
+  (refusal text `请先保存或取消当前编辑`) and requires a selected
+  session. An activity-level open additionally requires the activity id
+  to still exist in the current detail list.
+- `closeCorrectionShell` resets shell state but **preserves**
+  `selectedSessionId` so the user returns to the same session.
+- `resetCorrectionShellState` hides the shell DOM, removes the
+  `shell-open` class, clears the shell status / context / activities /
+  actions areas, and resets all shell state variables.
+- `clearEditPanel()` calls `resetCorrectionShellState()` so a stale
+  shell does not leak into the next session.
+- Date navigation (`goPrevDay` / `goNextDay` / `goToday`) closes the
+  shell so the shell context does not carry across dates.
+- `selectTimelineSession` closes the shell when the user switches to a
+  different session.
+- `showTimeline` refreshes the shell context when the shell is open and
+  the selected session still exists (and the panel is not dirty); it
+  resets the shell state when the selected session disappears (via
+  `clearEditPanel`).
+- `renderCorrectionShell` only uses display-safe fields
+  (`project_name`, `project_description`, `start_time`, `end_time`,
+  `duration`, `event_count`, `status`, `is_in_progress`, and the
+  display-safe activity fields already rendered into the detail rows:
+  `activity_id`, time range, `resource_name`, `resource_type`,
+  `app_name`, `duration`). It never reads raw `window_title`,
+  `file_path_hint`, `full_path`, `clipboard`, or note internals. It
+  reuses the existing `formatTimeRange` helper and does **not** parse
+  backend times with `new Date(string)`.
+- The shell activity rows are click-to-locate: clicking a row scrolls to
+  and highlights the corresponding `.detail-item` row so the user can
+  use the existing per-activity action buttons. No write is performed
+  from the shell.
+- The shell action area only renders guidance text; it does **not**
+  render its own write buttons. It reiterates that hide / delete are
+  soft operations (`本阶段不会物理删除数据`).
+
+Bridge / API boundary:
+
+- No new bridge method, no new API method, no new service method, no new
+  DB schema.
+- The bridge continues to import only `worktrace.api` /
+  `worktrace.formatters`; it does not import `services` / `db` /
+  `collector` / `security` / `runtime` / `config`.
+- The shell reads only from the already-loaded `currentSessions` and
+  the already-rendered detail rows; it makes no new bridge call.
+- Bridge error payloads continue to return generic Chinese messages
+  without tracebacks, SQL errors, `window_title`, `file_path_hint`,
+  `full_path`, `clipboard`, or `note` old values.
+
+## Phase 3B.5B Not Implemented
+
+Phase 3B.5B does not implement and does not start:
+
+- Batch edit (editing more than one activity or session per call);
+- Batch hide (hiding more than one activity per call);
+- Batch delete (soft-deleting more than one activity per call);
+- Undo / restore (reverting a hide, soft delete, split, merge, or time
+  correction);
+- Permanent delete (physically removing the DB row);
+- Auto-rule creation;
+- Global overlap detection (across the whole timeline);
+- Multi-activity session whole-hide / whole-delete;
+- Arbitrary-length merge (more than two activities per call);
+- Any new backend write capability;
+- Any new DB schema;
+- Any new bridge / API / service method;
+- Any new third-party UI library;
+- Any new top-level sidebar nav item (the shell is internal to the
+  Timeline page);
+- Any URL routing or browser-storage-based state;
+- Any per-activity `打开纠错` entry (only the session-level `打开高级纠错`
+  entry is required by this phase).
 
 ## Legacy Tkinter UI Handling
 

@@ -632,6 +632,23 @@ body {
     margin-bottom: 12px;
 }
 
+/* Phase 3B.5B: header actions row inside the edit panel (e.g. the
+   "打开高级纠错" entry button). Kept minimal so it does not displace the
+   existing section layout. */
+.edit-panel-header-actions {
+    margin-bottom: 12px;
+}
+
+.edit-shell-open-btn {
+    background: #ffffff;
+    color: #4338ca;
+    border-color: #c7d2fe;
+}
+
+.edit-shell-open-btn:hover:not(:disabled) {
+    background: #eef2ff;
+}
+
 /* Phase 3B.5A: correction-section labels (项目与备注 / 时间修正 / 拆分 / 可见性).
    Slightly more prominent than field-level .edit-label so the user can
    scan the edit panel by section. Each section below the first also
@@ -1200,5 +1217,202 @@ body {
     .edit-visibility-section .edit-time-actions {
         flex-wrap: wrap;
         gap: 4px;
+    }
+}
+
+/* --- Phase 3B.5B: Timeline correction shell ------------------------- */
+
+/* The correction shell is a read-only context + navigation layout that
+   lives inside #timeline-details, after the edit panel. It is hidden by
+   default and only shown when the user opens it. It reuses the existing
+   edit panel / detail row controls; it does not introduce new write
+   capability. When open, the edit panel and details list are visually
+   de-emphasized but not removed, so the user can still locate the
+   existing per-activity / session-level action buttons. */
+.correction-shell {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+}
+
+.correction-shell-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.correction-shell-title-group {
+    min-width: 0;
+}
+
+.correction-shell-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #334155;
+}
+
+.correction-shell-subtitle {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 2px;
+}
+
+.correction-shell-close-btn {
+    flex: 0 0 auto;
+    background: #ffffff;
+    color: #334155;
+}
+
+.correction-shell-close-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+}
+
+/* When the shell is open, de-emphasize the edit panel and details list so
+   the shell reads as the focus area. The elements are not hidden because
+   the shell only guides the user back to the existing controls. */
+.correction-shell[hidden] {
+    display: none;
+}
+
+.timeline-details.shell-open .timeline-edit-panel,
+.timeline-details.shell-open .timeline-details-header,
+.timeline-details.shell-open #timeline-details-list {
+    opacity: 0.55;
+}
+
+.correction-shell-context {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #334155;
+    line-height: 1.6;
+}
+
+.correction-shell-context-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+}
+
+.correction-shell-context-label {
+    color: #64748b;
+}
+
+.correction-shell-context-value {
+    color: #1e293b;
+    font-weight: 500;
+}
+
+.correction-shell-context-value.in-progress {
+    color: #b45309;
+}
+
+.correction-shell-activities {
+    margin-bottom: 12px;
+}
+
+.correction-shell-activities-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 8px;
+}
+
+.correction-shell-activity-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: #334155;
+}
+
+.correction-shell-activity-row.is-selected {
+    border-color: #818cf8;
+    background: #eef2ff;
+}
+
+.correction-shell-activity-time {
+    font-variant-numeric: tabular-nums;
+    color: #475569;
+    white-space: nowrap;
+}
+
+.correction-shell-activity-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.correction-shell-activity-duration {
+    font-variant-numeric: tabular-nums;
+    color: #64748b;
+    white-space: nowrap;
+}
+
+.correction-shell-activities-empty {
+    font-size: 12px;
+    color: #94a3b8;
+    padding: 8px 0;
+}
+
+.correction-shell-actions {
+    padding: 10px 12px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #475569;
+    line-height: 1.6;
+}
+
+.correction-shell-actions-title {
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 6px;
+}
+
+.correction-shell-actions-hint {
+    color: #64748b;
+}
+
+.correction-shell-actions-hint .danger-note {
+    color: #b91c1c;
+}
+
+/* Phase 3B.5B: brief highlight applied to a detail row when the user
+   clicks the corresponding shell activity row, so they can locate the
+   existing per-activity action buttons. */
+.detail-item.shell-target {
+    border-color: #818cf8;
+    background: #eef2ff;
+}
+
+@media (max-width: 900px) {
+    .correction-shell-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .correction-shell-close-btn {
+        align-self: flex-start;
+    }
+    .correction-shell-activity-row {
+        grid-template-columns: 1fr;
+        gap: 2px;
+    }
+    .correction-shell-activity-name {
+        white-space: normal;
     }
 }

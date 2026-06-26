@@ -87,6 +87,19 @@
     var deleteSaving = false;
     var deletingActivityId = null;
 
+    // --- Phase 3B.5B: Timeline correction shell state -------------------
+    // The correction shell is a read-only context + navigation layout that
+    // lives inside #timeline-details. It does not introduce new write
+    // capability; it only summarizes the selected session/activities using
+    // display-safe fields and guides the user back to the existing
+    // per-activity / session-level action buttons. These variables are
+    // intentionally separate from the edit/time/split/merge/hide/delete
+    // saving states so shell state never pollutes them.
+    var correctionShellOpen = false;
+    var correctionShellSessionId = null;
+    var correctionShellActivityId = null;
+    var correctionShellMode = null;  // "session" | "activity" | null
+
     // --- Bridge helper --------------------------------------------------
 
     function callBridge(method) {
@@ -316,6 +329,20 @@
                 if (!editingSession || editingSession.session_id !== found.session_id || !isEditDirty()) {
                     populateEditPanel(found);
                 }
+                // Phase 3B.5B: if the correction shell is open for this
+                // session, refresh its context summary from the updated
+                // session object. The activity summary is re-read from the
+                // rendered detail rows. No write is performed.
+                if (correctionShellOpen
+                    && correctionShellSessionId === found.session_id
+                    && !isEditDirty()) {
+                    renderCorrectionShell(
+                        found,
+                        getCurrentDetailActivities(),
+                        correctionShellMode,
+                        correctionShellActivityId
+                    );
+                }
             } else {
                 // Selected session disappeared (e.g. session ended and was
                 // re-grouped). Clear selection gracefully without throwing.
@@ -329,6 +356,12 @@
 
     function selectTimelineSession(sessionId, sessions) {
         selectedSessionId = sessionId;
+        // Phase 3B.5B: switching sessions closes the correction shell so
+        // the shell context does not get confused across sessions. The
+        // shell is a per-session workspace.
+        if (correctionShellOpen && correctionShellSessionId !== sessionId) {
+            resetCorrectionShellState();
+        }
         // Update selected class without full re-render
         var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
         for (var i = 0; i < items.length; i++) {
@@ -1530,6 +1563,9 @@
         hidingActivityId = null;
         deleteSaving = false;
         deletingActivityId = null;
+        // Phase 3B.5B: reset the correction shell state too so a stale
+        // shell does not leak into the next session.
+        resetCorrectionShellState();
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
         var noteEl = document.getElementById("edit-note-text");
@@ -1636,6 +1672,267 @@
             }
         }
         return false;
+    }
+
+    // --- Phase 3B.5B: Timeline correction shell helpers -----------------
+    // The shell is a read-only context + navigation layout. It reuses the
+    // existing edit panel / detail row controls; it does not introduce any
+    // new write capability. Activity summaries are read from the already-
+    // rendered detail rows (which contain only display-safe fields), so no
+    // new bridge call and no new backend method are needed.
+
+    function getSelectedSession() {
+        if (!selectedSessionId) return null;
+        for (var i = 0; i < currentSessions.length; i++) {
+            if (currentSessions[i].session_id === selectedSessionId) {
+                return currentSessions[i];
+            }
+        }
+        return null;
+    }
+
+    // Read display-safe activity fields from the rendered detail rows. The
+    // detail rows are produced by renderSessionDetails and only ever contain
+    // display-safe fields (activity_id, time range, resource_name, app_name,
+    // resource_type, project_name, duration, is_in_progress class). This
+    // helper never reads raw sensitive backend fields (window titles, file
+    // paths, copied-text metadata, or note internals) because those are
+    // never rendered into the DOM.
+    function getCurrentDetailActivities() {
+        var list = document.getElementById("timeline-details-list");
+        if (!list) return [];
+        var rows = list.querySelectorAll(".detail-item");
+        var out = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var aid = row.getAttribute("data-activity-id") || "";
+            var timeEl = row.querySelector(".detail-item-time");
+            var nameEl = row.querySelector(".detail-item-name");
+            var typeEl = row.querySelector(".detail-item-type");
+            var appEl = row.querySelector(".detail-item-app");
+            var projEl = row.querySelector(".detail-item-project");
+            var durEl = row.querySelector(".detail-item-duration");
+            out.push({
+                activity_id: aid,
+                time_range: timeEl ? timeEl.textContent : "",
+                resource_name: nameEl ? nameEl.textContent : "",
+                resource_type: typeEl ? typeEl.textContent : "",
+                app_name: appEl ? appEl.textContent : "",
+                project_name: projEl ? projEl.textContent : "",
+                duration: durEl ? durEl.textContent : "",
+                is_in_progress: row.classList.contains("in-progress")
+            });
+        }
+        return out;
+    }
+
+    function setCorrectionShellStatus(message, isError) {
+        var statusEl = document.getElementById("correction-shell-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "edit-status " + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function resetCorrectionShellState() {
+        correctionShellOpen = false;
+        correctionShellSessionId = null;
+        correctionShellActivityId = null;
+        correctionShellMode = null;
+        var shell = document.getElementById("timeline-correction-shell");
+        if (shell) shell.hidden = true;
+        var detailsCol = document.querySelector(".timeline-details");
+        if (detailsCol) detailsCol.classList.remove("shell-open");
+        var statusEl = document.getElementById("correction-shell-status");
+        if (statusEl) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "edit-status";
+        }
+        var ctxEl = document.getElementById("correction-shell-context");
+        if (ctxEl) ctxEl.innerHTML = "";
+        var actsEl = document.getElementById("correction-shell-activities");
+        if (actsEl) actsEl.innerHTML = "";
+        var actionsEl = document.getElementById("correction-shell-actions");
+        if (actionsEl) actionsEl.innerHTML = "";
+        var subEl = document.getElementById("correction-shell-subtitle");
+        if (subEl) subEl.textContent = "选择一个时段后打开";
+    }
+
+    // Render the shell context, activity summary, and action guidance. Only
+    // display-safe fields are used. The action area guides the user back to
+    // the existing per-activity / session-level controls; it does not render
+    // its own write buttons, so no new write path is introduced.
+    function renderCorrectionShell(session, activities, mode, activityId) {
+        var subEl = document.getElementById("correction-shell-subtitle");
+        var ctxEl = document.getElementById("correction-shell-context");
+        var actsEl = document.getElementById("correction-shell-activities");
+        var actionsEl = document.getElementById("correction-shell-actions");
+        if (!ctxEl || !session) return;
+
+        // --- Context summary (display-safe only) ---
+        var dateEl = document.getElementById("timeline-date-display");
+        var dateTxt = dateEl ? dateEl.textContent : "";
+        var projectLabel = session.project_name || "未归类";
+        if (session.project_description) {
+            projectLabel += " (" + session.project_description + ")";
+        }
+        var timeRange = formatTimeRange(session.start_time, session.end_time, session.is_in_progress);
+        var statusTxt = session.status || "";
+        var inProgressTxt = session.is_in_progress ? "进行中" : "已结束";
+        if (subEl) {
+            subEl.textContent = dateTxt + " ｜ " + timeRange + " ｜ " + projectLabel;
+        }
+        var ctxHtml = '<div class="correction-shell-context-row">'
+            + '<span class="correction-shell-context-label">日期：</span>'
+            + '<span class="correction-shell-context-value">' + escapeHtml(dateTxt) + '</span>'
+            + '<span class="correction-shell-context-label">项目：</span>'
+            + '<span class="correction-shell-context-value">' + escapeHtml(projectLabel) + '</span>'
+            + '<span class="correction-shell-context-label">时段：</span>'
+            + '<span class="correction-shell-context-value">' + escapeHtml(timeRange) + '</span>'
+            + '<span class="correction-shell-context-label">时长：</span>'
+            + '<span class="correction-shell-context-value">' + escapeHtml(session.duration || "") + '</span>'
+            + '<span class="correction-shell-context-label">活动数：</span>'
+            + '<span class="correction-shell-context-value">' + escapeHtml(String(session.event_count || 0)) + '</span>'
+            + '<span class="correction-shell-context-label">状态：</span>'
+            + '<span class="correction-shell-context-value' + (session.is_in_progress ? " in-progress" : "") + '">' + escapeHtml(statusTxt || inProgressTxt) + '</span>'
+            + '</div>';
+        ctxEl.innerHTML = ctxHtml;
+
+        // --- Activity list summary (read from rendered detail rows) ---
+        if (actsEl) {
+            if (!activities || activities.length === 0) {
+                actsEl.innerHTML = '<div class="correction-shell-activities-title">活动明细</div>'
+                    + '<div class="correction-shell-activities-empty">暂无活动详情，请在左侧活动详情中查看。</div>';
+            } else {
+                var html = '<div class="correction-shell-activities-title">活动明细（点击定位到对应活动）</div>';
+                for (var i = 0; i < activities.length; i++) {
+                    var a = activities[i];
+                    var cls = "correction-shell-activity-row";
+                    if (mode === "activity" && activityId && String(a.activity_id) === String(activityId)) {
+                        cls += " is-selected";
+                    }
+                    html += '<div class="' + cls + '" data-activity-id="' + escapeHtml(String(a.activity_id)) + '">'
+                        + '<span class="correction-shell-activity-time">' + escapeHtml(a.time_range) + '</span>'
+                        + '<span class="correction-shell-activity-name" title="' + escapeHtml(a.resource_name) + '">' + escapeHtml(a.resource_name) + '</span>'
+                        + '<span class="correction-shell-activity-duration">' + escapeHtml(a.duration) + '</span>'
+                        + '</div>';
+                }
+                actsEl.innerHTML = html;
+                // Bind click handlers: highlight / scroll to the matching
+                // detail row so the user can use the existing per-activity
+                // action buttons. This does not perform any write.
+                var rows = actsEl.querySelectorAll(".correction-shell-activity-row");
+                for (var j = 0; j < rows.length; j++) {
+                    (function (rowEl) {
+                        rowEl.addEventListener("click", function () {
+                            var aid = rowEl.getAttribute("data-activity-id");
+                            highlightDetailRow(aid);
+                        });
+                    })(rows[j]);
+                }
+            }
+        }
+
+        // --- Action guidance (no write buttons rendered here) ---
+        if (actionsEl) {
+            var guidance = '<div class="correction-shell-actions-title">纠错操作</div>'
+                + '<div class="correction-shell-actions-hint">'
+                + '会话级操作（项目与备注 / 时间修正 / 拆分 / 可见性）请在上方“编辑当前时段”面板中执行；'
+                + '单条活动操作（编辑时间 / 拆分 / 与下一条合并 / 隐藏 / 删除）请在左侧活动详情列表中对应行执行。'
+                + ' <span class="danger-note">隐藏与删除为软操作，本阶段不会物理删除数据。</span>'
+                + '</div>';
+            actionsEl.innerHTML = guidance;
+        }
+    }
+
+    // Scroll to and briefly highlight a detail row so the user can locate
+    // the existing per-activity action buttons. No write is performed.
+    function highlightDetailRow(activityId) {
+        if (!activityId) return;
+        var row = document.querySelector(
+            '#timeline-details-list .detail-item[data-activity-id="' + activityId + '"]'
+        );
+        if (!row) {
+            setCorrectionShellStatus("未找到对应活动，可能已刷新，请重试。", true);
+            return;
+        }
+        // Clear any prior selected class on sibling rows.
+        var all = document.querySelectorAll("#timeline-details-list .detail-item");
+        for (var i = 0; i < all.length; i++) {
+            all[i].classList.remove("shell-target");
+        }
+        row.classList.add("shell-target");
+        if (row.scrollIntoView) {
+            row.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        setCorrectionShellStatus("", false);
+    }
+
+    function openCorrectionShell(mode, activityId) {
+        // Refuse to open while there are unsaved edits so the shell does
+        // not override in-progress inputs.
+        if (isEditDirty()) {
+            setCorrectionShellStatus("请先保存或取消当前编辑", true);
+            return;
+        }
+        var session = getSelectedSession();
+        if (!session) {
+            setCorrectionShellStatus("请先选择一个时段", true);
+            return;
+        }
+        // activity-level open requires the activity id to still exist in the
+        // current detail list.
+        var effectiveMode = mode === "activity" ? "activity" : "session";
+        if (effectiveMode === "activity") {
+            var activities = getCurrentDetailActivities();
+            var found = false;
+            for (var i = 0; i < activities.length; i++) {
+                if (String(activities[i].activity_id) === String(activityId)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                setCorrectionShellStatus("该活动已不存在，请刷新后重试", true);
+                return;
+            }
+        }
+        correctionShellOpen = true;
+        correctionShellSessionId = session.session_id;
+        correctionShellActivityId = effectiveMode === "activity" ? activityId : null;
+        correctionShellMode = effectiveMode;
+
+        var shell = document.getElementById("timeline-correction-shell");
+        if (shell) shell.hidden = false;
+        var detailsCol = document.querySelector(".timeline-details");
+        if (detailsCol) detailsCol.classList.add("shell-open");
+
+        renderCorrectionShell(
+            session,
+            getCurrentDetailActivities(),
+            effectiveMode,
+            correctionShellActivityId
+        );
+        setCorrectionShellStatus("", false);
+    }
+
+    function closeCorrectionShell() {
+        // Closing the shell returns to the Timeline details / edit panel.
+        // The selected session is intentionally preserved so the user
+        // returns to the same context.
+        var wasOpen = correctionShellOpen;
+        resetCorrectionShellState();
+        // selectedSessionId is intentionally NOT cleared here.
+        if (wasOpen) {
+            setCorrectionShellStatus("", false);
+        }
     }
 
     function updateNoteCount() {
@@ -2168,6 +2465,9 @@
         var current = timelineDate || (dateEl ? dateEl.textContent : null);
         timelineDate = shiftDate(current, -1);
         selectedSessionId = null;
+        // Phase 3B.5B: close the correction shell on date switch so the
+        // shell context does not carry over to a different day.
+        resetCorrectionShellState();
         loadTimeline(timelineDate);
     }
 
@@ -2176,12 +2476,16 @@
         var current = timelineDate || (dateEl ? dateEl.textContent : null);
         timelineDate = shiftDate(current, 1);
         selectedSessionId = null;
+        // Phase 3B.5B: close the correction shell on date switch.
+        resetCorrectionShellState();
         loadTimeline(timelineDate);
     }
 
     function goToday() {
         timelineDate = null;
         selectedSessionId = null;
+        // Phase 3B.5B: close the correction shell on date switch.
+        resetCorrectionShellState();
         loadTimeline(null);
     }
 
@@ -2410,6 +2714,19 @@
         var sessionDeleteBtn = document.getElementById("edit-visibility-delete-btn");
         if (sessionDeleteBtn) {
             sessionDeleteBtn.addEventListener("click", saveSessionDelete);
+        }
+        // Phase 3B.5B: correction shell open / close handlers. The shell
+        // only reads display-safe data and guides the user back to the
+        // existing action buttons; no new write path is wired here.
+        var shellOpenBtn = document.getElementById("open-correction-shell-btn");
+        if (shellOpenBtn) {
+            shellOpenBtn.addEventListener("click", function () {
+                openCorrectionShell("session", null);
+            });
+        }
+        var shellCloseBtn = document.getElementById("correction-shell-close-btn");
+        if (shellCloseBtn) {
+            shellCloseBtn.addEventListener("click", closeCorrectionShell);
         }
     }
 
