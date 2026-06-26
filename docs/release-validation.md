@@ -1551,3 +1551,152 @@ foundation tests did not exercise.
   correction page, overlap detection, arbitrary-length merge,
   multi-activity session whole-merge) is introduced.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.4 Validation
+
+Phase 3B.4 implements the **Timeline hide / soft delete foundation** —
+the minimal usable single-activity hide and soft delete. Hide sets
+`activity_log.is_hidden = 1`; soft delete sets `is_deleted = 1`. Neither
+physically deletes the row or touches assignment / resource / note /
+session-note rows. Single-activity session-level hide / soft delete is
+supported; multi-activity session whole-hide / whole-delete is rejected.
+
+### Automated Checklist
+
+| Check | Command |
+|-------|---------|
+| Full test suite | `python -m pytest` |
+| PyInstaller build | `python -m PyInstaller --noconfirm --clean WorkTrace.spec` |
+
+### Validation Items
+
+#### BJ. Service Layer
+
+- ``hide_activity`` sets ``is_hidden = 1`` and leaves ``is_deleted``
+  unchanged.
+- ``soft_delete_activity`` sets ``is_deleted = 1`` and leaves
+  ``is_hidden`` unchanged.
+- Neither operation physically deletes the row (the row still exists in
+  ``activity_log``).
+- Neither operation modifies ``start_time``, ``end_time``,
+  ``duration_seconds``, ``project_id``, ``note``, ``status``, or
+  ``source``.
+- Neither operation deletes ``activity_project_assignment``,
+  ``activity_resource``, or ``project_session_note`` rows.
+- Neither operation migrates ``project_session_note``.
+- ``hide_activity`` on a nonexistent / deleted / in-progress activity
+  raises ``ValueError`` (the WHERE clause excludes ``is_deleted = 1``
+  and ``end_time IS NULL``).
+- ``soft_delete_activity`` on a nonexistent / deleted / in-progress
+  activity raises ``ValueError``.
+- ``hide_activity`` is idempotent: hiding an already-hidden activity
+  succeeds (the UPDATE still matches the row).
+- ``soft_delete_activity`` is NOT idempotent: deleting an already-deleted
+  activity raises ``ValueError`` (the WHERE clause excludes it).
+- A race-condition UPDATE (rowcount 0) raises ``ValueError`` and no
+  write occurs.
+
+#### BK. API Layer
+
+- ``hide_timeline_activity`` and ``soft_delete_timeline_activity`` accept
+  a single positive integer (``bool`` rejected).
+- Non-int, non-positive, nonexistent, deleted, and in-progress ids are
+  rejected with the appropriate stable error codes.
+- ``hide_timeline_session`` and ``soft_delete_timeline_session`` accept a
+  non-empty list of positive integers (``bool`` rejected). Duplicate ids
+  are deduplicated.
+- A multi-activity session (more than one id after dedup) raises
+  ``multi_activity_hide`` / ``multi_activity_delete`` respectively.
+- A single-activity session hide / soft delete is equivalent to the
+  activity-level call.
+- Service-layer ``ValueError`` codes map to stable
+  ``TimelineVisibilityError`` codes: ``invalid_id``, ``in_progress``,
+  ``multi_activity_hide``, ``multi_activity_delete``,
+  ``operation_failed``.
+- The API returns ``None`` on success and does not leak raw rows,
+  ``window_title``, ``file_path_hint``, ``note``, or internal fields.
+- In-progress is determined by the raw DB ``end_time IS NULL`` column,
+  not the projected display value.
+
+#### BL. Bridge Layer
+
+- ``hide_timeline_activity``, ``soft_delete_timeline_activity``,
+  ``hide_timeline_session``, and ``soft_delete_timeline_session`` return
+  ``{"ok": true}`` on success.
+- Error results return ``{"ok": false, "error": "<chinese message>"}``
+  with clear messages for each known failure mode.
+- Bridge error messages: ``操作失败`` (invalid_id / operation_failed /
+  unknown), ``进行中记录暂不支持隐藏或删除`` (in_progress),
+  ``多活动 session 暂不支持整体隐藏，请在活动详情中逐条处理``
+  (multi_activity_hide),
+  ``多活动 session 暂不支持整体删除，请在活动详情中逐条处理``
+  (multi_activity_delete).
+- Unknown failures and unknown error codes collapse to ``"操作失败"``.
+- Error results do not contain tracebacks, SQL errors, ``window_title``,
+  ``file_path_hint``, ``full_path``, ``clipboard``, or ``note``.
+- The bridge does not import ``worktrace.services``, ``worktrace.db``,
+  ``worktrace.collector``, ``worktrace.runtime``, ``worktrace.security``,
+  or ``worktrace.config``.
+
+#### BM. Frontend
+
+- app.js calls ``hide_timeline_activity``, ``soft_delete_timeline_activity``,
+  ``hide_timeline_session``, and ``soft_delete_timeline_session`` bridge
+  methods.
+- app.js has independent ``hideSaving`` / ``hidingActivityId`` and
+  ``deleteSaving`` / ``deletingActivityId`` state, separate from the
+  project/note/time/split/merge saving states.
+- app.js resets the saving state on both success and failure paths.
+- app.js refreshes the Timeline on success and preserves the detail list
+  on failure.
+- app.js disables the hide / delete buttons for in-progress activities.
+- app.js shows the "多活动" hint for multi-activity session-level hide /
+  delete.
+- app.js refuses hide / delete when ``isEditDirty()`` returns true with
+  "请先保存或取消当前编辑".
+- app.js uses ``window.confirm`` for the delete flow with the soft-delete
+  hint.
+- app.js does not contain batch hide, batch delete, restore,
+  permanent-delete, auto-rule, or complex-correction handlers.
+- app.js does not display tracebacks or raw sensitive fields.
+- index.html includes the ``edit-visibility-section`` with the single /
+  multi / hide / delete / status elements.
+- styles.css styles the hide / delete UI, with responsive layout for
+  narrow viewports.
+- No external links, CDN, Google Fonts, or browser storage introduced.
+
+#### BN. Regression
+
+- All Phase 3B.3 / 3B.3.1 merge tests continue to pass.
+- All Phase 3B.2 / 3B.2.1 split tests continue to pass.
+- All Phase 3B.1 / 3B.1.1 time-correction tests continue to pass.
+- All Phase 3A / 3A.1 editing tests continue to pass.
+- All Phase 2.1 privacy boundary tests continue to pass.
+- Overview and Timeline read-only tests continue to pass.
+- Default WebView entry tests continue to pass.
+- PyInstaller resource path tests continue to pass.
+
+### Phase 3B.4 Release Blockers
+
+- Hide or soft delete physically removes the DB row.
+- Hide or soft delete modifies ``start_time``, ``end_time``,
+  ``duration_seconds``, ``project_id``, ``note``, ``status``, or
+  ``source``.
+- Hide or soft delete deletes ``activity_project_assignment``,
+  ``activity_resource``, or ``project_session_note`` rows.
+- A race condition (UPDATE rowcount 0) does not raise ``ValueError`` or
+  leaves a partial write.
+- An in-progress activity (raw ``end_time IS NULL``) can be hidden or
+  deleted.
+- A deleted activity can be hidden or soft-deleted.
+- A multi-activity session whole-hide / whole-delete is allowed.
+- The bridge exposes tracebacks, SQL errors, ``window_title``,
+  ``file_path_hint``, ``full_path``, ``clipboard``, or ``note``.
+- The bridge imports backend internals (services/db/collector/runtime/
+  security/config).
+- The frontend introduces batch hide, batch delete, restore,
+  permanent-delete, auto-rule, or complex-correction controls.
+- The frontend uses browser storage or external resources.
+- The frontend wipes the detail list on a hide / delete failure.
+- Any Phase 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any new DB schema is introduced.

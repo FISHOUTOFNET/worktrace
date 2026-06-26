@@ -2,15 +2,16 @@
 
 ## Status
 
-- Current phase: 3B.3.1 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.4 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
   implemented and hardened; Timeline activity split foundation — single
   closed activity split into two closed activities — implemented and
   hardened; Timeline activity merge foundation — two closed activities
-  merged into one — implemented and hardened; WebView is the default and
-  only shipping UI).
+  merged into one — implemented and hardened; Timeline hide / soft delete
+  foundation — single closed activity hide and soft delete — implemented;
+  WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -301,7 +302,22 @@ The migration is phased so each step is independently shippable:
   hide, batch editing, auto-rule creation, complex correction pages,
   overlap detection, arbitrary-length merge, and multi-activity session
   whole-merge remain out of scope. **Completed.**
-- Phase 3B: Timeline advanced editing (delete, batch editing,
+- Phase 3B.4: **Timeline hide / soft delete foundation.** Implements the
+  minimal usable single-activity hide and soft delete. Hide sets
+  ``activity_log.is_hidden = 1``; soft delete sets ``is_deleted = 1``.
+  Neither physically deletes the row or touches assignment / resource /
+  note / session-note rows. Single-activity session-level hide / soft
+  delete is supported (semantically equivalent to operating on that
+  activity); multi-activity session whole-hide / whole-delete is rejected
+  with a clear Chinese message directing the user to per-activity
+  editing. In-progress activities (raw ``end_time IS NULL``) cannot be
+  hidden or deleted. Hide is idempotent; soft delete is not. After a
+  successful write the Timeline is refreshed; if the selected session
+  regroups or disappears the selection is cleared gracefully. Batch
+  hide, batch delete, undo / restore, permanent delete, auto-rule
+  creation, complex correction pages, and overlap detection remain out
+  of scope. No new DB schema. **Completed.**
+- Phase 3B: Timeline advanced editing (batch editing,
   correction page) — not yet started.
 - Phase 4: Statistics / Export.
 - Phase 5: Rules.
@@ -1445,6 +1461,176 @@ Phase 3B.3.1 does not implement and does not start:
 - Overlap detection (global, across the whole timeline);
 - Arbitrary-length merge (more than two activities per call);
 - Multi-activity session whole-merge.
+
+## Phase 3B.4 Implemented Scope
+
+Phase 3B.4 implements the **minimal usable single-activity hide / soft
+delete foundation** for the WebView Timeline. It is the first phase that
+allows the user to remove an activity from the default Timeline view
+without physically deleting the underlying row.
+
+### Data Semantics
+
+- **Hide** sets `activity_log.is_hidden = 1` for a single closed
+  activity. The row is not physically deleted. Hidden activities do not
+  appear in the default Timeline (`include_hidden=False`). They remain
+  accessible via the legacy / debug `include_hidden=True` read path.
+- **Soft delete** sets `activity_log.is_deleted = 1` for a single closed
+  activity. The row is not physically deleted. Soft-deleted activities do
+  not appear in the Timeline. `is_deleted = 1` is the same flag already
+  used as an internal write semantic by the Phase 3B.3 merge (the later
+  activity in a merge is soft-deleted).
+- Neither operation modifies `start_time`, `end_time`,
+  `duration_seconds`, `project_id`, `note`, `status`, or `source`.
+- Neither operation deletes `activity_project_assignment`,
+  `activity_resource`, or `project_session_note` rows. They are record-
+  level visibility flags only.
+- Neither operation migrates `project_session_note`. If the hidden /
+  deleted activity was a `first_activity_id`, the note row remains keyed
+  to that activity id. Phase 3B.4 does not perform session-note
+  migration.
+- **Hide is idempotent**: hiding an already-hidden activity succeeds (the
+  UPDATE still matches the row because `is_deleted = 0` and
+  `end_time IS NOT NULL`).
+- **Soft delete is NOT idempotent**: deleting an already-deleted activity
+  fails with `TimelineVisibilityError("invalid_id")` (the activity is
+  treated as missing).
+- The activity must exist and must not already be deleted
+  (`is_deleted = 0`).
+- The activity must be closed (raw DB `end_time IS NOT NULL`). The
+  in-progress check reads the raw DB `end_time`, not the projected
+  display value. An open activity may carry a projected display
+  `end_time`; consumers must not infer in-progress state from the
+  displayed `end_time`.
+- The write is a single atomic UPDATE with a `WHERE id = ? AND
+  is_deleted = 0 AND end_time IS NOT NULL` guard. No partial writes are
+  possible.
+
+### Session-Level Semantics
+
+- `hide_timeline_session(activity_ids)` and
+  `soft_delete_timeline_session(activity_ids)` accept a session's full
+  activity id list. The list is validated and deduplicated.
+- After deduplication, **exactly one** id must remain. The call is then
+  equivalent to `hide_timeline_activity` / `soft_delete_timeline_activity`
+  on that single activity.
+- A multi-activity session (more than one id after dedup) raises
+  `TimelineVisibilityError("multi_activity_hide")` or
+  `TimelineVisibilityError("multi_activity_delete")` respectively. The
+  frontend must direct the user to per-activity editing instead.
+- The single activity is re-checked for in-progress state at the API
+  layer before the write.
+
+### Race-Condition Safety
+
+- Both `hide_activity` and `soft_delete_activity` use
+  `WHERE id = ? AND is_deleted = 0 AND end_time IS NOT NULL`. If the
+  rowcount is 0 (the activity was deleted or re-opened between
+  validation and write), the service raises `ValueError` and no write
+  occurs.
+- Both race-condition failures map to
+  `TimelineVisibilityError("operation_failed")` at the API layer and
+  `"操作失败"` at the bridge layer.
+
+### API Layer
+
+- `hide_timeline_activity(activity_id: int) -> None` is the production
+  hide write path.
+- `soft_delete_timeline_activity(activity_id: int) -> None` is the
+  production soft-delete write path.
+- `hide_timeline_session(activity_ids: list[int]) -> None` and
+  `soft_delete_timeline_session(activity_ids: list[int]) -> None` are
+  the session-level entry points.
+- Stable error codes: `invalid_id`, `in_progress`,
+  `multi_activity_hide`, `multi_activity_delete`, `operation_failed`.
+- `TimelineVisibilityError(ValueError)` is the stable exception class.
+- `activity_id` must be a positive integer; `bool` is rejected (it is a
+  subclass of `int`). Session-level `activity_ids` must be a non-empty
+  list of positive integers; `bool` elements are rejected.
+- The API does not return raw rows, `window_title`, `file_path_hint`,
+  `note`, or any internal field. It returns `None` on success.
+
+### Bridge Layer
+
+- `WebViewBridge.hide_timeline_activity(activity_id)`,
+  `soft_delete_timeline_activity(activity_id)`,
+  `hide_timeline_session(activity_ids)`, and
+  `soft_delete_timeline_session(activity_ids)` are the frontend-facing
+  entry points. They call only `worktrace.api.timeline_api`.
+- Success returns `{"ok": true}`.
+- Failure returns `{"ok": false, "error": "<chinese message>"}`.
+- Bridge error messages: `操作失败` (invalid_id / operation_failed /
+  unknown), `进行中记录暂不支持隐藏或删除` (in_progress),
+  `多活动 session 暂不支持整体隐藏，请在活动详情中逐条处理`
+  (multi_activity_hide),
+  `多活动 session 暂不支持整体删除，请在活动详情中逐条处理`
+  (multi_activity_delete).
+- The bridge does not return tracebacks, SQL errors, file paths, window
+  titles, notes, or clipboard data. Unknown error codes collapse to
+  `"操作失败"`.
+- The bridge does not import `worktrace.services`, `worktrace.db`,
+  `worktrace.collector`, `worktrace.runtime`, `worktrace.security`, or
+  `worktrace.config`.
+
+### Frontend UI
+
+- Each closed activity detail row gets a "隐藏" (hide) button and a
+  "删除" (delete) button. The delete button carries a red accent so the
+  user can tell the destructive action apart. Both are disabled for
+  in-progress activities.
+- The delete flow uses `window.confirm("确定从 Timeline 删除这条记录
+  吗？本阶段不会物理删除数据。")` to avoid accidental deletion. The
+  hint text explicitly states the data is not physically deleted.
+- The session-level edit panel gets a "隐藏 / 删除" section with
+  "隐藏此 session" and "删除此 session" buttons. For a single-activity
+  session these are enabled; for a multi-activity session they are
+  replaced by the hint "多活动 session 暂不支持整体隐藏/删除，请在活
+  动详情中逐条处理。". For an in-progress session they are replaced by
+  the hint "进行中记录暂不支持隐藏或删除。".
+- The hide saving state (`hideSaving` / `hidingActivityId`) and delete
+  saving state (`deleteSaving` / `deletingActivityId`) are independent
+  from each other and from the project/note, time, split, and merge
+  saving states so the flows do not pollute each other.
+- On success: the saving state is reset, "已隐藏" / "已删除" is shown
+  briefly, and the Timeline is refreshed. If the selected session
+  regroups or disappears the selection is cleared gracefully.
+- On failure: the saving state is reset, the Chinese error message is
+  shown, and the detail list is left intact. No traceback is displayed.
+- Auto-refresh preserves an in-flight hide / delete: if the activity is
+  still present after refresh, the saving state is re-applied; if it
+  disappeared, the state is reset.
+- If `isEditDirty()` returns true (unsaved project / note / time / split
+  inputs), hide / delete is refused with "请先保存或取消当前编辑" so the
+  refresh does not wipe unsaved edits.
+- No batch, restore, permanent-delete, auto-rule, or complex-correction
+  controls are introduced.
+
+### Privacy / Security
+
+- The hide / delete flows do not expose `window_title`,
+  `file_path_hint`, `full_path`, `clipboard`, tracebacks, SQL errors,
+  or internal exception details.
+- Notes, resource names, paths, and window titles are not written to
+  logs.
+- No browser storage is used to persist hide / delete drafts.
+- No external resources or network dependencies are introduced.
+- The bridge continues to access the backend only through
+  `worktrace.api`.
+
+## Phase 3B.4 Not Implemented
+
+The following remain out of scope until a later phase:
+
+- Batch hide (hiding more than one activity per call);
+- Batch delete (soft-deleting more than one activity per call);
+- Undo / restore (reverting a hide or soft delete);
+- Permanent delete (physically removing the DB row);
+- Auto-rule creation;
+- Complex correction page;
+- Overlap detection between activities on the same timeline;
+- Multi-activity session whole-hide / whole-delete;
+- Session-note migration when the hidden / deleted activity was a
+  `first_activity_id`.
 
 ## Legacy Tkinter UI Handling
 

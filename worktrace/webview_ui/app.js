@@ -75,6 +75,18 @@
     var mergeSaving = false;
     var mergingActivityId = null;
 
+    // --- Phase 3B.4: Timeline hide / soft delete state -------------------
+    // hideSaving guards any hide operation (per-activity or session-level).
+    // deleteSaving guards any soft-delete operation. They are intentionally
+    // separate from each other and from all other saving states so the
+    // hide and delete flows do not pollute each other or the project/note/
+    // time/split/merge flows. hidingActivityId / deletingActivityId track
+    // which activity's per-activity button is currently saving (null = none).
+    var hideSaving = false;
+    var hidingActivityId = null;
+    var deleteSaving = false;
+    var deletingActivityId = null;
+
     // --- Bridge helper --------------------------------------------------
 
     function callBridge(method) {
@@ -419,6 +431,14 @@
                         : (nextInProgress
                             ? "下一条活动进行中，暂不支持合并"
                             : "将此活动与下一条活动合并")));
+            // Phase 3B.4: per-activity "隐藏" and "删除" buttons. Both are
+            // disabled for in-progress activities (raw end_time IS NULL) and
+            // when the activity id is missing. The delete button uses a
+            // confirmation dialog (window.confirm) before calling the bridge.
+            var visibilityBtnDisabled = a.is_in_progress || !aid;
+            var visibilityBtnTitle = a.is_in_progress
+                ? "进行中记录暂不支持隐藏或删除"
+                : (aid ? "从 Timeline 隐藏或删除此活动" : "活动 ID 缺失，无法操作");
             html += '<div class="' + cls + '" data-activity-id="' + escapeHtml(String(aid)) + '">'
                 + '<div class="detail-item-time">' + escapeHtml(timeRange) + '</div>'
                 + '<div class="detail-item-name" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</div>'
@@ -449,6 +469,16 @@
                 + (mergeBtnDisabled ? ' disabled' : '')
                 + ' title="' + escapeHtml(mergeBtnTitle) + '"'
                 + '>与下一条合并</button>'
+                + '<button type="button" class="detail-hide-btn"'
+                + ' data-activity-id="' + escapeHtml(String(aid)) + '"'
+                + (visibilityBtnDisabled ? ' disabled' : '')
+                + ' title="' + escapeHtml(visibilityBtnTitle) + '"'
+                + '>隐藏</button>'
+                + '<button type="button" class="detail-delete-btn"'
+                + ' data-activity-id="' + escapeHtml(String(aid)) + '"'
+                + (visibilityBtnDisabled ? ' disabled' : '')
+                + ' title="' + escapeHtml(visibilityBtnTitle) + '"'
+                + '>删除</button>'
                 + '</div>'
                 + '<div class="detail-time-editor" hidden>'
                 + '<div class="detail-time-row">'
@@ -477,6 +507,7 @@
                 + '<div class="detail-split-status edit-status" hidden></div>'
                 + '</div>'
                 + '<div class="detail-merge-status edit-status" hidden></div>'
+                + '<div class="detail-visibility-status edit-status" hidden></div>'
                 + '</div>';
         }
         detailsList.innerHTML = html;
@@ -541,6 +572,64 @@
             if (!mergeStillThere) {
                 mergingActivityId = null;
                 mergeSaving = false;
+            }
+        }
+
+        // Phase 3B.4: bind per-activity "隐藏" and "删除" button handlers.
+        var hideBtns = detailsList.querySelectorAll(".detail-hide-btn");
+        for (var hIdx = 0; hIdx < hideBtns.length; hIdx++) {
+            (function (btn) {
+                btn.addEventListener("click", function () {
+                    if (btn.disabled || hideSaving) return;
+                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
+                    if (!id) return;
+                    saveActivityHide(btn, id);
+                });
+            })(hideBtns[hIdx]);
+        }
+        var deleteBtns = detailsList.querySelectorAll(".detail-delete-btn");
+        for (var dIdx = 0; dIdx < deleteBtns.length; dIdx++) {
+            (function (btn) {
+                btn.addEventListener("click", function () {
+                    if (btn.disabled || deleteSaving) return;
+                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
+                    if (!id) return;
+                    saveActivityDelete(btn, id);
+                });
+            })(deleteBtns[dIdx]);
+        }
+
+        // Phase 3B.4: if a hide or delete save is in progress for an
+        // activity that still exists, re-apply the saving state so the user
+        // sees consistent feedback across auto-refresh. If the activity
+        // disappeared (session regroup), reset the state so the UI does not
+        // get stuck.
+        if (hidingActivityId !== null && hideSaving) {
+            var hideStillThere = false;
+            for (var hCheck = 0; hCheck < hideBtns.length; hCheck++) {
+                if (parseInt(hideBtns[hCheck].getAttribute("data-activity-id"), 10) === hidingActivityId) {
+                    hideStillThere = true;
+                    setHideSaving(hideBtns[hCheck], true);
+                    break;
+                }
+            }
+            if (!hideStillThere) {
+                hidingActivityId = null;
+                hideSaving = false;
+            }
+        }
+        if (deletingActivityId !== null && deleteSaving) {
+            var deleteStillThere = false;
+            for (var dCheck = 0; dCheck < deleteBtns.length; dCheck++) {
+                if (parseInt(deleteBtns[dCheck].getAttribute("data-activity-id"), 10) === deletingActivityId) {
+                    deleteStillThere = true;
+                    setDeleteSaving(deleteBtns[dCheck], true);
+                    break;
+                }
+            }
+            if (!deleteStillThere) {
+                deletingActivityId = null;
+                deleteSaving = false;
             }
         }
 
@@ -989,6 +1078,296 @@
         });
     }
 
+    // --- Phase 3B.4: per-activity hide / soft delete ------------------
+
+    function setVisibilityStatus(btn, message, isError) {
+        if (!btn) return;
+        var row = btn.closest(".detail-item");
+        if (!row) return;
+        var statusEl = row.querySelector(".detail-visibility-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "detail-visibility-status edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "detail-visibility-status edit-status "
+            + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function setHideSaving(btn, saving) {
+        hideSaving = saving;
+        hidingActivityId = saving ? parseInt(btn.getAttribute("data-activity-id"), 10) : null;
+        if (btn) {
+            btn.disabled = saving;
+            btn.textContent = saving ? "隐藏中…" : "隐藏";
+        }
+        // Also disable the delete button on the same row during a hide so
+        // the user cannot start a conflicting operation.
+        var row = btn ? btn.closest(".detail-item") : null;
+        if (row) {
+            var delBtn = row.querySelector(".detail-delete-btn");
+            if (delBtn) delBtn.disabled = saving || delBtn.disabled;
+        }
+    }
+
+    function setDeleteSaving(btn, saving) {
+        deleteSaving = saving;
+        deletingActivityId = saving ? parseInt(btn.getAttribute("data-activity-id"), 10) : null;
+        if (btn) {
+            btn.disabled = saving;
+            btn.textContent = saving ? "删除中…" : "删除";
+        }
+        var row = btn ? btn.closest(".detail-item") : null;
+        if (row) {
+            var hideBtn = row.querySelector(".detail-hide-btn");
+            if (hideBtn) hideBtn.disabled = saving || hideBtn.disabled;
+        }
+    }
+
+    function saveActivityHide(btn, activityId) {
+        if (!btn || hideSaving) return;
+        if (!activityId) {
+            setVisibilityStatus(btn, "活动 ID 无效", true);
+            return;
+        }
+        // Guard against unsaved edits: hide is an immediate action that
+        // triggers a refresh, which would wipe unsaved project/note/time/
+        // split inputs. Require the user to save or cancel first.
+        if (isEditDirty()) {
+            setVisibilityStatus(btn, "请先保存或取消当前编辑", true);
+            return;
+        }
+        // Verify the activity id still exists in the current details list
+        // so a stale button (e.g. after rapid session switching) does not
+        // operate on a different session's activity.
+        var row = btn.closest(".detail-item");
+        if (!row) return;
+        var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
+        if (rowAid !== activityId) return;
+
+        setHideSaving(btn, true);
+        setVisibilityStatus(btn, "", false);
+        callBridge("hide_timeline_activity", activityId).then(function (result) {
+            if (!result || result.ok === false) {
+                setHideSaving(btn, false);
+                setVisibilityStatus(
+                    btn,
+                    result && result.error ? result.error : "隐藏失败",
+                    true
+                );
+                return;
+            }
+            setHideSaving(btn, false);
+            setVisibilityStatus(btn, "已隐藏", false);
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setHideSaving(btn, false);
+            setVisibilityStatus(btn, "隐藏失败", true);
+        });
+    }
+
+    function saveActivityDelete(btn, activityId) {
+        if (!btn || deleteSaving) return;
+        if (!activityId) {
+            setVisibilityStatus(btn, "活动 ID 无效", true);
+            return;
+        }
+        if (isEditDirty()) {
+            setVisibilityStatus(btn, "请先保存或取消当前编辑", true);
+            return;
+        }
+        var row = btn.closest(".detail-item");
+        if (!row) return;
+        var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
+        if (rowAid !== activityId) return;
+
+        // Lightweight confirmation so the user does not accidentally
+        // soft-delete. The message makes clear this is not a permanent
+        // delete. Uses native window.confirm — no third-party library.
+        var confirmed = window.confirm("确定从 Timeline 删除这条记录吗？本阶段不会物理删除数据。");
+        if (!confirmed) return;
+
+        setDeleteSaving(btn, true);
+        setVisibilityStatus(btn, "", false);
+        callBridge("soft_delete_timeline_activity", activityId).then(function (result) {
+            if (!result || result.ok === false) {
+                setDeleteSaving(btn, false);
+                setVisibilityStatus(
+                    btn,
+                    result && result.error ? result.error : "删除失败",
+                    true
+                );
+                return;
+            }
+            setDeleteSaving(btn, false);
+            setVisibilityStatus(btn, "已删除", false);
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setDeleteSaving(btn, false);
+            setVisibilityStatus(btn, "删除失败", true);
+        });
+    }
+
+    // --- Phase 3B.4: session-level hide / soft delete -----------------
+
+    function populateSessionVisibilitySection(session) {
+        var singleEl = document.getElementById("edit-visibility-single");
+        var multiEl = document.getElementById("edit-visibility-multi");
+        var hideBtn = document.getElementById("edit-visibility-hide-btn");
+        var deleteBtn = document.getElementById("edit-visibility-delete-btn");
+        if (!singleEl || !multiEl) return;
+
+        var activityIds = session.activity_ids || [];
+        var isMulti = activityIds.length > 1;
+        var inProgress = !!session.is_in_progress;
+
+        if (isMulti) {
+            singleEl.hidden = true;
+            multiEl.hidden = false;
+            multiEl.textContent = "多活动 session 暂不支持整体隐藏/删除，请在活动详情中逐条处理。";
+            showVisibilityStatus("", false);
+            return;
+        }
+        if (inProgress) {
+            singleEl.hidden = true;
+            multiEl.hidden = false;
+            multiEl.textContent = "进行中记录暂不支持隐藏或删除。";
+            showVisibilityStatus("", false);
+            return;
+        }
+        singleEl.hidden = false;
+        multiEl.hidden = true;
+        if (hideBtn) hideBtn.disabled = false;
+        if (deleteBtn) deleteBtn.disabled = false;
+        showVisibilityStatus("", false);
+    }
+
+    function resetSessionVisibilitySection() {
+        hideSaving = false;
+        hidingActivityId = null;
+        deleteSaving = false;
+        deletingActivityId = null;
+        var singleEl = document.getElementById("edit-visibility-single");
+        var multiEl = document.getElementById("edit-visibility-multi");
+        var hideBtn = document.getElementById("edit-visibility-hide-btn");
+        var deleteBtn = document.getElementById("edit-visibility-delete-btn");
+        if (singleEl) singleEl.hidden = true;
+        if (multiEl) {
+            multiEl.hidden = true;
+            multiEl.textContent = "多活动 session 暂不支持整体隐藏/删除，请在活动详情中逐条处理。";
+        }
+        if (hideBtn) { hideBtn.disabled = true; hideBtn.textContent = "隐藏此 session"; }
+        if (deleteBtn) { deleteBtn.disabled = true; deleteBtn.textContent = "删除此 session"; }
+        showVisibilityStatus("", false);
+    }
+
+    function showVisibilityStatus(message, isError) {
+        var statusEl = document.getElementById("edit-visibility-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "edit-status " + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function setSessionHideSaving(saving) {
+        hideSaving = saving;
+        var hideBtn = document.getElementById("edit-visibility-hide-btn");
+        var deleteBtn = document.getElementById("edit-visibility-delete-btn");
+        if (hideBtn) {
+            hideBtn.disabled = saving;
+            hideBtn.textContent = saving ? "隐藏中…" : "隐藏此 session";
+        }
+        if (deleteBtn) deleteBtn.disabled = saving || deleteBtn.disabled;
+    }
+
+    function setSessionDeleteSaving(saving) {
+        deleteSaving = saving;
+        var hideBtn = document.getElementById("edit-visibility-hide-btn");
+        var deleteBtn = document.getElementById("edit-visibility-delete-btn");
+        if (deleteBtn) {
+            deleteBtn.disabled = saving;
+            deleteBtn.textContent = saving ? "删除中…" : "删除此 session";
+        }
+        if (hideBtn) hideBtn.disabled = saving || hideBtn.disabled;
+    }
+
+    function saveSessionHide() {
+        if (!editingSession || hideSaving) return;
+        var activityIds = editingSession.activity_ids || [];
+        if (activityIds.length !== 1) {
+            showVisibilityStatus("多活动 session 暂不支持整体隐藏，请在活动详情中逐条处理", true);
+            return;
+        }
+        if (editingSession.is_in_progress) {
+            showVisibilityStatus("进行中记录暂不支持隐藏或删除", true);
+            return;
+        }
+        if (isEditDirty()) {
+            showVisibilityStatus("请先保存或取消当前编辑", true);
+            return;
+        }
+        setSessionHideSaving(true);
+        showVisibilityStatus("", false);
+        callBridge("hide_timeline_session", activityIds).then(function (result) {
+            if (!result || result.ok === false) {
+                setSessionHideSaving(false);
+                showVisibilityStatus(result && result.error ? result.error : "隐藏失败", true);
+                return;
+            }
+            setSessionHideSaving(false);
+            showVisibilityStatus("已隐藏", false);
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setSessionHideSaving(false);
+            showVisibilityStatus("隐藏失败", true);
+        });
+    }
+
+    function saveSessionDelete() {
+        if (!editingSession || deleteSaving) return;
+        var activityIds = editingSession.activity_ids || [];
+        if (activityIds.length !== 1) {
+            showVisibilityStatus("多活动 session 暂不支持整体删除，请在活动详情中逐条处理", true);
+            return;
+        }
+        if (editingSession.is_in_progress) {
+            showVisibilityStatus("进行中记录暂不支持隐藏或删除", true);
+            return;
+        }
+        if (isEditDirty()) {
+            showVisibilityStatus("请先保存或取消当前编辑", true);
+            return;
+        }
+        var confirmed = window.confirm("确定从 Timeline 删除这条记录吗？本阶段不会物理删除数据。");
+        if (!confirmed) return;
+
+        setSessionDeleteSaving(true);
+        showVisibilityStatus("", false);
+        callBridge("soft_delete_timeline_session", activityIds).then(function (result) {
+            if (!result || result.ok === false) {
+                setSessionDeleteSaving(false);
+                showVisibilityStatus(result && result.error ? result.error : "删除失败", true);
+                return;
+            }
+            setSessionDeleteSaving(false);
+            showVisibilityStatus("已删除", false);
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setSessionDeleteSaving(false);
+            showVisibilityStatus("删除失败", true);
+        });
+    }
+
     // --- Phase 3A: Timeline editing (project reclassification + note) ----
 
     function loadProjects() {
@@ -1094,6 +1473,8 @@
         populateSessionTimeSection(session);
         // Phase 3B.2: populate the session-level split section.
         populateSessionSplitSection(session);
+        // Phase 3B.4: populate the session-level hide / soft-delete section.
+        populateSessionVisibilitySection(session);
 
         // Clear any prior status message
         showEditStatus("", false);
@@ -1116,6 +1497,11 @@
         // Phase 3B.3: reset per-activity merge state too.
         mergeSaving = false;
         mergingActivityId = null;
+        // Phase 3B.4: reset per-activity hide / delete state too.
+        hideSaving = false;
+        hidingActivityId = null;
+        deleteSaving = false;
+        deletingActivityId = null;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
         var noteEl = document.getElementById("edit-note-text");
@@ -1137,6 +1523,8 @@
         resetSessionTimeSection();
         // Phase 3B.2: reset the session-level split section.
         resetSessionSplitSection();
+        // Phase 3B.4: reset the session-level hide / soft-delete section.
+        resetSessionVisibilitySection();
     }
 
     function isEditDirty() {
@@ -1984,6 +2372,16 @@
         var sessionSplitSaveBtn = document.getElementById("edit-split-save-btn");
         if (sessionSplitSaveBtn) {
             sessionSplitSaveBtn.addEventListener("click", saveSessionSplit);
+        }
+        // Phase 3B.4: session-level hide / soft-delete handlers. Per-activity
+        // hide/delete buttons are bound inside renderSessionDetails.
+        var sessionHideBtn = document.getElementById("edit-visibility-hide-btn");
+        if (sessionHideBtn) {
+            sessionHideBtn.addEventListener("click", saveSessionHide);
+        }
+        var sessionDeleteBtn = document.getElementById("edit-visibility-delete-btn");
+        if (sessionDeleteBtn) {
+            sessionDeleteBtn.addEventListener("click", saveSessionDelete);
         }
     }
 

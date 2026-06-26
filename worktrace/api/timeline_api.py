@@ -84,6 +84,25 @@ class TimelineMergeError(ValueError):
         self.code = code
 
 
+class TimelineVisibilityError(ValueError):
+    """Raised by the Phase 3B.4 hide / soft-delete methods for known,
+    user-facing failure modes.
+
+    Stable ``code`` values mapped by the WebView bridge to Chinese messages:
+
+    - ``invalid_id`` — not a positive int, ``bool``, missing, or deleted.
+    - ``in_progress`` — the activity is still open (``end_time IS NULL``).
+    - ``multi_activity_hide`` — session-level hide on a multi-activity session.
+    - ``multi_activity_delete`` — session-level delete on a multi-activity
+      session.
+    - ``operation_failed`` — race condition or unexpected service failure.
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 # --- timeline / sessions -------------------------------------------------
 
 def get_default_report_date() -> str:
@@ -613,6 +632,204 @@ def _validate_merge_activity_ids(activity_ids: list[int]) -> list[int]:
     return ids
 
 
+# --- Phase 3B.4: Timeline hide / soft delete (single-activity foundation) ---
+#
+# Phase 3B.4 implements the minimal hide / soft-delete foundation:
+#
+# - ``hide_timeline_activity`` hides a single closed activity by setting
+#   ``is_hidden = 1``. Hidden activities do not appear in the default
+#   Timeline.
+# - ``soft_delete_timeline_activity`` soft-deletes a single closed activity by
+#   setting ``is_deleted = 1``. Soft-deleted activities do not appear in the
+#   Timeline and are not physically removed.
+# - ``hide_timeline_session`` / ``soft_delete_timeline_session`` expose
+#   session-level writes but only support sessions that resolve to a single
+#   activity. Multi-activity sessions raise ``TimelineVisibilityError`` with
+#   ``multi_activity_hide`` / ``multi_activity_delete`` so the user is pointed
+#   to per-activity editing instead.
+#
+# Data semantics (see docs/ui-webview-migration.md):
+# - Neither operation physically deletes the DB row.
+# - Neither operation deletes assignment / resource / note / session-note rows.
+# - Neither operation modifies start_time / end_time / duration_seconds /
+#   project_id / note / status / source.
+# - In-progress activities (raw ``end_time IS NULL``) cannot be hidden or
+#   deleted. The API reads the raw ``end_time`` from the row to decide.
+# - Deleted activities cannot be hidden or soft-deleted.
+# - Hide is idempotent: hiding an already-hidden activity succeeds.
+# - Soft delete is NOT idempotent: deleting an already-deleted activity fails
+#   with ``invalid_id`` (the activity is treated as missing).
+# - project_session_note is NOT migrated.
+# - The write is a single atomic UPDATE; no partial writes are possible.
+
+
+def hide_timeline_activity(activity_id: int) -> None:
+    """Validate and hide a single closed activity.
+
+    Validation:
+    - ``activity_id`` must be a positive integer (``bool`` rejected); it must
+      reference an existing, non-deleted, non-in-progress activity.
+
+    Raises ``TimelineVisibilityError`` with a stable ``code`` for known
+    failure modes (``invalid_id``, ``in_progress``, ``operation_failed``).
+    The write is a single atomic UPDATE; no partial writes are possible.
+    Hiding an already-hidden activity succeeds (idempotent).
+    """
+    aid = _validate_activity_id_for_visibility(activity_id)
+    try:
+        activity_service.hide_activity(aid)
+    except ValueError:
+        # Defensive: race condition (deleted/reopened between validation and
+        # write). Treat as operation_failed so the bridge returns a clear
+        # message without echoing internal details.
+        raise TimelineVisibilityError("operation_failed")
+
+
+def soft_delete_timeline_activity(activity_id: int) -> None:
+    """Validate and soft-delete a single closed activity.
+
+    Validation:
+    - ``activity_id`` must be a positive integer (``bool`` rejected); it must
+      reference an existing, non-deleted, non-in-progress activity.
+
+    Raises ``TimelineVisibilityError`` with a stable ``code`` for known
+    failure modes (``invalid_id``, ``in_progress``, ``operation_failed``).
+    The write is a single atomic UPDATE; no partial writes are possible.
+    """
+    aid = _validate_activity_id_for_visibility(activity_id)
+    try:
+        activity_service.soft_delete_activity(aid)
+    except ValueError:
+        raise TimelineVisibilityError("operation_failed")
+
+
+def hide_timeline_session(activity_ids: list[int]) -> None:
+    """Validate and apply a session-level hide.
+
+    A session is an aggregate of one or more activities. Phase 3B.4 supports
+    whole-session hide only when the session resolves to a single activity
+    (after deduplication), in which case the call is equivalent to
+    ``hide_timeline_activity`` on that activity. Multi-activity sessions
+    raise ``TimelineVisibilityError("multi_activity_hide")`` — the frontend
+    must direct the user to per-activity hiding instead.
+
+    Validation:
+    - ``activity_ids`` must be a non-empty list of positive integers
+      (``bool`` rejected); every id must reference an existing, non-deleted
+      activity. Duplicate ids are deduplicated.
+    - After deduplication, exactly one id must remain; otherwise
+      ``multi_activity_hide`` is raised.
+    - The single activity must not be in-progress.
+
+    Raises ``TimelineVisibilityError`` with a stable ``code``.
+    """
+    ids = _validate_visibility_activity_ids(activity_ids)
+    if len(ids) > 1:
+        raise TimelineVisibilityError("multi_activity_hide")
+    activity = activity_service.get_activity(ids[0])
+    if activity.get("end_time") is None:
+        raise TimelineVisibilityError("in_progress")
+    try:
+        activity_service.hide_activity(ids[0])
+    except ValueError:
+        raise TimelineVisibilityError("operation_failed")
+
+
+def soft_delete_timeline_session(activity_ids: list[int]) -> None:
+    """Validate and apply a session-level soft delete.
+
+    A session is an aggregate of one or more activities. Phase 3B.4 supports
+    whole-session soft delete only when the session resolves to a single
+    activity (after deduplication), in which case the call is equivalent to
+    ``soft_delete_timeline_activity`` on that activity. Multi-activity
+    sessions raise ``TimelineVisibilityError("multi_activity_delete")`` — the
+    frontend must direct the user to per-activity deletion instead.
+
+    Validation:
+    - ``activity_ids`` must be a non-empty list of positive integers
+      (``bool`` rejected); every id must reference an existing, non-deleted
+      activity. Duplicate ids are deduplicated.
+    - After deduplication, exactly one id must remain; otherwise
+      ``multi_activity_delete`` is raised.
+    - The single activity must not be in-progress.
+
+    Raises ``TimelineVisibilityError`` with a stable ``code``.
+    """
+    ids = _validate_visibility_activity_ids(activity_ids)
+    if len(ids) > 1:
+        raise TimelineVisibilityError("multi_activity_delete")
+    activity = activity_service.get_activity(ids[0])
+    if activity.get("end_time") is None:
+        raise TimelineVisibilityError("in_progress")
+    try:
+        activity_service.soft_delete_activity(ids[0])
+    except ValueError:
+        raise TimelineVisibilityError("operation_failed")
+
+
+def _validate_activity_id_for_visibility(activity_id: int) -> int:
+    """Validate a single ``activity_id`` for hide / soft delete.
+
+    Returns the validated positive int. Raises ``TimelineVisibilityError``:
+    - ``invalid_id`` — not a positive int, ``bool``, missing, or deleted.
+    - ``in_progress`` — the activity is still open (``end_time IS NULL``).
+
+    The in-progress check reads the raw ``end_time`` from the row (not a
+    projected display value), so it correctly reflects the DB state.
+    """
+    if isinstance(activity_id, bool):
+        raise TimelineVisibilityError("invalid_id")
+    try:
+        aid = int(activity_id)
+    except (TypeError, ValueError):
+        raise TimelineVisibilityError("invalid_id")
+    if aid <= 0:
+        raise TimelineVisibilityError("invalid_id")
+    activity = activity_service.get_activity(aid)
+    if not activity or int(activity.get("is_deleted") or 0):
+        raise TimelineVisibilityError("invalid_id")
+    if activity.get("end_time") is None:
+        raise TimelineVisibilityError("in_progress")
+    return aid
+
+
+def _validate_visibility_activity_ids(activity_ids: list[int]) -> list[int]:
+    """Validate the ``activity_ids`` list for session-level hide / soft delete.
+
+    Returns a deduplicated list of positive ints. Raises
+    ``TimelineVisibilityError``:
+    - ``invalid_id`` — not a list, empty, contains non-int / bool /
+      non-positive values, or any id does not reference an existing,
+      non-deleted activity.
+
+    The caller checks that exactly one id remains after dedup.
+    """
+    if isinstance(activity_ids, bool) or not isinstance(activity_ids, list):
+        raise TimelineVisibilityError("invalid_id")
+    if not activity_ids:
+        raise TimelineVisibilityError("invalid_id")
+    ids: list[int] = []
+    seen: set[int] = set()
+    for raw in activity_ids:
+        if isinstance(raw, bool):
+            raise TimelineVisibilityError("invalid_id")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            raise TimelineVisibilityError("invalid_id")
+        if value <= 0:
+            raise TimelineVisibilityError("invalid_id")
+        if value in seen:
+            continue
+        seen.add(value)
+        ids.append(value)
+    for aid in ids:
+        activity = activity_service.get_activity(aid)
+        if not activity or int(activity.get("is_deleted") or 0):
+            raise TimelineVisibilityError("invalid_id")
+    return ids
+
+
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
     # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
     # not silently coerced to ``1``/``0``.
@@ -832,6 +1049,7 @@ __all__ = [
     "TimelineTimeEditError",
     "TimelineSplitError",
     "TimelineMergeError",
+    "TimelineVisibilityError",
     "get_default_report_date",
     "get_project_sessions_by_date",
     "get_project_sessions_by_range",
@@ -843,12 +1061,16 @@ __all__ = [
     "get_snapshot_persisted_id",
     "get_snapshot_seconds_for_date_range",
     "get_snapshot_signature",
+    "hide_timeline_activity",
+    "hide_timeline_session",
     "is_snapshot_unconfirmed",
     "list_selectable_projects",
     "merge_timeline_activities",
     "preview_session_project_update",
     "reclassify_timeline_session_project",
     "soft_delete_activity",
+    "soft_delete_timeline_activity",
+    "soft_delete_timeline_session",
     "split_timeline_activity",
     "split_timeline_session",
     "sync_short_activity_carry_value",

@@ -959,6 +959,81 @@ body {
     font-size: 11px;
 }
 
+/* Phase 3B.4: per-activity "隐藏" / "删除" buttons. Mirror the merge button
+   styling so the action row looks consistent. Hide is a neutral light
+   button; delete carries a red accent so the user can tell the destructive
+   action apart at a glance, while still being a soft delete (no DB row is
+   physically removed in this phase). */
+.detail-hide-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #334155;
+    cursor: pointer;
+}
+
+.detail-hide-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+}
+
+.detail-hide-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.detail-delete-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid #fca5a5;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #b91c1c;
+    cursor: pointer;
+}
+
+.detail-delete-btn:hover:not(:disabled) {
+    background: #fef2f2;
+}
+
+.detail-delete-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.detail-visibility-status {
+    grid-row: 7;
+    grid-column: 1 / -1;
+    margin-top: 4px;
+    font-size: 11px;
+}
+
+/* Phase 3B.4: session-level "隐藏此 session" / "删除此 session" section.
+   Visually separated from the split section above so the user can tell the
+   destructive visibility actions apart from editing flows. The delete
+   button carries a red accent consistent with the per-activity delete
+   button. */
+.edit-visibility-section {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px dashed #e2e8f0;
+}
+
+.edit-visibility-hide-btn {
+    background: #f8fafc;
+}
+
+.edit-visibility-delete-btn {
+    background: #ffffff;
+    color: #b91c1c;
+    border-color: #fca5a5;
+}
+
+.edit-visibility-delete-btn:hover:not(:disabled) {
+    background: #fef2f2;
+}
+
 .detail-time-row {
     display: flex;
     align-items: center;
@@ -1061,6 +1136,17 @@ body {
     /* Phase 3B.3: action buttons wrap on narrow viewports so the merge
        button remains reachable alongside the edit/split buttons. */
     .detail-item-actions {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    /* Phase 3B.4: visibility status mirrors the merge status grid row so
+       the hide/delete status text stays below the action buttons without
+       overlapping the merge status on narrow viewports. The session-level
+       visibility actions also wrap so both buttons remain reachable. */
+    .detail-visibility-status {
+        grid-row: 7;
+    }
+    .edit-visibility-section .edit-time-actions {
         flex-wrap: wrap;
         gap: 4px;
     }

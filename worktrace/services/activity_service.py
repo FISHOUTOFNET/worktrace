@@ -951,12 +951,65 @@ def merge_activities(first_activity_id: int, second_activity_id: int) -> dict:
         }
 
 
-def soft_delete_activity(activity_id: int) -> None:
+def hide_activity(activity_id: int) -> None:
+    """Atomically hide a closed activity from the default Timeline.
+
+    Sets ``activity_log.is_hidden = 1`` for the given activity. The row is
+    not physically deleted; assignment / resource / note / session-note rows
+    are untouched. Only non-deleted, already-closed (raw ``end_time IS NOT
+    NULL``) rows are affected, so a stale or racing call cannot hide a
+    deleted or in-progress record.
+
+    This operation is idempotent: hiding an already-hidden activity still
+    succeeds (the UPDATE matches the row and refreshes ``updated_at``).
+
+    Raises ``ValueError("activity_hide_affected_zero_rows")`` if the UPDATE
+    affects 0 rows (the activity was missing, deleted, or in-progress at
+    write time). The caller (API layer) maps this to a controlled
+    ``TimelineVisibilityError``.
+    """
     with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET is_deleted = 1, updated_at = ? WHERE id = ?",
+        cur = conn.execute(
+            """
+            UPDATE activity_log
+            SET is_hidden = 1, updated_at = ?
+            WHERE id = ?
+              AND is_deleted = 0
+              AND end_time IS NOT NULL
+            """,
             (now_str(), activity_id),
         )
+        if cur.rowcount == 0:
+            raise ValueError("activity_hide_affected_zero_rows")
+
+
+def soft_delete_activity(activity_id: int) -> None:
+    """Atomically soft-delete a closed activity from the Timeline.
+
+    Sets ``activity_log.is_deleted = 1`` for the given activity. The row is
+    not physically deleted; assignment / resource / note / session-note rows
+    are untouched. Only non-deleted, already-closed (raw ``end_time IS NOT
+    NULL``) rows are affected, so a stale or racing call cannot delete a
+    deleted or in-progress record.
+
+    Raises ``ValueError("activity_soft_delete_affected_zero_rows")`` if the
+    UPDATE affects 0 rows (the activity was missing, already deleted, or
+    in-progress at write time). The caller (API layer) maps this to a
+    controlled ``TimelineVisibilityError``.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE activity_log
+            SET is_deleted = 1, updated_at = ?
+            WHERE id = ?
+              AND is_deleted = 0
+              AND end_time IS NOT NULL
+            """,
+            (now_str(), activity_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("activity_soft_delete_affected_zero_rows")
 
 
 def update_activity_fields(activity_id: int, **fields: Any) -> None:

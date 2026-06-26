@@ -63,6 +63,20 @@ is soft-deleted. Only two activities can be merged per call; arbitrary-
 length batch merge and multi-activity session whole-merge are NOT
 supported. Errors are mapped from stable ``TimelineMergeError`` codes to
 Chinese messages without echoing tracebacks, SQL, or internal field names.
+
+Phase 3B.4 adds the minimal hide / soft-delete foundation:
+``hide_timeline_activity``, ``soft_delete_timeline_activity``,
+``hide_timeline_session``, and ``soft_delete_timeline_session`` are the
+production write path for hiding or soft-deleting a single closed activity.
+Hide sets ``is_hidden = 1``; soft delete sets ``is_deleted = 1``. Neither
+physically deletes the row or touches assignment / resource / note /
+session-note rows. Session-level operations only support single-activity
+sessions; multi-activity sessions return a clear Chinese message directing
+the user to per-activity editing. In-progress activities cannot be hidden
+or deleted. Errors are mapped from stable ``TimelineVisibilityError`` codes
+to Chinese messages without echoing tracebacks, SQL, or internal field
+names. This phase does not change the existing project / note / time /
+split / merge semantics.
 """
 
 from __future__ import annotations
@@ -72,7 +86,12 @@ import re
 from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
-from ..api.timeline_api import TimelineMergeError, TimelineSplitError, TimelineTimeEditError
+from ..api.timeline_api import (
+    TimelineMergeError,
+    TimelineSplitError,
+    TimelineTimeEditError,
+    TimelineVisibilityError,
+)
 from ..formatters import (
     format_duration,
     format_project_label,
@@ -129,6 +148,17 @@ _MERGE_ERROR_MESSAGES = {
     "incompatible_activity": "活动类型不同，暂不支持合并",
     "not_adjacent": "活动时间不连续，暂不支持合并",
     "invalid_time": "时间无效",
+    "operation_failed": "操作失败",
+}
+
+# Maps ``TimelineVisibilityError.code`` to stable Chinese user-facing messages
+# for the Phase 3B.4 hide / soft delete. Unknown codes collapse to the generic
+# "操作失败" so internal details are never surfaced.
+_VISIBILITY_ERROR_MESSAGES = {
+    "invalid_id": "操作失败",
+    "in_progress": "进行中记录暂不支持隐藏或删除",
+    "multi_activity_hide": "多活动 session 暂不支持整体隐藏，请在活动详情中逐条处理",
+    "multi_activity_delete": "多活动 session 暂不支持整体删除，请在活动详情中逐条处理",
     "operation_failed": "操作失败",
 }
 
@@ -656,6 +686,129 @@ class WebViewBridge:
             return {"ok": False, "error": "操作失败"}
         except Exception:
             logger.exception("webview bridge merge_timeline_activities failed")
+            return dict(_GENERIC_ERROR)
+
+    # --- Phase 3B.4: Timeline hide / soft delete (single-activity foundation) ---
+
+    def hide_timeline_activity(self, activity_id) -> dict[str, Any]:
+        """Hide a single closed activity from the default Timeline.
+
+        ``activity_id`` must be a positive int (``bool`` rejected). Sets
+        ``is_hidden = 1``; the row is not physically deleted. In-progress
+        activities (``end_time IS NULL``) cannot be hidden. Hiding an
+        already-hidden activity succeeds (idempotent).
+
+        Returns ``{"ok": true}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure. Known
+        failure modes map to clear Chinese messages; unknown failures
+        collapse to ``"操作失败"``. Tracebacks, SQL errors, file paths,
+        window titles, and notes are never surfaced.
+        """
+        try:
+            if isinstance(activity_id, bool):
+                return {"ok": False, "error": "操作失败"}
+            try:
+                aid = int(activity_id)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "操作失败"}
+            if aid <= 0:
+                return {"ok": False, "error": "操作失败"}
+            timeline_api.hide_timeline_activity(aid)
+            return {"ok": True}
+        except TimelineVisibilityError as exc:
+            return {"ok": False, "error": _VISIBILITY_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge hide_timeline_activity failed")
+            return dict(_GENERIC_ERROR)
+
+    def soft_delete_timeline_activity(self, activity_id) -> dict[str, Any]:
+        """Soft-delete a single closed activity from the Timeline.
+
+        ``activity_id`` must be a positive int (``bool`` rejected). Sets
+        ``is_deleted = 1``; the row is not physically deleted. In-progress
+        activities (``end_time IS NULL``) cannot be deleted.
+
+        Returns ``{"ok": true}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure. Known
+        failure modes map to clear Chinese messages; unknown failures
+        collapse to ``"操作失败"``. Tracebacks, SQL errors, file paths,
+        window titles, and notes are never surfaced.
+        """
+        try:
+            if isinstance(activity_id, bool):
+                return {"ok": False, "error": "操作失败"}
+            try:
+                aid = int(activity_id)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "操作失败"}
+            if aid <= 0:
+                return {"ok": False, "error": "操作失败"}
+            timeline_api.soft_delete_timeline_activity(aid)
+            return {"ok": True}
+        except TimelineVisibilityError as exc:
+            return {"ok": False, "error": _VISIBILITY_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge soft_delete_timeline_activity failed")
+            return dict(_GENERIC_ERROR)
+
+    def hide_timeline_session(self, activity_ids) -> dict[str, Any]:
+        """Apply a session-level hide.
+
+        ``activity_ids`` is the session's full activity id list. Phase 3B.4
+        only supports sessions that resolve to a single activity (after
+        deduplication); multi-activity sessions return a clear Chinese
+        message directing the user to per-activity hiding.
+
+        Returns ``{"ok": true}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "操作失败"}
+            # Multi-activity check at the bridge layer so the user gets a
+            # clear message without a round-trip through the API.
+            if len(ids) > 1:
+                return {"ok": False, "error": "多活动 session 暂不支持整体隐藏，请在活动详情中逐条处理"}
+            timeline_api.hide_timeline_session(ids)
+            return {"ok": True}
+        except TimelineVisibilityError as exc:
+            return {"ok": False, "error": _VISIBILITY_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge hide_timeline_session failed")
+            return dict(_GENERIC_ERROR)
+
+    def soft_delete_timeline_session(self, activity_ids) -> dict[str, Any]:
+        """Apply a session-level soft delete.
+
+        ``activity_ids`` is the session's full activity id list. Phase 3B.4
+        only supports sessions that resolve to a single activity (after
+        deduplication); multi-activity sessions return a clear Chinese
+        message directing the user to per-activity deletion.
+
+        Returns ``{"ok": true}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "操作失败"}
+            if len(ids) > 1:
+                return {"ok": False, "error": "多活动 session 暂不支持整体删除，请在活动详情中逐条处理"}
+            timeline_api.soft_delete_timeline_session(ids)
+            return {"ok": True}
+        except TimelineVisibilityError as exc:
+            return {"ok": False, "error": _VISIBILITY_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge soft_delete_timeline_session failed")
             return dict(_GENERIC_ERROR)
 
 
