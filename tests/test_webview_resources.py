@@ -4653,3 +4653,199 @@ def test_app_js_batch_note_render_called_from_render_correction_shell():
     assert "renderBatchNoteSection" in render_body, (
         "renderCorrectionShell must call renderBatchNoteSection"
     )
+
+
+# --- Phase 3B.7.1: Timeline batch note editing hardening -----------------
+#
+# These static tests verify the hardening invariants in app.js: cross-save
+# guard, session/date/shell switch clearing, and cross-disable of batch
+# project controls when batch note is saving (and vice versa).
+
+
+def test_app_js_batch_note_save_checks_batch_project_saving():
+    """Phase 3B.7.1: saveBatchNote must check ``batchProjectSaving`` before
+    proceeding so two batch saves cannot compete."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "batchProjectSaving" in save_body, (
+        "saveBatchNote must check batchProjectSaving before proceeding"
+    )
+
+
+def test_app_js_select_timeline_session_resets_batch_note():
+    """Phase 3B.7.1: selectTimelineSession must call
+    resetCorrectionShellState (which calls resetBatchNoteState) when
+    switching sessions so the note textarea does not carry over."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    select_start = source.find("function selectTimelineSession")
+    select_end = source.find("\n    function ", select_start + 1)
+    select_body = source[select_start:select_end]
+    assert "resetCorrectionShellState" in select_body, (
+        "selectTimelineSession must call resetCorrectionShellState on "
+        "session switch (which resets batch note state)"
+    )
+
+
+def test_app_js_date_navigation_resets_batch_note():
+    """Phase 3B.7.1: goPrevDay / goNextDay / goToday must all call
+    resetCorrectionShellState (which calls resetBatchNoteState) so the
+    note textarea does not carry over to a different day."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for func_name in ("goPrevDay", "goNextDay", "goToday"):
+        func_start = source.find("function " + func_name)
+        assert func_start >= 0, f"app.js must define {func_name}"
+        func_end = source.find("\n    function ", func_start + 1)
+        func_body = source[func_start:func_end]
+        assert "resetCorrectionShellState" in func_body, (
+            func_name + " must call resetCorrectionShellState (which "
+            "resets batch note state)"
+        )
+
+
+def test_app_js_close_correction_shell_resets_batch_note():
+    """Phase 3B.7.1: closeCorrectionShell must call
+    resetCorrectionShellState (which calls resetBatchNoteState) so the
+    note textarea is cleared when the user closes the shell."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    close_start = source.find("function closeCorrectionShell")
+    close_end = source.find("\n    function ", close_start + 1)
+    close_body = source[close_start:close_end]
+    assert "resetCorrectionShellState" in close_body, (
+        "closeCorrectionShell must call resetCorrectionShellState "
+        "(which resets batch note state)"
+    )
+
+
+def test_app_js_set_batch_note_saving_disables_batch_project_controls():
+    """Phase 3B.7.1: setBatchNoteSaving must disable the batch project
+    save button (and select-all / clear / project select) so the user
+    cannot start a competing project save while a note save is in flight."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    saving_start = source.find("function setBatchNoteSaving")
+    saving_end = source.find("\n    function ", saving_start + 1)
+    saving_body = source[saving_start:saving_end]
+    assert "correction-shell-batch-save-btn" in saving_body, (
+        "setBatchNoteSaving must disable the batch project save button"
+    )
+    assert "correction-shell-batch-select-all-btn" in saving_body, (
+        "setBatchNoteSaving must disable the select-all button"
+    )
+    assert "correction-shell-batch-clear-btn" in saving_body, (
+        "setBatchNoteSaving must disable the clear-selection button"
+    )
+    assert "correction-shell-batch-project-select" in saving_body, (
+        "setBatchNoteSaving must disable the batch project select"
+    )
+
+
+def test_app_js_set_batch_project_saving_disables_batch_note_controls():
+    """Phase 3B.7.1: setBatchProjectSaving must disable the batch note
+    textarea so the user cannot edit the note while a project save is in
+    flight."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    saving_start = source.find("function setBatchProjectSaving")
+    saving_end = source.find("\n    function ", saving_start + 1)
+    saving_body = source[saving_start:saving_end]
+    assert "correction-shell-batch-note-text" in saving_body, (
+        "setBatchProjectSaving must disable the batch note textarea"
+    )
+
+
+def test_app_js_reset_correction_shell_state_calls_reset_batch_note():
+    """Phase 3B.7.1: resetCorrectionShellState must call
+    resetBatchNoteState so every path that resets the shell also clears
+    the note textarea / count / status / saving state."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    reset_start = source.find("function resetCorrectionShellState")
+    reset_end = source.find("\n    function ", reset_start + 1)
+    reset_body = source[reset_start:reset_end]
+    assert "resetBatchNoteState" in reset_body, (
+        "resetCorrectionShellState must call resetBatchNoteState"
+    )
+
+
+def test_app_js_reset_batch_note_state_clears_textarea_and_count():
+    """Phase 3B.7.1: resetBatchNoteState must clear the note textarea
+    value, reset the count, and hide the status area."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    reset_start = source.find("function resetBatchNoteState")
+    reset_end = source.find("\n    function ", reset_start + 1)
+    reset_body = source[reset_start:reset_end]
+    assert 'noteText.value = ""' in reset_body or "noteText.value = ''" in reset_body, (
+        "resetBatchNoteState must clear the note textarea value"
+    )
+    assert "batchNoteSaving = false" in reset_body, (
+        "resetBatchNoteState must reset batchNoteSaving"
+    )
+    assert "correction-shell-batch-note-count" in reset_body, (
+        "resetBatchNoteState must reset the note count"
+    )
+
+
+def test_app_js_batch_note_no_old_or_new_note_leak_in_error_handling():
+    """Phase 3B.7.1: the batch note error handling code must not reference
+    old_note or new_note variables — the bridge error is surfaced verbatim
+    without echoing note content."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "old_note" not in save_body, (
+        "saveBatchNote must not reference old_note"
+    )
+    assert "new_note" not in save_body, (
+        "saveBatchNote must not reference new_note"
+    )
+    assert "oldNote" not in save_body, (
+        "saveBatchNote must not reference oldNote"
+    )
+    assert "newNote" not in save_body, (
+        "saveBatchNote must not reference newNote"
+    )
+
+
+def test_app_js_batch_note_failure_preserves_textarea():
+    """Phase 3B.7.1: the failure path in saveBatchNote must NOT clear the
+    note textarea — the user's input is preserved so they can retry."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    # Find the error/failure branch (result.ok === false).
+    fail_idx = save_body.find("result.ok === false")
+    if fail_idx < 0:
+        fail_idx = save_body.find("result.ok !== true")
+    assert fail_idx >= 0, "saveBatchNote must have a failure branch"
+    # Extract only the failure branch body — from the condition up to (but
+    # not including) the first ``return;`` that closes the branch. Anything
+    # after that return belongs to the success path.
+    fail_return = save_body.find("return;", fail_idx)
+    if fail_return < 0:
+        fail_return = len(save_body)
+    fail_branch = save_body[fail_idx:fail_return]
+    # The failure branch must NOT reset the textarea value.
+    assert 'noteEl.value = ""' not in fail_branch, (
+        "saveBatchNote failure path must not clear the note textarea"
+    )
+    assert "resetBatchNoteState" not in fail_branch, (
+        "saveBatchNote failure path must not call resetBatchNoteState"
+    )
+
+
+def test_app_js_batch_note_success_clears_selection_and_textarea():
+    """Phase 3B.7.1: the success path in saveBatchNote must clear the
+    selection and the note textarea."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchNote")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    # The success path must clear selectedBatchActivityIds.
+    assert "selectedBatchActivityIds = {}" in save_body, (
+        "saveBatchNote success must clear selectedBatchActivityIds"
+    )
+    # The success path must clear the note textarea.
+    assert 'noteEl.value = ""' in save_body or "noteEl.value = ''" in save_body, (
+        "saveBatchNote success must clear the note textarea"
+    )

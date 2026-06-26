@@ -372,3 +372,129 @@ def test_bridge_does_not_import_backend_internals():
         assert forbidden not in source, (
             "bridge must not import " + forbidden
         )
+
+
+# --- Phase 3B.7.1: bridge hardening --------------------------------------
+#
+# These tests verify the bridge error/success payload does not leak note
+# content, the updated_count matches the selection, and the bridge
+# converges all error paths to stable Chinese messages.
+
+
+def test_batch_error_does_not_leak_note_content(bridge):
+    """Phase 3B.7.1: error payloads must not contain the note content that
+    was sent to the bridge. The user may have typed sensitive content into
+    the note textarea; a validation error must not echo it back."""
+    ids = _seed_two_closed_activities()
+    secret_note = "super_secret_note_in_error_path"
+    # Trigger an error (in_progress) while sending a secret note.
+    a3 = activity_service.create_activity(
+        "Word", "winword.exe", "A3.docx", start_time="2026-06-25 11:00:00"
+    )
+    activity_service.finalize_created_activity(a3)
+    # a3 is in-progress (no close_activity call).
+    result = bridge.batch_update_timeline_activities_note(
+        [ids[0], a3], secret_note
+    )
+    assert result["ok"] is False
+    # The note content must not appear anywhere in the error payload.
+    assert secret_note not in str(result)
+    assert "note" not in result
+    assert "old_note" not in result
+    assert "new_note" not in result
+
+
+def test_batch_success_updated_count_matches_selection(bridge):
+    """Phase 3B.7.1: the ``updated_count`` in the success payload must
+    equal the number of activities sent (after dedup)."""
+    ids = _seed_two_closed_activities()
+    result = bridge.batch_update_timeline_activities_note(ids, "note")
+    assert result["ok"] is True
+    assert result["updated_count"] == len(ids)
+
+
+def test_batch_success_updated_count_matches_deduped_selection(bridge):
+    """Phase 3B.7.1: duplicate ids in the input must be deduplicated, and
+    ``updated_count`` must reflect the deduplicated count."""
+    ids = _seed_two_closed_activities()
+    # Send duplicates.
+    result = bridge.batch_update_timeline_activities_note(
+        [ids[0], ids[1], ids[0], ids[1]], "note"
+    )
+    assert result["ok"] is True
+    assert result["updated_count"] == 2
+
+
+def test_batch_all_chinese_error_messages_present(bridge):
+    """Phase 3B.7.1: verify every stable error code produces its exact
+    Chinese message through the bridge. This guards against accidental
+    message drift."""
+    ids = _seed_two_closed_activities()
+    cases = [
+        ("invalid_selection", "请选择至少两个活动"),
+        ("batch_too_large", "一次最多修改 100 条活动"),
+        ("invalid_note", "请输入有效备注"),
+        ("note_too_long", "备注过长"),
+        ("in_progress", "进行中记录暂不支持批量修改"),
+        ("hidden_activity", "隐藏记录暂不支持批量修改"),
+        ("operation_failed", "操作失败"),
+    ]
+    for code, expected_msg in cases:
+        with patch(
+            "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+            side_effect=TimelineBatchNoteError(code),
+        ):
+            result = bridge.batch_update_timeline_activities_note(ids, "note")
+        assert result["ok"] is False
+        assert result["error"] == expected_msg, (
+            f"error code '{code}' must produce '{expected_msg}', "
+            f"got '{result['error']}'"
+        )
+
+
+def test_batch_unknown_code_converges_to_generic(bridge):
+    """Phase 3B.7.1: an unrecognized error code must converge to
+    ``操作失败`` so internal details are never surfaced."""
+    ids = _seed_two_closed_activities()
+    with patch(
+        "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+        side_effect=TimelineBatchNoteError("unexpected_new_code_xyz"),
+    ):
+        result = bridge.batch_update_timeline_activities_note(ids, "note")
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    assert "unexpected_new_code_xyz" not in str(result)
+
+
+def test_batch_success_payload_has_only_ok_and_count(bridge):
+    """Phase 3B.7.1: the success payload must contain exactly ``ok`` and
+    ``updated_count`` — no extra keys that could leak internal data."""
+    ids = _seed_two_closed_activities()
+    result = bridge.batch_update_timeline_activities_note(ids, "note")
+    assert result["ok"] is True
+    assert set(result.keys()) == {"ok", "updated_count"}
+
+
+def test_batch_error_payload_has_only_ok_and_error(bridge):
+    """Phase 3B.7.1: the error payload must contain exactly ``ok`` and
+    ``error`` — no extra keys that could leak internal data."""
+    ids = _seed_two_closed_activities()
+    with patch(
+        "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+        side_effect=TimelineBatchNoteError("operation_failed"),
+    ):
+        result = bridge.batch_update_timeline_activities_note(ids, "note")
+    assert result["ok"] is False
+    assert set(result.keys()) == {"ok", "error"}
+
+
+def test_batch_note_too_long_rejected_at_bridge(bridge):
+    """Phase 3B.7.1: the bridge must reject an overly long note before
+    calling the API, returning the ``备注过长`` message."""
+    ids = _seed_two_closed_activities()
+    from worktrace.api import timeline_api as api_module
+
+    long_note = "x" * (api_module.TIMELINE_NOTE_MAX_LENGTH + 1)
+    result = bridge.batch_update_timeline_activities_note(ids, long_note)
+    assert result["ok"] is False
+    assert result["error"] == "备注过长"

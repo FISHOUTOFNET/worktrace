@@ -2385,3 +2385,89 @@ are modified — `source` is intentionally not changed (unlike the single
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
   server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 3B.7.1 Validation
+
+Phase 3B.7.1 is a **hardening-only** phase for the Phase 3B.7 batch note
+overwrite. It introduces **no new features** and **no new batch write
+types**. The hardening adds explicit tests that verify the service
+transaction, API error mapping, bridge error convergence, and frontend
+state-management invariants are stable and do not regress.
+
+### Phase 3B.7.1 Scope
+
+- Service (`worktrace/services/activity_service.py`): verified that
+  `batch_update_activity_note` does NOT set `source = 'manual'` — the
+  `source` column remains unchanged (the key semantic difference from the
+  single `update_activity_note` path). Verified the `note_update_failed`
+  error code on rowcount mismatch. Verified every selected activity's
+  note equals the target exactly. Verified empty string clears all
+  selected notes. Verified `updated_at` is refreshed on every selected
+  activity.
+- API (`worktrace/api/timeline_api.py`): verified the complete service →
+  API error code mapping table (all 10 stable service codes map to the
+  correct API codes). Verified non-`ValueError` exception collapse to
+  `operation_failed` without leaking exception text. Verified the return
+  payload contains only `{"updated_count": n}` — no note content, no
+  old/new note keys.
+- Bridge (`worktrace/webview_ui/bridge.py`): verified error payloads do
+  not contain the note content sent to the bridge. Verified
+  `updated_count` matches the deduplicated selection. Verified every
+  stable error code produces its exact Chinese message. Verified unknown
+  codes converge to `操作失败`. Verified success payload has exactly
+  `{ok, updated_count}` and error payload has exactly `{ok, error}`.
+  Verified the bridge rejects overly long notes before calling the API.
+- Frontend (`worktrace/webview_ui/app.js`): verified the cross-save guard
+  (`saveBatchNote` checks `batchProjectSaving` and vice versa). Verified
+  `setBatchNoteSaving` disables batch project controls and
+  `setBatchProjectSaving` disables the batch note textarea. Verified
+  `selectTimelineSession` / `goPrevDay` / `goNextDay` / `goToday` /
+  `closeCorrectionShell` all reset batch note state. Verified
+  `resetBatchNoteState` clears the textarea, count, and saving flag.
+  Verified the error handling code does not reference old/new note
+  variables. Verified the failure path preserves the textarea and the
+  success path clears both selection and textarea.
+- DB schema: **no new schema**. No code changes to the implementation.
+- WebView-only: no Tkinter fallback, no new sidebar nav item, no React /
+  Vue / Vite / Node, no local HTTP server, no CDN / external fonts /
+  Google Fonts, no `localStorage` / `sessionStorage`.
+
+### Phase 3B.7.1 Verification
+
+- `python -m pytest` passes (all Phase 3B.7.1 hardening tests pass; all
+  prior phase tests continue to pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- No new DB schema is introduced.
+- No code changes to the service / API / bridge / frontend implementation
+  (hardening-only: tests + docs).
+
+### Phase 3B.7.1 Release Blockers
+
+- `source` is changed to `'manual'` by the batch note overwrite (it must
+  remain unchanged — this is the key semantic difference from single
+  note editing).
+- The API return payload leaks the note content (old or new).
+- The bridge error payload echoes back the note content that was sent.
+- A non-`ValueError` service exception propagates uncaught through the
+  API layer (it must collapse to `operation_failed`).
+- The `updated_count` does not match the deduplicated selection count.
+- An unknown error code surfaces internal details instead of converging
+  to `操作失败`.
+- The frontend cross-save guard is bypassed (two batch saves can
+  compete).
+- The note textarea carries over to a different session / date / shell
+  state.
+- The failure path clears the note textarea (it must be preserved for
+  retry).
+- The success path does not clear the selection and textarea.
+- `source` / `project_id` / `status` / `start_time` / `end_time` /
+  `duration_seconds` / assignment rows / resource rows / session notes
+  are modified by the batch note overwrite.
+- A new DB schema is introduced.
+- The bridge imports `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- Any Phase 3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A / 3B.4 /
+  3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
+  server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.

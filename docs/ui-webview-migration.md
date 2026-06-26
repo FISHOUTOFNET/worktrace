@@ -38,7 +38,13 @@
   with rowcount guard and full rollback, rejecting in-progress / hidden /
   deleted activities; only `activity_log.note` and `updated_at` are
   modified (`source` is intentionally not changed); empty string is
-  allowed and clears notes — implemented; WebView is the default and only
+  allowed and clears notes — implemented; Timeline batch note editing
+  hardening — explicit tests for source-not-changed-to-manual, complete
+  service→API error code mapping table, non-ValueError exception collapse,
+  API/bridge return payload note-content leak prevention, bridge
+  updated_count matches deduped selection, frontend cross-save guard,
+  session/date/shell switch clearing the note textarea, and failure-path
+  textarea preservation — implemented; WebView is the default and only
   shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
@@ -2526,6 +2532,96 @@ Phase 3B.7 does not implement and does not start:
 - Multi-activity session whole-hide / whole-delete;
 - Any new DB schema;
 - Any new batch write type other than note overwrite;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any Tkinter fallback path.
+
+## Phase 3B.7.1 Implemented Scope
+
+Phase 3B.7.1 is a **hardening-only** phase for the Phase 3B.7 batch note
+overwrite. It introduces **no new features** and **no new batch write
+types**. The hardening stabilizes the batch note overwrite across the
+service transaction, API error mapping, bridge error convergence, and
+frontend stale selection / textarea preservation / auto-refresh /
+dirty-state / saving-state / selected-session-disappear paths.
+
+Hardening coverage:
+
+- **Service layer**: verified that `batch_update_activity_note` does NOT
+  set `source = 'manual'` (the key semantic difference from the single
+  `update_activity_note` path which does set `source = 'manual'`); the
+  `source` column remains unchanged after a batch note overwrite. Verified
+  that the `note_update_failed` error code is raised on rowcount mismatch
+  (race condition). Verified that every selected activity's note equals
+  the target note exactly (not concatenated, not prefixed, not
+  truncated). Verified that empty string clears the note on every selected
+  activity. Verified that `updated_at` is refreshed on every selected
+  activity.
+- **API layer**: verified the complete service → API error code mapping
+  table (every stable `ValueError(code)` maps to a stable
+  `TimelineBatchNoteError(code)`): `invalid_activity_ids` /
+  `activity_not_found` / `activity_deleted` → `invalid_selection`;
+  `batch_too_large` → `batch_too_large`; `invalid_note` → `invalid_note`;
+  `note_too_long` → `note_too_long`; `activity_hidden` →
+  `hidden_activity`; `activity_in_progress` → `in_progress`;
+  `note_update_failed` / unknown → `operation_failed`. Verified that a
+  non-`ValueError` service exception collapses to `operation_failed`
+  without leaking the exception text. Verified that the API return payload
+  contains only `{"updated_count": n}` — no note content, no old/new note
+  keys, no raw rows, no exception text.
+- **Bridge layer**: verified that error payloads do not contain the note
+  content that was sent to the bridge (a user may type sensitive content
+  into the note textarea; a validation error must not echo it back).
+  Verified that `updated_count` matches the deduplicated selection count.
+  Verified that every stable error code produces its exact Chinese
+  message. Verified that unknown codes converge to `操作失败`. Verified
+  that the success payload contains exactly `{"ok": true, "updated_count":
+  n}` and the error payload contains exactly `{"ok": false, "error":
+  "<message>"}` — no extra keys that could leak internal data. Verified
+  that the bridge rejects overly long notes before calling the API.
+- **Frontend**: verified the cross-save guard — `saveBatchNote` checks
+  `batchProjectSaving` before proceeding (and vice versa,
+  `saveBatchProject` checks `batchNoteSaving`), so two batch saves cannot
+  compete. Verified that `setBatchNoteSaving` disables the batch project
+  controls (save button / select-all / clear / project select), and
+  `setBatchProjectSaving` disables the batch note textarea. Verified that
+  `selectTimelineSession`, `goPrevDay`, `goNextDay`, `goToday`, and
+  `closeCorrectionShell` all call `resetCorrectionShellState` (which calls
+  `resetBatchNoteState`) so the note textarea does not carry over to a
+  different session / date / shell state. Verified that
+  `resetBatchNoteState` clears the textarea value, resets the count, and
+  resets `batchNoteSaving`. Verified that the error handling code does
+  not reference `old_note` / `new_note` / `oldNote` / `newNote`
+  variables. Verified that the failure path preserves the note textarea
+  (does not clear it or call `resetBatchNoteState`). Verified that the
+  success path clears both the selection and the note textarea.
+
+DB schema: **no new schema**. No code changes were made to the service /
+API / bridge / frontend implementation — the Phase 3B.7 foundation was
+already solid; this phase adds explicit hardening tests and documentation
+to guard against regressions.
+
+## Phase 3B.7.1 Not Implemented
+
+Phase 3B.7.1 does not implement and does not start:
+
+- Batch note append (concatenating note text onto existing notes);
+- Batch note merge (combining multiple notes into one);
+- Batch hide / batch delete;
+- Batch time correction;
+- Batch split;
+- Batch merge;
+- Undo / restore;
+- Permanent delete;
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge;
+- Multi-activity session whole-hide / whole-delete;
+- Any new DB schema;
+- Any new batch write type;
+- Any new feature or UI control;
 - Any React / Vue / Vite / Node dependency;
 - Any local HTTP server;
 - Any CDN / external JS / CSS / font / Google Fonts usage;
