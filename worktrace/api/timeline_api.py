@@ -103,6 +103,30 @@ class TimelineVisibilityError(ValueError):
         self.code = code
 
 
+class TimelineBatchProjectError(ValueError):
+    """Raised by the Phase 3B.6 batch project reassignment methods for
+    known, user-facing failure modes.
+
+    Stable ``code`` values mapped by the WebView bridge to Chinese messages:
+
+    - ``invalid_selection`` — activity_ids is not a list, contains fewer
+      than 2 ids after dedup, or contains non-int / bool / non-positive
+      values.
+    - ``batch_too_large`` — the deduplicated id count exceeds
+      ``MAX_BATCH_PROJECT_EDIT_ACTIVITIES`` (100).
+    - ``invalid_project`` — project_id is not a positive int / bool, or the
+      project does not exist / is archived / is disabled.
+    - ``in_progress`` — any activity is still open (``end_time IS NULL``).
+    - ``hidden_activity`` — any activity has ``is_hidden = 1``.
+    - ``operation_failed`` — race condition or unexpected service failure
+      (e.g. a row was deleted between validation and write).
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 # --- timeline / sessions -------------------------------------------------
 
 def get_default_report_date() -> str:
@@ -830,6 +854,133 @@ def _validate_visibility_activity_ids(activity_ids: list[int]) -> list[int]:
     return ids
 
 
+# --- Phase 3B.6: Timeline batch project editing foundation ---
+#
+# Phase 3B.6 implements the first batch write capability: batch project
+# reassignment only.
+#
+# - ``batch_update_timeline_activities_project`` sets the same project on
+#   multiple closed, non-hidden, non-deleted activities in a single atomic
+#   transaction.
+# - The write semantics match the existing single-activity / session-level
+#   manual project reassignment: both ``activity_log.project_id`` and
+#   ``activity_project_assignment`` are updated, ``manual_override`` is set,
+#   ``updated_at`` is refreshed.
+# - At least 2 activities are required (after dedup); the max is
+#   ``MAX_BATCH_PROJECT_EDIT_ACTIVITIES`` (100).
+# - In-progress, hidden, and deleted activities are rejected.
+# - No new DB schema is introduced.
+# - This phase does NOT implement batch note editing, batch hide, batch
+#   delete, batch time correction, batch split, batch merge, undo / restore,
+#   permanent delete, auto-rule, or global overlap detection.
+
+
+def batch_update_timeline_activities_project(
+    activity_ids: list[int],
+    project_id: int,
+) -> dict:
+    """Validate and apply a batch project reassignment to multiple activities.
+
+    Validation:
+    - ``activity_ids`` must be a list of positive integers (``bool``
+      rejected); duplicate ids are deduplicated. After deduplication, at
+      least 2 ids must remain and the count must not exceed
+      ``MAX_BATCH_PROJECT_EDIT_ACTIVITIES``.
+    - ``project_id`` must be a positive integer (``bool`` rejected) and
+      must reference an existing, non-archived, enabled project.
+    - Every activity must exist, be non-deleted, non-hidden, and closed
+      (``end_time IS NOT NULL``).
+
+    Returns ``{"updated_count": int}`` on success. Raises
+    ``TimelineBatchProjectError`` with a stable ``code`` for known failure
+    modes. The write is a single atomic transaction; no partial writes are
+    possible.
+    """
+    ids = _validate_batch_activity_ids(activity_ids)
+    pid = _validate_batch_project_id(project_id)
+    try:
+        count = activity_service.batch_update_activity_project(ids, pid)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "invalid_activity_ids":
+            raise TimelineBatchProjectError("invalid_selection")
+        if code == "batch_too_large":
+            raise TimelineBatchProjectError("batch_too_large")
+        if code == "invalid_project":
+            raise TimelineBatchProjectError("invalid_project")
+        if code == "activity_not_found":
+            raise TimelineBatchProjectError("invalid_selection")
+        if code == "activity_deleted":
+            raise TimelineBatchProjectError("invalid_selection")
+        if code == "activity_hidden":
+            raise TimelineBatchProjectError("hidden_activity")
+        if code == "activity_in_progress":
+            raise TimelineBatchProjectError("in_progress")
+        # ``project_update_failed`` or any unexpected ValueError collapses
+        # to ``operation_failed`` so the bridge returns a clear generic
+        # message without echoing internal details.
+        raise TimelineBatchProjectError("operation_failed")
+    return {"updated_count": int(count)}
+
+
+def _validate_batch_activity_ids(activity_ids: list[int]) -> list[int]:
+    """Validate the ``activity_ids`` list for batch project editing.
+
+    Returns a deduplicated list of positive ints. Raises
+    ``TimelineBatchProjectError``:
+    - ``invalid_selection`` — not a list, empty, contains non-int / bool /
+      non-positive values, or fewer than 2 ids after dedup.
+    - ``batch_too_large`` — deduplicated count exceeds the max.
+    """
+    if isinstance(activity_ids, bool) or not isinstance(activity_ids, list):
+        raise TimelineBatchProjectError("invalid_selection")
+    if not activity_ids:
+        raise TimelineBatchProjectError("invalid_selection")
+    ids: list[int] = []
+    seen: set[int] = set()
+    for raw in activity_ids:
+        if isinstance(raw, bool):
+            raise TimelineBatchProjectError("invalid_selection")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            raise TimelineBatchProjectError("invalid_selection")
+        if value <= 0:
+            raise TimelineBatchProjectError("invalid_selection")
+        if value in seen:
+            continue
+        seen.add(value)
+        ids.append(value)
+    if len(ids) < 2:
+        raise TimelineBatchProjectError("invalid_selection")
+    if len(ids) > activity_service.MAX_BATCH_PROJECT_EDIT_ACTIVITIES:
+        raise TimelineBatchProjectError("batch_too_large")
+    return ids
+
+
+def _validate_batch_project_id(project_id: int) -> int:
+    """Validate ``project_id`` for batch project editing.
+
+    Returns the validated positive int. Raises ``TimelineBatchProjectError``:
+    - ``invalid_project`` — not a positive int, ``bool``, or the project
+      does not exist / is archived / is disabled.
+    """
+    if isinstance(project_id, bool):
+        raise TimelineBatchProjectError("invalid_project")
+    try:
+        pid = int(project_id)
+    except (TypeError, ValueError):
+        raise TimelineBatchProjectError("invalid_project")
+    if pid <= 0:
+        raise TimelineBatchProjectError("invalid_project")
+    project = project_service.get_project(pid)
+    if not project:
+        raise TimelineBatchProjectError("invalid_project")
+    if int(project.get("is_archived") or 0) or not int(project.get("enabled") or 0):
+        raise TimelineBatchProjectError("invalid_project")
+    return pid
+
+
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
     # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
     # not silently coerced to ``1``/``0``.
@@ -1046,10 +1197,12 @@ def is_snapshot_unconfirmed(snapshot: dict[str, Any] | None) -> bool:
 
 __all__ = [
     "TIMELINE_NOTE_MAX_LENGTH",
+    "TimelineBatchProjectError",
     "TimelineTimeEditError",
     "TimelineSplitError",
     "TimelineMergeError",
     "TimelineVisibilityError",
+    "batch_update_timeline_activities_project",
     "get_default_report_date",
     "get_project_sessions_by_date",
     "get_project_sessions_by_range",

@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3B.5B.1 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.6 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -21,7 +21,11 @@
   Timeline correction shell hardening — navigation, auto-refresh,
   dirty-state, selected-session-disappear, display-safe field boundary,
   click-to-locate, and close / reset path stabilization — implemented;
-  WebView is the default and only shipping UI).
+  Timeline batch project editing foundation — the first batch write
+  capability: multiple closed activities in the correction shell can be
+  reassigned to one project via an atomic transaction with rowcount guard
+  and full rollback, rejecting in-progress / hidden / deleted activities —
+  implemented; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -371,8 +375,11 @@ The migration is phased so each step is independently shippable:
   overlap detection, multi-activity session whole-hide / whole-delete,
   and arbitrary-length merge remain out of scope. No new DB schema.
   **Completed.**
-- Phase 3B: Timeline advanced editing (batch editing,
-  correction page) — not yet started.
+- Phase 3B: Timeline advanced editing (batch editing foundation,
+  correction page) — Phase 3B.6 batch project reassignment foundation
+  implemented; other batch operations (batch hide / batch delete / batch
+  time / batch split / batch merge) and the wider correction page remain
+  not yet started.
 - Phase 4: Statistics / Export.
 - Phase 5: Rules.
 - Phase 6: Settings / Privacy / Encrypted Backup.
@@ -2118,6 +2125,148 @@ Phase 3B.5B.1 does not implement and does not start:
 - Any new DB schema;
 - Any new bridge / API / service method;
 - Any new correction action.
+
+## Phase 3B.6 Implemented Scope
+
+Phase 3B.6 implements the **first batch write capability** in the WebView
+Timeline: **batch project reassignment**. Multiple closed activities
+selected in the correction shell (Phase 3B.5B shell) can be reassigned to a
+single target project in one operation. This is the **only** batch write
+capability introduced in this phase; it is **not** a general batch editing
+phase.
+
+Backend write path:
+
+- Service layer (`worktrace/services/activity_service.py`):
+  `batch_update_activity_project(activity_ids, project_id) -> int`.
+  Validates the activity id list (must be a list, dedup to ≥ 2, each item a
+  positive int, reject bool, reject > `MAX_BATCH_PROJECT_EDIT_ACTIVITIES`
+  (= 100)), validates the target project (positive int, reject bool, exists,
+  not archived, enabled), validates every activity (exists, `is_deleted = 0`,
+  `is_hidden = 0`, raw DB `end_time IS NOT NULL` i.e. closed — in-progress
+  rejected), then performs a single atomic transaction: UPDATEs each
+  activity's effective project consistent with the existing single-edit
+  `update_activity_project` / `update_activities_project` semantics (writes
+  both `activity_log.project_id` and `activity_project_assignment` rows with
+  `is_manual = 1` / `source = 'manual'` / `confidence = 100`, matching the
+  manual override semantics), refreshes `updated_at`, applies a rowcount
+  guard (any UPDATE affecting 0 rows raises and rolls back), and returns the
+  updated activity count. Any validation or write failure rolls back the
+  whole transaction so no partial project assignment is left behind. Service
+  raises stable `ValueError(code)` codes: `invalid_activity_ids`,
+  `batch_too_large`, `invalid_project`, `activity_not_found`,
+  `activity_deleted`, `activity_hidden`, `activity_in_progress`,
+  `project_update_failed`.
+- API layer (`worktrace/api/timeline_api.py`):
+  `batch_update_timeline_activities_project(activity_ids, project_id) -> dict`
+  returns `{"updated_count": n}`. Defines `TimelineBatchProjectError(ValueError)`
+  with stable codes: `invalid_selection`, `batch_too_large`,
+  `invalid_project`, `in_progress`, `hidden_activity`, `operation_failed`.
+  Service error codes are mapped: `invalid_activity_ids` /
+  `activity_not_found` / `activity_deleted` → `invalid_selection`;
+  `batch_too_large` → `batch_too_large`; `invalid_project` →
+  `invalid_project`; `activity_in_progress` → `in_progress`;
+  `activity_hidden` → `hidden_activity`; anything else →
+  `operation_failed`. The API never returns raw rows, raw field values,
+  tracebacks, SQL errors, or internal exception text.
+- Bridge layer (`worktrace/webview_ui/bridge.py`):
+  `batch_update_timeline_activities_project(activity_ids, project_id) ->
+  dict` returns `{"ok": true, "updated_count": n}` on success and
+  `{"ok": false, "error": "<中文错误>"}` on failure. The bridge imports
+  only `worktrace.api` / `worktrace.formatters`; it does **not** import
+  `services` / `db` / `collector` / `runtime` / `security` / `config`.
+  Chinese error message mapping via `_BATCH_PROJECT_ERROR_MESSAGES`:
+  `invalid_selection` → `请选择至少两个活动`; `batch_too_large` →
+  `一次最多修改 100 条活动`; `invalid_project` → `请选择有效的项目`;
+  `in_progress` → `进行中记录暂不支持批量修改`; `hidden_activity` →
+  `隐藏记录暂不支持批量修改`; `operation_failed` / unknown → `操作失败`.
+  The bridge rejects bool ids and bool project_id at the boundary, never
+  returns tracebacks / SQL / `window_title` / `file_path_hint` /
+  `full_path` / `clipboard` / note values, and falls back to the generic
+  `操作失败` message on any unexpected exception.
+
+Frontend (`worktrace/webview_ui/index.html` / `app.js` / `styles.css`):
+
+- The Phase 3B.5B correction shell gains a dedicated `批量项目重分类`
+  section. The section is rendered inside the shell (advanced edit layout),
+  not as a new sidebar nav item, and not on the simple detail panel.
+- Each eligible shell activity row carries a `correction-shell-activity-checkbox`
+  with `data-batch-activity-id`. In-progress activities render with a
+  disabled checkbox (and the `is-in-progress` class); non-numeric / `.is-static`
+  rows render with a disabled checkbox. Only the current rendered shell
+  activity list is selectable.
+- Selection state: `selectedBatchActivityIds` (a map of id → true),
+  `batchProjectSaving` (bool), `batchProjectTargetId` (project id or null).
+  Selection is **never** written to `localStorage` / `sessionStorage`.
+- Controls: `全选当前可修改活动` / `清空选择` toggle buttons, a
+  `已选择 N 条` count, a target project `<select>` (reusing the existing
+  project list cache), and a `批量设置项目` save button. The save button is
+  disabled when fewer than 2 activities are selected or no target project is
+  chosen. Saving disables the checkboxes / select / buttons.
+- Dirty-state guard: `saveBatchProject` refuses while `isEditDirty()` is
+  true with `请先保存或取消当前编辑`; it does **not** clear the detail
+  list or the selection.
+- Save flow: stale selected ids are pruned on every render and re-checked
+  against the currently rendered shell rows before the bridge call. On
+  success, the selection is cleared and the Timeline is refreshed (the
+  selected session is preserved when possible; if the session regroups or
+  disappears, the shell is safely closed). On failure, the selection and
+  detail list are preserved and a Chinese error is shown without exposing
+  tracebacks.
+- State boundaries: `clearEditPanel`, `resetCorrectionShellState`,
+  `closeCorrectionShell`, `selectTimelineSession` (on switch), and date
+  navigation (`goPrevDay` / `goNextDay` / `goToday`) all clear the batch
+  selection and reset `batchProjectSaving`. Auto-refresh re-renders the
+  batch rows only when the shell is open and not dirty, and prunes stale
+  selected ids automatically; it never overwrites the selection while a
+  save is in flight. When the selected session disappears, the shell is
+  closed and the selection is cleared.
+- CSS: the batch section reuses the existing shell styling; checkboxes,
+  count, project select, save button, and saving / disabled states are
+  clearly indicated; narrow-viewport rules keep the project select and
+  button from overflowing. No external fonts / icons / resources are
+  used. Phase 3B.5A action-group styles and the Phase 3B.5B shell layout
+  are untouched.
+
+Privacy / safety:
+
+- The shell activity rows continue to use display-safe fields only (no raw
+  `window_title` / `file_path_hint` / `full_path` / clipboard / note
+  internals). The batch save status area never displays tracebacks, SQL
+  errors, raw field values, or note old values.
+- The bridge returns only `ok` / `updated_count` / `error` (a Chinese
+  message); no raw rows are returned to the frontend.
+- The WebView bridge boundary is unchanged: the bridge imports only
+  `worktrace.api` / `worktrace.formatters`.
+
+DB schema: **no new schema**. The batch write reuses the existing
+`activity_project_assignment` and `activity_log.project_id` columns and
+the existing single-edit `update_activity_project` /
+`update_activities_project` write semantics.
+
+## Phase 3B.6 Not Implemented
+
+Phase 3B.6 does not implement and does not start:
+
+- Batch note editing;
+- Batch hide / batch delete (single hide / soft delete from Phase 3B.4
+  remains the only visibility write);
+- Batch time correction;
+- Batch split;
+- Batch merge;
+- Undo / restore;
+- Permanent delete (the existing delete remains a soft delete);
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge (Phase 3B.3 two-activity merge remains the only
+  merge);
+- Multi-activity session whole-hide / whole-delete;
+- Any new DB schema;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any Tkinter fallback path.
 
 ## Legacy Tkinter UI Handling
 

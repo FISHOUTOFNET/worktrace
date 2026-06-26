@@ -479,6 +479,179 @@ def update_activities_project(activity_ids: list[int], project_id: int, manual: 
             )
 
 
+# Maximum number of activities that can be reclassified in a single
+# batch project edit call. This guards against accidental huge writes.
+MAX_BATCH_PROJECT_EDIT_ACTIVITIES = 100
+
+
+def batch_update_activity_project(activity_ids: list[int], project_id: int) -> int:
+    """Atomically reclassify multiple closed activities to a project.
+
+    Phase 3B.6 batch project editing foundation. Writes the effective
+    project for every activity in ``activity_ids`` as a manual assignment
+    within a single transaction, matching the semantics of the existing
+    single-activity / session-level manual project reassignment (both
+    ``activity_log.project_id`` and ``activity_project_assignment`` are
+    updated, ``manual_override`` is set, ``updated_at`` is refreshed).
+
+    Input validation (raises ``ValueError`` with a stable code suffix on
+    any failure; no partial write is performed):
+
+    - ``activity_ids`` must be a list; after deduplication it must contain
+      at least 2 positive integers; ``bool`` elements are rejected; the
+      deduplicated count must not exceed ``MAX_BATCH_PROJECT_EDIT_ACTIVITIES``.
+    - ``project_id`` must be a positive integer (``bool`` rejected).
+    - Each activity must exist, ``is_deleted = 0``, ``is_hidden = 0``, and
+      ``end_time IS NOT NULL`` (closed). In-progress, hidden, and deleted
+      activities are rejected so the user cannot modify records that are
+      not visible / editable in the Timeline.
+
+    Write guarantees:
+
+    - The write is a single transaction; any failure rolls back so no
+      activity's project assignment changes.
+    - Each activity's ``project_id`` and ``manual_override`` are updated,
+      and an ``activity_project_assignment`` row is upserted with
+      ``source = 'manual'``, ``confidence = 100``, ``is_manual = 1``.
+    - ``updated_at`` is refreshed on every touched row.
+    - ``start_time`` / ``end_time`` / ``duration_seconds`` / ``status`` /
+      ``source`` / ``note`` / resource rows / session notes are NOT
+      modified.
+    - A rowcount guard ensures every UPDATE affects exactly the expected
+      number of rows; a 0-row UPDATE (race condition) raises
+      ``ValueError("project_update_failed")`` and the transaction rolls
+      back.
+
+    Returns the number of activities successfully updated (the deduplicated
+    count). Does not return raw rows or any sensitive fields.
+
+    Raises ``ValueError`` with a stable code suffix:
+    - ``invalid_activity_ids`` — not a list, empty after dedup, < 2, or
+      contains non-int / bool / non-positive values.
+    - ``batch_too_large`` — deduplicated count exceeds the max.
+    - ``invalid_project`` — ``project_id`` is not a positive int or
+      ``bool``.
+    - ``activity_not_found`` — any id does not reference an existing row.
+    - ``activity_deleted`` — any activity has ``is_deleted = 1``.
+    - ``activity_hidden`` — any activity has ``is_hidden = 1``.
+    - ``activity_in_progress`` — any activity has ``end_time IS NULL``.
+    - ``project_update_failed`` — a rowcount guard tripped (race) or an
+      unexpected write failure.
+    """
+    # --- Validate activity_ids ---
+    if isinstance(activity_ids, bool) or not isinstance(activity_ids, list):
+        raise ValueError("invalid_activity_ids")
+    ids: list[int] = []
+    seen: set[int] = set()
+    for raw in activity_ids:
+        if isinstance(raw, bool):
+            raise ValueError("invalid_activity_ids")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError("invalid_activity_ids")
+        if value <= 0:
+            raise ValueError("invalid_activity_ids")
+        if value in seen:
+            continue
+        seen.add(value)
+        ids.append(value)
+    if len(ids) < 2:
+        raise ValueError("invalid_activity_ids")
+    if len(ids) > MAX_BATCH_PROJECT_EDIT_ACTIVITIES:
+        raise ValueError("batch_too_large")
+
+    # --- Validate project_id ---
+    if isinstance(project_id, bool):
+        raise ValueError("invalid_project")
+    try:
+        pid = int(project_id)
+    except (TypeError, ValueError):
+        raise ValueError("invalid_project")
+    if pid <= 0:
+        raise ValueError("invalid_project")
+
+    ts = now_str()
+    placeholders = ",".join("?" for _ in ids)
+    with get_connection() as conn:
+        # --- Validate project exists, is not archived, and is enabled ---
+        project_row = conn.execute(
+            "SELECT id, is_archived, enabled FROM project WHERE id = ?",
+            (pid,),
+        ).fetchone()
+        if not project_row:
+            raise ValueError("invalid_project")
+        if int(project_row["is_archived"] or 0) or not int(project_row["enabled"] or 0):
+            raise ValueError("invalid_project")
+
+        # --- Validate every activity: exists, not deleted, not hidden, closed ---
+        rows = conn.execute(
+            f"""
+            SELECT id, is_deleted, is_hidden, end_time
+            FROM activity_log
+            WHERE id IN ({placeholders})
+            """,
+            ids,
+        ).fetchall()
+        found_ids = set()
+        for row in rows:
+            found_ids.add(int(row["id"]))
+            if int(row["is_deleted"] or 0):
+                raise ValueError("activity_deleted")
+            if int(row["is_hidden"] or 0):
+                raise ValueError("activity_hidden")
+            if row["end_time"] is None:
+                raise ValueError("activity_in_progress")
+        # Any id not found in the DB is a missing activity.
+        for aid in ids:
+            if aid not in found_ids:
+                raise ValueError("activity_not_found")
+
+        # --- Atomic write: update activity_log.project_id + manual_override ---
+        cur = conn.execute(
+            f"""
+            UPDATE activity_log
+            SET project_id = ?,
+                manual_override = 1,
+                updated_at = ?
+            WHERE id IN ({placeholders})
+              AND is_deleted = 0
+              AND is_hidden = 0
+              AND end_time IS NOT NULL
+            """,
+            [pid, ts, *ids],
+        )
+        if cur.rowcount != len(ids):
+            # Race condition: one or more rows were deleted / hidden /
+            # reopened between validation and write. Roll back (the
+            # context manager handles this on raise) and surface a stable
+            # error.
+            raise ValueError("project_update_failed")
+
+        # --- Upsert activity_project_assignment for each activity ---
+        source = "manual"
+        confidence = 100
+        for aid in ids:
+            conn.execute(
+                """
+                INSERT INTO activity_project_assignment(
+                    activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+                ON CONFLICT(activity_id) DO UPDATE SET
+                    project_id = excluded.project_id,
+                    confidence = excluded.confidence,
+                    source = excluded.source,
+                    is_manual = excluded.is_manual,
+                    suggested_project_name = excluded.suggested_project_name,
+                    updated_at = excluded.updated_at
+                """,
+                (aid, pid, confidence, source, 1, ts, ts),
+            )
+
+        return len(ids)
+
+
 def apply_midnight_anchor_assignment(activity_id: int, project_id: int) -> None:
     ts = now_str()
     with get_connection() as conn:

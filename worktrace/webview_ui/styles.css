@@ -1418,6 +1418,71 @@ body {
     opacity: 0.7;
 }
 
+/* Phase 3B.6: batch project reassignment section inside the correction
+   shell. This is the first batch write capability: only project
+   reassignment. The section mirrors the existing per-activity edit
+   styling so it reads as part of the shell. */
+.correction-shell-batch-section {
+    margin-top: 16px;
+    padding: 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+}
+
+.correction-shell-batch-section[hidden] {
+    display: none;
+}
+
+.correction-shell-batch-hint {
+    margin-bottom: 8px;
+}
+
+.correction-shell-batch-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.correction-shell-batch-count {
+    font-weight: 600;
+    color: #475569;
+    margin-right: 4px;
+}
+
+.correction-shell-batch-toggle-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.correction-shell-batch-save-btn:disabled,
+.correction-shell-batch-toggle-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Phase 3B.6: checkbox cell on each shell activity row. When the batch
+   section is open, eligible (closed, non-hidden, non-deleted) activities
+   show the checkbox; in-progress / stale rows disable it. */
+.correction-shell-activity-row .correction-shell-activity-checkbox {
+    margin-right: 8px;
+    align-self: center;
+    cursor: pointer;
+}
+
+.correction-shell-activity-row.is-in-progress .correction-shell-activity-checkbox,
+.correction-shell-activity-row.is-static .correction-shell-activity-checkbox {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.correction-shell-activity-row.batch-saving {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
 @media (max-width: 900px) {
     .correction-shell-header {
         flex-direction: column;
@@ -1432,5 +1497,12 @@ body {
     }
     .correction-shell-activity-name {
         white-space: normal;
+    }
+    .correction-shell-batch-summary {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .correction-shell-batch-toggle-btn {
+        align-self: flex-start;
     }
 }

@@ -77,6 +77,18 @@ or deleted. Errors are mapped from stable ``TimelineVisibilityError`` codes
 to Chinese messages without echoing tracebacks, SQL, or internal field
 names. This phase does not change the existing project / note / time /
 split / merge semantics.
+
+Phase 3B.6 adds the first batch write capability:
+``batch_update_timeline_activities_project`` reclassifies multiple closed,
+non-hidden, non-deleted activities to the same project in a single atomic
+transaction. It is the production write path for batch project
+reassignment only; batch hide / delete / time correction / split / merge
+are NOT supported. In-progress, hidden, and deleted activities are
+rejected. The service layer uses a rowcount guard and rollback so no
+partial write is ever persisted. Errors are mapped from stable
+``TimelineBatchProjectError`` codes to Chinese messages without echoing
+tracebacks, SQL, window titles, file paths, notes, or internal exception
+details.
 """
 
 from __future__ import annotations
@@ -87,6 +99,7 @@ from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
 from ..api.timeline_api import (
+    TimelineBatchProjectError,
     TimelineMergeError,
     TimelineSplitError,
     TimelineTimeEditError,
@@ -159,6 +172,18 @@ _VISIBILITY_ERROR_MESSAGES = {
     "in_progress": "进行中记录暂不支持隐藏或删除",
     "multi_activity_hide": "多活动 session 暂不支持整体隐藏，请在活动详情中逐条处理",
     "multi_activity_delete": "多活动 session 暂不支持整体删除，请在活动详情中逐条处理",
+    "operation_failed": "操作失败",
+}
+
+# Maps ``TimelineBatchProjectError.code`` to stable Chinese user-facing
+# messages for the Phase 3B.6 batch project reassignment. Unknown codes
+# collapse to the generic "操作失败" so internal details are never surfaced.
+_BATCH_PROJECT_ERROR_MESSAGES = {
+    "invalid_selection": "请选择至少两个活动",
+    "batch_too_large": "一次最多修改 100 条活动",
+    "invalid_project": "请选择有效的项目",
+    "in_progress": "进行中记录暂不支持批量修改",
+    "hidden_activity": "隐藏记录暂不支持批量修改",
     "operation_failed": "操作失败",
 }
 
@@ -809,6 +834,45 @@ class WebViewBridge:
             return {"ok": False, "error": "操作失败"}
         except Exception:
             logger.exception("webview bridge soft_delete_timeline_session failed")
+            return dict(_GENERIC_ERROR)
+
+    def batch_update_timeline_activities_project(self, activity_ids, project_id) -> dict[str, Any]:
+        """Phase 3B.6: batch reclassify multiple closed activities to a project.
+
+        ``activity_ids`` must be a list of at least two positive ints after
+        deduplication (``bool`` rejected); ``project_id`` must be a positive
+        int (``bool`` rejected). The API/service layer performs all deeper
+        validation (project exists / not archived / enabled, every activity
+        exists / not deleted / not hidden / closed).
+
+        Returns ``{"ok": true, "updated_count": n}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure. Errors are
+        mapped from stable ``TimelineBatchProjectError`` codes so tracebacks,
+        SQL, window titles, file paths, notes, and internal exception details
+        are never surfaced to JS.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "请选择至少两个活动"}
+            if len(ids) < 2:
+                return {"ok": False, "error": "请选择至少两个活动"}
+            if isinstance(project_id, bool):
+                return {"ok": False, "error": "请选择有效的项目"}
+            try:
+                pid = int(project_id)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "请选择有效的项目"}
+            if pid <= 0:
+                return {"ok": False, "error": "请选择有效的项目"}
+            result = timeline_api.batch_update_timeline_activities_project(ids, pid)
+            return {"ok": True, "updated_count": int(result.get("updated_count", 0))}
+        except TimelineBatchProjectError as exc:
+            return {"ok": False, "error": _BATCH_PROJECT_ERROR_MESSAGES.get(exc.code, "操作失败")}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge batch_update_timeline_activities_project failed")
             return dict(_GENERIC_ERROR)
 
 

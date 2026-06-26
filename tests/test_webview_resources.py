@@ -340,10 +340,14 @@ def test_index_html_timeline_edit_panel_has_no_delete_batch():
     (``edit-visibility-section``). Phase 3B.3 adds the per-activity merge
     button in the rendered detail rows (not in the static edit panel), so
     "merge" may appear in app.js but the static index.html must still not
-    contain merge, batch, restore, permanent-delete, or auto-rule
-    controls. Phase 3B.4 introduces a soft-delete button in the static
-    panel; "delete" is therefore allowed in index.html, but only as the
-    soft-delete foundation, never as a permanent delete control."""
+    contain merge, restore, permanent-delete, or auto-rule controls.
+    Phase 3B.4 introduces a soft-delete button in the static panel;
+    "delete" is therefore allowed in index.html, but only as the
+    soft-delete foundation, never as a permanent delete control.
+    Phase 3B.6 introduces the first batch write capability (batch project
+    reassignment in the correction shell); "batch" is now allowed in
+    index.html but only in the project reassignment context. Batch hide /
+    delete / time / split / merge controls must still be absent."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     # Phase 3B.1 now provides time-correction inputs in the edit panel.
     assert 'id="edit-start-time"' in source
@@ -360,13 +364,21 @@ def test_index_html_timeline_edit_panel_has_no_delete_batch():
     assert 'id="edit-visibility-hide-btn"' in source
     assert 'id="edit-visibility-delete-btn"' in source
     assert 'id="edit-visibility-status"' in source
-    # Batch / restore / permanent delete / auto-rule must still be absent
-    # from the entire HTML (these controls must never appear anywhere).
-    # Phase 3B.4 allows "delete" because the visibility section contains a
-    # soft-delete button; the test instead guards against the stronger
-    # destructive variants.
+    # Phase 3B.6 now provides a batch project reassignment section in the
+    # correction shell. "batch" is allowed only in the project context;
+    # batch hide / delete / time / split / merge controls must still be
+    # absent from the entire HTML. Restore / permanent delete / auto-rule
+    # must also still be absent.
     lowered = source.lower()
-    assert "batch" not in lowered
+    for forbidden_batch in (
+        "batch-hide", "batch-delete", "batch-time",
+        "batch-split", "batch-merge",
+        "batchhide", "batchdelete", "batchtime",
+        "batchsplit", "batchmerge",
+    ):
+        assert forbidden_batch not in lowered, (
+            "index.html must not contain a '" + forbidden_batch + "' control"
+        )
     assert "restore" not in lowered
     assert "permanent" not in lowered
     assert "auto-rule" not in lowered
@@ -555,9 +567,21 @@ def test_app_js_still_has_no_forbidden_edit_handlers_after_hardening():
     # in the HTML either. Merge is now allowed in app.js (Phase 3B.3) but
     # still must not appear in the static index.html (the merge button is
     # rendered dynamically by app.js). Phase 3B.4 introduces a soft-delete
-    # button in index.html, so "delete" is allowed there.
+    # button in index.html, so "delete" is allowed there. Phase 3B.6
+    # introduces batch project reassignment in the correction shell, so
+    # "batch" is now allowed in index.html but only in the project context;
+    # batch hide / delete / time / split / merge controls must still be
+    # absent.
     html_source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8").lower()
-    assert "batch" not in html_source
+    for forbidden_batch in (
+        "batch-hide", "batch-delete", "batch-time",
+        "batch-split", "batch-merge",
+        "batchhide", "batchdelete", "batchtime",
+        "batchsplit", "batchmerge",
+    ):
+        assert forbidden_batch not in html_source, (
+            "index.html must not contain a '" + forbidden_batch + "' control"
+        )
     assert "restore" not in html_source
     assert "permanent" not in html_source
     assert "auto-rule" not in html_source
@@ -2577,12 +2601,19 @@ def test_app_js_consolidation_has_no_forbidden_handlers():
 
 
 def test_index_html_consolidation_has_no_forbidden_controls():
-    """Phase 3B.5A: index.html must not contain batch / restore /
-    permanent-delete / auto-rule / complex-correction-page controls."""
+    """Phase 3B.5A: index.html must not contain batch hide / batch delete /
+    batch time / batch split / batch merge / restore / permanent-delete /
+    auto-rule / complex-correction-page / overlap controls. Phase 3B.6
+    introduces batch project reassignment, so "batch" is now allowed in
+    index.html but only in the project context; the specific batch hide /
+    delete / time / split / merge variants must still be absent."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
     for forbidden in (
-        "batch",
+        "batch-hide", "batch-delete", "batch-time",
+        "batch-split", "batch-merge",
+        "batchhide", "batchdelete", "batchtime",
+        "batchsplit", "batchmerge",
         "restore",
         "permanent",
         "auto-rule",
@@ -2994,11 +3025,20 @@ def test_app_js_correction_shell_no_forbidden_handlers():
 
 
 def test_index_html_correction_shell_no_forbidden_controls():
-    """Phase 3B.5B: index.html must not contain batch / restore /
-    permanent-delete / auto-rule / overlap controls in the shell."""
+    """Phase 3B.5B: index.html must not contain batch hide / batch delete /
+    batch time / batch split / batch merge / restore / permanent-delete /
+    auto-rule / overlap controls in the shell. Phase 3B.6 introduces batch
+    project reassignment in the correction shell, so "batch" is now
+    allowed in the shell but only in the project context; the specific
+    batch hide / delete / time / split / merge variants must still be
+    absent."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
-    for forbidden in ("batch", "restore", "permanent", "auto-rule",
+    for forbidden in ("batch-hide", "batch-delete", "batch-time",
+                      "batch-split", "batch-merge",
+                      "batchhide", "batchdelete", "batchtime",
+                      "batchsplit", "batchmerge",
+                      "restore", "permanent", "auto-rule",
                       "overlap"):
         assert forbidden not in lowered, (
             "index.html must not contain a '" + forbidden + "' control"
@@ -3402,7 +3442,11 @@ def test_index_html_correction_shell_no_external_resources_3b_5b_1():
     assert not re.search(r"localStorage|sessionStorage", shell_block), (
         "correction shell must not use browser storage"
     )
-    for forbidden in ("batch", "restore", "permanent", "auto-rule", "overlap"):
+    for forbidden in ("batch-hide", "batch-delete", "batch-time",
+                      "batch-split", "batch-merge",
+                      "batchhide", "batchdelete", "batchtime",
+                      "batchsplit", "batchmerge",
+                      "restore", "permanent", "auto-rule", "overlap"):
         assert forbidden not in shell_block.lower(), (
             "correction shell must not contain a '" + forbidden + "' control"
         )
@@ -3493,3 +3537,358 @@ def test_docs_mention_phase_3b_5b_1():
             "ui-webview-migration.md must restate that " + term
             + " is not implemented"
         )
+
+
+# --- Phase 3B.6: Timeline batch project editing foundation ---------------
+#
+# Phase 3B.6 adds the first batch write capability: batch project
+# reassignment on multiple closed activities in the correction shell. It
+# reuses the existing activity_project_assignment / activity_log.project_id
+# semantics. The service layer uses a single atomic transaction with a
+# rowcount guard; the API maps service errors to stable
+# TimelineBatchProjectError codes; the bridge maps those to Chinese messages.
+# No new DB schema, no batch hide / delete / time / split / merge, no
+# restore / permanent delete / auto-rule / overlap detection.
+
+
+def test_app_js_has_batch_selection_state():
+    """Phase 3B.6: app.js must declare the batch project selection state."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "selectedBatchActivityIds" in source, (
+        "app.js must declare the selectedBatchActivityIds state variable"
+    )
+    assert "batchProjectSaving" in source, (
+        "app.js must declare the batchProjectSaving state variable"
+    )
+    assert "batchProjectTargetId" in source, (
+        "app.js must declare the batchProjectTargetId state variable"
+    )
+
+
+def test_app_js_has_batch_project_save_helper():
+    """Phase 3B.6: app.js must define the saveBatchProject function."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function saveBatchProject" in source, (
+        "app.js must define the saveBatchProject function"
+    )
+    assert "function resetBatchProjectState" in source, (
+        "app.js must define the resetBatchProjectState function"
+    )
+    assert "function renderBatchProjectSection" in source, (
+        "app.js must define the renderBatchProjectSection function"
+    )
+    assert "function pruneStaleBatchSelection" in source, (
+        "app.js must define the pruneStaleBatchSelection function"
+    )
+    assert "function setBatchProjectSaving" in source, (
+        "app.js must define the setBatchProjectSaving function"
+    )
+
+
+def test_app_js_calls_batch_update_bridge():
+    """Phase 3B.6: app.js must call the batch_update_timeline_activities_project
+    bridge method."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "batch_update_timeline_activities_project" in source, (
+        "app.js must call the batch_update_timeline_activities_project bridge method"
+    )
+
+
+def test_index_html_has_batch_project_section():
+    """Phase 3B.6: index.html must contain the batch project section in the
+    correction shell."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "批量项目重分类" in source, (
+        "index.html must contain the 批量项目重分类 section title"
+    )
+    assert 'id="correction-shell-batch-project-section"' in source, (
+        "index.html must contain the batch project section container"
+    )
+    assert 'id="correction-shell-batch-save-btn"' in source, (
+        "index.html must contain the batch save button"
+    )
+    assert 'id="correction-shell-batch-project-select"' in source, (
+        "index.html must contain the batch project select"
+    )
+    assert 'id="correction-shell-batch-count"' in source, (
+        "index.html must contain the batch selection count display"
+    )
+
+
+def test_index_html_batch_hint_only_project():
+    """Phase 3B.6: the batch section hint must state that only batch
+    project reassignment is supported."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "仅支持批量设置项目" in source, (
+        "batch section hint must state only project batch is supported"
+    )
+    # The hint must also list the unsupported batch operations.
+    assert "拆分" in source or "合并" in source, (
+        "batch section hint must mention unsupported batch operations"
+    )
+
+
+def test_index_html_no_batch_hide_delete_time_split_merge_controls():
+    """Phase 3B.6: index.html must not contain batch hide / delete / time /
+    split / merge control identifiers."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in (
+        "batch-hide", "batch-delete", "batch-time",
+        "batch-split", "batch-merge",
+        "batchhide", "batchdelete", "batchtime",
+        "batchsplit", "batchmerge",
+    ):
+        assert forbidden not in lowered, (
+            "index.html must not contain a '" + forbidden + "' control"
+        )
+
+
+def test_app_js_batch_checkbox_only_for_shell_activities():
+    """Phase 3B.6: the batch checkbox must only be rendered on shell
+    activity rows, not on the detail list rows."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The checkbox class must be correction-shell-activity-checkbox.
+    assert "correction-shell-activity-checkbox" in source, (
+        "app.js must render the correction-shell-activity-checkbox class"
+    )
+    # The checkbox must carry a data-batch-activity-id attribute.
+    assert "data-batch-activity-id" in source, (
+        "app.js must render the data-batch-activity-id attribute on checkboxes"
+    )
+
+
+def test_app_js_batch_in_progress_checkbox_disabled():
+    """Phase 3B.6: in-progress activities must render a disabled checkbox."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The renderCorrectionShell function must check is_in_progress and
+    # disable the checkbox for in-progress rows.
+    render_start = source.find("function renderCorrectionShell")
+    assert render_start != -1
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    assert "isInProgress" in render_body or "is_in_progress" in render_body, (
+        "renderCorrectionShell must check in-progress state for checkbox eligibility"
+    )
+    assert "batchEligible" in render_body, (
+        "renderCorrectionShell must compute batchEligible for each activity row"
+    )
+
+
+def test_app_js_batch_save_disabled_for_fewer_than_two():
+    """Phase 3B.6: the batch save button must be disabled when fewer than
+    two activities are selected."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function updateBatchSaveButtonState")
+    assert save_start != -1
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "count < 2" in save_body or "len(ids) < 2" in save_body, (
+        "updateBatchSaveButtonState must check count < 2"
+    )
+
+
+def test_app_js_batch_save_blocked_by_dirty_edit():
+    """Phase 3B.6: saveBatchProject must block when isEditDirty() is true."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchProject")
+    assert save_start != -1
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "isEditDirty()" in save_body, (
+        "saveBatchProject must call isEditDirty() and block on dirty edits"
+    )
+    assert "请先保存或取消当前编辑" in save_body, (
+        "saveBatchProject must show the dirty-edit blocking message"
+    )
+
+
+def test_app_js_batch_success_refreshes_timeline():
+    """Phase 3B.6: a successful batch save must refresh the Timeline."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchProject")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "refreshTimelineForBatchSave" in save_body or "loadTimeline" in save_body, (
+        "saveBatchProject must call refresh/load on success"
+    )
+
+
+def test_app_js_batch_failure_preserves_selection():
+    """Phase 3B.6: a failed batch save must preserve the selection and
+    detail list so the user can retry."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchProject")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    # The error path must NOT call clearBatchSelection or resetBatchProjectState.
+    # It must only show the error message and reset the saving flag.
+    assert "clearBatchSelection" not in save_body or save_body.count("clearBatchSelection") == 0, (
+        "saveBatchProject failure must not clear the selection"
+    )
+
+
+def test_app_js_clear_edit_panel_resets_batch_state():
+    """Phase 3B.6: clearEditPanel must call resetBatchProjectState."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    clear_start = source.find("function clearEditPanel")
+    clear_end = source.find("\n    function ", clear_start + 1)
+    clear_body = source[clear_start:clear_end]
+    assert "resetBatchProjectState" in clear_body, (
+        "clearEditPanel must call resetBatchProjectState"
+    )
+
+
+def test_app_js_reset_correction_shell_resets_batch_state():
+    """Phase 3B.6: resetCorrectionShellState must call
+    resetBatchProjectState."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    reset_start = source.find("function resetCorrectionShellState")
+    reset_end = source.find("\n    function ", reset_start + 1)
+    reset_body = source[reset_start:reset_end]
+    assert "resetBatchProjectState" in reset_body, (
+        "resetCorrectionShellState must call resetBatchProjectState"
+    )
+
+
+def test_app_js_batch_no_local_storage():
+    """Phase 3B.6: the batch project code must not use browser storage."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert not re.search(r"localStorage|sessionStorage", source), (
+        "app.js must not use localStorage or sessionStorage"
+    )
+
+
+def test_app_js_batch_no_external_links():
+    """Phase 3B.6: the batch project code must not introduce external links."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{filename} must not contain http:// or https:// links"
+        )
+
+
+def test_app_js_batch_no_traceback_display():
+    """Phase 3B.6: the batch project code must not display tracebacks."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "traceback" not in source.lower(), (
+        "app.js must not contain traceback display logic"
+    )
+
+
+def test_app_js_batch_no_restore_permanent_auto_rule_overlap():
+    """Phase 3B.6: the batch project code must not introduce restore,
+    permanent delete, auto-rule, or overlap handlers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("restoreActivity", "restoreSession",
+                      "permanentDelete", "autoRule", "auto_rule",
+                      "overlapDetection", "globalOverlap"):
+        assert forbidden not in source, (
+            "app.js must not contain " + forbidden + " handler"
+        )
+
+
+def test_styles_css_has_batch_section_styles():
+    """Phase 3B.6: styles.css must define the batch section styles."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell-batch-section" in source, (
+        "styles.css must define .correction-shell-batch-section"
+    )
+    assert ".correction-shell-batch-save-btn" in source, (
+        "styles.css must define .correction-shell-batch-save-btn"
+    )
+    assert ".correction-shell-activity-checkbox" in source, (
+        "styles.css must define .correction-shell-activity-checkbox"
+    )
+
+
+def test_bridge_has_batch_update_method():
+    """Phase 3B.6: the bridge must define the
+    batch_update_timeline_activities_project method."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    assert "def batch_update_timeline_activities_project" in bridge_src, (
+        "bridge must define batch_update_timeline_activities_project"
+    )
+
+
+def test_bridge_batch_error_messages_dict():
+    """Phase 3B.6: the bridge must define the _BATCH_PROJECT_ERROR_MESSAGES
+    dict with all stable error code → Chinese message mappings."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    assert "_BATCH_PROJECT_ERROR_MESSAGES" in bridge_src, (
+        "bridge must define _BATCH_PROJECT_ERROR_MESSAGES"
+    )
+    for code in ("invalid_selection", "batch_too_large", "invalid_project",
+                 "in_progress", "hidden_activity", "operation_failed"):
+        assert code in bridge_src, (
+            "bridge must map the '" + code + "' error code"
+        )
+    for msg in ("请选择至少两个活动", "一次最多修改 100 条活动",
+                "请选择有效的项目", "进行中记录暂不支持批量修改",
+                "隐藏记录暂不支持批量修改", "操作失败"):
+        assert msg in bridge_src, (
+            "bridge must contain the Chinese message: " + msg
+        )
+
+
+def test_api_has_batch_update_function():
+    """Phase 3B.6: the API must define the
+    batch_update_timeline_activities_project function and
+    TimelineBatchProjectError class."""
+    api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class TimelineBatchProjectError" in api_src, (
+        "timeline_api must define TimelineBatchProjectError"
+    )
+    assert "def batch_update_timeline_activities_project" in api_src, (
+        "timeline_api must define batch_update_timeline_activities_project"
+    )
+
+
+def test_service_has_batch_update_function():
+    """Phase 3B.6: the service must define the
+    batch_update_activity_project function and the
+    MAX_BATCH_PROJECT_EDIT_ACTIVITIES constant."""
+    service_src = (REPO_ROOT / "worktrace" / "services" / "activity_service.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def batch_update_activity_project" in service_src, (
+        "activity_service must define batch_update_activity_project"
+    )
+    assert "MAX_BATCH_PROJECT_EDIT_ACTIVITIES" in service_src, (
+        "activity_service must define MAX_BATCH_PROJECT_EDIT_ACTIVITIES"
+    )
+    assert "= 100" in service_src, (
+        "MAX_BATCH_PROJECT_EDIT_ACTIVITIES must be set to 100"
+    )
+
+
+def test_app_js_batch_stale_id_pruning():
+    """Phase 3B.6: app.js must prune stale selected ids on every render."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function pruneStaleBatchSelection" in source, (
+        "app.js must define the pruneStaleBatchSelection function"
+    )
+    # The prune function must be called from renderCorrectionShell.
+    render_start = source.find("function renderCorrectionShell")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    assert "pruneStaleBatchSelection" in render_body, (
+        "renderCorrectionShell must call pruneStaleBatchSelection"
+    )
+
+
+def test_app_js_batch_save_rechecks_stale_ids():
+    """Phase 3B.6: saveBatchProject must re-check selected ids against the
+    currently rendered shell activity rows before calling the bridge."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveBatchProject")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "renderedIds" in save_body or "querySelectorAll" in save_body, (
+        "saveBatchProject must re-check selected ids against rendered rows"
+    )
+    assert "cleanIds" in save_body, (
+        "saveBatchProject must build a cleanIds list from rendered rows"
+    )

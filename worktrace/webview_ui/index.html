@@ -182,6 +182,27 @@
                             <div id="correction-shell-context" class="correction-shell-context"></div>
                             <div id="correction-shell-activities" class="correction-shell-activities"></div>
                             <div id="correction-shell-actions" class="correction-shell-actions"></div>
+                            <div class="correction-shell-batch-section" id="correction-shell-batch-project-section">
+                                <div class="edit-section-label">批量项目重分类</div>
+                                <div class="edit-time-hint correction-shell-batch-hint">
+                                    仅支持批量设置项目；暂不支持批量时间、拆分、合并、隐藏或删除。
+                                </div>
+                                <div class="correction-shell-batch-summary">
+                                    <span id="correction-shell-batch-count" class="correction-shell-batch-count">已选择 0 条</span>
+                                    <button id="correction-shell-batch-select-all-btn" class="edit-btn correction-shell-batch-toggle-btn" type="button">全选当前可修改活动</button>
+                                    <button id="correction-shell-batch-clear-btn" class="edit-btn correction-shell-batch-toggle-btn" type="button">清空选择</button>
+                                </div>
+                                <div class="edit-field">
+                                    <label for="correction-shell-batch-project-select" class="edit-label">目标项目</label>
+                                    <select id="correction-shell-batch-project-select" class="edit-select" disabled>
+                                        <option value="">请选择项目</option>
+                                    </select>
+                                </div>
+                                <div class="edit-time-actions">
+                                    <button id="correction-shell-batch-save-btn" class="edit-btn correction-shell-batch-save-btn" type="button" disabled>批量设置项目</button>
+                                </div>
+                                <div id="correction-shell-batch-status" class="edit-status" hidden></div>
+                            </div>
                         </div>
                     </div>
                 </div>

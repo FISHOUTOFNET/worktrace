@@ -103,6 +103,16 @@
     // click-to-locate clicks never accumulate timers or throw. It is
     // cleared before each new schedule and on shell reset.
     var correctionShellHighlightTimer = null;
+    // Phase 3B.6: batch project reassignment selection state. This is the
+    // first batch write capability: only project reassignment on multiple
+    // closed, non-hidden, non-deleted activities in the current shell
+    // session. Selected ids are kept in a Set so dedup is automatic; the
+    // ids must always be a subset of the currently rendered shell activity
+    // ids (stale ids are removed on every render / refresh). Selection is
+    // never persisted to browser storage.
+    var selectedBatchActivityIds = {};
+    var batchProjectSaving = false;
+    var batchProjectTargetId = null;
 
     // --- Bridge helper --------------------------------------------------
 
@@ -1567,6 +1577,11 @@
         hidingActivityId = null;
         deleteSaving = false;
         deletingActivityId = null;
+        // Phase 3B.6: reset batch project selection state so a stale batch
+        // selection from the previous session does not leak into the next
+        // session. The reset also clears the project select / status so the
+        // panel returns to a clean baseline.
+        resetBatchProjectState();
         // Phase 3B.5B: reset the correction shell state too so a stale
         // shell does not leak into the next session.
         resetCorrectionShellState();
@@ -1756,6 +1771,10 @@
             clearTimeout(correctionShellHighlightTimer);
             correctionShellHighlightTimer = null;
         }
+        // Phase 3B.6: clear the batch project selection so a stale selection
+        // does not carry over to the next shell open. selectedSessionId is
+        // intentionally NOT cleared here (preserved by closeCorrectionShell).
+        resetBatchProjectState();
         var shell = document.getElementById("timeline-correction-shell");
         if (shell) shell.hidden = true;
         var detailsCol = document.querySelector(".timeline-details");
@@ -1837,29 +1856,79 @@
                     if (mode === "activity" && activityId && rawId === String(activityId)) {
                         cls += " is-selected";
                     }
+                    // Phase 3B.6: in-progress activities cannot be batch
+                    // edited (their displayed end_time may be projected).
+                    var isInProgress = !!a.is_in_progress;
+                    if (isInProgress) cls += " is-in-progress";
+                    // Eligible for batch project edit only when closed and
+                    // has a valid numeric id. Hidden / deleted activities
+                    // never reach the rendered detail rows.
+                    var batchEligible = !!numericId && !isInProgress;
+                    var checkedAttr = "";
+                    if (batchEligible && selectedBatchActivityIds[numericId]) {
+                        checkedAttr = " checked";
+                    }
                     html += '<div class="' + cls + '"'
                         + (numericId ? ' data-correction-activity-id="' + escapeHtml(numericId) + '"' : '')
                         + '>'
+                        + (batchEligible
+                            ? '<input type="checkbox" class="correction-shell-activity-checkbox"'
+                                + ' data-batch-activity-id="' + escapeHtml(numericId) + '"'
+                                + (batchProjectSaving ? ' disabled' : '')
+                                + checkedAttr + '>'
+                            : '<input type="checkbox" class="correction-shell-activity-checkbox" disabled>')
                         + '<span class="correction-shell-activity-time">' + escapeHtml(a.time_range) + '</span>'
                         + '<span class="correction-shell-activity-name" title="' + escapeHtml(a.resource_name) + '">' + escapeHtml(a.resource_name) + '</span>'
                         + '<span class="correction-shell-activity-duration">' + escapeHtml(a.duration) + '</span>'
                         + '</div>';
                 }
                 actsEl.innerHTML = html;
+                // Phase 3B.6: prune stale selected ids that no longer exist
+                // in the freshly rendered activity list so the selection is
+                // always a subset of the current shell activities.
+                pruneStaleBatchSelection(activities);
                 // Bind click handlers only on rows that carry a valid
                 // numeric id. The handler only scrolls to / highlights the
                 // matching detail row; it performs no write and calls no
-                // bridge method.
+                // bridge method. Clicks on the batch checkbox are stopped
+                // so they do not also trigger the row click-to-locate.
                 var rows = actsEl.querySelectorAll(
                     ".correction-shell-activity-row[data-correction-activity-id]"
                 );
                 for (var j = 0; j < rows.length; j++) {
                     (function (rowEl) {
-                        rowEl.addEventListener("click", function () {
+                        rowEl.addEventListener("click", function (event) {
+                            if (event.target
+                                && event.target.classList
+                                && event.target.classList.contains("correction-shell-activity-checkbox")) {
+                                return;
+                            }
                             var aid = rowEl.getAttribute("data-correction-activity-id");
                             highlightDetailRow(aid);
                         });
                     })(rows[j]);
+                }
+                // Phase 3B.6: bind batch checkbox change handlers so toggling
+                // a checkbox updates the selection state without re-rendering
+                // the whole shell (which would lose the user's checkbox focus).
+                var checkboxes = actsEl.querySelectorAll(
+                    ".correction-shell-activity-checkbox[data-batch-activity-id]"
+                );
+                for (var k = 0; k < checkboxes.length; k++) {
+                    (function (cbEl) {
+                        cbEl.addEventListener("change", function () {
+                            var aid = cbEl.getAttribute("data-batch-activity-id");
+                            toggleBatchActivity(aid, cbEl.checked);
+                        });
+                        cbEl.addEventListener("click", function (event) {
+                            // Stop propagation so the row click-to-locate
+                            // handler does not fire when the user clicks the
+                            // checkbox.
+                            if (event.stopPropagation) {
+                                event.stopPropagation();
+                            }
+                        });
+                    })(checkboxes[k]);
                 }
             }
         }
@@ -1874,6 +1943,13 @@
                 + '</div>';
             actionsEl.innerHTML = guidance;
         }
+
+        // --- Phase 3B.6: batch project reassignment section ---
+        // The batch section is always rendered when the shell is open so the
+        // user can start a batch project reassignment. It reuses the cached
+        // project list (projectsCache) so no extra bridge call is needed
+        // after the first load.
+        renderBatchProjectSection(session, activities);
     }
 
     // Scroll to and briefly highlight a detail row so the user can locate
@@ -1972,6 +2048,381 @@
         // selectedSessionId is intentionally NOT cleared here.
         if (wasOpen) {
             setCorrectionShellStatus("", false);
+        }
+    }
+
+    // ====================================================================
+    // Phase 3B.6: Timeline batch project editing foundation
+    // ====================================================================
+    //
+    // This is the first batch write capability in the WebView Timeline. It
+    // allows the user to select multiple closed, non-hidden, non-deleted
+    // activities in the current correction shell session and reclassify them
+    // to the same project in a single atomic transaction (the bridge ->
+    // API -> service path uses a rowcount guard + rollback so no partial
+    // write is ever persisted).
+    //
+    // Scope boundaries (enforced by the backend, mirrored here):
+    // - Only project reassignment. No batch hide / delete / time / split /
+    //   merge / undo / restore / permanent delete / auto-rule / overlap.
+    // - Only closed activities (end_time IS NOT NULL). In-progress rows
+    //   render a disabled checkbox.
+    // - Only activities in the current shell session. Stale ids that
+    //   disappear after a refresh are pruned automatically.
+    // - No browser storage. Selection lives in memory only.
+
+    function resetBatchProjectState() {
+        selectedBatchActivityIds = {};
+        batchProjectSaving = false;
+        batchProjectTargetId = null;
+        // Reset the batch project select / status DOM so the section
+        // returns to a clean baseline. The section element itself is
+        // shown/hidden together with the shell; only its inner controls
+        // are reset here.
+        var select = document.getElementById("correction-shell-batch-project-select");
+        if (select) {
+            select.value = "";
+            select.disabled = true;
+        }
+        var saveBtn = document.getElementById("correction-shell-batch-save-btn");
+        if (saveBtn) saveBtn.disabled = true;
+        var selectAllBtn = document.getElementById("correction-shell-batch-select-all-btn");
+        var clearBtn = document.getElementById("correction-shell-batch-clear-btn");
+        if (selectAllBtn) selectAllBtn.disabled = true;
+        if (clearBtn) clearBtn.disabled = true;
+        var countEl = document.getElementById("correction-shell-batch-count");
+        if (countEl) countEl.textContent = "已选择 0 条";
+        showBatchProjectStatus("", false);
+    }
+
+    // Remove selected ids that are no longer present in the freshly rendered
+    // activity list. Activities that disappeared (e.g. hidden / deleted by
+    // another session, or grouped differently after an auto-refresh) are
+    // silently dropped so the selection is always a subset of the current
+    // shell activities.
+    function pruneStaleBatchSelection(activities) {
+        if (!activities) {
+            selectedBatchActivityIds = {};
+            updateBatchSelectionCount();
+            return;
+        }
+        var validIds = {};
+        for (var i = 0; i < activities.length; i++) {
+            var rawId = String(activities[i].activity_id || "");
+            if (!/^[0-9]+$/.test(rawId)) continue;
+            if (activities[i].is_in_progress) continue;
+            validIds[rawId] = true;
+        }
+        var next = {};
+        var changed = false;
+        var keys = Object.keys(selectedBatchActivityIds);
+        for (var k = 0; k < keys.length; k++) {
+            if (validIds[keys[k]]) {
+                next[keys[k]] = true;
+            } else {
+                changed = true;
+            }
+        }
+        if (changed) {
+            selectedBatchActivityIds = next;
+            updateBatchSelectionCount();
+        }
+    }
+
+    function toggleBatchActivity(activityId, checked) {
+        if (batchProjectSaving) return;
+        if (!activityId) return;
+        var key = String(activityId);
+        if (checked) {
+            selectedBatchActivityIds[key] = true;
+        } else {
+            delete selectedBatchActivityIds[key];
+        }
+        updateBatchSelectionCount();
+        updateBatchSaveButtonState();
+    }
+
+    function selectAllBatchActivities() {
+        if (batchProjectSaving) return;
+        var rows = document.querySelectorAll(
+            "#correction-shell-activities .correction-shell-activity-checkbox[data-batch-activity-id]:not([disabled])"
+        );
+        for (var i = 0; i < rows.length; i++) {
+            var aid = rows[i].getAttribute("data-batch-activity-id");
+            if (aid) {
+                selectedBatchActivityIds[aid] = true;
+                rows[i].checked = true;
+            }
+        }
+        updateBatchSelectionCount();
+        updateBatchSaveButtonState();
+    }
+
+    function clearBatchSelection() {
+        if (batchProjectSaving) return;
+        selectedBatchActivityIds = {};
+        var rows = document.querySelectorAll(
+            "#correction-shell-activities .correction-shell-activity-checkbox[data-batch-activity-id]"
+        );
+        for (var i = 0; i < rows.length; i++) {
+            rows[i].checked = false;
+        }
+        updateBatchSelectionCount();
+        updateBatchSaveButtonState();
+    }
+
+    function updateBatchSelectionCount() {
+        var countEl = document.getElementById("correction-shell-batch-count");
+        if (!countEl) return;
+        var count = Object.keys(selectedBatchActivityIds).length;
+        countEl.textContent = "已选择 " + count + " 条";
+    }
+
+    function updateBatchSaveButtonState() {
+        var saveBtn = document.getElementById("correction-shell-batch-save-btn");
+        if (!saveBtn) return;
+        var count = Object.keys(selectedBatchActivityIds).length;
+        var select = document.getElementById("correction-shell-batch-project-select");
+        var hasProject = !!(select && select.value);
+        saveBtn.disabled = batchProjectSaving || count < 2 || !hasProject;
+    }
+
+    function setBatchProjectSaving(saving) {
+        batchProjectSaving = saving;
+        var saveBtn = document.getElementById("correction-shell-batch-save-btn");
+        var selectAllBtn = document.getElementById("correction-shell-batch-select-all-btn");
+        var clearBtn = document.getElementById("correction-shell-batch-clear-btn");
+        var select = document.getElementById("correction-shell-batch-project-select");
+        if (saveBtn) {
+            saveBtn.disabled = saving;
+            saveBtn.textContent = saving ? "保存中…" : "批量设置项目";
+        }
+        if (selectAllBtn) selectAllBtn.disabled = saving;
+        if (clearBtn) clearBtn.disabled = saving;
+        if (select) select.disabled = saving;
+        // Disable / re-enable every batch checkbox so the user cannot
+        // change selection while a save is in flight.
+        var checkboxes = document.querySelectorAll(
+            "#correction-shell-activities .correction-shell-activity-checkbox[data-batch-activity-id]"
+        );
+        for (var i = 0; i < checkboxes.length; i++) {
+            // Preserve the "is-in-progress" disabled state: only eligible
+            // (closed) rows get toggled. We re-derive eligibility from
+            // whether the checkbox carries data-batch-activity-id.
+            var eligible = checkboxes[i].hasAttribute("data-batch-activity-id");
+            if (eligible) {
+                checkboxes[i].disabled = saving;
+            }
+        }
+        if (!saving) {
+            // Re-apply the project/count-based gating after save ends.
+            updateBatchSaveButtonState();
+        }
+    }
+
+    function showBatchProjectStatus(message, isError) {
+        var statusEl = document.getElementById("correction-shell-batch-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "edit-status " + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    // Render the batch project section. The section is always present in
+    // the HTML; this function populates the project select (reusing
+    // projectsCache) and refreshes the count / save button state. The
+    // section is shown whenever the shell is open.
+    function renderBatchProjectSection(session, activities) {
+        var section = document.getElementById("correction-shell-batch-project-section");
+        if (!section) return;
+        // The section is always visible when the shell is open so the user
+        // can start a batch reassignment at any time. It does not need to
+        // be hidden based on session in-progress state (an in-progress
+        // session simply has no eligible closed activities).
+        section.hidden = false;
+        // Re-prune the selection in case the activity list changed.
+        pruneStaleBatchSelection(activities);
+        // Populate the project select using the cached project list. If the
+        // cache is empty (first use), load it lazily and re-populate.
+        var select = document.getElementById("correction-shell-batch-project-select");
+        if (select && !projectsCache) {
+            select.innerHTML = '<option value="">加载中…</option>';
+            select.disabled = true;
+            loadProjects().then(function (projects) {
+                populateBatchProjectSelect(projects);
+            });
+        } else if (select && projectsCache) {
+            populateBatchProjectSelect(projectsCache);
+        }
+        updateBatchSelectionCount();
+        updateBatchSaveButtonState();
+        showBatchProjectStatus("", false);
+    }
+
+    function populateBatchProjectSelect(projects) {
+        var select = document.getElementById("correction-shell-batch-project-select");
+        if (!select) return;
+        select.innerHTML = "";
+        var placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "请选择项目";
+        select.appendChild(placeholder);
+        if (!projects || projects.length === 0) {
+            select.disabled = true;
+            return;
+        }
+        for (var i = 0; i < projects.length; i++) {
+            var p = projects[i];
+            var option = document.createElement("option");
+            option.value = String(p.id);
+            var label = p.name || "";
+            if (p.description) {
+                label += " (" + p.description + ")";
+            }
+            option.textContent = label;
+            select.appendChild(option);
+        }
+        // Restore the previously chosen target project if any (e.g. after
+        // an auto-refresh re-rendered the select).
+        if (batchProjectTargetId) {
+            select.value = String(batchProjectTargetId);
+        }
+        select.disabled = batchProjectSaving;
+    }
+
+    function saveBatchProject() {
+        if (batchProjectSaving) return;
+        // Block the batch save while there are unsaved per-session edits so
+        // the two write paths never race on the same session.
+        if (isEditDirty()) {
+            showBatchProjectStatus("请先保存或取消当前编辑", true);
+            return;
+        }
+        var selectedIds = Object.keys(selectedBatchActivityIds);
+        if (selectedIds.length < 2) {
+            showBatchProjectStatus("请选择至少两个活动", true);
+            return;
+        }
+        var select = document.getElementById("correction-shell-batch-project-select");
+        if (!select) {
+            showBatchProjectStatus("操作失败", true);
+            return;
+        }
+        var projectIdStr = select.value;
+        if (!projectIdStr) {
+            showBatchProjectStatus("请选择有效的项目", true);
+            return;
+        }
+        var projectId = parseInt(projectIdStr, 10);
+        if (!projectId || projectId <= 0) {
+            showBatchProjectStatus("请选择有效的项目", true);
+            return;
+        }
+        // Phase 3B.6: re-check every selected id is still present in the
+        // currently rendered shell activity rows. Stale ids (e.g. an
+        // auto-refresh removed a row between the user checking the box and
+        // clicking save) are dropped silently; if fewer than 2 remain we
+        // abort with a clear message instead of calling the bridge.
+        var renderedIds = {};
+        var rows = document.querySelectorAll(
+            "#correction-shell-activities .correction-shell-activity-checkbox[data-batch-activity-id]:not([disabled])"
+        );
+        for (var i = 0; i < rows.length; i++) {
+            var aid = rows[i].getAttribute("data-batch-activity-id");
+            if (aid) renderedIds[aid] = true;
+        }
+        var cleanIds = [];
+        for (var j = 0; j < selectedIds.length; j++) {
+            if (renderedIds[selectedIds[j]]) {
+                cleanIds.push(parseInt(selectedIds[j], 10));
+            }
+        }
+        if (cleanIds.length < 2) {
+            // Update the in-memory selection to match the rendered rows so
+            // the count display stays accurate, then abort.
+            selectedBatchActivityIds = {};
+            for (var k in renderedIds) {
+                if (renderedIds.hasOwnProperty(k)) selectedBatchActivityIds[k] = true;
+            }
+            updateBatchSelectionCount();
+            updateBatchSaveButtonState();
+            showBatchProjectStatus("所选活动已失效，请重新选择", true);
+            return;
+        }
+        batchProjectTargetId = projectId;
+        setBatchProjectSaving(true);
+        showBatchProjectStatus("", false);
+        callBridge("batch_update_timeline_activities_project", cleanIds, projectId).then(function (result) {
+            setBatchProjectSaving(false);
+            if (!result || result.ok === false) {
+                // Keep the selection / detail list so the user can retry.
+                // The bridge returns a stable Chinese error message; we
+                // surface it verbatim without echoing internal error detail.
+                var msg = (result && result.error) ? result.error : "操作失败";
+                showBatchProjectStatus(msg, true);
+                return;
+            }
+            // Success: clear selection, refresh Timeline, keep the shell
+            // context if the session is still present.
+            var updatedCount = result.updated_count || cleanIds.length;
+            showBatchProjectStatus("已批量更新项目（共 " + updatedCount + " 条）", false);
+            selectedBatchActivityIds = {};
+            batchProjectTargetId = null;
+            updateBatchSelectionCount();
+            // Refresh the Timeline so the new project assignment is
+            // reflected in the sessions list and the detail list. The
+            // shell will re-render from the refreshed data if the session
+            // is still present; if the session disappeared (e.g. it was
+            // re-grouped), the auto-refresh / disappear path will close
+            // the shell safely.
+            refreshTimelineForBatchSave();
+        }).catch(function () {
+            setBatchProjectSaving(false);
+            showBatchProjectStatus("操作失败", true);
+        });
+    }
+
+    // Refresh the Timeline data after a successful batch save. We reuse the
+    // existing loadTimeline path so the sessions list, detail list, and
+    // edit panel are all rebuilt from the fresh backend state. If the
+    // shell's session is still present after the refresh, the shell is
+    // re-rendered with the updated activity list; otherwise the shell is
+    // closed safely.
+    function refreshTimelineForBatchSave() {
+        var dateEl = document.getElementById("timeline-date-display");
+        var date = timelineDate || (dateEl ? dateEl.textContent : null);
+        // Defer the shell re-render to after the timeline reloads; the
+        // loadTimeline path's auto-refresh branch already re-renders the
+        // shell if it is still open for the refreshed session.
+        loadTimeline(date);
+    }
+
+    // Bind the batch project section controls. Called once during init.
+    function bindBatchProjectControls() {
+        var saveBtn = document.getElementById("correction-shell-batch-save-btn");
+        if (saveBtn) {
+            saveBtn.addEventListener("click", saveBatchProject);
+        }
+        var selectAllBtn = document.getElementById("correction-shell-batch-select-all-btn");
+        if (selectAllBtn) {
+            selectAllBtn.addEventListener("click", selectAllBatchActivities);
+        }
+        var clearBtn = document.getElementById("correction-shell-batch-clear-btn");
+        if (clearBtn) {
+            clearBtn.addEventListener("click", clearBatchSelection);
+        }
+        var select = document.getElementById("correction-shell-batch-project-select");
+        if (select) {
+            select.addEventListener("change", function () {
+                batchProjectTargetId = select.value ? parseInt(select.value, 10) : null;
+                updateBatchSaveButtonState();
+            });
         }
     }
 
@@ -2768,6 +3219,11 @@
         if (shellCloseBtn) {
             shellCloseBtn.addEventListener("click", closeCorrectionShell);
         }
+        // Phase 3B.6: batch project reassignment controls inside the
+        // correction shell. The save button calls the bridge's
+        // batch_update_timeline_activities_project method; the select-all /
+        // clear buttons only manipulate in-memory selection state.
+        bindBatchProjectControls();
     }
 
     function startAutoRefresh() {
