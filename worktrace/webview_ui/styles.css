@@ -1400,6 +1400,24 @@ body {
     background: #eef2ff;
 }
 
+/* Phase 3B.5B.1: transient highlight applied on top of .shell-target
+   right after a click-to-locate, giving immediate visual feedback. It is
+   removed automatically by a single tracked timer in app.js; .shell-target
+   remains as the persistent locator. Noticeable but not harsh. */
+.detail-item.detail-item-highlight {
+    border-color: #f59e0b;
+    background: #fffbeb;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
+}
+
+/* Phase 3B.5B.1: a shell activity row whose activity id is missing / non-
+   numeric is rendered non-clickable so it never produces a stale-target
+   error. It keeps the summary text but drops the pointer cursor. */
+.correction-shell-activity-row.is-static {
+    cursor: default;
+    opacity: 0.7;
+}
+
 @media (max-width: 900px) {
     .correction-shell-header {
         flex-direction: column;

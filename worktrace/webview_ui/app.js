@@ -99,6 +99,10 @@
     var correctionShellSessionId = null;
     var correctionShellActivityId = null;
     var correctionShellMode = null;  // "session" | "activity" | null
+    // Phase 3B.5B.1: a single tracked highlight timer so repeated
+    // click-to-locate clicks never accumulate timers or throw. It is
+    // cleared before each new schedule and on shell reset.
+    var correctionShellHighlightTimer = null;
 
     // --- Bridge helper --------------------------------------------------
 
@@ -1745,6 +1749,13 @@
         correctionShellSessionId = null;
         correctionShellActivityId = null;
         correctionShellMode = null;
+        // Phase 3B.5B.1: cancel any pending highlight timer so a shell
+        // close / reset never leaves a dangling timer that mutates a
+        // detail row's class list after the shell is gone.
+        if (correctionShellHighlightTimer !== null) {
+            clearTimeout(correctionShellHighlightTimer);
+            correctionShellHighlightTimer = null;
+        }
         var shell = document.getElementById("timeline-correction-shell");
         if (shell) shell.hidden = true;
         var detailsCol = document.querySelector(".timeline-details");
@@ -1814,25 +1825,38 @@
                 var html = '<div class="correction-shell-activities-title">活动明细（点击定位到对应活动）</div>';
                 for (var i = 0; i < activities.length; i++) {
                     var a = activities[i];
+                    var rawId = String(a.activity_id || "");
+                    // Phase 3B.5B.1: only a numeric activity id is a valid
+                    // click-to-locate target. An invalid / missing id is
+                    // rendered as a non-clickable row so the user never
+                    // gets a stale-target error from an id that could never
+                    // match a real .detail-item.
+                    var numericId = /^[0-9]+$/.test(rawId) ? rawId : "";
                     var cls = "correction-shell-activity-row";
-                    if (mode === "activity" && activityId && String(a.activity_id) === String(activityId)) {
+                    if (!numericId) cls += " is-static";
+                    if (mode === "activity" && activityId && rawId === String(activityId)) {
                         cls += " is-selected";
                     }
-                    html += '<div class="' + cls + '" data-activity-id="' + escapeHtml(String(a.activity_id)) + '">'
+                    html += '<div class="' + cls + '"'
+                        + (numericId ? ' data-correction-activity-id="' + escapeHtml(numericId) + '"' : '')
+                        + '>'
                         + '<span class="correction-shell-activity-time">' + escapeHtml(a.time_range) + '</span>'
                         + '<span class="correction-shell-activity-name" title="' + escapeHtml(a.resource_name) + '">' + escapeHtml(a.resource_name) + '</span>'
                         + '<span class="correction-shell-activity-duration">' + escapeHtml(a.duration) + '</span>'
                         + '</div>';
                 }
                 actsEl.innerHTML = html;
-                // Bind click handlers: highlight / scroll to the matching
-                // detail row so the user can use the existing per-activity
-                // action buttons. This does not perform any write.
-                var rows = actsEl.querySelectorAll(".correction-shell-activity-row");
+                // Bind click handlers only on rows that carry a valid
+                // numeric id. The handler only scrolls to / highlights the
+                // matching detail row; it performs no write and calls no
+                // bridge method.
+                var rows = actsEl.querySelectorAll(
+                    ".correction-shell-activity-row[data-correction-activity-id]"
+                );
                 for (var j = 0; j < rows.length; j++) {
                     (function (rowEl) {
                         rowEl.addEventListener("click", function () {
-                            var aid = rowEl.getAttribute("data-activity-id");
+                            var aid = rowEl.getAttribute("data-correction-activity-id");
                             highlightDetailRow(aid);
                         });
                     })(rows[j]);
@@ -1853,22 +1877,38 @@
     }
 
     // Scroll to and briefly highlight a detail row so the user can locate
-    // the existing per-activity action buttons. No write is performed.
+    // the existing per-activity action buttons. No write is performed and
+    // no bridge method is called. Repeated clicks reuse a single tracked
+    // timer so timers never accumulate.
     function highlightDetailRow(activityId) {
         if (!activityId) return;
         var row = document.querySelector(
             '#timeline-details-list .detail-item[data-activity-id="' + activityId + '"]'
         );
         if (!row) {
-            setCorrectionShellStatus("未找到对应活动，可能已刷新，请重试。", true);
+            setCorrectionShellStatus("该活动已不在当前详情中，可能已刷新，请重试。", true);
             return;
         }
-        // Clear any prior selected class on sibling rows.
+        // Clear any prior selected / highlight class on sibling rows.
         var all = document.querySelectorAll("#timeline-details-list .detail-item");
         for (var i = 0; i < all.length; i++) {
             all[i].classList.remove("shell-target");
+            all[i].classList.remove("detail-item-highlight");
         }
         row.classList.add("shell-target");
+        // Phase 3B.5B.1: brief transient highlight for immediate feedback.
+        // A single tracked timer is used: clear the previous before
+        // scheduling a new one so repeated clicks never accumulate timers
+        // or throw. .shell-target remains as the persistent locator.
+        row.classList.add("detail-item-highlight");
+        if (correctionShellHighlightTimer !== null) {
+            clearTimeout(correctionShellHighlightTimer);
+            correctionShellHighlightTimer = null;
+        }
+        correctionShellHighlightTimer = setTimeout(function () {
+            row.classList.remove("detail-item-highlight");
+            correctionShellHighlightTimer = null;
+        }, 1800);
         if (row.scrollIntoView) {
             row.scrollIntoView({ behavior: "smooth", block: "center" });
         }

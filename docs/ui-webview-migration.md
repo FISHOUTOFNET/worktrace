@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3B.5B (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.5B.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -18,6 +18,9 @@
   + navigation shell inside the Timeline page that reuses the existing
   single project / note / time / split / merge / hide / delete capability
   without adding any new backend write semantics — implemented;
+  Timeline correction shell hardening — navigation, auto-refresh,
+  dirty-state, selected-session-disappear, display-safe field boundary,
+  click-to-locate, and close / reset path stabilization — implemented;
   WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
@@ -2003,6 +2006,118 @@ Phase 3B.5B does not implement and does not start:
 - Any URL routing or browser-storage-based state;
 - Any per-activity `打开纠错` entry (only the session-level `打开高级纠错`
   entry is required by this phase).
+
+## Phase 3B.5B.1 Implemented Scope
+
+Phase 3B.5B.1 is a **hardening-only** phase for the 3B.5B correction shell.
+It stabilizes the shell on navigation, auto-refresh, dirty-state, selected
+session disappearance, display-safe field boundaries, click-to-locate, and
+the close / reset paths. It does **not** add any new feature, any new
+backend write capability, any new DB schema, any new bridge / API / service
+method, or any new correction action. It does **not** implement batch
+editing.
+
+Hardening points (`worktrace/webview_ui/app.js`):
+
+- `openCorrectionShell` keeps its dirty-state open guard (`isEditDirty()`
+  → refusal text `请先保存或取消当前编辑`). The refusal does **not** clear
+  `selectedSessionId`, does **not** clear the edit panel / inputs, and does
+  not change the selected session. It still requires the selected session
+  to exist in `currentSessions` (via `getSelectedSession`).
+- `closeCorrectionShell` hides the shell, resets shell-only state, and
+  **preserves** `selectedSessionId`. It triggers no refresh and performs no
+  write.
+- `resetCorrectionShellState` clears shell-only state only; it does **not**
+  reset the edit / time / split / merge / hide / delete saving states
+  (those are owned by `clearEditPanel`). It also cancels any pending
+  highlight timer so a close / reset never leaves a dangling timer.
+- `clearEditPanel`, date navigation (`goPrevDay` / `goNextDay` /
+  `goToday`), and `selectTimelineSession` (on session switch) continue to
+  reset shell state; `showTimeline` resets shell state when the selected
+  session disappears (via `clearEditPanel`).
+- Auto-refresh: `showTimeline` re-renders the shell context only when the
+  shell is open, the selected session still exists, **and** the panel is
+  not dirty. A dirty edit is never overwritten; if the selected session
+  disappears the shell is closed.
+- Shell state (`correctionShellOpen`, `correctionShellSessionId`,
+  `correctionShellActivityId`, `correctionShellMode`,
+  `correctionShellHighlightTimer`) remains independent of the existing
+  `editSaving` / `timeSaving` / `activityTimeSaving` / `sessionSplitSaving`
+  / `activitySplitSaving` / `mergeSaving` / `hideSaving` / `deleteSaving`
+  states.
+
+Rendering hardening (`renderCorrectionShell`):
+
+- Only display-safe fields are rendered (session: `project_name`,
+  `project_description`, `start_time`, `end_time`, `duration`,
+  `event_count`, `status`, `is_in_progress`; activity: `activity_id`,
+  `time_range`, `resource_name`, `resource_type`, `app_name`,
+  `project_name`, `duration`, `is_in_progress`). It never reads raw
+  `window_title`, `file_path_hint`, `full_path`, `clipboard`, note
+  internals, traceback, SQL errors, or exception messages.
+- All dynamic values go through `escapeHtml`; no unescaped external /
+  dynamic value is injected via `innerHTML`. Backend times reuse the
+  existing `formatTimeRange` helper; `new Date(string)` is never used.
+- Shell activity rows carry a distinct `data-correction-activity-id`
+  attribute (so they cannot be confused with the real `.detail-item`
+  rows). Only a numeric `activity_id` is rendered as a click-to-locate
+  target; an invalid / missing id is rendered as a non-clickable `.is-static`
+  row.
+- An empty activity list shows `暂无活动详情…` without throwing. An
+  in-progress session / activity is marked `进行中`; no projected end_time
+  is shown as a real closed end_time.
+- The action guidance reiterates that hide / delete are soft operations
+  (`本阶段不会物理删除数据`) and guides the user back to the existing
+  per-activity / session-level controls. No batch / restore / permanent
+  delete wording is shown.
+
+Click-to-locate hardening (`highlightDetailRow`):
+
+- Clicking a shell activity row only looks up the existing
+  `#timeline-details-list .detail-item[data-activity-id="..."]` row and
+  scrolls to / highlights it. It calls **no** bridge method and performs
+  no write (no hide / delete / merge / split / time / project / note
+  save). It does not switch date or session and does not change
+  `selectedSessionId`.
+- A stale target (the detail row is gone) shows a safe status message
+  (`该活动已不在当前详情中…`) and returns; it never throws.
+- The highlight uses a transient `.detail-item-highlight` class on top of
+  the persistent `.shell-target` locator. A **single tracked timer**
+  (`correctionShellHighlightTimer`) is cleared before each new schedule,
+  so repeated clicks never accumulate timers or throw. The timer is also
+  cancelled on shell reset.
+
+CSS (`worktrace/webview_ui/styles.css`):
+
+- `.correction-shell[hidden]` remains `display: none`.
+- `.detail-item.detail-item-highlight` is a noticeable but not harsh
+  transient flash; `.correction-shell-activity-row.is-static` de-emphasizes
+  non-clickable rows. Narrow-viewport rules continue to stack the shell
+  header and activity rows and keep buttons from overflowing. No external
+  fonts / icons / resources are used. Phase 3B.5A action-group styles are
+  untouched.
+
+Bridge / API boundary:
+
+- No new bridge method, no new API method, no new service method, no new
+  DB schema. The bridge continues to import only `worktrace.api` /
+  `worktrace.formatters`.
+
+## Phase 3B.5B.1 Not Implemented
+
+Phase 3B.5B.1 does not implement and does not start:
+
+- Batch edit / batch hide / batch delete;
+- Undo / restore;
+- Permanent delete;
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge;
+- Multi-activity session whole-hide / whole-delete;
+- Any new backend write capability;
+- Any new DB schema;
+- Any new bridge / API / service method;
+- Any new correction action.
 
 ## Legacy Tkinter UI Handling
 

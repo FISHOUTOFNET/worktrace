@@ -1948,3 +1948,90 @@ does **not** implement batch editing.
   or ``note``.
 - Any Phase 3B.5A / 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.5B.1 Validation
+
+Phase 3B.5B.1 is a **hardening-only** phase for the 3B.5B correction shell.
+It stabilizes the shell on navigation, auto-refresh, dirty-state, selected
+session disappearance, display-safe field boundaries, click-to-locate, and
+the close / reset paths. It adds **no new backend write capability**, **no
+new DB schema**, **no new bridge / API / service method**, and **no new
+correction action**. It does **not** implement batch editing.
+
+### Phase 3B.5B.1 Scope
+
+- `openCorrectionShell` keeps its dirty-state open guard
+  (`isEditDirty()` → `请先保存或取消当前编辑`). The refusal does not clear
+  `selectedSessionId`, does not clear the edit panel / inputs, and does
+  not change the selected session. It requires the selected session to
+  still exist in `currentSessions`.
+- `closeCorrectionShell` resets shell-only state and **preserves**
+  `selectedSessionId`; it triggers no refresh and performs no write.
+- `resetCorrectionShellState` clears shell-only state only (never the
+  edit / time / split / merge / hide / delete saving states) and cancels
+  any pending highlight timer.
+- `clearEditPanel`, date navigation (`goPrevDay` / `goNextDay` /
+  `goToday`), and `selectTimelineSession` (on switch) reset shell state;
+  `showTimeline` resets shell state when the selected session disappears.
+- Auto-refresh never overwrites a dirty shell: the shell context is
+  re-rendered only when the shell is open, the selected session still
+  exists, **and** the panel is not dirty.
+- `renderCorrectionShell` uses only display-safe fields, escapes all
+  dynamic values via `escapeHtml`, reuses `formatTimeRange`, and never
+  reads `window_title` / `file_path_hint` / `full_path` / `clipboard` /
+  note internals / traceback / SQL / exception text. Shell activity rows
+  carry a distinct `data-correction-activity-id`; only numeric ids are
+  click-to-locate targets, invalid ids render as non-clickable `.is-static`
+  rows.
+- `highlightDetailRow` (click-to-locate) only scrolls to / highlights the
+  existing `.detail-item[data-activity-id=...]` row. It calls no bridge
+  method, performs no write, does not switch date / session, and does not
+  change `selectedSessionId`. A stale target shows a safe status message
+  and never throws. A single tracked transient-highlight timer is cleared
+  before each re-schedule so repeated clicks never accumulate timers.
+- CSS: `.correction-shell[hidden]` stays `display: none`;
+  `.detail-item.detail-item-highlight` is a noticeable-but-not-harsh
+  transient flash; narrow-viewport rules keep the layout stable. No
+  external fonts / icons / resources are used; Phase 3B.5A action-group
+  styles are untouched.
+
+### Phase 3B.5B.1 Verification
+
+- `python -m pytest` passes (all Phase 3B.5B.1 shell state / display-safe
+  / click-to-locate / boundary tests pass; all prior phase tests continue
+  to pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- The bridge still imports only `worktrace.api` / `worktrace.formatters`
+  (no `services` / `db` / `collector` / `security` / `runtime` /
+  `config`).
+- No frontend resource contains `localStorage`, `sessionStorage`, CDN,
+  external links, or Google Fonts.
+- No frontend resource contains batch / restore / permanent-delete /
+  auto-rule / overlap-detection handlers.
+- No new bridge / API / service method is added; no new DB schema is
+  introduced.
+
+### Phase 3B.5B.1 Release Blockers
+
+- Any new feature (batch edit, batch hide, batch delete, undo / restore,
+  permanent delete, auto-rule, complex correction page, overlap
+  detection, multi-activity session whole-hide / whole-delete,
+  arbitrary-length merge) is introduced.
+- `openCorrectionShell` opens while `isEditDirty()` is true, or the dirty
+  refusal clears `selectedSessionId` / the edit panel.
+- `closeCorrectionShell` clears `selectedSessionId` or triggers a refresh
+  / write.
+- `resetCorrectionShellState` resets any edit / time / split / merge /
+  hide / delete saving state, or leaves a dangling highlight timer.
+- Auto-refresh overwrites a dirty shell, or fails to close the shell when
+  the selected session disappears.
+- The shell reads or displays raw `window_title`, `file_path_hint`,
+  `full_path`, `clipboard`, note internals, traceback, SQL, or exception
+  text.
+- `highlightDetailRow` calls a bridge method, performs a write, switches
+  date / session, changes `selectedSessionId`, throws on a stale target,
+  or accumulates highlight timers.
+- Any Phase 3B.5B / 3B.5A / 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1
+  regression.
+- Any new DB schema or any new bridge / API / service method is
+  introduced.

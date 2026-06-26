@@ -3132,3 +3132,364 @@ def test_docs_readme_mentions_phase_3b_5b():
         assert term.lower() in readme.lower(), (
             "README.md must restate that " + term + " is not implemented"
         )
+
+
+# --- Phase 3B.5B.1: Timeline correction shell hardening tests ------------
+#
+# Phase 3B.5B.1 is a hardening-only phase for the 3B.5B correction shell.
+# It stabilizes the shell on navigation, auto-refresh, dirty-state, selected
+# session disappearance, display-safe field boundaries, click-to-locate, and
+# the close / reset paths. It does NOT add batch edit / hide / delete, undo /
+# restore, permanent delete, auto-rule, global overlap detection, arbitrary-
+# length merge, multi-activity session whole-hide / whole-delete, any new
+# backend write capability, any new DB schema, or any new bridge / API /
+# service method.
+
+
+def _func_body(source, name):
+    """Return the body of ``function <name>`` in app.js (best-effort)."""
+    start = source.find("function " + name)
+    assert start != -1, "app.js must define " + name
+    end = source.find("\n    function ", start + 1)
+    return source[start:end] if end != -1 else source[start:]
+
+
+def test_app_js_correction_shell_highlight_timer_variable_declared():
+    """Phase 3B.5B.1: app.js must declare a single tracked highlight timer
+    so repeated click-to-locate clicks never accumulate timers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "correctionShellHighlightTimer" in source, (
+        "app.js must declare the correctionShellHighlightTimer state variable"
+    )
+
+
+def test_app_js_reset_correction_shell_state_clears_highlight_timer():
+    """Phase 3B.5B.1: resetCorrectionShellState must cancel any pending
+    highlight timer so a close / reset never leaves a dangling timer."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "resetCorrectionShellState")
+    assert "correctionShellHighlightTimer" in body, (
+        "resetCorrectionShellState must reference the highlight timer"
+    )
+    assert "clearTimeout" in body, (
+        "resetCorrectionShellState must clear the pending highlight timer"
+    )
+
+
+def test_app_js_highlight_detail_row_no_bridge_writes():
+    """Phase 3B.5B.1: highlightDetailRow must be read-only — it must not
+    call any bridge method (write or otherwise) and must not perform any
+    save / hide / delete / merge / split / time / project / note action."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "highlightDetailRow")
+    assert "callBridge" not in body, (
+        "highlightDetailRow must not call any bridge method"
+    )
+    for forbidden in ("saveProject", "saveNote", "saveActivityTime",
+                      "saveSessionTime", "saveActivitySplit", "saveSessionSplit",
+                      "saveMerge", "saveHide", "saveDelete",
+                      "hide_timeline", "soft_delete", "merge_timeline",
+                      "split_timeline", "update_timeline"):
+        assert forbidden not in body, (
+            "highlightDetailRow must not invoke " + forbidden
+        )
+
+
+def test_app_js_highlight_detail_row_safe_single_timer():
+    """Phase 3B.5B.1: the transient highlight must use a single tracked
+    timer — clearTimeout before setTimeout — so repeated clicks never
+    accumulate timers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "highlightDetailRow")
+    assert "clearTimeout" in body, (
+        "highlightDetailRow must clear the prior timer before scheduling"
+    )
+    assert "setTimeout" in body, (
+        "highlightDetailRow must schedule a transient highlight timer"
+    )
+    assert "correctionShellHighlightTimer" in body, (
+        "highlightDetailRow must track the timer in the shared variable"
+    )
+    # Only one setTimeout call may be present so timers cannot accumulate.
+    assert body.count("setTimeout") == 1, (
+        "highlightDetailRow must schedule exactly one timer per click"
+    )
+
+
+def test_app_js_highlight_detail_row_stale_target_message():
+    """Phase 3B.5B.1: when the target detail row is missing, the handler
+    must show a safe message (not throw, not perform any write)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "highlightDetailRow")
+    # The stale-target branch must set a status message and return early.
+    assert "setCorrectionShellStatus" in body, (
+        "highlightDetailRow must report a safe status on stale target"
+    )
+    assert "已不在当前详情" in body or "未找到对应活动" in body, (
+        "highlightDetailRow must use a safe stale-target message"
+    )
+    # No window alert / confirm / throw on the stale path.
+    for forbidden in ("window.alert", "window.confirm", "throw "):
+        assert forbidden not in body, (
+            "highlightDetailRow must not use " + forbidden
+        )
+
+
+def test_app_js_highlight_detail_row_uses_detail_item_selector():
+    """Phase 3B.5B.1: click-to-locate must only look up the existing
+    .detail-item[data-activity-id=...] row inside #timeline-details-list."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "highlightDetailRow")
+    assert '#timeline-details-list .detail-item[data-activity-id="' in body, (
+        "highlightDetailRow must query the existing detail-item row"
+    )
+
+
+def test_app_js_render_correction_shell_uses_correction_activity_id():
+    """Phase 3B.5B.1: shell activity rows must carry a distinct
+    data-correction-activity-id attribute so they cannot be confused with
+    the real .detail-item rows."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderCorrectionShell")
+    assert "data-correction-activity-id" in body, (
+        "shell activity rows must use data-correction-activity-id"
+    )
+
+
+def test_app_js_render_correction_shell_invalid_id_not_clickable():
+    """Phase 3B.5B.1: a non-numeric / missing activity id must not be
+    rendered as a click-to-locate target (numeric guard)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderCorrectionShell")
+    assert "/^[0-9]+$/.test" in body, (
+        "renderCorrectionShell must guard a numeric activity id"
+    )
+    # The click handler must only bind to rows carrying the safe attribute.
+    assert ".correction-shell-activity-row[data-correction-activity-id]" in body, (
+        "click handlers must only bind to rows with a valid id"
+    )
+
+
+def test_app_js_render_correction_shell_uses_escape_html():
+    """Phase 3B.5B.1: every dynamic value rendered into the shell must go
+    through escapeHtml so no unescaped external / dynamic value is
+    injected via innerHTML."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderCorrectionShell")
+    assert "escapeHtml" in body, (
+        "renderCorrectionShell must escape dynamic values"
+    )
+
+
+def test_app_js_render_correction_shell_no_sensitive_fields_3b_5b_1():
+    """Phase 3B.5B.1: the hardened shell rendering must still never read
+    raw window_title / file_path_hint / full_path / clipboard / note
+    internals, and must not surface traceback / SQL / exception text."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderCorrectionShell")
+    for forbidden in ("window_title", "file_path_hint", "file_path",
+                      "full_path", "clipboard", "session_note", "traceback",
+                      "SQL", "exception"):
+        assert forbidden not in body, (
+            "renderCorrectionShell must not read or display " + forbidden
+        )
+
+
+def test_app_js_correction_shell_state_independent_of_saving_states():
+    """Phase 3B.5B.1: resetCorrectionShellState must only reset shell-only
+    state; it must not reset the edit / time / split / merge / hide / delete
+    saving states (those are owned by clearEditPanel)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "resetCorrectionShellState")
+    for saving in ("editSaving", "timeSaving", "activityTimeSaving",
+                   "sessionSplitSaving", "activitySplitSaving", "mergeSaving",
+                   "hideSaving", "deleteSaving", "editingSession"):
+        assert saving not in body, (
+            "resetCorrectionShellState must not reset " + saving
+        )
+
+
+def test_app_js_open_correction_shell_dirty_refusal_preserves_state():
+    """Phase 3B.5B.1: the dirty-state refusal in openCorrectionShell must
+    not clear selectedSessionId, must not clear the edit panel / inputs,
+    and must not change the selected session."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "openCorrectionShell")
+    assert "selectedSessionId = null" not in body, (
+        "openCorrectionShell must not clear selectedSessionId on refusal"
+    )
+    assert "clearEditPanel" not in body, (
+        "openCorrectionShell must not clear the edit panel on refusal"
+    )
+    assert "请先保存或取消当前编辑" in body, (
+        "openCorrectionShell must keep the dirty refusal text"
+    )
+
+
+def test_app_js_get_selected_session_uses_current_sessions():
+    """Phase 3B.5B.1: getSelectedSession must look the session up from
+    currentSessions so a stale / disappeared session cannot open the
+    shell."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "getSelectedSession")
+    assert "currentSessions" in body, (
+        "getSelectedSession must read from currentSessions"
+    )
+
+
+def test_app_js_auto_refresh_shell_guarded_by_dirty_state():
+    """Phase 3B.5B.1: auto-refresh must not overwrite a dirty shell. The
+    showTimeline shell re-render path must be guarded by !isEditDirty()."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    show_start = source.find("function showTimeline(")
+    assert show_start != -1, "showTimeline must exist"
+    show_end = source.find("\n    function ", show_start + 1)
+    show_body = source[show_start:show_end]
+    assert "correctionShellOpen" in show_body, (
+        "showTimeline must consider the correction shell state"
+    )
+    assert "isEditDirty()" in show_body, (
+        "showTimeline must guard shell re-render with isEditDirty()"
+    )
+
+
+def test_app_js_close_correction_shell_no_refresh_or_write():
+    """Phase 3B.5B.1: closeCorrectionShell must not trigger a refresh and
+    must not perform any write action."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "closeCorrectionShell")
+    for forbidden in ("loadTimeline", "refreshAll", "callBridge",
+                      "saveProject", "saveNote", "saveActivityTime",
+                      "saveSessionTime", "saveActivitySplit", "saveSessionSplit",
+                      "saveMerge", "saveHide", "saveDelete"):
+        assert forbidden not in body, (
+            "closeCorrectionShell must not call " + forbidden
+        )
+
+
+def test_app_js_correction_shell_no_new_forbidden_handlers_3b_5b_1():
+    """Phase 3B.5B.1: the hardening must not introduce batch edit / hide /
+    delete, undo / restore, permanent delete, auto-rule, or global overlap
+    detection handlers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("batchEdit", "batchHide", "batchDelete",
+                      "restoreActivity", "restoreSession",
+                      "permanentDelete", "autoRule", "auto_rule",
+                      "overlapDetection", "globalOverlap",
+                      "multiActivityHide", "multiActivityDelete"):
+        assert forbidden not in source, (
+            "app.js must not contain " + forbidden + " handler"
+        )
+
+
+def test_index_html_correction_shell_no_external_resources_3b_5b_1():
+    """Phase 3B.5B.1: the correction shell region must not introduce
+    external links, CDN, Google Fonts, or browser storage."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    start = source.find('id="timeline-correction-shell"')
+    assert start != -1, "correction shell container must exist"
+    end = source.find("</div>\n                    </div>\n                </div>\n            </section>",
+                      start)
+    if end == -1:
+        end = len(source)
+    shell_block = source[start:end]
+    assert not re.search(r"https?://", shell_block), (
+        "correction shell must not contain external links"
+    )
+    assert not re.search(r"cdn", shell_block, re.IGNORECASE), (
+        "correction shell must not reference CDN"
+    )
+    assert not re.search(r"localStorage|sessionStorage", shell_block), (
+        "correction shell must not use browser storage"
+    )
+    for forbidden in ("batch", "restore", "permanent", "auto-rule", "overlap"):
+        assert forbidden not in shell_block.lower(), (
+            "correction shell must not contain a '" + forbidden + "' control"
+        )
+
+
+def test_styles_css_has_detail_item_highlight_class():
+    """Phase 3B.5B.1: styles.css must define the transient
+    .detail-item.detail-item-highlight class used by click-to-locate."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".detail-item.detail-item-highlight" in source, (
+        "styles.css must define .detail-item.detail-item-highlight"
+    )
+
+
+def test_styles_css_has_correction_shell_is_static_class():
+    """Phase 3B.5B.1: styles.css must define the .is-static style for
+    shell activity rows whose activity id is missing / non-numeric."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell-activity-row.is-static" in source, (
+        "styles.css must define the non-clickable .is-static style"
+    )
+
+
+def test_styles_css_correction_shell_hidden_still_display_none():
+    """Phase 3B.5B.1: the shell must remain truly hidden when [hidden]."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell[hidden]" in source, (
+        "styles.css must keep the .correction-shell[hidden] rule"
+    )
+
+
+def test_bridge_no_new_methods_for_phase_3b_5b_1():
+    """Phase 3B.5B.1: the hardening must not add any new bridge method,
+    and the bridge must continue to import only allowed modules."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # No new shell-specific write / read method is added in this phase.
+    for forbidden in ("def correction_shell", "def batch_edit",
+                      "def batch_hide", "def batch_delete",
+                      "def restore_activity", "def permanent_delete",
+                      "def auto_rule", "def detect_overlaps"):
+        assert forbidden not in bridge_src, (
+            "bridge must not add " + forbidden
+        )
+    for forbidden in (
+        "import worktrace.services",
+        "import worktrace.db",
+        "import worktrace.collector",
+        "import worktrace.security",
+        "import worktrace.runtime",
+        "import worktrace.config",
+        "from worktrace.services",
+        "from worktrace.db",
+        "from worktrace.collector",
+        "from worktrace.security",
+        "from worktrace.runtime",
+        "from worktrace.config",
+    ):
+        assert forbidden not in bridge_src, (
+            "bridge must not import " + forbidden
+        )
+
+
+def test_docs_mention_phase_3b_5b_1():
+    """Phase 3B.5B.1: the migration doc, release-validation doc, and
+    README must mention Phase 3B.5B.1 as the correction shell hardening
+    phase and restate that no new backend / DB / bridge capability and no
+    batch editing were added."""
+    migration = (REPO_ROOT / "docs" / "ui-webview-migration.md").read_text(
+        encoding="utf-8"
+    )
+    release_val = (REPO_ROOT / "docs" / "release-validation.md").read_text(
+        encoding="utf-8"
+    )
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    for doc, name in ((migration, "ui-webview-migration.md"),
+                      (release_val, "release-validation.md"),
+                      (readme, "README.md")):
+        assert "3B.5B.1" in doc, name + " must mention Phase 3B.5B.1"
+        assert "hardening" in doc.lower() or "硬化" in doc, (
+            name + " must describe 3B.5B.1 as a hardening phase"
+        )
+    # The migration doc must restate the hardening points and the
+    # not-implemented list.
+    assert "correction shell" in migration.lower() or "高级纠错" in migration
+    for term in ("batch", "restore", "permanent delete", "auto-rule",
+                 "overlap"):
+        assert term.lower() in migration.lower(), (
+            "ui-webview-migration.md must restate that " + term
+            + " is not implemented"
+        )
