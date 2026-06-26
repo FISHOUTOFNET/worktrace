@@ -2,15 +2,15 @@
 
 ## Status
 
-- Current phase: 3B.3 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.3.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
   implemented and hardened; Timeline activity split foundation — single
   closed activity split into two closed activities — implemented and
   hardened; Timeline activity merge foundation — two closed activities
-  merged into one — implemented; WebView is the default and only shipping
-  UI).
+  merged into one — implemented and hardened; WebView is the default and
+  only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -284,6 +284,23 @@ The migration is phased so each step is independently shippable:
   is cleared gracefully. Delete/hide, batch editing, auto-rule creation,
   complex correction pages, and overlap detection remain out of scope.
   **Completed.**
+- Phase 3B.3.1: **Timeline activity merge hardening.** Hardens the
+  Phase 3B.3 merge write path with no new features. Confirms the
+  transaction boundary covers both the kept-activity UPDATE and the
+  later-activity soft-delete; confirms both UPDATEs raise on rowcount 0
+  and roll back; confirms an exception during the soft-delete UPDATE
+  rolls back via the ``with get_connection()`` context manager so no
+  partial write survives. Adds explicit tests for excluded-vs-non-excluded
+  rejection (rejected by the resource-identity check because excluded
+  activities always carry ``system:excluded``), no-partial-write for
+  every rejection path (different project / resource / status / source /
+  gap-too-large), kept-fields-unchanged on validation failure, soft-delete
+  exception rollback, and the full service-ValueError → API-error-code
+  mapping table. Restates that in-progress is determined by the raw DB
+  ``end_time IS NULL`` column, not the projected display value. Delete /
+  hide, batch editing, auto-rule creation, complex correction pages,
+  overlap detection, arbitrary-length merge, and multi-activity session
+  whole-merge remain out of scope. **Completed.**
 - Phase 3B: Timeline advanced editing (delete, batch editing,
   correction page) — not yet started.
 - Phase 4: Statistics / Export.
@@ -1350,6 +1367,84 @@ The following remain out of scope until a later phase:
 - Overlap detection between activities on the same timeline (the merge
   itself rejects overlap between the two activities being merged, but
   global overlap detection is not implemented).
+
+## Phase 3B.3.1 Hardening
+
+Phase 3B.3.1 is a **hardening-only** phase. It introduces no new features,
+no new DB schema, no new UI controls, and no changes to the merge data
+semantics. It confirms the Phase 3B.3 write path is stable, safe, and
+semantically clear, and adds explicit regression tests for the edge cases
+the foundation tests did not exercise.
+
+### Transaction Boundary
+
+- The kept-activity UPDATE and the later-activity soft-delete run inside
+  the same ``with get_connection() as conn:`` block in
+  ``activity_service.merge_activities``. The sqlite3 connection context
+  manager commits on normal exit and rolls back on any exception.
+- The kept-activity UPDATE guards its WHERE clause with
+  ``id = ? AND is_deleted = 0 AND end_time IS NOT NULL``. If the rowcount
+  is 0 (race condition: the activity was deleted or re-opened between
+  validation and write), the service raises
+  ``ValueError("activity_merge_update_affected_zero_rows")`` and the
+  transaction rolls back.
+- The later-activity soft-delete UPDATE uses the same WHERE guard. If the
+  rowcount is 0, the service raises the same ``ValueError`` and the
+  transaction rolls back (the kept-activity UPDATE is also rolled back).
+- If the soft-delete UPDATE raises an arbitrary exception (e.g. a
+  ``sqlite3.OperationalError`` from a mid-transaction database failure),
+  the exception propagates out of ``merge_activities`` and the
+  ``with get_connection()`` context manager rolls back the transaction.
+  No partial write (kept end_time extended but later activity still live)
+  survives. The service does not wrap the soft-delete in its own
+  try/except; it relies on the connection context manager for rollback.
+
+### Validation Order And Excluded Activities
+
+- The service checks resource identity (``activity_resource.identity_key``)
+  before status/source. Excluded activities are always anonymised to
+  ``system:excluded`` (see ``resource_service._enforce_anonymous_if_excluded``
+  and ``make_system_resource``), which differs from a normal activity's
+  file-based identity_key. Therefore an excluded-vs-non-excluded merge is
+  rejected with ``different_resource`` — a stronger and earlier guard that
+  covers the excluded boundary without needing a separate status check.
+- The in-progress determination reads the raw DB ``end_time IS NULL``
+  column, not the projected display ``end_time`` value. This is consistent
+  with the rest of the activity-editing flows.
+
+### Added Hardening Tests
+
+- ``test_merge_excluded_vs_non_excluded_rejected`` — excluded activity
+  (``system:excluded``) vs normal activity rejected with
+  ``different_resource``.
+- ``test_merge_no_partial_write_on_different_resource`` /
+  ``test_merge_no_partial_write_on_different_status`` /
+  ``test_merge_no_partial_write_on_different_source`` /
+  ``test_merge_no_partial_write_on_gap_too_large`` — each rejection path
+  leaves both activities' ``start_time`` / ``end_time`` / ``is_deleted``
+  unchanged.
+- ``test_merge_kept_fields_unchanged_on_validation_failure`` — on a
+  validation failure the kept activity's ``start_time`` / ``end_time`` /
+  ``duration_seconds`` / ``updated_at`` are all unchanged.
+- ``test_service_merge_soft_delete_exception_rolls_back`` — a
+  ``sqlite3.OperationalError`` raised by the soft-delete UPDATE propagates
+  and the transaction rolls back: the kept ``end_time`` returns to its
+  original value and the later activity is NOT soft-deleted.
+- ``test_api_maps_all_service_value_error_codes`` — table-driven test
+  verifying every service ``ValueError`` code (including an unknown code)
+  maps to the documented stable ``TimelineMergeError`` code.
+
+### Not Implemented (Restated)
+
+Phase 3B.3.1 does not implement and does not start:
+
+- Delete / hide as an independent feature;
+- Batch editing;
+- Auto-rule creation;
+- Complex correction page;
+- Overlap detection (global, across the whole timeline);
+- Arbitrary-length merge (more than two activities per call);
+- Multi-activity session whole-merge.
 
 ## Legacy Tkinter UI Handling
 

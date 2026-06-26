@@ -729,3 +729,222 @@ def test_service_merge_assignment_resource_not_complex_merged(temp_db):
         ).fetchone()["c"]
     assert after_assignments == before_assignments
     assert after_resources == before_resources
+
+
+# --- Phase 3B.3.1: merge hardening tests ----------------------------------
+#
+# These tests cover the hardening edge cases the Phase 3B.3 foundation
+# tests did not explicitly exercise: excluded vs non-excluded rejection,
+# no-partial-write for every rejection path, kept-fields-unchanged on
+# validation failure, soft-delete UPDATE exception rollback, and the
+# full service-ValueError → API-error-code mapping table.
+
+
+def test_merge_excluded_vs_non_excluded_rejected(temp_db):
+    """Excluded vs non-excluded activities must be rejected.
+
+    Excluded activities are always anonymised to the ``system:excluded``
+    resource identity (see ``resource_service._enforce_anonymous_if_excluded``
+    and ``make_system_resource``), which differs from a normal activity's
+    file-based identity_key. The service checks resource identity before
+    status, so this case is rejected with ``different_resource`` — a
+    stronger and earlier guard that also covers the excluded-vs-non-excluded
+    boundary without needing a separate status check.
+    """
+    from worktrace.constants import STATUS_EXCLUDED
+
+    a1 = _seed_closed_activity(start="09:00:00", end="09:30:00")
+    a2 = activity_service.create_activity(
+        "Word", "winword.exe", "A1.docx",
+        start_time="2026-06-25 09:30:00",
+        status=STATUS_EXCLUDED,
+    )
+    activity_service.finalize_created_activity(a2)
+    activity_service.close_activity(a2, "2026-06-25 10:00:00")
+    with pytest.raises(TimelineMergeError) as exc:
+        timeline_api.merge_timeline_activities([a1, a2])
+    assert exc.value.code == "different_resource"
+
+
+def test_merge_no_partial_write_on_different_resource(temp_db):
+    """Different resource must not modify either activity."""
+    ids = _seed_two_adjacent_activities()
+    originals = {aid: activity_service.get_activity(aid) for aid in ids}
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_resource SET identity_key = ? WHERE activity_id = ?",
+            ("different_identity_key", ids[1]),
+        )
+    with pytest.raises(TimelineMergeError):
+        timeline_api.merge_timeline_activities(ids)
+    for aid in ids:
+        after = activity_service.get_activity(aid)
+        assert after["start_time"] == originals[aid]["start_time"]
+        assert after["end_time"] == originals[aid]["end_time"]
+        assert int(after["is_deleted"] or 0) == 0
+
+
+def test_merge_no_partial_write_on_different_status(temp_db):
+    """Different status must not modify either activity."""
+    ids = _seed_two_adjacent_activities()
+    originals = {aid: activity_service.get_activity(aid) for aid in ids}
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET status = 'idle' WHERE id = ?",
+            (ids[1],),
+        )
+    with pytest.raises(TimelineMergeError):
+        timeline_api.merge_timeline_activities(ids)
+    for aid in ids:
+        after = activity_service.get_activity(aid)
+        assert after["start_time"] == originals[aid]["start_time"]
+        assert after["end_time"] == originals[aid]["end_time"]
+        assert int(after["is_deleted"] or 0) == 0
+
+
+def test_merge_no_partial_write_on_different_source(temp_db):
+    """Different source must not modify either activity."""
+    ids = _seed_two_adjacent_activities()
+    originals = {aid: activity_service.get_activity(aid) for aid in ids}
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET source = 'manual' WHERE id = ?",
+            (ids[1],),
+        )
+    with pytest.raises(TimelineMergeError):
+        timeline_api.merge_timeline_activities(ids)
+    for aid in ids:
+        after = activity_service.get_activity(aid)
+        assert after["start_time"] == originals[aid]["start_time"]
+        assert after["end_time"] == originals[aid]["end_time"]
+        assert int(after["is_deleted"] or 0) == 0
+
+
+def test_merge_no_partial_write_on_gap_too_large(temp_db):
+    """Gap too large must not modify either activity."""
+    ids = _seed_two_adjacent_activities(
+        start1="09:00:00", end1="09:30:00",
+        start2="10:00:00", end2="10:30:00",
+    )
+    originals = {aid: activity_service.get_activity(aid) for aid in ids}
+    with pytest.raises(TimelineMergeError):
+        timeline_api.merge_timeline_activities(ids)
+    for aid in ids:
+        after = activity_service.get_activity(aid)
+        assert after["start_time"] == originals[aid]["start_time"]
+        assert after["end_time"] == originals[aid]["end_time"]
+        assert int(after["is_deleted"] or 0) == 0
+
+
+def test_merge_kept_fields_unchanged_on_validation_failure(temp_db):
+    """On any validation failure, the kept activity's start_time,
+    end_time, duration_seconds, and updated_at must all be unchanged."""
+    ids = _seed_two_adjacent_activities(
+        start1="09:00:00", end1="09:30:00", start2="09:30:00", end2="10:00:00"
+    )
+    kept_before = activity_service.get_activity(ids[0])
+    # Trigger a validation failure (different project).
+    from worktrace.services import project_service
+
+    project = project_service.create_project("Blocker")
+    activity_service.update_activity_project(ids[1], project, manual=True)
+    with pytest.raises(TimelineMergeError):
+        timeline_api.merge_timeline_activities(ids)
+    kept_after = activity_service.get_activity(ids[0])
+    assert kept_after["start_time"] == kept_before["start_time"]
+    assert kept_after["end_time"] == kept_before["end_time"]
+    assert int(kept_after["duration_seconds"] or 0) == int(
+        kept_before["duration_seconds"] or 0
+    )
+    assert kept_after["updated_at"] == kept_before["updated_at"]
+
+
+def test_service_merge_soft_delete_exception_rolls_back(temp_db):
+    """If the soft-delete UPDATE raises an exception (not just rowcount 0),
+    the exception propagates and the ``with get_connection()`` context
+    manager rolls back the transaction so the kept activity's end_time
+    returns to its original value and the later activity is NOT soft-deleted.
+
+    The service does not wrap the soft-delete UPDATE in its own try/except;
+    it relies on the sqlite3 connection context manager for rollback. This
+    test simulates a mid-transaction database failure and verifies that no
+    partial write survives.
+    """
+    import sqlite3
+
+    ids = _seed_two_adjacent_activities(
+        start1="09:00:00", end1="09:30:00", start2="09:30:00", end2="10:00:00"
+    )
+    orig_kept_end = activity_service.get_activity(ids[0])["end_time"]
+    real_get_connection = activity_service.get_connection
+
+    class _ExplodingSoftDeleteConn:
+        """Wraps a real connection. The soft-delete UPDATE (SET is_deleted = 1)
+        raises a sqlite3.Error to simulate a database failure mid-transaction.
+        All other statements delegate to the real connection."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, params=()):
+            stripped = " ".join(sql.split())
+            if "UPDATE activity_log" in stripped and "SET is_deleted = 1" in stripped:
+                raise sqlite3.OperationalError("simulated soft-delete failure")
+            return self._real.execute(sql, params)
+
+        def __enter__(self):
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._real.__exit__(*args)
+
+    def patched_get_connection():
+        return _ExplodingSoftDeleteConn(real_get_connection())
+
+    with patch.object(
+        activity_service, "get_connection", side_effect=patched_get_connection
+    ):
+        # The sqlite3.OperationalError propagates out of merge_activities;
+        # the connection context manager rolls back the transaction.
+        with pytest.raises(sqlite3.OperationalError):
+            activity_service.merge_activities(ids[0], ids[1])
+    # The kept activity's end_time must have been rolled back.
+    kept = activity_service.get_activity(ids[0])
+    assert kept["end_time"] == orig_kept_end
+    # The later activity must NOT have been soft-deleted.
+    later = activity_service.get_activity(ids[1])
+    assert later is not None
+    assert int(later.get("is_deleted") or 0) == 0
+
+
+def test_api_maps_all_service_value_error_codes(temp_db):
+    """Every service-layer ValueError code used by ``merge_activities`` must
+    map to a stable ``TimelineMergeError`` code. This is a table-driven test
+    that exercises the mapping in ``merge_timeline_activities`` directly by
+    mocking the service to raise each known code."""
+    code_map = {
+        "activity_merge_same_id": "invalid_selection",
+        "activity_merge_not_found_or_deleted": "invalid_id",
+        "activity_merge_in_progress": "in_progress",
+        "activity_merge_overlap": "invalid_time",
+        "activity_merge_not_adjacent": "not_adjacent",
+        "activity_merge_different_project": "different_project",
+        "activity_merge_different_resource": "different_resource",
+        "activity_merge_incompatible_activity": "incompatible_activity",
+        "activity_merge_update_affected_zero_rows": "operation_failed",
+        "some_unknown_code": "operation_failed",
+    }
+    ids = _seed_two_adjacent_activities()
+    for service_code, expected_api_code in code_map.items():
+        with patch.object(
+            activity_service,
+            "merge_activities",
+            side_effect=ValueError(service_code),
+        ):
+            with pytest.raises(TimelineMergeError) as exc:
+                timeline_api.merge_timeline_activities(ids)
+        assert exc.value.code == expected_api_code, (
+            f"service code {service_code!r} must map to "
+            f"{expected_api_code!r}, got {exc.value.code!r}"
+        )

@@ -1452,3 +1452,102 @@ to the later activity's end_time. The later activity is soft-deleted.
 - The frontend uses browser storage or external resources.
 - Any Phase 3B.2 / 3B.1 / 3A / 2.1 regression.
 - Any new DB schema is introduced.
+
+## WebView Phase 3B.3.1 Validation
+
+Phase 3B.3.1 is a **hardening-only** phase for the Phase 3B.3 activity
+merge. It introduces no new features, no new DB schema, and no new UI
+controls. It confirms the merge write path is stable, safe, and
+semantically clear, and adds explicit regression tests for edge cases the
+foundation tests did not exercise.
+
+### Automated Checklist
+
+| Check | Command |
+|-------|---------|
+| Full test suite | `python -m pytest` |
+| PyInstaller build | `python -m PyInstaller --noconfirm --clean WorkTrace.spec` |
+
+### Validation Items
+
+#### BJ. Transaction Boundary Hardening
+
+- The kept-activity UPDATE and the later-activity soft-delete run inside
+  the same ``with get_connection()`` transaction. The sqlite3 connection
+  context manager commits on normal exit and rolls back on any exception.
+- The kept-activity UPDATE guards its WHERE clause with
+  ``id = ? AND is_deleted = 0 AND end_time IS NOT NULL``; a rowcount of 0
+  raises ``ValueError("activity_merge_update_affected_zero_rows")`` and
+  rolls back.
+- The later-activity soft-delete UPDATE uses the same WHERE guard; a
+  rowcount of 0 raises the same ``ValueError`` and rolls back (the kept
+  UPDATE is also rolled back).
+- An arbitrary exception raised by the soft-delete UPDATE (e.g.
+  ``sqlite3.OperationalError``) propagates out of ``merge_activities`` and
+  the ``with get_connection()`` context manager rolls back the
+  transaction. The kept activity's ``end_time`` returns to its original
+  value and the later activity is NOT soft-deleted. Verified by
+  ``test_service_merge_soft_delete_exception_rolls_back``.
+
+#### BK. Validation Order And Excluded Activities
+
+- The service checks resource identity (``activity_resource.identity_key``)
+  before status/source. Excluded activities are always anonymised to
+  ``system:excluded``, which differs from a normal activity's file-based
+  identity_key. An excluded-vs-non-excluded merge is therefore rejected
+  with ``different_resource`` — a stronger and earlier guard. Verified by
+  ``test_merge_excluded_vs_non_excluded_rejected``.
+- The in-progress determination reads the raw DB ``end_time IS NULL``
+  column, not the projected display value.
+
+#### BL. No Partial Write On Rejection
+
+- Different project: both activities' ``start_time`` / ``end_time`` /
+  ``is_deleted`` unchanged. Verified by existing Phase 3B.3 tests and
+  ``test_merge_kept_fields_unchanged_on_validation_failure``.
+- Different resource: both activities unchanged. Verified by
+  ``test_merge_no_partial_write_on_different_resource``.
+- Different status: both activities unchanged. Verified by
+  ``test_merge_no_partial_write_on_different_status``.
+- Different source: both activities unchanged. Verified by
+  ``test_merge_no_partial_write_on_different_source``.
+- Gap too large: both activities unchanged. Verified by
+  ``test_merge_no_partial_write_on_gap_too_large``.
+- On any validation failure the kept activity's ``start_time`` /
+  ``end_time`` / ``duration_seconds`` / ``updated_at`` are all unchanged.
+  Verified by ``test_merge_kept_fields_unchanged_on_validation_failure``.
+
+#### BM. Error Code Mapping
+
+- Every service-layer ``ValueError`` code used by ``merge_activities``
+  maps to a stable ``TimelineMergeError`` code. Verified by
+  ``test_api_maps_all_service_value_error_codes`` (table-driven, covers
+  all 9 known codes plus an unknown code that collapses to
+  ``operation_failed``).
+
+#### BN. Regression
+
+- All Phase 3B.3 merge foundation tests continue to pass.
+- All Phase 3B.2 / 3B.2.1 split tests continue to pass.
+- All Phase 3B.1 / 3B.1.1 time-correction tests continue to pass.
+- All Phase 3A / 3A.1 editing tests continue to pass.
+- All Phase 2.1 privacy boundary tests continue to pass.
+- Overview and Timeline read-only tests continue to pass.
+- Default WebView entry tests continue to pass.
+- PyInstaller resource path tests continue to pass.
+
+### Phase 3B.3.1 Release Blockers
+
+- A soft-delete UPDATE exception leaves a partial write (kept ``end_time``
+  extended but later activity still live).
+- A race-condition rowcount-0 does not roll back the transaction.
+- An excluded-vs-non-excluded merge is allowed.
+- A validation failure modifies either activity's ``start_time`` /
+  ``end_time`` / ``is_deleted`` / ``duration_seconds`` / ``updated_at``.
+- A service ``ValueError`` code does not map to the documented stable
+  ``TimelineMergeError`` code.
+- Any Phase 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any new feature (delete / hide, batch edit, auto-rule, complex
+  correction page, overlap detection, arbitrary-length merge,
+  multi-activity session whole-merge) is introduced.
+- Any new DB schema is introduced.
