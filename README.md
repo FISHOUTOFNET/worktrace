@@ -1,13 +1,15 @@
 # WorkTrace v0.1 Lite
 
-WorkTrace is a lightweight Windows local work-trace and timesheet helper. It
+WorkTrace is a lightweight Windows local work-trace and CSV export helper. It
 runs as a portable desktop app, records active-window metadata locally,
-helps classify time into projects, and exports draft timesheets.
+helps classify time into projects, and exports display-safe CSV activity
+records.
 
-> **Current state**: WebView Phase 4B.1 (CSV export hardening — native save
-> dialog, packaging, error collapse, static contract; hardening-only, no new
-> export format) is the latest shipped phase. Phase 4B (CSV export foundation)
-> remains the latest behavior-shipping phase. For a one-screen snapshot read
+> **Current state**: WebView Phase 5A (Project Rules WebView read-only
+> foundation) is the latest shipped phase. It adds a read-only Project Rules
+> page for viewing project-grouped folder / keyword rules; Project/Rule
+> creation, editing, deletion, enable/disable, conflict preview, and backfill
+> remain unsupported in WebView. For a one-screen snapshot read
 > [`docs/current-state.md`](docs/current-state.md). For the full per-phase
 > history read [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
 > AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)
@@ -31,9 +33,12 @@ helps classify time into projects, and exports draft timesheets.
 - Statistics / Export page: read-only summary cards and grouped tables, plus
   CSV export (display-safe, UTF-8 BOM, no raw window title / file path /
   note). Excel / PDF / timesheet export are not supported.
+- Project Rules page: read-only project-grouped folder / keyword rule list,
+  including project/rule enabled state and the special local `排除规则`.
+  Project/Rule creation, editing, deletion, enable/disable, conflict preview,
+  backfill, and automatic rule workflows are not supported in WebView.
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.
-- Excel export from the legacy UI and all-local-data export from Settings.
 
 ## Privacy And Permissions
 
@@ -143,7 +148,8 @@ database file or use the Settings page to clear and rebuild all data.
   adapter.
 - No service, driver, cloud sync, login, AI, OCR, screenshots, screen
   recording, or automatic startup.
-- Project Rules and Settings / Privacy pages are not yet migrated to WebView
-  (legacy Tkinter reference code remains).
-- Excel / PDF / timesheet export, folder opening, and auto-submit are not
+- Settings / Privacy / Encrypted Backup pages are not yet migrated to
+  WebView (legacy Tkinter reference code remains only as reference).
+- Project Rules write actions, conflict preview, backfill, automatic rules,
+  Excel / PDF / timesheet export, folder opening, and auto-submit are not
   supported.

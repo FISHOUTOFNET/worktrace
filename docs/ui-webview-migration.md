@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 4B "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5A "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -10,19 +10,21 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **4B.1 (CSV export hardening / native dialog + packaging
-  validation — hardening-only, no new export format or product feature)**.
-  Phase 4B (CSV export foundation) remains the latest behavior-shipping
-  phase; Phase 4B.1 only hardens the save dialog, packaging, error
-  collapse, static contract, and documentation boundaries.
+- Current phase: **5A (Project Rules WebView read-only foundation)**. The
+  Project Rules page now renders a read-only project-grouped folder /
+  keyword rule list in WebView. Project/Rule creation, editing, deletion,
+  enable/disable, conflict preview, backfill, automatic rules, schema
+  changes, and new frontend dependencies remain out of scope.
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime). It is
   the only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview (Phase 1), Timeline / Time Details (read-only in
   Phase 2, hardened in Phase 2.1, editing added across Phase 3A / 3B.x /
   3C.x), Statistics / Export (read-only in Phase 4A / 4A.1, CSV export write
-  in Phase 4B, hardened in Phase 4B.1).
-- Unmigrated pages: Project Rules, Settings / Privacy (still legacy Tkinter
-  code kept for reference; not a supported runtime path).
+  in Phase 4B, hardened in Phase 4B.1), Project Rules (read-only in Phase
+  5A: folder / keyword rules, project/rule enabled state, and special
+  excluded-project marker).
+- Unmigrated pages: Settings / Privacy / Encrypted Backup (still legacy
+  Tkinter code kept for reference; not a supported runtime path).
 - Detailed phase-by-phase scope, data semantics, and "not implemented" lists
   for every phase are in [`docs/history/webview-phases.md`](history/webview-phases.md).
 
@@ -165,7 +167,12 @@ the high-level order is:
 - Phase 4A / 4A.1 — Statistics / Export read-only migration and hardening.
   **Completed.**
 - Phase 4B — Export actions foundation (CSV export only). **Completed.**
-- Phase 5 — Rules. Not started.
+- Phase 4B.1 — CSV export hardening / native save dialog + packaging
+  validation. **Completed.**
+- Phase 5A — Project Rules read-only foundation. **Completed.**
+- Phase 5B+ — Project Rules write workflows (create / edit / delete /
+  enable-disable / conflict preview / backfill / automatic rules). Not
+  started.
 - Phase 6 — Settings / Privacy / Encrypted Backup. Not started.
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.

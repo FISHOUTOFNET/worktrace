@@ -7,13 +7,13 @@
 
 ## Current Phase
 
-**Phase 4B.1 — CSV export hardening (native save dialog + packaging
-validation; hardening-only, no new export format).** Phase 4B (CSV export
-foundation) remains the latest behavior-shipping phase; Phase 4B.1 only
-hardens the save dialog compatibility, packaging path, error collapse,
-frontend static contract, and documentation boundaries. All earlier WebView
-migration phases (Phase 0A → Phase 4B) are completed. README, this file,
-and `ui-webview-migration.md` all describe the current phase as 4B.1.
+**Phase 5A — Project Rules WebView read-only foundation.** The Project Rules
+page is now a WebView read-only page for viewing project-grouped folder /
+keyword rules. Phase 5A does not add Project Rules write actions, conflict
+preview, backfill, automatic rules, schema changes, new frontend
+dependencies, or new export formats. All earlier WebView migration phases
+(Phase 0A → Phase 4B.1) are completed. README, this file, and
+`ui-webview-migration.md` all describe the current phase as 5A.
 
 ## Default UI
 
@@ -37,10 +37,15 @@ and `ui-webview-migration.md` all describe the current phase as 4B.1.
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
+- **Project Rules** (Phase 5A): read-only project-grouped rule list showing
+  project name / description, project enabled state, special `排除规则`
+  marker, rule counts, folder rules, keyword rules, rule enabled state, and
+  folder recursion scope. Project/Rule creation, editing, deletion,
+  enable/disable, conflict preview, backfill, and automatic rules are still
+  not open in WebView.
 
 ## Unmigrated Pages (Legacy Tkinter, Reference-Only)
 
-- **Project Rules** — Phase 5, not started.
 - **Settings / Privacy / Encrypted Backup** — Phase 6, not started.
 
 ## Supported Timeline Write Operations
@@ -77,6 +82,10 @@ and `ui-webview-migration.md` all describe the current phase as 4B.1.
 
 - Excel / PDF / timesheet-template export; folder opening; auto-open of the
   exported file; auto-submit of a timesheet.
+- Project Rules creation / editing / deletion; Project or Rule
+  enable/disable; folder-rule conflict preview; folder-rule backfill;
+  automatic rules; batch Project Rules operations.
+- Settings / Privacy / Encrypted Backup WebView migration.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
 - Batch time / batch split / batch merge; note append / merge; auto-rule
   creation; global overlap detection.
@@ -100,7 +109,8 @@ Frontend JS layout (Phase R2, no behavior change): the former single
 `app.js` is split by feature into local classic scripts under
 `worktrace/webview_ui/js/` — `core.js` (shared `window.WorkTraceApp`
 namespace, state, bridge call, generic helpers), `overview.js`,
-`timeline.js`, `timeline_correction.js`, `statistics.js`, `init.js` —
+`timeline.js`, `timeline_correction.js`, `statistics.js`, `rules.js`,
+`init.js` —
 loaded in that order via plain `<script src="js/...">` tags. No ES
 modules, no bundler, no Node/build step. Product behavior is unchanged.
 

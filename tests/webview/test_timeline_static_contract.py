@@ -87,18 +87,21 @@ def test_index_html_timeline_page_has_total_and_current():
 
 
 def test_index_html_unmigrated_pages_still_have_placeholders():
-    """Phase 2: Rules and Settings pages are not yet migrated
-    and must still show the placeholder text. Statistics is migrated
-    in Phase 4A."""
+    """Phase 5A: Settings remains a placeholder; Rules is read-only WebView."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    for page_id in ["rules", "settings"]:
-        start = source.find('id="page-{}"'.format(page_id))
-        assert start != -1, f"{page_id} section must exist"
-        end = source.find('</section>', start)
-        section = source[start:end]
-        assert "WebView 迁移中" in section, (
-            f"{page_id} page should still be a placeholder in Phase 2"
-        )
+    rules_start = source.find('id="page-rules"')
+    assert rules_start != -1, "rules section must exist"
+    rules_end = source.find("</section>", rules_start)
+    rules_section = source[rules_start:rules_end]
+    assert "WebView 迁移中" not in rules_section
+    assert "项目规则" in rules_section
+    assert "只读" in rules_section
+
+    settings_start = source.find('id="page-settings"')
+    assert settings_start != -1, "settings section must exist"
+    settings_end = source.find("</section>", settings_start)
+    settings_section = source[settings_start:settings_end]
+    assert "WebView 迁移中" in settings_section
 
 
 
@@ -2374,10 +2377,11 @@ def test_index_html_not_implemented_card_lists_unavailable_3c():
 
 
 def test_index_html_no_new_top_level_pages_3c():
-    """Phase 3C / 4A: the sidebar nav must still list exactly the five known
-    items. As of Phase 4A the Statistics / Export page is migrated to a real
-    read-only WebView page; Project Rules and Settings / Privacy must remain
-    placeholders (regression lock)."""
+    """Phase 5A: the sidebar nav still lists the five known items.
+
+    Statistics / Export and Project Rules are migrated WebView pages;
+    Settings / Privacy remains a placeholder.
+    """
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     # The sidebar nav must still list exactly the five known items.
     for nav_item in ("概览", "时间详情", "统计与导出",
@@ -2385,19 +2389,17 @@ def test_index_html_no_new_top_level_pages_3c():
         assert nav_item in source, (
             "sidebar must still list nav item: " + nav_item
         )
-    # The Project Rules / Settings pages must remain placeholders, not
-    # migrated WebView pages. The Statistics / Export page is now a real
-    # read-only page (Phase 4A) and is no longer a placeholder.
-    for placeholder_id in ("page-rules", "page-settings"):
-        pos = source.find('id="' + placeholder_id + '"')
-        assert pos != -1, (
-            "index.html must still contain the placeholder: " + placeholder_id
-        )
-        # The placeholder section must still contain the migration notice.
-        section = source[pos:pos + 400]
-        assert "WebView 迁移中" in section, (
-            "placeholder " + placeholder_id + " must still show the migration notice"
-        )
+    rules_pos = source.find('id="page-rules"')
+    assert rules_pos != -1
+    rules_end = source.find("</section>", rules_pos)
+    rules_section = source[rules_pos:rules_end]
+    assert "WebView 迁移中" not in rules_section
+    assert "rules-list" in rules_section
+
+    settings_pos = source.find('id="page-settings"')
+    assert settings_pos != -1
+    settings_section = source[settings_pos:settings_pos + 400]
+    assert "WebView 迁移中" in settings_section
 
 
 

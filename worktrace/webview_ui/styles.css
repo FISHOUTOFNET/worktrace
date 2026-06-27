@@ -1832,6 +1832,248 @@ body {
     color: #b91c1c;
 }
 
+/* --- Project Rules page (Phase 5A, read-only) ------------------------ */
+
+.rules-header {
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.rules-header-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rules-subtitle {
+    font-size: 12px;
+    color: #64748b;
+    margin: 0;
+}
+
+.rules-readonly-hint {
+    font-size: 12px;
+    color: #475569;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 16px;
+    line-height: 1.6;
+}
+
+.rules-loading {
+    font-size: 13px;
+    color: #64748b;
+    padding: 8px 14px;
+    margin-bottom: 12px;
+}
+
+.rules-list {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.rules-project-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.rules-project-card.is-disabled {
+    background: #fffbeb;
+    border-color: #fde68a;
+}
+
+.rules-project-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.rules-project-title-group {
+    min-width: 0;
+}
+
+.rules-project-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #0f172a;
+    word-break: break-word;
+}
+
+.rules-project-description {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 2px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.rules-project-badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.rules-status,
+.rules-excluded-badge,
+.rules-kind-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 24px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.rules-status.is-enabled {
+    color: #15803d;
+    background: #dcfce7;
+}
+
+.rules-status.is-disabled {
+    color: #92400e;
+    background: #fef3c7;
+}
+
+.rules-excluded-badge {
+    color: #991b1b;
+    background: #fee2e2;
+}
+
+.rules-project-summary {
+    font-size: 12px;
+    color: #475569;
+    margin-bottom: 12px;
+}
+
+.rules-count-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.rules-count-grid > div {
+    background: #f8fafc;
+    border: 1px solid #f1f5f9;
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+
+.rules-count-grid span {
+    display: block;
+    font-size: 11px;
+    color: #64748b;
+    margin-bottom: 3px;
+}
+
+.rules-count-grid strong {
+    display: block;
+    font-size: 16px;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+}
+
+.rules-row-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.rules-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 9px 10px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+}
+
+.rules-row.is-disabled {
+    background: #fff7ed;
+    border-color: #fed7aa;
+}
+
+.rules-kind-badge {
+    color: #4338ca;
+    background: #e0e7ff;
+}
+
+.rules-kind-keyword {
+    color: #0369a1;
+    background: #e0f2fe;
+}
+
+.rules-row-main {
+    min-width: 0;
+}
+
+.rules-target {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1e293b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rules-detail {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 2px;
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rules-project-empty,
+.rules-empty {
+    font-size: 13px;
+    color: #94a3b8;
+    text-align: center;
+    padding: 16px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+}
+
+@media (max-width: 900px) {
+    .rules-project-head {
+        flex-direction: column;
+    }
+    .rules-project-badges {
+        justify-content: flex-start;
+    }
+    .rules-count-grid {
+        grid-template-columns: 1fr;
+    }
+    .rules-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+    .rules-target,
+    .rules-detail {
+        white-space: normal;
+    }
+    .rules-row > .rules-status {
+        justify-self: flex-start;
+    }
+}
+
 /* Phase 3B.5B.1: a shell activity row whose activity id is missing / non-
    numeric is rendered non-clickable so it never produces a stale-target
    error. It keeps the summary text but drops the pointer cursor. */

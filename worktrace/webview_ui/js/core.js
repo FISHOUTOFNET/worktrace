@@ -73,6 +73,11 @@
     App.statisticsRequestToken = 0;
     App.statisticsExportSaving = false;
 
+    // --- Phase 5A: Project Rules read-only state -----------------------
+    App.rulesLoaded = false;
+    App.rulesLoading = false;
+    App.rulesRequestToken = 0;
+
     // --- Phase 3C: Unified Timeline status semantics -------------------
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",

@@ -6,9 +6,9 @@ constants and helpers here are intentionally lightweight so every themed
 test module under ``tests/webview/`` can import the same paths without
 re-declaring them.
 
-Phase R2 split the monolithic ``app.js`` into six modules under
+Phase R2 split the monolithic ``app.js`` into classic modules under
 ``worktrace/webview_ui/js/`` (core / overview / timeline /
-timeline_correction / statistics / init). Tests that previously read
+timeline_correction / statistics / rules / init). Tests that previously read
 ``app.js`` should now use :func:`read_all_js` (concatenated source in
 load order) so per-function substring contracts keep working.
 """
@@ -25,7 +25,7 @@ HISTORY_PATH = REPO_ROOT / "docs" / "history" / "webview-phases.md"
 RELEASE_VALIDATION_PATH = REPO_ROOT / "docs" / "release-validation.md"
 README_PATH = REPO_ROOT / "README.md"
 
-# Six JS modules produced by Phase R2, in the exact load order used by
+# JS modules in the exact load order used by
 # index.html. read_all_js() concatenates them in this order so that
 # func_body() and substring checks see the same logical source the
 # browser would execute.
@@ -35,6 +35,7 @@ ALL_JS_FILES = [
     "timeline.js",
     "timeline_correction.js",
     "statistics.js",
+    "rules.js",
     "init.js",
 ]
 

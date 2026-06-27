@@ -417,14 +417,16 @@ def test_styles_css_timeline_and_correction_shell_not_removed_4a():
 
 
 
-def test_index_html_no_project_rules_page_4a():
-    """Phase 4A: the Project Rules page must remain a placeholder, not a
-    migrated WebView page."""
+def test_index_html_project_rules_page_migrated_after_5a():
+    """Phase 5A: Project Rules is no longer a migration placeholder."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-rules"')
     assert pos != -1
-    section = source[pos:pos + 400]
-    assert "WebView 迁移中" in section
+    end = source.find("</section>", pos)
+    section = source[pos:end]
+    assert "WebView 迁移中" not in section
+    assert "项目规则" in section
+    assert "只读" in section
 
 
 
@@ -989,16 +991,13 @@ def test_legacy_ui_files_not_deleted_4a1():
 
 
 
-def test_index_html_no_new_pages_4a1():
-    """Phase 4A.1: no Project Rules or Settings/Privacy WebView pages."""
+def test_index_html_no_settings_privacy_page_4a1():
+    """Phase 4A.1/5A: Settings/Privacy remains a placeholder."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    for page_id in ("page-rules", "page-settings"):
-        pos = source.find('id="{}"'.format(page_id))
-        assert pos != -1, f"{page_id} section must still exist as placeholder"
-        section = source[pos:pos + 500]
-        assert "WebView 迁移中" in section, (
-            f"{page_id} must still be a placeholder in Phase 4A.1"
-        )
+    pos = source.find('id="page-settings"')
+    assert pos != -1, "page-settings section must still exist as placeholder"
+    section = source[pos:pos + 500]
+    assert "WebView 迁移中" in section
 
 
 

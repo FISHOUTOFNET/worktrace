@@ -119,6 +119,16 @@ restored. Activities that are neither hidden nor deleted are rejected as
 echoing tracebacks, SQL, window titles, file paths, notes, or internal
 exception details. This phase does NOT implement batch restore, undo
 stack, permanent delete, or any new DB schema.
+
+Phase 5A adds the Project Rules WebView read-only foundation:
+``get_project_rules`` is the only Project Rules bridge method introduced
+in this phase. It reuses ``project_api.list_project_bindings()`` and
+returns a display-oriented project/rule payload for viewing folder and
+keyword rules by project. It does NOT create, edit, delete, enable, or
+disable projects or rules; it does NOT perform conflict preview,
+backfill, automatic rules, DB schema changes, native dialogs, file writes,
+or network access. Errors collapse to ``"加载项目规则失败"`` without
+tracebacks, SQL, raw exception text, window titles, clipboard, or notes.
 """
 
 from __future__ import annotations
@@ -1111,6 +1121,27 @@ class WebViewBridge:
             logger.exception("webview bridge get_timeline_restorable_activities failed")
             return {"ok": False, "error": "加载可恢复记录失败", "activities": []}
 
+    # --- Phase 5A: Project Rules read-only foundation -------------------
+
+    def get_project_rules(self) -> dict[str, Any]:
+        """Return display-safe Project Rules data for the WebView page.
+
+        Read-only path only: this method delegates to
+        ``project_api.list_project_bindings()`` and projects the result into
+        a stable display payload. It never writes projects/rules, never opens
+        native dialogs, and never exposes traceback / SQL / raw exception
+        details.
+        """
+        try:
+            projects = project_api.list_project_bindings()
+            return {
+                "ok": True,
+                "projects": [_project_rules_project_payload(project) for project in projects],
+            }
+        except Exception:
+            logger.exception("webview bridge get_project_rules failed")
+            return {"ok": False, "error": "加载项目规则失败", "projects": []}
+
     # --- Phase 4A: Statistics / Export read-only summary ----------------
 
     def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:
@@ -1441,6 +1472,99 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
             "export_actions_enabled": bool(preview.get("export_actions_enabled")),
         },
     }
+
+
+def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
+    """Build one Phase 5A Project Rules display payload."""
+    project_name = str(project.get("name") or "未知项目")
+    project_enabled = _project_rules_bool(project.get("enabled"), default=True)
+    is_excluded = project_name == "排除规则"
+    folder_rules = [
+        _project_rules_folder_payload(rule, project_name)
+        for rule in (project.get("folder_rules") or [])
+    ]
+    keyword_rules = [
+        _project_rules_keyword_payload(rule, project_name)
+        for rule in (project.get("keyword_rules") or [])
+    ]
+    folder_count = len(folder_rules)
+    keyword_count = len(keyword_rules)
+    rule_count = folder_count + keyword_count
+    summary = _project_rules_summary(
+        project_enabled=project_enabled,
+        is_excluded=is_excluded,
+        folder_count=folder_count,
+        keyword_count=keyword_count,
+    )
+    return {
+        "id": int(project.get("id") or 0),
+        "name": project_name,
+        "description": str(project.get("description") or ""),
+        "enabled": project_enabled,
+        "created_by": str(project.get("created_by") or ""),
+        "is_excluded": is_excluded,
+        "summary": summary,
+        "folder_rule_count": folder_count,
+        "keyword_rule_count": keyword_count,
+        "rule_count": rule_count,
+        "rules": [*folder_rules, *keyword_rules],
+    }
+
+
+def _project_rules_folder_payload(rule: dict[str, Any], project_name: str) -> dict[str, Any]:
+    enabled = _project_rules_bool(rule.get("enabled"), default=True)
+    recursive = _project_rules_bool(rule.get("recursive"), default=True)
+    scope = "包含子文件夹" if recursive else "仅直接文件"
+    state = "已启用" if enabled else "已禁用"
+    return {
+        "kind": "folder",
+        "kind_label": "文件夹",
+        "id": int(rule.get("id") or 0),
+        "target": str(rule.get("folder_path") or ""),
+        "enabled": enabled,
+        "recursive": recursive,
+        "detail": f"归属项目：{project_name} | {scope} | {state}",
+    }
+
+
+def _project_rules_keyword_payload(rule: dict[str, Any], project_name: str) -> dict[str, Any]:
+    enabled = _project_rules_bool(rule.get("enabled"), default=True)
+    state = "已启用" if enabled else "已禁用"
+    return {
+        "kind": "keyword",
+        "kind_label": "关键词",
+        "id": int(rule.get("id") or 0),
+        "target": str(rule.get("keyword") or ""),
+        "enabled": enabled,
+        "recursive": None,
+        "detail": f"归属项目：{project_name} | {state}",
+    }
+
+
+def _project_rules_summary(
+    *,
+    project_enabled: bool,
+    is_excluded: bool,
+    folder_count: int,
+    keyword_count: int,
+) -> str:
+    parts: list[str] = []
+    if not project_enabled:
+        parts.append("已禁用")
+    if is_excluded:
+        parts.append("命中后匿名记录")
+    total = folder_count + keyword_count
+    if total == 0:
+        parts.append("暂无规则")
+    else:
+        parts.append(f"{total} 条规则：文件夹 {folder_count}，关键词 {keyword_count}")
+    return " | ".join(parts)
+
+
+def _project_rules_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    return bool(int(value))
 
 
 __all__ = ["WebViewBridge"]

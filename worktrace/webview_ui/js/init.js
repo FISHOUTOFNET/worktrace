@@ -76,6 +76,14 @@
             promises.push(timelinePromise);
         }
 
+        // If the Project Rules page is active and has been loaded once,
+        // refresh its read-only data. The rules module owns the loading
+        // guard and request token so stale responses cannot overwrite newer
+        // page data.
+        if (App.currentPage === "rules" && App.rulesLoaded && !App.rulesLoading) {
+            promises.push(App.loadProjectRules());
+        }
+
         Promise.allSettled(promises).then(function (results) {
             var anyError = false;
             for (var i = 0; i < results.length; i++) {
@@ -131,6 +139,12 @@
         if (pageId === "statistics" && !App.statisticsLoaded && !App.statisticsLoading) {
             App.initStatisticsDefaults();
             App.loadStatisticsExportSummary();
+        }
+        // Phase 5A: lazy-load Project Rules read-only data when navigating
+        // to the page for the first time. No Project Rules write events are
+        // bound in this phase.
+        if (pageId === "rules" && !App.rulesLoaded && !App.rulesLoading) {
+            App.loadProjectRules();
         }
     }
     App.switchPage = switchPage;

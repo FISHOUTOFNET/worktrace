@@ -1,7 +1,7 @@
 # WorkTrace WebView UI Phase History (Archive)
 
 > **Archive — historical phase log.** This file is the long-form record of
-> every completed WebView migration phase (Phase 0A → Phase 4B.1). It is kept
+> every completed WebView migration phase (Phase 0A → Phase 5A). It is kept
 > for reference and traceability only. For the current state, read
 > [`docs/current-state.md`](../current-state.md); for architecture decisions,
 > read [`docs/ui-webview-migration.md`](../ui-webview-migration.md).
@@ -13,7 +13,7 @@
 
 > This `## Status` block was captured when the migration doc was archived.
 > The **live current phase** is in
-> [`../current-state.md`](../current-state.md) (now Phase 4B.1). Treat the
+> [`../current-state.md`](../current-state.md) (now Phase 5A). Treat the
 > list below as a historical narrative, not a live status claim; this
 > archive also contains the later Phase 4A / 4A.1 / 4B / 4B.1 sections below.
 
@@ -3901,6 +3901,110 @@ Phase 4B.1 does not implement and does not start:
 - Any rewrite of the existing, already-stable Phase 4B runtime code
   (per the Phase 4B.1 instruction: "如当前实现已满足，补充更精确测试
   即可；不要重写稳定代码").
+
+## Phase 5A Implemented Scope
+
+Phase 5A is the **Project Rules WebView read-only foundation** phase. It
+migrates the Project Rules page from a WebView placeholder to a usable
+read-only WebView page backed by the existing
+`project_api.list_project_bindings()` read path. It does not add any
+Project Rules write workflow and does not change existing data semantics.
+
+Implemented in Phase 5A:
+
+- **Bridge layer** (`worktrace/webview_ui/bridge.py`):
+  - Added `get_project_rules`, a read-only bridge method that delegates to
+    `project_api.list_project_bindings()` and builds a display-oriented
+    payload for WebView.
+  - Each project payload includes id, name, description, enabled state,
+    created_by, special `排除规则` detection, summary text, folder /
+    keyword / total counts, and a flattened display rule list.
+  - Folder rules are projected as `kind="folder"` / `kind_label="文件夹"`
+    with `folder_path` as target, enabled state, recursive scope, and
+    detail text containing project ownership, recursion scope, and state.
+  - Keyword rules are projected as `kind="keyword"` /
+    `kind_label="关键词"` with `keyword` as target, enabled state,
+    `recursive=None`, and detail text containing project ownership and
+    state.
+  - Failures return exactly `{"ok": False, "error": "加载项目规则失败",
+    "projects": []}`. Tracebacks, SQL, raw exception text, window titles,
+    clipboard, notes, and backend row internals are not surfaced.
+- **Frontend** (`worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/js/core.js`, `worktrace/webview_ui/js/rules.js`,
+  `worktrace/webview_ui/js/init.js`, `worktrace/webview_ui/styles.css`):
+  - Replaced the `page-rules` placeholder with a real read-only page titled
+    `项目规则`, a subtitle explaining the folder / keyword rule view, stable
+    loading / error / list / empty / readonly-hint DOM anchors, and no
+    action buttons.
+  - Added `rules.js` as a local classic script under the shared
+    `window.WorkTraceApp` namespace, loaded after `statistics.js` and
+    before `init.js`; no ES modules, Node, bundler, browser storage, remote
+    resources, or frontend file writes were introduced.
+  - Added `rulesLoaded`, `rulesLoading`, and `rulesRequestToken` state to
+    `core.js`; `init.js` lazy-loads Project Rules on first navigation and
+    refreshes it only when the page is active and already loaded.
+  - Added read-only rendering for project cards, rule count summaries,
+    folder / keyword badges, targets, enabled / disabled states, recursive
+    folder scope, special `排除规则` marker, empty state, loading state, and
+    stable Chinese failure state.
+  - All dynamic text is escaped through the shared frontend helpers before
+    insertion into `innerHTML`; catch paths collapse to `加载项目规则失败` and
+    do not read raw exception `.message` fields.
+- **Packaging / static coverage**:
+  - Added `rules.js` to `tests/webview/static_helpers.py` and
+    `WorkTrace.spec` so static tests and PyInstaller packaging include the
+    new split module in the correct load order.
+- **Tests**:
+  - Added `tests/webview/test_project_rules_static_contract.py` covering the
+    migrated page structure, script load order, shared state variables,
+    read-only bridge call, absence of Project Rules write method calls,
+    stable catch-path behavior, frontend no-storage / no-remote-resource
+    boundary, and no export / folder-open / auto-submit controls on the
+    Project Rules page.
+  - Added `tests/test_webview_project_rules_bridge.py` covering successful
+    payload shape, field types, folder / keyword mapping, disabled
+    project/rule states, special `排除规则` summary, empty list behavior,
+    exception collapse, sensitive text exclusion, and bridge import
+    boundary.
+  - Added a lightweight service regression proving
+    `project_service.list_project_bindings()` returns user projects plus
+    the special excluded project, groups folder / keyword rules under the
+    owning project, preserves the existing ordering, and does not change DB
+    row counts when called as a read-only path.
+- **Documentation**:
+  - Updated README, current-state, and the migration summary to mark Phase
+    5A as current, list Project Rules as a migrated read-only WebView page,
+    remove Project Rules from the unmigrated-page list, preserve Phase 4B /
+    4B.1 CSV export boundaries, and restate unsupported Project Rules write
+    workflows and Phase 6 Settings / Privacy / Encrypted Backup migration.
+
+## Phase 5A Not Implemented
+
+Phase 5A does not implement and does not start:
+
+- Project creation, editing, deletion, archive, or enable/disable in
+  WebView;
+- Folder rule creation, editing, deletion, or enable/disable in WebView;
+- Keyword rule creation, editing, deletion, or enable/disable in WebView;
+- Folder rule conflict preview;
+- Folder rule backfill;
+- Automatic rules;
+- Batch Project Rules operations;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, collector,
+  privacy, encrypted backup, or database semantics.
 
 ## Legacy Tkinter UI Handling
 

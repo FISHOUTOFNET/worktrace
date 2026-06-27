@@ -1,6 +1,7 @@
 import pytest
 
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
+from worktrace.db import get_connection
 from worktrace.services import activity_service, folder_rule_service, project_service, rule_service
 from worktrace.ui.project_rule_dialog import PROJECT_MODE_NEW
 from worktrace.ui.project_rules_view import ProjectRulesView, _project_binding_text
@@ -143,6 +144,36 @@ def test_project_rules_copy_text_includes_project_description(temp_db):
     assert "Client (billable)" in text
 
 
+def test_project_bindings_readonly_returns_grouped_user_and_excluded_projects(temp_db):
+    user_project = project_service.create_project("Client")
+    other_project = project_service.create_project("Other")
+    excluded_project = project_service.get_or_create_excluded_project()
+    folder_rule_service.create_or_update_folder_rule(r"D:\Client", user_project)
+    rule_service.create_rule("Spec", user_project)
+    folder_rule_service.create_or_update_folder_rule(r"D:\Private", excluded_project)
+
+    before_counts = _table_counts()
+
+    projects = project_service.list_project_bindings()
+
+    after_counts = _table_counts()
+    assert after_counts == before_counts
+    assert [project["name"] for project in projects] == [
+        EXCLUDED_PROJECT,
+        "Client",
+        "Other",
+    ]
+    by_name = {project["name"]: project for project in projects}
+    assert len(by_name["Client"]["folder_rules"]) == 1
+    assert by_name["Client"]["folder_rules"][0]["folder_path"] == r"D:\Client"
+    assert len(by_name["Client"]["keyword_rules"]) == 1
+    assert by_name["Client"]["keyword_rules"][0]["keyword"] == "Spec"
+    assert len(by_name[EXCLUDED_PROJECT]["folder_rules"]) == 1
+    assert by_name[EXCLUDED_PROJECT]["folder_rules"][0]["folder_path"] == r"D:\Private"
+    assert by_name["Other"]["folder_rules"] == []
+    assert by_name["Other"]["keyword_rules"] == []
+
+
 def _binding(project_id, name, description="", enabled=1):
     return {
         "id": project_id,
@@ -153,6 +184,17 @@ def _binding(project_id, name, description="", enabled=1):
         "folder_rules": [],
         "keyword_rules": [],
     }
+
+
+def _table_counts():
+    with get_connection() as conn:
+        return {
+            "project": conn.execute("SELECT COUNT(*) FROM project").fetchone()[0],
+            "folder_project_rule": conn.execute(
+                "SELECT COUNT(*) FROM folder_project_rule"
+            ).fetchone()[0],
+            "project_rule": conn.execute("SELECT COUNT(*) FROM project_rule").fetchone()[0],
+        }
 
 
 def test_delete_project_deletes_project_and_clears_associated_rules(temp_db):
