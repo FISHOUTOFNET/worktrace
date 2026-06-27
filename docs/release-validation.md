@@ -3145,3 +3145,123 @@ UI removal.
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local
   HTTP server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 4B Validation
+
+Phase 4B is the **Export actions foundation — CSV export only** phase. It
+introduces the first controlled file-write capability on the Statistics /
+Export page: the user picks a save location through a native pywebview
+save dialog and exports the current closed, non-hidden, non-deleted
+activities in the chosen date range as a display-safe CSV file. Phase 4B
+does **not** implement Excel / PDF / timesheet export, folder opening,
+auto-open, auto-submit, Project Rules migration, Settings migration, DB
+schema change, or legacy UI removal.
+
+### Phase 4B Automated Validation
+
+- `python -m pytest tests/test_statistics_api_summary.py
+  tests/test_webview_bridge_statistics.py tests/test_webview_resources.py
+  tests/test_webview_packaging.py tests/test_statistics_csv_export.py` —
+  all tests pass (including the 54 new service/API/bridge tests and the
+  13 new frontend static tests).
+- `python -m pytest` — full test suite passes.
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` — build
+  succeeds; WebView static resources (`index.html`, `app.js`,
+  `styles.css`) are bundled; the bridge and `webview_main.py` window
+  injection does not break the packaging path.
+
+### Phase 4B Controlled Write Path
+
+- The export is the **only** new file-write capability: a single CSV
+  file at a user-chosen save location. No other write action is added.
+- Date range validation reuses the Phase 4A / 4A.1 canonical
+  `validate_statistics_date_range` so the export enforces the exact
+  same rules as the read-only summary (`YYYY-MM-DD` only,
+  `date_from <= date_to`, inclusive span ≤ 31 days; `None` / `bool` /
+  non-string rejected).
+- Only closed, non-hidden, non-deleted activities are exported;
+  in-progress activities are excluded. All statuses (`normal` / `idle`
+  / `paused` / `excluded` / `error`) are included.
+- The CSV columns are display-safe: 日期 / 开始时间 / 结束时间 / 时长 /
+  时长秒数 / 项目 / 应用 / 资源类型 / 资源名称 / 状态. The resource
+  name uses the `format_safe_display_name` chain
+  (`resource_display_name` → `activity_display_name` → `app_name` →
+  `process_name` → `"未知"`) and never falls back to raw `window_title`
+  / `file_path_hint` / `full_path` / clipboard / `note` / traceback /
+  SQL.
+- The file is written with `newline=""` and `encoding="utf-8-sig"`
+  (UTF-8 BOM) so Excel opens Chinese headers correctly. Each text cell
+  is passed through `_escape_csv_cell` to mitigate CSV formula injection
+  (cells starting with `=` / `+` / `-` / `@` / tab get a single leading
+  quote).
+- The save path is normalized to end with `.csv` (auto-appended or
+  replaced). A directory path or a missing-parent path is rejected as
+  `invalid_path`. An empty data range raises `empty_data` and does NOT
+  create a file.
+- The success payload returns the basename only (`filename`), the
+  activity count, and the total duration. The full local path never
+  leaves the bridge.
+- The user cancelling the save dialog is a clean cancel result
+  (`{"ok": False, "cancelled": True, "error": "已取消导出"}`) — the
+  API write is NOT called and no Python exception is raised.
+- Errors converge to stable Chinese messages via
+  `_STATISTICS_EXPORT_ERROR_MESSAGES`. `permission_denied` / `file_busy`
+  / `write_failed` share one message so a low-level OS failure never
+  distinguishes which kind of write error occurred. Unknown failures
+  collapse to `导出失败`.
+- The export writes only the chosen CSV file. It never writes to the
+  DB, never updates `activity_log.updated_at`, never opens a folder,
+  never opens the exported file, and never auto-submits a timesheet.
+- The bridge imports only `worktrace.api` (plus the allowed formatter
+  and the lazily-resolved pywebview UI dependency). It does NOT import
+  `worktrace.services` / `worktrace.db` / `worktrace.collector` /
+  `worktrace.runtime` / `worktrace.config` / `worktrace.security`.
+
+### Phase 4B Release Blockers
+
+- Excel / PDF / timesheet export is implemented.
+- The exported CSV is auto-opened, the export folder is opened, or the
+  exported file is auto-submitted as a timesheet.
+- A raw `window_title` / `file_path_hint` / `full_path` / clipboard /
+  `note` / traceback / SQL leaks into the CSV content, the bridge
+  return value, or the logs.
+- The full local path of the chosen save location is returned to JS.
+- A user cancel of the save dialog surfaces as a Python exception or
+  `导出失败` instead of the clean `已取消导出` info result.
+- A duplicate-click on the export button triggers a second concurrent
+  write, or a CSV write overlaps a statistics load.
+- The export catch block reads `err.message` / `error.message` /
+  `exception.message` or surfaces raw exception text.
+- CSV formula injection is not escaped (a cell starting with `=` / `+`
+  / `-` / `@` / tab is written verbatim).
+- A directory path or missing-parent path is silently accepted and a
+  file write is attempted.
+- An empty data range creates an empty CSV file instead of returning
+  `empty_data`.
+- `PermissionError` / `OSError` during file write surfaces as a raw
+  traceback / SQL / exception message instead of the stable Chinese
+  message.
+- The export writes to the DB, mutates `activity_log.updated_at`, or
+  changes resource / assignment / session-note rows.
+- The bridge imports `worktrace.services` / `worktrace.db` /
+  `worktrace.collector` / `worktrace.runtime` / `worktrace.config` /
+  `worktrace.security`, or any backend-internal module beyond
+  `worktrace.api` and the allowed formatters.
+- The read-only `get_statistics_export_summary` bridge method starts
+  opening a save dialog or touching a file.
+- Importing the bridge module starts the GUI; `set_window` calls
+  `webview.start()` or `webview.create_window()`.
+- Any DB schema change is introduced.
+- Project Rules migration to WebView is started.
+- Settings / Privacy migration to WebView is started.
+- The legacy Tkinter / CustomTkinter UI code is deleted.
+- `localStorage` / `sessionStorage` / CDN / external font / Google
+  Fonts / Node / Vite / React / Vue is introduced.
+- The Overview / Timeline default WebView entry or behavior regresses.
+- Any Phase 4A.1 / 4A / 3C.1 / 3C / 3B.9.1 / 3B.9 / 3B.8.1 / 3B.8 /
+  3B.7.1 / 3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A / 3B.4.1 /
+  3B.4 / 3B.3.1 / 3B.3 / 3B.2.1 / 3B.2 / 3B.1.1 / 3B.1 / 3A.1 / 3A /
+  2.1 regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local
+  HTTP server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.

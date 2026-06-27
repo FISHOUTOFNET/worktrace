@@ -127,7 +127,8 @@ import logging
 import re
 from typing import Any
 
-from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
+from ..api import app_api, settings_api, statistics_api, timeline_api, project_api, export_api
+from ..api.export_api import StatisticsExportError
 from ..api.statistics_api import StatisticsSummaryError
 from ..api.timeline_api import (
     TimelineBatchNoteError,
@@ -142,6 +143,7 @@ from ..formatters import (
     format_duration,
     format_project_label,
     format_resource_type,
+    format_safe_display_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -256,6 +258,23 @@ _STATISTICS_ERROR_MESSAGES = {
     "operation_failed": "加载统计失败",
 }
 
+# Maps ``StatisticsExportError.code`` to stable Chinese user-facing messages
+# for the Phase 4B CSV export write action. Unknown codes collapse to
+# "导出失败" so internal details are never surfaced. ``permission_denied`` /
+# ``file_busy`` / ``write_failed`` share one message so a low-level OS
+# failure never distinguishes which kind of write error occurred.
+_STATISTICS_EXPORT_ERROR_MESSAGES = {
+    "invalid_date": "请选择有效日期",
+    "invalid_range": "请选择有效日期范围",
+    "range_too_large": "日期范围过大",
+    "empty_data": "当前范围没有可导出的记录",
+    "invalid_path": "请选择有效保存位置",
+    "permission_denied": "无法写入文件，请检查权限或文件是否被占用",
+    "file_busy": "无法写入文件，请检查权限或文件是否被占用",
+    "write_failed": "无法写入文件，请检查权限或文件是否被占用",
+    "operation_failed": "导出失败",
+}
+
 
 class WebViewBridge:
     """Bridge object exposed to JS through pywebview's JS API.
@@ -263,6 +282,23 @@ class WebViewBridge:
     Each method returns a plain dict (or list inside a dict) so pywebview can
     serialize it to JS. Errors never include tracebacks or sensitive fields.
     """
+
+    def __init__(self) -> None:
+        # Phase 4B: the pywebview window is injected by ``webview_main.py``
+        # after ``create_window`` so the bridge can open a native save dialog
+        # for the CSV export. Stays ``None`` until ``set_window`` is called,
+        # so importing / unit-testing the bridge never starts the GUI.
+        self._window: Any = None
+
+    def set_window(self, window: Any) -> None:
+        """Inject the pywebview window so the bridge can open native dialogs.
+
+        Called by ``worktrace.webview_main`` after ``webview.create_window``
+        returns. The bridge must not construct a window itself: that would
+        start the GUI on import / during tests. Until this is called the
+        CSV export save dialog is unavailable and returns a stable error.
+        """
+        self._window = window
 
     def get_status(self) -> dict[str, Any]:
         """Return the current collector status and pause state."""
@@ -1114,6 +1150,121 @@ class WebViewBridge:
             logger.exception("webview bridge get_statistics_export_summary failed")
             return {"ok": False, "error": "加载统计失败", "summary": None}
 
+    # --- Phase 4B: Statistics CSV export (controlled file write) ---------
+
+    def export_statistics_csv(self, date_from, date_to) -> dict[str, Any]:
+        """Export a display-safe CSV for the statistics date range.
+
+        Phase 4B controlled write path. ``date_from`` / ``date_to`` must be
+        ``YYYY-MM-DD`` strings sharing the same rules as the read-only
+        summary. The save path is chosen by the user through the native
+        pywebview save dialog (the window is injected via ``set_window``);
+        the bridge never writes to a hard-coded location.
+
+        The bridge only validates the obvious date shape and opens the
+        save dialog; all deeper validation and the file write happen in
+        ``worktrace.api.export_api.export_statistics_csv`` (which goes
+        through ``export_service``). The bridge does not import services /
+        db / collector / runtime / config / security.
+
+        Returns one of:
+
+        - ``{"ok": True, "filename": "<basename.csv>", "activity_count": n,
+          "duration": "HH:MM:SS", "cancelled": False}`` on success. Only
+          the basename is surfaced; the full local path never leaves the
+          bridge.
+        - ``{"ok": False, "cancelled": True, "error": "已取消导出"}`` when
+          the user cancels the save dialog. No API write is called.
+        - ``{"ok": False, "error": "<chinese message>", "cancelled":
+          False}`` on any failure. Known failure modes map to clear
+          Chinese messages; unknown failures collapse to ``"导出失败"``.
+
+        Tracebacks, SQL, full local paths, raw exception text, window
+        titles, file paths, and notes are never surfaced to JS.
+        """
+        try:
+            # ``isinstance(..., str)`` rejects ``None``, ``bool``, ``int``,
+            # and any other non-string type (``bool`` is not a string).
+            if not isinstance(date_from, str) or not isinstance(date_to, str):
+                return {"ok": False, "error": "请选择有效日期", "cancelled": False}
+            if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):
+                return {"ok": False, "error": "请选择有效日期", "cancelled": False}
+            output_path = self._choose_csv_save_path()
+            if output_path is None:
+                # User cancelled the native save dialog. This is a clean
+                # cancel result, not a Python exception or "操作失败".
+                return {"ok": False, "cancelled": True, "error": "已取消导出"}
+            result = export_api.export_statistics_csv(
+                date_from, date_to, output_path
+            )
+            return {
+                "ok": True,
+                "filename": str(result.get("filename") or ""),
+                "activity_count": int(result.get("activity_count") or 0),
+                "duration": format_duration(result.get("duration_seconds") or 0),
+                "cancelled": False,
+            }
+        except StatisticsExportError as exc:
+            return {
+                "ok": False,
+                "error": _STATISTICS_EXPORT_ERROR_MESSAGES.get(exc.code, "导出失败"),
+                "cancelled": False,
+            }
+        except Exception:
+            logger.exception("webview bridge export_statistics_csv failed")
+            return {"ok": False, "error": "导出失败", "cancelled": False}
+
+    def _choose_csv_save_path(self) -> str | None:
+        """Open the native save dialog and return the chosen path or ``None``.
+
+        Returns ``None`` when the user cancels. Raises
+        ``StatisticsExportError("operation_failed")`` when no window has
+        been injected or the pywebview save dialog API is unavailable / raises.
+
+        The returned path is the user-chosen string verbatim; path
+        normalization (``.csv`` suffix, parent existence) is handled by the
+        service layer. The full path never leaves the bridge except as the
+        argument to the API write call (which is the only path the bridge
+        is allowed to touch).
+        """
+        window = self._window
+        if window is None:
+            raise StatisticsExportError("operation_failed")
+        # Resolve the save dialog type constant lazily so the bridge module
+        # does not import pywebview at import time (which would pull the
+        # WebView backend into unit tests). Newer pywebview exposes
+        # ``FileDialog.SAVE``; the deprecated ``SAVE_DIALOG`` is the fallback.
+        dialog_type = None
+        try:
+            import webview  # noqa: WPS433 (lazy import, UI-only dependency)
+
+            file_dialog = getattr(webview, "FileDialog", None)
+            if file_dialog is not None:
+                dialog_type = getattr(file_dialog, "SAVE", None)
+            if dialog_type is None:
+                dialog_type = getattr(webview, "SAVE_DIALOG", None)
+        except Exception:
+            dialog_type = None
+        if dialog_type is None:
+            raise StatisticsExportError("operation_failed")
+        try:
+            result = window.create_file_dialog(
+                dialog_type,
+                save_filename="worktrace-export.csv",
+                file_types=("CSV Files (*.csv)",),
+            )
+        except Exception:
+            raise StatisticsExportError("operation_failed")
+        if not result:
+            return None
+        # pywebview returns a sequence of strings (or None on cancel). For a
+        # save dialog exactly one path is expected; take the first.
+        if isinstance(result, (tuple, list)):
+            if not result:
+                return None
+            return str(result[0])
+        return str(result)
+
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
     """Validate and normalize the ``activity_ids`` argument from JS.
@@ -1181,32 +1332,18 @@ def _validate_split_time_input(split_time: str) -> str | None:
 def _safe_resource_display_name(row: dict[str, Any]) -> str:
     """Return a display-safe resource name for a Timeline detail row.
 
-    The fallback chain is intentionally ordered to surface the most
-    sanitized field first:
-
-    1. ``resource_display_name`` — already sanitized by the resource
-       service (basename for files, cleaned title for browsers, app name
-       for generic apps).
-    2. ``activity_display_name`` — set to ``resource_display_name`` or
-       ``app_name`` by the resource service, so still safe.
-    3. ``app_name`` — application name only, no path or window title.
-    4. ``process_name`` — process executable name only.
+    Delegates to the shared ``formatters.format_safe_display_name`` helper
+    so the Timeline detail rows and the Phase 4B CSV export use the same
+    display-safe fallback chain (``resource_display_name`` →
+    ``activity_display_name`` → ``app_name`` → ``process_name`` → ``未知``)
+    without the bridge reverse-depending on the export service.
 
     The raw ``window_title`` column is **deliberately skipped** because it
     can contain full file paths, URLs, or email subjects. ``file_path_hint``
     and ``note`` are also skipped. If all safe fields are empty the row
     falls back to ``"未知"`` rather than leaking sensitive metadata.
     """
-    for key in (
-        "resource_display_name",
-        "activity_display_name",
-        "app_name",
-        "process_name",
-    ):
-        val = str(row.get(key) or "").strip()
-        if val:
-            return val
-    return "未知"
+    return format_safe_display_name(row)
 
 
 def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:

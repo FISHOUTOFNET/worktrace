@@ -61,3 +61,37 @@ def format_activity_display_name(row: dict) -> str:
         if val:
             return val
     return "未知"
+
+
+def format_safe_display_name(row: dict) -> str:
+    """Return a display-safe activity/resource name that never falls back to
+    raw ``window_title``.
+
+    The fallback chain surfaces the most sanitized field first:
+
+    1. ``resource_display_name`` — already sanitized by the resource service
+       (basename for files, cleaned title for browsers, app name for generic
+       apps).
+    2. ``activity_display_name`` — set to ``resource_display_name`` or
+       ``app_name`` by the resource service, so still safe.
+    3. ``app_name`` — application name only, no path or window title.
+    4. ``process_name`` — process executable name only.
+
+    The raw ``window_title`` column is deliberately skipped because it can
+    contain full file paths, URLs, or email subjects. ``file_path_hint`` and
+    ``note`` are also skipped. If all safe fields are empty the row falls
+    back to ``"未知"`` rather than leaking sensitive metadata.
+
+    Used by the WebView bridge Timeline detail rows and by the Phase 4B CSV
+    export so the service layer does not reverse-depend on the bridge.
+    """
+    for key in (
+        "resource_display_name",
+        "activity_display_name",
+        "app_name",
+        "process_name",
+    ):
+        val = str(row.get(key) or "").strip()
+        if val:
+            return val
+    return "未知"

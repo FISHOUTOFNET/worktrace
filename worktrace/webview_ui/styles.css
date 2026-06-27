@@ -1780,11 +1780,56 @@ body {
 .stats-export-action-btn {
     padding: 6px 16px;
     font-size: 13px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #2563eb;
     border-radius: 6px;
-    background: #f1f5f9;
-    color: #94a3b8;
+    background: #2563eb;
+    color: #ffffff;
+    cursor: pointer;
+}
+
+.stats-export-action-btn:hover {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+}
+
+/* Phase 4B: disabled export / load buttons (during a write or a load). */
+.stats-export-action-btn:disabled,
+.stats-load-btn:disabled {
     cursor: not-allowed;
+    background: #e2e8f0;
+    border-color: #e2e8f0;
+    color: #94a3b8;
+}
+
+/* Phase 4B: CSV export status line. Collapses to a single message with a
+   kind-based color so success / info / error are visually distinct. */
+.stats-export-status {
+    font-size: 12px;
+    line-height: 1.6;
+    margin-bottom: 12px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #475569;
+}
+
+.stats-export-status.info {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    color: #1d4ed8;
+}
+
+.stats-export-status.success {
+    background: #ecfdf5;
+    border-color: #a7f3d0;
+    color: #047857;
+}
+
+.stats-export-status.error {
+    background: #fef2f2;
+    border-color: #fecaca;
+    color: #b91c1c;
 }
 
 /* Phase 3B.5B.1: a shell activity row whose activity id is missing / non-

@@ -7117,14 +7117,17 @@ def test_index_html_statistics_page_section_exists_4a():
     assert "WebView 迁移中" not in section
 
 
-def test_index_html_statistics_header_read_only_subtitle_4a():
-    """Phase 4A: the page header must say read-only / no file write."""
+def test_index_html_statistics_header_subtitle_4b():
+    """Phase 4B: the page header subtitle must announce CSV export is
+    open (no longer the read-only / no-file-write 4A copy)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-statistics"')
     section = source[pos:pos + 600]
     assert "统计 / 导出" in section
-    assert "本阶段仅提供只读统计和导出预览" in section
-    assert "暂不写入文件" in section
+    assert "查看统计并导出当前范围内的活动记录为 CSV 文件" in section
+    # The old 4A read-only copy must be gone.
+    assert "本阶段仅提供只读统计和导出预览" not in section
+    assert "暂不写入文件" not in section
 
 
 def test_index_html_statistics_date_range_controls_4a():
@@ -7186,26 +7189,42 @@ def test_index_html_statistics_export_preview_4a():
     assert "导出预览" in source
 
 
-def test_index_html_statistics_export_action_disabled_4a():
-    """Phase 4A: the export action button must be disabled and say the
-    action will be available in a later phase."""
+def test_index_html_statistics_export_action_enabled_4b():
+    """Phase 4B: the export action button must be enabled and labeled
+    "导出 CSV" (no longer the disabled 4A placeholder)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    assert 'id="stats-export-action-btn"' in source
-    assert "disabled" in source
-    assert "导出动作将在后续阶段开放" in source
+    pos = source.find('id="stats-export-action-btn"')
+    assert pos != -1
+    section = source[pos:pos + 400]
+    # The button must be a real action button with the CSV label.
+    assert "导出 CSV" in section
+    # The button itself must NOT carry a disabled attribute; the old
+    # 4A copy ("导出动作将在后续阶段开放") must be gone.
+    assert "导出动作将在后续阶段开放" not in section
+    # A status element must exist for export progress / success / cancel.
+    assert 'id="stats-export-status"' in source
 
 
-def test_index_html_statistics_export_hint_no_file_write_4a():
-    """Phase 4A: the export hint must explicitly say no CSV / Excel / PDF /
-    timesheet file write, no save dialog, no folder open, no auto-submit."""
+def test_index_html_statistics_export_hint_csv_enabled_4b():
+    """Phase 4B: the export hint must announce CSV is supported and that
+    Excel / PDF / timesheet / folder-open / auto-submit remain unsupported."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find("stats-export-hint")
     assert pos != -1
-    section = source[pos:pos + 400]
-    for keyword in ("CSV", "Excel", "PDF", "timesheet", "保存对话框", "文件夹"):
-        assert keyword in section, (
-            "export hint must mention: " + keyword
-        )
+    section = source[pos:pos + 600]
+    # The hint must clearly state CSV is the supported format.
+    assert "当前支持 CSV 导出" in section
+    assert "导出范围最多 31 天" in section
+    assert "已结束的非隐藏记录" in section
+    assert "不含窗口标题、文件路径等敏感信息" in section
+    # Excel / PDF / timesheet / folder-open / auto-submit remain unsupported.
+    assert "Excel" in section
+    assert "PDF" in section
+    assert "timesheet" in section
+    assert "打开文件夹" in section
+    assert "自动提交工时" in section
+    # The old 4A copy must be gone.
+    assert "本阶段不支持写出" not in section
 
 
 def test_index_html_statistics_loading_text_4a():
@@ -7376,14 +7395,22 @@ def test_styles_css_statistics_responsive_wrap_4a():
     assert "overflow-x" in source
 
 
-def test_styles_css_statistics_export_action_disabled_style_4a():
-    """Phase 4A: the disabled export action button must have a
-    cursor: not-allowed style."""
+def test_styles_css_statistics_export_action_enabled_style_4b():
+    """Phase 4B: the export action button must use an enabled pointer
+    style (no longer the 4A ``cursor: not-allowed`` disabled style)."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     pos = source.find(".stats-export-action-btn")
     assert pos != -1
-    body = source[pos:pos + 300]
-    assert "not-allowed" in body
+    body = source[pos:pos + 400]
+    # An enabled action button uses pointer cursor and a primary blue.
+    assert "cursor: pointer" in body or "cursor:pointer" in body
+    # The disabled not-allowed style must not appear on the default
+    # (non-disabled) state. The :disabled shared style may still exist
+    # elsewhere, but the default rule must not include not-allowed.
+    assert "not-allowed" not in body
+    # A status element style must exist for export progress / success /
+    # cancel / error.
+    assert ".stats-export-status" in source
 
 
 def test_styles_css_no_external_assets_4a():
@@ -8376,20 +8403,23 @@ def test_app_js_statistics_no_export_write_handler_4a1():
         )
 
 
-def test_index_html_statistics_export_hint_mentions_no_file_write_4a1():
-    """Phase 4A.1: the export hint must explicitly say no file write,
-    no save dialog, no folder open, no timesheet auto-submit."""
+def test_index_html_statistics_export_hint_csv_enabled_4a1_to_4b():
+    """Phase 4B (supersedes 4A.1): the export preview area must announce
+    CSV is supported; the old 4A.1 "本阶段不支持写出" copy must be gone."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="statistics-export-preview"')
     assert pos != -1
     section = source[pos:pos + 2000]
-    assert "本阶段不支持写出" in section
-    assert "CSV" in section
+    # CSV is now supported; the hint announces it.
+    assert "当前支持 CSV 导出" in section
+    # Excel / PDF / timesheet remain explicitly unsupported.
     assert "Excel" in section
     assert "PDF" in section
     assert "timesheet" in section
-    assert "不打开保存对话框" in section
-    assert "不打开文件夹" in section
+    # The old 4A.1 read-only copy must be gone.
+    assert "本阶段不支持写出" not in section
+    assert "不打开保存对话框" not in section
+    assert "不打开文件夹" not in section
 
 
 def test_bridge_statistics_explicit_bool_rejection_comment_4a1():
@@ -8636,3 +8666,289 @@ def test_index_html_no_new_pages_4a1():
         assert "WebView 迁移中" in section, (
             f"{page_id} must still be a placeholder in Phase 4A.1"
         )
+
+
+# --- Phase 4B: Statistics CSV export frontend locks --------------------
+
+
+def test_app_js_statistics_export_calls_bridge_export_statistics_csv_4b():
+    """Phase 4B: app.js must call the bridge ``export_statistics_csv``
+    method to perform the CSV write. The frontend never writes a file
+    itself; it only invokes the bridge."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'callBridge("export_statistics_csv"' in source, (
+        "app.js must call bridge export_statistics_csv for the CSV write"
+    )
+
+
+def test_app_js_statistics_export_saving_guard_present_4b():
+    """Phase 4B: app.js must define a separate ``statisticsExportSaving``
+    guard so the CSV write cannot be double-triggered or overlap a
+    statistics load. The guard must NOT reuse ``statisticsLoading``."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "statisticsExportSaving" in source, (
+        "app.js must define statisticsExportSaving guard"
+    )
+    # The guard variable must be declared as a separate boolean state.
+    assert "var statisticsExportSaving = false" in source, (
+        "statisticsExportSaving must start as a separate false boolean"
+    )
+    # The export function must check the guard on entry.
+    pos = source.find("function exportStatisticsCsv")
+    assert pos != -1, "app.js must define exportStatisticsCsv function"
+    body = source[pos:pos + 1500]
+    assert "if (statisticsExportSaving)" in body, (
+        "exportStatisticsCsv must guard against duplicate clicks"
+    )
+    # The statistics load path must also block while a write is in flight.
+    # ``setStatisticsLoading`` must consider ``statisticsExportSaving``.
+    set_load_pos = source.find("function setStatisticsLoading")
+    assert set_load_pos != -1
+    set_load_body = source[set_load_pos:set_load_pos + 800]
+    assert "statisticsExportSaving" in set_load_body, (
+        "setStatisticsLoading must disable export btn while a write is in flight"
+    )
+
+
+def test_app_js_statistics_export_uses_validate_statistics_date_range_4b():
+    """Phase 4B: exportStatisticsCsv must call
+    validateStatisticsDateRange before calling the bridge, so the user
+    gets an immediate clear message without a bridge round-trip."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    pos = source.find("function exportStatisticsCsv")
+    assert pos != -1
+    body = source[pos:pos + 1500]
+    assert "validateStatisticsDateRange" in body, (
+        "exportStatisticsCsv must call validateStatisticsDateRange"
+    )
+
+
+def test_app_js_statistics_export_catch_never_surfaces_raw_exception_4b():
+    """Phase 4B: the exportStatisticsCsv promise catch must collapse to
+    a stable Chinese message and never read raw exception text."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    pos = source.find("function exportStatisticsCsv")
+    assert pos != -1
+    # The catch block is somewhere after the export function. Find the
+    # next ``.catch`` after the export function start.
+    catch_pos = source.find(".catch", pos)
+    assert catch_pos != -1
+    # The catch block extends to the next ``;`` after the closing ``}``.
+    catch_body = source[catch_pos:catch_pos + 400]
+    assert "导出失败" in catch_body, (
+        "export catch must collapse to the stable 导出失败 message"
+    )
+    # The catch must NOT read err / error / exception message fields.
+    for forbidden in (
+        "err.message",
+        "err.toString",
+        "error.message",
+        "error.toString",
+        "exception.message",
+    ):
+        assert forbidden not in catch_body, (
+            "export catch must not surface raw exception text via " + forbidden
+        )
+
+
+def test_app_js_statistics_export_cancel_is_clean_result_4b():
+    """Phase 4B: a cancelled export must be handled as a clean info
+    result (``已取消导出``), not as a Python exception or ``导出失败``."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    pos = source.find("function exportStatisticsCsv")
+    assert pos != -1
+    body = source[pos:pos + 2000]
+    assert "result.cancelled" in body or "cancelled" in body, (
+        "exportStatisticsCsv must handle a cancelled result explicitly"
+    )
+    assert "已取消导出" in body, (
+        "cancel result must show the stable 已取消导出 message"
+    )
+
+
+def test_app_js_statistics_export_success_shows_filename_count_duration_4b():
+    """Phase 4B: a successful export must surface the basename, activity
+    count, and total duration — never the full local path."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    pos = source.find("function exportStatisticsCsv")
+    assert pos != -1
+    body = source[pos:pos + 2000]
+    # The success branch must reference filename / activity_count / duration.
+    assert "filename" in body, (
+        "success payload must surface filename (basename only)"
+    )
+    assert "activity_count" in body, (
+        "success payload must surface activity_count"
+    )
+    assert "duration" in body, (
+        "success payload must surface duration"
+    )
+    # ``导出成功`` is the stable success prefix.
+    assert "导出成功" in body, (
+        "success message must start with the stable 导出成功 prefix"
+    )
+
+
+def test_app_js_no_export_excel_pdf_timesheet_open_folder_methods_4b():
+    """Phase 4B: app.js must not define any export_excel / export_pdf /
+    export_timesheet / open_folder / auto-submit methods."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    lowered = source.lower()
+    forbidden = (
+        "exportexcel",
+        "export_pdf",
+        "exportpdf",
+        "exporttimesheet",
+        "export_timesheet",
+        "openfolder",
+        "open_folder",
+        "auto_submit",
+        "autosubmit",
+        "openexternal",
+        "open_external",
+        "shell.open",
+        "require('electron')",
+        "require('node')",
+    )
+    for token in forbidden:
+        assert token not in lowered, (
+            "app.js must not reference forbidden export/external token: " + token
+        )
+
+
+def test_bridge_export_statistics_csv_method_present_4b():
+    """Phase 4B: bridge.py must define ``export_statistics_csv`` (the
+    controlled write path for the CSV export)."""
+    source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    assert "def export_statistics_csv" in source, (
+        "bridge.py must define export_statistics_csv"
+    )
+    # The bridge must NOT define any other export write methods.
+    for forbidden in (
+        "def export_excel",
+        "def export_pdf",
+        "def export_timesheet",
+        "def open_folder",
+        "def auto_submit",
+        "def open_external",
+    ):
+        assert forbidden not in source, (
+            "bridge.py must not define forbidden export method: " + forbidden
+        )
+
+
+def test_bridge_set_window_method_present_4b():
+    """Phase 4B: bridge.py must define ``set_window`` so webview_main.py
+    can inject the pywebview window for the native save dialog."""
+    source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    assert "def set_window" in source, (
+        "bridge.py must define set_window for pywebview window injection"
+    )
+    # The constructor must initialize ``_window`` to None so importing
+    # the bridge module never starts the GUI.
+    assert "self._window" in source
+    # set_window must NOT itself start the GUI or construct a window. We
+    # only forbid the actual call form (``webview.start()`` /
+    # ``webview.create_window(``), not docstring text that merely mentions
+    # these APIs.
+    pos = source.find("def set_window")
+    body = source[pos:pos + 800]
+    assert "webview.start()" not in body, (
+        "set_window must not call webview.start()"
+    )
+    assert "webview.create_window(" not in body, (
+        "set_window must not call webview.create_window()"
+    )
+
+
+def test_bridge_export_statistics_csv_returns_basename_only_4b():
+    """Phase 4B: the docstring of export_statistics_csv must state that
+    only the basename is returned (never the full local path)."""
+    source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = source.find("def export_statistics_csv")
+    body = source[pos:pos + 2500]
+    assert "basename" in body.lower() or "filename" in body.lower(), (
+        "export_statistics_csv docstring must document basename-only return"
+    )
+    # The success payload must include filename / activity_count / duration.
+    assert "filename" in body
+    assert "activity_count" in body
+    assert "duration" in body
+    # The cancel payload must include cancelled: True.
+    assert "cancelled" in body
+
+
+def test_webview_main_injects_window_into_bridge_4b():
+    """Phase 4B: webview_main.py must call bridge.set_window(window) so
+    the bridge can open the native save dialog for the CSV export."""
+    source = (REPO_ROOT / "worktrace" / "webview_main.py").read_text(
+        encoding="utf-8"
+    )
+    assert "bridge.set_window" in source, (
+        "webview_main.py must call bridge.set_window(window)"
+    )
+    # The window must be captured from create_window's return value.
+    assert "window = webview.create_window" in source, (
+        "webview_main.py must capture the create_window return value"
+    )
+    # set_window must be called BEFORE webview.start() so the bridge has
+    # the reference when the JS callback fires.
+    set_pos = source.find("bridge.set_window")
+    start_pos = source.find("webview.start()")
+    assert set_pos != -1 and start_pos != -1
+    assert set_pos < start_pos, (
+        "bridge.set_window must be called before webview.start()"
+    )
+
+
+def test_index_html_statistics_export_status_element_present_4b():
+    """Phase 4B: index.html must contain a dedicated export status
+    element (``stats-export-status``) so the frontend can surface
+    export progress / success / cancel / error without alert()."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="stats-export-status"' in source, (
+        "index.html must define stats-export-status element"
+    )
+
+
+def test_styles_css_statistics_export_status_classes_4b():
+    """Phase 4B: styles.css must define the export status base class and
+    the info / success / error variants."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".stats-export-status" in source
+    # At least the success and error variants must exist.
+    assert ".stats-export-status.success" in source or ".success" in source
+    assert ".stats-export-status.error" in source or ".error" in source
+
+
+def test_app_js_statistics_export_no_local_storage_session_storage_4b():
+    """Phase 4B: the export action must not use localStorage or
+    sessionStorage (regression lock for the new write path)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    pos = source.find("function exportStatisticsCsv")
+    assert pos != -1
+    # Scan a generous body so the catch / status helpers are included.
+    body = source[pos:pos + 2500]
+    for forbidden in ("localStorage", "sessionStorage"):
+        assert forbidden not in body, (
+            "exportStatisticsCsv must not use " + forbidden
+        )
+
+
+def test_index_html_statistics_export_no_external_links_4b():
+    """Phase 4B: the statistics export section must not reference any
+    external link / CDN / Google Fonts (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="page-statistics"')
+    assert pos != -1
+    end = source.find("</section>", pos)
+    section = source[pos:end] if end != -1 else source[pos:pos + 4000]
+    assert not re.search(r"https?://", section), (
+        "statistics section must not reference external links"
+    )
+    assert not re.search(r"cdn", section, re.IGNORECASE), (
+        "statistics section must not reference CDN"
+    )
+    assert not re.search(r"google\s*fonts", section, re.IGNORECASE), (
+        "statistics section must not reference Google Fonts"
+    )

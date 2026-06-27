@@ -117,10 +117,11 @@ def test_bridge_statistics_summary_success(bridge):
         assert "duration" in group
     for group in summary["by_status"]:
         assert "duration" in group
-    # export_preview is read-only.
+    # export_preview: Phase 4B opens the CSV write action. timesheet is no
+    # longer advertised as an available format.
     preview = summary["export_preview"]
-    assert preview["export_actions_enabled"] is False
-    assert preview["available_formats"] == ["csv", "timesheet"]
+    assert preview["export_actions_enabled"] is True
+    assert preview["available_formats"] == ["csv"]
     assert preview["included_duration"] == "00:45:00"
     _assert_no_sensitive_keys(result)
 

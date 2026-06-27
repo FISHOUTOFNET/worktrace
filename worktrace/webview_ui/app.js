@@ -131,18 +131,20 @@
     var restoreSaving = false;
     var restoreSavingActivityId = null;
 
-    // --- Phase 4A: Statistics / Export read-only state ------------------
-    // The Statistics / Export page is a read-only page: it only loads
-    // display-safe aggregated data via get_statistics_export_summary and
-    // never writes a file, opens a save dialog, or calls an export action.
-    // statisticsLoaded tracks whether the page has been loaded at least
-    // once; statisticsLoading guards the load button against double-clicks;
-    // statisticsRequestToken prevents stale responses from overwriting newer
-    // data when the user rapidly changes the date range. No state is ever
-    // persisted to browser storage.
+    // --- Phase 4A / 4B: Statistics / Export state -----------------------
+    // The Statistics / Export page loads display-safe aggregated data via
+    // get_statistics_export_summary. Phase 4B adds a single controlled
+    // write action: the CSV export. statisticsLoaded tracks whether the
+    // page has been loaded at least once; statisticsLoading guards the load
+    // button against double-clicks; statisticsRequestToken prevents stale
+    // responses from overwriting newer data. statisticsExportSaving is a
+    // SEPARATE guard for the export action so a CSV write never overlaps
+    // another export or a statistics load. No state is ever persisted to
+    // browser storage.
     var statisticsLoaded = false;
     var statisticsLoading = false;
     var statisticsRequestToken = 0;
+    var statisticsExportSaving = false;
 
     // --- Bridge helper --------------------------------------------------
 
@@ -3816,6 +3818,10 @@
         if (el) el.hidden = !loading;
         var btn = document.getElementById("statistics-load-btn");
         if (btn) btn.disabled = loading;
+        // Phase 4B: also disable the CSV export button while statistics are
+        // loading so a write cannot be triggered mid-load.
+        var exportBtn = document.getElementById("stats-export-action-btn");
+        if (exportBtn) exportBtn.disabled = loading || statisticsExportSaving;
     }
 
     function loadStatisticsExportSummary() {
@@ -3969,6 +3975,93 @@
         var toEl = document.getElementById("statistics-date-to");
         if (fromEl && !fromEl.value) fromEl.value = today;
         if (toEl && !toEl.value) toEl.value = today;
+    }
+
+    // --- Phase 4B: Statistics CSV export --------------------------------
+    // The single controlled write action on the Statistics / Export page.
+    // The save path is chosen by the user through the native save dialog
+    // (opened by the bridge); the frontend never writes a file itself.
+    // statisticsExportSaving is a separate guard so a CSV write cannot be
+    // double-triggered or overlap a statistics load. The promise catch
+    // never reads the raw exception text; an unexpected failure collapses
+    // to the generic "导出失败" so internal details are never surfaced.
+
+    function setStatisticsExportStatus(message, kind) {
+        var el = document.getElementById("stats-export-status");
+        if (!el) return;
+        if (!message) {
+            el.hidden = true;
+            el.textContent = "";
+            el.className = "stats-export-status";
+            return;
+        }
+        el.hidden = false;
+        el.textContent = message;
+        el.className = "stats-export-status" + (kind ? " " + kind : "");
+    }
+
+    function setStatisticsExportSaving(saving) {
+        statisticsExportSaving = saving;
+        var btn = document.getElementById("stats-export-action-btn");
+        if (btn) {
+            btn.disabled = saving || statisticsLoading;
+        }
+        // Block the statistics load button too while a write is in flight.
+        var loadBtn = document.getElementById("statistics-load-btn");
+        if (loadBtn) loadBtn.disabled = saving || statisticsLoading;
+    }
+
+    function exportStatisticsCsv() {
+        // Duplicate-click guard: a write is already in flight.
+        if (statisticsExportSaving) return;
+        // Block the export while statistics are loading.
+        if (statisticsLoading) return;
+        var fromEl = document.getElementById("statistics-date-from");
+        var toEl = document.getElementById("statistics-date-to");
+        var dateFrom = fromEl ? fromEl.value : "";
+        var dateTo = toEl ? toEl.value : "";
+        if (!dateFrom || !dateTo) {
+            setStatisticsExportStatus("请选择有效日期", "error");
+            return;
+        }
+        // Reuse the same client-side pre-check as the statistics load so
+        // the user gets an immediate clear message without a bridge
+        // round-trip. The bridge / service still perform canonical validation.
+        var rangeMsg = validateStatisticsDateRange(dateFrom, dateTo);
+        if (rangeMsg) {
+            setStatisticsExportStatus(rangeMsg, "error");
+            return;
+        }
+        setStatisticsExportSaving(true);
+        setStatisticsExportStatus("正在导出…", "info");
+        callBridge("export_statistics_csv", dateFrom, dateTo).then(function (result) {
+            setStatisticsExportSaving(false);
+            if (!result) {
+                setStatisticsExportStatus("导出失败", "error");
+                return;
+            }
+            // Cancelled is a clean result, not a failure.
+            if (result.cancelled) {
+                setStatisticsExportStatus("已取消导出", "info");
+                return;
+            }
+            if (result.ok) {
+                var filename = safeText(result.filename, "");
+                var count = String(result.activity_count || 0);
+                var duration = safeText(result.duration, "00:00:00");
+                setStatisticsExportStatus(
+                    "导出成功：" + filename + "（" + count + " 条，共 " + duration + "）",
+                    "success"
+                );
+                return;
+            }
+            // Known failure: the bridge already collapsed to a Chinese msg.
+            setStatisticsExportStatus(result.error || "导出失败", "error");
+        }).catch(function () {
+            setStatisticsExportSaving(false);
+            // Never surface raw exception text; collapse to generic message.
+            setStatisticsExportStatus("导出失败", "error");
+        });
     }
 
     // --- Utility --------------------------------------------------------
@@ -4239,10 +4332,12 @@
         // delegation on the list container handles clicks without
         // re-binding on every render.
         bindRestoreControls();
-        // Phase 4A: Statistics / Export read-only page controls. The load
-        // button triggers a read-only bridge call; the quick-range buttons
-        // only update the in-memory date inputs and re-trigger the read.
-        // No export / file / dialog action is wired here.
+        // Phase 4A / 4B: Statistics / Export page controls. The load button
+        // triggers a read-only bridge call; the quick-range buttons only
+        // update the in-memory date inputs and re-trigger the read. The
+        // export button (Phase 4B) opens the native save dialog through the
+        // bridge and writes the chosen CSV file; the frontend never writes a
+        // file itself.
         var statsLoadBtn = document.getElementById("statistics-load-btn");
         if (statsLoadBtn) {
             statsLoadBtn.addEventListener("click", loadStatisticsExportSummary);
@@ -4264,6 +4359,10 @@
             statsMonthBtn.addEventListener("click", function () {
                 applyStatisticsQuickRange("month");
             });
+        }
+        var statsExportBtn = document.getElementById("stats-export-action-btn");
+        if (statsExportBtn) {
+            statsExportBtn.addEventListener("click", exportStatisticsCsv);
         }
     }
 

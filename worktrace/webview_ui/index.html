@@ -259,7 +259,7 @@
                 <header class="page-header stats-header">
                     <div class="stats-header-text">
                         <h1>统计 / 导出</h1>
-                        <p class="stats-subtitle">本阶段仅提供只读统计和导出预览，暂不写入文件。</p>
+                        <p class="stats-subtitle">查看统计并导出当前范围内的活动记录为 CSV 文件。</p>
                     </div>
                 </header>
                 <div class="stats-controls">
@@ -370,9 +370,10 @@
                         </div>
                     </div>
                     <div class="stats-export-hint">
-                        本阶段不支持写出 CSV、Excel、PDF 或 timesheet 文件，不打开保存对话框，不打开文件夹，不自动提交工时。
+                        当前支持 CSV 导出。导出范围最多 31 天，仅包含已结束的非隐藏记录，不含窗口标题、文件路径等敏感信息。暂不支持 Excel、PDF、timesheet 模板、打开文件夹或自动提交工时。
                     </div>
-                    <button id="stats-export-action-btn" class="stats-export-action-btn" type="button" disabled>导出动作将在后续阶段开放</button>
+                    <div id="stats-export-status" class="stats-export-status" hidden></div>
+                    <button id="stats-export-action-btn" class="stats-export-action-btn" type="button">导出 CSV</button>
                 </div>
             </section>
             <section id="page-rules" class="page">

@@ -109,7 +109,12 @@ def main() -> int:
     index_path = resource_path("index.html")
 
     try:
-        webview.create_window(
+        # Phase 4B: capture the window so the bridge can open a native save
+        # dialog for the CSV export. ``create_window`` returns the Window
+        # object before ``start()`` runs the main loop; the dialog is only
+        # invoked later from a JS callback (after the WebView is live), so
+        # injecting the reference here is safe and does not start the GUI.
+        window = webview.create_window(
             title="WorkTrace",
             url=str(index_path),
             js_api=bridge,
@@ -117,6 +122,7 @@ def main() -> int:
             height=720,
             min_size=(800, 540),
         )
+        bridge.set_window(window)
         webview.start()
     except Exception:
         # pywebview raises when the WebView2 backend cannot initialize even

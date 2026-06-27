@@ -267,8 +267,10 @@ def test_service_summary_export_preview_read_only(temp_db):
     assert preview["date_to"] == "2026-06-25"
     assert preview["included_activity_count"] == 1
     assert preview["included_duration_seconds"] == 1800
-    assert preview["available_formats"] == ["csv", "timesheet"]
-    assert preview["export_actions_enabled"] is False
+    # Phase 4B: only CSV export is enabled; timesheet is not yet supported.
+    # The export action button is now enabled (CSV write is open).
+    assert preview["available_formats"] == ["csv"]
+    assert preview["export_actions_enabled"] is True
     _assert_no_sensitive_keys(preview)
 
 

@@ -277,19 +277,32 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
             "date_to": date_to,
             "included_activity_count": activity_count,
             "included_duration_seconds": total_duration,
-            "available_formats": ["csv", "timesheet"],
-            "export_actions_enabled": False,
+            # Phase 4B: CSV export is now available. Excel / PDF /
+            # timesheet are intentionally NOT listed here; the frontend must
+            # never offer a format the backend cannot produce.
+            "available_formats": ["csv"],
+            "export_actions_enabled": True,
         },
     }
 
 
-def _validate_summary_date_range(date_from: str, date_to: str) -> None:
-    """Validate the date range for the read-only statistics summary.
+def validate_statistics_date_range(date_from: str, date_to: str) -> None:
+    """Validate the date range shared by the Statistics summary and CSV export.
+
+    This is the single canonical validation used by both the read-only
+    summary (``get_statistics_export_summary``) and the Phase 4B CSV export
+    (``export_service.build_statistics_csv_rows`` / ``write_statistics_csv``)
+    so summary and export enforce identical rules.
 
     Raises ``ValueError`` with a stable code token (``invalid_date`` /
-    ``invalid_range`` / ``range_too_large``) so callers can map to
-    user-facing messages without echoing internal details.
+    ``invalid_range`` / ``range_too_large``) so the API layer can map to
+    user-facing messages without echoing internal details. ``bool`` is
+    rejected explicitly because it is not a date string even though it is
+    a subclass of ``int``.
     """
+    # ``bool`` is a subclass of ``int`` but not of ``str``; the ``str``
+    # isinstance check below rejects it so ``True`` / ``False`` never reach
+    # ``date.fromisoformat``.
     if not isinstance(date_from, str) or not isinstance(date_to, str):
         raise ValueError("invalid_date")
     try:
@@ -301,6 +314,25 @@ def _validate_summary_date_range(date_from: str, date_to: str) -> None:
         raise ValueError("invalid_range")
     if (end - start).days > STATISTICS_SUMMARY_MAX_RANGE_DAYS - 1:
         raise ValueError("range_too_large")
+
+
+# Backwards-compatible private alias. Existing internal callers and tests
+# that referenced the pre-refactor private name keep working; the canonical
+# implementation is the public ``validate_statistics_date_range`` above.
+_validate_summary_date_range = validate_statistics_date_range
+
+
+def get_status_display_label(status_code: str | None) -> str:
+    """Return the display-safe Chinese label for a status code.
+
+    Shared by the read-only statistics summary and the Phase 4B CSV export
+    so both surface identical status labels. Unknown codes fall back to
+    ``"未知状态"``; raw ``window_title`` / ``file_path_hint`` / ``note`` are
+    never used.
+    """
+    return _STATUS_DISPLAY_LABELS.get(
+        str(status_code or "").strip(), _UNKNOWN_STATUS_LABEL
+    )
 
 
 def _accumulate_summary_group(

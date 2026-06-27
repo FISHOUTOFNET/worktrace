@@ -457,7 +457,19 @@ The migration is phased so each step is independently shippable:
   shows statistics summary cards, grouped tables (by project / by app /
   by status), and an export preview. No export write action, no file
   creation, no save dialog, no DB schema change, and no write API is
-  introduced in Phase 4A.
+  introduced in Phase 4A. Phase 4A.1 — read-only hardening — is
+  **completed**: loading double-click guard, client-side date range
+  validator, status inclusion semantics, bool/None/non-string rejection,
+  and stable tie-breaker are added without any new write capability.
+  Phase 4B — Export actions foundation — CSV export only — is
+  **completed**: the first controlled file-write capability is
+  introduced on the Statistics / Export page. The user picks a save
+  location through a native pywebview save dialog and exports the
+  current closed, non-hidden, non-deleted activities in the chosen date
+  range as a display-safe CSV file (UTF-8 BOM, Chinese headers,
+  formula-injection escaping, no raw window title / file path / note).
+  Excel / PDF / timesheet export, folder opening, auto-open, and
+  auto-submit remain explicitly unsupported.
 - Phase 5: Rules.
 - Phase 6: Settings / Privacy / Encrypted Backup.
 - Cleanup: remove the legacy Tkinter UI. This is a cleanup phase reached
@@ -3577,6 +3589,183 @@ Phase 4A.1 does not implement and does not start:
 - Any live-time projection;
 - Any Project Rules migration to WebView;
 - Any Settings / Privacy migration to WebView;
+- Any removal of the legacy Tkinter / CustomTkinter UI code;
+- Any Tkinter fallback path;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any change to the Timeline / Overview existing entry points or behavior.
+
+## Phase 4B Implemented Scope
+
+Phase 4B is the **Export actions foundation — CSV export only** phase. It
+introduces the first controlled file-write capability on the Statistics /
+Export page: the user can pick a save location through a native save dialog
+and export the current closed, non-hidden, non-deleted activities in the
+chosen date range as a display-safe CSV file. Phase 4B does **not** add
+Excel / PDF / timesheet export, does **not** open a folder, does **not**
+auto-open the exported file, does **not** auto-submit a timesheet, does
+**not** migrate Project Rules / Settings, does **not** change the DB
+schema, and does **not** remove the legacy Tkinter UI.
+
+Implemented in Phase 4B:
+
+- **Shared helper** (`worktrace/formatters.py`):
+  - Added `format_safe_display_name(row)` that returns the first non-empty
+    value from the chain `resource_display_name` → `activity_display_name`
+    → `app_name` → `process_name` → `"未知"`. This deliberately skips
+    `window_title` / `file_path_hint` / `note` so the CSV resource-name
+    column never surfaces a raw window title, file path, or note. The
+    bridge Timeline detail row now delegates to this helper too, removing
+    the previously duplicated fallback chain.
+- **Service layer** (`worktrace/services/statistics_service.py`):
+  - Promoted `_validate_summary_date_range` to the public
+    `validate_statistics_date_range` so the export path reuses the exact
+    same date rules as the read-only summary (`YYYY-MM-DD` only,
+    `date_from <= date_to`, inclusive span ≤ 31 days; `None` / `bool` /
+    non-string rejected). The private alias `_validate_summary_date_range`
+    is retained for backwards compatibility.
+  - Added `get_status_display_label(status_code)` returning the Chinese
+    label for `normal` / `idle` / `paused` / `excluded` / `error` so the
+    CSV status column is human-readable.
+  - Updated `export_preview` in `get_statistics_export_summary`:
+    `available_formats` is now `["csv"]` (timesheet is no longer
+    advertised) and `export_actions_enabled` is now `True` (the CSV write
+    is open).
+- **Export service** (`worktrace/services/export_service.py`):
+  - Added `build_statistics_csv_rows(date_from, date_to)` that reuses
+    `validate_statistics_date_range` and
+    `timeline_service.get_report_activity_rows(include_hidden=False)`,
+    drops `is_in_progress` rows, and projects each row into a display-safe
+    dict with the 10 ordered CSV columns. The resource name uses
+    `format_safe_display_name`; raw `window_title` / `file_path_hint` /
+    `full_path` / clipboard / `note` / traceback / SQL are never present.
+  - Added `write_statistics_csv(date_from, date_to, output_path)` that
+    validates dates, normalizes the `.csv` suffix (auto-appends /
+    replaces non-csv suffix), rejects a directory path or a
+    missing-parent path as `invalid_path`, raises `ValueError("empty_data")`
+    for an empty range (no file is created), and writes the CSV with
+    `newline=""` and `encoding="utf-8-sig"` (UTF-8 BOM) so Excel opens
+    Chinese headers correctly. Each text cell is passed through
+    `_escape_csv_cell` to mitigate CSV formula injection (cells starting
+    with `=` / `+` / `-` / `@` / tab get a single leading quote).
+    Returns `{"activity_count", "duration_seconds", "filename"}` where
+    `filename` is the basename only (never the full local path).
+    `PermissionError` / `OSError` are allowed to propagate so the API
+    layer can map them to stable codes. This function only writes the
+    chosen CSV file — it never writes to the DB, never updates
+    `activity_log.updated_at`, never opens a folder, never opens the
+    exported file, and never auto-submits a timesheet.
+- **API layer** (`worktrace/api/export_api.py`):
+  - Added `StatisticsExportError(ValueError)` with a stable `code`
+    attribute. Documented codes: `invalid_date` / `invalid_range` /
+    `range_too_large` / `empty_data` / `invalid_path` /
+    `permission_denied` / `file_busy` / `write_failed` /
+    `operation_failed`.
+  - Added `export_statistics_csv(date_from, date_to, output_path)` that
+    delegates to `export_service.write_statistics_csv` and maps
+    `ValueError` (with a known code token) to the matching stable code,
+    `PermissionError` → `permission_denied`, `OSError` → `file_busy`,
+    and any unknown exception → `operation_failed`. Error messages never
+    contain the raw exception text, full path, SQL, traceback, or
+    sensitive fields.
+- **Bridge layer** (`worktrace/webview_ui/bridge.py`):
+  - Added `_STATISTICS_EXPORT_ERROR_MESSAGES` mapping each stable code
+    to a stable Chinese message. `permission_denied` / `file_busy` /
+    `write_failed` share one message so a low-level OS failure never
+    distinguishes which kind of write error occurred.
+  - Added `WebViewBridge.__init__` storing `self._window: Any = None` and
+    `set_window(window)` so `webview_main.py` can inject the pywebview
+    window after `create_window` returns. Importing the bridge module
+    does NOT start the GUI; `set_window` only stores the reference.
+  - Added `export_statistics_csv(date_from, date_to)` that validates the
+    obvious date shape, opens the native save dialog via the injected
+    window, returns `{"ok": False, "cancelled": True, "error":
+    "已取消导出"}` on user cancel (no API write is called), returns
+    `{"ok": True, "filename", "activity_count", "duration",
+    "cancelled": False}` on success (basename only — full path never
+    leaves the bridge), and returns `{"ok": False, "error": "<chinese>",
+    "cancelled": False}` on any failure. Unknown exceptions collapse to
+    `"导出失败"`.
+  - Added `_choose_csv_save_path()` that lazily imports `pywebview`
+    inside the method (so the bridge module does not pull the WebView
+    backend into unit tests), resolves the save-dialog type constant
+    (`FileDialog.SAVE` first, deprecated `SAVE_DIALOG` as fallback),
+    and calls `window.create_file_dialog(...)`. Raises
+    `StatisticsExportError("operation_failed")` if no window is injected
+    or the pywebview API is unavailable.
+- **WebView entry** (`worktrace/webview_main.py`):
+  - Captured the `webview.create_window(...)` return value and called
+    `bridge.set_window(window)` before `webview.start()` so the bridge
+    can open the native save dialog from a JS callback. This does not
+    start the GUI on import and does not require admin privileges.
+- **Frontend** (`worktrace/webview_ui/index.html`, `app.js`, `styles.css`):
+  - The statistics page subtitle now announces CSV export is open:
+    `查看统计并导出当前范围内的活动记录为 CSV 文件。`
+  - The export hint now reads: `当前支持 CSV 导出。导出范围最多 31 天，
+    仅包含已结束的非隐藏记录，不含窗口标题、文件路径等敏感信息。
+    暂不支持 Excel、PDF、timesheet 模板、打开文件夹或自动提交工时。`
+  - The disabled placeholder button is replaced with a real action button
+    `导出 CSV` plus a dedicated `stats-export-status` element.
+  - Added `statisticsExportSaving` as a separate guard so the CSV write
+    cannot be double-triggered or overlap a statistics load. Both the
+    export button and the load button are disabled while either is in
+    flight.
+  - Added `setStatisticsExportStatus(message, kind)` with `info` /
+    `success` / `error` CSS variants and `setStatisticsExportSaving(saving)`
+    that toggles both buttons.
+  - Added `exportStatisticsCsv()` that reuses
+    `validateStatisticsDateRange` for the client-side pre-check, calls
+    `callBridge("export_statistics_csv", ...)`, handles `cancelled` as a
+    clean info status, surfaces `导出成功：<filename>（<count> 条，共
+    <duration>）` on success, and collapses any unexpected `.catch` to
+    `导出失败` (never reads `err.message`).
+  - CSS: `.stats-export-action-btn` is now an enabled blue pointer
+    button; `:disabled` shared style retained for both load and export
+    buttons.
+- **Tests**:
+  - Added `tests/test_statistics_csv_export.py` with 54 tests covering
+    service build/write (UTF-8 BOM, Chinese headers, multi-day range,
+    hidden / deleted / in-progress exclusion, all-statuses inclusion,
+    empty-data no-file, invalid date / range / range-too-large, bool /
+    None rejection, no raw sensitive fields, CSV formula injection
+    escaping, permission / file-busy / OSError mapping, no DB writes,
+    no resource / assignment / session-note mutation, path extension
+    normalization, directory / missing-parent rejection), API layer
+    (success payload, all stable error codes, error message never leaks
+    internals), and bridge layer (basename-only return, cancel does not
+    call API, all stable Chinese messages, no full path in payload,
+    no backend-internals import, read-only summary still preserved,
+    `set_window` does not start GUI).
+  - Updated the 8 Phase 4A / 4A.1 regression tests that locked the old
+    read-only subtitle / disabled button / `not-allowed` CSS / `["csv",
+    "timesheet"]` formats / `export_actions_enabled is False` to reflect
+    the Phase 4B enabled CSV write semantics.
+  - Added 13 Phase 4B frontend static tests in
+    `tests/test_webview_resources.py` covering bridge call wiring,
+    `statisticsExportSaving` guard, `validateStatisticsDateRange`
+    pre-check, catch-block never reads raw exception text, cancel /
+    success payload shape, no `export_excel` / `export_pdf` /
+    `export_timesheet` / `open_folder` / auto-submit references,
+    `set_window` does not start GUI, `webview_main.py` injects window
+    before `webview.start()`, dedicated export status element and CSS,
+    no `localStorage` / `sessionStorage`, no external links / CDN /
+    Google Fonts.
+
+## Phase 4B Not Implemented
+
+Phase 4B does not implement and does not start:
+
+- Any Excel export;
+- Any PDF export;
+- Any timesheet advanced template;
+- Any folder opening;
+- Any auto-open of the exported CSV file;
+- Any auto-submit of a timesheet;
+- Any DB schema change;
+- Any migration of Project Rules to WebView;
+- Any migration of Settings / Privacy to WebView;
 - Any removal of the legacy Tkinter / CustomTkinter UI code;
 - Any Tkinter fallback path;
 - Any React / Vue / Vite / Node dependency;
