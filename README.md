@@ -1,50 +1,50 @@
 # WorkTrace v0.1 Lite
 
-WorkTrace is a lightweight Windows local work-trace and timesheet helper. It runs as a portable desktop app, records active-window metadata locally, helps classify time into projects, and exports draft timesheets.
+WorkTrace is a lightweight Windows local work-trace and timesheet helper. It
+runs as a portable desktop app, records active-window metadata locally,
+helps classify time into projects, and exports draft timesheets.
 
-## Core Features
+> **Current state**: WebView Phase 4B (CSV export foundation) is the latest
+> shipped phase. For a one-screen snapshot read
+> [`docs/current-state.md`](docs/current-state.md). For the full per-phase
+> history read [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
+> AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)
+> before touching the repo.
 
-- WebView desktop UI (pywebview + Microsoft Edge WebView2 Runtime) is the default and only shipping UI as of Phase 1. The Overview page is fully migrated (Phase 1); the Timeline / Time Details page is migrated as a read-only page (Phase 2) and hardened for real-run reliability, refresh stability, and privacy boundary enforcement (Phase 2.1); the Timeline page supports basic editing (Phase 3A): project reclassification and session-note editing. Phase 3A.1 hardens the basic editing path with stricter input validation, save-success baseline updates, note-length-overflow UI guards, and documentation cleanup. Phase 3B.1 adds the time-correction foundation (single-activity `start_time` / `end_time` editing with strict validation, `duration_seconds` recomputation, in-progress rejection, and single-activity session-level time correction). Phase 3B.1.1 hardens the time-correction path with a service-layer rowcount guard (race-condition defense), API-layer error mapping, and frontend saving-state fixes (session-time save button no longer stuck disabled; save flows fully decoupled). Phase 3B.2 adds the activity split foundation (single closed activity split at a user-supplied split point into two closed activities, with precise `duration_seconds` recomputation, project/resource inheritance, atomic transaction safety, and single-activity session-level split; multi-activity session whole-split is rejected). Phase 3B.2.1 hardens the split write path with a defensive `lastrowid` guard, clarified `created_at`/`updated_at` inheritance semantics, and explicit rollback tests for every transaction step (INSERT failure, assignment-copy failure, resource-copy failure). Phase 3B.3 adds the activity merge foundation (two closed, adjacent, same-project / same-resource / same-status / same-source activities merged into one; the earlier activity keeps its id and start_time, its end_time is extended to the later activity's end_time, and the later activity is soft-deleted; `duration_seconds` is precisely recomputed; notes are not concatenated; `project_session_note` is not migrated; only two activities per call; arbitrary-length batch merge and multi-activity session whole-merge are rejected; atomic transaction with rollback on any failure). Phase 3B.3.1 hardens the merge write path (confirms the transaction boundary covers both the kept-activity UPDATE and the later-activity soft-delete; confirms both UPDATEs raise on rowcount 0 and roll back; confirms a soft-delete UPDATE exception rolls back via the connection context manager so no partial write survives; adds explicit tests for excluded-vs-non-excluded rejection, no-partial-write for every rejection path, kept-fields-unchanged on validation failure, soft-delete exception rollback, and the full service-ValueError → API-error-code mapping table; restates that in-progress is determined by the raw DB `end_time IS NULL` column, not the projected display value; no new features, no new DB schema, no new UI controls). Phase 3B.4 adds the hide / soft delete foundation (single closed activity hide sets `is_hidden = 1`; single closed activity soft delete sets `is_deleted = 1` without physically deleting the row; both preserve `start_time`, `end_time`, `duration_seconds`, `project_id`, `note`, assignment/resource rows, and `project_session_note`; both reject in-progress activities based on the raw DB `end_time IS NULL` column; single-activity session-level hide/delete is equivalent to operating on that activity; multi-activity session whole-hide/whole-delete is rejected with a clear Chinese message; hide is idempotent; soft delete is not idempotent; service-layer rowcount guards race-condition the writes; the Timeline refreshes after a successful write and safely clears the selection if the session regroups or disappears; no new DB schema). Phase 3B.4.1 hardens the hide / soft delete write path with no new features: it adds direct service-layer tests for idempotent hide, non-idempotent soft delete, in-progress soft-delete rejection, `is_hidden` / `is_deleted` independence, core-field preservation, assignment / resource preservation, and no physical row removal; it confirms the bridge-layer multi-activity and invalid-input guards short-circuit before invoking the API write path; and it restates that in-progress is determined by the raw DB `end_time IS NULL` column (not the projected display value) and that the delete confirmation is a soft-delete confirmation, not a permanent-delete confirmation. Phase 3B.5A is a consolidation / polish / consistency phase (not a feature expansion): it groups the existing per-activity correction buttons (编辑时间, 拆分, 与下一条合并, 隐藏, 删除) into edit / merge / danger action groups with a stable order, unifies dirty-state guards (merge now refuses while there are unsaved project/note/time/split inputs, consistent with hide/delete), unifies destructive-action copy (hide 已隐藏/隐藏失败; delete 已删除/删除失败; delete confirmation still says 本阶段不会物理删除数据), and unifies the session-level edit-panel section labels (项目与备注 / 时间修正 / 拆分 / 可见性). No new backend write capability, no new DB schema, and no new correction action are introduced. Phase 3B.5B adds a Timeline correction shell / advanced edit layout foundation: a hidden read-only context + navigation shell inside the Timeline page (高级纠错) that summarizes the selected session and its activities using display-safe fields only and guides the user back to the existing single project / note / time / split / merge / hide / delete controls. It adds no new backend write capability, no new DB schema, no new bridge / API / service method, and no new correction action; it does not implement batch editing. Phase 3B.5B.1 hardens the correction shell (a hardening-only phase): it stabilizes navigation, auto-refresh, dirty-state open guard, selected-session-disappear / date-switch / session-switch reset, close-preserves-selected-session, read-only click-to-locate with a single tracked transient highlight, and display-safe field boundaries (no raw window_title / file_path_hint / full_path / clipboard / note internals). It remains a read-only shell — no new backend write capability, no new DB schema, no new bridge / API / service method, no new correction action, and no batch editing. Phase 3B.6 adds the first batch write capability inside the correction shell: batch project reassignment of multiple closed activities (原子事务 with rowcount guard and full rollback on any failure; min 2 / max 100 activities after dedup; rejects in-progress / hidden / deleted activities; reuses `activity_project_assignment` / `activity_log.project_id` semantics with no new DB schema; stable API error codes mapped to Chinese user-facing messages). Phase 3B.6.1 hardens the batch project reassignment with mid-transaction exception rollback tests (assignment UPSERT / activity_log UPDATE / pre-write SELECT), mixed invalid selection rejection (no partial write), exact max boundary (100 activities), assignment semantics match single-edit, resource rows and session notes unchanged, API non-ValueError exception collapse to `operation_failed`, bridge error convergence, and frontend stale selection pruning / auto-refresh / session and date switch reset / dirty-state guard / saving-state reset. Phase 3B.7 adds the batch note editing foundation (the second batch write capability: multiple closed activities in the correction shell can have their note overwritten to the same value via an atomic transaction with rowcount guard and full rollback, rejecting in-progress / hidden / deleted activities; only `activity_log.note` and `updated_at` are modified, `source` is intentionally not changed; empty string is allowed and clears notes). Phase 3B.7.1 hardens the batch note editing path with explicit tests for source-not-changed-to-manual (the key semantic difference from single note editing), complete service→API error code mapping table, non-ValueError exception collapse to operation_failed, API/bridge return payload note-content leak prevention, bridge updated_count matches deduped selection, frontend cross-save guard (batchNoteSaving blocks batchProjectSaving and vice versa), session/date/shell switch clearing the note textarea, and failure-path textarea preservation. Phase 3B.8 adds the single activity restore foundation (a single hidden or soft-deleted closed activity can be restored to visible + not-deleted via a single atomic UPDATE setting `is_hidden = 0` and `is_deleted = 0` with a rowcount guard; a read-only recovery list returns display-safe fields for hidden/deleted activities for the current date; only `is_hidden` / `is_deleted` / `updated_at` are modified). Phase 3B.8.1 hardens the single activity restore path with service-layer write exception propagation and transaction rollback, API-layer non-ValueError exception collapse to `operation_failed`, recovery list id tiebreaker (sorted by `start_time, id`), `updated_at` refresh verification, idempotent restore rejection (already-restored rows are rejected as `not_restorable`), recovery list read-path `updated_at` immutability, API error message leak prevention, frontend stale-row guard (restore click validates the row still exists in the current recovery list before calling the bridge), and auto-refresh reload guard chain (shell open + no dirty edit + not restore saving). Batch note append / merge, batch hide, batch delete, batch time correction, batch split, batch merge, batch restore, undo stack, permanent delete, auto-rule creation, complex correction pages, multi-activity session whole-hide/whole-delete, and overlap detection are not yet available in the WebView UI. Phase 3B.9 is a consolidation-only phase for the Timeline correction shell: it reorganizes the shell's internal UI into unified cards (context / activity / single-action / batch-action / restore / not-implemented) with stable IDs and shared `.correction-shell-card` styling, adds unified helpers (`safeText` display-safe rendering, `isAnyCorrectionWriteSaving` cross-save guard, `resetCorrectionActionStatus` status clearer), extends the cross-save guard so batch project / batch note / single restore saves are mutually exclusive with the stable `请等待当前操作完成` message, and explicitly lists the unsupported capabilities in a not-implemented card. Phase 3B.9 does NOT add any backend write capability, bridge/API/service method, DB schema, or new correction action. Statistics/Export, Project Rules, and Settings/Privacy remain on the legacy Tkinter / CustomTkinter code pending per-page migration. Phase 3B.9.1 is a hardening-only phase for the correction shell consolidation: it unifies the `saveBatchNote` cross-save guard to use `请等待当前操作完成` for both `batchProjectSaving` and `restoreSaving` (previously `batchProjectSaving` used `操作失败`), adds an `isAnyCorrectionWriteSaving()` guard to the auto-refresh re-render path so a save in flight is never overwritten, and prevents `renderBatchProjectSection` / `renderBatchNoteSection` from clearing their status area while a save is in flight. Phase 3B.9.1 does NOT add any backend write capability, bridge/API/service method, DB schema, or new correction action. Phase 3C is the Timeline UI release stabilization phase: it unifies Timeline list / detail / edit / correction-shell status semantics (loading / empty / error / success / info / saving), adds unified status-type CSS classes (`.edit-status-info` / `.edit-status-loading` / `.edit-status-empty`), closes four `err.message` leaks in `loadTimeline` / `refreshAll` catch blocks so raw exception text never reaches the UI, and adds additive unified status helpers (`setTimelineStatus` / `setDetailStatus` / `setEditStatus` / `setCorrectionStatus`) that delegate to the existing per-area helpers without changing any DOM contract. Phase 3C is stabilization-only: it does NOT add any backend write capability, bridge/API/service method, DB schema, new correction action, batch hide/delete/restore, undo stack, permanent delete, batch time/split/merge, note append/merge, auto-rule, global overlap detection, or Statistics/Export/Project Rules/Settings/Privacy migration. Phase 3C.1 is the Timeline UI release hardening / regression phase: it hardens the Phase 3C status helpers (`applyStatusType` now preserves non-status structural classes via a whitelisted `STATUS_TYPE_CLASS_VALUES` filter; `statusClassFor` returns a safe default for unknown types), closes the last raw-exception leak surface (the `saveEdit` `Promise.allSettled` rejection handler no longer reads `.reason.message` and uses the stable `保存失败` fallback), unifies all Timeline catch-path fallback strings to a stable short Chinese vocabulary (`加载时间线失败` / `刷新失败` / `加载详情失败` / `保存失败` / `操作失败` / `恢复失败`), and adds 43 regression tests locking status-helper hardening, raw-exception leak prevention, stable fallback vocabulary, auto-refresh dirty/saving guards, display-safe rendering, CSS state hardening, and boundary regression locks. Phase 3C.1 is hardening-only / regression-only: it does NOT add any backend write capability, bridge/API/service method, DB schema, new correction action, batch hide/delete/restore, undo stack, permanent delete, batch time/split/merge, note append/merge, auto-rule, global overlap detection, or Statistics/Export/Project Rules/Settings/Privacy migration. Phase 4A migrates the Statistics / Export page from the legacy Tkinter placeholder to a read-only WebView page (statistics summary cards, grouped tables by project / app / status, export preview; no export write action, no file creation, no save dialog, no DB schema change). Phase 4A.1 hardens the read-only Statistics / Export page: service/API/bridge input validation (bool/None/non-string rejected), documented status inclusion semantics (normal/idle/paused/excluded/error all included), stable tie-breaker for equal-duration groups, client-side date range pre-check, loading double-click guard, and tightened read-only boundary tests. Phase 4B opens the first controlled file-write capability on the Statistics / Export page: a CSV export action that reuses the Phase 4A / 4A.1 date validation (`YYYY-MM-DD`, `date_from <= date_to`, max 31 calendar days inclusive), exports only closed / non-hidden / non-deleted activities across all statuses (normal / idle / paused / excluded / error), and writes display-safe columns (date / start / end / duration / duration seconds / project / app / resource type / resource name / status) using `format_safe_display_name` so raw `window_title` / `file_path_hint` / `full_path` / clipboard / note / traceback / SQL are never exposed. A native pywebview save dialog lets the user choose the destination path; the file is written with `newline=""` and `utf-8-sig` (UTF-8 BOM) so Excel opens Chinese headers correctly, and CSV formula injection (`=` / `+` / `-` / `@` / tab prefixes) is escaped. Success returns only the basename plus activity count and total duration; the full local path is never surfaced. Cancel-save, empty data, permission errors, and file-busy errors collapse to stable Chinese messages without exposing tracebacks or paths. Phase 4B does NOT add Excel / PDF / timesheet templates, does NOT open the folder or auto-open the file, does NOT auto-submit a timesheet, does NOT change the DB schema, does NOT migrate Project Rules / Settings, and does NOT delete the legacy Tkinter UI.
+## Core Capabilities
 
+- WebView desktop UI (`pywebview` + Microsoft Edge WebView2 Runtime) is the
+  default and only shipping UI; no Tkinter fallback.
 - SQLite local storage at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
-- Background collector thread using pywin32/psutil on Windows.
-- Idle, paused, excluded, normal, and error activity states.
+- Background collector thread using pywin32/psutil on Windows; idle, paused,
+  excluded, normal, and error activity states.
 - First-run privacy notice before any collection starts.
-- Project creation, manual project assignment, notes, and soft delete.
-- File, folder, and keyword project rules, including the special local `排除规则`.
+- Project creation, manual assignment, notes, soft delete; file / folder /
+  keyword project rules including the special local `排除规则`.
+- Overview page (KPIs, current activity, recent activities, pause toggle).
+- Timeline / Time Details page with editing: project reclassification,
+  session-note editing, single-activity time correction / split / merge /
+  hide / soft delete / restore, batch project and batch note editing, and a
+  read-only correction shell.
+- Statistics / Export page: read-only summary cards and grouped tables, plus
+  CSV export (display-safe, UTF-8 BOM, no raw window title / file path /
+  note). Excel / PDF / timesheet export are not supported.
+- Collector heartbeat and startup recovery for unclosed records; single-
+  instance collector protection.
 - Excel export from the legacy UI and all-local-data export from Settings.
-- Collector heartbeat and startup recovery for unclosed records.
-- Single-instance collector protection.
-
-## v0.2 Boundary
-
-The current implementation remains v0.1 Lite. The next-version boundary is documented in [`docs/v0.2-boundary.md`](docs/v0.2-boundary.md): all local features remain free and usable without registration, payment, or network access; paid features are limited to opt-in server-side AI classification and AI project-session note drafts; AI is off by default and must not affect local functionality.
-
-Phase 1A local security design is documented in [`docs/v0.2-local-security-design.md`](docs/v0.2-local-security-design.md). It covers the independent crypto foundation, DPAPI keyring, and `.wtbackup` format without changing the existing runtime database behavior.
-
-Phase 1B extends the v0.2 local security foundation with encrypted `.wtbackup` export/import. A `.wtbackup` file is a local encrypted file created on the user's request; WorkTrace never uploads it. The backup passphrase is chosen by the user at export time and is not recoverable if forgotten. See [`docs/v0.2-local-security-design.md`](docs/v0.2-local-security-design.md) for the full Phase 1B scope, payload format, and import semantics.
-
-WebView Phase 1 is a destructive UI migration: the WebView UI is now the default and only shipping UI. `python -m worktrace.main` (and the packaged `WorkTrace.exe`) start the WebView UI directly. The legacy `--webview` flag is accepted as a no-op compatibility flag and does not change behavior. The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only as legacy code pending per-page migration and removal; it is not a supported runtime path and is not started by the default entry point.
-
-WorkTrace requires the Microsoft Edge WebView2 Runtime on Windows. When the runtime is missing, WorkTrace prints a clear install prompt and exits with a non-zero code; it does not auto-download the runtime and does not fall back to Tkinter. Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; some Windows 10 machines need a manual install from Microsoft.
-
-See [`docs/ui-webview-migration.md`](docs/ui-webview-migration.md) for the Phase 1 scope, destructive-migration principles, packaging conclusions, and stop-loss conditions.
 
 ## Privacy And Permissions
 
-无需注册。  
-无需联网。  
-无需管理员权限。  
-不截屏。  
-不录屏。  
-不记录键盘。  
-不主动读取正文。  
-不上传数据。  
-命中排除规则的窗口只保存匿名时间块。  
-复制文字记录默认关闭；开启后仅本地保存复制到剪贴板的文本，并自动清理 30 天前的复制文字。  
+无需注册。无需联网。无需管理员权限。不截屏。不录屏。不记录键盘。不主动读取
+正文。不上传数据。命中排除规则的窗口只保存匿名时间块。复制文字记录默认关
+闭；开启后仅本地保存复制到剪贴板的文本，并自动清理 30 天前的复制文字。
 自动记录需由用户整理归类后再作为正式工时依据。
 
-WorkTrace records the current application name, process name, window title, identifiable local file path, local folder-rule file-name/path indexes, start time, end time, duration, status, project, and notes. If the user enables clipboard text recording in Settings, it also stores copied text locally for up to 30 days. It does not actively read Word/PDF/webpage/email/chat body content, browser history, cookies, passwords, camera, or microphone data.
+WorkTrace records the current application name, process name, window title,
+identifiable local file path, local folder-rule file-name/path indexes,
+start time, end time, duration, status, project, and notes. It does not
+actively read Word/PDF/webpage/email body content, browser history, cookies,
+passwords, camera, or microphone data.
 
 ## Portable Usage
 
@@ -60,22 +60,19 @@ Start the app:
 python -m worktrace.main
 ```
 
-The first launch shows the privacy notice. The collector starts only after the notice is accepted.
-
-As of Phase 1, the default UI is WebView. Closing the WebView window exits WorkTrace cleanly (the collector thread, folder-index worker, and single-instance lock are released). The legacy Tkinter tray-icon behavior is not part of the default runtime path; it remains in the legacy `worktrace/ui` package pending removal.
+The first launch shows the privacy notice. The collector starts only after
+the notice is accepted. Closing the WebView window exits WorkTrace cleanly.
 
 ## Windows Packaging
 
-Packaging is optional and only needed when producing distributable Windows builds. It relies on extra build dependencies that are not part of the runtime requirements.
-
-Install the runtime dependencies first, then add the build dependencies only when packaging:
+Packaging is optional and relies on extra build dependencies that are not
+part of the runtime requirements. Install the runtime dependencies first,
+then add the build dependencies only when packaging:
 
 ```powershell
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
-
-`requirements-dev.txt` extends `requirements.txt` with `pyinstaller`. The same build dependency set covers both the single-file executable and the per-user installer, because `scripts\build_windows_installer.ps1` also drives PyInstaller to wrap the installer payload.
 
 Build the single-file executable:
 
@@ -83,117 +80,38 @@ Build the single-file executable:
 python -m PyInstaller --noconfirm --clean WorkTrace.spec
 ```
 
-Build the per-user installer (run after the single-file executable has been built, since the installer wraps `dist\WorkTrace.exe` as its payload):
+Build the per-user installer (run after the single-file executable has been
+built, since the installer wraps `dist\WorkTrace.exe` as its payload):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
 ```
 
-The build outputs are:
-
-- `dist\WorkTrace.exe` — single-file application.
-- `dist\WorkTrace-Setup.exe` — current-user installer.
-
-The installer copies WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace` and creates a current-user Start Menu shortcut. It installs per-user only: it does not write to `Program Files` and does not request administrator privileges.
-
-Build artifacts (`build/`, `dist/`, generated `.spec` files other than `WorkTrace.spec`) must not be committed to Git; `.gitignore` already excludes them. The release acceptance steps for both builds are documented in [`docs/release-checklist.md`](docs/release-checklist.md).
+Build outputs: `dist\WorkTrace.exe` (single-file application) and
+`dist\WorkTrace-Setup.exe` (current-user installer). The installer copies
+WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace`, creates a current-user
+Start Menu shortcut, installs per-user only, and does not request
+administrator privileges. Build artifacts (`build/`, `dist/`, generated
+`.spec` files other than `WorkTrace.spec`) must not be committed to Git.
 
 ## Release Validation
 
-Before a Windows release, use [`docs/release-validation.md`](docs/release-validation.md) as the v0.1 Lite release-candidate baseline. Run `pytest`, require GitHub Actions CI to pass, and validate both the PyInstaller exe and the per-user installer.
+Before a Windows release, use
+[`docs/release-validation.md`](docs/release-validation.md) as the v0.1 Lite
+release-candidate baseline. Run `pytest`, require GitHub Actions CI to pass,
+and validate both the PyInstaller exe and the per-user installer.
 
-## Local Paths
+## v0.2 Boundary And Local Security
 
-- Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`
-- Logs: `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`
-- Optional COM path catalog: `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`
-- Default exports: `Documents\WorkTrace Exports`
-
-The app writes to user-local folders and does not require administrator privileges.
-
-`schema.sql` is the single source of truth for the local database structure. The project is in pre-release development, so old databases are not guaranteed to be compatible. If the schema changes, delete the local database file or use the Settings page to clear and rebuild all data.
-
-## Performance And Memory
-
-WorkTrace keeps the startup path small by creating only the Overview page at launch. Time Details, Statistics/Export, Project Rules, and Settings/Privacy are created on first use and then kept mounted for smooth switching.
-
-Heavy optional dependencies are loaded only when needed: `openpyxl` is imported during Excel export, and Windows process inspection dependencies are imported only when the real Windows adapter reads the foreground window. Shared duration formatting lives in `worktrace.formatters` so UI modules do not load export modules just to format `hh:mm:ss` values.
-
-Displayed UI text supports copying through right-click copy menus. Time Details tables also support right-click copying for the current cell, row, or page text, while `Ctrl+C` keeps copying selected table rows before falling back to the current page summary.
-
-The default full-page data refresh interval is 10 seconds. A lightweight 1-second tick updates the current-activity label plus visible Overview, Time Details, and Statistics durations, including the current activity before it is persisted to history, so active records grow smoothly between full refreshes. The current-activity label previews automatic project inference immediately: folder rules and keyword rules win before parent-folder suggestions, even while the activity is still under the 30-second history threshold. During that threshold window, only the Overview recent-project row and the Time Details project/session row temporarily continue the previous confirmed project counter; the current-activity label, KPIs, Statistics, and activity details keep using the real snapshot. Time Details uses value-only Treeview updates on that tick when the table structure is unchanged, and falls back to one full refresh only when sessions or details are added, removed, or reordered. Heavy refreshes are suspended during window resize/minimize/restore. Resize uses a content-area cover and can catch up before revealing; restore keeps the content tree mounted under a full-window cover, reveals the complete UI first, then merges delayed refresh work after the window is stable. On Windows, WorkTrace relies on Tk window events for minimize/restore handling and keeps native WndProc subclassing disabled for Python runtime stability.
-
-Time Details no longer supports manual session splitting, merging same-name project segments, or moving an activity into another session. Project corrections operate on the selected project session or selected detail activity only. The detail table is the only activity-level view; file identity is derived from the activity's app, process, window title, and file path hint at runtime. Project-session notes live in the selected session summary area: an empty note shows the generated summary as light placeholder text, and user text is saved automatically without a separate save button.
-
-## Project Classification
-
-Each activity record first generates a `DetectedResource` from the active window's app name, process name, window title, and file path hint. The `resource_kind` is one of `local_file`, `office_document`, `email`, `browser_tab`, `ide_file`, `app`, `system`, or `unknown`. Folder rules, keyword rules, and the `排除规则` project match against safe metadata only: resource path, path hint, display name, uri_host, app name, process name, and window title. WorkTrace does not read file contents, email bodies, or browser history.
-
-Folder project rules prefer a recognizable full local file path, and WorkTrace also keeps a local file-name/path index for bound folders so title-only file windows can still match the correct rule. Any full local file path can be an anchor regardless of extension, and the folder index also covers all file extensions, so rules can match source code, CAD drawings, design files, images, PDFs, and Office documents. Keyword rules match activity app names, process names, window titles, known local file paths, and copied text when clipboard recording is enabled. The special `排除规则` project supports folder and keyword rules, starts disabled with no default rules, and records matches anonymously as `已排除窗口` only after the user enables it. Disabled projects remain visible but no longer participate in automatic classification.
-
-If a file path is known but no folder or keyword rule matches, Time Details may show the parent folder name as a suggested project only for the built-in low-risk document extensions. Suggested names are display-only hints and are not inserted into the `project` table. User-created folder and keyword rules are not limited by that extension list.
-
-On Windows, the collector resolves active file paths in this order: full paths visible in the window title, a best-effort COM path catalog, a timeout-limited helper process that calls `psutil.Process(pid).open_files()` for the foreground process, then the local folder-rule index. The open-files helper runs as a subprocess to avoid blocking the UI: in development it uses `python -m worktrace.platforms.open_files_helper`, and in the PyInstaller packaged build it re-enters the executable with `WorkTrace.exe --open-files-helper`. The open-files and index fallbacks use the file name visible in the title and accept a path only when the result is unambiguous. If the helper times out, that PID is skipped briefly so a slow handle enumeration cannot freeze the UI.
-
-Folder indexes are local derived caches. They store file names and paths under user-bound folder rules, do not read file contents, and only affect activities after the index `valid_from` time. If the same title file name appears under different active projects, WorkTrace treats it as ambiguous and leaves the activity unclassified.
-
-The built-in COM catalog covers common Office/WPS apps, Acrobat, AutoCAD, Photoshop, Illustrator, InDesign, CorelDRAW, and SOLIDWORKS when their ProgIDs are registered locally. Advanced users may add entries in `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`; there is no UI for this file. Example:
-
-```json
-{
-  "entries": [
-    {
-      "name": "Custom App",
-      "process_names": ["custom.exe"],
-      "prog_ids": ["Custom.Application"],
-      "path_expressions": ["ActiveDocument.FullName"]
-    }
-  ]
-}
-```
-
-Context carry-over applies to normal non-anchor auxiliary activity. A single previous or next concrete anchor can carry context within 15 minutes. Two matching concrete anchors carry a continuous auxiliary block regardless of that 15-minute window. When clipboard recording is enabled, copying text and switching to the next normal activity within 10 seconds is treated as a stronger same-project signal than anchor/time context, but it does not override manual assignments, folder rules, or keyword rules. Idle and paused records stop anchor search; excluded and error records do not. Per-date context recomputation is skipped when the activity, assignment, project, rule, clipboard, and context-setting fingerprint is unchanged, so switching pages does not repeatedly rescan and rewrite the same day.
-
-For reporting, a short interruption is also folded into the surrounding anchor project: if two anchors for project A enclose a contiguous block under 5 minutes containing only another normal project or idle time, the Time Details session and project statistics count that block under A. The original activity status and project assignment are preserved in the detailed records.
-
-Report dates are calendar-day based. Activities are split at local midnight for Overview, Time Details, Statistics, and exports. When the collector crosses midnight during an existing concrete project, the new post-midnight activity gets a persistent temporary `midnight_anchor` assignment to the previous concrete project, bypassing the 30-second history threshold for that new activity only. This does not change folder rules, keyword rules, or any long-term per-file binding.
-
-Activity history is persisted after 30 seconds. All duration displays use exact `hh:mm:ss`, including exports and the live current-activity counter.
-
-The Overview page shows `总时长`, `已归类`, and `未归类`. `已归类` is normal/mixed session time already assigned to a concrete project; clicking `未归类` opens Time Details filtered to uncategorized sessions, and clicking a recent session opens Time Details with that session selected.
-
-## Collector Heartbeat
-
-The collector writes `collector_status` and `last_collector_heartbeat` into the settings table. The UI displays:
-
-- `记录中` when running
-- `已暂停` when paused
-- `采集器未运行` when stopped
-- `状态异常` on collector errors
-
-The tray icon mirrors the same state on the legacy Tkinter UI only: color means WorkTrace is recording, while the monochrome icon means recording is paused, stopped, or in an error state. The default WebView UI does not implement a tray icon in Phase 1; the status label in the Overview sidebar mirrors the same `记录中 / 已暂停 / 采集器未运行 / 状态异常` states.
-
-## Abnormal Recovery
-
-If the app exits unexpectedly, startup recovery closes any `activity_log` rows where `end_time IS NULL`. It uses the last heartbeat when available; otherwise it closes at startup time and marks the row as `error` for review. Recovered rows that cross midnight are split into calendar-day records.
-
-## Single Instance
-
-WorkTrace prevents multiple collectors from writing to the same database. On Windows it uses a local mutex. A second UI instance may open, but it will not start another collector.
-
-## Data Export And Clearing
-
-The Project Rules page shows project binding summaries and manages file rules, folder rules, keyword rules, project edits, project enable/disable state, and the special `排除规则`. The top-right `新增项目` action opens project creation by default; each project card has its own `新增规则` action that opens rule creation preselected for that project.
-
-The Settings page saves the clipboard text recording toggle immediately when it is changed. It can also clear all local data after this confirmation text:
-
-```text
-此操作将删除本机保存的所有工作轨迹、项目、规则和设置。删除后无法恢复。是否继续？
-```
-
-Clearing data recreates the database defaults, including the system projects `未归类` and `排除规则`, with the `排除规则` project starting disabled and empty. The all-data export includes clipboard events and project session notes, and intentionally excludes folder index tables because they are derived caches that may contain many local file paths.
-
-The Settings/Privacy page also offers encrypted `.wtbackup` export and import. A `.wtbackup` file is a local encrypted backup created on the user's request; WorkTrace never uploads it. The backup may include copied text if clipboard recording was enabled, so the UI warns before export. Import is replace-only (or import into an empty profile); a wrong passphrase, corrupted backup, or unsupported version never damages the current database. The backup passphrase is not recoverable if forgotten. Encrypted import pauses recording during replacement and keeps recording paused after a successful import.
+The next-version boundary is documented in
+[`docs/v0.2-boundary.md`](docs/v0.2-boundary.md). The Phase 1A / 1B local
+security design (independent crypto foundation, DPAPI keyring, encrypted
+`.wtbackup` export/import) is documented in
+[`docs/v0.2-local-security-design.md`](docs/v0.2-local-security-design.md).
+A `.wtbackup` file is a local encrypted file created on the user's request;
+WorkTrace never uploads it. The backup passphrase is chosen by the user and
+is not recoverable if forgotten. Import is replace-only and never damages
+the current database on a wrong passphrase or corrupted backup.
 
 ## Tests
 
@@ -205,20 +123,25 @@ pytest
 
 Tests use `worktrace.platforms.fake_adapter.FakeAdapter`.
 
-## Uninstall
+## Local Paths
 
-Exit WorkTrace from the WebView window close button (the default UI does not implement a tray icon in Phase 1), then delete:
+- Database: `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`
+- Logs: `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`
+- Optional COM path catalog: `%LOCALAPPDATA%\WorkTrace\com_path_catalog.json`
+- Default exports: `Documents\WorkTrace Exports`
 
-```text
-%LOCALAPPDATA%\WorkTrace
-Documents\WorkTrace Exports
-```
-
-Also remove the project folder or packaged executable if you no longer need it.
+`schema.sql` is the single source of truth for the local database structure.
+The project is in pre-release development, so old databases are not
+guaranteed to be compatible; if the schema changes, delete the local
+database file or use the Settings page to clear and rebuild all data.
 
 ## Current Limitations
 
-- Windows is the intended production platform; non-Windows runs use the fake adapter.
-- No service, driver, cloud sync, login, AI, OCR, screenshots, screen recording, or automatic startup.
-- Date inputs are plain `YYYY-MM-DD` text fields in v0.1 Lite.
-- Time Details uses plain text date fields in `YYYY-MM-DD` format.
+- Windows is the intended production platform; non-Windows runs use the fake
+  adapter.
+- No service, driver, cloud sync, login, AI, OCR, screenshots, screen
+  recording, or automatic startup.
+- Project Rules and Settings / Privacy pages are not yet migrated to WebView
+  (legacy Tkinter reference code remains).
+- Excel / PDF / timesheet export, folder opening, and auto-submit are not
+  supported.
