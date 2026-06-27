@@ -1330,6 +1330,209 @@ def soft_delete_activity(activity_id: int) -> None:
             raise ValueError("activity_soft_delete_affected_zero_rows")
 
 
+def restore_activity(activity_id: int) -> dict:
+    """Atomically restore a single hidden or soft-deleted activity.
+
+    Phase 3B.8 single activity restore foundation. Sets ``is_hidden = 0``
+    AND ``is_deleted = 0`` for the given activity in a single UPDATE so a
+    hidden, soft-deleted, or hidden+deleted activity becomes visible and
+    not-deleted again. The row is not physically modified beyond the two
+    visibility flags and ``updated_at``; assignment / resource / note /
+    session-note rows are untouched. Only rows that are currently hidden or
+    deleted (``is_hidden = 1 OR is_deleted = 1``) and already closed (raw
+    ``end_time IS NOT NULL``) are affected, so a stale or racing call
+    cannot restore a normal or in-progress record.
+
+    This operation is idempotent in the sense that restoring an
+    already-restored activity is rejected as ``activity_not_restorable``
+    (the activity is neither hidden nor deleted, so there is nothing to
+    restore). This avoids misleading the user into thinking a restore
+    happened when nothing changed.
+
+    Input validation (raises ``ValueError`` with a stable code suffix on
+    any failure; no write is performed):
+
+    - ``activity_id`` must be a positive integer; ``bool`` is rejected.
+    - The activity must exist (``activity_not_found``).
+    - The activity must be hidden or deleted (``activity_not_restorable``).
+    - The activity must be closed (``activity_in_progress`` — raw
+      ``end_time IS NULL``). In-progress hidden/deleted activities are
+      rejected to keep restore symmetric with hide / soft delete, which
+      both require ``end_time IS NOT NULL``.
+
+    Write guarantees:
+
+    - ``start_time`` / ``end_time`` / ``duration_seconds`` / ``project_id``
+      / ``note`` / ``status`` / ``source`` are NOT modified.
+    - ``activity_resource`` rows are NOT modified.
+    - ``activity_project_assignment`` rows are NOT modified.
+    - ``project_session_note`` rows are NOT modified.
+    - The row is NOT physically deleted.
+    - A rowcount guard ensures the UPDATE affects exactly 1 row; a 0-row
+      UPDATE (race condition) raises ``ValueError("restore_failed")``.
+
+    Returns ``{"restored": True, "activity_id": int}`` on success. Does not
+    return raw rows or any sensitive fields.
+
+    Raises ``ValueError`` with a stable code suffix:
+    - ``invalid_activity_id`` — not a positive int or ``bool``.
+    - ``activity_not_found`` — the id does not reference an existing row.
+    - ``activity_not_restorable`` — the activity is neither hidden nor
+      deleted.
+    - ``activity_in_progress`` — the activity is still open.
+    - ``restore_failed`` — a rowcount guard tripped (race) or an
+      unexpected write failure.
+    """
+    if isinstance(activity_id, bool):
+        raise ValueError("invalid_activity_id")
+    try:
+        aid = int(activity_id)
+    except (TypeError, ValueError):
+        raise ValueError("invalid_activity_id")
+    if aid <= 0:
+        raise ValueError("invalid_activity_id")
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, is_hidden, is_deleted, end_time FROM activity_log WHERE id = ?",
+            (aid,),
+        ).fetchone()
+        if not row:
+            raise ValueError("activity_not_found")
+        if int(row["is_hidden"] or 0) == 0 and int(row["is_deleted"] or 0) == 0:
+            raise ValueError("activity_not_restorable")
+        if row["end_time"] is None:
+            raise ValueError("activity_in_progress")
+
+        cur = conn.execute(
+            """
+            UPDATE activity_log
+            SET is_hidden = 0,
+                is_deleted = 0,
+                updated_at = ?
+            WHERE id = ?
+              AND (is_hidden = 1 OR is_deleted = 1)
+              AND end_time IS NOT NULL
+            """,
+            (now_str(), aid),
+        )
+        if cur.rowcount == 0:
+            # Race condition: the row was restored / reopened / deleted
+            # between validation and write. Raise so the API can map this
+            # to a controlled error.
+            raise ValueError("restore_failed")
+        return {"restored": True, "activity_id": aid}
+
+
+def list_restorable_activities_for_date(date: str) -> list[dict]:
+    """Return display-safe summaries of hidden / deleted activities for a date.
+
+    Phase 3B.8 recovery list read path. Returns closed activities that are
+    hidden (``is_hidden = 1``) or soft-deleted (``is_deleted = 1``) whose
+    ``start_time`` falls within the given date, sorted by ``start_time``
+    then ``id``. In-progress hidden/deleted activities are excluded so the
+    restore button is never offered on an open record (keeping restore
+    symmetric with hide / soft delete, which both require
+    ``end_time IS NOT NULL``).
+
+    This is a read-only path: it performs no writes and introduces no new
+    DB schema.
+
+    Only display-safe fields are returned — no raw ``window_title``,
+    ``file_path_hint`` / ``full_path``, ``clipboard``, ``note``, or
+    exception details. The ``resource_name`` uses the sanitized
+    ``resource_display_name`` → ``activity_display_name`` → ``app_name``
+    → ``process_name`` fallback chain (same as the bridge's
+    ``_safe_resource_display_name``); the raw ``window_title`` column is
+    never surfaced.
+
+    Input validation:
+    - ``date`` must be a ``YYYY-MM-DD`` string. Raises
+      ``ValueError("invalid_date")`` otherwise.
+
+    Returns a list of dicts with keys:
+    - ``activity_id`` — int.
+    - ``start_time`` / ``end_time`` — ``YYYY-MM-DD HH:MM:SS`` strings.
+    - ``duration_seconds`` — int.
+    - ``app_name`` — str.
+    - ``resource_kind`` / ``resource_subtype`` — str (raw DB values for
+      the API/bridge to format via ``format_resource_type``).
+    - ``resource_display_name`` — sanitized display name.
+    - ``project_name`` — str.
+    - ``status`` — str.
+    - ``restore_state`` — ``"hidden"`` / ``"deleted"`` / ``"hidden+deleted"``.
+    - ``is_hidden`` / ``is_deleted`` — int (0/1).
+    """
+    from datetime import date as date_type
+
+    if not isinstance(date, str) or not date:
+        raise ValueError("invalid_date")
+    try:
+        date_type.fromisoformat(date)
+    except ValueError:
+        raise ValueError("invalid_date")
+
+    start = f"{date} 00:00:00"
+    end = f"{date} 23:59:59"
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.*, p.name AS project_name
+            FROM activity_log a
+            LEFT JOIN project p ON p.id = a.project_id
+            WHERE (a.is_hidden = 1 OR a.is_deleted = 1)
+              AND a.end_time IS NOT NULL
+              AND a.start_time BETWEEN ? AND ?
+            ORDER BY a.start_time, a.id
+            """,
+            (start, end),
+        ).fetchall()
+
+    result: list[dict] = []
+    for row in dict_rows(rows):
+        attached = attach_resource(row)
+        is_hidden = int(attached.get("is_hidden") or 0)
+        is_deleted = int(attached.get("is_deleted") or 0)
+        if is_hidden and is_deleted:
+            restore_state = "hidden+deleted"
+        elif is_hidden:
+            restore_state = "hidden"
+        else:
+            restore_state = "deleted"
+        # Display-safe resource name: never fall back to raw window_title.
+        resource_name = ""
+        for key in (
+            "resource_display_name",
+            "activity_display_name",
+            "app_name",
+            "process_name",
+        ):
+            val = str(attached.get(key) or "").strip()
+            if val:
+                resource_name = val
+                break
+        if not resource_name:
+            resource_name = "未知"
+        result.append(
+            {
+                "activity_id": int(attached.get("id") or 0),
+                "start_time": str(attached.get("start_time") or ""),
+                "end_time": str(attached.get("end_time") or ""),
+                "duration_seconds": int(attached.get("duration_seconds") or 0),
+                "app_name": str(attached.get("app_name") or ""),
+                "resource_kind": str(attached.get("resource_kind") or ""),
+                "resource_subtype": str(attached.get("resource_subtype") or ""),
+                "resource_display_name": resource_name,
+                "project_name": str(attached.get("project_name") or "未归类"),
+                "status": str(attached.get("status") or ""),
+                "restore_state": restore_state,
+                "is_hidden": is_hidden,
+                "is_deleted": is_deleted,
+            }
+        )
+    return result
+
+
 def update_activity_fields(activity_id: int, **fields: Any) -> None:
     if not fields:
         return

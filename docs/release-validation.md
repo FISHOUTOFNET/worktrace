@@ -2471,3 +2471,79 @@ state-management invariants are stable and do not regress.
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
   server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 3B.8 Validation
+
+Phase 3B.8 implements the **single activity restore foundation** in the
+WebView Timeline. A single hidden or soft-deleted closed activity can be
+restored to visible + not-deleted. This is a **single-activity restore only**
+phase — batch restore, undo stack, and permanent delete are explicitly out
+of scope.
+
+### Phase 3B.8 Scope
+
+- **Service**: `restore_activity(activity_id)` sets `is_hidden = 0` AND
+  `is_deleted = 0` in a single atomic UPDATE with a rowcount guard.
+  `list_restorable_activities_for_date(date)` returns a display-safe
+  recovery list of hidden / deleted closed activities, sorted by
+  `start_time`. In-progress activities are excluded from the list and
+  rejected on restore.
+- **API**: `restore_timeline_activity(activity_id)` maps service errors to
+  stable `TimelineRestoreActivityError` codes (`invalid_activity`,
+  `not_found`, `not_restorable`, `in_progress`, `operation_failed`).
+  `get_timeline_restorable_activities(date)` returns display-safe fields
+  only; invalid dates raise `invalid_date`.
+- **Bridge**: `restore_timeline_activity` returns
+  `{"ok": true, "activity_id": int}` or
+  `{"ok": false, "error": "<chinese>"}`. `get_timeline_restorable_activities`
+  returns `{"ok": true, "activities": [...]}` or
+  `{"ok": false, "error": "<chinese>", "activities": []}`. Unknown codes
+  collapse to `恢复失败` (restore) / `加载可恢复记录失败` (recovery list).
+- **Frontend**: the correction shell gains a `可恢复记录` section with a
+  hint stating batch restore / undo stack / permanent delete are not
+  supported. Each row shows display-safe fields + a restore-state badge.
+  A single `恢复` button per row. `restoreSaving` state is independent.
+  `clearEditPanel` / `resetCorrectionShellState` call `resetRestoreState`.
+- **Restore modifies only**: `is_hidden`, `is_deleted`, `updated_at`.
+- **Restore does not modify**: `start_time`, `end_time`,
+  `duration_seconds`, `project_id`, `note`, `status`, `source`, resource
+  rows, assignment rows, `project_session_note`. The row is never
+  physically deleted.
+- **Recovery list**: only display-safe fields (no raw `window_title`,
+  `file_path_hint`, `full_path`, `clipboard`, `note`).
+
+### Phase 3B.8 Verification
+
+- `python -m pytest` passes (all Phase 3B.8 service / API / bridge /
+  frontend tests, plus all Phase 3B.7.1 / 3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 /
+  3B.5B / 3B.5A / 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression tests).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- No frontend resource contains batch restore / restore all / undo stack /
+  permanent delete controls (only single activity restore is present).
+- The recovery list never surfaces raw `window_title` / `file_path_hint` /
+  `full_path` / `clipboard` / `note` / traceback / SQL.
+- The bridge does not import `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- No new DB schema is introduced.
+
+### Phase 3B.8 Release Blockers
+
+- Restore modifies any field other than `is_hidden` / `is_deleted` /
+  `updated_at`.
+- Restore physically deletes data.
+- Restore exposes raw `window_title` / `file_path_hint` / `full_path` /
+  `clipboard` / `note` / traceback / SQL in any return payload.
+- Restore works on non-restorable rows silently (a normal activity is
+  restored without rejection).
+- Batch restore is introduced.
+- Undo stack is introduced.
+- Permanent delete is introduced.
+- A new DB schema is introduced.
+- The bridge imports `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- The recovery list leaks sensitive fields.
+- Any Phase 3B.7.1 / 3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A /
+  3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
+  server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.

@@ -379,9 +379,16 @@ def test_index_html_timeline_edit_panel_has_no_delete_batch():
         assert forbidden_batch not in lowered, (
             "index.html must not contain a '" + forbidden_batch + "' control"
         )
-    assert "restore" not in lowered
-    assert "permanent" not in lowered
-    assert "auto-rule" not in lowered
+    # Phase 3B.8 introduces single activity restore, so "restore" is now
+    # allowed in index.html. Batch restore, restore-all, undo stack, and
+    # permanent delete must still be absent.
+    for forbidden_restore in (
+        "batch-restore", "batchrestore", "restore-all", "restoreall",
+        "undo-restore", "undorestore", "permanent", "auto-rule",
+    ):
+        assert forbidden_restore not in lowered, (
+            "index.html must not contain a '" + forbidden_restore + "' control"
+        )
 
 
 def test_app_js_has_edit_panel_functions():
@@ -582,9 +589,16 @@ def test_app_js_still_has_no_forbidden_edit_handlers_after_hardening():
         assert forbidden_batch not in html_source, (
             "index.html must not contain a '" + forbidden_batch + "' control"
         )
-    assert "restore" not in html_source
-    assert "permanent" not in html_source
-    assert "auto-rule" not in html_source
+    # Phase 3B.8 introduces single activity restore, so "restore" is now
+    # allowed in index.html. Batch restore, restore-all, undo stack, and
+    # permanent delete must still be absent.
+    for forbidden_restore in (
+        "batch-restore", "batchrestore", "restore-all", "restoreall",
+        "undo-restore", "undorestore", "permanent", "auto-rule",
+    ):
+        assert forbidden_restore not in html_source, (
+            "index.html must not contain a '" + forbidden_restore + "' control"
+        )
 
 
 def test_app_js_still_no_browser_storage_after_hardening():
@@ -2602,11 +2616,14 @@ def test_app_js_consolidation_has_no_forbidden_handlers():
 
 def test_index_html_consolidation_has_no_forbidden_controls():
     """Phase 3B.5A: index.html must not contain batch hide / batch delete /
-    batch time / batch split / batch merge / restore / permanent-delete /
-    auto-rule / complex-correction-page / overlap controls. Phase 3B.6
-    introduces batch project reassignment, so "batch" is now allowed in
-    index.html but only in the project context; the specific batch hide /
-    delete / time / split / merge variants must still be absent."""
+    batch time / batch split / batch merge / batch restore / restore-all /
+    permanent-delete / auto-rule / complex-correction-page / overlap
+    controls. Phase 3B.6 introduces batch project reassignment, so "batch"
+    is now allowed in index.html but only in the project context; the
+    specific batch hide / delete / time / split / merge variants must still
+    be absent. Phase 3B.8 introduces single activity restore, so "restore"
+    is now allowed; batch restore, restore-all, undo stack, and permanent
+    delete must still be absent."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
     for forbidden in (
@@ -2614,7 +2631,9 @@ def test_index_html_consolidation_has_no_forbidden_controls():
         "batch-split", "batch-merge",
         "batchhide", "batchdelete", "batchtime",
         "batchsplit", "batchmerge",
-        "restore",
+        "batch-restore", "batchrestore",
+        "restore-all", "restoreall",
+        "undo-restore", "undorestore",
         "permanent",
         "auto-rule",
         "complex-correction",
@@ -3026,19 +3045,24 @@ def test_app_js_correction_shell_no_forbidden_handlers():
 
 def test_index_html_correction_shell_no_forbidden_controls():
     """Phase 3B.5B: index.html must not contain batch hide / batch delete /
-    batch time / batch split / batch merge / restore / permanent-delete /
-    auto-rule / overlap controls in the shell. Phase 3B.6 introduces batch
-    project reassignment in the correction shell, so "batch" is now
-    allowed in the shell but only in the project context; the specific
-    batch hide / delete / time / split / merge variants must still be
-    absent."""
+    batch time / batch split / batch merge / batch restore / restore-all /
+    permanent-delete / auto-rule / overlap controls in the shell. Phase
+    3B.6 introduces batch project reassignment in the correction shell, so
+    "batch" is now allowed in the shell but only in the project context;
+    the specific batch hide / delete / time / split / merge variants must
+    still be absent. Phase 3B.8 introduces single activity restore in the
+    shell, so "restore" is now allowed; batch restore, restore-all, undo
+    stack, and permanent delete must still be absent."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
     for forbidden in ("batch-hide", "batch-delete", "batch-time",
                       "batch-split", "batch-merge",
                       "batchhide", "batchdelete", "batchtime",
                       "batchsplit", "batchmerge",
-                      "restore", "permanent", "auto-rule",
+                      "batch-restore", "batchrestore",
+                      "restore-all", "restoreall",
+                      "undo-restore", "undorestore",
+                      "permanent", "auto-rule",
                       "overlap"):
         assert forbidden not in lowered, (
             "index.html must not contain a '" + forbidden + "' control"
@@ -3446,7 +3470,10 @@ def test_index_html_correction_shell_no_external_resources_3b_5b_1():
                       "batch-split", "batch-merge",
                       "batchhide", "batchdelete", "batchtime",
                       "batchsplit", "batchmerge",
-                      "restore", "permanent", "auto-rule", "overlap"):
+                      "batch-restore", "batchrestore",
+                      "restore-all", "restoreall",
+                      "undo-restore", "undorestore",
+                      "permanent", "auto-rule", "overlap"):
         assert forbidden not in shell_block.lower(), (
             "correction shell must not contain a '" + forbidden + "' control"
         )
@@ -4559,11 +4586,16 @@ def test_app_js_batch_note_no_traceback_display():
 
 
 def test_app_js_batch_note_no_restore_permanent_auto_rule_overlap():
-    """Phase 3B.7: the batch note code must not introduce restore,
-    permanent delete, auto-rule, or overlap handlers (re-asserted)."""
+    """Phase 3B.7: the batch note code must not introduce batch restore,
+    restore all, undo restore, permanent delete, auto-rule, or overlap
+    handlers (re-asserted for Phase 3B.8: single ``saveActivityRestore`` is
+    now implemented, but batch/undo/permanent variants remain forbidden)."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
-    for forbidden in ("restoreActivity", "restoreSession",
-                      "permanentDelete", "autoRule", "auto_rule",
+    for forbidden in ("batchRestore", "batch_restore", "restoreAll",
+                      "restore_all", "restoreSession", "restore_session",
+                      "undoRestore", "undo_restore",
+                      "permanentDelete", "permanent_delete",
+                      "autoRule", "auto_rule",
                       "overlapDetection", "globalOverlap"):
         assert forbidden not in source, (
             "app.js must not contain " + forbidden + " handler"
@@ -4848,4 +4880,486 @@ def test_app_js_batch_note_success_clears_selection_and_textarea():
     # The success path must clear the note textarea.
     assert 'noteEl.value = ""' in save_body or "noteEl.value = ''" in save_body, (
         "saveBatchNote success must clear the note textarea"
+    )
+
+
+# --- Phase 3B.8: Timeline single activity restore foundation -------------
+#
+# These static tests verify the Phase 3B.8 restore foundation in the WebView
+# frontend: the restore section in index.html, the restore saving state and
+# helpers in app.js, the CSS styles, and the bridge/API/service layer
+# existence. They also re-assert that no batch restore / undo stack /
+# permanent delete / auto-rule / overlap controls are introduced.
+
+
+def test_index_html_has_restore_section():
+    """Phase 3B.8: index.html must contain the restore section in the
+    correction shell."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "可恢复记录" in source, (
+        "index.html must contain the 可恢复记录 section title"
+    )
+    assert 'id="correction-shell-restore-section"' in source, (
+        "index.html must contain the restore section container"
+    )
+    assert 'id="correction-shell-restore-list"' in source, (
+        "index.html must contain the restore list container"
+    )
+    assert 'id="correction-shell-restore-status"' in source, (
+        "index.html must contain the restore status display"
+    )
+
+
+def test_index_html_restore_hint_no_batch_undo_permanent():
+    """Phase 3B.8: the restore hint must state that batch restore, undo
+    stack, and permanent delete are not supported."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    hint_start = source.find("correction-shell-restore-hint")
+    assert hint_start != -1, "index.html must contain the restore hint"
+    # Extract a window around the hint to check its text.
+    hint_window = source[hint_start:hint_start + 500]
+    assert "批量恢复" in hint_window or "批量" in hint_window, (
+        "restore hint must mention batch restore is not supported"
+    )
+    assert "撤销" in hint_window, (
+        "restore hint must mention undo stack is not supported"
+    )
+    assert "永久删除" in hint_window, (
+        "restore hint must mention permanent delete is not supported"
+    )
+
+
+def test_index_html_no_batch_restore_restore_all_permanent_undo_controls():
+    """Phase 3B.8: index.html must not contain batch restore, restore all,
+    permanent delete, or undo stack controls."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in (
+        "batch-restore", "batchrestore",
+        "restore-all", "restoreall",
+        "undo-restore", "undorestore",
+        "permanent-delete", "permanentdelete",
+        "undo-stack", "undostack",
+    ):
+        assert forbidden not in lowered, (
+            "index.html must not contain a '" + forbidden + "' control"
+        )
+
+
+def test_app_js_has_restore_saving_state():
+    """Phase 3B.8: app.js must declare the restoreSaving state variable,
+    independent from batchProjectSaving / batchNoteSaving."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "restoreSaving" in source, (
+        "app.js must declare the restoreSaving state variable"
+    )
+    assert "restoreSavingActivityId" in source, (
+        "app.js must declare the restoreSavingActivityId state variable"
+    )
+
+
+def test_app_js_has_restore_helpers():
+    """Phase 3B.8: app.js must define the restore helper functions."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function resetRestoreState" in source, (
+        "app.js must define the resetRestoreState function"
+    )
+    assert "function showRestoreStatus" in source, (
+        "app.js must define the showRestoreStatus function"
+    )
+    assert "function setRestoreSaving" in source, (
+        "app.js must define the setRestoreSaving function"
+    )
+    assert "function renderRestoreSection" in source, (
+        "app.js must define the renderRestoreSection function"
+    )
+    assert "function loadRestorableActivities" in source, (
+        "app.js must define the loadRestorableActivities function"
+    )
+    assert "function renderRestorableActivities" in source, (
+        "app.js must define the renderRestorableActivities function"
+    )
+    assert "function saveActivityRestore" in source, (
+        "app.js must define the saveActivityRestore function"
+    )
+    assert "function bindRestoreControls" in source, (
+        "app.js must define the bindRestoreControls function"
+    )
+
+
+def test_app_js_calls_restore_bridge_methods():
+    """Phase 3B.8: app.js must call the restore_timeline_activity and
+    get_timeline_restorable_activities bridge methods."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "restore_timeline_activity" in source, (
+        "app.js must call the restore_timeline_activity bridge method"
+    )
+    assert "get_timeline_restorable_activities" in source, (
+        "app.js must call the get_timeline_restorable_activities bridge method"
+    )
+
+
+def test_app_js_restore_save_blocked_by_dirty_edit():
+    """Phase 3B.8: saveActivityRestore must block when isEditDirty() is
+    true and show the dirty-edit blocking message."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    assert save_start != -1
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "isEditDirty()" in save_body, (
+        "saveActivityRestore must call isEditDirty() and block on dirty edits"
+    )
+    assert "请先保存或取消当前编辑" in save_body, (
+        "saveActivityRestore must show the dirty-edit blocking message"
+    )
+
+
+def test_app_js_restore_save_checks_restore_saving():
+    """Phase 3B.8: saveActivityRestore must check restoreSaving before
+    proceeding so two restores cannot compete."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "restoreSaving" in save_body, (
+        "saveActivityRestore must check restoreSaving before proceeding"
+    )
+
+
+def test_app_js_restore_success_refreshes_timeline():
+    """Phase 3B.8: a successful restore must refresh the Timeline."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "refreshTimelineAfterEdit" in save_body, (
+        "saveActivityRestore success must call refreshTimelineAfterEdit"
+    )
+
+
+def test_app_js_restore_success_shows_restored_message():
+    """Phase 3B.8: a successful restore must show the 已恢复 message."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "已恢复" in save_body, (
+        "saveActivityRestore success must show the 已恢复 message"
+    )
+
+
+def test_app_js_restore_failure_preserves_list():
+    """Phase 3B.8: a failed restore must preserve the restore list so the
+    user can retry."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    # The error path must NOT call resetRestoreState (which clears the list).
+    # It should only call setRestoreSaving(false, null) + showRestoreStatus.
+    error_start = save_body.find("result.ok === false")
+    assert error_start != -1
+    error_body = save_body[error_start:]
+    assert "resetRestoreState" not in error_body, (
+        "saveActivityRestore failure must not clear the restore list"
+    )
+
+
+def test_app_js_restore_catch_resets_saving():
+    """Phase 3B.8: the .catch path in saveActivityRestore must reset
+    saving."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    catch_start = save_body.find(".catch(")
+    assert catch_start != -1, "saveActivityRestore must have a .catch handler"
+    catch_body = save_body[catch_start:]
+    assert "setRestoreSaving(false" in catch_body, (
+        "saveActivityRestore .catch must call setRestoreSaving(false)"
+    )
+    assert "恢复失败" in catch_body, (
+        "saveActivityRestore .catch must show 恢复失败"
+    )
+
+
+def test_app_js_restore_saving_disables_buttons():
+    """Phase 3B.8: setRestoreSaving must disable all restore buttons when
+    saving is true."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    set_start = source.find("function setRestoreSaving")
+    set_end = source.find("\n    function ", set_start + 1)
+    set_body = source[set_start:set_end]
+    assert "disabled" in set_body, (
+        "setRestoreSaving must disable/enable restore buttons"
+    )
+    assert "correction-shell-restore-btn" in set_body, (
+        "setRestoreSaving must target the restore button class"
+    )
+
+
+def test_app_js_clear_edit_panel_resets_restore_state():
+    """Phase 3B.8: clearEditPanel must call resetRestoreState."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    clear_start = source.find("function clearEditPanel")
+    clear_end = source.find("\n    function ", clear_start + 1)
+    clear_body = source[clear_start:clear_end]
+    assert "resetRestoreState" in clear_body, (
+        "clearEditPanel must call resetRestoreState"
+    )
+
+
+def test_app_js_reset_correction_shell_resets_restore_state():
+    """Phase 3B.8: resetCorrectionShellState must call resetRestoreState."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    reset_start = source.find("function resetCorrectionShellState")
+    reset_end = source.find("\n    function ", reset_start + 1)
+    reset_body = source[reset_start:reset_end]
+    assert "resetRestoreState" in reset_body, (
+        "resetCorrectionShellState must call resetRestoreState"
+    )
+
+
+def test_app_js_restore_render_called_from_render_correction_shell():
+    """Phase 3B.8: renderRestoreSection must be called from
+    renderCorrectionShell so the section is always populated when the shell
+    opens."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderCorrectionShell")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    assert "renderRestoreSection" in render_body, (
+        "renderCorrectionShell must call renderRestoreSection"
+    )
+
+
+def test_app_js_restore_bind_called_in_init():
+    """Phase 3B.8: bindRestoreControls must be called during initButtons."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    buttons_start = source.find("function initButtons")
+    buttons_end = source.find("\n    function ", buttons_start + 1)
+    buttons_body = source[buttons_start:buttons_end]
+    assert "bindRestoreControls" in buttons_body, (
+        "bindRestoreControls must be called during initButtons"
+    )
+
+
+def test_app_js_restore_uses_escape_html():
+    """Phase 3B.8: renderRestorableActivities must escape dynamic values
+    using escapeHtml."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderRestorableActivities")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    assert "escapeHtml" in render_body, (
+        "renderRestorableActivities must use escapeHtml for dynamic values"
+    )
+
+
+def test_app_js_restore_no_local_storage():
+    """Phase 3B.8: the restore code must not use browser storage
+    (re-asserted for the whole app.js)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert not re.search(r"localStorage|sessionStorage", source), (
+        "app.js must not use localStorage or sessionStorage"
+    )
+
+
+def test_app_js_restore_no_external_links():
+    """Phase 3B.8: the restore code must not introduce external links
+    (re-asserted for all frontend resources)."""
+    for filename in ["index.html", "app.js", "styles.css"]:
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{filename} must not contain http:// or https:// links"
+        )
+
+
+def test_app_js_restore_no_traceback_display():
+    """Phase 3B.8: the restore code must not display tracebacks
+    (re-asserted for the whole app.js)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "traceback" not in source.lower(), (
+        "app.js must not contain traceback display logic"
+    )
+
+
+def test_app_js_restore_no_raw_field_display():
+    """Phase 3B.8: the restore code must not display raw window_title /
+    file_path / clipboard / note fields."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderRestorableActivities")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    for forbidden in ("window_title", "file_path_hint", "full_path",
+                       "clipboard", "raw_note", "traceback"):
+        assert forbidden not in render_body.lower(), (
+            "renderRestorableActivities must not reference " + forbidden
+        )
+
+
+def test_styles_css_has_restore_section_styles():
+    """Phase 3B.8: styles.css must define the restore section styles."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell-restore-section" in source, (
+        "styles.css must define .correction-shell-restore-section"
+    )
+    assert ".correction-shell-restore-list" in source, (
+        "styles.css must define .correction-shell-restore-list"
+    )
+    assert ".correction-shell-restore-row" in source, (
+        "styles.css must define .correction-shell-restore-row"
+    )
+    assert ".correction-shell-restore-btn" in source, (
+        "styles.css must define .correction-shell-restore-btn"
+    )
+    assert ".correction-shell-restore-badge" in source, (
+        "styles.css must define .correction-shell-restore-badge"
+    )
+
+
+def test_bridge_has_restore_method():
+    """Phase 3B.8: the bridge must define the restore_timeline_activity
+    and get_timeline_restorable_activities methods."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    assert "def restore_timeline_activity" in bridge_src, (
+        "bridge must define restore_timeline_activity"
+    )
+    assert "def get_timeline_restorable_activities" in bridge_src, (
+        "bridge must define get_timeline_restorable_activities"
+    )
+
+
+def test_bridge_restore_error_messages_dict():
+    """Phase 3B.8: the bridge must define the _RESTORE_ERROR_MESSAGES
+    dict with all stable error code -> Chinese message mappings."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    assert "_RESTORE_ERROR_MESSAGES" in bridge_src, (
+        "bridge must define _RESTORE_ERROR_MESSAGES"
+    )
+    for code in ("invalid_activity", "not_found", "not_restorable",
+                 "in_progress", "invalid_date", "operation_failed"):
+        assert code in bridge_src, (
+            "bridge must map the '" + code + "' error code"
+        )
+    for msg in ("请选择有效的活动", "活动不存在", "该活动无需恢复",
+                "进行中记录暂不支持恢复", "日期无效", "恢复失败",
+                "加载可恢复记录失败"):
+        assert msg in bridge_src, (
+            "bridge must contain the Chinese message: " + msg
+        )
+
+
+def test_api_has_restore_function():
+    """Phase 3B.8: the API must define the restore_timeline_activity and
+    get_timeline_restorable_activities functions and the
+    TimelineRestoreActivityError class."""
+    api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class TimelineRestoreActivityError" in api_src, (
+        "timeline_api must define TimelineRestoreActivityError"
+    )
+    assert "def restore_timeline_activity" in api_src, (
+        "timeline_api must define restore_timeline_activity"
+    )
+    assert "def get_timeline_restorable_activities" in api_src, (
+        "timeline_api must define get_timeline_restorable_activities"
+    )
+
+
+def test_service_has_restore_function():
+    """Phase 3B.8: the service must define the restore_activity and
+    list_restorable_activities_for_date functions."""
+    service_src = (
+        REPO_ROOT / "worktrace" / "services" / "activity_service.py"
+    ).read_text(encoding="utf-8")
+    assert "def restore_activity" in service_src, (
+        "activity_service must define restore_activity"
+    )
+    assert "def list_restorable_activities_for_date" in service_src, (
+        "activity_service must define list_restorable_activities_for_date"
+    )
+
+
+def test_app_js_restore_state_independent_from_batch_states():
+    """Phase 3B.8: the restore saving state must be independent from
+    batchProjectSaving / batchNoteSaving."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The restore saving variable must be declared separately.
+    assert "var restoreSaving" in source, (
+        "app.js must declare restoreSaving as a separate variable"
+    )
+    assert "var restoreSavingActivityId" in source, (
+        "app.js must declare restoreSavingActivityId as a separate variable"
+    )
+    # saveActivityRestore must not check batchProjectSaving or batchNoteSaving
+    # (restore is independent).
+    save_start = source.find("function saveActivityRestore")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    assert "batchProjectSaving" not in save_body, (
+        "saveActivityRestore must not check batchProjectSaving (independent)"
+    )
+    assert "batchNoteSaving" not in save_body, (
+        "saveActivityRestore must not check batchNoteSaving (independent)"
+    )
+
+
+def test_app_js_restore_does_not_reload_during_save():
+    """Phase 3B.8: renderRestoreSection must not reload the recovery list
+    while a restore save is in flight."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderRestoreSection")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    assert "restoreSaving" in render_body, (
+        "renderRestoreSection must check restoreSaving before reloading"
+    )
+
+
+def test_app_js_restore_load_shows_loading_placeholder():
+    """Phase 3B.8: loadRestorableActivities must show a loading placeholder
+    while the list loads."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    load_start = source.find("function loadRestorableActivities")
+    load_end = source.find("\n    function ", load_start + 1)
+    load_body = source[load_start:load_end]
+    assert "加载中" in load_body, (
+        "loadRestorableActivities must show a 加载中 placeholder"
+    )
+
+
+def test_app_js_restore_load_failure_shows_error():
+    """Phase 3B.8: loadRestorableActivities must show 加载可恢复记录失败 on
+    failure."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    load_start = source.find("function loadRestorableActivities")
+    load_end = source.find("\n    function ", load_start + 1)
+    load_body = source[load_start:load_end]
+    assert "加载可恢复记录失败" in load_body, (
+        "loadRestorableActivities must show 加载可恢复记录失败 on failure"
+    )
+
+
+def test_app_js_restore_empty_list_css_fallback():
+    """Phase 3B.8: an empty restore list must rely on the CSS :empty
+    rule (no explicit 'no records' text in JS)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderRestorableActivities")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    # The empty-state comment must reference the CSS :empty rule.
+    assert ":empty" in render_body or "暂无可恢复记录" not in render_body, (
+        "renderRestorableActivities must rely on CSS :empty for empty state"
+    )
+
+
+def test_styles_css_restore_empty_state():
+    """Phase 3B.8: styles.css must define the empty-state fallback for the
+    restore list."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert "暂无可恢复记录" in source or ":empty" in source, (
+        "styles.css must define the restore list empty-state fallback"
     )

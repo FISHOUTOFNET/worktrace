@@ -121,6 +121,15 @@
     // note". The note text lives in memory only (never persisted to browser
     // storage). Empty string is a valid value and clears the notes.
     var batchNoteSaving = false;
+    // Phase 3B.8: single activity restore state. This is the restore
+    // foundation: only single hidden / soft-deleted activities can be
+    // restored. restoreSaving guards any restore operation;
+    // restoreSavingActivityId tracks which activity's restore button is
+    // currently saving (null = none). They are intentionally separate from
+    // all other saving states so the restore flow does not pollute the
+    // project / note / time / split / merge / hide / delete / batch flows.
+    var restoreSaving = false;
+    var restoreSavingActivityId = null;
 
     // --- Bridge helper --------------------------------------------------
 
@@ -1593,6 +1602,9 @@
         // Phase 3B.7: reset batch note state too so a stale note textarea /
         // saving flag does not leak into the next session.
         resetBatchNoteState();
+        // Phase 3B.8: reset restore state too so a stale restore list /
+        // saving flag does not leak into the next session.
+        resetRestoreState();
         // Phase 3B.5B: reset the correction shell state too so a stale
         // shell does not leak into the next session.
         resetCorrectionShellState();
@@ -1789,6 +1801,9 @@
         // Phase 3B.7: clear the batch note textarea / saving flag too so a
         // stale note does not carry over to the next shell open.
         resetBatchNoteState();
+        // Phase 3B.8: clear the restore list / saving flag too so a stale
+        // restore list does not carry over to the next shell open.
+        resetRestoreState();
         var shell = document.getElementById("timeline-correction-shell");
         if (shell) shell.hidden = true;
         var detailsCol = document.querySelector(".timeline-details");
@@ -1969,6 +1984,12 @@
         // selectedBatchActivityIds selection. The user picks activities once
         // and can choose either "set project" or "overwrite note".
         renderBatchNoteSection(session, activities);
+        // --- Phase 3B.8: single activity restore section ---
+        // Loads the restorable activities for the current date and renders
+        // a read-only recovery list. Only single hidden / soft-deleted
+        // activities can be restored; no batch restore, undo stack, or
+        // permanent delete.
+        renderRestoreSection(session, activities);
     }
 
     // Scroll to and briefly highlight a detail row so the user can locate
@@ -2703,6 +2724,252 @@
         var noteText = document.getElementById("correction-shell-batch-note-text");
         if (noteText) {
             noteText.addEventListener("input", updateBatchNoteCount);
+        }
+    }
+
+    // ====================================================================
+    // Phase 3B.8: Timeline single activity restore foundation
+    // ====================================================================
+    //
+    // This is the single activity restore capability in the WebView
+    // Timeline. It allows the user to restore a single hidden or
+    // soft-deleted activity by setting is_hidden = 0 and is_deleted = 0 in
+    // a single atomic UPDATE (the bridge -> API -> service path uses a
+    // rowcount guard so no partial write is ever persisted).
+    //
+    // Scope boundaries (enforced by the backend, mirrored here):
+    // - Only single activity restore. No batch restore, undo stack,
+    //   permanent delete, or any new DB schema.
+    // - Only closed activities (end_time IS NOT NULL). In-progress rows
+    //   are excluded from the recovery list by the service.
+    // - Only activities in the current Timeline date. The recovery list
+    //   is a read-only, display-safe summary.
+    // - Only is_hidden, is_deleted, and updated_at are modified; no other
+    //   fields, resource rows, assignment rows, or session notes are
+    //   touched.
+    // - No browser storage. Restore state lives in memory only.
+
+    function resetRestoreState() {
+        restoreSaving = false;
+        restoreSavingActivityId = null;
+        var listEl = document.getElementById("correction-shell-restore-list");
+        if (listEl) listEl.innerHTML = "";
+        showRestoreStatus("", false);
+    }
+
+    function showRestoreStatus(message, isError) {
+        var statusEl = document.getElementById("correction-shell-restore-status");
+        if (!statusEl) return;
+        if (!message) {
+            statusEl.hidden = true;
+            statusEl.textContent = "";
+            statusEl.className = "edit-status";
+            return;
+        }
+        statusEl.hidden = false;
+        statusEl.textContent = message;
+        statusEl.className = "edit-status " + (isError ? "edit-status-error" : "edit-status-success");
+    }
+
+    function setRestoreSaving(saving, activityId) {
+        restoreSaving = saving;
+        restoreSavingActivityId = saving ? activityId : null;
+        // Disable / re-enable every restore button so the user cannot
+        // start a competing restore while one is in flight.
+        var buttons = document.querySelectorAll(
+            "#correction-shell-restore-list .correction-shell-restore-btn"
+        );
+        for (var i = 0; i < buttons.length; i++) {
+            buttons[i].disabled = saving;
+        }
+        // Add a visual saving indicator to the row whose restore is in
+        // flight.
+        var rows = document.querySelectorAll(
+            "#correction-shell-restore-list .correction-shell-restore-row"
+        );
+        for (var j = 0; j < rows.length; j++) {
+            var rowAid = rows[j].getAttribute("data-activity-id");
+            if (saving && rowAid === String(activityId)) {
+                rows[j].classList.add("restore-saving");
+            } else {
+                rows[j].classList.remove("restore-saving");
+            }
+        }
+    }
+
+    // Render the restore section. The section is always present in the
+    // HTML; this function shows it and triggers loading of the restorable
+    // activities for the current Timeline date. If a restore is in
+    // flight, the list is not reloaded (the in-flight save must complete
+    // first).
+    function renderRestoreSection(session, activities) {
+        var section = document.getElementById("correction-shell-restore-section");
+        if (!section) return;
+        section.hidden = false;
+        // Do not reload the list while a restore save is in flight; the
+        // success / failure handler will trigger a reload after the save
+        // completes.
+        if (restoreSaving) return;
+        var dateEl = document.getElementById("timeline-date-display");
+        var date = timelineDate || (dateEl ? dateEl.textContent : null);
+        if (date === "--") date = null;
+        loadRestorableActivities(date);
+    }
+
+    function loadRestorableActivities(date) {
+        var listEl = document.getElementById("correction-shell-restore-list");
+        if (!listEl) return;
+        // Show a loading placeholder while the list loads.
+        listEl.innerHTML = '<div class="correction-shell-restore-loading">加载中…</div>';
+        showRestoreStatus("", false);
+        callBridge("get_timeline_restorable_activities", date).then(function (result) {
+            if (!result || result.ok === false) {
+                // Keep the list empty; surface the bridge error.
+                listEl.innerHTML = "";
+                var msg = (result && result.error) ? result.error : "加载可恢复记录失败";
+                showRestoreStatus(msg, true);
+                return;
+            }
+            var activities = (result && result.activities) || [];
+            renderRestorableActivities(activities);
+            showRestoreStatus("", false);
+        }).catch(function () {
+            listEl.innerHTML = "";
+            showRestoreStatus("加载可恢复记录失败", true);
+        });
+    }
+
+    function renderRestorableActivities(activities) {
+        var listEl = document.getElementById("correction-shell-restore-list");
+        if (!listEl) return;
+        listEl.innerHTML = "";
+        if (!activities || activities.length === 0) {
+            // The CSS :empty::after rule shows "暂无可恢复记录".
+            return;
+        }
+        for (var i = 0; i < activities.length; i++) {
+            var a = activities[i];
+            var aid = String(a.activity_id || "");
+            var startTime = a.start_time || "";
+            var endTime = a.end_time || "";
+            var timeRange = formatTimeRange(startTime, endTime, false);
+            var duration = a.duration || "";
+            var appName = a.app_name || "";
+            var resourceType = a.resource_type || "";
+            var resourceName = a.resource_name || "";
+            var projectName = a.project_name || "未归类";
+            var restoreState = a.restore_state || "";
+            // Badge text and class based on restore_state.
+            var badgeText = "";
+            var badgeClass = "correction-shell-restore-badge";
+            if (restoreState === "hidden") {
+                badgeText = "已隐藏";
+            } else if (restoreState === "deleted") {
+                badgeText = "已删除";
+                badgeClass += " is-deleted";
+            } else if (restoreState === "hidden+deleted") {
+                badgeText = "已隐藏且已删除";
+                badgeClass += " is-hidden-deleted";
+            }
+            // Build the meta line: app · resource_type · resource_name · project
+            var metaParts = [];
+            if (appName) metaParts.push(escapeHtml(appName));
+            if (resourceType) metaParts.push(escapeHtml(resourceType));
+            if (resourceName) metaParts.push(escapeHtml(resourceName));
+            if (projectName) metaParts.push(escapeHtml(projectName));
+            var metaLine = metaParts.join(" · ");
+
+            var row = document.createElement("div");
+            row.className = "correction-shell-restore-row";
+            row.setAttribute("data-activity-id", aid);
+
+            var info = document.createElement("div");
+            info.className = "correction-shell-restore-info";
+
+            var timeEl = document.createElement("div");
+            timeEl.className = "correction-shell-restore-time";
+            timeEl.textContent = timeRange + (duration ? "  ·  " + duration : "");
+
+            var metaEl = document.createElement("div");
+            metaEl.className = "correction-shell-restore-meta";
+            if (badgeText) {
+                var badge = document.createElement("span");
+                badge.className = badgeClass;
+                badge.textContent = badgeText;
+                metaEl.appendChild(badge);
+            }
+            var metaText = document.createElement("span");
+            metaText.textContent = metaLine;
+            metaEl.appendChild(metaText);
+
+            info.appendChild(timeEl);
+            info.appendChild(metaEl);
+
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "edit-btn correction-shell-restore-btn";
+            btn.textContent = "恢复";
+            btn.setAttribute("data-restore-activity-id", aid);
+            btn.disabled = restoreSaving;
+
+            row.appendChild(info);
+            row.appendChild(btn);
+            listEl.appendChild(row);
+        }
+    }
+
+    function saveActivityRestore(activityId, btn) {
+        if (restoreSaving) return;
+        if (!activityId) {
+            showRestoreStatus("请选择有效的活动", true);
+            return;
+        }
+        // Guard against unsaved edits: restore is an immediate action that
+        // triggers a refresh, which would wipe unsaved project/note/time/
+        // split inputs. Require the user to save or cancel first.
+        if (isEditDirty()) {
+            showRestoreStatus("请先保存或取消当前编辑", true);
+            return;
+        }
+        setRestoreSaving(true, activityId);
+        showRestoreStatus("", false);
+        callBridge("restore_timeline_activity", activityId).then(function (result) {
+            if (!result || result.ok === false) {
+                setRestoreSaving(false, null);
+                var msg = (result && result.error) ? result.error : "恢复失败";
+                showRestoreStatus(msg, true);
+                return;
+            }
+            setRestoreSaving(false, null);
+            showRestoreStatus("已恢复", false);
+            // Refresh the Timeline so the restored activity reappears in
+            // the sessions list and the detail list. The shell will
+            // re-render from the refreshed data (which also reloads the
+            // recovery list) if the session is still present; if the
+            // session disappeared, the auto-refresh / disappear path will
+            // close the shell safely.
+            refreshTimelineAfterEdit();
+        }).catch(function () {
+            setRestoreSaving(false, null);
+            showRestoreStatus("恢复失败", true);
+        });
+    }
+
+    // Bind the restore section controls via event delegation. Called once
+    // during init. The restore buttons are rendered dynamically, so event
+    // delegation on the list container avoids re-binding on every render.
+    function bindRestoreControls() {
+        var listEl = document.getElementById("correction-shell-restore-list");
+        if (listEl) {
+            listEl.addEventListener("click", function (ev) {
+                var target = ev.target;
+                if (!target) return;
+                if (!target.classList.contains("correction-shell-restore-btn")) return;
+                if (target.disabled) return;
+                var aid = target.getAttribute("data-restore-activity-id");
+                if (!aid) return;
+                saveActivityRestore(parseInt(aid, 10), target);
+            });
         }
     }
 
@@ -3509,6 +3776,11 @@
         // batch_update_timeline_activities_note method; the textarea input
         // updates the count / save button state in-memory only.
         bindBatchNoteControls();
+        // Phase 3B.8: single activity restore controls inside the correction
+        // shell. The restore buttons are rendered dynamically, so event
+        // delegation on the list container handles clicks without
+        // re-binding on every render.
+        bindRestoreControls();
     }
 
     function startAutoRefresh() {

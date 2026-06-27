@@ -1494,6 +1494,109 @@ body {
     resize: vertical;
 }
 
+/* Phase 3B.8: single activity restore section inside the correction shell.
+   This is the restore foundation: only single hidden / soft-deleted
+   activities can be restored. The section mirrors the batch sections so it
+   reads as part of the shell, but does NOT provide batch restore,
+   permanent delete, or undo stack. */
+.correction-shell-restore-section {
+    margin-top: 16px;
+    padding: 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+}
+
+.correction-shell-restore-section[hidden] {
+    display: none;
+}
+
+.correction-shell-restore-hint {
+    margin-bottom: 8px;
+}
+
+.correction-shell-restore-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.correction-shell-restore-list:empty::after {
+    content: "暂无可恢复记录";
+    display: block;
+    color: #64748b;
+    font-size: 13px;
+    padding: 8px 4px;
+}
+
+.correction-shell-restore-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px 12px;
+    align-items: center;
+    padding: 8px 10px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+}
+
+.correction-shell-restore-row.restore-saving {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.correction-shell-restore-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.correction-shell-restore-time {
+    font-size: 13px;
+    color: #1e293b;
+    font-weight: 600;
+}
+
+.correction-shell-restore-meta {
+    font-size: 12px;
+    color: #475569;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.correction-shell-restore-badge {
+    display: inline-block;
+    margin-right: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 10px;
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.correction-shell-restore-badge.is-deleted {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.correction-shell-restore-badge.is-hidden-deleted {
+    background: #ede9fe;
+    color: #5b21b6;
+}
+
+.correction-shell-restore-btn {
+    padding: 4px 12px;
+    font-size: 12px;
+}
+
+.correction-shell-restore-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 @media (max-width: 900px) {
     .correction-shell-header {
         flex-direction: column;
@@ -1515,5 +1618,15 @@ body {
     }
     .correction-shell-batch-toggle-btn {
         align-self: flex-start;
+    }
+    .correction-shell-restore-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+    }
+    .correction-shell-restore-meta {
+        white-space: normal;
+    }
+    .correction-shell-restore-btn {
+        justify-self: flex-start;
     }
 }

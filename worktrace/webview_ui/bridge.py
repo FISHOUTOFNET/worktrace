@@ -103,6 +103,22 @@ rowcount guard and rollback so no partial write is ever persisted. Errors
 are mapped from stable ``TimelineBatchNoteError`` codes to Chinese
 messages without echoing tracebacks, SQL, window titles, file paths,
 notes, or internal exception details.
+
+Phase 3B.8 adds the single activity restore foundation:
+``restore_timeline_activity`` restores a single hidden or soft-deleted
+activity by setting ``is_hidden = 0`` and ``is_deleted = 0`` in a single
+atomic UPDATE with a rowcount guard. ``get_timeline_restorable_activities``
+returns a display-safe recovery list of hidden / deleted closed activities
+for a given date so the user can select which activity to restore. Only
+``is_hidden``, ``is_deleted``, and ``updated_at`` are modified; no other
+fields, resource rows, assignment rows, or session notes are touched. The
+row is never physically deleted. In-progress activities cannot be
+restored. Activities that are neither hidden nor deleted are rejected as
+``not_restorable``. Errors are mapped from stable
+``TimelineRestoreActivityError`` codes to Chinese messages without
+echoing tracebacks, SQL, window titles, file paths, notes, or internal
+exception details. This phase does NOT implement batch restore, undo
+stack, permanent delete, or any new DB schema.
 """
 
 from __future__ import annotations
@@ -116,6 +132,7 @@ from ..api.timeline_api import (
     TimelineBatchNoteError,
     TimelineBatchProjectError,
     TimelineMergeError,
+    TimelineRestoreActivityError,
     TimelineSplitError,
     TimelineTimeEditError,
     TimelineVisibilityError,
@@ -213,6 +230,18 @@ _BATCH_NOTE_ERROR_MESSAGES = {
     "in_progress": "进行中记录暂不支持批量修改",
     "hidden_activity": "隐藏记录暂不支持批量修改",
     "operation_failed": "操作失败",
+}
+
+# Maps ``TimelineRestoreActivityError.code`` to stable Chinese user-facing
+# messages for the Phase 3B.8 single activity restore. Unknown codes
+# collapse to the generic "恢复失败" so internal details are never surfaced.
+_RESTORE_ERROR_MESSAGES = {
+    "invalid_activity": "请选择有效的活动",
+    "not_found": "活动不存在",
+    "not_restorable": "该活动无需恢复",
+    "in_progress": "进行中记录暂不支持恢复",
+    "invalid_date": "日期无效",
+    "operation_failed": "恢复失败",
 }
 
 
@@ -938,6 +967,101 @@ class WebViewBridge:
         except Exception:
             logger.exception("webview bridge batch_update_timeline_activities_note failed")
             return dict(_GENERIC_ERROR)
+
+    # --- Phase 3B.8: Timeline single activity restore foundation ---
+
+    def restore_timeline_activity(self, activity_id) -> dict[str, Any]:
+        """Restore a single hidden or soft-deleted activity.
+
+        ``activity_id`` must be a positive int (``bool`` rejected). Sets
+        ``is_hidden = 0`` and ``is_deleted = 0`` in a single atomic UPDATE;
+        the row is not physically deleted. In-progress activities
+        (``end_time IS NULL``) cannot be restored. Activities that are
+        neither hidden nor deleted are rejected as ``not_restorable``.
+
+        Returns ``{"ok": true, "activity_id": int}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure. Known
+        failure modes map to clear Chinese messages; unknown failures
+        collapse to ``"恢复失败"``. Tracebacks, SQL errors, file paths,
+        window titles, and notes are never surfaced.
+        """
+        try:
+            if isinstance(activity_id, bool):
+                return {"ok": False, "error": "请选择有效的活动"}
+            try:
+                aid = int(activity_id)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "请选择有效的活动"}
+            if aid <= 0:
+                return {"ok": False, "error": "请选择有效的活动"}
+            result = timeline_api.restore_timeline_activity(aid)
+            return {"ok": True, "activity_id": int(result.get("activity_id") or 0)}
+        except TimelineRestoreActivityError as exc:
+            return {"ok": False, "error": _RESTORE_ERROR_MESSAGES.get(exc.code, "恢复失败")}
+        except ValueError:
+            return {"ok": False, "error": "恢复失败"}
+        except Exception:
+            logger.exception("webview bridge restore_timeline_activity failed")
+            return {"ok": False, "error": "恢复失败"}
+
+    def get_timeline_restorable_activities(self, date) -> dict[str, Any]:
+        """Return a display-safe recovery list for a date.
+
+        Returns ``{"ok": true, "activities": [...]}`` where each item has
+        display-safe fields only (time range, duration, app/resource/
+        project name, status, restore_state). No raw ``window_title``,
+        ``file_path_hint``, ``full_path``, ``clipboard``, ``note``, or
+        exception details are surfaced. Only hidden / deleted closed
+        activities are returned, sorted by ``start_time``.
+
+        Returns ``{"ok": false, "error": "<chinese message>",
+        "activities": []}`` on failure.
+        """
+        try:
+            if not isinstance(date, str) or not date:
+                return {"ok": False, "error": "加载可恢复记录失败", "activities": []}
+            if not _DATE_SHAPE_RE.match(date):
+                return {"ok": False, "error": "加载可恢复记录失败", "activities": []}
+            result = timeline_api.get_timeline_restorable_activities(date)
+            items: list[dict[str, Any]] = []
+            for row in result.get("activities") or []:
+                items.append(
+                    {
+                        "activity_id": int(row.get("activity_id") or 0),
+                        "start_time": str(row.get("start_time") or ""),
+                        "end_time": str(row.get("end_time") or ""),
+                        "duration": format_duration(row.get("duration_seconds") or 0),
+                        "app_name": str(row.get("app_name") or ""),
+                        "resource_type": format_resource_type(
+                            row.get("resource_kind"),
+                            row.get("resource_subtype"),
+                        ),
+                        "resource_name": str(row.get("resource_display_name") or "未知"),
+                        "project_name": str(row.get("project_name") or "未归类"),
+                        "status": str(row.get("status") or ""),
+                        "restore_state": str(row.get("restore_state") or ""),
+                        "is_hidden": int(row.get("is_hidden") or 0),
+                        "is_deleted": int(row.get("is_deleted") or 0),
+                    }
+                )
+            return {"ok": True, "activities": items}
+        except TimelineRestoreActivityError as exc:
+            # Only ``invalid_date`` has a distinct user-facing message; all
+            # other known codes (``operation_failed`` etc.) and unknown codes
+            # collapse to the load-focused ``加载可恢复记录失败`` so a
+            # recovery-list failure never surfaces a restore-focused message.
+            if exc.code == "invalid_date":
+                msg = "日期无效"
+            else:
+                msg = "加载可恢复记录失败"
+            return {
+                "ok": False,
+                "error": msg,
+                "activities": [],
+            }
+        except Exception:
+            logger.exception("webview bridge get_timeline_restorable_activities failed")
+            return {"ok": False, "error": "加载可恢复记录失败", "activities": []}
 
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:

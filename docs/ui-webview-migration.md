@@ -44,8 +44,14 @@
   API/bridge return payload note-content leak prevention, bridge
   updated_count matches deduped selection, frontend cross-save guard,
   session/date/shell switch clearing the note textarea, and failure-path
-  textarea preservation — implemented; WebView is the default and only
-  shipping UI).
+  textarea preservation — implemented; Timeline single activity restore
+  foundation — a single hidden or soft-deleted closed activity can be
+  restored to visible + not-deleted via a single atomic UPDATE setting
+  `is_hidden = 0` and `is_deleted = 0` with a rowcount guard; a read-only
+  recovery list returns display-safe fields for hidden/deleted activities
+  for the current date; only `is_hidden` / `is_deleted` / `updated_at` are
+  modified; no batch restore, undo stack, or permanent delete —
+  implemented; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -2622,6 +2628,124 @@ Phase 3B.7.1 does not implement and does not start:
 - Any new DB schema;
 - Any new batch write type;
 - Any new feature or UI control;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any Tkinter fallback path.
+
+## Phase 3B.8 Implemented Scope
+
+Phase 3B.8 implements the **single activity restore foundation** in the
+WebView Timeline. A single hidden activity (`is_hidden = 1`) or soft-deleted
+activity (`is_deleted = 1`) can be restored to visible + not-deleted in one
+operation. This is a **single-activity restore only** phase — batch restore,
+undo stack, and permanent delete are explicitly out of scope.
+
+### What restore modifies
+
+The restore operation is a single atomic UPDATE with a rowcount guard. It
+modifies **only**:
+
+- `activity_log.is_hidden` → `0`;
+- `activity_log.is_deleted` → `0`;
+- `activity_log.updated_at` → refreshed to `now()`.
+
+### What restore does not modify
+
+- `start_time`, `end_time`, `duration_seconds`;
+- `project_id`, `note`, `status`, `source`;
+- `activity_resource` rows;
+- `activity_project_assignment` rows;
+- `project_session_note` rows;
+- The row is never physically deleted.
+
+### Service layer
+
+`worktrace.services.activity_service.restore_activity(activity_id)` performs
+a single fetch + single UPDATE. Input validation rejects `bool`,
+non-positive, and non-int ids. The activity must exist, must be hidden or
+deleted, and must be closed (raw `end_time IS NOT NULL`). A rowcount guard
+ensures exactly 1 row is affected; a 0-row UPDATE (race condition) raises
+`ValueError("restore_failed")`.
+
+`worktrace.services.activity_service.list_restorable_activities_for_date(date)`
+returns a display-safe recovery list of hidden / deleted closed activities
+for the given date, sorted by `start_time`. Only display-safe fields are
+returned (no raw `window_title`, `file_path_hint`, `full_path`, `clipboard`,
+or `note`). In-progress hidden/deleted activities are excluded.
+
+### API layer
+
+`worktrace.api.timeline_api.restore_timeline_activity(activity_id)` validates
+the id and delegates to the service. Service `ValueError` codes are mapped to
+stable `TimelineRestoreActivityError` codes:
+
+- `invalid_activity_id` → `invalid_activity`
+- `activity_not_found` → `not_found`
+- `activity_not_restorable` → `not_restorable`
+- `activity_in_progress` → `in_progress`
+- `restore_failed` or any unexpected exception → `operation_failed`
+
+`worktrace.api.timeline_api.get_timeline_restorable_activities(date)` returns
+`{"activities": [...]}` with display-safe fields only. Invalid dates raise
+`TimelineRestoreActivityError("invalid_date")`.
+
+### Bridge layer
+
+`WebViewBridge.restore_timeline_activity(activity_id)` returns
+`{"ok": true, "activity_id": int}` on success or
+`{"ok": false, "error": "<chinese message>"}` on failure. Known error codes
+map to clear Chinese messages; unknown codes collapse to `恢复失败`.
+
+`WebViewBridge.get_timeline_restorable_activities(date)` returns
+`{"ok": true, "activities": [...]}` on success or
+`{"ok": false, "error": "<chinese message>", "activities": []}` on failure.
+The recovery list error path collapses to `加载可恢复记录失败` (except
+`invalid_date` → `日期无效`).
+
+### Frontend
+
+The Phase 3B.5B correction shell gains a dedicated `可恢复记录` section
+after the batch note section. The section hint states:
+"仅支持恢复单条隐藏或软删除记录；暂不支持批量恢复、撤销栈或永久删除。"
+
+The section loads the recovery list for the current Timeline date when the
+shell opens. Each row shows time range, duration, app/resource/project,
+and a restore-state badge (`已隐藏` / `已删除` / `已隐藏且已删除`). A
+single `恢复` button per row calls `restore_timeline_activity`. On success,
+the Timeline is refreshed and the recovery list is reloaded. On failure,
+the list is preserved for retry. The `restoreSaving` state is independent
+from `batchProjectSaving` / `batchNoteSaving` and all other edit saving
+states. `clearEditPanel` and `resetCorrectionShellState` both call
+`resetRestoreState` so no stale list / saving flag leaks across sessions.
+
+### CSS
+
+The restore section reuses the existing shell styling conventions. The
+`.correction-shell-restore-list:empty::after` rule shows `暂无可恢复记录`
+when the list is empty. Restore-state badges use distinct colors:
+`.is-deleted` (red), `.is-hidden-deleted` (purple). The `.restore-saving`
+class dims the in-flight row.
+
+## Phase 3B.8 Not Implemented
+
+Phase 3B.8 does not implement and does not start:
+
+- Batch restore (restoring multiple activities at once);
+- Restore all;
+- Undo stack (multi-step undo / redo);
+- Permanent delete (physically deleting a row);
+- Batch hide / batch delete;
+- Batch time correction;
+- Batch split;
+- Batch merge;
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge;
+- Multi-activity session whole-hide / whole-delete;
+- Any new DB schema;
+- Any new batch write type;
 - Any React / Vue / Vite / Node dependency;
 - Any local HTTP server;
 - Any CDN / external JS / CSS / font / Google Fonts usage;

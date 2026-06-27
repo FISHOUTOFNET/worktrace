@@ -151,6 +151,24 @@ class TimelineBatchNoteError(ValueError):
         self.code = code
 
 
+class TimelineRestoreActivityError(ValueError):
+    """Raised by the Phase 3B.8 single activity restore methods for known,
+    user-facing failure modes.
+
+    Stable ``code`` values mapped by the WebView bridge to Chinese messages:
+
+    - ``invalid_activity`` — activity_id is not a positive int or is ``bool``.
+    - ``not_found`` — the activity does not exist.
+    - ``not_restorable`` — the activity is neither hidden nor deleted.
+    - ``in_progress`` — the activity is still open (``end_time IS NULL``).
+    - ``operation_failed`` — race condition or unexpected service failure.
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 # --- timeline / sessions -------------------------------------------------
 
 def get_default_report_date() -> str:
@@ -1144,6 +1162,124 @@ def _validate_batch_note(note: str) -> str:
     return note
 
 
+# --- Phase 3B.8: Timeline single activity restore foundation ---
+#
+# Phase 3B.8 implements the minimal restore foundation:
+#
+# - ``restore_timeline_activity`` restores a single hidden or soft-deleted
+#   activity by setting ``is_hidden = 0`` AND ``is_deleted = 0`` in a single
+#   atomic UPDATE. The row is not physically modified beyond the two
+#   visibility flags and ``updated_at``; assignment / resource / note /
+#   session-note rows are untouched.
+# - ``get_timeline_restorable_activities`` returns a display-safe recovery
+#   list of hidden / deleted activities for a given date so the user can
+#   select which activity to restore.
+#
+# Data semantics (see docs/ui-webview-migration.md):
+# - Restore only modifies ``is_hidden``, ``is_deleted``, and ``updated_at``.
+# - Restore does NOT modify ``start_time`` / ``end_time`` /
+#   ``duration_seconds`` / ``project_id`` / ``note`` / ``status`` /
+#   ``source`` / resource rows / assignment rows / ``project_session_note``.
+# - Restore does NOT physically delete data.
+# - In-progress activities (raw ``end_time IS NULL``) cannot be restored.
+# - Activities that are neither hidden nor deleted are rejected as
+#   ``not_restorable`` (restore is not a no-op).
+# - The write is a single atomic UPDATE with a rowcount guard; no partial
+#   writes are possible.
+# - The recovery list is read-only and returns display-safe fields only.
+#
+# This phase does NOT implement batch restore, undo stack, permanent
+# delete, batch hide/delete, batch time correction, batch split, batch
+# merge, auto-rule, or global overlap detection.
+
+
+def restore_timeline_activity(activity_id: int) -> dict:
+    """Validate and restore a single hidden or soft-deleted activity.
+
+    Validation:
+    - ``activity_id`` must be a positive integer (``bool`` rejected); it
+      must reference an existing activity that is hidden (``is_hidden = 1``)
+      or soft-deleted (``is_deleted = 1``) and closed (raw
+      ``end_time IS NOT NULL``).
+
+    Returns ``{"restored": True, "activity_id": int}`` on success. Raises
+    ``TimelineRestoreActivityError`` with a stable ``code`` for known
+    failure modes. The write is a single atomic UPDATE; no partial writes
+    are possible.
+    """
+    aid = _validate_activity_id_for_restore(activity_id)
+    try:
+        return activity_service.restore_activity(aid)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "invalid_activity_id":
+            raise TimelineRestoreActivityError("invalid_activity")
+        if code == "activity_not_found":
+            raise TimelineRestoreActivityError("not_found")
+        if code == "activity_not_restorable":
+            raise TimelineRestoreActivityError("not_restorable")
+        if code == "activity_in_progress":
+            raise TimelineRestoreActivityError("in_progress")
+        # ``restore_failed`` or any unexpected ValueError collapses to
+        # ``operation_failed`` so the bridge returns a clear generic
+        # message without echoing internal details.
+        raise TimelineRestoreActivityError("operation_failed")
+    except Exception:
+        # A non-ValueError service exception must also collapse to
+        # ``operation_failed`` so the bridge returns a clear generic
+        # message without echoing internal details or tracebacks.
+        raise TimelineRestoreActivityError("operation_failed")
+
+
+def get_timeline_restorable_activities(date: str) -> dict:
+    """Return a display-safe recovery list for a date.
+
+    Returns ``{"activities": [...]}`` where each item has display-safe
+    fields only (no raw ``window_title``, ``file_path_hint``,
+    ``full_path``, ``clipboard``, ``note``, or exception details). Only
+    hidden / deleted closed activities are returned, sorted by
+    ``start_time``.
+
+    Raises ``TimelineRestoreActivityError("invalid_date")`` if ``date``
+    is not a ``YYYY-MM-DD`` string. The read path performs no writes and
+    introduces no new DB schema.
+    """
+    if not isinstance(date, str) or not date:
+        raise TimelineRestoreActivityError("invalid_date")
+    try:
+        items = activity_service.list_restorable_activities_for_date(date)
+    except ValueError:
+        raise TimelineRestoreActivityError("invalid_date")
+    except Exception:
+        # Any unexpected service exception collapses to ``operation_failed``
+        # so the bridge returns a clear generic message without echoing
+        # internal details or tracebacks.
+        raise TimelineRestoreActivityError("operation_failed")
+    return {"activities": items}
+
+
+def _validate_activity_id_for_restore(activity_id: int) -> int:
+    """Validate a single ``activity_id`` for restore.
+
+    Returns the validated positive int. Raises ``TimelineRestoreActivityError``:
+    - ``invalid_activity`` — not a positive int or ``bool``.
+
+    The deeper existence / restorable / in-progress checks are performed
+    by the service layer (``restore_activity``) so a single fetch is used
+    for both validation and write; this avoids a double fetch and keeps
+    the race-condition window minimal.
+    """
+    if isinstance(activity_id, bool):
+        raise TimelineRestoreActivityError("invalid_activity")
+    try:
+        aid = int(activity_id)
+    except (TypeError, ValueError):
+        raise TimelineRestoreActivityError("invalid_activity")
+    if aid <= 0:
+        raise TimelineRestoreActivityError("invalid_activity")
+    return aid
+
+
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
     # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
     # not silently coerced to ``1``/``0``.
@@ -1362,6 +1498,7 @@ __all__ = [
     "TIMELINE_NOTE_MAX_LENGTH",
     "TimelineBatchNoteError",
     "TimelineBatchProjectError",
+    "TimelineRestoreActivityError",
     "TimelineTimeEditError",
     "TimelineSplitError",
     "TimelineMergeError",
@@ -1379,6 +1516,7 @@ __all__ = [
     "get_snapshot_persisted_id",
     "get_snapshot_seconds_for_date_range",
     "get_snapshot_signature",
+    "get_timeline_restorable_activities",
     "hide_timeline_activity",
     "hide_timeline_session",
     "is_snapshot_unconfirmed",
@@ -1386,6 +1524,7 @@ __all__ = [
     "merge_timeline_activities",
     "preview_session_project_update",
     "reclassify_timeline_session_project",
+    "restore_timeline_activity",
     "soft_delete_activity",
     "soft_delete_timeline_activity",
     "soft_delete_timeline_session",
