@@ -547,3 +547,158 @@ def test_get_restorable_activities_excludes_other_dates(temp_db):
     assert not any(a["activity_id"] == a2 for a in result_25["activities"])
     assert any(a["activity_id"] == a2 for a in result_26["activities"])
     assert not any(a["activity_id"] == a1 for a in result_26["activities"])
+
+
+# --- Phase 3B.8.1: restore hardening tests --------------------------------
+
+
+def test_service_restore_activity_write_exception_propagates(temp_db):
+    """Phase 3B.8.1: a write exception (e.g. sqlite3.OperationalError)
+    during the restore UPDATE must propagate from the service so the API
+    layer can collapse it to ``operation_failed``. The transaction must
+    roll back so the activity remains hidden."""
+    import sqlite3
+
+    aid = _seed_closed_activity()
+    timeline_api.hide_timeline_activity(aid)
+    real_get_connection = activity_service.get_connection
+
+    class _FailingRestoreConn:
+        """Wraps a real connection. The restore UPDATE (SET is_hidden = 0
+        and is_deleted = 0) raises ``sqlite3.OperationalError`` so the
+        transaction rolls back. All other statements (SELECT, etc.)
+        delegate to the real connection."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, params=()):
+            stripped = " ".join(sql.split())
+            if (
+                "UPDATE activity_log" in stripped
+                and "is_hidden = 0" in stripped
+            ):
+                raise sqlite3.OperationalError("simulated write failure")
+            return self._real.execute(sql, params)
+
+        def __enter__(self):
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._real.__exit__(*args)
+
+    def patched_get_connection():
+        return _FailingRestoreConn(real_get_connection())
+
+    with patch.object(
+        activity_service, "get_connection", side_effect=patched_get_connection
+    ):
+        with pytest.raises(sqlite3.OperationalError):
+            activity_service.restore_activity(aid)
+    # The activity must remain hidden after the failed write (transaction
+    # rolled back).
+    activity = activity_service.get_activity(aid)
+    assert int(activity.get("is_hidden") or 0) == 1
+
+
+def test_restore_activity_api_write_exception_operation_failed(temp_db):
+    """Phase 3B.8.1: a non-ValueError service exception during restore
+    must collapse to ``operation_failed`` at the API layer."""
+    aid = _seed_closed_activity()
+    timeline_api.hide_timeline_activity(aid)
+    with patch.object(
+        activity_service, "restore_activity", side_effect=RuntimeError("write boom")
+    ):
+        with pytest.raises(TimelineRestoreActivityError) as exc:
+            timeline_api.restore_timeline_activity(aid)
+    assert exc.value.code == "operation_failed"
+    assert "write boom" not in str(exc.value)
+
+
+def test_get_restorable_activities_api_non_value_error(temp_db):
+    """Phase 3B.8.1: a non-ValueError service exception from the recovery
+    list read must collapse to ``operation_failed`` at the API layer."""
+    with patch.object(
+        activity_service,
+        "list_restorable_activities_for_date",
+        side_effect=RuntimeError("read boom"),
+    ):
+        with pytest.raises(TimelineRestoreActivityError) as exc:
+            timeline_api.get_timeline_restorable_activities("2026-06-25")
+    assert exc.value.code == "operation_failed"
+    assert "read boom" not in str(exc.value)
+
+
+def test_get_restorable_activities_sorted_by_start_time_then_id(temp_db):
+    """Phase 3B.8.1: when two hidden activities share the same start_time,
+    the recovery list must break ties by id ascending."""
+    # Create two activities with the same start_time. The second created
+    # will have a higher id.
+    a1 = _seed_closed_activity(start="09:00:00", end="09:20:00")
+    a2 = _seed_closed_activity(start="09:00:00", end="09:40:00")
+    assert a2 > a1  # second insert has a higher id
+    timeline_api.hide_timeline_activity(a1)
+    timeline_api.hide_timeline_activity(a2)
+    result = timeline_api.get_timeline_restorable_activities("2026-06-25")
+    activities = result["activities"]
+    assert len(activities) == 2
+    # Same start_time → id ascending tiebreaker.
+    assert activities[0]["activity_id"] == a1
+    assert activities[1]["activity_id"] == a2
+
+
+def test_restore_activity_updated_at_refreshed(temp_db):
+    """Phase 3B.8.1: restore must refresh ``updated_at``."""
+    aid = _seed_closed_activity()
+    timeline_api.hide_timeline_activity(aid)
+    before = activity_service.get_activity(aid)
+    before_updated = before["updated_at"]
+    # SQLite timestamps have 1-second resolution; sleep to ensure the
+    # new updated_at differs.
+    import time
+
+    time.sleep(1.1)
+    timeline_api.restore_timeline_activity(aid)
+    after = activity_service.get_activity(aid)
+    assert after["updated_at"] != before_updated
+
+
+def test_restore_activity_idempotent_after_restore(temp_db):
+    """Phase 3B.8.1: restoring an already-restored activity is rejected
+    as ``not_restorable`` — restore is not a silent no-op."""
+    aid = _seed_closed_activity()
+    timeline_api.hide_timeline_activity(aid)
+    timeline_api.restore_timeline_activity(aid)
+    # Second restore must reject, not silently succeed.
+    with pytest.raises(TimelineRestoreActivityError) as exc:
+        timeline_api.restore_timeline_activity(aid)
+    assert exc.value.code == "not_restorable"
+
+
+def test_get_restorable_activities_no_updated_at_change(temp_db):
+    """Phase 3B.8.1: the recovery list read path must not refresh
+    ``updated_at`` on any activity."""
+    aid = _seed_closed_activity()
+    timeline_api.hide_timeline_activity(aid)
+    before = activity_service.get_activity(aid)
+    before_updated = before["updated_at"]
+    timeline_api.get_timeline_restorable_activities("2026-06-25")
+    after = activity_service.get_activity(aid)
+    assert after["updated_at"] == before_updated
+
+
+def test_restore_activity_does_not_leak_exception_in_message(temp_db):
+    """Phase 3B.8.1: the API error message must not contain the service
+    exception class name or internal detail."""
+    aid = _seed_closed_activity()
+    timeline_api.hide_timeline_activity(aid)
+    with patch.object(
+        activity_service, "restore_activity", side_effect=OSError("disk full")
+    ):
+        with pytest.raises(TimelineRestoreActivityError) as exc:
+            timeline_api.restore_timeline_activity(aid)
+    assert exc.value.code == "operation_failed"
+    error_str = str(exc.value)
+    assert "OSError" not in error_str
+    assert "disk full" not in error_str

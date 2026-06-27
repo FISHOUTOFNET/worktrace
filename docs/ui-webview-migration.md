@@ -2752,6 +2752,131 @@ Phase 3B.8 does not implement and does not start:
 - Any `localStorage` / `sessionStorage` usage;
 - Any Tkinter fallback path.
 
+## Phase 3B.8.1 Implemented Scope
+
+Phase 3B.8.1 is a **hardening-only** phase for the Phase 3B.8 single activity
+restore foundation. No new features, no new restore/delete/batch types, no
+new DB schema, and no new UI controls are introduced. The hardening
+strengthens the restore path across service rowcount/rollback,
+not-restorable/in-progress, hidden+deleted, recovery list display-safe,
+API error mapping, bridge error convergence, frontend dirty-state /
+saving-state / date-switch / session-switch / auto-refresh /
+selected-session-disappear paths.
+
+### Service layer hardening
+
+- `restore_activity` write exception (e.g. `sqlite3.OperationalError`)
+  propagates and the transaction rolls back so no partial write survives
+  (the activity remains hidden/deleted).
+- The `restore_activity` rowcount guard continues to reject a 0-row
+  UPDATE (race condition: the activity was restored or re-opened between
+  validation and write) as `ValueError("restore_failed")`.
+- `restore_activity` is idempotent in rejection: an already-restored row
+  (normal activity) is rejected as `activity_not_restorable` — restore is
+  never a silent no-op.
+- `list_restorable_activities_for_date` is sorted by `start_time ASC, id ASC`
+  so two activities with the same start time have a stable order (id
+  tiebreaker).
+- `list_restorable_activities_for_date` read path performs no write and does
+  not refresh `updated_at` for any activity.
+- Restore refreshes `updated_at` to `now()` (verified by a test that sleeps
+  to cross the SQLite second boundary).
+
+### API layer hardening
+
+- `restore_timeline_activity` maps non-ValueError service exceptions (e.g.
+  `RuntimeError`) to `operation_failed` so the bridge never receives an
+  unhandled exception type.
+- `get_timeline_restorable_activities` also collapses non-ValueError
+  service exceptions to `operation_failed`.
+- API error messages do not leak the service exception class name or
+  internal detail (e.g. `OSError`, "disk full", raw SQL) — only the
+  stable `.code` is surfaced.
+- The API return payload never includes raw rows, exception text,
+  `window_title`, `file_path_hint`, `full_path`, `clipboard`, or `note`.
+
+### Bridge layer hardening
+
+- The `_RESTORE_ERROR_MESSAGES` dict maps every stable API code to a
+  clear Chinese message:
+  - `invalid_activity` → `请选择有效的活动`
+  - `not_found` → `活动不存在`
+  - `not_restorable` → `该活动无需恢复`
+  - `in_progress` → `进行中记录暂不支持恢复`
+  - `invalid_date` → `日期无效`
+  - `operation_failed` → `恢复失败`
+- Unknown error codes and unexpected exceptions collapse to `恢复失败`
+  (restore) / `加载可恢复记录失败` (recovery list) without echoing
+  tracebacks, SQL, exception class names, or raw fields.
+- The bridge continues to import only `worktrace.api` — it does not
+  directly import `services` / `db` / `collector` / `runtime` / `security` /
+  `config`.
+
+### Frontend hardening
+
+- **Stale-row guard**: `saveActivityRestore` queries the DOM for a
+  `.correction-shell-restore-row[data-activity-id="..."]` matching the
+  clicked activity before calling the bridge. If the row is no longer
+  present (e.g. the list was reloaded by an auto-refresh and the activity
+  is gone), a safe message `该活动已不在可恢复列表中，请刷新后重试` is
+  shown and the bridge is NOT called. The stale-row guard runs before the
+  `isEditDirty()` check and does not change the selected session.
+- **Auto-refresh reload guard**: the auto-refresh path that re-renders the
+  correction shell (and thus the restore section) is guarded by a
+  four-layer chain:
+  1. `correctionShellOpen` — the shell must be open;
+  2. `correctionShellSessionId === found.session_id` — the session must
+     match;
+  3. `!isEditDirty()` — no unsaved edits;
+  4. `restoreSaving` — `renderRestoreSection` early-returns when a restore
+     save is in flight so the in-flight save's success/failure handler
+     completes the reload itself.
+- The `restoreSaving` / `restoreSavingActivityId` state remains
+  independent from `batchProjectSaving` / `batchNoteSaving` / `editSaving` /
+  `timeSaving` / `activityTimeSaving` / `sessionSplitSaving` /
+  `activitySplitSaving` / `mergeSaving` / `hideSaving` / `deleteSaving` and
+  all correction shell state.
+- `clearEditPanel` and `resetCorrectionShellState` continue to call
+  `resetRestoreState` so no stale list / saving flag leaks across sessions,
+  dates, or shell close.
+- Dynamic values in the restore list continue to be escaped via
+  `escapeHtml`; no `localStorage` / `sessionStorage`, external links,
+  tracebacks, or raw field display.
+
+### What Phase 3B.8.1 does not change
+
+- `restore_activity` still modifies only `is_hidden`, `is_deleted`,
+  `updated_at` — `start_time`, `end_time`, `duration_seconds`,
+  `project_id`, `note`, `status`, `source`, resource rows, assignment
+  rows, and `project_session_note` are unchanged.
+- The row is never physically deleted.
+- No new DB schema.
+- No batch restore, restore all, undo stack, or permanent delete.
+
+## Phase 3B.8.1 Not Implemented
+
+Phase 3B.8.1 does not implement and does not start:
+
+- Batch restore (restoring multiple activities at once);
+- Restore all;
+- Undo stack (multi-step undo / redo);
+- Permanent delete (physically deleting a row);
+- Batch hide / batch delete;
+- Batch time correction;
+- Batch split;
+- Batch merge;
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge;
+- Multi-activity session whole-hide / whole-delete;
+- Any new DB schema;
+- Any new batch write type;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any Tkinter fallback path.
+
 ## Legacy Tkinter UI Handling
 
 The `worktrace/ui` package is retained in the source tree as legacy code

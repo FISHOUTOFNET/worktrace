@@ -2924,6 +2924,22 @@
             showRestoreStatus("请选择有效的活动", true);
             return;
         }
+        // Phase 3B.8.1: confirm the activity id still exists in the
+        // current restore list. If the list was reloaded (e.g. by an
+        // auto-refresh) and the activity is no longer present, surface a
+        // safe message and do not call the bridge. This guards against a
+        // stale row whose state may have already changed.
+        var listEl = document.getElementById("correction-shell-restore-list");
+        if (listEl) {
+            var staleRow = listEl.querySelector(
+                '.correction-shell-restore-row[data-activity-id="'
+                + String(activityId) + '"]'
+            );
+            if (!staleRow) {
+                showRestoreStatus("该活动已不在可恢复列表中，请刷新后重试", true);
+                return;
+            }
+        }
         // Guard against unsaved edits: restore is an immediate action that
         // triggers a refresh, which would wipe unsaved project/note/time/
         // split inputs. Require the user to save or cancel first.

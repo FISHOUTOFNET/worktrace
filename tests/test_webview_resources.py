@@ -5363,3 +5363,178 @@ def test_styles_css_restore_empty_state():
     assert "暂无可恢复记录" in source or ":empty" in source, (
         "styles.css must define the restore list empty-state fallback"
     )
+
+
+# --- Phase 3B.8.1: restore hardening tests -------------------------------
+
+
+def test_app_js_restore_stale_row_guard():
+    """Phase 3B.8.1: saveActivityRestore must confirm the activity row
+    still exists in the current restore list before calling the bridge.
+    If the row is stale (e.g. the list was reloaded by an auto-refresh and
+    the activity is no longer present), a safe message must be shown and
+    the bridge must NOT be called."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    assert save_start != -1, "saveActivityRestore must exist"
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    # The stale-row guard must query the DOM for a matching restore row.
+    assert "correction-shell-restore-list" in save_body, (
+        "saveActivityRestore must query the restore list container"
+    )
+    assert "correction-shell-restore-row" in save_body, (
+        "saveActivityRestore must query for restore row elements"
+    )
+    assert "data-activity-id" in save_body, (
+        "saveActivityRestore must match rows by data-activity-id"
+    )
+    # The stale-row guard must show a safe message when the row is gone.
+    assert "该活动已不在可恢复列表中" in save_body, (
+        "saveActivityRestore must show a stale-row safe message"
+    )
+    # The stale-row guard must return early (not fall through to the
+    # bridge call). The bridge call ("callBridge") must appear AFTER the
+    # stale-row guard's return, so extract the guard body and verify
+    # callBridge is not referenced before the guard's return.
+    guard_start = save_body.find("correction-shell-restore-list")
+    guard_return = save_body.find("return", guard_start)
+    call_bridge_pos = save_body.find('callBridge("restore_timeline_activity"')
+    assert call_bridge_pos != -1, (
+        "saveActivityRestore must call the restore bridge method"
+    )
+    assert guard_return != -1 and guard_return < call_bridge_pos, (
+        "saveActivityRestore stale-row guard must return before the "
+        "bridge call (stale rows must not call the bridge)"
+    )
+
+
+def test_app_js_restore_stale_row_guard_before_dirty_check():
+    """Phase 3B.8.1: the stale-row guard must run before the dirty-edit
+    check so that a stale row is surfaced even when the user has unsaved
+    edits (the stale row message is more specific than the dirty-edit
+    block message)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    stale_guard_pos = save_body.find("correction-shell-restore-list")
+    dirty_check_pos = save_body.find("isEditDirty()")
+    assert stale_guard_pos != -1 and dirty_check_pos != -1, (
+        "saveActivityRestore must contain both the stale-row guard and "
+        "the isEditDirty() check"
+    )
+    assert stale_guard_pos < dirty_check_pos, (
+        "saveActivityRestore stale-row guard must precede the isEditDirty() "
+        "check so stale rows are surfaced before the generic dirty block"
+    )
+
+
+def test_app_js_restore_auto_refresh_reload_guard():
+    """Phase 3B.8.1: the auto-refresh path that re-renders the correction
+    shell (and thus the restore section) must be guarded by:
+      1. shell open (correctionShellOpen),
+      2. session match (correctionShellSessionId === found.session_id),
+      3. no dirty edit (!isEditDirty()),
+      4. not restore saving (restoreSaving check in renderRestoreSection).
+    This test verifies the complete guard chain exists in the auto-refresh
+    path of showTimeline and the renderRestoreSection function."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # 1. showTimeline auto-refresh path must guard the shell re-render.
+    show_start = source.find("function showTimeline(")
+    assert show_start != -1, "showTimeline must exist"
+    show_end = source.find("\n    function ", show_start + 1)
+    show_body = source[show_start:show_end]
+    assert "correctionShellOpen" in show_body, (
+        "showTimeline auto-refresh must check correctionShellOpen before "
+        "re-rendering the shell (which contains the restore section)"
+    )
+    assert "isEditDirty()" in show_body, (
+        "showTimeline auto-refresh must guard with isEditDirty() before "
+        "re-rendering the shell"
+    )
+    assert "renderCorrectionShell" in show_body, (
+        "showTimeline auto-refresh must call renderCorrectionShell (which "
+        "in turn calls renderRestoreSection)"
+    )
+    # 2. renderRestoreSection must independently guard against an in-flight
+    #    restore save (the final layer of the guard chain).
+    render_start = source.find("function renderRestoreSection")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    assert "restoreSaving" in render_body, (
+        "renderRestoreSection must check restoreSaving before reloading the "
+        "restore list (auto-refresh must not overwrite an in-flight save)"
+    )
+    # The restoreSaving guard must return early before calling
+    # loadRestorableActivities so a save in flight is not clobbered.
+    load_pos = render_body.find("loadRestorableActivities")
+    saving_pos = render_body.find("restoreSaving")
+    assert load_pos != -1, (
+        "renderRestoreSection must call loadRestorableActivities"
+    )
+    assert saving_pos < load_pos, (
+        "renderRestoreSection must check restoreSaving before calling "
+        "loadRestorableActivities"
+    )
+
+
+def test_app_js_restore_saving_guard_in_render_returns_early():
+    """Phase 3B.8.1: when restoreSaving is true, renderRestoreSection must
+    return immediately (skip the loadRestorableActivities call) so the
+    in-flight save's success/failure handler can complete the reload
+    itself. This prevents an auto-refresh from overwriting the list while
+    a restore save response is pending."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_start = source.find("function renderRestoreSection")
+    render_end = source.find("\n    function ", render_start + 1)
+    render_body = source[render_start:render_end]
+    # The guard must be an early return: "if (restoreSaving) return;"
+    assert re.search(r"if\s*\(\s*restoreSaving\s*\)\s*return", render_body), (
+        "renderRestoreSection must early-return when restoreSaving is true"
+    )
+
+
+def test_app_js_restore_stale_guard_does_not_change_selected_session():
+    """Phase 3B.8.1: the stale-row refusal path must not change the
+    selected session (only show a safe message and return). This mirrors
+    the dirty-state refusal semantics."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    # Extract the stale-row guard body: from the list query to the guard's
+    # return statement.
+    stale_guard_start = save_body.find("correction-shell-restore-list")
+    # The stale-row guard block ends at the "return;" after the safe message.
+    guard_return = save_body.find("return", stale_guard_start)
+    assert guard_return != -1, (
+        "saveActivityRestore stale-row guard must return early"
+    )
+    guard_body = save_body[stale_guard_start:guard_return]
+    # The stale-row guard must not touch selectedSessionId.
+    assert "selectedSessionId" not in guard_body, (
+        "saveActivityRestore stale-row guard must not change the selected "
+        "session"
+    )
+
+
+def test_app_js_restore_stale_guard_no_bridge_call():
+    """Phase 3B.8.1: the stale-row guard path must not call callBridge.
+    Only the path after the dirty-edit check (the actual restore path) may
+    call the bridge."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    save_start = source.find("function saveActivityRestore")
+    save_end = source.find("\n    function ", save_start + 1)
+    save_body = source[save_start:save_end]
+    # The stale-row guard runs from the list query to its return.
+    stale_guard_start = save_body.find("correction-shell-restore-list")
+    stale_guard_end = save_body.find("return", stale_guard_start)
+    assert stale_guard_end != -1, (
+        "saveActivityRestore stale-row guard must return early"
+    )
+    guard_body = save_body[stale_guard_start:stale_guard_end]
+    assert "callBridge" not in guard_body, (
+        "saveActivityRestore stale-row guard must not call the bridge "
+        "(stale rows must not trigger a restore)"
+    )

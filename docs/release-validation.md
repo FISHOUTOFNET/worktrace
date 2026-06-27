@@ -2547,3 +2547,107 @@ of scope.
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
   server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 3B.8.1 Validation
+
+Phase 3B.8.1 is a **hardening-only** phase for the Phase 3B.8 single activity
+restore foundation. No new features, no new restore/delete/batch types, no
+new DB schema, and no new UI controls are introduced.
+
+### Phase 3B.8.1 Scope
+
+- **Service hardening**:
+  - `restore_activity` write exception (e.g. `sqlite3.OperationalError`)
+    propagates and the transaction rolls back so no partial write survives.
+  - The rowcount guard continues to reject a 0-row UPDATE as
+    `ValueError("restore_failed")`.
+  - Restore is idempotent in rejection: an already-restored (normal)
+    activity is rejected as `activity_not_restorable`.
+  - `list_restorable_activities_for_date` is sorted by
+    `start_time ASC, id ASC` (stable id tiebreaker).
+  - The recovery list read path performs no write and does not refresh
+    `updated_at` for any activity.
+  - Restore refreshes `updated_at` to `now()`.
+- **API hardening**:
+  - `restore_timeline_activity` maps non-ValueError service exceptions
+    (e.g. `RuntimeError`) to `operation_failed`.
+  - `get_timeline_restorable_activities` also collapses non-ValueError
+    service exceptions to `operation_failed`.
+  - API error messages do not leak the service exception class name or
+    internal detail (e.g. `OSError`, "disk full", raw SQL).
+  - The API return payload never includes raw rows, exception text,
+    `window_title`, `file_path_hint`, `full_path`, `clipboard`, or `note`.
+- **Bridge hardening**:
+  - `_RESTORE_ERROR_MESSAGES` maps every stable API code to a clear
+    Chinese message (`invalid_activity`, `not_found`, `not_restorable`,
+    `in_progress`, `invalid_date`, `operation_failed`).
+  - Unknown codes and unexpected exceptions collapse to `恢复失败`
+    (restore) / `加载可恢复记录失败` (recovery list).
+  - The bridge does not import `services` / `db` / `collector` / `runtime` /
+    `security` / `config` directly.
+- **Frontend hardening**:
+  - Stale-row guard: `saveActivityRestore` validates the activity row still
+    exists in the current restore list DOM before calling the bridge; if
+    stale, shows `该活动已不在可恢复列表中，请刷新后重试` and does NOT call
+    the bridge. The guard runs before `isEditDirty()` and does not change
+    the selected session.
+  - Auto-refresh reload guard chain: `correctionShellOpen` +
+    `correctionShellSessionId === found.session_id` + `!isEditDirty()` +
+    `restoreSaving` early-return in `renderRestoreSection`.
+  - `restoreSaving` / `restoreSavingActivityId` independent from all other
+    saving states.
+  - `clearEditPanel` / `resetCorrectionShellState` call `resetRestoreState`.
+  - Dynamic values escaped via `escapeHtml`; no `localStorage` /
+    `sessionStorage`, external links, tracebacks, or raw field display.
+- **Restore modifies only**: `is_hidden`, `is_deleted`, `updated_at`.
+- **Restore does not modify**: `start_time`, `end_time`,
+  `duration_seconds`, `project_id`, `note`, `status`, `source`, resource
+  rows, assignment rows, `project_session_note`. The row is never
+  physically deleted.
+- **Recovery list**: only display-safe fields (no raw `window_title`,
+  `file_path_hint`, `full_path`, `clipboard`, `note`), sorted by
+  `start_time, id`.
+
+### Phase 3B.8.1 Verification
+
+- `python -m pytest` passes (all Phase 3B.8.1 hardening tests pass; all
+  Phase 3B.8 / 3B.7.1 / 3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A /
+  3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression tests pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- No frontend resource contains batch restore / restore all / undo stack /
+  permanent delete controls.
+- The recovery list never surfaces raw `window_title` / `file_path_hint` /
+  `full_path` / `clipboard` / `note` / traceback / SQL.
+- The bridge does not import `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- No new DB schema is introduced.
+- Restore modifies only `is_hidden` / `is_deleted` / `updated_at`.
+
+### Phase 3B.8.1 Release Blockers
+
+- Restore modifies any field other than `is_hidden` / `is_deleted` /
+  `updated_at`.
+- Restore physically deletes data.
+- Restore exposes raw `window_title` / `file_path_hint` / `full_path` /
+  `clipboard` / `note` / traceback / SQL in any return payload.
+- Recovery list exposes sensitive fields.
+- A normal activity is restored silently (without `not_restorable`
+  rejection).
+- An in-progress activity (raw `end_time IS NULL`) is restored.
+- A dirty-edit bypass: restore proceeds while `isEditDirty()` is true.
+- A restore saving state gets stuck (saving flag never resets).
+- A stale row triggers a bridge call (no stale-row guard).
+- Auto-refresh overwrites the restore list while a restore save is in
+  flight (no `restoreSaving` guard in `renderRestoreSection`).
+- Batch restore is introduced.
+- Restore all is introduced.
+- Undo stack is introduced.
+- Permanent delete is introduced.
+- A new DB schema is introduced.
+- The bridge imports `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- Any Phase 3B.8 / 3B.7.1 / 3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B /
+  3B.5A / 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
+  server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.
