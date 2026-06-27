@@ -1,7 +1,9 @@
 """Timeline WebView static-contract tests.
 
 These tests read the bundled frontend resources (index.html /
-app.js / styles.css) directly without starting the GUI. They lock
+js/*.js / styles.css) directly without starting the GUI. Phase R2
+split the monolithic app.js into six js/ modules; JS-level contracts
+use read_all_js() (concatenated split modules in load order). They lock
 the Timeline page contracts for Phases 2, 2.1, 3A, 3A.1, 3B.1,
 3B.1.1, 3B.2, 3B.3, 3B.4, 3C, and 3C.1.
 """

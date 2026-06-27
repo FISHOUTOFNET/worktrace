@@ -1,8 +1,11 @@
 """Statistics / Export WebView static-contract tests.
 
 These tests read the bundled frontend resources (index.html /
-app.js / styles.css) directly without starting the GUI. They lock
-the Statistics / Export page contracts for Phases 4A, 4A.1, and 4B.
+js/*.js / styles.css) directly without starting the GUI. Phase R2
+split the monolithic app.js into six js/ modules; JS-level contracts
+use read_all_js() (concatenated split modules in load order) or
+read_js("<module>.js") for module-scoped checks. They lock the
+Statistics / Export page contracts for Phases 4A, 4A.1, and 4B.
 """
 
 from __future__ import annotations
@@ -182,17 +185,31 @@ def test_index_html_statistics_error_text_4a():
 
 
 
-def test_index_html_statistics_no_real_export_button_4a():
-    """Phase 4A: no real export write button may be present. The only
-    export-related button must be the disabled placeholder."""
+def test_index_html_statistics_only_csv_export_button_allowed_4b():
+    """Phase 4B: CSV export is now supported via the bridge. index.html may
+    contain the CSV export button (stats-export-action-btn / 导出 CSV), but
+    must NOT contain Excel / PDF / timesheet / open-folder / auto-submit
+    button controls, nor any frontend-side save-dialog / file-path input
+    control. The CSV export write itself is only invoked through a bridge
+    call, never via a frontend direct file-write control.
+
+    Note: the export hint text legitimately mentions Excel / PDF / timesheet
+    / 打开文件夹 / 自动提交工时 as *unsupported* features; those mentions are
+    verified by test_index_html_statistics_export_hint_csv_enabled_4b. This
+    test only forbids button-like ids / classes and the ``导出excel`` /
+    ``导出pdf`` label tokens (with the 导出 prefix) that would indicate a
+    real unsupported export button."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
-    for forbidden in ("export-csv-btn", "export-excel-btn", "export-pdf-btn",
+    # CSV is the only supported export format (Phase 4B). No button id /
+    # class for Excel / PDF / timesheet / folder-open / auto-submit may
+    # exist, and no 导出excel / 导出pdf button label may be present.
+    for forbidden in ("export-excel-btn", "export-pdf-btn",
                       "export-timesheet-btn", "save-file-btn",
-                      "open-folder-btn", "导出csv", "导出excel",
-                      "导出pdf"):
+                      "open-folder-btn", "auto-submit-btn",
+                      "导出excel", "导出pdf"):
         assert forbidden not in lowered, (
-            "index.html must not contain real export button: " + forbidden
+            "index.html must not contain unsupported export button: " + forbidden
         )
 
 
@@ -205,8 +222,8 @@ def test_index_html_overview_and_timeline_nav_not_regressed_4a():
 
 
 
-def test_app_js_statistics_state_variables_4a():
-    """Phase 4A: app.js must declare the statistics state variables."""
+def test_frontend_js_statistics_state_variables_4a():
+    """Phase 4A: frontend JS must declare the statistics state variables."""
     source = read_all_js()
     assert "statisticsLoaded" in source
     assert "statisticsLoading" in source
@@ -214,8 +231,8 @@ def test_app_js_statistics_state_variables_4a():
 
 
 
-def test_app_js_statistics_load_function_4a():
-    """Phase 4A: app.js must define loadStatisticsExportSummary and call the
+def test_frontend_js_statistics_load_function_4a():
+    """Phase 4A: frontend JS must define loadStatisticsExportSummary and call the
     bridge method get_statistics_export_summary."""
     source = read_all_js()
     assert "function loadStatisticsExportSummary" in source
@@ -223,8 +240,8 @@ def test_app_js_statistics_load_function_4a():
 
 
 
-def test_app_js_statistics_render_function_4a():
-    """Phase 4A: app.js must define showStatistics and renderStatsTable."""
+def test_frontend_js_statistics_render_function_4a():
+    """Phase 4A: frontend JS must define showStatistics and renderStatsTable."""
     source = read_all_js()
     assert "function showStatistics" in source
     assert "function renderStatsTable" in source
@@ -232,8 +249,8 @@ def test_app_js_statistics_render_function_4a():
 
 
 
-def test_app_js_statistics_quick_range_function_4a():
-    """Phase 4A: app.js must define applyStatisticsQuickRange and
+def test_frontend_js_statistics_quick_range_function_4a():
+    """Phase 4A: frontend JS must define applyStatisticsQuickRange and
     initStatisticsDefaults."""
     source = read_all_js()
     assert "function applyStatisticsQuickRange" in source
@@ -241,7 +258,7 @@ def test_app_js_statistics_quick_range_function_4a():
 
 
 
-def test_app_js_statistics_lazy_load_in_switch_page_4a():
+def test_frontend_js_statistics_lazy_load_in_switch_page_4a():
     """Phase 4A: switchPage must lazy-load the statistics summary on first
     navigation to the page."""
     source = read_all_js()
@@ -255,7 +272,7 @@ def test_app_js_statistics_lazy_load_in_switch_page_4a():
 
 
 
-def test_app_js_statistics_event_binding_in_init_buttons_4a():
+def test_frontend_js_statistics_event_binding_in_init_buttons_4a():
     """Phase 4A: initButtons must bind the statistics load + quick range
     buttons."""
     source = read_all_js()
@@ -271,7 +288,7 @@ def test_app_js_statistics_event_binding_in_init_buttons_4a():
 
 
 
-def test_app_js_statistics_uses_escape_html_4a():
+def test_frontend_js_statistics_uses_escape_html_4a():
     """Phase 4A: renderStatsTable must use escapeHtml for dynamic values."""
     source = read_all_js()
     pos = source.find("function renderStatsTable")
@@ -282,42 +299,58 @@ def test_app_js_statistics_uses_escape_html_4a():
 
 
 
-def test_app_js_statistics_no_export_write_handler_4a():
-    """Phase 4A: app.js must not wire any export write / save dialog / file
-    creation handler for the statistics page."""
+def test_frontend_js_statistics_export_only_via_bridge_4b():
+    """Phase 4B: CSV export is now supported, but only through the bridge.
+    The frontend JS must define ``exportStatisticsCsv`` and must invoke
+    ``App.callBridge("export_statistics_csv", ...)``. Direct filesystem
+    APIs, save-dialog helpers, Excel / PDF / timesheet / folder-open
+    handlers, and ``window.pywebview.api.export...`` direct calls are all
+    forbidden — the CSV write must go through ``App.callBridge(...)``."""
     source = read_all_js()
+    # The allowed CSV export handler must exist and go through the bridge.
+    assert "function exportStatisticsCsv" in source, (
+        "frontend JS must define exportStatisticsCsv for the CSV export"
+    )
+    assert 'callBridge("export_statistics_csv"' in source, (
+        "frontend JS must call App.callBridge(\"export_statistics_csv\", ...) "
+        "for the CSV write; direct file writes are forbidden"
+    )
+    # Direct filesystem / save-dialog / non-CSV export handlers are forbidden.
     lowered = source.lower()
-    for forbidden in ("exportcsv", "exportexcel", "exportpdf",
+    for forbidden in ("exportexcel", "exportpdf",
                       "exporttimesheet", "savefile", "saveas",
-                      "opensavefile", "window.pywebview.api.export"):
+                      "opensavefile", "createfile", "writefile",
+                      "write_file", "openfolder", "open_folder",
+                      "shell.open", "window.pywebview.api.export"):
         assert forbidden not in lowered, (
-            "app.js must not wire export write handler: " + forbidden
+            "frontend JS must not wire direct file write / unsupported export "
+            "handler: " + forbidden
         )
 
 
 
-def test_app_js_statistics_no_local_storage_4a():
+def test_frontend_js_statistics_no_local_storage_4a():
     """Phase 4A: the statistics page must not use localStorage /
     sessionStorage (regression lock)."""
     source = read_all_js()
     for forbidden in ("localStorage", "sessionStorage"):
         assert forbidden not in source, (
-            "app.js must not use " + forbidden
+            "frontend JS must not use " + forbidden
         )
 
 
 
-def test_app_js_statistics_error_text_4a():
+def test_frontend_js_statistics_error_text_4a():
     """Phase 4A: the statistics error path must surface 加载统计失败."""
     source = read_all_js()
     assert "加载统计失败" in source
 
 
 
-def test_app_js_statistics_loading_text_4a():
+def test_frontend_js_statistics_loading_text_4a():
     """Phase 4A: the statistics loading path must surface 正在加载统计…."""
     source = read_all_js()
-    # The loading text is in index.html; app.js toggles the hidden flag on
+    # The loading text is in index.html; frontend JS toggles the hidden flag on
     # the statistics-loading element. Verify the element id is referenced.
     assert "statistics-loading" in source
 
@@ -406,14 +439,14 @@ def test_index_html_no_settings_privacy_page_4a():
 
 
 
-def test_app_js_no_save_dialog_or_folder_open_4a():
-    """Phase 4A: app.js must not call any save dialog or folder open helper."""
+def test_frontend_js_no_save_dialog_or_folder_open_4a():
+    """Phase 4A: frontend JS must not call any save dialog or folder open helper."""
     source = read_all_js()
     lowered = source.lower()
     for forbidden in ("saveasdialog", "save_dialog", "createfile",
                       "openfolder", "open_folder", "shell.open"):
         assert forbidden not in lowered, (
-            "app.js must not call: " + forbidden
+            "frontend JS must not call: " + forbidden
         )
 
 
@@ -474,8 +507,8 @@ def test_index_html_no_react_vue_vite_node_4a():
 
 
 
-def test_app_js_no_react_vue_vite_node_4a():
-    """Phase 4A: app.js must not reference React / Vue / Vite / Node.
+def test_frontend_js_no_react_vue_vite_node_4a():
+    """Phase 4A: frontend JS must not reference React / Vue / Vite / Node.
     Uses word-boundary matching to avoid false positives on substrings
     like ``navItems`` containing ``vite``."""
     import re
@@ -484,26 +517,26 @@ def test_app_js_no_react_vue_vite_node_4a():
     for forbidden in ("react", "vue", "vite", "node_modules"):
         pattern = r'\b' + re.escape(forbidden) + r'\b'
         assert not re.search(pattern, lowered), (
-            "app.js must not reference: " + forbidden
+            "frontend JS must not reference: " + forbidden
         )
 
 
 
-def test_app_js_correction_shell_no_external_links_3c():
-    """Phase 3C: app.js must not reference external links / CDN
+def test_frontend_js_correction_shell_no_external_links_3c():
+    """Phase 3C: frontend JS must not reference external links / CDN
     (regression lock)."""
     source = read_all_js()
     lowered = source.lower()
     for forbidden in ("http://", "https://", "cdn", "google fonts",
                       "googleapis"):
         assert forbidden not in lowered, (
-            "app.js must not reference external resource: " + forbidden
+            "frontend JS must not reference external resource: " + forbidden
         )
 
 
 
-def test_app_js_correction_shell_no_raw_sensitive_fields_3c():
-    """Phase 3C: app.js must not render raw window_title / file_path_hint /
+def test_frontend_js_correction_shell_no_raw_sensitive_fields_3c():
+    """Phase 3C: frontend JS must not render raw window_title / file_path_hint /
     full_path / clipboard fields (regression lock)."""
     source = read_all_js()
     # The literal field names must not appear as rendered display values.
@@ -512,7 +545,7 @@ def test_app_js_correction_shell_no_raw_sensitive_fields_3c():
     for forbidden in ("window_title", "file_path_hint",
                       "full_path", "clipboard"):
         assert forbidden not in source, (
-            "app.js must not reference raw sensitive field: " + forbidden
+            "frontend JS must not reference raw sensitive field: " + forbidden
         )
 
 
@@ -630,7 +663,7 @@ def test_default_webview_entry_preserved_3c():
 # --- Phase 4A.1 --------------------------------------------------
 
 
-def test_app_js_statistics_loading_double_click_guard_4a1():
+def test_frontend_js_statistics_loading_double_click_guard_4a1():
     """Phase 4A.1: loadStatisticsExportSummary must refuse concurrent loads
     by checking ``statisticsLoading`` before doing any work."""
     source = read_all_js()
@@ -643,13 +676,13 @@ def test_app_js_statistics_loading_double_click_guard_4a1():
 
 
 
-def test_app_js_statistics_client_side_range_validator_4a1():
-    """Phase 4A.1: app.js must have a client-side date range validator that
+def test_frontend_js_statistics_client_side_range_validator_4a1():
+    """Phase 4A.1: frontend JS must have a client-side date range validator that
     catches invalid_date / invalid_range / range_too_large before calling the
     bridge."""
     source = read_all_js()
     assert "function validateStatisticsDateRange" in source, (
-        "app.js must define validateStatisticsDateRange"
+        "frontend JS must define validateStatisticsDateRange"
     )
     pos = source.find("function validateStatisticsDateRange")
     body = source[pos:pos + 1200]
@@ -665,7 +698,7 @@ def test_app_js_statistics_client_side_range_validator_4a1():
 
 
 
-def test_app_js_statistics_load_uses_validator_4a1():
+def test_frontend_js_statistics_load_uses_validator_4a1():
     """Phase 4A.1: loadStatisticsExportSummary must call
     validateStatisticsDateRange before calling the bridge."""
     source = read_all_js()
@@ -676,9 +709,14 @@ def test_app_js_statistics_load_uses_validator_4a1():
 
 
 
-def test_app_js_statistics_no_export_write_handler_4a1():
-    """Phase 4A.1: app.js must not contain any export write / file save /
-    save dialog handler anywhere in the statistics module.
+def test_frontend_js_statistics_no_direct_file_write_in_module_4b():
+    """Phase 4B: the statistics module may invoke the CSV export through the
+    bridge (``App.callBridge("export_statistics_csv", ...)``), but must not
+    contain any direct file write / save dialog / filesystem helper. The
+    forbidden tokens below (``export_csv`` / ``exportCsv`` etc.) do not match
+    the bridge-mediated ``exportStatisticsCsv`` / ``export_statistics_csv``
+    identifiers, so the allowed bridge path is unaffected while direct
+    handlers like ``exportCsv()`` or ``saveFile()`` would be caught.
 
     Phase R2: the statistics logic now lives in its own js/statistics.js
     file, so we check that file directly instead of looking for the old
@@ -967,24 +1005,24 @@ def test_index_html_no_new_pages_4a1():
 # --- Phase 4B ----------------------------------------------------
 
 
-def test_app_js_statistics_export_calls_bridge_export_statistics_csv_4b():
-    """Phase 4B: app.js must call the bridge ``export_statistics_csv``
+def test_frontend_js_statistics_export_calls_bridge_export_statistics_csv_4b():
+    """Phase 4B: frontend JS must call the bridge ``export_statistics_csv``
     method to perform the CSV write. The frontend never writes a file
     itself; it only invokes the bridge."""
     source = read_all_js()
     assert 'callBridge("export_statistics_csv"' in source, (
-        "app.js must call bridge export_statistics_csv for the CSV write"
+        "frontend JS must call bridge export_statistics_csv for the CSV write"
     )
 
 
 
-def test_app_js_statistics_export_saving_guard_present_4b():
-    """Phase 4B: app.js must define a separate ``statisticsExportSaving``
+def test_frontend_js_statistics_export_saving_guard_present_4b():
+    """Phase 4B: frontend JS must define a separate ``statisticsExportSaving``
     guard so the CSV write cannot be double-triggered or overlap a
     statistics load. The guard must NOT reuse ``statisticsLoading``."""
     source = read_all_js()
     assert "statisticsExportSaving" in source, (
-        "app.js must define statisticsExportSaving guard"
+        "frontend JS must define statisticsExportSaving guard"
     )
     # The guard variable must be declared as a separate boolean state.
     # Phase R2: state vars now live on the App. namespace.
@@ -993,7 +1031,7 @@ def test_app_js_statistics_export_saving_guard_present_4b():
     )
     # The export function must check the guard on entry.
     pos = source.find("function exportStatisticsCsv")
-    assert pos != -1, "app.js must define exportStatisticsCsv function"
+    assert pos != -1, "frontend JS must define exportStatisticsCsv function"
     body = source[pos:pos + 1500]
     assert "if (App.statisticsExportSaving)" in body, (
         "exportStatisticsCsv must guard against duplicate clicks"
@@ -1009,7 +1047,7 @@ def test_app_js_statistics_export_saving_guard_present_4b():
 
 
 
-def test_app_js_statistics_export_uses_validate_statistics_date_range_4b():
+def test_frontend_js_statistics_export_uses_validate_statistics_date_range_4b():
     """Phase 4B: exportStatisticsCsv must call
     validateStatisticsDateRange before calling the bridge, so the user
     gets an immediate clear message without a bridge round-trip."""
@@ -1023,7 +1061,7 @@ def test_app_js_statistics_export_uses_validate_statistics_date_range_4b():
 
 
 
-def test_app_js_statistics_export_catch_never_surfaces_raw_exception_4b():
+def test_frontend_js_statistics_export_catch_never_surfaces_raw_exception_4b():
     """Phase 4B: the exportStatisticsCsv promise catch must collapse to
     a stable Chinese message and never read raw exception text."""
     source = read_all_js()
@@ -1052,7 +1090,7 @@ def test_app_js_statistics_export_catch_never_surfaces_raw_exception_4b():
 
 
 
-def test_app_js_statistics_export_cancel_is_clean_result_4b():
+def test_frontend_js_statistics_export_cancel_is_clean_result_4b():
     """Phase 4B: a cancelled export must be handled as a clean info
     result (``已取消导出``), not as a Python exception or ``导出失败``."""
     source = read_all_js()
@@ -1068,7 +1106,7 @@ def test_app_js_statistics_export_cancel_is_clean_result_4b():
 
 
 
-def test_app_js_statistics_export_success_shows_filename_count_duration_4b():
+def test_frontend_js_statistics_export_success_shows_filename_count_duration_4b():
     """Phase 4B: a successful export must surface the basename, activity
     count, and total duration — never the full local path."""
     source = read_all_js()
@@ -1092,8 +1130,8 @@ def test_app_js_statistics_export_success_shows_filename_count_duration_4b():
 
 
 
-def test_app_js_no_export_excel_pdf_timesheet_open_folder_methods_4b():
-    """Phase 4B: app.js must not define any export_excel / export_pdf /
+def test_frontend_js_no_export_excel_pdf_timesheet_open_folder_methods_4b():
+    """Phase 4B: frontend JS must not define any export_excel / export_pdf /
     export_timesheet / open_folder / auto-submit methods."""
     source = read_all_js()
     lowered = source.lower()
@@ -1115,7 +1153,7 @@ def test_app_js_no_export_excel_pdf_timesheet_open_folder_methods_4b():
     )
     for token in forbidden:
         assert token not in lowered, (
-            "app.js must not reference forbidden export/external token: " + token
+            "frontend JS must not reference forbidden export/external token: " + token
         )
 
 
@@ -1231,7 +1269,7 @@ def test_styles_css_statistics_export_status_classes_4b():
 
 
 
-def test_app_js_statistics_export_no_local_storage_session_storage_4b():
+def test_frontend_js_statistics_export_no_local_storage_session_storage_4b():
     """Phase 4B: the export action must not use localStorage or
     sessionStorage (regression lock for the new write path)."""
     source = read_all_js()
@@ -1262,4 +1300,25 @@ def test_index_html_statistics_export_no_external_links_4b():
     )
     assert not re.search(r"google\s*fonts", section, re.IGNORECASE), (
         "statistics section must not reference Google Fonts"
+    )
+
+
+
+# --- Phase R2.1: wording regression lock --------------------------------
+# Phase R2 split the monolithic app.js into js/ modules. This tiny test
+# prevents the old monolithic-file "must" phrasing from creeping back
+# into this file's docstrings / assertion messages and misleading readers.
+
+
+def test_no_stale_app_js_must_wording_in_this_file_r21():
+    """Phase R2.1: this statistics contract file must no longer phrase
+    requirements as ``app.js`` followed by ``must`` (the monolithic file
+    was split into js/ modules in Phase R2). Use ``frontend JS must``
+    instead. The only allowed ``app.js`` mentions are the historical
+    ``monolithic app.js`` references explaining the Phase R2 split."""
+    own_source = open(__file__, encoding="utf-8").read()
+    stale = "app.js" + " must"
+    assert stale not in own_source, (
+        "statistics contract must not revive stale monolithic-file wording; "
+        "use 'frontend JS must' instead"
     )

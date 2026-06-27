@@ -1,9 +1,12 @@
 """Global WebView frontend resource boundary tests.
 
-These tests read the bundled frontend resources (``index.html`` / ``app.js`` /
-``styles.css``) directly without starting the GUI. They cover:
+These tests read the bundled frontend resources (``index.html`` /
+``js/*.js`` / ``styles.css``) directly without starting the GUI. Phase R2
+split the monolithic ``app.js`` into six ``js/`` modules; JS-level
+contracts use ``read_all_js()`` (concatenated split modules in load
+order). They cover:
 
-- Resource existence (index.html / app.js / styles.css / bridge.py).
+- Resource existence (index.html / js/*.js / styles.css / bridge.py).
 - Global static boundaries (no external links / CDN / Google Fonts /
   localStorage / traceback text), expressed as parametrized tests that
   replace the per-phase duplicate checks scattered across the original

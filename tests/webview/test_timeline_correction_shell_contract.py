@@ -1,7 +1,9 @@
 """Timeline correction-shell WebView static-contract tests.
 
 These tests read the bundled frontend resources (index.html /
-app.js / styles.css) directly without starting the GUI. They lock
+js/*.js / styles.css) directly without starting the GUI. Phase R2
+split the monolithic app.js into six js/ modules; JS-level contracts
+use read_all_js() (concatenated split modules in load order). They lock
 the correction-shell contracts for Phases 3B.5A, 3B.5B, 3B.5B.1,
 3B.6, 3B.6.1, 3B.7, 3B.7.1, 3B.8, 3B.8.1, 3B.9, and 3B.9.1.
 """
