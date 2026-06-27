@@ -207,9 +207,27 @@
     // Apply a status type class to a status element that uses the shared
     // ``edit-status`` base. Used by the per-area helpers when they want to
     // express info / loading / empty states in addition to error / success.
+    // Phase 3C.1 hardening: only toggle the status-type classes, preserve
+    // any structural classes the element already has, and never splice
+    // user input into the class name — only the whitelisted
+    // STATUS_TYPE_CLASS values are ever applied.
+    var STATUS_TYPE_CLASS_VALUES = [
+        "edit-status-info", "edit-status-success", "edit-status-error",
+        "edit-status-loading", "edit-status-empty"
+    ];
     function applyStatusType(el, type) {
         if (!el) return;
-        el.className = "edit-status " + statusClassFor(type);
+        var preserved = [];
+        if (typeof el.className === "string" && el.className) {
+            preserved = el.className.split(/\s+/).filter(function (cls) {
+                return cls && STATUS_TYPE_CLASS_VALUES.indexOf(cls) === -1;
+            });
+        }
+        if (preserved.indexOf("edit-status") === -1) {
+            preserved.unshift("edit-status");
+        }
+        preserved.push(statusClassFor(type));
+        el.className = preserved.join(" ");
     }
 
     // Unified Timeline list-level status (loading / empty / error / info).
@@ -3312,9 +3330,11 @@
             for (var i = 0; i < results.length; i++) {
                 if (results[i].status === "rejected") {
                     hasError = true;
-                    errorMsg = results[i].reason && results[i].reason.message
-                        ? results[i].reason.message
-                        : "保存失败";
+                    // Phase 3C.1: never read .message from a rejected
+                    // promise — it could be a raw pywebview exception.
+                    // Use the stable "保存失败" fallback so internal
+                    // details never leak into the UI.
+                    errorMsg = "保存失败";
                     break;
                 }
             }
@@ -3485,14 +3505,15 @@
         callBridge("get_timeline", date).then(function (result) {
             if (token !== timelineRequestToken) return;
             var data = handleResult(result, function (msg) {
-                showTimelineError(msg || "刷新时间详情失败，请稍后重试。");
+                showTimelineError(msg || "刷新失败");
             });
             if (!data) return;
             showTimeline(data);
             clearTimelineError();
         }).catch(function () {
             if (token !== timelineRequestToken) return;
-            showTimelineError("刷新时间详情失败，请稍后重试。");
+            // Phase 3C.1: use the stable "刷新失败" fallback.
+            showTimelineError("刷新失败");
         });
     }
 
@@ -3654,7 +3675,7 @@
         callBridge("get_timeline", date).then(function (result) {
             if (token !== timelineRequestToken) return;  // stale response
             var data = handleResult(result, function (msg) {
-                showTimelineError(msg || "加载时间详情失败，请稍后重试。");
+                showTimelineError(msg || "加载时间线失败");
             });
             setTimelineLoading(false);
             if (!data) return;
@@ -3663,9 +3684,9 @@
         }).catch(function () {
             if (token !== timelineRequestToken) return;  // stale response
             setTimelineLoading(false);
-            // Phase 3C: never surface raw exception text; use the stable
+            // Phase 3C.1: never surface raw exception text; use the stable
             // fallback so internal details do not leak into the UI.
-            showTimelineError("加载时间详情失败，请稍后重试。");
+            showTimelineError("加载时间线失败");
         });
     }
 
@@ -3680,7 +3701,7 @@
         callBridge("get_timeline", date).then(function (result) {
             if (token !== timelineRequestToken) return;  // stale response
             var data = handleResult(result, function (msg) {
-                showTimelineError(msg || "刷新时间详情失败，请稍后重试。");
+                showTimelineError(msg || "刷新失败");
             });
             if (!data) return;
             showTimeline(data);
@@ -3688,7 +3709,8 @@
         }).catch(function () {
             if (token !== timelineRequestToken) return;  // stale response
             // Only show error banner; keep lastTimelineData on screen.
-            showTimelineError("刷新时间详情失败，请稍后重试。");
+            // Phase 3C.1: use the stable "刷新失败" fallback.
+            showTimelineError("刷新失败");
         });
     }
 
@@ -3816,9 +3838,9 @@
             });
             showStatus(status);
         }).catch(function (err) {
-            // Phase 3C: never surface raw exception text; use the stable
+            // Phase 3C.1: never surface raw exception text; use the stable
             // fallback so internal details do not leak into the UI.
-            showError("无法连接采集器状态，请稍后重试。");
+            showError("刷新失败");
             throw err;
         });
 
@@ -3828,9 +3850,9 @@
             });
             showOverview(overview);
         }).catch(function (err) {
-            // Phase 3C: never surface raw exception text; use the stable
+            // Phase 3C.1: never surface raw exception text; use the stable
             // fallback so internal details do not leak into the UI.
-            showError("加载今日概览失败，请稍后重试。");
+            showError("刷新失败");
             throw err;
         });
 
@@ -3840,9 +3862,9 @@
             });
             showRecent(recent);
         }).catch(function (err) {
-            // Phase 3C: never surface raw exception text; use the stable
+            // Phase 3C.1: never surface raw exception text; use the stable
             // fallback so internal details do not leak into the UI.
-            showError("加载最近活动失败，请稍后重试。");
+            showError("刷新失败");
             throw err;
         });
 
@@ -3858,7 +3880,7 @@
                 callBridge("get_timeline", date).then(function (result) {
                     if (token !== timelineRequestToken) { resolve(); return; }  // stale
                     var data = handleResult(result, function (msg) {
-                        showTimelineError(msg || "刷新时间详情失败，请稍后重试。");
+                        showTimelineError(msg || "刷新失败");
                         throw new Error(msg);
                     });
                     if (data) {
@@ -3869,7 +3891,8 @@
                 }).catch(function (err) {
                     if (token !== timelineRequestToken) { resolve(); return; }  // stale
                     // Keep lastTimelineData on screen; just surface the error.
-                    showTimelineError("刷新时间详情失败，请稍后重试。");
+                    // Phase 3C.1: use the stable "刷新失败" fallback.
+                    showTimelineError("刷新失败");
                     reject(err);
                 });
             });

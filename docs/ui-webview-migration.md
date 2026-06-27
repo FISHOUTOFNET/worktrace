@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3C (Overview fully migrated; Timeline read-only page
+- Current phase: 3C.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -71,6 +71,27 @@
   (`setTimelineStatus` / `setDetailStatus` / `setEditStatus` /
   `setCorrectionStatus`) delegating to existing per-area helpers without
   changing any DOM contract; no new backend write capability, bridge /
+  API / service method, DB schema, correction action, batch
+  hide / delete / restore, undo stack, permanent delete, batch
+  time / split / merge, note append / merge, auto-rule, global overlap
+  detection, or Statistics / Export / Project Rules / Settings / Privacy
+  migration — implemented; Timeline UI release hardening / regression
+  (Phase 3C.1) — hardening-only / regression-only: hardens the Phase 3C
+  status helpers (`applyStatusType` now preserves non-status structural
+  classes via a whitelisted `STATUS_TYPE_CLASS_VALUES` filter so toggling
+  a status type never wipes structural classes like
+  `correction-shell-status`; `statusClassFor` returns a safe default for
+  unknown types), closes the last raw-exception leak surface (the
+  `saveEdit` `Promise.allSettled` rejection handler no longer reads
+  `.reason.message` and uses the stable `保存失败` fallback so a raw
+  pywebview exception never reaches the UI), unifies all Timeline
+  catch-path fallback strings to a stable short Chinese vocabulary
+  (`加载时间线失败` / `刷新失败` / `加载详情失败` / `保存失败` /
+  `操作失败` / `恢复失败`) so the seven older longer strings are gone,
+  and adds 43 regression tests locking status-helper hardening,
+  raw-exception leak prevention, stable fallback vocabulary, auto-refresh
+  dirty/saving guards, display-safe rendering, CSS state hardening, and
+  boundary regression locks; no new backend write capability, bridge /
   API / service method, DB schema, correction action, batch
   hide / delete / restore, undo stack, permanent delete, batch
   time / split / merge, note append / merge, auto-rule, global overlap
@@ -3197,6 +3218,163 @@ Stabilization scope:
 ## Phase 3C Not Implemented
 
 Phase 3C does not implement and does not start:
+
+- Any new backend write capability;
+- Any new bridge / API / service method;
+- Any new DB schema;
+- Any new correction action;
+- Batch hide;
+- Batch delete;
+- Batch restore;
+- Restore all;
+- Undo stack;
+- Permanent delete;
+- Batch time correction;
+- Batch split;
+- Batch merge;
+- Batch note append;
+- Batch note merge;
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge;
+- Multi-activity session whole-hide / whole-delete;
+- Statistics / Export migration to WebView;
+- Project Rules migration to WebView;
+- Settings / Privacy migration to WebView;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any Tkinter fallback path;
+- Any removal of an existing feature, bridge call, or test.
+
+## Phase 3C.1 Implemented Scope
+
+Phase 3C.1 is the **Timeline UI release hardening / regression** phase. It
+is a **hardening-only / regression-only** phase, not a feature expansion
+phase. The goal is to lock the Timeline / Time Details page as
+release-ready by hardening the Phase 3C status helpers, closing the last
+raw-exception leak surface, unifying all Timeline catch-path fallback
+strings to a stable short Chinese vocabulary, and adding 43 regression
+tests — without adding any new backend write capability, bridge / API /
+service method, DB schema, correction action, or UI control.
+
+Hardening scope:
+
+1. **Status helper hardening — `applyStatusType` class preservation.**
+   `worktrace/webview_ui/app.js` `applyStatusType(el, type)` previously
+   did `el.className = "edit-status " + statusClassFor(type)`, which
+   would wipe any structural class the element already had (for example
+   `correction-shell-status`). Phase 3C.1 introduces a whitelisted
+   `STATUS_TYPE_CLASS_VALUES` array
+   (`edit-status-info` / `edit-status-success` / `edit-status-error` /
+   `edit-status-loading` / `edit-status-empty`) and rewrites
+   `applyStatusType` to filter only those whitelisted classes from the
+   existing class list, preserve every other class, ensure the
+   `edit-status` base class is present, then push the single
+   `statusClassFor(type)` result. Unknown types still fall through to
+   the safe `statusClassFor` default (`edit-status-info`). No user
+   input is ever spliced into a class name.
+
+2. **Status helper hardening — `statusClassFor` safe default.**
+   `statusClassFor(type)` returns `STATUS_TYPE_CLASS[type]` with a
+   `|| "edit-status-info"` fallback, so an unknown / missing type never
+   throws a JS exception and never produces an `undefined` class name.
+
+3. **Raw exception leak closure — `saveEdit` `Promise.allSettled`
+   rejection handler.** The `saveEdit` flow uses `Promise.allSettled`
+   to fan out project / note / time / split / merge / hide / delete
+   saves. The rejection handler previously read
+   `results[i].reason && results[i].reason.message ? ... : "保存失败"`,
+   which could surface a raw pywebview exception message. Phase 3C.1
+   replaces that with the stable `保存失败` fallback so internal
+   exception details never reach the UI. This was the last known
+   raw-exception-text leak surface in the Timeline code path.
+
+4. **Stable short Chinese fallback vocabulary.** Phase 3C used longer
+   strings (`加载时间详情失败，请稍后重试。` /
+   `无法连接采集器状态，请稍后重试。` /
+   `加载今日概览失败，请稍后重试。` /
+   `加载最近活动失败，请稍后重试。` /
+   `刷新时间详情失败，请稍后重试。`). Phase 3C.1 unifies all seven
+   Timeline catch-path fallback strings to the stable short vocabulary:
+   - `loadTimeline().catch()` → `加载时间线失败`;
+   - `refreshAll()` status / overview / recent catch blocks → `刷新失败`;
+   - `refreshAll()` timeline refresh catch → `刷新失败`;
+   - `refreshTimelineAfterEdit().catch()` → `刷新失败`;
+   - `refreshTimeline().catch()` → `刷新失败`;
+   - `saveEdit` rejection → `保存失败`.
+   The vocabulary (`加载时间线失败` / `刷新失败` / `加载详情失败` /
+   `保存失败` / `操作失败` / `恢复失败`) is locked by the Phase 3C.1
+   regression tests.
+
+5. **No new backend write capability.** `bridge.py`,
+   `timeline_api.py`, `timeline_service.py`, `activity_service.py`,
+   and `schema.sql` are unchanged in Phase 3C.1. The locked bridge
+   method set (21 methods asserted by
+   `test_bridge_no_new_methods_for_phase_3b9_1` and re-asserted by
+   `test_bridge_no_new_methods_for_phase_3c1`) is preserved. No
+   new API method, service method, DB column, DB table, DB index, or
+   DB trigger is introduced.
+
+6. **No new UI control or correction action.** No new sidebar nav
+   item, no new top-level page, no new action button, no new
+   destructive-action UI, no new card. The correction shell card
+   structure (context / activity / single-action / batch-action /
+   restore / not-implemented) is preserved.
+
+7. **No DOM contract change.** All existing JS-dependent IDs, CSS
+   classes, function names, and Chinese status / button / copy
+   strings asserted by `tests/test_webview_resources.py` and the
+   prior-phase test suites are preserved. The hardened
+   `applyStatusType` does not rename or relocate any existing DOM
+   element.
+
+8. **Display-safe rendering audit re-confirmed.** The Timeline list,
+   detail panel, edit panel, and correction shell still render only
+   display-safe fields. The forbidden-field set
+   (`window_title` / `file_path_hint` / `full_path` / clipboard /
+   note internals / SQL / traceback / raw exception text) is still
+   absent from the frontend resources and from the bridge return
+   values. The `saveEdit` `.reason.message` closure above closes the
+   last known exception-text leak surface in the Timeline code path.
+   `escapeHtml` / `safeText` / `textContent` are still the only
+   dynamic-render primitives.
+
+9. **Auto-refresh dirty / saving guards re-confirmed.** The
+   `refreshAll` / `refreshTimeline` / `refreshTimelineAfterEdit`
+   paths still respect the `isEditDirty()` dirty guard and the
+   `isAnyCorrectionWriteSaving()` cross-save guard. A dirty edit
+   input, a saving batch project / batch note / restore write, a
+   batch selection, a batch note textarea, and a restore list are
+   never overwritten by an auto-refresh tick. Date switch and
+   session switch still clear shell-only state and reset saving
+   flags. The selected-session-disappear path still safely closes
+   the shell / clears the detail without a JS exception.
+
+10. **CSS state hardening re-confirmed.** `styles.css` still defines
+    the complete status class family
+    (`.edit-status-info` / `.edit-status-success` / `.edit-status-error` /
+    `.edit-status-loading` / `.edit-status-empty`), the disabled /
+    saving button styles, `.correction-shell[hidden] { display: none; }`,
+    and the transient highlight CSS. No external CSS / font / CDN
+    reference is introduced. No `localStorage` / `sessionStorage`
+    reference is introduced.
+
+11. **Default WebView entry preserved.** `python -m worktrace.main`
+    (and the packaged `WorkTrace.exe`) still start the WebView UI
+    directly. The Overview, Timeline, and Time Details default
+    WebView entries are unchanged. No Tkinter fallback path was
+    introduced.
+
+12. **Release validation checklist updated.**
+    `docs/release-validation.md` now includes a Phase 3C.1 Validation
+    section with the hardening acceptance items and the release
+    blockers list.
+
+## Phase 3C.1 Not Implemented
+
+Phase 3C.1 does not implement and does not start:
 
 - Any new backend write capability;
 - Any new bridge / API / service method;

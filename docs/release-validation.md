@@ -2904,3 +2904,120 @@ schema, correction action, or UI control.
   `sessionStorage` usage is introduced.
 - Statistics / Export / Project Rules / Settings / Privacy migration
   to WebView is started.
+
+## WebView Phase 3C.1 Validation
+
+Phase 3C.1 is the **Timeline UI release hardening / regression** phase. It
+is a **hardening-only / regression-only** phase, not a feature expansion
+phase. It does NOT add any backend write capability, bridge / API /
+service method, DB schema, correction action, or UI control. It only
+hardens the Phase 3C status helpers, closes the last raw-exception leak
+surface, unifies the Timeline catch-path fallback vocabulary, and adds
+regression tests.
+
+### Phase 3C.1 Scope
+
+- Status helper hardening — `applyStatusType` class preservation:
+  `worktrace/webview_ui/app.js` `applyStatusType(el, type)` now filters
+  only the whitelisted `STATUS_TYPE_CLASS_VALUES` classes
+  (`edit-status-info` / `edit-status-success` / `edit-status-error` /
+  `edit-status-loading` / `edit-status-empty`) from the existing class
+  list, preserves every other structural class (for example
+  `correction-shell-status`), ensures the `edit-status` base class is
+  present, then pushes the single `statusClassFor(type)` result. No user
+  input is ever spliced into a class name.
+- Status helper hardening — `statusClassFor` safe default:
+  `statusClassFor(type)` returns `STATUS_TYPE_CLASS[type]` with a
+  `|| "edit-status-info"` fallback so an unknown / missing type never
+  throws a JS exception and never produces an `undefined` class name.
+- Raw exception leak closure — `saveEdit` `Promise.allSettled` rejection
+  handler: the rejection handler no longer reads `.reason.message` (which
+  could surface a raw pywebview exception) and uses the stable `保存失败`
+  fallback. This was the last known raw-exception-text leak surface in
+  the Timeline code path.
+- Stable short Chinese fallback vocabulary: all seven Timeline catch-path
+  fallback strings are unified to the stable short vocabulary
+  (`加载时间线失败` / `刷新失败` / `加载详情失败` / `保存失败` /
+  `操作失败` / `恢复失败`). The older longer Phase 3C strings are gone.
+- No backend change: `bridge.py`, `timeline_api.py`,
+  `timeline_service.py`, `activity_service.py`, and `schema.sql` are
+  unchanged. The locked bridge method set (21 methods) is preserved.
+- No DOM contract change: all existing JS-dependent IDs, CSS classes,
+  function names, and Chinese status / button / copy strings asserted by
+  `tests/test_webview_resources.py` and the prior-phase test suites are
+  preserved.
+- No new UI control: no new sidebar nav item, top-level page, action
+  button, destructive-action UI, or correction shell card.
+- Display-safe rendering audit re-confirmed: the Timeline list, detail
+  panel, edit panel, and correction shell still render only display-safe
+  fields; the forbidden-field set (`window_title` / `file_path_hint` /
+  `full_path` / clipboard / note internals / SQL / traceback / raw
+  exception text) is still absent.
+- Auto-refresh dirty / saving guards re-confirmed: the
+  `refreshAll` / `refreshTimeline` / `refreshTimelineAfterEdit` paths
+  still respect the `isEditDirty()` dirty guard and the
+  `isAnyCorrectionWriteSaving()` cross-save guard; date switch / session
+  switch / selected-session-disappear still clear shell-only state and
+  reset saving flags without a JS exception.
+- CSS state hardening re-confirmed: `styles.css` still defines the
+  complete status class family, disabled / saving button styles,
+  `.correction-shell[hidden] { display: none; }`, and the transient
+  highlight CSS; no external CSS / font / CDN / `localStorage` /
+  `sessionStorage` reference is introduced.
+
+### Phase 3C.1 Verification
+
+- `python -m pytest` passes (all 43 Phase 3C.1 regression tests pass; all
+  prior-phase tests continue to pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- No new bridge / API / service method is introduced.
+- No new DB schema is introduced.
+- No new correction action is introduced.
+- No `.reason.message` / `String(err)` / `err.toString()` reference
+  reaches a status / error DOM element in the Timeline code path.
+- The hardened `applyStatusType` preserves non-status structural classes.
+- `statusClassFor` returns a safe default for unknown types.
+- All seven Timeline catch-path fallback strings use the stable short
+  vocabulary.
+- The Overview / Timeline / Time Details default WebView entry tests
+  continue to pass.
+- The PyInstaller resource path tests continue to pass.
+
+### Phase 3C.1 Release Blockers
+
+- Any new backend write capability is introduced.
+- Any new bridge / API / service method is introduced.
+- Any new DB schema is introduced.
+- Any new correction action is introduced.
+- A raw exception / traceback / SQL string is shown in the Timeline list,
+  detail panel, edit panel, or correction shell.
+- Raw `window_title` / `file_path_hint` / `full_path` / clipboard /
+  note internals leak into the UI.
+- Auto-refresh overwrites dirty / saving state (a dirty edit input, a
+  saving batch project / batch note / restore write, a batch selection,
+  a batch note textarea, or a restore list is overwritten by an
+  auto-refresh tick).
+- A saving flag gets stuck (saving flag never resets after a catch path).
+- A failed save clears required input unexpectedly.
+- A dirty guard regression (any write path proceeds while `isEditDirty()`
+  is true).
+- A cross-save bypass (two correction-shell writes run concurrently).
+- A stale id reaches the bridge (stale id / stale restore row guard
+  fails to block the bridge call).
+- A soft delete is described as permanent delete.
+- Batch hide / delete / restore / permanent delete / undo stack UI is
+  introduced.
+- `localStorage` / `sessionStorage` / CDN / external font is introduced.
+- The bridge imports `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- Any Phase 3C / 3B.9.1 / 3B.9 / 3B.8.1 / 3B.8 / 3B.7.1 / 3B.7 /
+  3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A / 3B.4.1 / 3B.4 /
+  3B.3.1 / 3B.3 / 3B.2.1 / 3B.2 / 3B.1.1 / 3B.1 / 3A.1 / 3A /
+  2.1 regression.
+- The Overview / Timeline / Time Details default WebView entry
+  regresses.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local
+  HTTP server, CDN, external font, or `localStorage` /
+  `sessionStorage` usage is introduced.
+- Statistics / Export / Project Rules / Settings / Privacy migration
+  to WebView is started.
