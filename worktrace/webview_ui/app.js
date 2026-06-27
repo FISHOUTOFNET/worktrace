@@ -364,9 +364,14 @@
                 // session, refresh its context summary from the updated
                 // session object. The activity summary is re-read from the
                 // rendered detail rows. No write is performed.
+                // Phase 3B.9.1: also skip the re-render while any
+                // correction-shell write is in flight (batch project / batch
+                // note / single restore) so the saving state, selection,
+                // textarea, and status messages are not overwritten mid-save.
                 if (correctionShellOpen
                     && correctionShellSessionId === found.session_id
-                    && !isEditDirty()) {
+                    && !isEditDirty()
+                    && !isAnyCorrectionWriteSaving()) {
                     renderCorrectionShell(
                         found,
                         getCurrentDetailActivities(),
@@ -2384,7 +2389,13 @@
         }
         updateBatchSelectionCount();
         updateBatchSaveButtonState();
-        showBatchProjectStatus("", false);
+        // Phase 3B.9.1: do not clear the status area while a save is in
+        // flight. The save success / failure handler owns the status during
+        // saving; an auto-refresh re-render must not wipe a just-shown
+        // error or success message.
+        if (!batchProjectSaving) {
+            showBatchProjectStatus("", false);
+        }
     }
 
     function populateBatchProjectSelect(projects) {
@@ -2695,7 +2706,13 @@
         }
         updateBatchNoteCount();
         updateBatchNoteSaveButtonState();
-        showBatchNoteStatus("", false);
+        // Phase 3B.9.1: do not clear the status area while a save is in
+        // flight. The save success / failure handler owns the status during
+        // saving; an auto-refresh re-render must not wipe a just-shown
+        // error or success message.
+        if (!batchNoteSaving) {
+            showBatchNoteStatus("", false);
+        }
     }
 
     function saveBatchNote() {
@@ -2706,15 +2723,11 @@
             showBatchNoteStatus("请先保存或取消当前编辑", true);
             return;
         }
-        if (batchProjectSaving) {
-            showBatchNoteStatus("操作失败", true);
-            return;
-        }
-        // Phase 3B.9: cross-save guard. A batch note save triggers a
-        // Timeline refresh which would race with an in-flight single
-        // restore. Refuse with the unified message instead of calling the
-        // bridge.
-        if (restoreSaving) {
+        // Phase 3B.9 / 3B.9.1: cross-save guard. A batch note save triggers
+        // a Timeline refresh which would race with an in-flight batch
+        // project save or single restore. Refuse with the unified message
+        // instead of calling the bridge.
+        if (batchProjectSaving || restoreSaving) {
             showBatchNoteStatus("请等待当前操作完成", true);
             return;
         }

@@ -6180,3 +6180,537 @@ def test_docs_release_validation_mentions_phase_3b_9():
     assert "3B.9" in source, (
         "release-validation.md must mention Phase 3B.9"
     )
+
+
+# ======================================================================
+# Phase 3B.9.1 — Timeline correction shell consolidation hardening
+# ======================================================================
+# These tests lock the hardening contracts introduced by Phase 3B.9.1:
+#   1. saveBatchNote cross-save guard uses the unified message for
+#      batchProjectSaving (not "操作失败").
+#   2. The auto-refresh re-render path checks isAnyCorrectionWriteSaving()
+#      so a save in flight is never overwritten.
+#   3. renderBatchProjectSection / renderBatchNoteSection do not clear
+#      their status area while a save is in flight.
+#   4. Existing Phase 3B.9 contracts (cards, helpers, guards, reset
+#      paths, display-safe, CSS, boundary) continue to hold.
+
+
+def test_app_js_save_batch_note_cross_save_uses_unified_message_3b9_1():
+    """Phase 3B.9.1: saveBatchNote must use the unified cross-save message
+    '请等待当前操作完成' for BOTH batchProjectSaving and restoreSaving, not
+    '操作失败' for batchProjectSaving."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "saveBatchNote")
+    # The consolidated cross-save guard checks both flags together.
+    assert "batchProjectSaving || restoreSaving" in body, (
+        "saveBatchNote must consolidate the cross-save guard into a single "
+        "check covering batchProjectSaving and restoreSaving"
+    )
+    # The unified message must appear in the cross-save guard section.
+    cross_pos = body.find("batchProjectSaving || restoreSaving")
+    assert cross_pos != -1, "cross-save guard must exist"
+    guard_section = body[cross_pos:cross_pos + 200]
+    assert "请等待当前操作完成" in guard_section, (
+        "saveBatchNote cross-save guard must use the unified message"
+    )
+
+
+def test_app_js_save_batch_note_no_legacy_failure_message_for_cross_save_3b9_1():
+    """Phase 3B.9.1: saveBatchNote must NOT use '操作失败' for the
+    batchProjectSaving cross-save (that was the pre-hardening behavior)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "saveBatchNote")
+    # The cross-save guard section must not contain '操作失败'.
+    cross_pos = body.find("batchProjectSaving || restoreSaving")
+    assert cross_pos != -1
+    # Look at the guard block up to the next 'return'.
+    ret_pos = body.find("return", cross_pos)
+    guard_block = body[cross_pos:ret_pos] if ret_pos != -1 else body[cross_pos:]
+    assert "操作失败" not in guard_block, (
+        "saveBatchNote cross-save guard must not use '操作失败'"
+    )
+
+
+def test_app_js_auto_refresh_checks_correction_write_saving_3b9_1():
+    """Phase 3B.9.1: the auto-refresh re-render path must check
+    isAnyCorrectionWriteSaving() so a save in flight is not overwritten."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The auto-refresh guard is in the session-found branch of the
+    # timeline render path. It must include isAnyCorrectionWriteSaving().
+    # We search for the combined condition.
+    assert "isAnyCorrectionWriteSaving()" in source, (
+        "app.js must call isAnyCorrectionWriteSaving()"
+    )
+    # The auto-refresh block must combine the four conditions.
+    assert "correctionShellOpen" in source
+    assert "correctionShellSessionId === found.session_id" in source
+    # The isAnyCorrectionWriteSaving check must appear near the
+    # renderCorrectionShell call in the auto-refresh path.
+    render_pos = source.find("renderCorrectionShell(")
+    assert render_pos != -1
+    # Find the auto-refresh renderCorrectionShell call (not the one in
+    # openCorrectionShell). The auto-refresh path is preceded by the
+    # isAnyCorrectionWriteSaving guard.
+    auto_refresh_section = source[max(0, render_pos - 600):render_pos]
+    assert "isAnyCorrectionWriteSaving()" in auto_refresh_section, (
+        "auto-refresh path must guard renderCorrectionShell with "
+        "isAnyCorrectionWriteSaving()"
+    )
+
+
+def test_app_js_render_batch_project_section_status_guard_3b9_1():
+    """Phase 3B.9.1: renderBatchProjectSection must not clear the batch
+    project status while a batch project save is in flight."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderBatchProjectSection")
+    # The showBatchProjectStatus("", false) call must be wrapped in a
+    # !batchProjectSaving guard.
+    status_pos = body.find('showBatchProjectStatus("", false)')
+    assert status_pos != -1, (
+        "renderBatchProjectSection must call showBatchProjectStatus"
+    )
+    # Look backwards from the status call for the guard.
+    preceding = body[max(0, status_pos - 200):status_pos]
+    assert "batchProjectSaving" in preceding, (
+        "renderBatchProjectSection must guard showBatchProjectStatus with "
+        "batchProjectSaving"
+    )
+    assert "if (!batchProjectSaving)" in body, (
+        "renderBatchProjectSection must wrap status clear in "
+        "if (!batchProjectSaving)"
+    )
+
+
+def test_app_js_render_batch_note_section_status_guard_3b9_1():
+    """Phase 3B.9.1: renderBatchNoteSection must not clear the batch note
+    status while a batch note save is in flight."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderBatchNoteSection")
+    status_pos = body.find('showBatchNoteStatus("", false)')
+    assert status_pos != -1, (
+        "renderBatchNoteSection must call showBatchNoteStatus"
+    )
+    preceding = body[max(0, status_pos - 200):status_pos]
+    assert "batchNoteSaving" in preceding, (
+        "renderBatchNoteSection must guard showBatchNoteStatus with "
+        "batchNoteSaving"
+    )
+    assert "if (!batchNoteSaving)" in body, (
+        "renderBatchNoteSection must wrap status clear in "
+        "if (!batchNoteSaving)"
+    )
+
+
+def test_app_js_cross_save_guard_order_dirty_before_cross_save_3b9_1():
+    """Phase 3B.9.1: in all three consolidated write paths, the dirty guard
+    (isEditDirty) must come BEFORE the cross-save guard."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for func_name, cross_marker in [
+        ("saveBatchProject", "batchNoteSaving || restoreSaving"),
+        ("saveBatchNote", "batchProjectSaving || restoreSaving"),
+        ("saveActivityRestore", "batchProjectSaving || batchNoteSaving"),
+    ]:
+        body = _func_body(source, func_name)
+        dirty_pos = body.find("isEditDirty()")
+        cross_pos = body.find(cross_marker)
+        assert dirty_pos != -1, (
+            func_name + " must contain isEditDirty check"
+        )
+        assert cross_pos != -1, (
+            func_name + " must contain cross-save guard"
+        )
+        assert dirty_pos < cross_pos, (
+            func_name + ": dirty guard must precede cross-save guard"
+        )
+
+
+def test_app_js_cross_save_guard_no_bridge_call_3b9_1():
+    """Phase 3B.9.1: none of the three cross-save guard paths may call
+    callBridge before returning."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for func_name, cross_marker in [
+        ("saveBatchProject", "batchNoteSaving || restoreSaving"),
+        ("saveBatchNote", "batchProjectSaving || restoreSaving"),
+        ("saveActivityRestore", "batchProjectSaving || batchNoteSaving"),
+    ]:
+        body = _func_body(source, func_name)
+        cross_pos = body.find(cross_marker)
+        assert cross_pos != -1
+        ret_pos = body.find("return", cross_pos)
+        assert ret_pos != -1, (
+            func_name + " cross-save guard must return early"
+        )
+        guard_block = body[cross_pos:ret_pos]
+        assert "callBridge" not in guard_block, (
+            func_name + " cross-save guard must not call the bridge"
+        )
+
+
+def test_app_js_cross_save_guard_preserves_state_3b9_1():
+    """Phase 3B.9.1: the cross-save guard paths must not clear selection,
+    textarea, or restore list (they only show a status and return)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for func_name, cross_marker in [
+        ("saveBatchProject", "batchNoteSaving || restoreSaving"),
+        ("saveBatchNote", "batchProjectSaving || restoreSaving"),
+        ("saveActivityRestore", "batchProjectSaving || batchNoteSaving"),
+    ]:
+        body = _func_body(source, func_name)
+        cross_pos = body.find(cross_marker)
+        assert cross_pos != -1
+        ret_pos = body.find("return", cross_pos)
+        guard_block = body[cross_pos:ret_pos]
+        # The guard block must not clear selection or textarea.
+        assert "selectedBatchActivityIds = {}" not in guard_block, (
+            func_name + " cross-save guard must not clear selection"
+        )
+        assert ".value = ''" not in guard_block, (
+            func_name + " cross-save guard must not clear textarea"
+        )
+
+
+def test_app_js_is_any_correction_write_saving_covers_three_states_3b9_1():
+    """Phase 3B.9.1: isAnyCorrectionWriteSaving must cover batchProjectSaving,
+    batchNoteSaving, and restoreSaving."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "isAnyCorrectionWriteSaving")
+    assert "batchProjectSaving" in body, (
+        "isAnyCorrectionWriteSaving must check batchProjectSaving"
+    )
+    assert "batchNoteSaving" in body, (
+        "isAnyCorrectionWriteSaving must check batchNoteSaving"
+    )
+    assert "restoreSaving" in body, (
+        "isAnyCorrectionWriteSaving must check restoreSaving"
+    )
+
+
+def test_app_js_reset_correction_shell_state_calls_sub_resets_3b9_1():
+    """Phase 3B.9.1: resetCorrectionShellState must still call all three
+    sub-reset helpers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "resetCorrectionShellState")
+    assert "resetBatchProjectState()" in body, (
+        "resetCorrectionShellState must call resetBatchProjectState"
+    )
+    assert "resetBatchNoteState()" in body, (
+        "resetCorrectionShellState must call resetBatchNoteState"
+    )
+    assert "resetRestoreState()" in body, (
+        "resetCorrectionShellState must call resetRestoreState"
+    )
+
+
+def test_app_js_reset_paths_cover_all_contexts_3b9_1():
+    """Phase 3B.9.1: resetCorrectionShellState must be called on close,
+    date switch, session switch, and session disappear paths."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # closeCorrectionShell must call resetCorrectionShellState.
+    close_body = _func_body(source, "closeCorrectionShell")
+    assert "resetCorrectionShellState()" in close_body, (
+        "closeCorrectionShell must call resetCorrectionShellState"
+    )
+    # goPrevDay / goNextDay / goToday must call resetCorrectionShellState.
+    for fn in ("goPrevDay", "goNextDay", "goToday"):
+        body = _func_body(source, fn)
+        assert "resetCorrectionShellState()" in body, (
+            fn + " must call resetCorrectionShellState"
+        )
+    # selectTimelineSession must call resetCorrectionShellState when
+    # switching sessions.
+    sel_body = _func_body(source, "selectTimelineSession")
+    assert "resetCorrectionShellState()" in sel_body, (
+        "selectTimelineSession must call resetCorrectionShellState"
+    )
+
+
+def test_app_js_close_correction_shell_preserves_selected_session_3b9_1():
+    """Phase 3B.9.1: closeCorrectionShell must NOT clear selectedSessionId
+    (the user returns to the same session context)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "closeCorrectionShell")
+    # The comment documenting the preserve semantics must be present.
+    assert "selectedSessionId" in body, (
+        "closeCorrectionShell must reference selectedSessionId"
+    )
+    # It must not assign null to selectedSessionId.
+    assert "selectedSessionId = null" not in body, (
+        "closeCorrectionShell must not clear selectedSessionId"
+    )
+
+
+def test_app_js_safe_text_still_used_in_correction_shell_3b9_1():
+    """Phase 3B.9.1: renderCorrectionShell and renderRestorableActivities
+    must still use safeText for dynamic values."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_body = _func_body(source, "renderCorrectionShell")
+    assert "safeText(" in render_body, (
+        "renderCorrectionShell must use safeText"
+    )
+    restore_body = _func_body(source, "renderRestorableActivities")
+    assert "safeText(" in restore_body, (
+        "renderRestorableActivities must use safeText"
+    )
+
+
+def test_app_js_correction_shell_no_raw_sensitive_fields_3b9_1():
+    """Phase 3B.9.1: app.js must not reference raw sensitive backend column
+    names anywhere (window_title, file_path_hint, full_path, clipboard)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    for forbidden in ("window_title", "file_path_hint", "full_path",
+                      "clipboard"):
+        assert forbidden not in source, (
+            "app.js must not reference raw sensitive field: " + forbidden
+        )
+
+
+def test_app_js_correction_shell_escape_html_still_used_3b9_1():
+    """Phase 3B.9.1: escapeHtml must still be used in correction shell
+    rendering paths."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    render_body = _func_body(source, "renderCorrectionShell")
+    assert "escapeHtml(" in render_body, (
+        "renderCorrectionShell must use escapeHtml"
+    )
+    restore_body = _func_body(source, "renderRestorableActivities")
+    assert "escapeHtml(" in restore_body, (
+        "renderRestorableActivities must use escapeHtml"
+    )
+
+
+def test_app_js_correction_shell_no_local_storage_3b9_1():
+    """Phase 3B.9.1: app.js must not use localStorage or sessionStorage."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    assert "localstorage" not in source, (
+        "app.js must not use localStorage"
+    )
+    assert "sessionstorage" not in source, (
+        "app.js must not use sessionStorage"
+    )
+
+
+def test_app_js_correction_shell_no_external_links_3b9_1():
+    """Phase 3B.9.1: app.js must not reference external http/https/CDN
+    resources."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("http://", "https://", "//cdn", "googleapis"):
+        assert forbidden not in source, (
+            "app.js must not reference external resource: " + forbidden
+        )
+
+
+def test_app_js_correction_shell_no_traceback_display_3b9_1():
+    """Phase 3B.9.1: app.js must not display traceback or raw exception
+    text in correction shell status areas."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    assert "traceback" not in source, (
+        "app.js must not display traceback"
+    )
+
+
+def test_index_html_correction_shell_cards_still_present_3b9_1():
+    """Phase 3B.9.1: all six correction shell cards must still be present
+    in index.html."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for card_id in (
+        "correction-shell-context-card",
+        "correction-shell-activity-card",
+        "correction-shell-single-action-card",
+        "correction-shell-batch-action-card",
+        "correction-shell-restore-card",
+        "correction-shell-not-implemented-card",
+    ):
+        assert card_id in source, (
+            "index.html must contain " + card_id
+        )
+
+
+def test_index_html_correction_shell_existing_ids_preserved_3b9_1():
+    """Phase 3B.9.1: all existing JS-dependent ids must still be present."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for element_id in (
+        "timeline-correction-shell",
+        "correction-shell-close-btn",
+        "correction-shell-status",
+        "correction-shell-context",
+        "correction-shell-activities",
+        "correction-shell-actions",
+        "correction-shell-batch-project-section",
+        "correction-shell-batch-save-btn",
+        "correction-shell-batch-project-select",
+        "correction-shell-batch-count",
+        "correction-shell-batch-select-all-btn",
+        "correction-shell-batch-clear-btn",
+        "correction-shell-batch-status",
+        "correction-shell-batch-note-section",
+        "correction-shell-batch-note-text",
+        "correction-shell-batch-note-save-btn",
+        "correction-shell-batch-note-count",
+        "correction-shell-batch-note-status",
+        "correction-shell-restore-section",
+        "correction-shell-restore-list",
+        "correction-shell-restore-status",
+        "open-correction-shell-btn",
+    ):
+        assert element_id in source, (
+            "index.html must preserve existing id: " + element_id
+        )
+
+
+def test_index_html_no_forbidden_batch_ui_3b9_1():
+    """Phase 3B.9.1: index.html must not contain batch hide / batch delete /
+    batch restore / undo stack / permanent delete UI controls."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for forbidden in (
+        "batch-hide",
+        "batch-delete",
+        "batch-restore",
+        "restore-all",
+        "undo-stack",
+        "permanent-delete",
+    ):
+        # The not-implemented card may mention these as "暂不开放" text;
+        # that is allowed. Forbidden UI controls (buttons / checkboxes with
+        # these ids) are what we check for.
+        assert ('id="' + forbidden + '"') not in source, (
+            "index.html must not contain forbidden UI control id: "
+            + forbidden
+        )
+
+
+def test_index_html_not_implemented_card_lists_unavailable_3b9_1():
+    """Phase 3B.9.1: the not-implemented card must list all unavailable
+    capabilities."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    not_impl_pos = source.find("correction-shell-not-implemented-card")
+    assert not_impl_pos != -1
+    not_impl_section = source[not_impl_pos:not_impl_pos + 600]
+    for keyword in ("批量隐藏", "批量删除", "批量恢复", "撤销栈",
+                    "永久删除", "批量时间", "批量拆分", "批量合并",
+                    "自动规则", "重叠检测"):
+        assert keyword in not_impl_section, (
+            "not-implemented card must list: " + keyword
+        )
+
+
+def test_styles_css_correction_shell_hidden_display_none_3b9_1():
+    """Phase 3B.9.1: .correction-shell[hidden] must remain display:none."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell[hidden]" in source, (
+        "styles.css must have .correction-shell[hidden] rule"
+    )
+    pos = source.find(".correction-shell[hidden]")
+    rule = source[pos:pos + 80]
+    assert "display: none" in rule, (
+        ".correction-shell[hidden] must set display: none"
+    )
+
+
+def test_styles_css_card_classes_present_3b9_1():
+    """Phase 3B.9.1: unified card CSS classes must still be present."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    for cls in (
+        ".correction-shell-card",
+        ".correction-shell-card-header",
+        ".correction-shell-card-hint",
+        ".correction-shell-status",
+    ):
+        assert cls in source, (
+            "styles.css must contain " + cls
+        )
+
+
+def test_styles_css_no_external_resources_3b9_1():
+    """Phase 3B.9.1: styles.css must not reference external resources."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8").lower()
+    for forbidden in ("http://", "https://", "@import", "googleapis",
+                      "cdn"):
+        assert forbidden not in source, (
+            "styles.css must not reference external resource: " + forbidden
+        )
+
+
+def test_styles_css_highlight_still_present_3b9_1():
+    """Phase 3B.9.1: the transient highlight CSS must still be present."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert "detail-item-highlight" in source, (
+        "styles.css must retain .detail-item-highlight"
+    )
+    assert "shell-target" in source, (
+        "styles.css must retain .shell-target"
+    )
+
+
+def test_bridge_no_new_methods_for_phase_3b9_1():
+    """Phase 3B.9.1: no new bridge methods beyond the known set."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    known_methods = (
+        "get_status",
+        "toggle_pause",
+        "get_overview",
+        "get_recent_activities",
+        "get_timeline",
+        "get_timeline_session_details",
+        "list_projects_for_timeline",
+        "update_timeline_project",
+        "update_timeline_note",
+        "update_timeline_activity_time",
+        "update_timeline_session_time",
+        "split_timeline_activity",
+        "split_timeline_session",
+        "merge_timeline_activities",
+        "hide_timeline_activity",
+        "soft_delete_timeline_activity",
+        "hide_timeline_session",
+        "soft_delete_timeline_session",
+        "batch_update_timeline_activities_project",
+        "batch_update_timeline_activities_note",
+        "get_timeline_restorable_activities",
+        "restore_timeline_activity",
+    )
+    for method in known_methods:
+        assert method in bridge_src, (
+            "bridge must still expose " + method
+        )
+
+
+def test_bridge_imports_only_allowed_modules_3b9_1():
+    """Phase 3B.9.1: the bridge must still only import worktrace.api and
+    worktrace.formatters."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    for forbidden in ("from ..services", "from ..db",
+                      "from ..collector", "from ..security",
+                      "from ..runtime", "from ..config",
+                      "import worktrace.services",
+                      "import worktrace.db"):
+        assert forbidden not in bridge_src, (
+            "bridge must not import " + forbidden
+        )
+
+
+def test_docs_mention_phase_3b9_1():
+    """Phase 3B.9.1: the migration doc must mention Phase 3B.9.1."""
+    doc_path = REPO_ROOT / "docs" / "ui-webview-migration.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "3B.9.1" in source, (
+        "ui-webview-migration.md must mention Phase 3B.9.1"
+    )
+
+
+def test_docs_readme_mentions_phase_3b9_1():
+    """Phase 3B.9.1: README must mention Phase 3B.9.1."""
+    doc_path = REPO_ROOT / "README.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "3B.9.1" in source, (
+        "README.md must mention Phase 3B.9.1"
+    )
+
+
+def test_docs_release_validation_mentions_phase_3b9_1():
+    """Phase 3B.9.1: release-validation must mention Phase 3B.9.1."""
+    doc_path = REPO_ROOT / "docs" / "release-validation.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "3B.9.1" in source, (
+        "release-validation.md must mention Phase 3B.9.1"
+    )

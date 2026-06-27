@@ -2742,3 +2742,77 @@ shell's internal UI structure, state, copy, render helpers, and CSS.
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
   server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 3B.9.1 Validation
+
+Phase 3B.9.1 is a **hardening-only** phase for the Timeline correction shell
+consolidation. It does NOT add any backend write capability, bridge / API /
+service method, DB schema, or new correction action.
+
+### Phase 3B.9.1 Scope
+
+- Cross-save guard message consistency: `saveBatchNote` now uses the unified
+  `请等待当前操作完成` message for both `batchProjectSaving` and
+  `restoreSaving` (previously `batchProjectSaving` used `操作失败`).
+- Auto-refresh saving guard: the auto-refresh re-render path checks
+  `isAnyCorrectionWriteSaving()` before calling `renderCorrectionShell`, so
+  a save in flight is never overwritten.
+- Render helper status guard: `renderBatchProjectSection` and
+  `renderBatchNoteSection` do not clear their status area while a save is in
+  flight.
+- Card structure regression lock: all six correction shell cards and all
+  existing JS-dependent IDs are confirmed stable.
+- Reset helper contracts: `resetCorrectionShellState` calls the three
+  sub-reset helpers; close / date switch / session switch / session
+  disappear all call it; `closeCorrectionShell` preserves
+  `selectedSessionId`.
+- Dirty guard ordering: dirty guard precedes cross-save guard in all three
+  consolidated write paths.
+- Cross-save guard no-bridge: none of the three cross-save guard paths call
+  `callBridge`; they do not clear selection / textarea / restore list.
+- Display-safe rendering: `safeText` + `escapeHtml` cover every dynamic
+  value; no raw sensitive fields are read or displayed.
+- CSS state hardening: `.correction-shell[hidden] { display: none }`, the
+  unified card classes, and the highlight rules are preserved.
+
+### Phase 3B.9.1 Verification
+
+- `python -m pytest` passes (all Phase 3B.9.1 hardening tests pass; all
+  prior-phase tests continue to pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- No new bridge / API / service method is introduced.
+- No new DB schema is introduced.
+- No new correction action is introduced.
+
+### Phase 3B.9.1 Release Blockers
+
+- Any new backend write capability is introduced.
+- Any new bridge / API / service method is introduced.
+- Any new DB schema is introduced.
+- Any new correction action is introduced.
+- A correction shell card disappears (context / activity / single-action /
+  batch-action / restore / not-implemented).
+- A batch project or batch note regression.
+- A restore regression.
+- A dirty guard regression (any write path proceeds while `isEditDirty()`
+  is true).
+- A cross-save bypass (two correction-shell writes run concurrently).
+- A cross-save guard uses an inconsistent message (e.g. `操作失败` instead
+  of `请等待当前操作完成`).
+- A saving state gets stuck (saving flag never resets).
+- Auto-refresh overwrites dirty / saving shell state.
+- A render helper clears status while a save is in flight.
+- A stale id reaches the bridge.
+- Raw `window_title` / `file_path_hint` / `full_path` / clipboard / note
+  / traceback / SQL is leaked in the correction shell.
+- Batch hide / delete / restore / permanent delete / undo stack UI is
+  introduced.
+- `localStorage` / `sessionStorage` / CDN / external font is introduced.
+- The bridge imports `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- Any Phase 3B.9 / 3B.8.1 / 3B.8 / 3B.7.1 / 3B.7 / 3B.6.1 / 3B.6 /
+  3B.5B.1 / 3B.5B / 3B.5A / 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1
+  regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
+  server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.

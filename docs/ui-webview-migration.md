@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3B.9 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.9.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -2958,6 +2958,89 @@ The consolidation covers:
 ## Phase 3B.9 Not Implemented
 
 Phase 3B.9 does not implement and does not start:
+
+- Any new backend write capability;
+- Any new bridge / API / service method;
+- Any new DB schema;
+- Any new correction action;
+- Batch hide;
+- Batch delete;
+- Batch restore;
+- Restore all;
+- Undo stack;
+- Permanent delete;
+- Batch time correction;
+- Batch split;
+- Batch merge;
+- Batch note append;
+- Batch note merge;
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge;
+- Multi-activity session whole-hide / whole-delete;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any Tkinter fallback path.
+
+## Phase 3B.9.1 Implemented Scope
+
+Phase 3B.9.1 is a **hardening-only** phase for the Timeline correction shell
+consolidation. It does NOT add any backend write capability, bridge / API /
+service method, DB schema, or new correction action. It only hardens the
+Phase 3B.9 consolidation so the shell card structure, helpers, cross-save
+guard, reset semantics, display-safe rendering, and CSS remain stable under
+complex UI state transitions.
+
+The hardening covers:
+
+- **Cross-save guard message consistency.** `saveBatchNote` now uses the
+  unified `请等待当前操作完成` message for BOTH `batchProjectSaving` and
+  `restoreSaving` (previously `batchProjectSaving` used `操作失败`). The
+  two checks are consolidated into a single
+  `if (batchProjectSaving || restoreSaving)` guard that matches the
+  structure of `saveBatchProject` and `saveActivityRestore`.
+- **Auto-refresh saving guard.** The auto-refresh re-render path now checks
+  `isAnyCorrectionWriteSaving()` before calling `renderCorrectionShell`. When
+  any correction-shell write (batch project / batch note / single restore)
+  is in flight, the shell is NOT re-rendered, so the saving state, selection,
+  textarea, and status messages are not overwritten mid-save.
+- **Render helper status guard.** `renderBatchProjectSection` and
+  `renderBatchNoteSection` no longer clear their status area
+  (`showBatchProjectStatus("", false)` / `showBatchNoteStatus("", false)`)
+  while a save is in flight. The save success / failure handler owns the
+  status during saving; an auto-refresh re-render must not wipe a just-shown
+  error or success message.
+- **Card structure regression lock.** All six correction shell cards
+  (context / activity / single-action / batch-action / restore /
+  not-implemented) and all existing JS-dependent IDs are confirmed stable.
+- **Reset helper contracts.** `resetCorrectionShellState` continues to call
+  `resetBatchProjectState`, `resetBatchNoteState`, and `resetRestoreState`.
+  Close / date switch / session switch / selected session disappear all
+  call `resetCorrectionShellState`. `closeCorrectionShell` preserves
+  `selectedSessionId` so the user returns to the same session context.
+- **Dirty guard ordering.** In all three consolidated write paths
+  (`saveBatchProject`, `saveBatchNote`, `saveActivityRestore`), the dirty
+  guard (`isEditDirty`) comes BEFORE the cross-save guard, which comes
+  before any bridge call.
+- **Cross-save guard no-bridge.** None of the three cross-save guard paths
+  call `callBridge`; they only show a status and return. They do not clear
+  selection, textarea, or restore list.
+- **Display-safe rendering.** `safeText` + `escapeHtml` continue to cover
+  every dynamic value in `renderCorrectionShell` and
+  `renderRestorableActivities`. No raw `window_title` / `file_path_hint` /
+  `full_path` / clipboard / note internals / traceback / SQL / exception
+  text is read or displayed.
+- **CSS state hardening.** `.correction-shell[hidden] { display: none }`,
+  the unified `.correction-shell-card` / `-card-header` / `-card-hint` /
+  `-status` classes, and the `.detail-item-highlight` / `.shell-target`
+  highlight rules are all preserved. No external CSS / font / CDN
+  references are introduced.
+
+## Phase 3B.9.1 Not Implemented
+
+Phase 3B.9.1 does not implement and does not start:
 
 - Any new backend write capability;
 - Any new bridge / API / service method;
