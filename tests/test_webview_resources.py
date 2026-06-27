@@ -5284,8 +5284,12 @@ def test_service_has_restore_function():
 
 
 def test_app_js_restore_state_independent_from_batch_states():
-    """Phase 3B.8: the restore saving state must be independent from
-    batchProjectSaving / batchNoteSaving."""
+    """Phase 3B.8 / 3B.9: the restore saving STATE VARIABLE must be
+    independent from batchProjectSaving / batchNoteSaving (declared as a
+    separate variable). Phase 3B.9 adds a cross-save guard so
+    saveActivityRestore refuses when a batch save is in flight; that guard
+    is covered by the Phase 3B.9 cross-save tests and does not violate the
+    state-variable independence."""
     source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
     # The restore saving variable must be declared separately.
     assert "var restoreSaving" in source, (
@@ -5294,16 +5298,13 @@ def test_app_js_restore_state_independent_from_batch_states():
     assert "var restoreSavingActivityId" in source, (
         "app.js must declare restoreSavingActivityId as a separate variable"
     )
-    # saveActivityRestore must not check batchProjectSaving or batchNoteSaving
-    # (restore is independent).
-    save_start = source.find("function saveActivityRestore")
-    save_end = source.find("\n    function ", save_start + 1)
-    save_body = source[save_start:save_end]
-    assert "batchProjectSaving" not in save_body, (
-        "saveActivityRestore must not check batchProjectSaving (independent)"
-    )
-    assert "batchNoteSaving" not in save_body, (
-        "saveActivityRestore must not check batchNoteSaving (independent)"
+    # The setRestoreSaving helper must still set the independent
+    # restoreSaving variable (not batchProjectSaving / batchNoteSaving).
+    set_start = source.find("function setRestoreSaving")
+    set_end = source.find("\n    function ", set_start + 1)
+    set_body = source[set_start:set_end]
+    assert "restoreSaving = saving" in set_body, (
+        "setRestoreSaving must set the independent restoreSaving variable"
     )
 
 
@@ -5537,4 +5538,645 @@ def test_app_js_restore_stale_guard_no_bridge_call():
     assert "callBridge" not in guard_body, (
         "saveActivityRestore stale-row guard must not call the bridge "
         "(stale rows must not trigger a restore)"
+    )
+
+
+# ====================================================================
+# Phase 3B.9: Timeline correction shell consolidation
+# ====================================================================
+#
+# This phase only consolidates the correction shell's internal UI
+# structure, state, copy, render helpers, and CSS. It does NOT add any
+# backend write capability, bridge/API/service method, DB schema, or new
+# correction action. The tests below verify the consolidation is present
+# and that no forbidden capability was introduced.
+
+
+def test_index_html_correction_shell_has_context_card_3b9():
+    """Phase 3B.9: index.html must wrap the context block in a
+    correction-shell-context-card."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-context-card"' in source, (
+        "index.html must contain #correction-shell-context-card"
+    )
+    assert "correction-shell-context-card" in source, (
+        "index.html must define the .correction-shell-context-card class"
+    )
+
+
+def test_index_html_correction_shell_has_activity_card_3b9():
+    """Phase 3B.9: index.html must wrap the activities block in a
+    correction-shell-activity-card."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-activity-card"' in source, (
+        "index.html must contain #correction-shell-activity-card"
+    )
+    assert "correction-shell-activity-card" in source
+
+
+def test_index_html_correction_shell_has_single_action_card_3b9():
+    """Phase 3B.9: index.html must wrap the actions block in a
+    correction-shell-single-action-card."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-single-action-card"' in source, (
+        "index.html must contain #correction-shell-single-action-card"
+    )
+    assert "correction-shell-single-action-card" in source
+
+
+def test_index_html_correction_shell_has_batch_action_card_3b9():
+    """Phase 3B.9: index.html must wrap the batch project + batch note
+    sections in a single correction-shell-batch-action-card."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-batch-action-card"' in source, (
+        "index.html must contain #correction-shell-batch-action-card"
+    )
+    assert "correction-shell-batch-action-card" in source
+    # The batch action card must contain both batch project and batch note
+    # sections.
+    card_start = source.find('id="correction-shell-batch-action-card"')
+    card_end = source.find("</div>", source.find(
+        'id="correction-shell-batch-note-status"', card_start))
+    assert card_start != -1 and card_end != -1, (
+        "batch action card must contain both batch sections"
+    )
+    card_block = source[card_start:card_end]
+    assert 'id="correction-shell-batch-project-section"' in card_block, (
+        "batch action card must contain the batch project section"
+    )
+    assert 'id="correction-shell-batch-note-section"' in card_block, (
+        "batch action card must contain the batch note section"
+    )
+
+
+def test_index_html_correction_shell_has_restore_card_3b9():
+    """Phase 3B.9: index.html must wrap the restore section in a
+    correction-shell-restore-card."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-restore-card"' in source, (
+        "index.html must contain #correction-shell-restore-card"
+    )
+    assert "correction-shell-restore-card" in source
+    # The restore card must contain the restore list and status, but no
+    # batch restore / restore all / permanent delete / undo UI.
+    card_start = source.find('id="correction-shell-restore-card"')
+    card_end = source.find("</div>", source.find(
+        'id="correction-shell-restore-status"', card_start))
+    card_block = source[card_start:card_end]
+    assert 'id="correction-shell-restore-list"' in card_block, (
+        "restore card must contain the restore list"
+    )
+    assert 'id="correction-shell-restore-status"' in card_block, (
+        "restore card must contain the restore status"
+    )
+    forbidden = ("batch-restore", "restore-all", "permanent-delete",
+                 "undo-stack", "batch-undo")
+    for token in forbidden:
+        assert token not in card_block, (
+            "restore card must not contain " + token + " UI"
+        )
+
+
+def test_index_html_correction_shell_has_not_implemented_card_3b9():
+    """Phase 3B.9: index.html must contain a not-implemented hint card
+    that explicitly lists the unsupported batch / undo / permanent delete
+    capabilities."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="correction-shell-not-implemented-card"' in source, (
+        "index.html must contain #correction-shell-not-implemented-card"
+    )
+    card_start = source.find('id="correction-shell-not-implemented-card"')
+    card_end = source.find("</div>", source.find(
+        "correction-shell-card-hint", card_start))
+    card_block = source[card_start:card_end]
+    # The hint must mention each forbidden capability family.
+    for keyword in ("批量隐藏", "批量删除", "批量恢复", "撤销栈",
+                    "永久删除", "批量时间", "批量拆分", "批量合并"):
+        assert keyword in card_block, (
+            "not-implemented card must mention " + keyword
+        )
+
+
+def test_index_html_correction_shell_card_headers_present_3b9():
+    """Phase 3B.9: each card must have a .correction-shell-card-header."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "correction-shell-card-header" in source, (
+        "index.html must define .correction-shell-card-header elements"
+    )
+    # Count occurrences: context / activity / single-action / batch /
+    # restore / not-implemented = 6 headers.
+    assert source.count("correction-shell-card-header") >= 6, (
+        "index.html must contain at least 6 card headers"
+    )
+
+
+def test_index_html_correction_shell_preserves_existing_ids_3b9():
+    """Phase 3B.9: consolidation must not remove any existing IDs that
+    prior-phase tests depend on."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for required_id in (
+        "timeline-correction-shell",
+        "correction-shell-close-btn",
+        "correction-shell-status",
+        "correction-shell-context",
+        "correction-shell-activities",
+        "correction-shell-actions",
+        "correction-shell-batch-project-section",
+        "correction-shell-batch-save-btn",
+        "correction-shell-batch-project-select",
+        "correction-shell-batch-count",
+        "correction-shell-batch-select-all-btn",
+        "correction-shell-batch-clear-btn",
+        "correction-shell-batch-status",
+        "correction-shell-batch-note-section",
+        "correction-shell-batch-note-text",
+        "correction-shell-batch-note-save-btn",
+        "correction-shell-batch-note-count",
+        "correction-shell-batch-note-status",
+        "correction-shell-restore-section",
+        "correction-shell-restore-list",
+        "correction-shell-restore-status",
+        "open-correction-shell-btn",
+    ):
+        assert 'id="' + required_id + '"' in source, (
+            "index.html must preserve id=" + required_id
+        )
+
+
+def test_index_html_correction_shell_no_new_forbidden_controls_3b9():
+    """Phase 3B.9: the consolidation must not introduce batch hide /
+    delete / restore, restore-all, undo stack, permanent delete, batch
+    time / split / merge UI controls."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    forbidden_ids = (
+        "batch-hide-btn",
+        "batch-delete-btn",
+        "batch-restore-btn",
+        "restore-all-btn",
+        "permanent-delete-btn",
+        "undo-stack-btn",
+        "batch-time-btn",
+        "batch-split-btn",
+        "batch-merge-btn",
+        "batch-note-append-btn",
+        "batch-note-merge-btn",
+        "auto-rule-btn",
+        "overlap-detection-btn",
+    )
+    for forbidden_id in forbidden_ids:
+        assert 'id="' + forbidden_id + '"' not in source, (
+            "index.html must not contain id=" + forbidden_id
+        )
+
+
+def test_index_html_correction_shell_no_external_resources_3b9():
+    """Phase 3B.9: the correction shell region must not introduce
+    external links, CDN, Google Fonts, or browser storage."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    shell_start = source.find('id="timeline-correction-shell"')
+    shell_end = source.find("</section>", shell_start)
+    shell_block = source[shell_start:shell_end]
+    for forbidden in ("http://", "https://", "cdn.", "googleapis.com",
+                      "fonts.googleapis", "localStorage",
+                      "sessionStorage"):
+        assert forbidden not in shell_block, (
+            "correction shell must not reference " + forbidden
+        )
+
+
+def test_app_js_has_safe_text_helper_3b9():
+    """Phase 3B.9: app.js must define a safeText display-safe helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function safeText" in source, (
+        "app.js must define the safeText helper"
+    )
+
+
+def test_app_js_safe_text_returns_fallback_3b9():
+    """Phase 3B.9: safeText must return the fallback for null / undefined /
+    empty values, and stringify non-empty values."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "safeText")
+    assert "null" in body, "safeText must handle null"
+    assert "undefined" in body, "safeText must handle undefined"
+    assert "fallback" in body, "safeText must accept a fallback"
+    assert "String(" in body, "safeText must stringify non-empty values"
+
+
+def test_app_js_has_is_any_correction_write_saving_helper_3b9():
+    """Phase 3B.9: app.js must define an isAnyCorrectionWriteSaving
+    cross-save guard helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function isAnyCorrectionWriteSaving" in source, (
+        "app.js must define the isAnyCorrectionWriteSaving helper"
+    )
+    body = _func_body(source, "isAnyCorrectionWriteSaving")
+    assert "batchProjectSaving" in body, (
+        "isAnyCorrectionWriteSaving must consult batchProjectSaving"
+    )
+    assert "batchNoteSaving" in body, (
+        "isAnyCorrectionWriteSaving must consult batchNoteSaving"
+    )
+    assert "restoreSaving" in body, (
+        "isAnyCorrectionWriteSaving must consult restoreSaving"
+    )
+
+
+def test_app_js_has_reset_correction_action_status_helper_3b9():
+    """Phase 3B.9: app.js must define a resetCorrectionActionStatus helper
+    that clears every shell status area."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function resetCorrectionActionStatus" in source, (
+        "app.js must define the resetCorrectionActionStatus helper"
+    )
+    body = _func_body(source, "resetCorrectionActionStatus")
+    assert "setCorrectionShellStatus" in body, (
+        "resetCorrectionActionStatus must clear the shell status"
+    )
+    assert "showBatchProjectStatus" in body, (
+        "resetCorrectionActionStatus must clear the batch project status"
+    )
+    assert "showBatchNoteStatus" in body, (
+        "resetCorrectionActionStatus must clear the batch note status"
+    )
+    assert "showRestoreStatus" in body, (
+        "resetCorrectionActionStatus must clear the restore status"
+    )
+
+
+def test_app_js_open_correction_shell_calls_reset_action_status_3b9():
+    """Phase 3B.9: openCorrectionShell must call resetCorrectionActionStatus
+    so stale messages from a previous shell session do not linger."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "openCorrectionShell")
+    assert "resetCorrectionActionStatus" in body, (
+        "openCorrectionShell must call resetCorrectionActionStatus"
+    )
+
+
+def test_app_js_render_correction_shell_uses_safe_text_3b9():
+    """Phase 3B.9: renderCorrectionShell must pass dynamic values through
+    safeText so the shell never renders undefined / null."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderCorrectionShell")
+    assert "safeText" in body, (
+        "renderCorrectionShell must use safeText for dynamic values"
+    )
+
+
+def test_app_js_render_restorable_activities_uses_safe_text_3b9():
+    """Phase 3B.9: renderRestorableActivities must pass dynamic values
+    through safeText so the restore list never renders undefined / null."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderRestorableActivities")
+    assert "safeText" in body, (
+        "renderRestorableActivities must use safeText for dynamic values"
+    )
+
+
+def test_app_js_render_correction_shell_still_uses_escape_html_3b9():
+    """Phase 3B.9: renderCorrectionShell must still escapeHtml every
+    dynamic value before inserting into innerHTML."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderCorrectionShell")
+    assert "escapeHtml" in body, (
+        "renderCorrectionShell must still use escapeHtml"
+    )
+
+
+def test_app_js_correction_shell_no_raw_sensitive_fields_3b9():
+    """Phase 3B.9: the correction shell render path must not read raw
+    window_title / file_path_hint / full_path / clipboard / note internals
+    / traceback / SQL / exception text."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderCorrectionShell")
+    for forbidden in ("window_title", "file_path_hint", "file_path",
+                      "full_path", "clipboard", "session_note",
+                      "traceback", "SQL", "Exception"):
+        assert forbidden not in body, (
+            "renderCorrectionShell must not read " + forbidden
+        )
+
+
+def test_app_js_render_restorable_activities_no_raw_sensitive_fields_3b9():
+    """Phase 3B.9: the restore list render path must not read raw
+    window_title / file_path_hint / full_path / clipboard / note internals
+    / traceback / SQL / exception text."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "renderRestorableActivities")
+    for forbidden in ("window_title", "file_path_hint", "file_path",
+                      "full_path", "clipboard", "session_note",
+                      "traceback", "SQL", "Exception"):
+        assert forbidden not in body, (
+            "renderRestorableActivities must not read " + forbidden
+        )
+
+
+def test_app_js_save_batch_project_has_cross_save_guard_3b9():
+    """Phase 3B.9: saveBatchProject must refuse when a batch note save or
+    single restore is in flight (cross-save guard)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "saveBatchProject")
+    assert "restoreSaving" in body, (
+        "saveBatchProject must guard against restoreSaving"
+    )
+    assert "batchNoteSaving" in body, (
+        "saveBatchProject must guard against batchNoteSaving"
+    )
+    assert "请等待当前操作完成" in body, (
+        "saveBatchProject cross-save guard must use the unified message"
+    )
+
+
+def test_app_js_save_batch_note_has_cross_save_guard_3b9():
+    """Phase 3B.9: saveBatchNote must refuse when a single restore is in
+    flight (cross-save guard)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "saveBatchNote")
+    assert "restoreSaving" in body, (
+        "saveBatchNote must guard against restoreSaving"
+    )
+    assert "请等待当前操作完成" in body, (
+        "saveBatchNote cross-save guard must use the unified message"
+    )
+
+
+def test_app_js_save_activity_restore_has_cross_save_guard_3b9():
+    """Phase 3B.9: saveActivityRestore must refuse when a batch project or
+    batch note save is in flight (cross-save guard)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "saveActivityRestore")
+    assert "batchProjectSaving" in body, (
+        "saveActivityRestore must guard against batchProjectSaving"
+    )
+    assert "batchNoteSaving" in body, (
+        "saveActivityRestore must guard against batchNoteSaving"
+    )
+    assert "请等待当前操作完成" in body, (
+        "saveActivityRestore cross-save guard must use the unified message"
+    )
+
+
+def test_app_js_save_activity_restore_cross_save_after_dirty_check_3b9():
+    """Phase 3B.9: the cross-save guard in saveActivityRestore must come
+    AFTER the dirty-edit check (the stale-row guard must still come before
+    the dirty-edit check, per Phase 3B.8.1)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "saveActivityRestore")
+    stale_pos = body.find("correction-shell-restore-list")
+    dirty_pos = body.find("isEditDirty()")
+    cross_pos = body.find("batchProjectSaving || batchNoteSaving")
+    assert stale_pos != -1 and dirty_pos != -1 and cross_pos != -1, (
+        "saveActivityRestore must contain all three guards"
+    )
+    assert stale_pos < dirty_pos, (
+        "stale-row guard must precede the dirty-edit check"
+    )
+    assert dirty_pos < cross_pos, (
+        "cross-save guard must come after the dirty-edit check"
+    )
+
+
+def test_app_js_save_activity_restore_cross_save_no_bridge_call_3b9():
+    """Phase 3B.9: the cross-save guard path in saveActivityRestore must
+    not call callBridge."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "saveActivityRestore")
+    cross_start = body.find("batchProjectSaving || batchNoteSaving")
+    cross_end = body.find("return", cross_start)
+    assert cross_end != -1, (
+        "saveActivityRestore cross-save guard must return early"
+    )
+    guard_body = body[cross_start:cross_end]
+    assert "callBridge" not in guard_body, (
+        "saveActivityRestore cross-save guard must not call the bridge"
+    )
+
+
+def test_app_js_reset_correction_shell_state_still_resets_all_3b9():
+    """Phase 3B.9: resetCorrectionShellState must still call the three
+    sub-reset helpers (batch project / batch note / restore)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "resetCorrectionShellState")
+    assert "resetBatchProjectState" in body, (
+        "resetCorrectionShellState must still call resetBatchProjectState"
+    )
+    assert "resetBatchNoteState" in body, (
+        "resetCorrectionShellState must still call resetBatchNoteState"
+    )
+    assert "resetRestoreState" in body, (
+        "resetCorrectionShellState must still call resetRestoreState"
+    )
+
+
+def test_app_js_reset_correction_shell_state_independent_of_edit_saving_3b9():
+    """Phase 3B.9: resetCorrectionShellState must not reset the edit /
+    time / split / merge / hide / delete saving states (those are owned by
+    clearEditPanel)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "resetCorrectionShellState")
+    for saving in ("editSaving", "timeSaving", "activityTimeSaving",
+                   "sessionSplitSaving", "activitySplitSaving", "mergeSaving",
+                   "hideSaving", "deleteSaving", "editingSession"):
+        assert saving not in body, (
+            "resetCorrectionShellState must not reset " + saving
+        )
+
+
+def test_app_js_close_correction_shell_no_write_3b9():
+    """Phase 3B.9: closeCorrectionShell must not trigger a refresh or any
+    write action."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    body = _func_body(source, "closeCorrectionShell")
+    for forbidden in ("loadTimeline", "refreshAll", "callBridge",
+                      "saveProject", "saveNote", "saveActivityTime",
+                      "saveSessionTime", "saveActivitySplit", "saveSessionSplit",
+                      "saveMerge", "saveHide", "saveDelete",
+                      "saveBatchProject", "saveBatchNote",
+                      "saveActivityRestore"):
+        assert forbidden not in body, (
+            "closeCorrectionShell must not call " + forbidden
+        )
+
+
+def test_app_js_correction_shell_no_local_storage_3b9():
+    """Phase 3B.9: the correction shell must not use localStorage or
+    sessionStorage."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("localStorage", "sessionStorage"):
+        assert forbidden not in source, (
+            "app.js must not use " + forbidden
+        )
+
+
+def test_app_js_correction_shell_no_external_links_3b9():
+    """Phase 3B.9: app.js must not reference external links, CDN, or
+    Google Fonts."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("http://", "https://", "cdn.", "googleapis.com",
+                      "fonts.googleapis"):
+        assert forbidden not in source, (
+            "app.js must not reference " + forbidden
+        )
+
+
+def test_app_js_correction_shell_no_traceback_display_3b9():
+    """Phase 3B.9: app.js must not display tracebacks / SQL / raw exception
+    text in the correction shell."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("traceback", "Traceback", "SQL", "Exception"):
+        assert forbidden not in source, (
+            "app.js must not display " + forbidden
+        )
+
+
+def test_app_js_correction_shell_no_new_forbidden_handlers_3b9():
+    """Phase 3B.9: the consolidation must not introduce batch hide /
+    delete, batch restore, restore all, undo stack, permanent delete,
+    auto-rule, or global overlap detection handlers."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("batchHide", "batchDelete", "batchRestore",
+                      "restoreAll", "restore_all",
+                      "permanentDelete", "permanent_delete",
+                      "undoStack", "undo_stack",
+                      "autoRule", "auto_rule",
+                      "overlapDetection", "globalOverlap",
+                      "batchTimeCorrection", "batchSplit", "batchMerge",
+                      "batchNoteAppend", "batchNoteMerge"):
+        assert forbidden not in source, (
+            "app.js must not contain " + forbidden + " handler"
+        )
+
+
+def test_app_js_batch_project_and_note_share_selection_3b9():
+    """Phase 3B.9: batch project and batch note must share the same
+    selectedBatchActivityIds selection (single source of truth)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    project_body = _func_body(source, "saveBatchProject")
+    note_body = _func_body(source, "saveBatchNote")
+    assert "selectedBatchActivityIds" in project_body, (
+        "saveBatchProject must read from the shared selection"
+    )
+    assert "selectedBatchActivityIds" in note_body, (
+        "saveBatchNote must read from the shared selection"
+    )
+
+
+def test_styles_css_has_correction_shell_card_styles_3b9():
+    """Phase 3B.9: styles.css must define the unified .correction-shell-card
+    style and its variants."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell-card" in source, (
+        "styles.css must define .correction-shell-card"
+    )
+    assert ".correction-shell-card-header" in source, (
+        "styles.css must define .correction-shell-card-header"
+    )
+    assert ".correction-shell-card-hint" in source, (
+        "styles.css must define .correction-shell-card-hint"
+    )
+    assert ".correction-shell-card[hidden]" in source, (
+        "styles.css must hide .correction-shell-card[hidden]"
+    )
+
+
+def test_styles_css_correction_shell_hidden_still_display_none_3b9():
+    """Phase 3B.9: .correction-shell[hidden] must still be display:none."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell[hidden]" in source, (
+        "styles.css must keep the .correction-shell[hidden] rule"
+    )
+
+
+def test_styles_css_has_card_responsive_rules_3b9():
+    """Phase 3B.9: styles.css must keep the correction shell cards stable
+    on narrow viewports."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    # The responsive block must reference the card class.
+    assert ".correction-shell-card" in source, (
+        "styles.css responsive block must reference .correction-shell-card"
+    )
+
+
+def test_styles_css_no_external_resources_3b9():
+    """Phase 3B.9: styles.css must not reference external resources."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    for forbidden in ("http://", "https://", "cdn.", "googleapis.com",
+                      "fonts.googleapis", "@import"):
+        assert forbidden not in source, (
+            "styles.css must not reference " + forbidden
+        )
+
+
+def test_bridge_no_new_methods_for_phase_3b_9():
+    """Phase 3B.9: the bridge must not gain new methods. The existing
+    project / note / time / split / merge / hide / delete / batch project /
+    batch note / restore methods must still be present."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    for required in (
+        "def update_timeline_project",
+        "def update_timeline_note",
+        "def update_timeline_activity_time",
+        "def update_timeline_session_time",
+        "def split_timeline_activity",
+        "def split_timeline_session",
+        "def merge_timeline_activities",
+        "def hide_timeline_activity",
+        "def soft_delete_timeline_activity",
+        "def hide_timeline_session",
+        "def soft_delete_timeline_session",
+        "def get_timeline",
+        "def get_timeline_session_details",
+        "def batch_update_timeline_activities_project",
+        "def batch_update_timeline_activities_note",
+        "def restore_timeline_activity",
+        "def get_timeline_restorable_activities",
+    ):
+        assert required in bridge_src, (
+            "bridge must still define " + required
+        )
+
+
+def test_bridge_imports_only_allowed_modules_3b_9():
+    """Phase 3B.9: the bridge must still only import worktrace.api and
+    worktrace.formatters; no direct service / db / collector / security /
+    runtime / config imports."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    for forbidden in ("from ..services", "from ..db",
+                      "from ..collector", "from ..security",
+                      "from ..runtime", "from ..config",
+                      "import worktrace.services",
+                      "import worktrace.db"):
+        assert forbidden not in bridge_src, (
+            "bridge must not import " + forbidden
+        )
+
+
+def test_docs_mention_phase_3b_9():
+    """Phase 3B.9: the migration doc must mention Phase 3B.9."""
+    doc_path = REPO_ROOT / "docs" / "ui-webview-migration.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "3B.9" in source, (
+        "ui-webview-migration.md must mention Phase 3B.9"
+    )
+    assert "consolidation" in source.lower() or "整理" in source, (
+        "ui-webview-migration.md must describe 3B.9 as consolidation"
+    )
+
+
+def test_docs_readme_mentions_phase_3b_9():
+    """Phase 3B.9: README must mention Phase 3B.9."""
+    doc_path = REPO_ROOT / "README.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "3B.9" in source, (
+        "README.md must mention Phase 3B.9"
+    )
+
+
+def test_docs_release_validation_mentions_phase_3b_9():
+    """Phase 3B.9: release-validation must mention Phase 3B.9."""
+    doc_path = REPO_ROOT / "docs" / "release-validation.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "3B.9" in source, (
+        "release-validation.md must mention Phase 3B.9"
     )

@@ -2651,3 +2651,94 @@ new DB schema, and no new UI controls are introduced.
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
   server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 3B.9 Validation
+
+Phase 3B.9 is a **consolidation-only** phase for the Timeline correction
+shell. It does NOT add any backend write capability, bridge / API / service
+method, DB schema, or new correction action. It only reorganizes the
+shell's internal UI structure, state, copy, render helpers, and CSS.
+
+### Phase 3B.9 Scope
+
+- The correction shell is reorganized into unified cards with stable IDs:
+  `correction-shell-context-card`, `correction-shell-activity-card`,
+  `correction-shell-single-action-card`, `correction-shell-batch-action-card`,
+  `correction-shell-restore-card`, and `correction-shell-not-implemented-card`.
+  Each card carries a `.correction-shell-card-header` and an optional
+  `.correction-shell-card-hint`.
+- All existing IDs from prior phases (e.g. `correction-shell-context`,
+  `correction-shell-activities`, `correction-shell-actions`,
+  `correction-shell-batch-project-section`,
+  `correction-shell-batch-note-section`,
+  `correction-shell-restore-section`) are preserved.
+- Single activity actions (edit time / split / merge / hide / delete) live
+  in the single-action card as guidance; batch project reassignment and
+  batch note overwrite live together in the batch-action card and share
+  the same `selectedBatchActivityIds` selection; the recovery list lives
+  in the restore card.
+- A dedicated not-implemented card explicitly lists the unsupported
+  capabilities (batch hide / delete / restore, restore all, undo stack,
+  permanent delete, batch time / split / merge, note append / merge,
+  auto-rule, global overlap detection).
+- Unified helpers:
+  - `safeText(value, fallback)` — display-safe text helper that returns
+    the fallback for null / undefined / empty values and stringifies
+    non-empty values; used by `renderCorrectionShell` and
+    `renderRestorableActivities` before `escapeHtml`.
+  - `isAnyCorrectionWriteSaving()` — cross-save guard that returns true
+    when any correction-shell write (batch project / batch note / single
+    restore) is in flight.
+  - `resetCorrectionActionStatus()` — clears every shell status area
+    (shell / batch project / batch note / restore); called on
+    `openCorrectionShell` so stale messages do not linger.
+- Cross-save guard extended: `saveBatchProject` refuses when batch note or
+  restore is saving; `saveBatchNote` refuses when restore is saving;
+  `saveActivityRestore` refuses when batch project or batch note is saving.
+  Every cross-save refusal uses the stable `请等待当前操作完成` message
+  and does NOT call the bridge.
+- CSS consolidation: a unified `.correction-shell-card` style (with
+  `.correction-shell-card-header`, `.correction-shell-card-hint`,
+  `.correction-shell-card[hidden]`) replaces the per-section card chrome.
+  The existing `.correction-shell[hidden] { display: none }` rule and the
+  `.detail-item-highlight` rule are preserved. Narrow-viewport rules keep
+  the cards stable.
+- No raw fields: the shell, the activity rows, the context summary, and
+  the recovery list only use display-safe fields. Raw `window_title` /
+  `file_path_hint` / `full_path` / clipboard / note internals / traceback
+  / SQL / exception text are never read or displayed.
+
+### Phase 3B.9 Verification
+
+- `python -m pytest` passes (all Phase 3B.9 consolidation tests pass; all
+  Phase 3B.8.1 / 3B.8 / 3B.7.1 / 3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B /
+  3B.5A / 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 / 2 / 1 tests still pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds and
+  the packaged build includes the updated `index.html` / `app.js` /
+  `styles.css`.
+
+### Phase 3B.9 Release Blockers
+
+- Any new backend write capability is introduced.
+- Any new bridge / API / service method is introduced.
+- Any new DB schema is introduced.
+- Any new correction action is introduced.
+- Raw `window_title` / `file_path_hint` / `full_path` / clipboard / note
+  / traceback / SQL is leaked in the correction shell.
+- A correction shell action disappears (single / batch / restore).
+- A batch project or batch note regression.
+- A restore regression.
+- A dirty guard regression (any write path proceeds while `isEditDirty()`
+  is true).
+- A saving state gets stuck (saving flag never resets).
+- A cross-save bypass (two correction-shell writes run concurrently).
+- Batch hide / delete / restore / permanent delete / undo stack UI is
+  introduced.
+- `localStorage` / `sessionStorage` / CDN / external font is introduced.
+- The bridge imports `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- Any Phase 3B.8.1 / 3B.8 / 3B.7.1 / 3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 /
+  3B.5B / 3B.5A / 3B.4 / 3B.3 / 3B.2 / 3B.1 / 3A / 2.1 regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
+  server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.

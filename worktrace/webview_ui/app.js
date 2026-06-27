@@ -1768,18 +1768,81 @@
         return out;
     }
 
+    // --- Phase 3B.9: correction shell consolidation helpers ------------
+    // These helpers consolidate the cross-phase saving / status / display
+    // logic so single / batch / restore sections share one source of truth.
+    // No new write capability is introduced; the helpers only coordinate
+    // existing state and DOM.
+
+    // Display-safe text helper. Returns a fallback when the value is null /
+    // undefined / empty so the shell never renders "undefined" or "null".
+    // The returned string is intended to be passed through escapeHtml by
+    // the caller before insertion into innerHTML; it never reads raw
+    // sensitive backend columns (titles, paths, copy buffers, note internals).
+    function safeText(value, fallback) {
+        if (value === null || value === undefined || value === "") {
+            return fallback || "";
+        }
+        return String(value);
+    }
+
+    // Cross-save guard: returns true when ANY correction-shell write is in
+    // flight (batch project, batch note, or single restore). The existing
+    // edit / time / split / merge / hide / delete saving states are owned
+    // by clearEditPanel and are intentionally not consulted here; those
+    // flows run inside the edit panel and have their own dirty guard.
+    // Used by every correction-shell write path to refuse a competing
+    // write with a unified "请等待当前操作完成" message instead of calling
+    // the bridge.
+    function isAnyCorrectionWriteSaving() {
+        return !!(batchProjectSaving || batchNoteSaving || restoreSaving);
+    }
+
+    // Unified cross-save refusal helper. Surfaces the stable Chinese
+    // message on the most specific open status area (batch project / batch
+    // note / restore / shell) so the user sees the refusal where they
+    // clicked. Does not call the bridge.
+    function refuseCrossSaveStatus() {
+        var msg = "请等待当前操作完成";
+        if (restoreSaving) {
+            showRestoreStatus(msg, true);
+            return;
+        }
+        if (batchNoteSaving) {
+            showBatchNoteStatus(msg, true);
+            return;
+        }
+        if (batchProjectSaving) {
+            showBatchProjectStatus(msg, true);
+            return;
+        }
+        setCorrectionShellStatus(msg, true);
+    }
+
+    // Reset every correction-shell action status area to the hidden / empty
+    // baseline. Used on shell open and on successful writes so stale
+    // messages do not linger. Does not reset saving state (saving state is
+    // owned by the per-action reset helpers).
+    function resetCorrectionActionStatus() {
+        setCorrectionShellStatus("", false);
+        showBatchProjectStatus("", false);
+        showBatchNoteStatus("", false);
+        showRestoreStatus("", false);
+    }
+
     function setCorrectionShellStatus(message, isError) {
         var statusEl = document.getElementById("correction-shell-status");
         if (!statusEl) return;
         if (!message) {
             statusEl.hidden = true;
             statusEl.textContent = "";
-            statusEl.className = "edit-status";
+            statusEl.className = "edit-status correction-shell-status";
             return;
         }
         statusEl.hidden = false;
         statusEl.textContent = message;
-        statusEl.className = "edit-status " + (isError ? "edit-status-error" : "edit-status-success");
+        statusEl.className = "edit-status correction-shell-status "
+            + (isError ? "edit-status-error" : "edit-status-success");
     }
 
     function resetCorrectionShellState() {
@@ -1836,14 +1899,19 @@
         if (!ctxEl || !session) return;
 
         // --- Context summary (display-safe only) ---
+        // Phase 3B.9: every dynamic value passes through safeText + escapeHtml
+        // so the shell never reads / displays raw sensitive backend columns
+        // (titles, paths, copy buffers, note internals). Only display-safe
+        // fields (date, project label, time range, duration, count, status)
+        // are used.
         var dateEl = document.getElementById("timeline-date-display");
-        var dateTxt = dateEl ? dateEl.textContent : "";
-        var projectLabel = session.project_name || "未归类";
+        var dateTxt = safeText(dateEl ? dateEl.textContent : "", "");
+        var projectLabel = safeText(session.project_name, "未归类");
         if (session.project_description) {
-            projectLabel += " (" + session.project_description + ")";
+            projectLabel += " (" + safeText(session.project_description, "") + ")";
         }
-        var timeRange = formatTimeRange(session.start_time, session.end_time, session.is_in_progress);
-        var statusTxt = session.status || "";
+        var timeRange = safeText(formatTimeRange(session.start_time, session.end_time, session.is_in_progress), "");
+        var statusTxt = safeText(session.status, "");
         var inProgressTxt = session.is_in_progress ? "进行中" : "已结束";
         if (subEl) {
             subEl.textContent = dateTxt + " ｜ " + timeRange + " ｜ " + projectLabel;
@@ -1856,9 +1924,9 @@
             + '<span class="correction-shell-context-label">时段：</span>'
             + '<span class="correction-shell-context-value">' + escapeHtml(timeRange) + '</span>'
             + '<span class="correction-shell-context-label">时长：</span>'
-            + '<span class="correction-shell-context-value">' + escapeHtml(session.duration || "") + '</span>'
+            + '<span class="correction-shell-context-value">' + escapeHtml(safeText(session.duration, "")) + '</span>'
             + '<span class="correction-shell-context-label">活动数：</span>'
-            + '<span class="correction-shell-context-value">' + escapeHtml(String(session.event_count || 0)) + '</span>'
+            + '<span class="correction-shell-context-value">' + escapeHtml(safeText(session.event_count, "0")) + '</span>'
             + '<span class="correction-shell-context-label">状态：</span>'
             + '<span class="correction-shell-context-value' + (session.is_in_progress ? " in-progress" : "") + '">' + escapeHtml(statusTxt || inProgressTxt) + '</span>'
             + '</div>';
@@ -1906,9 +1974,9 @@
                                 + (batchProjectSaving ? ' disabled' : '')
                                 + checkedAttr + '>'
                             : '<input type="checkbox" class="correction-shell-activity-checkbox" disabled>')
-                        + '<span class="correction-shell-activity-time">' + escapeHtml(a.time_range) + '</span>'
-                        + '<span class="correction-shell-activity-name" title="' + escapeHtml(a.resource_name) + '">' + escapeHtml(a.resource_name) + '</span>'
-                        + '<span class="correction-shell-activity-duration">' + escapeHtml(a.duration) + '</span>'
+                        + '<span class="correction-shell-activity-time">' + escapeHtml(safeText(a.time_range, "")) + '</span>'
+                        + '<span class="correction-shell-activity-name" title="' + escapeHtml(safeText(a.resource_name, "")) + '">' + escapeHtml(safeText(a.resource_name, "")) + '</span>'
+                        + '<span class="correction-shell-activity-duration">' + escapeHtml(safeText(a.duration, "")) + '</span>'
                         + '</div>';
                 }
                 actsEl.innerHTML = html;
@@ -2076,7 +2144,9 @@
             effectiveMode,
             correctionShellActivityId
         );
-        setCorrectionShellStatus("", false);
+        // Phase 3B.9: clear every action status area on open so stale
+        // messages from a previous shell session do not linger.
+        resetCorrectionActionStatus();
     }
 
     function closeCorrectionShell() {
@@ -2087,6 +2157,9 @@
         resetCorrectionShellState();
         // selectedSessionId is intentionally NOT cleared here.
         if (wasOpen) {
+            // Phase 3B.9: resetCorrectionShellState already clears the
+            // shell-only status areas via the per-section reset helpers;
+            // this extra clear is a no-op safety net.
             setCorrectionShellStatus("", false);
         }
     }
@@ -2351,6 +2424,14 @@
         // the two write paths never race on the same session.
         if (isEditDirty()) {
             showBatchProjectStatus("请先保存或取消当前编辑", true);
+            return;
+        }
+        // Phase 3B.9: cross-save guard. A batch project save triggers a
+        // Timeline refresh which would race with an in-flight batch note
+        // save or single restore. Refuse with the unified message instead
+        // of calling the bridge.
+        if (batchNoteSaving || restoreSaving) {
+            showBatchProjectStatus("请等待当前操作完成", true);
             return;
         }
         var selectedIds = Object.keys(selectedBatchActivityIds);
@@ -2629,6 +2710,14 @@
             showBatchNoteStatus("操作失败", true);
             return;
         }
+        // Phase 3B.9: cross-save guard. A batch note save triggers a
+        // Timeline refresh which would race with an in-flight single
+        // restore. Refuse with the unified message instead of calling the
+        // bridge.
+        if (restoreSaving) {
+            showBatchNoteStatus("请等待当前操作完成", true);
+            return;
+        }
         var selectedIds = Object.keys(selectedBatchActivityIds);
         if (selectedIds.length < 2) {
             showBatchNoteStatus("请选择至少两个活动", true);
@@ -2850,15 +2939,21 @@
         for (var i = 0; i < activities.length; i++) {
             var a = activities[i];
             var aid = String(a.activity_id || "");
-            var startTime = a.start_time || "";
-            var endTime = a.end_time || "";
-            var timeRange = formatTimeRange(startTime, endTime, false);
-            var duration = a.duration || "";
-            var appName = a.app_name || "";
-            var resourceType = a.resource_type || "";
-            var resourceName = a.resource_name || "";
-            var projectName = a.project_name || "未归类";
-            var restoreState = a.restore_state || "";
+            // Phase 3B.9: every dynamic value passes through safeText so the
+            // restore list never renders "undefined" / "null". Only display-
+            // safe fields (activity_id, time range, app_name, resource_type,
+            // resource_name, project_name, duration, restore_state) are used;
+            // raw sensitive backend columns (titles, paths, copy buffers,
+            // note internals) are never read.
+            var startTime = safeText(a.start_time, "");
+            var endTime = safeText(a.end_time, "");
+            var timeRange = safeText(formatTimeRange(startTime, endTime, false), "");
+            var duration = safeText(a.duration, "");
+            var appName = safeText(a.app_name, "");
+            var resourceType = safeText(a.resource_type, "");
+            var resourceName = safeText(a.resource_name, "");
+            var projectName = safeText(a.project_name, "未归类");
+            var restoreState = safeText(a.restore_state, "");
             // Badge text and class based on restore_state.
             var badgeText = "";
             var badgeClass = "correction-shell-restore-badge";
@@ -2945,6 +3040,13 @@
         // split inputs. Require the user to save or cancel first.
         if (isEditDirty()) {
             showRestoreStatus("请先保存或取消当前编辑", true);
+            return;
+        }
+        // Phase 3B.9: cross-save guard. A restore triggers a Timeline refresh
+        // which would race with an in-flight batch project / batch note save.
+        // Refuse with the unified message instead of calling the bridge.
+        if (batchProjectSaving || batchNoteSaving) {
+            showRestoreStatus("请等待当前操作完成", true);
             return;
         }
         setRestoreSaving(true, activityId);

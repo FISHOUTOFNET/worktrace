@@ -1284,6 +1284,92 @@ body {
     opacity: 0.55;
 }
 
+/* --- Phase 3B.9: unified correction shell card styles -------------- */
+/* All shell sections (context / activity / single-action / batch / restore
+   / not-implemented) share the same card chrome so the visual hierarchy
+   stays consistent and the per-section CSS stays minimal. The card class
+   is additive; existing section-specific classes (e.g.
+   .correction-shell-context, .correction-shell-activities,
+   .correction-shell-restore-section) keep their inner layout rules. */
+.correction-shell-card {
+    margin-top: 12px;
+    padding: 12px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+}
+
+.correction-shell-card[hidden] {
+    display: none;
+}
+
+.correction-shell-card-header {
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
+    margin-bottom: 8px;
+}
+
+.correction-shell-card-hint {
+    margin-bottom: 8px;
+    color: #64748b;
+}
+
+/* The context card's inner context block already carries its own padding /
+   border; reset the card's inner chrome so the two do not double up. */
+.correction-shell-context-card .correction-shell-context {
+    margin-bottom: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+}
+
+/* The activity card's inner activities block is plain; keep the card
+   chrome as the only container. */
+.correction-shell-activity-card .correction-shell-activities {
+    margin-bottom: 0;
+}
+
+/* The single-action card's inner actions block already carries its own
+   padding / border; reset so the card chrome is the only container. */
+.correction-shell-single-action-card .correction-shell-actions {
+    padding: 0;
+    background: transparent;
+    border: none;
+}
+
+/* The batch action card contains the batch project + batch note sections.
+   Each inner section already has .correction-shell-batch-section styling;
+   the card only adds the outer chrome + header + hint. */
+.correction-shell-batch-action-card .correction-shell-batch-section {
+    margin-top: 8px;
+}
+
+.correction-shell-batch-action-card .correction-shell-batch-section:first-of-type {
+    margin-top: 0;
+}
+
+/* The restore card's inner restore section already has its own padding /
+   border; reset so the card chrome is the only container. */
+.correction-shell-restore-card .correction-shell-restore-section {
+    margin-top: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+}
+
+/* The not-implemented card is hint-only; reuse the card chrome + hint
+   styling. */
+.correction-shell-not-implemented-card {
+    background: #f8fafc;
+}
+
+/* Unified status area inside the shell header. Reuses .edit-status
+   semantics; this rule only positions it consistently under the header. */
+.correction-shell-status {
+    margin-bottom: 8px;
+}
+
 .correction-shell-context {
     margin-bottom: 12px;
     padding: 10px 12px;
@@ -1628,5 +1714,21 @@ body {
     }
     .correction-shell-restore-btn {
         justify-self: flex-start;
+    }
+    /* Phase 3B.9: keep the unified cards stable on narrow viewports.
+       The cards stay full-width, the inner select / textarea / buttons
+       never overflow, and the card padding tightens so the shell stays
+       usable on a single column. */
+    .correction-shell-card {
+        margin-top: 10px;
+        padding: 10px;
+    }
+    .correction-shell-card-header {
+        font-size: 12px;
+    }
+    .correction-shell-batch-action-card .edit-select,
+    .correction-shell-batch-action-card .correction-shell-batch-note-text,
+    .correction-shell-batch-action-card .edit-btn {
+        max-width: 100%;
     }
 }

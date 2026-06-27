@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3B.7 (Overview fully migrated; Timeline read-only page
+- Current phase: 3B.9 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -2871,6 +2871,113 @@ Phase 3B.8.1 does not implement and does not start:
 - Multi-activity session whole-hide / whole-delete;
 - Any new DB schema;
 - Any new batch write type;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any Tkinter fallback path.
+
+## Phase 3B.9 Implemented Scope
+
+Phase 3B.9 is a **consolidation-only** phase for the Timeline correction
+shell. It does NOT add any backend write capability, bridge / API / service
+method, DB schema, or new correction action. It only reorganizes the
+shell's internal UI structure, state, copy, render helpers, and CSS so the
+accumulated Phase 3B.5B / 3B.6 / 3B.7 / 3B.8 functionality reads as a
+single, stable, maintainable shell.
+
+The consolidation covers:
+
+- **Shell cards.** The correction shell is now organized into unified
+  cards with stable IDs:
+  `correction-shell-context-card`,
+  `correction-shell-activity-card`,
+  `correction-shell-single-action-card`,
+  `correction-shell-batch-action-card`,
+  `correction-shell-restore-card`, and
+  `correction-shell-not-implemented-card`. Each card carries a
+  `.correction-shell-card-header` and an optional
+  `.correction-shell-card-hint`. All existing IDs from prior phases
+  (e.g. `correction-shell-context`, `correction-shell-activities`,
+  `correction-shell-actions`, `correction-shell-batch-project-section`,
+  `correction-shell-batch-note-section`,
+  `correction-shell-restore-section`) are preserved so prior-phase tests
+  keep passing.
+- **Single actions / batch actions / recovery list grouping.** Single
+  activity actions (edit time / split / merge / hide / delete) live in
+  the single-action card as guidance; batch project reassignment and
+  batch note overwrite live together in the batch-action card and share
+  the same `selectedBatchActivityIds` selection; the recovery list lives
+  in the restore card. A dedicated not-implemented card explicitly lists
+  the unsupported capabilities (batch hide / delete / restore, restore
+  all, undo stack, permanent delete, batch time / split / merge, note
+  append / merge, auto-rule, global overlap detection).
+- **Shared selection.** Batch project and batch note continue to share a
+  single `selectedBatchActivityIds` source of truth; the selected count
+  is derived from one place; select-all / clear affect only eligible
+  current shell activities; auto-refresh prunes disappeared / ineligible
+  ids; shell close / date switch / session switch clear the selection.
+- **Shared status / empty / loading / disabled semantics.** A unified
+  `resetCorrectionActionStatus()` helper clears every shell status area
+  (shell / batch project / batch note / restore) on open so stale
+  messages do not linger. The unified Chinese copy is preserved:
+  `请先保存或取消当前编辑`, `请等待当前操作完成`, `已批量更新项目`,
+  `已批量更新备注`, `已恢复`, `操作失败`, `恢复失败`,
+  `暂无可恢复记录`.
+- **Cross-save guard.** A unified `isAnyCorrectionWriteSaving()` helper
+  returns true when any correction-shell write (batch project / batch
+  note / single restore) is in flight. `saveBatchProject` refuses when
+  batch note or restore is saving; `saveBatchNote` refuses when restore
+  is saving; `saveActivityRestore` refuses when batch project or batch
+  note is saving. Every cross-save refusal uses the stable
+  `请等待当前操作完成` message and does NOT call the bridge.
+- **Display-safe rendering helper.** A unified `safeText(value, fallback)`
+  helper returns the fallback for null / undefined / empty values and
+  stringifies non-empty values. `renderCorrectionShell` and
+  `renderRestorableActivities` pass every dynamic value through
+  `safeText` followed by `escapeHtml` so the shell never renders
+  `undefined` / `null`. The shell never reads raw `window_title`,
+  `file_path_hint`, `full_path`, `clipboard`, note internals,
+  traceback, SQL, or exception text.
+- **CSS consolidation.** A unified `.correction-shell-card` style
+  (with `.correction-shell-card-header`, `.correction-shell-card-hint`,
+  `.correction-shell-card[hidden]`) replaces the per-section card chrome
+  so context / activity / single-action / batch / restore / not-implemented
+  cards share one visual hierarchy. The existing
+  `.correction-shell[hidden] { display: none }` rule and the
+  `.detail-item-highlight` rule are preserved. Narrow-viewport rules keep
+  the cards stable (no overflow, rows wrap, padding tightens).
+- **No raw fields.** The shell, the activity rows, the context summary,
+  and the recovery list only use display-safe fields (`activity_id`,
+  time range, `resource_name`, `app_name`, `resource_type`,
+  `project_name`, `duration`, `is_in_progress`, `restore_state`). Raw
+  `window_title` / `file_path_hint` / `full_path` / clipboard / note
+  internals / traceback / SQL / exception text are never read or
+  displayed.
+
+## Phase 3B.9 Not Implemented
+
+Phase 3B.9 does not implement and does not start:
+
+- Any new backend write capability;
+- Any new bridge / API / service method;
+- Any new DB schema;
+- Any new correction action;
+- Batch hide;
+- Batch delete;
+- Batch restore;
+- Restore all;
+- Undo stack;
+- Permanent delete;
+- Batch time correction;
+- Batch split;
+- Batch merge;
+- Batch note append;
+- Batch note merge;
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge;
+- Multi-activity session whole-hide / whole-delete;
 - Any React / Vue / Vite / Node dependency;
 - Any local HTTP server;
 - Any CDN / external JS / CSS / font / Google Fonts usage;
