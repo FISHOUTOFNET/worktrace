@@ -31,10 +31,11 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from static_helpers import (
-    REPO_ROOT, WEBVIEW_UI_DIR, HISTORY_PATH,
+    REPO_ROOT, WEBVIEW_UI_DIR, JS_DIR, HISTORY_PATH,
     RELEASE_VALIDATION_PATH, README_PATH,
-    read_resource, func_body,
+    read_resource, read_all_js, read_js, func_body,
     FRONTEND_RESOURCE_FILES, NO_STORAGE_FILES,
+    ALL_JS_FILES,
 )
 
 
@@ -46,7 +47,16 @@ def test_index_html_exists():
 
 
 def test_app_js_exists():
-    assert (WEBVIEW_UI_DIR / "app.js").is_file()
+    """Phase R2: the monolithic app.js has been split into six js/ modules.
+    The old app.js must no longer exist; each js/ module must exist."""
+    assert not (WEBVIEW_UI_DIR / "app.js").is_file(), (
+        "app.js must be removed after Phase R2 split"
+    )
+    assert JS_DIR.is_dir(), "js/ directory must exist after Phase R2 split"
+    for name in ALL_JS_FILES:
+        assert (JS_DIR / name).is_file(), (
+            "js/" + name + " must exist after Phase R2 split"
+        )
 
 
 def test_styles_css_exists():
@@ -114,7 +124,15 @@ def test_frontend_resource_has_no_traceback_text(filename):
 def test_index_html_references_local_resources():
     source = read_resource("index.html")
     assert 'href="styles.css"' in source
-    assert 'src="app.js"' in source
+    # Phase R2: index.html must load the six js/ modules in order and
+    # must no longer reference the removed app.js.
+    assert 'src="app.js"' not in source, (
+        "index.html must not reference removed app.js"
+    )
+    for name in ALL_JS_FILES:
+        assert 'src="js/' + name + '"' in source, (
+            "index.html must load js/" + name
+        )
 
 
 def test_index_html_has_chinese_text():
@@ -172,10 +190,10 @@ def test_index_html_overview_page_has_pause_toggle():
 
 
 def test_app_js_displays_classified_and_uncategorized_durations():
-    """Phase 1: app.js must render classified_duration and
+    """Phase 1: the frontend must render classified_duration and
     uncategorized_duration returned by the bridge, not just total
-    duration."""
-    source = read_resource("app.js")
+    duration. (Phase R2: contract now checked across all js/ modules.)"""
+    source = read_all_js()
     assert "kpi-classified" in source
     assert "kpi-uncategorized" in source
     assert "classified_duration" in source
@@ -183,9 +201,10 @@ def test_app_js_displays_classified_and_uncategorized_durations():
 
 
 def test_app_js_surfaces_bridge_errors_in_page():
-    """Phase 1: app.js must show bridge errors in the in-page error banner
-    instead of silently swallowing them."""
-    source = read_resource("app.js")
+    """Phase 1: the frontend must show bridge errors in the in-page error
+    banner instead of silently swallowing them. (Phase R2: contract now
+    checked across all js/ modules.)"""
+    source = read_all_js()
     assert "overview-error" in source
     assert "showError" in source
     assert "clearError" in source
@@ -193,8 +212,9 @@ def test_app_js_surfaces_bridge_errors_in_page():
 
 def test_app_js_does_not_expose_tracebacks():
     """The frontend must not attempt to parse or display Python tracebacks.
-    It only shows the generic error string returned by the bridge."""
-    source = read_resource("app.js")
+    It only shows the generic error string returned by the bridge.
+    (Phase R2: contract now checked across all js/ modules.)"""
+    source = read_all_js()
     assert "traceback" not in source.lower()
 
 
@@ -488,4 +508,267 @@ def test_docs_release_validation_phase_4a1_section_4a1():
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     assert "4A.1" in source, (
         "release-validation.md must mention Phase 4A.1"
+    )
+
+
+# --- Phase R2: JS module split structural tests --------------------------
+# Phase R2 split the monolithic app.js into six IIFE modules under
+# worktrace/webview_ui/js/. These tests verify the split is structurally
+# correct and behavior-preserving.
+
+
+def test_phase_r2_js_directory_exists():
+    """Phase R2: the js/ subdirectory must exist under webview_ui/."""
+    assert JS_DIR.is_dir(), (
+        "worktrace/webview_ui/js/ directory must exist after Phase R2"
+    )
+
+
+def test_phase_r2_each_js_file_declares_worktrace_namespace():
+    """Phase R2: every js/ module must declare the shared namespace via
+    ``var App = window.WorkTraceApp = window.WorkTraceApp || {};`` so all
+    modules share the same namespace object."""
+    for name in ALL_JS_FILES:
+        source = read_js(name)
+        assert "var App = window.WorkTraceApp = window.WorkTraceApp || {};" in source, (
+            "js/" + name + " must declare the WorkTraceApp namespace"
+        )
+
+
+def test_phase_r2_each_js_file_is_iife():
+    """Phase R2: every js/ module must be wrapped in an IIFE to avoid
+    leaking locals into the global scope (matching the original app.js
+    structure). A short leading comment header (module name / purpose)
+    is permitted before the IIFE opening."""
+    for name in ALL_JS_FILES:
+        source = read_js(name).strip()
+        # The IIFE opening must appear near the top (after optional
+        # comment lines that document the module).
+        assert "(function () {" in source[:400], (
+            "js/" + name + " must open with an IIFE near the top"
+        )
+        assert source.rstrip().endswith("})();"), (
+            "js/" + name + " must close with })();"
+        )
+
+
+def test_phase_r2_index_html_loads_js_files_in_correct_order():
+    """Phase R2: index.html must load the six js/ modules in the exact
+    dependency order (core → overview → timeline → timeline_correction →
+    statistics → init). A wrong order would cause ReferenceError at load
+    time because a module might call App.foo() before core.js defines it."""
+    source = read_resource("index.html")
+    positions = []
+    for name in ALL_JS_FILES:
+        tag = 'src="js/' + name + '"'
+        pos = source.find(tag)
+        assert pos != -1, (
+            "index.html must contain script tag for js/" + name
+        )
+        positions.append(pos)
+    for i in range(len(positions) - 1):
+        assert positions[i] < positions[i + 1], (
+            "index.html must load js/" + ALL_JS_FILES[i]
+            + " before js/" + ALL_JS_FILES[i + 1]
+        )
+
+
+def test_phase_r2_no_es_module_syntax_in_js_files():
+    """Phase R2: the js/ modules must NOT use ES module syntax (import /
+    export). The project loads scripts via plain <script> tags, so ES
+    modules would break the load chain.
+
+    The patterns are scoped to actual ES module statement syntax so
+    legitimate identifiers like ``exportStatisticsCsv`` and comment
+    phrases like ``// CSV export`` do not produce false positives."""
+    forbidden_patterns = [
+        # import declarations: import x from "..."; import { x } from "..."
+        r'\bimport\s+[\w{}\s,]+\s+from\s',
+        r'\bimport\s*\{',
+        r'\bimport\s+["\']',
+        # export declarations: export default ...; export { ... };
+        # export const/let/var/function ...
+        r'\bexport\s+default\b',
+        r'\bexport\s*\{',
+        r'\bexport\s+(?:const|let|var|function)\s+\w+',
+        # CommonJS require()
+        r'\brequire\s*\(',
+    ]
+    for name in ALL_JS_FILES:
+        source = read_js(name)
+        for pattern in forbidden_patterns:
+            assert not re.search(pattern, source), (
+                "js/" + name + " must not use ES module syntax: " + pattern
+            )
+
+
+def test_phase_r2_domcontentloaded_wiring_only_in_init_js():
+    """Phase R2: the DOMContentLoaded wiring (the only top-level code
+    that runs at module-load time) must exist ONLY in init.js — the last
+    module loaded. Other modules must not auto-execute any code."""
+    for name in ALL_JS_FILES:
+        source = read_js(name)
+        if name == "init.js":
+            assert "DOMContentLoaded" in source, (
+                "init.js must contain the DOMContentLoaded wiring"
+            )
+        else:
+            assert "DOMContentLoaded" not in source, (
+                "js/" + name + " must not contain DOMContentLoaded wiring "
+                "(only init.js should auto-execute at load time)"
+            )
+
+
+def test_phase_r2_worktrace_spec_bundles_js_modules():
+    """Phase R2: the PyInstaller spec must list every js/ module in datas
+    so the packaged exe includes the split frontend resources."""
+    spec = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
+    for name in ALL_JS_FILES:
+        assert ("js" in spec and name in spec), (
+            "WorkTrace.spec must bundle js/" + name + " in datas"
+        )
+    # The old app.js reference must be gone.
+    assert "app.js" not in spec, (
+        "WorkTrace.spec must no longer reference the removed app.js"
+    )
+
+
+def test_phase_r2_no_app_js_references_remain_in_js_files():
+    """Phase R2: no js/ module must reference the removed app.js file
+    (e.g., via a script load or string literal)."""
+    source = read_all_js()
+    assert "app.js" not in source, (
+        "js/ modules must not reference the removed app.js"
+    )
+
+
+# --- Phase R2: CRITICAL behavior-preservation guards --------------------
+
+
+def test_phase_r2_all_functions_still_defined():
+    """CRITICAL Phase R2 guard: every function that existed in the
+    monolithic app.js must still be defined across the six js/ modules.
+    A missing function would cause a ReferenceError at runtime when the
+    UI tries to call it — and no other test would catch this except a
+    full runtime integration test. This static guard lists the critical
+    entry points and lifecycle hooks from each module."""
+    source = read_all_js()
+    required_functions = [
+        # core.js — bridge + state helpers + utilities
+        "callBridge", "showError", "clearError", "showTimelineError",
+        "clearTimelineError", "setTimelineLoading", "statusClassFor",
+        "applyStatusType", "setTimelineStatus", "setDetailStatus",
+        "setEditStatus", "setCorrectionStatus", "handleResult", "showStatus",
+        "safeText", "escapeHtml", "formatTimeRange", "shiftDate",
+        "localTodayStr", "formatDuration", "backendToDatetimeLocal",
+        "datetimeLocalToBackend", "midpointTime", "parseBackendTimeParts",
+        "formatUtcParts",
+        # overview.js
+        "showOverview", "showRecent",
+        # timeline.js — main flow + editing
+        "showTimeline", "selectTimelineSession", "loadSessionDetails",
+        "renderSessionDetails", "loadTimeline", "refreshTimeline",
+        "goPrevDay", "goNextDay", "goToday", "loadProjects",
+        "populateEditPanel", "clearEditPanel", "isEditDirty", "saveEdit",
+        "cancelEdit", "updateNoteCount", "showEditStatus", "setEditSaving",
+        "saveActivityTime", "saveActivitySplit", "saveActivityMerge",
+        "saveActivityHide", "saveActivityDelete",
+        "saveSessionTime", "saveSessionSplit", "saveSessionHide",
+        "saveSessionDelete", "refreshTimelineAfterEdit",
+        # timeline_correction.js — correction shell + batch + restore
+        "getSelectedSession", "getCurrentDetailActivities",
+        "isAnyCorrectionWriteSaving", "renderCorrectionShell",
+        "openCorrectionShell", "closeCorrectionShell",
+        "saveBatchProject", "saveBatchNote", "saveActivityRestore",
+        "resetCorrectionShellState", "highlightDetailRow",
+        "resetBatchProjectState", "resetBatchNoteState", "resetRestoreState",
+        "bindBatchProjectControls", "bindBatchNoteControls", "bindRestoreControls",
+        # statistics.js
+        "loadStatisticsExportSummary", "showStatistics", "renderStatsTable",
+        "validateStatisticsDateRange", "applyStatisticsQuickRange",
+        "initStatisticsDefaults", "exportStatisticsCsv",
+        # init.js — refresh + nav + bootstrap
+        "refreshAll", "togglePause", "switchPage", "initNav", "initButtons",
+        "startAutoRefresh", "init",
+    ]
+    missing = []
+    for name in required_functions:
+        if source.find("function " + name + "(") == -1:
+            missing.append(name)
+    assert not missing, (
+        "Phase R2 split is missing function definitions: "
+        + ", ".join(missing)
+        + ". These would cause ReferenceError at runtime."
+    )
+    # Also verify the total function count is in the expected range.
+    # The original app.js had 147 function declarations. After the split,
+    # we expect at least 140 top-level function declarations (some may be
+    # counted as nested). This guards against accidental drops.
+    all_decls = re.findall(r'\n    function \w+\s*\(', source)
+    assert len(all_decls) >= 140, (
+        "Expected at least 140 function declarations across js/ modules, "
+        "found " + str(len(all_decls))
+    )
+
+
+def test_phase_r2_state_variables_only_accessed_via_app_namespace():
+    """CRITICAL Phase R2 guard: every state variable declared via
+    ``App.<name>`` in core.js must be accessed ONLY via the App.
+    namespace in all js/ modules. A bare reference (e.g.
+    ``timelineDate = shiftDate(...)`` without ``App.``) would be a
+    runtime ReferenceError because the variable is not declared with
+    ``var`` in any module's IIFE scope.
+
+    This test strips line comments to avoid false positives from
+    comments that mention state variable names, then searches for
+    bare (non-dot-prefixed) references."""
+    source = read_all_js()
+    # Strip // line comments to avoid false positives.
+    cleaned_lines = []
+    for line in source.split("\n"):
+        idx = line.find("//")
+        if idx != -1:
+            line = line[:idx]
+        cleaned_lines.append(line)
+    cleaned = "\n".join(cleaned_lines)
+
+    # State variable names declared in core.js via App.<name> = ...
+    # These are the module-level state variables that must NEVER be
+    # accessed without the App. prefix.
+    state_vars = [
+        "timelineDate", "timelineLoaded", "timelineLoading",
+        "selectedSessionId", "timelineRequestToken", "detailsRequestToken",
+        "projectsCache", "projectsLoading", "currentSessions",
+        "editingSession", "editSaving",
+        "timeSaving", "editingActivityId", "activityTimeSaving",
+        "sessionSplitSaving", "editingSplitActivityId", "activitySplitSaving",
+        "mergeSaving", "mergingActivityId",
+        "hideSaving", "hidingActivityId", "deleteSaving", "deletingActivityId",
+        "correctionShellOpen", "correctionShellSessionId",
+        "correctionShellActivityId", "correctionShellMode",
+        "correctionShellHighlightTimer",
+        "selectedBatchActivityIds", "batchProjectSaving",
+        "batchProjectTargetId", "batchNoteSaving",
+        "restoreSaving", "restoreSavingActivityId",
+        "statisticsLoaded", "statisticsLoading",
+        "statisticsRequestToken", "statisticsExportSaving",
+        "lastTimelineData", "refreshTimer",
+    ]
+    errors = []
+    for varname in state_vars:
+        # Match VARNAME not preceded by a word char or dot, and not
+        # followed by a word char. This catches bare references like
+        # `timelineDate = ...` or `if (timelineDate)` while skipping
+        # `App.timelineDate` (preceded by dot).
+        pattern = re.compile(
+            r'(?<![\w.])' + re.escape(varname) + r'(?!\w)'
+        )
+        matches = pattern.findall(cleaned)
+        if matches:
+            errors.append(
+                varname + " (" + str(len(matches)) + " bare reference(s))"
+            )
+    assert not errors, (
+        "State variables accessed without App. prefix (would cause "
+        "ReferenceError at runtime): " + "; ".join(errors)
     )

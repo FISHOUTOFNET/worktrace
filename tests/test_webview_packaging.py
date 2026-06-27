@@ -44,9 +44,22 @@ def _read(path: Path) -> str:
 
 
 def test_spec_bundles_webview_ui_static_resources():
+    """Phase R2: the spec must bundle index.html, styles.css, and the six
+    js/ modules that replaced the monolithic app.js. The old app.js must
+    no longer be referenced since the file was removed."""
     spec = _read(SPEC_PATH)
-    for name in ("index.html", "app.js", "styles.css"):
+    for name in ("index.html", "styles.css"):
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/{name}"
+    # Phase R2: the six split JS modules must each be bundled.
+    for name in (
+        "core.js", "overview.js", "timeline.js",
+        "timeline_correction.js", "statistics.js", "init.js",
+    ):
+        assert name in spec, f"WorkTrace.spec must bundle webview_ui/js/{name}"
+    # The removed monolithic app.js must no longer be referenced.
+    assert "app.js" not in spec, (
+        "WorkTrace.spec must not reference the removed app.js"
+    )
 
 
 def test_spec_bundles_webview_resources_under_webview_ui_dir():

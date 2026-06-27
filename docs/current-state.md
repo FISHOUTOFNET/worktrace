@@ -79,13 +79,21 @@ file, and `ui-webview-migration.md` all describe the current phase as 4B.
 ## Architecture Boundary
 
 ```
-WebView (index.html / app.js / styles.css)
+WebView (index.html / js/*.js / styles.css)
    └─> Python bridge (worktrace.webview_ui.bridge)
          └─> worktrace.api  (the ONLY backend layer the bridge may import)
                └─> worktrace.services
                      └─> worktrace.db   (schema.sql is the single source of truth)
    (collector thread ──> worktrace.collector)
 ```
+
+Frontend JS layout (Phase R2, no behavior change): the former single
+`app.js` is split by feature into local classic scripts under
+`worktrace/webview_ui/js/` — `core.js` (shared `window.WorkTraceApp`
+namespace, state, bridge call, generic helpers), `overview.js`,
+`timeline.js`, `timeline_correction.js`, `statistics.js`, `init.js` —
+loaded in that order via plain `<script src="js/...">` tags. No ES
+modules, no bundler, no Node/build step. Product behavior is unchanged.
 
 - The bridge may import `worktrace.api` and nothing else from the backend.
 - The bridge returns `{"ok": false, "error": "<chinese>"}` on failure; it

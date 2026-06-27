@@ -20,7 +20,7 @@ if _HERE not in sys.path:
 from static_helpers import (
     REPO_ROOT, WEBVIEW_UI_DIR, HISTORY_PATH,
     RELEASE_VALIDATION_PATH, README_PATH,
-    read_resource, func_body,
+    read_resource, read_all_js, read_js, func_body,
     FRONTEND_RESOURCE_FILES, NO_STORAGE_FILES,
 )
 
@@ -207,7 +207,7 @@ def test_index_html_overview_and_timeline_nav_not_regressed_4a():
 
 def test_app_js_statistics_state_variables_4a():
     """Phase 4A: app.js must declare the statistics state variables."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "statisticsLoaded" in source
     assert "statisticsLoading" in source
     assert "statisticsRequestToken" in source
@@ -217,7 +217,7 @@ def test_app_js_statistics_state_variables_4a():
 def test_app_js_statistics_load_function_4a():
     """Phase 4A: app.js must define loadStatisticsExportSummary and call the
     bridge method get_statistics_export_summary."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function loadStatisticsExportSummary" in source
     assert "get_statistics_export_summary" in source
 
@@ -225,7 +225,7 @@ def test_app_js_statistics_load_function_4a():
 
 def test_app_js_statistics_render_function_4a():
     """Phase 4A: app.js must define showStatistics and renderStatsTable."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function showStatistics" in source
     assert "function renderStatsTable" in source
     assert "function renderExportPreview" in source
@@ -235,7 +235,7 @@ def test_app_js_statistics_render_function_4a():
 def test_app_js_statistics_quick_range_function_4a():
     """Phase 4A: app.js must define applyStatisticsQuickRange and
     initStatisticsDefaults."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function applyStatisticsQuickRange" in source
     assert "function initStatisticsDefaults" in source
 
@@ -244,7 +244,7 @@ def test_app_js_statistics_quick_range_function_4a():
 def test_app_js_statistics_lazy_load_in_switch_page_4a():
     """Phase 4A: switchPage must lazy-load the statistics summary on first
     navigation to the page."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # Find the switchPage function body and verify the statistics branch.
     pos = source.find("function switchPage")
     assert pos != -1
@@ -258,7 +258,7 @@ def test_app_js_statistics_lazy_load_in_switch_page_4a():
 def test_app_js_statistics_event_binding_in_init_buttons_4a():
     """Phase 4A: initButtons must bind the statistics load + quick range
     buttons."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     pos = source.find("function initButtons")
     assert pos != -1
     body = source[pos:pos + 5000]
@@ -273,7 +273,7 @@ def test_app_js_statistics_event_binding_in_init_buttons_4a():
 
 def test_app_js_statistics_uses_escape_html_4a():
     """Phase 4A: renderStatsTable must use escapeHtml for dynamic values."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     pos = source.find("function renderStatsTable")
     assert pos != -1
     body = source[pos:pos + 1200]
@@ -285,7 +285,7 @@ def test_app_js_statistics_uses_escape_html_4a():
 def test_app_js_statistics_no_export_write_handler_4a():
     """Phase 4A: app.js must not wire any export write / save dialog / file
     creation handler for the statistics page."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     lowered = source.lower()
     for forbidden in ("exportcsv", "exportexcel", "exportpdf",
                       "exporttimesheet", "savefile", "saveas",
@@ -299,7 +299,7 @@ def test_app_js_statistics_no_export_write_handler_4a():
 def test_app_js_statistics_no_local_storage_4a():
     """Phase 4A: the statistics page must not use localStorage /
     sessionStorage (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for forbidden in ("localStorage", "sessionStorage"):
         assert forbidden not in source, (
             "app.js must not use " + forbidden
@@ -309,14 +309,14 @@ def test_app_js_statistics_no_local_storage_4a():
 
 def test_app_js_statistics_error_text_4a():
     """Phase 4A: the statistics error path must surface 加载统计失败."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "加载统计失败" in source
 
 
 
 def test_app_js_statistics_loading_text_4a():
     """Phase 4A: the statistics loading path must surface 正在加载统计…."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The loading text is in index.html; app.js toggles the hidden flag on
     # the statistics-loading element. Verify the element id is referenced.
     assert "statistics-loading" in source
@@ -408,7 +408,7 @@ def test_index_html_no_settings_privacy_page_4a():
 
 def test_app_js_no_save_dialog_or_folder_open_4a():
     """Phase 4A: app.js must not call any save dialog or folder open helper."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     lowered = source.lower()
     for forbidden in ("saveasdialog", "save_dialog", "createfile",
                       "openfolder", "open_folder", "shell.open"):
@@ -479,7 +479,7 @@ def test_app_js_no_react_vue_vite_node_4a():
     Uses word-boundary matching to avoid false positives on substrings
     like ``navItems`` containing ``vite``."""
     import re
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     lowered = source.lower()
     for forbidden in ("react", "vue", "vite", "node_modules"):
         pattern = r'\b' + re.escape(forbidden) + r'\b'
@@ -492,7 +492,7 @@ def test_app_js_no_react_vue_vite_node_4a():
 def test_app_js_correction_shell_no_external_links_3c():
     """Phase 3C: app.js must not reference external links / CDN
     (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     lowered = source.lower()
     for forbidden in ("http://", "https://", "cdn", "google fonts",
                       "googleapis"):
@@ -505,7 +505,7 @@ def test_app_js_correction_shell_no_external_links_3c():
 def test_app_js_correction_shell_no_raw_sensitive_fields_3c():
     """Phase 3C: app.js must not render raw window_title / file_path_hint /
     full_path / clipboard fields (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The literal field names must not appear as rendered display values.
     # (They may appear in comments explaining what is NOT rendered, but
     # the test asserts the literals are absent from the rendering paths.)
@@ -633,11 +633,11 @@ def test_default_webview_entry_preserved_3c():
 def test_app_js_statistics_loading_double_click_guard_4a1():
     """Phase 4A.1: loadStatisticsExportSummary must refuse concurrent loads
     by checking ``statisticsLoading`` before doing any work."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     pos = source.find("function loadStatisticsExportSummary")
     assert pos != -1
     body = source[pos:pos + 600]
-    assert "if (statisticsLoading) return" in body, (
+    assert "if (App.statisticsLoading) return" in body, (
         "loadStatisticsExportSummary must guard against concurrent loads"
     )
 
@@ -647,7 +647,7 @@ def test_app_js_statistics_client_side_range_validator_4a1():
     """Phase 4A.1: app.js must have a client-side date range validator that
     catches invalid_date / invalid_range / range_too_large before calling the
     bridge."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function validateStatisticsDateRange" in source, (
         "app.js must define validateStatisticsDateRange"
     )
@@ -668,7 +668,7 @@ def test_app_js_statistics_client_side_range_validator_4a1():
 def test_app_js_statistics_load_uses_validator_4a1():
     """Phase 4A.1: loadStatisticsExportSummary must call
     validateStatisticsDateRange before calling the bridge."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     pos = source.find("function loadStatisticsExportSummary")
     body = source[pos:pos + 2000]
     assert "validateStatisticsDateRange" in body
@@ -678,15 +678,13 @@ def test_app_js_statistics_load_uses_validator_4a1():
 
 def test_app_js_statistics_no_export_write_handler_4a1():
     """Phase 4A.1: app.js must not contain any export write / file save /
-    save dialog handler anywhere in the statistics section."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
-    # Find the statistics section boundaries.
-    start = source.find("// --- Phase 4A: Statistics")
-    assert start != -1
-    # The statistics section ends at the Utility section.
-    end = source.find("// --- Utility", start)
-    assert end != -1
-    section = source[start:end]
+    save dialog handler anywhere in the statistics module.
+
+    Phase R2: the statistics logic now lives in its own js/statistics.js
+    file, so we check that file directly instead of looking for the old
+    ``// --- Phase 4A: Statistics`` / ``// --- Utility`` section markers
+    that existed in the monolithic app.js."""
+    section = read_js("statistics.js")
     forbidden = (
         "save_dialog",
         "saveAs",
@@ -973,7 +971,7 @@ def test_app_js_statistics_export_calls_bridge_export_statistics_csv_4b():
     """Phase 4B: app.js must call the bridge ``export_statistics_csv``
     method to perform the CSV write. The frontend never writes a file
     itself; it only invokes the bridge."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert 'callBridge("export_statistics_csv"' in source, (
         "app.js must call bridge export_statistics_csv for the CSV write"
     )
@@ -984,19 +982,20 @@ def test_app_js_statistics_export_saving_guard_present_4b():
     """Phase 4B: app.js must define a separate ``statisticsExportSaving``
     guard so the CSV write cannot be double-triggered or overlap a
     statistics load. The guard must NOT reuse ``statisticsLoading``."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "statisticsExportSaving" in source, (
         "app.js must define statisticsExportSaving guard"
     )
     # The guard variable must be declared as a separate boolean state.
-    assert "var statisticsExportSaving = false" in source, (
+    # Phase R2: state vars now live on the App. namespace.
+    assert "App.statisticsExportSaving = false" in source, (
         "statisticsExportSaving must start as a separate false boolean"
     )
     # The export function must check the guard on entry.
     pos = source.find("function exportStatisticsCsv")
     assert pos != -1, "app.js must define exportStatisticsCsv function"
     body = source[pos:pos + 1500]
-    assert "if (statisticsExportSaving)" in body, (
+    assert "if (App.statisticsExportSaving)" in body, (
         "exportStatisticsCsv must guard against duplicate clicks"
     )
     # The statistics load path must also block while a write is in flight.
@@ -1014,7 +1013,7 @@ def test_app_js_statistics_export_uses_validate_statistics_date_range_4b():
     """Phase 4B: exportStatisticsCsv must call
     validateStatisticsDateRange before calling the bridge, so the user
     gets an immediate clear message without a bridge round-trip."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     pos = source.find("function exportStatisticsCsv")
     assert pos != -1
     body = source[pos:pos + 1500]
@@ -1027,7 +1026,7 @@ def test_app_js_statistics_export_uses_validate_statistics_date_range_4b():
 def test_app_js_statistics_export_catch_never_surfaces_raw_exception_4b():
     """Phase 4B: the exportStatisticsCsv promise catch must collapse to
     a stable Chinese message and never read raw exception text."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     pos = source.find("function exportStatisticsCsv")
     assert pos != -1
     # The catch block is somewhere after the export function. Find the
@@ -1056,7 +1055,7 @@ def test_app_js_statistics_export_catch_never_surfaces_raw_exception_4b():
 def test_app_js_statistics_export_cancel_is_clean_result_4b():
     """Phase 4B: a cancelled export must be handled as a clean info
     result (``已取消导出``), not as a Python exception or ``导出失败``."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     pos = source.find("function exportStatisticsCsv")
     assert pos != -1
     body = source[pos:pos + 2000]
@@ -1072,7 +1071,7 @@ def test_app_js_statistics_export_cancel_is_clean_result_4b():
 def test_app_js_statistics_export_success_shows_filename_count_duration_4b():
     """Phase 4B: a successful export must surface the basename, activity
     count, and total duration — never the full local path."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     pos = source.find("function exportStatisticsCsv")
     assert pos != -1
     body = source[pos:pos + 2000]
@@ -1096,7 +1095,7 @@ def test_app_js_statistics_export_success_shows_filename_count_duration_4b():
 def test_app_js_no_export_excel_pdf_timesheet_open_folder_methods_4b():
     """Phase 4B: app.js must not define any export_excel / export_pdf /
     export_timesheet / open_folder / auto-submit methods."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     lowered = source.lower()
     forbidden = (
         "exportexcel",
@@ -1235,7 +1234,7 @@ def test_styles_css_statistics_export_status_classes_4b():
 def test_app_js_statistics_export_no_local_storage_session_storage_4b():
     """Phase 4B: the export action must not use localStorage or
     sessionStorage (regression lock for the new write path)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     pos = source.find("function exportStatisticsCsv")
     assert pos != -1
     # Scan a generous body so the catch / status helpers are included.

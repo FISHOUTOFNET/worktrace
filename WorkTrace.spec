@@ -9,8 +9,13 @@ datas = [
     (str(root / 'worktrace' / 'schema.sql'), 'worktrace'),
     (str(root / 'worktrace' / 'platforms' / 'open_files_helper.py'), 'worktrace/platforms'),
     (str(root / 'worktrace' / 'webview_ui' / 'index.html'), 'worktrace/webview_ui'),
-    (str(root / 'worktrace' / 'webview_ui' / 'app.js'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'styles.css'), 'worktrace/webview_ui'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'core.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'overview.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_correction.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'statistics.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'init.js'), 'worktrace/webview_ui/js'),
 ]
 binaries = []
 hiddenimports = ['win32timezone']

@@ -21,7 +21,7 @@ if _HERE not in sys.path:
 from static_helpers import (
     REPO_ROOT, WEBVIEW_UI_DIR, HISTORY_PATH,
     RELEASE_VALIDATION_PATH, README_PATH,
-    read_resource, func_body,
+    read_resource, read_all_js, func_body,
     FRONTEND_RESOURCE_FILES, NO_STORAGE_FILES,
 )
 
@@ -103,7 +103,7 @@ def test_index_html_unmigrated_pages_still_have_placeholders():
 def test_app_js_has_timeline_load_function():
     """Phase 2: app.js must have a loadTimeline function that calls the
     get_timeline bridge method."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "loadTimeline" in source
     assert "get_timeline" in source
 
@@ -112,7 +112,7 @@ def test_app_js_has_timeline_load_function():
 def test_app_js_has_timeline_session_details_load():
     """Phase 2: app.js must load session details via
     get_timeline_session_details bridge method."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "get_timeline_session_details" in source
     assert "loadSessionDetails" in source
 
@@ -120,7 +120,7 @@ def test_app_js_has_timeline_session_details_load():
 
 def test_app_js_has_timeline_date_navigation():
     """Phase 2: app.js must implement prev/next/today date navigation."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "goPrevDay" in source
     assert "goNextDay" in source
     assert "goToday" in source
@@ -131,7 +131,7 @@ def test_app_js_has_timeline_date_navigation():
 def test_app_js_timeline_refreshes_on_auto_refresh():
     """Phase 2: when the Timeline page is active, refreshAll must also
     refresh the timeline data."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "currentPage" in source
     assert 'currentPage === "timeline"' in source
 
@@ -139,7 +139,7 @@ def test_app_js_timeline_refreshes_on_auto_refresh():
 
 def test_app_js_timeline_has_error_handling():
     """Phase 2: app.js must have timeline-specific error display functions."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "showTimelineError" in source
     assert "clearTimelineError" in source
 
@@ -151,7 +151,7 @@ def test_app_js_timeline_has_no_forbidden_edit_handlers():
     activity hide / soft delete. app.js must not contain handlers for
     batch editing, batch hide/delete, restore, permanent delete, auto-rule
     creation, or complex correction."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    source = read_all_js().lower()
     # Forbidden operations (not part of any current phase scope)
     assert "edit_activity" not in source
     assert "correct_activity" not in source
@@ -270,7 +270,7 @@ def test_index_html_timeline_edit_panel_has_no_delete_batch():
 
 def test_app_js_has_edit_panel_functions():
     """Phase 3A: app.js must define the edit panel lifecycle functions."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "populateEditPanel" in source
     assert "clearEditPanel" in source
     assert "isEditDirty" in source
@@ -285,7 +285,7 @@ def test_app_js_has_edit_panel_functions():
 def test_app_js_calls_editing_bridge_methods():
     """Phase 3A: app.js must call the Phase 3A bridge methods for project
     reclassification, note editing, and project list loading."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "list_projects_for_timeline" in source
     assert "update_timeline_project" in source
     assert "update_timeline_note" in source
@@ -295,7 +295,7 @@ def test_app_js_calls_editing_bridge_methods():
 def test_app_js_has_saving_state():
     """Phase 3A: app.js must track a saving state to prevent double-submit
     and show '保存中…' feedback."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "editSaving" in source
     assert "setEditSaving" in source
     assert "保存中" in source
@@ -306,7 +306,7 @@ def test_app_js_edit_save_failure_preserves_data():
     """Phase 3A: when a save fails, app.js must keep the original data in
     the form and display an error, not clear the form or leave it in a
     'saving' state."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # On error, setEditSaving(false) is called and showEditStatus shows error
     assert "setEditSaving(false)" in source
     assert "showEditStatus(errorMsg, true)" in source
@@ -316,7 +316,7 @@ def test_app_js_edit_save_failure_preserves_data():
 def test_app_js_edit_save_success_refreshes_timeline():
     """Phase 3A: on save success, app.js must refresh the Timeline so the
     session list and edit panel reflect the new state."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "refreshTimelineAfterEdit" in source
     assert "保存成功" in source
 
@@ -343,7 +343,7 @@ def test_app_js_save_success_updates_edit_baseline():
     """Phase 3A.1: on save success, app.js must update the editingSession
     baseline to the saved values so the dirty state clears and Cancel
     after save does not revert to pre-save values."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "editingSession.project_id = projectId" in source, (
         "save success must update editingSession.project_id to the saved value"
     )
@@ -356,24 +356,24 @@ def test_app_js_save_success_updates_edit_baseline():
 def test_app_js_update_note_count_disables_save_over_limit():
     """Phase 3A.1: updateNoteCount must disable the save button when the
     note exceeds NOTE_MAX_LENGTH, so the user gets immediate feedback."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "edit-note-count-over" in source, (
         "updateNoteCount must add an 'edit-note-count-over' class when over limit"
     )
     # The function must reference the save button and toggle its disabled
     # state based on the length check.
     assert "edit-save-btn" in source
-    assert "len > NOTE_MAX_LENGTH" in source or "len >= NOTE_MAX_LENGTH" in source
+    assert "len > App.NOTE_MAX_LENGTH" in source or "len >= App.NOTE_MAX_LENGTH" in source
 
 
 
 def test_app_js_set_edit_saving_reapplies_length_guard():
     """Phase 3A.1: setEditSaving(false) must call updateNoteCount to
     re-apply the note-length guard after a save finishes."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # Find the setEditSaving function body and verify it calls
     # updateNoteCount when saving is false.
-    assert "if (!saving && editingSession)" in source, (
+    assert "if (!saving && App.editingSession)" in source, (
         "setEditSaving must call updateNoteCount when saving is false"
     )
     assert "updateNoteCount()" in source
@@ -385,7 +385,7 @@ def test_app_js_populate_edit_panel_calls_update_note_count_last():
     enabling the save button so the length check has the final say."""
     import re
 
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # Find the populateEditPanel function body by brace matching (the body
     # contains nested `function` expressions, so a naive `find("function ")`
     # would truncate it too early).
@@ -447,7 +447,7 @@ def test_app_js_still_has_no_forbidden_edit_handlers_after_hardening():
     restore, permanent-delete, or auto-rule handlers. ``merge_session``
     (multi-activity session whole-merge) is also forbidden — only the
     two-activity ``merge_timeline_activities`` bridge call is allowed."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    source = read_all_js().lower()
     # Phase 3B.1 now provides time correction; Phase 3B.2 provides split;
     # Phase 3B.3 provides two-activity merge; Phase 3B.4 provides single-
     # activity hide / soft delete. The following forbidden handlers must
@@ -498,14 +498,14 @@ def test_app_js_has_request_token_guard_for_timeline_loads():
     """Phase 2.1: app.js must use a request token (or equivalent sequence
     id) to prevent stale Timeline load responses from overwriting newer
     data when the user rapidly switches dates."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "timelineRequestToken" in source, (
         "app.js must define a timelineRequestToken guard so stale bridge "
         "responses do not overwrite newer Timeline data"
     )
     # The token must be incremented before each load and checked after.
-    assert "++timelineRequestToken" in source
-    assert "token !== timelineRequestToken" in source
+    assert "++App.timelineRequestToken" in source
+    assert "token !== App.timelineRequestToken" in source
 
 
 
@@ -513,13 +513,13 @@ def test_app_js_has_request_token_guard_for_session_details():
     """Phase 2.1: app.js must use a request token for session detail loads
     too, so rapidly switching sessions does not let an older detail
     response overwrite the newer one."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "detailsRequestToken" in source, (
         "app.js must define a detailsRequestToken guard so stale session "
         "detail responses do not overwrite newer detail data"
     )
-    assert "++detailsRequestToken" in source
-    assert "token !== detailsRequestToken" in source
+    assert "++App.detailsRequestToken" in source
+    assert "token !== App.detailsRequestToken" in source
 
 
 
@@ -527,11 +527,11 @@ def test_app_js_preserves_selected_session_across_refresh():
     """Phase 2.1: app.js must keep the selected session selected across
     auto-refresh. The session must be matched by session_id, and if it
     disappears the selection must clear gracefully without JS errors."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "selectedSessionId" in source
     # The selected session must be matched by session_id after refresh.
-    assert "session_id === selectedSessionId" in source or (
-        "sessions[k].session_id === selectedSessionId" in source
+    assert "session_id === App.selectedSessionId" in source or (
+        "sessions[k].session_id === App.selectedSessionId" in source
     )
 
 
@@ -539,7 +539,7 @@ def test_app_js_preserves_selected_session_across_refresh():
 def test_app_js_handles_disappeared_selected_session_gracefully():
     """Phase 2.1: when the previously selected session no longer exists
     after a refresh, app.js must clear the selection without throwing."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The code path that handles a missing session must reset
     # selectedSessionId and update the details panel placeholder.
     assert "selectedSessionId = null" in source
@@ -550,7 +550,7 @@ def test_app_js_marks_in_progress_sessions():
     """Phase 2.1: app.js must visually mark in-progress sessions (sessions
     whose ``is_in_progress`` flag is true) so the user can tell the
     current open record from closed history."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "is_in_progress" in source
     assert "in-progress" in source, (
         "app.js must apply an 'in-progress' CSS class to in-progress items"
@@ -561,7 +561,7 @@ def test_app_js_marks_in_progress_sessions():
 def test_app_js_marks_in_progress_activities():
     """Phase 2.1: app.js must visually mark in-progress activity detail
     rows too."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The detail rendering must check is_in_progress and apply the class.
     assert "a.is_in_progress" in source or "is_in_progress" in source
 
@@ -573,7 +573,7 @@ def test_app_js_uses_in_progress_label_in_time_range():
     The frontend consumes the explicit ``is_in_progress`` flag (not the
     emptiness of the displayed ``end_time``, which may be projected for
     open activities)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "进行中" in source, (
         "app.js must show '进行中' for in-progress time ranges"
     )
@@ -585,7 +585,7 @@ def test_app_js_provides_safe_tooltip_for_long_text():
     display name so the user can read long names on hover. The tooltip
     must use the same sanitized display name shown inline, not the raw
     window_title or full path."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert 'title="' in source or "title=" in source
     # The tooltip must use escapeHtml to avoid attribute injection.
     assert 'escapeHtml(' in source
@@ -596,7 +596,7 @@ def test_app_js_preserves_prior_data_on_refresh_error():
     """Phase 2.1: when a Timeline refresh fails, app.js must keep showing
     the previously loaded data instead of clearing the page. The error
     banner is shown alongside the prior data."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "lastTimelineData" in source, (
         "app.js must cache lastTimelineData so a refresh failure keeps the "
         "prior data visible instead of clearing the page"
@@ -662,7 +662,7 @@ def test_index_html_has_time_correction_section():
 def test_app_js_calls_time_correction_bridge_methods():
     """Phase 3B.1: app.js must call the new bridge methods for time
     correction."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "update_timeline_activity_time" in source
     assert "update_timeline_session_time" in source
 
@@ -672,7 +672,7 @@ def test_app_js_has_datetime_conversion_helpers():
     """Phase 3B.1: app.js must have helpers to convert between the backend
     ``YYYY-MM-DD HH:MM:SS`` format and the ``datetime-local`` input's
     ``YYYY-MM-DDTHH:MM:SS`` format."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "backendToDatetimeLocal" in source
     assert "datetimeLocalToBackend" in source
     # The conversion must use fixed-format string replacement (space <-> T),
@@ -685,7 +685,7 @@ def test_app_js_has_time_saving_state():
     """Phase 3B.1: app.js must track independent saving states for
     session-level and per-activity time correction so they do not pollute
     the project/note saving state."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "timeSaving" in source
     assert "activityTimeSaving" in source
     assert "setTimeSaving" in source
@@ -698,7 +698,7 @@ def test_app_js_has_time_saving_state():
 def test_app_js_has_session_time_functions():
     """Phase 3B.1: app.js must define the session-level time correction
     lifecycle functions."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "populateSessionTimeSection" in source
     assert "resetSessionTimeSection" in source
     assert "saveSessionTime" in source
@@ -709,7 +709,7 @@ def test_app_js_has_session_time_functions():
 def test_app_js_has_per_activity_inline_editor_functions():
     """Phase 3B.1: app.js must define the per-activity inline time editor
     lifecycle functions."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "openActivityTimeEditor" in source
     assert "closeActivityTimeEditor" in source
     assert "saveActivityTime" in source
@@ -720,7 +720,7 @@ def test_app_js_has_per_activity_inline_editor_functions():
 def test_app_js_refreshes_timeline_after_time_save():
     """Phase 3B.1: after a successful time correction, app.js must refresh
     the Timeline so the new times are reflected."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # saveSessionTime and saveActivityTime must both call refreshTimelineAfterEdit
     save_session_pos = source.find("function saveSessionTime")
     assert save_session_pos != -1
@@ -735,7 +735,7 @@ def test_app_js_refreshes_timeline_after_time_save():
 def test_app_js_disables_in_progress_activity_time_edit():
     """Phase 3B.1: in-progress activities must have their '编辑时间' button
     disabled, and the session-level time section must show a hint."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "进行中记录暂不支持时间修正" in source
 
 
@@ -743,7 +743,7 @@ def test_app_js_disables_in_progress_activity_time_edit():
 def test_app_js_disables_multi_activity_session_time_edit():
     """Phase 3B.1: multi-activity sessions must show the 'multi-activity
     not supported' hint instead of the time inputs."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "多活动 session 暂不支持整体时间修改" in source
 
 
@@ -751,7 +751,7 @@ def test_app_js_disables_multi_activity_session_time_edit():
 def test_app_js_preserves_input_on_save_failure():
     """Phase 3B.1: when a time save fails, the user's input must be
     preserved (not cleared) and an error message shown."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The save functions must call setTimeSaving(false) on error to
     # re-enable the button without clearing the input values. The .catch
     # handler and the `result.ok === false` branch must both re-enable
@@ -767,7 +767,7 @@ def test_app_js_time_edit_uses_is_in_progress_not_end_time_emptiness():
     decide whether time editing is allowed, NOT infer it from whether
     ``end_time`` is empty (because the displayed ``end_time`` may be a
     projected value for open activities)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # populateSessionTimeSection must check is_in_progress, not end_time
     populate_pos = source.find("function populateSessionTimeSection")
     assert populate_pos != -1
@@ -784,7 +784,7 @@ def test_app_js_time_edit_buttons_have_no_delete_batch():
     are added in Phase 3B.2, merge buttons are added in Phase 3B.3, and
     per-activity hide / soft-delete buttons are added in Phase 3B.4; all
     three are allowed."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    source = read_all_js().lower()
     # The renderSessionDetails function must not generate batch / restore /
     # permanent-delete buttons. Hide / soft-delete buttons (Phase 3B.4),
     # merge buttons (Phase 3B.3), and split buttons (Phase 3B.2) are allowed.
@@ -820,7 +820,7 @@ def test_refresh_timeline_after_edit_does_not_reset_edit_saving():
     session-time, per-activity-time) must each reset their own saving state
     before calling the shared refresh function, so a refresh triggered by one
     flow does not prematurely reset another flow's saving state."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # Extract the refreshTimelineAfterEdit function body by brace matching.
     start = source.find("function refreshTimelineAfterEdit(")
     assert start != -1, "refreshTimelineAfterEdit must exist"
@@ -853,7 +853,7 @@ def test_save_session_time_resets_saving_before_refresh():
     """Phase 3B.1.1: ``saveSessionTime`` must call ``setTimeSaving(false)``
     BEFORE ``refreshTimelineAfterEdit`` on the success path, so the save
     button is re-enabled regardless of whether the refresh succeeds."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function saveSessionTime(")
     assert start != -1, "saveSessionTime must exist"
     brace_start = source.find("{", start)
@@ -883,7 +883,7 @@ def test_save_session_time_resets_saving_before_refresh():
 def test_save_edit_resets_saving_before_refresh():
     """Phase 3B.1.1: ``saveEdit`` must call ``setEditSaving(false)`` BEFORE
     ``refreshTimelineAfterEdit`` on the success path."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function saveEdit(")
     assert start != -1, "saveEdit must exist"
     brace_start = source.find("{", start)
@@ -917,7 +917,7 @@ def test_save_activity_time_resets_saving_before_refresh():
     """Phase 3B.1.1: ``saveActivityTime`` must call
     ``setActivityTimeSaving(row, false)`` BEFORE ``refreshTimelineAfterEdit``
     on the success path."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function saveActivityTime(")
     assert start != -1, "saveActivityTime must exist"
     brace_start = source.find("{", start)
@@ -948,7 +948,7 @@ def test_is_edit_dirty_covers_session_level_time_inputs():
     """Phase 3B.1.1: ``isEditDirty`` must check the session-level time inputs
     (``edit-start-time`` / ``edit-end-time``) so auto-refresh does not
     overwrite unsaved time edits."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function isEditDirty(")
     assert start != -1, "isEditDirty must exist"
     brace_start = source.find("{", start)
@@ -977,7 +977,7 @@ def test_is_edit_dirty_covers_per_activity_inline_editor():
     """Phase 3B.1.1: ``isEditDirty`` must also check the per-activity inline
     time editor so auto-refresh does not re-render the detail list and lose
     unsaved inline edits."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function isEditDirty(")
     assert start != -1
     brace_start = source.find("{", start)
@@ -1004,7 +1004,7 @@ def test_auto_refresh_skips_detail_reload_when_edit_dirty():
     """Phase 3B.1.1: the Timeline auto-refresh path must call ``isEditDirty``
     to decide whether to skip the detail reload / edit-panel repopulation,
     so unsaved time edits are not overwritten."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The showTimeline function (or its session-matching branch) must call
     # isEditDirty() before repopulating the edit panel.
     assert "isEditDirty()" in source, (
@@ -1059,7 +1059,7 @@ def test_save_session_time_updates_baseline_on_success():
     """Phase 3B.1.1: ``saveSessionTime`` must update the
     ``editingSession.start_time`` / ``end_time`` baseline on success so a
     subsequent auto-refresh does not revert the inputs to pre-save values."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function saveSessionTime(")
     assert start != -1
     brace_start = source.find("{", start)
@@ -1088,7 +1088,7 @@ def test_save_activity_time_updates_baseline_on_success():
     """Phase 3B.1.1: ``saveActivityTime`` must update the button's
     ``data-start`` / ``data-end`` attributes on success so a subsequent
     auto-refresh does not revert the editor inputs to pre-save values."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function saveActivityTime(")
     assert start != -1
     brace_start = source.find("{", start)
@@ -1133,7 +1133,7 @@ def test_index_html_has_split_section():
 
 def test_app_js_calls_split_bridge_methods():
     """Phase 3B.2: app.js must call the new bridge methods for splitting."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "split_timeline_activity" in source
     assert "split_timeline_session" in source
 
@@ -1143,7 +1143,7 @@ def test_app_js_has_split_saving_state():
     """Phase 3B.2: app.js must track independent saving states for
     session-level and per-activity split so they do not pollute the
     project/note/time saving states."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "sessionSplitSaving" in source
     assert "activitySplitSaving" in source
     assert "editingSplitActivityId" in source
@@ -1156,7 +1156,7 @@ def test_app_js_has_split_saving_state():
 def test_app_js_has_session_split_functions():
     """Phase 3B.2: app.js must define the session-level split lifecycle
     functions."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "populateSessionSplitSection" in source
     assert "resetSessionSplitSection" in source
     assert "saveSessionSplit" in source
@@ -1168,7 +1168,7 @@ def test_app_js_has_session_split_functions():
 def test_app_js_has_per_activity_split_functions():
     """Phase 3B.2: app.js must define the per-activity inline split editor
     lifecycle functions."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "openActivitySplitEditor" in source
     assert "closeActivitySplitEditor" in source
     assert "closeAllActivitySplitEditors" in source
@@ -1180,7 +1180,7 @@ def test_app_js_has_per_activity_split_functions():
 def test_app_js_refreshes_timeline_after_split_save():
     """Phase 3B.2: after a successful split, app.js must refresh the
     Timeline so the two new activities appear."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     save_session_pos = source.find("function saveSessionSplit")
     assert save_session_pos != -1, "saveSessionSplit must exist"
     save_activity_pos = source.find("function saveActivitySplit")
@@ -1228,7 +1228,7 @@ def test_app_js_split_save_resets_saving_before_refresh():
     reset the saving state BEFORE calling ``refreshTimelineAfterEdit`` so
     the UI does not get stuck in the '拆分中…' state if the refresh
     fails."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for func_name in ("saveActivitySplit", "saveSessionSplit"):
         start = source.find(f"function {func_name}(")
         assert start != -1, f"{func_name} must exist"
@@ -1264,7 +1264,7 @@ def test_app_js_split_preserves_input_on_save_failure():
     preserved (not cleared) and an error message shown. The save
     functions must reset the saving state to re-enable the button without
     wiping the input value."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The error path must reset the saving state. Both the
     # ``result.ok === false`` branch and the ``.catch`` handler must reset.
     assert "setActivitySplitSaving(row, false)" in source
@@ -1277,7 +1277,7 @@ def test_app_js_split_preserves_input_on_save_failure():
 def test_app_js_split_disables_multi_activity_session():
     """Phase 3B.2: multi-activity sessions must show the 'multi-activity
     not supported' hint for the session-level split."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动" in source
 
 
@@ -1285,7 +1285,7 @@ def test_app_js_split_disables_multi_activity_session():
 def test_app_js_split_disables_in_progress_activity():
     """Phase 3B.2: in-progress activities must be disabled or show a hint
     for splitting."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "进行中记录暂不支持拆分" in source
 
 
@@ -1295,7 +1295,7 @@ def test_app_js_split_does_not_use_date_automatic_parsing():
     string parsing (which interprets the value as local time and could
     shift it). The midpoint helper must use explicit Date.UTC
     construction."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "midpointTime" in source
     assert "parseBackendTimeParts" in source
     assert "formatUtcParts" in source
@@ -1350,7 +1350,7 @@ def test_app_js_split_has_no_merge_delete_batch_auto_rule_handlers():
     introduces ``saveActivityDelete`` / ``saveSessionDelete`` for single-
     activity soft delete; the lowercase-d ``deleteActivity`` handler name
     (a different convention) must still be absent."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The whole file must not contain merge/batch/restore/permanent/auto-rule
     # handler names. (Split and single-activity soft delete are allowed.)
     assert "mergeActivity" not in source
@@ -1367,7 +1367,7 @@ def test_app_js_is_edit_dirty_covers_split_inputs():
     """Phase 3B.2: ``isEditDirty`` must check the session-level split input
     and the per-activity inline split editor so auto-refresh does not wipe
     unsaved split edits."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function isEditDirty(")
     assert start != -1, "isEditDirty must exist"
     brace_start = source.find("{", start)
@@ -1446,7 +1446,7 @@ def test_styles_css_has_split_responsive_wrap():
 def test_app_js_calls_merge_bridge_method():
     """Phase 3B.3: app.js must call the new bridge method for merging two
     activities."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "merge_timeline_activities" in source
 
 
@@ -1454,7 +1454,7 @@ def test_app_js_calls_merge_bridge_method():
 def test_app_js_has_merge_saving_state():
     """Phase 3B.3: app.js must track an independent saving state for merge
     so it does not pollute the project/note/time/split saving states."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "mergeSaving" in source
     assert "mergingActivityId" in source
     # The merge saving state must be separate from the other saving states
@@ -1466,7 +1466,7 @@ def test_app_js_has_merge_saving_state():
 
 def test_app_js_has_merge_functions():
     """Phase 3B.3: app.js must define the merge lifecycle functions."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "saveActivityMerge" in source
     assert "setMergeSaving" in source
     assert "setMergeStatus" in source
@@ -1476,7 +1476,7 @@ def test_app_js_has_merge_functions():
 def test_app_js_has_merge_button_in_detail_rows():
     """Phase 3B.3: the renderSessionDetails function must generate a merge
     button (与下一条合并) for each closed activity."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "detail-merge-btn" in source
     assert "与下一条合并" in source
 
@@ -1486,7 +1486,7 @@ def test_app_js_merge_save_resets_saving_before_refresh():
     """Phase 3B.3: ``saveActivityMerge`` must reset the saving state BEFORE
     calling ``refreshTimelineAfterEdit`` on the success path so the UI
     does not get stuck in the '合并中…' state if the refresh fails."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function saveActivityMerge(")
     assert start != -1, "saveActivityMerge must exist"
     brace_start = source.find("{", start)
@@ -1515,7 +1515,7 @@ def test_app_js_merge_save_resets_saving_before_refresh():
 def test_app_js_merge_preserves_state_on_save_failure():
     """Phase 3B.3: when a merge save fails, the saving state must be reset
     and an error message shown. The detail list must not be cleared."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function saveActivityMerge(")
     assert start != -1
     brace_start = source.find("{", start)
@@ -1541,7 +1541,7 @@ def test_app_js_merge_preserves_state_on_save_failure():
 def test_app_js_merge_disables_in_progress_activity():
     """Phase 3B.3: in-progress activities must have their merge button
     disabled."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The merge button disabled logic must check is_in_progress
     start = source.find("function renderSessionDetails(")
     assert start != -1
@@ -1570,7 +1570,7 @@ def test_app_js_merge_has_no_delete_batch_auto_rule_handlers():
     introduces ``saveActivityDelete`` / ``saveSessionDelete`` for single-
     activity soft delete; the lowercase-d ``deleteActivity`` handler name
     must still be absent."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "deleteActivity" not in source
     assert "batchEdit" not in source
     assert "restoreActivity" not in source
@@ -1584,7 +1584,7 @@ def test_app_js_merge_has_no_delete_batch_auto_rule_handlers():
 def test_app_js_merge_has_no_raw_field_exposure():
     """Phase 3B.3: the merge code must not reference raw window_title,
     file_path_hint, full_path, or clipboard fields."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    source = read_all_js().lower()
     # The merge functions must not access raw sensitive fields
     start = source.find("function saveactivitymerge(")
     assert start != -1
@@ -1611,7 +1611,7 @@ def test_app_js_merge_has_no_raw_field_exposure():
 def test_app_js_merge_state_reset_in_clear_edit_panel():
     """Phase 3B.3: clearEditPanel must reset the merge saving state so a
     stale merge does not leak into a new session selection."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function clearEditPanel(")
     assert start != -1, "clearEditPanel must exist"
     brace_start = source.find("{", start)
@@ -1682,7 +1682,7 @@ def test_styles_css_has_merge_responsive_wrap():
 
 def test_app_js_has_hide_delete_bridge_calls():
     """Phase 3B.4: app.js must call the hide / soft-delete bridge methods."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "hide_timeline_activity" in source
     assert "soft_delete_timeline_activity" in source
     assert "hide_timeline_session" in source
@@ -1693,22 +1693,22 @@ def test_app_js_has_hide_delete_bridge_calls():
 def test_app_js_has_hide_delete_saving_state():
     """Phase 3B.4: app.js must declare independent hideSaving / deleteSaving
     state variables so the hide / delete flows do not pollute the other
-    save flows."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
-    assert "var hideSaving" in source
-    assert "var deleteSaving" in source
+    save flows. (Phase R2: state vars now live on the App. namespace.)"""
+    source = read_all_js()
+    assert "App.hideSaving" in source
+    assert "App.deleteSaving" in source
     # The hide/delete saving state must be separate from the merge saving
     # state (Phase 3B.3) and the other edit flows.
-    assert "var mergeSaving" in source
-    assert "var hideSaving" in source
-    assert "var deleteSaving" in source
+    assert "App.mergeSaving" in source
+    assert "App.hideSaving" in source
+    assert "App.deleteSaving" in source
 
 
 
 def test_app_js_hide_delete_refreshes_timeline_on_success():
     """Phase 3B.4: a successful hide / delete must call the shared
     ``refreshTimelineAfterEdit`` helper to refresh the Timeline."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # Locate the four save functions and verify each calls
     # refreshTimelineAfterEdit on the success branch.
     for func_name in [
@@ -1731,7 +1731,7 @@ def test_app_js_hide_delete_refreshes_timeline_on_success():
 def test_app_js_hide_delete_clears_saving_state_on_failure():
     """Phase 3B.4: a failed hide / delete must clear the saving state so the
     button is not stuck in the "处理中" state."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for func_name in [
         "saveActivityHide",
         "saveActivityDelete",
@@ -1772,7 +1772,7 @@ def test_app_js_hide_delete_preserves_details_on_failure():
     """Phase 3B.4: a failed hide / delete must not clear the detail list.
     The save functions must not call any clear/render function on the
     failure branch (only refreshTimelineAfterEdit is called on success)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for func_name in [
         "saveActivityHide",
         "saveActivityDelete",
@@ -1799,7 +1799,7 @@ def test_app_js_multi_activity_session_disables_whole_hide_delete():
     hide / delete and show the "多活动" hint. The
     ``populateSessionVisibilitySection`` function must check
     ``activityIds.length > 1`` and show the multi-activity hint."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function populateSessionVisibilitySection(")
     assert start != -1, "populateSessionVisibilitySection must exist"
     next_func = source.find("\n    function ", start + 1)
@@ -1817,7 +1817,7 @@ def test_app_js_in_progress_activity_disables_hide_delete():
     buttons (or show the "进行中" hint). The renderSessionDetails and
     populateSessionVisibilitySection functions must check
     ``is_in_progress``."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # renderSessionDetails must set a visibilityBtnDisabled flag for
     # in-progress activities.
     render_start = source.find("function renderSessionDetails(")
@@ -1839,7 +1839,7 @@ def test_app_js_in_progress_activity_disables_hide_delete():
 def test_app_js_hide_delete_blocked_when_edit_dirty():
     """Phase 3B.4: if ``isEditDirty()`` returns true, the hide / delete
     functions must refuse and show "请先保存或取消当前编辑"."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for func_name in [
         "saveActivityHide",
         "saveActivityDelete",
@@ -1862,7 +1862,7 @@ def test_app_js_hide_delete_blocked_when_edit_dirty():
 def test_app_js_has_no_batch_restore_permanent_auto_rule_handlers():
     """Phase 3B.4: the hide / delete additions must not introduce batch
     hide, batch delete, restore, permanent delete, or auto-rule handlers."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    source = read_all_js().lower()
     assert "batch_delete" not in source
     assert "batch_hide" not in source
     assert "restore_activity" not in source
@@ -1874,7 +1874,7 @@ def test_app_js_has_no_batch_restore_permanent_auto_rule_handlers():
 def test_app_js_hide_delete_has_no_raw_field_exposure():
     """Phase 3B.4: the hide / delete code must not reference raw
     window_title, file_path_hint, full_path, or clipboard fields."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8").lower()
+    source = read_all_js().lower()
     # The frontend must never reference these raw backend fields. (The
     # detail rows may show a resource_name, but never the raw column
     # names.)
@@ -1953,7 +1953,7 @@ def test_styles_css_has_visibility_responsive_wrap():
 def test_app_js_hide_delete_state_reset_in_clear_edit_panel():
     """Phase 3B.4: clearEditPanel must reset the hide / delete saving state
     so a stale hide / delete does not leak into a new session selection."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function clearEditPanel(")
     assert start != -1, "clearEditPanel must exist"
     brace_start = source.find("{", start)
@@ -1987,7 +1987,7 @@ def test_app_js_hide_delete_state_reset_in_clear_edit_panel():
 def test_app_js_visibility_buttons_bound_in_init():
     """Phase 3B.4: the session-level hide / delete buttons must be bound in
     initButtons so they actually call the save handlers."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function initButtons(")
     assert start != -1, "initButtons must exist"
     next_func = source.find("\n    function ", start + 1)
@@ -2003,7 +2003,7 @@ def test_app_js_per_activity_visibility_buttons_rendered():
     """Phase 3B.4: renderSessionDetails must render per-activity hide /
     delete buttons with the ``detail-hide-btn`` / ``detail-delete-btn``
     classes and a ``data-activity-id`` attribute."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     start = source.find("function renderSessionDetails(")
     assert start != -1, "renderSessionDetails must exist"
     next_func = source.find("\n    function ", start + 1)
@@ -2017,7 +2017,7 @@ def test_app_js_per_activity_visibility_buttons_rendered():
 def test_app_js_delete_uses_window_confirm():
     """Phase 3B.4: the delete flow must use ``window.confirm`` with the
     soft-delete hint to avoid accidental deletion."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "window.confirm" in source
     assert "确定从 Timeline 删除这条记录吗？本阶段不会物理删除数据。" in source
 
@@ -2029,7 +2029,7 @@ def test_app_js_delete_uses_window_confirm():
 def test_app_js_has_unified_status_type_class_map_3c():
     """Phase 3C: app.js must define the STATUS_TYPE_CLASS map with the five
     unified status types (info / success / error / loading / empty)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "STATUS_TYPE_CLASS" in source, (
         "app.js must define STATUS_TYPE_CLASS map"
     )
@@ -2042,7 +2042,7 @@ def test_app_js_has_unified_status_type_class_map_3c():
 
 def test_app_js_has_status_class_for_helper_3c():
     """Phase 3C: app.js must define the statusClassFor helper."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function statusClassFor" in source, (
         "app.js must define statusClassFor helper"
     )
@@ -2051,7 +2051,7 @@ def test_app_js_has_status_class_for_helper_3c():
 
 def test_app_js_has_apply_status_type_helper_3c():
     """Phase 3C: app.js must define the applyStatusType helper."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function applyStatusType" in source, (
         "app.js must define applyStatusType helper"
     )
@@ -2060,7 +2060,7 @@ def test_app_js_has_apply_status_type_helper_3c():
 
 def test_app_js_has_set_timeline_status_helper_3c():
     """Phase 3C: app.js must define the unified setTimelineStatus helper."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function setTimelineStatus" in source, (
         "app.js must define setTimelineStatus helper"
     )
@@ -2069,7 +2069,7 @@ def test_app_js_has_set_timeline_status_helper_3c():
 
 def test_app_js_has_set_detail_status_helper_3c():
     """Phase 3C: app.js must define the unified setDetailStatus helper."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function setDetailStatus" in source, (
         "app.js must define setDetailStatus helper"
     )
@@ -2078,7 +2078,7 @@ def test_app_js_has_set_detail_status_helper_3c():
 
 def test_app_js_has_set_edit_status_helper_3c():
     """Phase 3C: app.js must define the unified setEditStatus helper."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function setEditStatus" in source, (
         "app.js must define setEditStatus helper"
     )
@@ -2087,7 +2087,7 @@ def test_app_js_has_set_edit_status_helper_3c():
 
 def test_app_js_has_set_correction_status_helper_3c():
     """Phase 3C: app.js must define the unified setCorrectionStatus helper."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function setCorrectionStatus" in source, (
         "app.js must define setCorrectionStatus helper"
     )
@@ -2099,7 +2099,7 @@ def test_app_js_unified_helpers_delegate_to_existing_helpers_3c():
     per-area helpers (showEditStatus, setCorrectionShellStatus,
     clearTimelineError, setTimelineLoading, showTimelineError) so the DOM
     contract is unchanged."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     set_timeline = func_body(source, "setTimelineStatus")
     set_edit = func_body(source, "setEditStatus")
     set_correction = func_body(source, "setCorrectionStatus")
@@ -2125,7 +2125,7 @@ def test_app_js_set_detail_status_uses_safe_textcontent_3c():
     """Phase 3C: setDetailStatus must write to textContent (display-safe),
     never to innerHTML."""
     body = func_body(
-        (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8"),
+        read_all_js(),
         "setDetailStatus",
     )
     assert "textContent" in body, (
@@ -2141,7 +2141,7 @@ def test_app_js_set_detail_status_default_text_3c():
     """Phase 3C: setDetailStatus must reset the header to the stable
     '请选择一条时间记录' prompt when message is empty."""
     body = func_body(
-        (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8"),
+        read_all_js(),
         "setDetailStatus",
     )
     assert "请选择一条时间记录" in body, (
@@ -2154,7 +2154,7 @@ def test_app_js_no_err_message_in_catch_blocks_3c():
     """Phase 3C: no catch block in app.js may surface raw exception text
     via err.message / err.toString() / error.message / error.toString().
     This is the display-safe hardening closure."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for forbidden in ("err.message", "err.toString",
                       "error.message", "error.toString",
                       "exception.message"):
@@ -2167,7 +2167,7 @@ def test_app_js_no_err_message_in_catch_blocks_3c():
 def test_app_js_load_timeline_catch_uses_stable_fallback_3c():
     """Phase 3C: the loadTimeline catch block must use the stable Chinese
     fallback '加载时间线失败' instead of err.message."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "加载时间线失败" in source, (
         "loadTimeline catch must use the stable fallback string"
     )
@@ -2177,7 +2177,7 @@ def test_app_js_load_timeline_catch_uses_stable_fallback_3c():
 def test_app_js_refresh_all_catch_uses_stable_fallbacks_3c():
     """Phase 3C: the refreshAll catch blocks (status / overview / recent)
     must use the stable Chinese fallback '刷新失败' instead of err.message."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "刷新失败" in source, (
         "refreshAll catch must use the stable fallback '刷新失败'"
     )
@@ -2188,9 +2188,7 @@ def test_app_js_standard_loading_text_present_3c():
     """Phase 3C: the standard loading text must still be present in the
     frontend resources (Timeline loading indicator)."""
     html = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    assert "加载中" in html or "加载中" in (
-        WEBVIEW_UI_DIR / "app.js"
-    ).read_text(encoding="utf-8"), (
+    assert "加载中" in html or "加载中" in read_all_js(), (
         "standard loading text '加载中' must be present"
     )
 
@@ -2219,7 +2217,7 @@ def test_app_js_standard_error_text_present_3c():
 def test_app_js_cross_save_guard_text_still_present_3c():
     """Phase 3C: the cross-save guard text '请等待当前操作完成' must
     still be present (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "请等待当前操作完成" in source, (
         "cross-save guard text '请等待当前操作完成' must remain"
     )
@@ -2229,7 +2227,7 @@ def test_app_js_cross_save_guard_text_still_present_3c():
 def test_app_js_dirty_guard_text_still_present_3c():
     """Phase 3C: the dirty guard text '请先保存或取消当前编辑' must
     still be present (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "请先保存或取消当前编辑" in source, (
         "dirty guard text '请先保存或取消当前编辑' must remain"
     )
@@ -2239,7 +2237,7 @@ def test_app_js_dirty_guard_text_still_present_3c():
 def test_index_html_soft_delete_copy_still_present_3c():
     """Phase 3C: the soft delete copy '本阶段不会物理删除数据' must
     still be present (regression lock — delete is still soft delete)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "本阶段不会物理删除数据" in source, (
         "soft delete copy '本阶段不会物理删除数据' must remain"
     )
@@ -2404,7 +2402,7 @@ def test_index_html_no_new_top_level_pages_3c():
 def test_app_js_correction_shell_no_local_storage_3c():
     """Phase 3C: app.js must not use localStorage / sessionStorage
     (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for forbidden in ("localStorage", "sessionStorage"):
         assert forbidden not in source, (
             "app.js must not use " + forbidden
@@ -2420,7 +2418,7 @@ def test_app_js_apply_status_type_preserves_non_status_classes_3c1():
     classes — it must only toggle the whitelisted status-type classes,
     not replace the entire className."""
     body = func_body(
-        (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8"),
+        read_all_js(),
         "applyStatusType",
     )
     # The hardened implementation must filter classes, not replace wholesale.
@@ -2440,7 +2438,7 @@ def test_app_js_apply_status_type_preserves_non_status_classes_3c1():
 def test_app_js_has_status_type_class_values_whitelist_3c1():
     """Phase 3C.1: app.js must define the STATUS_TYPE_CLASS_VALUES whitelist
     used by applyStatusType to filter classes."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "STATUS_TYPE_CLASS_VALUES" in source, (
         "app.js must define STATUS_TYPE_CLASS_VALUES whitelist"
     )
@@ -2451,7 +2449,7 @@ def test_app_js_status_class_for_safe_default_3c1():
     """Phase 3C.1: statusClassFor must return a safe default (info class)
     for unknown types, never undefined or a user-supplied string."""
     body = func_body(
-        (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8"),
+        read_all_js(),
         "statusClassFor",
     )
     assert "STATUS_TYPE_CLASS.info" in body, (
@@ -2466,7 +2464,7 @@ def test_app_js_status_class_for_safe_default_3c1():
 def test_app_js_no_reason_message_leak_3c1():
     """Phase 3C.1: no code path may read .reason.message or .message from
     a rejected promise / raw exception and render it to the UI."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # .reason.message is the pattern used by Promise.allSettled rejection
     # handlers — it must not appear in executable code (comments are OK).
     for forbidden in ("reason.message", "reason && reason.message"):
@@ -2486,7 +2484,7 @@ def test_app_js_no_reason_message_leak_3c1():
 def test_app_js_no_string_err_leak_3c1():
     """Phase 3C.1: no code path may use String(err) or String(error) to
     convert a raw exception to a string for UI display."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for forbidden in ("String(err)", "String(error)",
                       "String(exception)", "err.toString()",
                       "error.toString()"):
@@ -2499,7 +2497,7 @@ def test_app_js_no_string_err_leak_3c1():
 def test_app_js_save_edit_catch_uses_stable_fallback_3c1():
     """Phase 3C.1: the saveEdit Promise.allSettled rejection handler must
     use the stable '保存失败' fallback instead of reading .reason.message."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # Find the Promise.allSettled block inside saveEdit.
     allsettled_pos = source.find("Promise.allSettled(promises).then")
     assert allsettled_pos != -1, "saveEdit must use Promise.allSettled"
@@ -2514,7 +2512,7 @@ def test_app_js_stable_fallback_vocabulary_present_3c1():
     """Phase 3C.1: all six stable Chinese fallback strings must be present
     in app.js: 加载时间线失败 / 刷新失败 / 加载详情失败 / 保存失败 /
     操作失败 / 恢复失败."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for fallback in ("加载时间线失败", "刷新失败", "加载详情失败",
                      "保存失败", "操作失败", "恢复失败"):
         assert fallback in source, (
@@ -2526,7 +2524,7 @@ def test_app_js_stable_fallback_vocabulary_present_3c1():
 def test_app_js_no_old_longer_fallback_strings_3c1():
     """Phase 3C.1: the old longer fallback strings from Phase 3C must be
     replaced by the stable short forms (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for old_string in ("加载时间详情失败，请稍后重试。",
                        "无法连接采集器状态，请稍后重试。",
                        "加载今日概览失败，请稍后重试。",
@@ -2567,7 +2565,7 @@ def test_app_js_timeline_error_text_stable_3c1():
 
 def test_app_js_detail_no_selection_text_stable_3c1():
     """Phase 3C.1: detail panel no-selection text must be stable."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # setDetailStatus default + the index.html initial header text.
     assert "请选择一条时间记录" in source, (
         "setDetailStatus must use stable '请选择一条时间记录' default"
@@ -2577,7 +2575,7 @@ def test_app_js_detail_no_selection_text_stable_3c1():
 
 def test_app_js_detail_error_fallback_stable_3c1():
     """Phase 3C.1: detail panel error fallback must be stable."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "加载详情失败" in source, (
         "detail panel must use stable '加载详情失败' error fallback"
     )
@@ -2587,7 +2585,7 @@ def test_app_js_detail_error_fallback_stable_3c1():
 def test_app_js_edit_saving_success_failure_strings_stable_3c1():
     """Phase 3C.1: edit panel saving/success/failure strings must be
     stable."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "保存中" in source, "edit saving text '保存中' must be present"
     assert "保存成功" in source, "edit success text '保存成功' must be present"
     assert "保存失败" in source, "edit failure text '保存失败' must be present"
@@ -2596,7 +2594,7 @@ def test_app_js_edit_saving_success_failure_strings_stable_3c1():
 
 def test_app_js_correction_shell_dirty_guard_text_stable_3c1():
     """Phase 3C.1: correction shell dirty guard text must be stable."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "请先保存或取消当前编辑" in source, (
         "dirty guard text '请先保存或取消当前编辑' must be present"
     )
@@ -2605,7 +2603,7 @@ def test_app_js_correction_shell_dirty_guard_text_stable_3c1():
 
 def test_app_js_correction_shell_cross_save_guard_text_stable_3c1():
     """Phase 3C.1: correction shell cross-save guard text must be stable."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "请等待当前操作完成" in source, (
         "cross-save guard text '请等待当前操作完成' must be present"
     )
@@ -2615,7 +2613,7 @@ def test_app_js_correction_shell_cross_save_guard_text_stable_3c1():
 def test_app_js_soft_delete_copy_still_not_permanent_3c1():
     """Phase 3C.1: soft delete copy must still say not physical / not
     permanent delete (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "本阶段不会物理删除数据" in source, (
         "soft delete copy '本阶段不会物理删除数据' must remain"
     )
@@ -2640,7 +2638,7 @@ def test_app_js_restore_copy_still_no_batch_undo_permanent_3c1():
 def test_app_js_auto_refresh_dirty_guard_present_3c1():
     """Phase 3C.1: auto-refresh must check isEditDirty() before overwriting
     edit inputs (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # The auto-refresh path in showTimeline checks isEditDirty.
     assert "isEditDirty()" in source, (
         "auto-refresh must call isEditDirty() to guard edit inputs"
@@ -2651,7 +2649,7 @@ def test_app_js_auto_refresh_dirty_guard_present_3c1():
 def test_app_js_auto_refresh_saving_guard_present_3c1():
     """Phase 3C.1: auto-refresh must check isAnyCorrectionWriteSaving()
     before re-rendering the correction shell (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "isAnyCorrectionWriteSaving()" in source, (
         "auto-refresh must call isAnyCorrectionWriteSaving() to guard "
         "correction shell re-render during save"
@@ -2662,7 +2660,7 @@ def test_app_js_auto_refresh_saving_guard_present_3c1():
 def test_app_js_catch_paths_reset_saving_3c1():
     """Phase 3C.1: all catch paths that follow a save must reset the saving
     flag so buttons are not left disabled (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     # Each save function has a catch that calls setXxxSaving(false).
     for reset_call in ("setEditSaving(false)", "setActivityTimeSaving(row, false)",
                        "setActivitySplitSaving(row, false)",
@@ -2681,7 +2679,7 @@ def test_app_js_catch_paths_reset_saving_3c1():
 def test_app_js_display_safe_helpers_present_3c1():
     """Phase 3C.1: display-safe helpers escapeHtml and safeText must be
     present (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     assert "function escapeHtml" in source, (
         "escapeHtml helper must be present"
     )
@@ -2694,7 +2692,7 @@ def test_app_js_display_safe_helpers_present_3c1():
 def test_app_js_no_raw_sensitive_fields_anywhere_3c1():
     """Phase 3C.1: app.js must not reference raw window_title /
     file_path_hint / full_path / clipboard anywhere (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     for forbidden in ("window_title", "file_path_hint",
                       "full_path", "clipboard"):
         assert forbidden not in source, (
@@ -2706,7 +2704,7 @@ def test_app_js_no_raw_sensitive_fields_anywhere_3c1():
 def test_app_js_no_traceback_sql_display_3c1():
     """Phase 3C.1: app.js must not display traceback or SQL strings
     (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     lowered = source.lower()
     for forbidden in ("traceback", "sql error", "sqlite"):
         assert forbidden not in lowered, (
@@ -2796,7 +2794,7 @@ def test_styles_css_no_local_storage_3c1():
 def test_app_js_no_react_vue_vite_node_3c1():
     """Phase 3C.1: app.js must not reference React / Vue / Vite / Node
     (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     lowered = source.lower()
     # Word-boundary matching for framework names so identifiers like
     # "navItems" (lowercased "navitems") do not falsely match "vite".
@@ -2815,7 +2813,7 @@ def test_app_js_no_react_vue_vite_node_3c1():
 def test_app_js_no_local_http_server_3c1():
     """Phase 3C.1: app.js must not start a local HTTP server
     (regression lock)."""
-    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    source = read_all_js()
     lowered = source.lower()
     for forbidden in ("httpserver", "http.createServer",
                       "express(", "flask "):
