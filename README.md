@@ -5,10 +5,16 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5B (Project Rules rule enable/disable
-> foundation) is the latest shipped phase. Project Rules now supports the
-> minimal reversible WebView write path: enabling or disabling one existing
-> folder or keyword rule at a time. Project enable/disable, project
+> **Current state**: WebView Phase 5B.1 (Project Rules rule enable/disable
+> hardening) is the latest shipped phase. Phase 5B.1 is a hardening-only /
+> regression-only follow-up to Phase 5B and does not open any new Project
+> Rules capability: the only Project Rules WebView write path remains
+> enabling or disabling one existing folder or keyword rule at a time. It
+> adds input validation / error collapse / saving-and-stale-state /
+> sensitive-field-boundary regression locks across the API, bridge, and
+> frontend, plus a fix for an unhashable-`rule_type` (list / dict) edge
+> case that previously surfaced a `TypeError` instead of the stable
+> `invalid_input` / `操作无效` error. Project enable/disable, project
 > create/edit/delete/archive, rule create/edit/delete, conflict preview,
 > backfill, and automatic rules remain unsupported in WebView. For a
 > one-screen snapshot read
@@ -36,11 +42,14 @@ records.
   CSV export (display-safe, UTF-8 BOM, no raw window title / file path /
   note). Excel / PDF / timesheet export are not supported.
 - Project Rules page: project-grouped folder / keyword rule list, including
-  project/rule enabled state and the special local `排除规则`. Phase 5B only
-  enables/disables existing folder / keyword rules one at a time. Project
-  enable/disable, Project creation/editing/deletion/archive, Rule
-  creation/editing/deletion, conflict preview, backfill, and automatic rule
-  workflows are not supported in WebView.
+  project/rule enabled state and the special local `排除规则`. Phase 5B
+  enables/disables existing folder / keyword rules one at a time; Phase 5B.1
+  is a hardening-only / regression-only follow-up that locks input
+  validation, error collapse, saving / stale-state behavior, and
+  sensitive-field boundaries without opening any new Project Rules write
+  path. Project enable/disable, Project creation/editing/deletion/archive,
+  Rule creation/editing/deletion, conflict preview, backfill, and automatic
+  rule workflows are not supported in WebView.
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.
 

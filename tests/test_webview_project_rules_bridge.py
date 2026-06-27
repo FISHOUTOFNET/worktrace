@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from worktrace.webview_ui import bridge as bridge_module
 from worktrace.webview_ui.bridge import WebViewBridge
 
@@ -445,6 +447,295 @@ def test_set_project_rule_enabled_rejects_invalid_bridge_input():
             "ok": False,
             "error": "操作无效",
         }
+
+
+@pytest.mark.parametrize(
+    "bad_rule_type",
+    [
+        None,
+        "",
+        "project",
+        "folder_rule",
+        "keyword_rule",
+        "Folder",
+        "KEYWORD",
+        "PROJECT",
+        "folders",
+        "keywords",
+        "unknown",
+        1,
+        1.0,
+        True,
+        [],
+        {},
+    ],
+)
+def test_set_project_rule_enabled_rejects_invalid_rule_type_variants(bad_rule_type):
+    # Phase 5B.1 regression lock: non-string types (including unhashable
+    # list / dict) collapse to ``操作无效`` at the bridge layer without
+    # leaking a TypeError or being misreported as ``更新规则状态失败``.
+    assert WebViewBridge().set_project_rule_enabled(bad_rule_type, 1, True) == {
+        "ok": False,
+        "error": "操作无效",
+    }
+
+
+@pytest.mark.parametrize("bad_id", ["abc", "1.5", 2.5, 0.5, -999, [], {}])
+def test_set_project_rule_enabled_rejects_invalid_id_extra_variants(bad_id):
+    # Phase 5B.1 regression lock: numeric strings, arbitrary floats, deep
+    # negatives, and container types all collapse to ``操作无效``.
+    assert WebViewBridge().set_project_rule_enabled("folder", bad_id, True) == {
+        "ok": False,
+        "error": "操作无效",
+    }
+
+
+@pytest.mark.parametrize("bad_enabled", ["1", "0", "True", "False", 1.0, 0.0, [], {}])
+def test_set_project_rule_enabled_rejects_invalid_enabled_extra_variants(bad_enabled):
+    # Phase 5B.1 regression lock: ``enabled`` must be a real ``bool`` at the
+    # bridge layer. Numeric strings, mixed-case bool strings, floats, and
+    # container types all collapse to ``操作无效``.
+    assert WebViewBridge().set_project_rule_enabled("keyword", 1, bad_enabled) == {
+        "ok": False,
+        "error": "操作无效",
+    }
+
+
+def test_set_project_rule_enabled_invalid_input_payload_excludes_sensitive_text():
+    # Phase 5B.1 regression lock: failure payloads for invalid input never
+    # carry traceback / SQL / path / note / clipboard / window_title text
+    # even when the bridge has access to rich exception context.
+    bridge = WebViewBridge()
+    for args in (
+        ("project", 1, True),
+        (None, 1, True),
+        ([], 1, True),
+        ({}, 1, True),
+        ("keyword", [], True),
+        ("keyword", {}, True),
+        ("keyword", 1, "true"),
+        ("keyword", 1, []),
+        ("keyword", 1, {}),
+    ):
+        result = bridge.set_project_rule_enabled(*args)
+        assert result == {"ok": False, "error": "操作无效"}
+        lowered = repr(result).lower()
+        for forbidden in (
+            "traceback",
+            "sqlite",
+            "select",
+            "window_title",
+            "clipboard",
+            "note",
+            "secret",
+        ):
+            assert forbidden not in lowered
+
+
+def test_set_project_rule_enabled_success_payload_does_not_return_full_project_list(monkeypatch):
+    # Phase 5B.1 regression lock: the toggle success payload is intentionally
+    # narrow (``rule_type`` / ``rule_id`` / ``enabled`` only). It must never
+    # echo the full refreshed Project Rules list back to JS — the frontend
+    # re-fetches via ``get_project_rules`` after success.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": True,
+            "rule_type": rule_type,
+            "rule_id": rule_id,
+            "enabled": enabled,
+            # Defensive: even if the API tried to echo a project list, the
+            # bridge must not surface it on the toggle write path.
+            "projects": [{"id": 1, "name": "should not leak"}],
+        },
+    )
+
+    result = WebViewBridge().set_project_rule_enabled("folder", 10, False)
+
+    assert result == {
+        "ok": True,
+        "rule_type": "folder",
+        "rule_id": 10,
+        "enabled": False,
+    }
+    assert "projects" not in result
+    assert "rules" not in result
+
+
+def test_set_project_rule_enabled_never_calls_create_edit_delete_or_project_toggle_apis(monkeypatch):
+    # Phase 5B.1 regression lock: the toggle path must only ever call
+    # ``rule_api.set_project_rule_enabled``. It must not invoke any of the
+    # other Project Rules write APIs (project enable/disable, project /
+    # rule create / edit / delete, conflict preview, backfill).
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": True,
+            "rule_type": rule_type,
+            "rule_id": rule_id,
+            "enabled": enabled,
+        },
+    )
+
+    forbidden_calls: list[str] = []
+
+    def make_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(name + " must not be called by toggle path")
+        return _fail
+
+    for name in (
+        "create_keyword_rule",
+        "create_or_update_folder_rule",
+        "set_keyword_rule_enabled",
+        "set_folder_rule_enabled",
+        "delete_keyword_rule",
+        "delete_folder_rule",
+        "preview_folder_rule_conflicts",
+        "backfill_folder_rule",
+    ):
+        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+
+    forbidden_project_calls: list[str] = []
+
+    def make_project_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_project_calls.append(name)
+            raise AssertionError(name + " must not be called by toggle path")
+        return _fail
+
+    for name in (
+        "create_project",
+        "update_project",
+        "delete_project",
+        "archive_project",
+        "set_project_enabled",
+    ):
+        if hasattr(bridge_module.project_api, name):
+            monkeypatch.setattr(bridge_module.project_api, name, make_project_forbidden(name))
+
+    result = WebViewBridge().set_project_rule_enabled("folder", 10, False)
+    assert result["ok"] is True
+    assert forbidden_calls == []
+    assert forbidden_project_calls == []
+
+
+def test_set_project_rule_enabled_not_found_payload_excludes_sensitive_text(monkeypatch):
+    # Phase 5B.1 regression lock: the ``not_found`` failure payload never
+    # surfaces SQL / traceback / path / note / clipboard / window_title even
+    # when the underlying service raises a verbose exception.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": False,
+            "error": "not_found",
+            "traceback": "SELECT * FROM folder_project_rule WHERE id=999",
+            "details": "C:\\Secret window_title clipboard note",
+        },
+    )
+
+    result = WebViewBridge().set_project_rule_enabled("folder", 999, False)
+
+    assert result == {"ok": False, "error": "规则不存在"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+        "details",
+    ):
+        assert forbidden not in lowered
+
+
+def test_set_project_rule_enabled_invalid_input_payload_excludes_backend_codes(monkeypatch):
+    # Phase 5B.1 regression lock: the ``invalid_input`` failure payload
+    # surfaces only the stable Chinese message, not the underlying code or
+    # any backend-internal fields the API might have attached.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": False,
+            "error": "invalid_input",
+            "code": "invalid_input",
+            "internal_field": "should not leak",
+        },
+    )
+
+    result = WebViewBridge().set_project_rule_enabled("folder", -1, True)
+
+    assert result == {"ok": False, "error": "操作无效"}
+    lowered = repr(result).lower()
+    for forbidden in ("internal_field", "should not leak", "code", "invalid_input"):
+        assert forbidden not in lowered
+
+
+def test_set_project_rule_enabled_success_payload_types_are_stable(monkeypatch):
+    # Phase 5B.1 regression lock: success payload field types must remain
+    # ``str`` / ``int`` / ``bool`` so JS consumers can rely on the contract
+    # even when the backend returns loose numeric / string variants.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": True,
+            "rule_type": rule_type,
+            "rule_id": rule_id,
+            "enabled": enabled,
+        },
+    )
+
+    result = WebViewBridge().set_project_rule_enabled("keyword", 25, True)
+
+    assert isinstance(result["rule_type"], str)
+    assert isinstance(result["rule_id"], int)
+    assert isinstance(result["enabled"], bool)
+    assert type(result["rule_id"]) is int
+    assert type(result["enabled"]) is bool
+
+
+def test_set_project_rule_enabled_get_project_rules_payload_is_unchanged(monkeypatch):
+    # Phase 5B.1 regression lock: ``get_project_rules`` remains the read path
+    # and is not affected by the toggle hardening. Its payload shape and
+    # display-safe projection stay stable.
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [
+            {
+                "id": 1,
+                "name": "Client",
+                "description": "Billable",
+                "enabled": 1,
+                "created_by": "user",
+                "folder_rules": [
+                    {"id": 10, "folder_path": "D:\\Client", "enabled": 1, "recursive": 1},
+                ],
+                "keyword_rules": [
+                    {"id": 11, "keyword": "Spec", "enabled": 0},
+                ],
+            },
+        ],
+    )
+
+    result = WebViewBridge().get_project_rules()
+
+    assert result["ok"] is True
+    project = result["projects"][0]
+    assert project["id"] == 1
+    assert project["name"] == "Client"
+    assert project["rule_count"] == 2
+    assert project["folder_rule_count"] == 1
+    assert project["keyword_rule_count"] == 1
+    json.dumps(result, ensure_ascii=False)
 
 
 def test_set_project_rule_enabled_not_found(monkeypatch):

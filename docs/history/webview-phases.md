@@ -1,7 +1,7 @@
 # WorkTrace WebView UI Phase History (Archive)
 
 > **Archive — historical phase log.** This file is the long-form record of
-> every completed WebView migration phase (Phase 0A → Phase 5B). It is kept
+> every completed WebView migration phase (Phase 0A → Phase 5B.1). It is kept
 > for reference and traceability only. For the current state, read
 > [`docs/current-state.md`](../current-state.md); for architecture decisions,
 > read [`docs/ui-webview-migration.md`](../ui-webview-migration.md).
@@ -13,9 +13,10 @@
 
 > This `## Status` block was captured when the migration doc was archived.
 > The **live current phase** is in
-> [`../current-state.md`](../current-state.md) (now Phase 5B). Treat the
+> [`../current-state.md`](../current-state.md) (now Phase 5B.1). Treat the
 > list below as a historical narrative, not a live status claim; this
-> archive also contains the later Phase 4A / 4A.1 / 4B / 4B.1 sections below.
+> archive also contains the later Phase 4A / 4A.1 / 4B / 4B.1 / 5A / 5A.1 /
+> 5B / 5B.1 sections below.
 
 - Phase at archive time: 3C.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
@@ -4187,7 +4188,143 @@ Phase 5B does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
-## Legacy Tkinter UI Handling
+## Phase 5B.1 Implemented Scope
+
+Phase 5B.1 is the **Project Rules rule enable/disable hardening** phase. It
+is a hardening-only / regression-only follow-up to Phase 5B (the most recent
+behavior-change phase). It does not introduce any new Project Rules
+capability: the only Project Rules WebView write path remains
+`rule_api.set_project_rule_enabled` / `WebViewBridge.set_project_rule_enabled`,
+which enables or disables one existing folder rule or keyword rule at a
+time. Phase 5B.1 locks the existing correct behavior across the API,
+bridge, and frontend, and fixes one real bug discovered while writing the
+regression tests.
+
+Implemented in Phase 5B.1:
+
+- **Bug fix (real runtime bug)**:
+  - `rule_api.set_project_rule_enabled` previously used
+    `if rule_type not in {"folder", "keyword"}:`, which raises
+    `TypeError: unhashable type: 'list'` for unhashable non-string
+    `rule_type` values (e.g. `[]`, `{}`). The spec requires non-string types
+    to collapse to the stable `invalid_input` code, so the check now reads
+    `if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:`,
+    which short-circuits before the set membership lookup for any non-string
+    input.
+  - `WebViewBridge.set_project_rule_enabled` had the same set-membership
+    check. For unhashable non-string `rule_type` values the bridge caught
+    the resulting `TypeError` in its outer `except` and returned the wrong
+    stable message `更新规则状态失败` instead of the spec-required
+    `操作无效`. The same `isinstance(rule_type, str)` short-circuit was
+    added so non-string `rule_type` values now collapse to `操作无效` at
+    the bridge layer without crossing `rule_api`.
+  - No other runtime behavior changed. The bug only manifested when JS
+    passed an unhashable non-string value to the bridge (the frontend never
+    does this), but the spec explicitly requires the API and bridge to
+    reject all non-string `rule_type` inputs with the stable code, so the
+    fix is in scope.
+- **API layer hardening** (`worktrace/api/rule_api.py`):
+  - `rule_type` validation now rejects every non-string type (including
+    unhashable `list` / `dict`) without leaking a `TypeError`.
+  - Existing `_valid_rule_id` / `_valid_enabled` helpers and the
+    pre-update existence check (`_rule_exists`) are unchanged. SQLite
+    UPDATE no-op behavior on a missing rule still returns `not_found`, never
+    success.
+  - Unknown exceptions from `rule_service.set_rule_enabled` /
+    `folder_rule_service.set_folder_rule_enabled` still collapse to
+    `operation_failed` and never surface raw exception text, SQL,
+    tracebacks, paths, window titles, clipboard, or notes.
+- **Bridge layer hardening** (`worktrace/webview_ui/bridge.py`):
+  - `set_project_rule_enabled` now applies the same `isinstance(rule_type,
+    str)` short-circuit so unhashable non-string inputs return `操作无效`
+    instead of falling through to the generic `更新规则状态失败`.
+  - Success payload remains the narrow
+    `{"ok": True, "rule_type": "folder"|"keyword", "rule_id": int,
+    "enabled": bool}` shape; the bridge does not return a refreshed
+    Project Rules list on the toggle write path (JS calls
+    `get_project_rules` after success).
+  - Failure payloads remain the stable Chinese messages only
+    (`操作无效` / `规则不存在` / `更新规则状态失败`); tracebacks, SQL,
+    raw exception text, paths, window titles, clipboard, and notes are
+    never surfaced.
+- **Frontend hardening** (`worktrace/webview_ui/js/rules.js`,
+  `worktrace/webview_ui/js/init.js`):
+  - No source change. The existing single-in-flight guard
+    (`App.rulesSavingRuleKey`), confirmation dialog for disable, dataset
+    parse / validation, success-then-refresh chain, failure-keeps-rendered-
+    list behavior, stale-response guard (`App.rulesRequestToken`), escape
+    helpers, and catch paths that never read `.message` are locked by the
+    new static contract tests below.
+  - `init.js` still lazy-loads Project Rules on first navigation only and
+    refreshes only when the page is active and not currently loading or
+    saving. No Project Rules create/edit/delete/project-toggle event is
+    bound.
+- **Tests**:
+  - `tests/test_project_rules_enable_disable.py`: added parametrized
+    regression locks for invalid `rule_type` variants (None, empty,
+    `project`, `folder_rule`, `keyword_rule`, `Folder`, `KEYWORD`,
+    `PROJECT`, plurals, unknown strings, ints, floats, bool, `list`,
+    `dict`), extra invalid `rule_id` variants (`abc`, `1.5`, `2.5`,
+    `0.5`, `-999`, `[]`, `{}`, `true`), extra invalid `enabled` variants
+    (`1`, `0`, `True`, `False`, `1.0`, `0.0`, `[]`, `{}`), service
+    exception folding for both keyword and folder paths, existence-check-
+    before-update, no-conflict-preview, idempotent same-value toggle,
+    privacy/exclude cache invalidation for both keyword and folder paths,
+    explicit row-count lock across multiple toggle cycles, and JSON-
+    serializable stable success payload.
+  - `tests/test_webview_project_rules_bridge.py`: added parametrized
+    regression locks for invalid `rule_type` / `rule_id` / `enabled`
+    variants, sensitive-text exclusion on every failure path (invalid
+    input / not_found / unknown exception), success payload never returns
+    a full refreshed project list, toggle path never calls any other
+    Project Rules write API (project enable/disable / project / rule
+    create / edit / delete / conflict preview / backfill), stable
+    `rule_type` / `rule_id` / `enabled` field types on success, and
+    unchanged `get_project_rules` payload.
+  - `tests/webview/test_project_rules_static_contract.py`: added regression
+    locks for the toggle button being inside the rule row (not the project
+    card), the saving state clearing on success/failure/rejected-promise
+    paths, the single-in-flight guard ordering, the `正在更新…` saving
+    label, success-then-refresh ordering, failure-keeps-rendered-list
+    behavior, dataset id parse / validation, dataset rule-type validation,
+    cancellation-does-not-call-bridge, no duplicate static DOM ids in the
+    page-rules section, loading / saving / error / empty state isolation,
+    the only-allowed `set_project_rule_enabled` bridge call, and no
+    create/edit/delete/project-toggle event binding in `init.js`.
+- **Documentation**:
+  - README, current-state, migration summary, and this history now mark
+    Phase 5B.1 as current, describe the hardening-only / regression-only
+    scope, name the unhashable-`rule_type` fix, and restate all not-yet-open
+    boundaries. Phase 4B / 4B.1 CSV export boundaries are preserved.
+  - No DB schema change. No legacy Tkinter UI removal. No new dependency.
+    No new frontend framework / network / browser storage.
+
+## Phase 5B.1 Not Implemented
+
+Phase 5B.1 does not implement and does not start:
+
+- Project creation, editing, deletion, archive, or enable/disable in WebView;
+- Folder rule creation, editing, or deletion in WebView;
+- Keyword rule creation, editing, or deletion in WebView;
+- Folder rule conflict preview;
+- Folder rule backfill;
+- Automatic rules;
+- Batch Project Rules operations;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
 
 The `worktrace/ui` package is retained in the source tree as legacy code
 pending removal:

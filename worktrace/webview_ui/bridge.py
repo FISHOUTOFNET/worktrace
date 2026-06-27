@@ -1158,7 +1158,11 @@ class WebViewBridge:
         never exposes raw exceptions or backend details in the payload.
         """
         try:
-            if rule_type not in {"folder", "keyword"}:
+            # ``isinstance(rule_type, str)`` short-circuits the set membership
+            # check so unhashable non-string types (list / dict) collapse to
+            # ``操作无效`` instead of being caught by the outer except and
+            # reported as ``更新规则状态失败``.
+            if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
                 return {"ok": False, "error": "操作无效"}
             if type(rule_id) is not int or rule_id <= 0:
                 return {"ok": False, "error": "操作无效"}

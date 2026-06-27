@@ -50,7 +50,10 @@ def set_project_rule_enabled(rule_type: str, rule_id: int, enabled: bool) -> dic
     Returned errors are stable codes for the bridge to map to Chinese text.
     """
 
-    if rule_type not in {"folder", "keyword"}:
+    # ``isinstance(rule_type, str)`` short-circuits the set membership check
+    # so unhashable non-string types (list / dict) collapse to
+    # ``invalid_input`` instead of leaking a ``TypeError`` to the bridge.
+    if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
         return {"ok": False, "error": "invalid_input"}
     if not _valid_rule_id(rule_id) or not _valid_enabled(enabled):
         return {"ok": False, "error": "invalid_input"}

@@ -7,16 +7,22 @@
 
 ## Current Phase
 
-**Phase 5B — Project Rules rule enable/disable foundation.** Phase 5B is the
-first minimal Project Rules WebView write phase. It only enables/disables one
-existing folder rule or keyword rule at a time, then refreshes the current
-Project Rules list. It does not implement project enable/disable, project
-create/edit/delete/archive, rule create/edit/delete, conflict preview,
-backfill, automatic rules, batch Project Rules operations, schema changes,
-new frontend dependencies, browser storage, network requests, or new export
-formats. All earlier WebView migration phases (Phase 0A → Phase 5A.1) are
-completed. README, this file, and `ui-webview-migration.md` all describe the
-current phase as 5B.
+**Phase 5B.1 — Project Rules rule enable/disable hardening.** Phase 5B.1 is
+a hardening-only / regression-only follow-up to Phase 5B (the most recent
+behavior-change phase). It does not introduce any new Project Rules
+capability: the only Project Rules WebView write path remains enabling or
+disabling one existing folder rule or keyword rule at a time. Phase 5B.1
+adds input validation / error-collapse / saving-and-stale-state /
+sensitive-field-boundary regression locks across the API, bridge, and
+frontend, plus a fix for an unhashable-`rule_type` (list / dict) edge case
+that previously surfaced a `TypeError` instead of the stable
+`invalid_input` / `操作无效` error. It does not implement project
+enable/disable, project create/edit/delete/archive, rule create/edit/delete,
+conflict preview, backfill, automatic rules, batch Project Rules
+operations, schema changes, new frontend dependencies, browser storage,
+network requests, or new export formats. All earlier WebView migration
+phases (Phase 0A → Phase 5B) are completed. README, this file, and
+`ui-webview-migration.md` all describe the current phase as 5B.1.
 
 ## Default UI
 
@@ -40,13 +46,16 @@ current phase as 5B.
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A / 5A.1 / 5B): project-grouped rule list
+- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1): project-grouped rule list
   showing project name / description, project enabled state, special
   `排除规则` marker, rule counts, folder rules, keyword rules, rule enabled
   state, and folder recursion scope. Phase 5B only adds existing folder /
-  keyword rule enable/disable. Project enable/disable, Project/Rule creation,
-  editing, deletion, conflict preview, backfill, and automatic rules are still
-  not open in WebView.
+  keyword rule enable/disable. Phase 5B.1 is a hardening-only / regression-
+  only follow-up: it locks input validation, error collapse, saving /
+  stale-state behavior, sensitive-field boundaries, and packaging /
+  static-resource contracts without opening any new Project Rules capability.
+  Project enable/disable, Project/Rule creation, editing, deletion, conflict
+  preview, backfill, and automatic rules are still not open in WebView.
 
 ## Unmigrated Pages (Legacy Tkinter, Reference-Only)
 
@@ -96,7 +105,7 @@ current phase as 5B.
 - AI, server, payment, license, token, subscription, login, cloud sync, OCR,
   screenshots, screen recording, keyboard logging, automatic startup.
 - Any DB schema change during development; `schema.sql` is the single source
-  of truth. Phase 5B made no schema change.
+  of truth. Phase 5B and Phase 5B.1 made no schema change.
 
 ## Architecture Boundary
 

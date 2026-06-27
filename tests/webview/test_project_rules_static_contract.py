@@ -331,3 +331,238 @@ def test_project_rules_page_does_not_add_export_or_auto_submit_controls():
         "打开文件夹",
     ):
         assert token not in section
+
+
+# --- Phase 5B.1 hardening regression locks ---------------------------------
+
+
+def test_project_rules_toggle_button_is_inside_rule_row_not_project_card():
+    # Phase 5B.1 regression lock: the toggle button must be rendered inside
+    # ``renderProjectRuleRow`` (i.e. on the rule row), never directly on the
+    # project card. The project card template may not contain a
+    # ``rules-toggle-btn`` of its own.
+    source = read_js("rules.js")
+    project_body = func_body(source, "renderProjectRuleProject")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "rules-toggle-btn" in row_body
+    assert "rules-toggle-btn" not in project_body
+    # The project card only renders rows via the row helper, never a static
+    # project-level toggle button.
+    for forbidden in (
+        "rules-project-toggle",
+        'data-rule-type="project"',
+        "setProjectEnabled",
+        "set_project_enabled",
+    ):
+        assert forbidden not in project_body
+
+
+def test_project_rules_toggle_handler_clears_saving_state_on_all_paths():
+    # Phase 5B.1 regression lock: the saving state must clear on success,
+    # on failure (ok=false), and on rejected promise. The handler achieves
+    # this by chaining ``App.setProjectRuleSaving(null)`` in the final
+    # ``.then`` that runs after ``.catch`` (which always resolves).
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    assert "App.setProjectRuleSaving(ruleType" in body
+    # The final cleanup must run unconditionally after the catch.
+    assert ".catch(function ()" in body
+    catch_pos = body.find(".catch(function ()")
+    cleanup_pos = body.find("App.setProjectRuleSaving(null)", catch_pos)
+    assert cleanup_pos != -1, (
+        "App.setProjectRuleSaving(null) must run after .catch so the saving "
+        "state clears on success, failure, and rejected-promise paths"
+    )
+
+
+def test_project_rules_toggle_handler_single_in_flight_guard():
+    # Phase 5B.1 regression lock: only one toggle write may be in flight at
+    # a time. The handler must early-return when ``App.rulesSavingRuleKey``
+    # is set, before any bridge call or confirmation dialog.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    guard_pos = body.find("App.rulesSavingRuleKey")
+    confirm_pos = body.find("window.confirm")
+    bridge_pos = body.find('App.callBridge("set_project_rule_enabled"')
+    assert guard_pos != -1 and confirm_pos != -1 and bridge_pos != -1
+    assert guard_pos < confirm_pos < bridge_pos, (
+        "in-flight guard must run before confirmation dialog and bridge call"
+    )
+
+
+def test_project_rules_toggle_button_saving_label_present():
+    # Phase 5B.1 regression lock: the saving button text must remain the
+    # stable ``正在更新…`` label so the user sees a clear in-progress state.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "正在更新…" in row_body
+    set_saving_body = func_body(source, "setProjectRuleSaving")
+    assert "正在更新…" in set_saving_body
+
+
+def test_project_rules_toggle_success_then_refresh_chain():
+    # Phase 5B.1 regression lock: the success path must call
+    # ``loadProjectRules`` (refresh) before showing the success banner so a
+    # stale rendered list is never left on screen after a successful toggle.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    refresh_pos = body.find("App.loadProjectRules()")
+    success_pos = body.find("规则状态已更新")
+    assert refresh_pos != -1 and success_pos != -1
+    assert refresh_pos < success_pos
+
+
+def test_project_rules_toggle_failure_keeps_existing_list_rendered():
+    # Phase 5B.1 regression lock: the failure path must not clear the
+    # already-rendered list. The toggle handler may only call
+    # ``showRulesError`` on failure, never ``list.innerHTML = ""`` or
+    # ``showProjectRules`` with an empty payload.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    assert "list.innerHTML" not in body
+    assert 'showProjectRules({ projects: [] })' not in body
+    assert 'showProjectRules([])' not in body
+
+
+def test_project_rules_toggle_dataset_id_is_parsed_and_validated():
+    # Phase 5B.1 regression lock: the dataset ``data-rule-id`` must be
+    # parsed via ``parseInt(..., 10)`` and rejected (``!ruleId``) when the
+    # result is NaN or 0, before the bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    assert 'parseInt(button.getAttribute("data-rule-id"), 10)' in body
+    assert "!ruleId" in body
+    # The guard must run before the bridge call.
+    guard_pos = body.find("!ruleId")
+    bridge_pos = body.find('App.callBridge("set_project_rule_enabled"')
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_toggle_rejects_unknown_rule_type_from_dataset():
+    # Phase 5B.1 regression lock: the dataset ``data-rule-type`` must be
+    # validated against ``folder`` / ``keyword`` before the bridge call so
+    # a malformed dataset cannot trigger an arbitrary write.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    assert 'ruleType !== "folder" && ruleType !== "keyword"' in body
+    # The type check must run before the bridge call.
+    type_check_pos = body.find('ruleType !== "folder" && ruleType !== "keyword"')
+    bridge_pos = body.find('App.callBridge("set_project_rule_enabled"')
+    assert type_check_pos < bridge_pos
+
+
+def test_project_rules_toggle_cancellation_does_not_call_bridge():
+    # Phase 5B.1 regression lock: when the user cancels the disable
+    # confirmation, the handler must ``return`` immediately without calling
+    # ``App.setProjectRuleSaving`` or the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    confirm_pos = body.find("window.confirm")
+    # The ``return;`` immediately after the confirm guard is the cancellation
+    # path. Verify the bridge call is not inside the cancellation branch.
+    bridge_pos = body.find('App.callBridge("set_project_rule_enabled"')
+    assert confirm_pos < bridge_pos
+    # Locate the cancellation ``return;`` that closes the confirm branch.
+    # The body contains: ``if (!nextEnabled && !window.confirm("...")) { return; }``
+    cancellation_return = body.find("return;", confirm_pos)
+    assert cancellation_return != -1 and cancellation_return < bridge_pos
+
+
+def test_project_rules_no_duplicate_static_dom_ids_in_section():
+    # Phase 5B.1 regression lock: the static ``page-rules`` section in
+    # ``index.html`` must not declare the same DOM id twice. Dynamic ids
+    # (rendered by JS at runtime) are out of scope here.
+    import re as _re
+
+    section = _rules_section()
+    ids = _re.findall(r'\sid="([^"]+)"', section)
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for dom_id in ids:
+        if dom_id in seen:
+            duplicates.append(dom_id)
+        seen.add(dom_id)
+    assert not duplicates, "duplicate DOM id in page-rules section: " + ", ".join(duplicates)
+
+
+def test_project_rules_state_isolation_across_loading_saving_error():
+    # Phase 5B.1 regression lock: the four rule-page UI states
+    # (loading / saving / error / empty) must be represented by separate
+    # DOM ids so they cannot visually pollute each other.
+    section = _rules_section()
+    for required_id in (
+        "rules-loading",
+        "rules-error",
+        "rules-empty",
+        "rules-list",
+    ):
+        assert 'id="' + required_id + '"' in section
+    # The saving state lives on the toggle buttons themselves (``正在更新…``
+    # label + ``disabled`` attribute), not as a separate top-level banner
+    # that could conflict with loading / error / empty banners.
+    source = read_js("rules.js")
+    assert "正在更新…" in source
+    # Loading and error banners are separate DOM nodes.
+    assert 'getElementById("rules-loading")' in source
+    assert 'getElementById("rules-error")' in source
+    # No code path writes the loading banner text into the error banner.
+    assert "rules-error" not in func_body(source, "setRulesLoading")
+    assert "rules-loading" not in func_body(source, "showRulesError")
+
+
+def test_project_rules_bridge_call_only_allows_toggle_write():
+    # Phase 5B.1 regression lock: ``set_project_rule_enabled`` is the only
+    # Project Rules write bridge call anywhere in the frontend. No other
+    # write bridge call (project toggle / create / edit / delete / preview /
+    # backfill) may be introduced even in init.js / core.js.
+    source = read_all_js()
+    assert 'callBridge("set_project_rule_enabled"' in source
+    # The forbidden write method names are already covered by
+    # ``test_project_rules_js_does_not_call_forbidden_write_methods``; here
+    # we additionally guard against accidental bridge call strings.
+    for forbidden_call in (
+        'callBridge("set_project_enabled"',
+        'callBridge("create_project"',
+        'callBridge("update_project"',
+        'callBridge("delete_project"',
+        'callBridge("archive_project"',
+        'callBridge("create_keyword_rule"',
+        'callBridge("create_or_update_folder_rule"',
+        'callBridge("delete_keyword_rule"',
+        'callBridge("delete_folder_rule"',
+        'callBridge("preview_folder_rule_conflicts"',
+        'callBridge("backfill_folder_rule"',
+        'callBridge("automatic_rules"',
+    ):
+        assert forbidden_call not in source, (
+            "frontend must not call forbidden Project Rules write bridge: "
+            + forbidden_call
+        )
+
+
+def test_project_rules_init_does_not_bind_project_or_rule_create_events():
+    # Phase 5B.1 regression lock: the init module must not bind any
+    # create / edit / delete / project-toggle events for Project Rules.
+    # The only Project Rules event binding is the click delegation on the
+    # rules list, set up inside ``rules.js``.
+    source = read_js("init.js")
+    for forbidden in (
+        "rules-add",
+        "rules-create",
+        "rules-edit",
+        "rules-delete",
+        "project-add",
+        "project-edit",
+        "project-delete",
+        "project-enable",
+        "project-disable",
+        "rule-add",
+        "rule-edit",
+        "rule-delete",
+        "rule-enable",
+        "rule-disable",
+    ):
+        assert forbidden not in source, (
+            "init.js must not bind Project Rules create/edit/delete/project-toggle event: "
+            + forbidden
+        )
