@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5A "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5A.1 "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -10,11 +10,14 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **5A (Project Rules WebView read-only foundation)**. The
-  Project Rules page now renders a read-only project-grouped folder /
-  keyword rule list in WebView. Project/Rule creation, editing, deletion,
-  enable/disable, conflict preview, backfill, automatic rules, schema
-  changes, and new frontend dependencies remain out of scope.
+- Current phase: **5A.1 (Project Rules WebView read-only hardening)**. Phase
+  5A was the last Project Rules behavior-change phase: the Project Rules page
+  now renders a read-only project-grouped folder / keyword rule list in
+  WebView. Phase 5A.1 is hardening-only / regression-only and locks payload,
+  display-safety, loading / stale response, active-page refresh, static,
+  packaging, and documentation contracts. Project/Rule creation, editing,
+  deletion, enable/disable, conflict preview, backfill, automatic rules,
+  schema changes, and new frontend dependencies remain out of scope.
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime). It is
   the only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview (Phase 1), Timeline / Time Details (read-only in
@@ -170,6 +173,7 @@ the high-level order is:
 - Phase 4B.1 — CSV export hardening / native save dialog + packaging
   validation. **Completed.**
 - Phase 5A — Project Rules read-only foundation. **Completed.**
+- Phase 5A.1 — Project Rules read-only hardening / regression. **Completed.**
 - Phase 5B+ — Project Rules write workflows (create / edit / delete /
   enable-disable / conflict preview / backfill / automatic rules). Not
   started.

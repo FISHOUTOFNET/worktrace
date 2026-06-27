@@ -1476,16 +1476,17 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
 
 def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     """Build one Phase 5A Project Rules display payload."""
-    project_name = str(project.get("name") or "未知项目")
+    project = _project_rules_mapping(project)
+    project_name = _project_rules_text(project.get("name"), "未知项目")
     project_enabled = _project_rules_bool(project.get("enabled"), default=True)
     is_excluded = project_name == "排除规则"
     folder_rules = [
         _project_rules_folder_payload(rule, project_name)
-        for rule in (project.get("folder_rules") or [])
+        for rule in _project_rules_list(project.get("folder_rules"))
     ]
     keyword_rules = [
         _project_rules_keyword_payload(rule, project_name)
-        for rule in (project.get("keyword_rules") or [])
+        for rule in _project_rules_list(project.get("keyword_rules"))
     ]
     folder_count = len(folder_rules)
     keyword_count = len(keyword_rules)
@@ -1497,11 +1498,11 @@ def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         keyword_count=keyword_count,
     )
     return {
-        "id": int(project.get("id") or 0),
+        "id": _project_rules_int(project.get("id")),
         "name": project_name,
-        "description": str(project.get("description") or ""),
+        "description": _project_rules_text(project.get("description"), ""),
         "enabled": project_enabled,
-        "created_by": str(project.get("created_by") or ""),
+        "created_by": _project_rules_text(project.get("created_by"), ""),
         "is_excluded": is_excluded,
         "summary": summary,
         "folder_rule_count": folder_count,
@@ -1512,6 +1513,7 @@ def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_rules_folder_payload(rule: dict[str, Any], project_name: str) -> dict[str, Any]:
+    rule = _project_rules_mapping(rule)
     enabled = _project_rules_bool(rule.get("enabled"), default=True)
     recursive = _project_rules_bool(rule.get("recursive"), default=True)
     scope = "包含子文件夹" if recursive else "仅直接文件"
@@ -1519,8 +1521,8 @@ def _project_rules_folder_payload(rule: dict[str, Any], project_name: str) -> di
     return {
         "kind": "folder",
         "kind_label": "文件夹",
-        "id": int(rule.get("id") or 0),
-        "target": str(rule.get("folder_path") or ""),
+        "id": _project_rules_int(rule.get("id")),
+        "target": _project_rules_text(rule.get("folder_path"), ""),
         "enabled": enabled,
         "recursive": recursive,
         "detail": f"归属项目：{project_name} | {scope} | {state}",
@@ -1528,13 +1530,14 @@ def _project_rules_folder_payload(rule: dict[str, Any], project_name: str) -> di
 
 
 def _project_rules_keyword_payload(rule: dict[str, Any], project_name: str) -> dict[str, Any]:
+    rule = _project_rules_mapping(rule)
     enabled = _project_rules_bool(rule.get("enabled"), default=True)
     state = "已启用" if enabled else "已禁用"
     return {
         "kind": "keyword",
         "kind_label": "关键词",
-        "id": int(rule.get("id") or 0),
-        "target": str(rule.get("keyword") or ""),
+        "id": _project_rules_int(rule.get("id")),
+        "target": _project_rules_text(rule.get("keyword"), ""),
         "enabled": enabled,
         "recursive": None,
         "detail": f"归属项目：{project_name} | {state}",
@@ -1564,7 +1567,39 @@ def _project_rules_summary(
 def _project_rules_bool(value: Any, *, default: bool) -> bool:
     if value is None:
         return default
-    return bool(int(value))
+    if isinstance(value, bool):
+        return value
+    try:
+        return bool(int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _project_rules_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _project_rules_text(value: Any, fallback: str) -> str:
+    if value is None or value == "":
+        return fallback
+    return str(value)
+
+
+def _project_rules_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _project_rules_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return []
 
 
 __all__ = ["WebViewBridge"]

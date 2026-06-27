@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -132,6 +133,220 @@ def test_get_project_rules_empty_projects(monkeypatch):
     assert result == {"ok": True, "projects": []}
 
 
+def test_get_project_rules_malformed_rows_are_safe_and_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [
+            {
+                "id": "bad-id",
+                "name": "",
+                "enabled": "not-a-bool",
+                "created_by": None,
+                "folder_rules": [
+                    {
+                        "id": "bad-rule-id",
+                        "enabled": "nope",
+                        "recursive": "bad-recursive",
+                    },
+                    "unexpected folder row",
+                ],
+                "keyword_rules": [
+                    {
+                        "id": None,
+                        "enabled": None,
+                    },
+                    None,
+                ],
+            },
+            "unexpected project row",
+        ],
+    )
+
+    result = WebViewBridge().get_project_rules()
+
+    json.dumps(result, ensure_ascii=False)
+    assert result["ok"] is True
+    assert len(result["projects"]) == 2
+
+    project = result["projects"][0]
+    assert project["id"] == 0
+    assert project["name"] == "未知项目"
+    assert project["description"] == ""
+    assert project["enabled"] is True
+    assert project["created_by"] == ""
+    assert project["rule_count"] == 4
+    assert project["folder_rule_count"] == 2
+    assert project["keyword_rule_count"] == 2
+
+    folder = project["rules"][0]
+    assert folder["id"] == 0
+    assert folder["target"] == ""
+    assert folder["enabled"] is True
+    assert folder["recursive"] is True
+    assert "包含子文件夹" in folder["detail"]
+
+    keyword = project["rules"][2]
+    assert keyword["id"] == 0
+    assert keyword["target"] == ""
+    assert keyword["enabled"] is True
+    assert keyword["recursive"] is None
+
+    fallback_project = result["projects"][1]
+    assert fallback_project["id"] == 0
+    assert fallback_project["name"] == "未知项目"
+    assert fallback_project["rules"] == []
+    assert fallback_project["summary"] == "暂无规则"
+
+
+def test_get_project_rules_missing_rule_lists_and_description(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [{"id": 1, "name": "Client", "enabled": 1, "created_by": "user"}],
+    )
+
+    result = WebViewBridge().get_project_rules()
+
+    project = result["projects"][0]
+    assert project["description"] == ""
+    assert project["folder_rule_count"] == 0
+    assert project["keyword_rule_count"] == 0
+    assert project["rule_count"] == 0
+    assert project["rules"] == []
+    assert project["summary"] == "暂无规则"
+
+
+def test_get_project_rules_bool_type_normalization(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [
+            {
+                "id": 1,
+                "name": "OffInt",
+                "enabled": 0,
+                "folder_rules": [{"id": 10, "enabled": 0, "recursive": 0}],
+                "keyword_rules": [],
+            },
+            {
+                "id": 2,
+                "name": "OnInt",
+                "enabled": 1,
+                "folder_rules": [{"id": 20, "enabled": 1, "recursive": 1}],
+                "keyword_rules": [],
+            },
+            {
+                "id": 3,
+                "name": "OffString",
+                "enabled": "0",
+                "folder_rules": [{"id": 30, "enabled": "0", "recursive": "0"}],
+                "keyword_rules": [],
+            },
+            {
+                "id": 4,
+                "name": "OnString",
+                "enabled": "1",
+                "folder_rules": [{"id": 40, "enabled": "1", "recursive": "1"}],
+                "keyword_rules": [],
+            },
+            {
+                "id": 5,
+                "name": "NoneDefaults",
+                "enabled": None,
+                "folder_rules": [{"id": 50, "enabled": None, "recursive": None}],
+                "keyword_rules": [],
+            },
+        ],
+    )
+
+    result = WebViewBridge().get_project_rules()
+
+    projects = result["projects"]
+    assert [project["enabled"] for project in projects] == [
+        False,
+        True,
+        False,
+        True,
+        True,
+    ]
+    assert [project["rules"][0]["enabled"] for project in projects] == [
+        False,
+        True,
+        False,
+        True,
+        True,
+    ]
+    assert [project["rules"][0]["recursive"] for project in projects] == [
+        False,
+        True,
+        False,
+        True,
+        True,
+    ]
+
+
+def test_get_project_rules_missing_targets_use_safe_empty_fallback(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [
+            {
+                "id": 1,
+                "name": "Client",
+                "enabled": 1,
+                "folder_rules": [{"id": 10, "enabled": 1, "recursive": 1}],
+                "keyword_rules": [{"id": 20, "enabled": 1}],
+            }
+        ],
+    )
+
+    result = WebViewBridge().get_project_rules()
+
+    folder, keyword = result["projects"][0]["rules"]
+    assert folder["target"] == ""
+    assert keyword["target"] == ""
+    assert "Traceback" not in repr(result)
+
+
+def test_get_project_rules_sensitive_tokens_absent_from_success_payload(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [
+            {
+                "id": 1,
+                "name": "Client",
+                "description": "",
+                "enabled": 1,
+                "created_by": "user",
+                "window_title": "Sensitive Window",
+                "clipboard": "Sensitive Clipboard",
+                "note": "Sensitive Note",
+                "folder_rules": [],
+                "keyword_rules": [],
+            }
+        ],
+    )
+
+    result = WebViewBridge().get_project_rules()
+
+    rendered = repr(result)
+    for forbidden in (
+        "traceback",
+        "Traceback",
+        "sqlite",
+        "SELECT",
+        "window_title",
+        "clipboard",
+        "note",
+        "Sensitive Window",
+        "Sensitive Clipboard",
+        "Sensitive Note",
+    ):
+        assert forbidden not in rendered
+
+
 def test_get_project_rules_exception_collapses_without_sensitive_text(monkeypatch):
     def fail():
         raise RuntimeError(
@@ -150,6 +365,7 @@ def test_get_project_rules_exception_collapses_without_sensitive_text(monkeypatc
     lowered = repr(result).lower()
     for forbidden in (
         "traceback",
+        "sqlite",
         "select",
         "boom",
         "window_title",

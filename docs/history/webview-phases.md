@@ -1,7 +1,7 @@
 # WorkTrace WebView UI Phase History (Archive)
 
 > **Archive — historical phase log.** This file is the long-form record of
-> every completed WebView migration phase (Phase 0A → Phase 5A). It is kept
+> every completed WebView migration phase (Phase 0A → Phase 5A.1). It is kept
 > for reference and traceability only. For the current state, read
 > [`docs/current-state.md`](../current-state.md); for architecture decisions,
 > read [`docs/ui-webview-migration.md`](../ui-webview-migration.md).
@@ -13,7 +13,7 @@
 
 > This `## Status` block was captured when the migration doc was archived.
 > The **live current phase** is in
-> [`../current-state.md`](../current-state.md) (now Phase 5A). Treat the
+> [`../current-state.md`](../current-state.md) (now Phase 5A.1). Treat the
 > list below as a historical narrative, not a live status claim; this
 > archive also contains the later Phase 4A / 4A.1 / 4B / 4B.1 sections below.
 
@@ -4005,6 +4005,87 @@ Phase 5A does not implement and does not start:
 - Network requests;
 - Any change to the existing Timeline, Statistics / CSV export, collector,
   privacy, encrypted backup, or database semantics.
+
+## Phase 5A.1 Implemented Scope
+
+Phase 5A.1 is the **Project Rules WebView read-only hardening** phase. It is
+hardening-only / regression-only on top of Phase 5A: Phase 5A remains the last
+Project Rules behavior-change phase, and Phase 5A.1 does not add any Project
+Rules write workflow or product feature.
+
+Implemented / hardened in Phase 5A.1:
+
+- **Bridge payload contract hardening** —
+  `WebViewBridge.get_project_rules` still delegates only to
+  `project_api.list_project_bindings()` and still returns
+  `{"ok": True, "projects": [...]}` on success or exactly
+  `{"ok": False, "error": "加载项目规则失败", "projects": []}` on failure.
+  The read-only payload projection now tolerates malformed project / rule
+  rows, missing `folder_rules` / `keyword_rules`, missing descriptions,
+  missing folder paths / keywords, non-int ids, and dirty boolean values
+  without exposing tracebacks, SQL, raw exception text, window titles,
+  clipboard, notes, or backend row internals to JS.
+- **Frontend read-only display contract hardening** —
+  `js/rules.js` keeps the existing read-only DOM and UI text, keeps dynamic
+  rendering behind the shared escape helpers, uses request tokens to avoid
+  stale response overwrites, keeps existing rendered data visible on failure,
+  collapses all load failures to `加载项目规则失败`, and does not bind any
+  Project Rules write button or write bridge call.
+- **Init / refresh regression lock** —
+  `init.js` still lazy-loads Project Rules only when the user first enters
+  the rules page, avoids concurrent Project Rules loads, and refreshes
+  Project Rules only when the active page is `rules` and the page has already
+  loaded once. Overview / Timeline / Statistics refresh behavior is not
+  changed.
+- **Static / packaging contract lock** —
+  static tests now pin `rules.js` between `statistics.js` and `init.js` in
+  both `index.html` and `tests/webview/static_helpers.py`, verify
+  `rulesLoaded` / `rulesLoading` / `rulesRequestToken`, loading and stale
+  guards, read-only bridge call wiring, absence of Project Rules write calls
+  and unsupported export / open-folder / auto-submit controls, no browser
+  storage or remote resources, and `WorkTrace.spec` inclusion of
+  `worktrace/webview_ui/js/rules.js`.
+- **Service regression coverage** —
+  the existing read-only `project_service.list_project_bindings()` regression
+  remains the service contract: user projects plus the special excluded
+  project are grouped stably, folder / keyword rule ownership is preserved,
+  ordering is stable, and a read-only call does not change DB row counts.
+- **Documentation boundary sync** —
+  README, current-state, migration summary, and this history now mark Phase
+  5A.1 as the current hardening phase, state that Project Rules is migrated
+  as a read-only WebView page, and preserve the unsupported boundaries for
+  Project Rules writes, Phase 6 Settings / Privacy / Encrypted Backup,
+  Phase 4B / 4B.1 CSV-only export, legacy Tkinter reference-only code, DB
+  schema, frontend dependencies, network, and unsupported export/automation
+  workflows.
+
+## Phase 5A.1 Not Implemented
+
+Phase 5A.1 does not implement and does not start:
+
+- Project creation, editing, deletion, archive, or enable/disable in
+  WebView;
+- Folder rule creation, editing, deletion, or enable/disable in WebView;
+- Keyword rule creation, editing, deletion, or enable/disable in WebView;
+- Folder rule conflict preview;
+- Folder rule backfill;
+- Automatic rules;
+- Batch Project Rules operations;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
 
 ## Legacy Tkinter UI Handling
 

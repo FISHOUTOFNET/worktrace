@@ -7,13 +7,17 @@
 
 ## Current Phase
 
-**Phase 5A — Project Rules WebView read-only foundation.** The Project Rules
-page is now a WebView read-only page for viewing project-grouped folder /
-keyword rules. Phase 5A does not add Project Rules write actions, conflict
-preview, backfill, automatic rules, schema changes, new frontend
-dependencies, or new export formats. All earlier WebView migration phases
-(Phase 0A → Phase 4B.1) are completed. README, this file, and
-`ui-webview-migration.md` all describe the current phase as 5A.
+**Phase 5A.1 — Project Rules WebView read-only hardening.** Phase 5A was the
+last Project Rules behavior-change phase: it migrated Project Rules to a
+WebView read-only page for viewing project-grouped folder / keyword rules.
+Phase 5A.1 is hardening-only / regression-only for that read-only page
+(payload contract, display safety, loading / stale response, active-page
+refresh, static contract, packaging validation, and documentation boundary).
+It does not add Project Rules write actions, conflict preview, backfill,
+automatic rules, schema changes, new frontend dependencies, or new export
+formats. All earlier WebView migration phases (Phase 0A → Phase 5A) are
+completed. README, this file, and `ui-webview-migration.md` all describe the
+current phase as 5A.1.
 
 ## Default UI
 
@@ -37,12 +41,13 @@ dependencies, or new export formats. All earlier WebView migration phases
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A): read-only project-grouped rule list showing
-  project name / description, project enabled state, special `排除规则`
-  marker, rule counts, folder rules, keyword rules, rule enabled state, and
-  folder recursion scope. Project/Rule creation, editing, deletion,
-  enable/disable, conflict preview, backfill, and automatic rules are still
-  not open in WebView.
+- **Project Rules** (Phase 5A / 5A.1): read-only project-grouped rule list
+  showing project name / description, project enabled state, special
+  `排除规则` marker, rule counts, folder rules, keyword rules, rule enabled
+  state, and folder recursion scope. Phase 5A.1 hardens the read-only
+  contracts only. Project/Rule creation, editing, deletion, enable/disable,
+  conflict preview, backfill, and automatic rules are still not open in
+  WebView.
 
 ## Unmigrated Pages (Legacy Tkinter, Reference-Only)
 

@@ -5,11 +5,14 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5A (Project Rules WebView read-only
-> foundation) is the latest shipped phase. It adds a read-only Project Rules
-> page for viewing project-grouped folder / keyword rules; Project/Rule
-> creation, editing, deletion, enable/disable, conflict preview, and backfill
-> remain unsupported in WebView. For a one-screen snapshot read
+> **Current state**: WebView Phase 5A.1 (Project Rules read-only hardening) is
+> the latest shipped phase. Phase 5A was the last Project Rules behavior-change
+> phase: it added a read-only Project Rules page for viewing project-grouped
+> folder / keyword rules. Phase 5A.1 is hardening-only and adds regression
+> coverage for payload, frontend, refresh, static, packaging, and documentation
+> contracts; Project/Rule creation, editing, deletion, enable/disable, conflict
+> preview, backfill, and automatic rules remain unsupported in WebView. For a
+> one-screen snapshot read
 > [`docs/current-state.md`](docs/current-state.md). For the full per-phase
 > history read [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
 > AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)
@@ -36,7 +39,8 @@ records.
 - Project Rules page: read-only project-grouped folder / keyword rule list,
   including project/rule enabled state and the special local `排除规则`.
   Project/Rule creation, editing, deletion, enable/disable, conflict preview,
-  backfill, and automatic rule workflows are not supported in WebView.
+  backfill, and automatic rule workflows are not supported in WebView. Phase
+  5A.1 only hardens this read-only page and does not add write behavior.
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.
 

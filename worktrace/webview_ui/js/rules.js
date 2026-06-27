@@ -15,7 +15,7 @@
         return App.callBridge("get_project_rules").then(function (result) {
             if (token !== App.rulesRequestToken) return;
             if (result && result.ok === false) {
-                App.showRulesError(result.error || "加载项目规则失败");
+                App.showRulesError("加载项目规则失败");
                 return;
             }
             App.showProjectRules(result || { projects: [] });
