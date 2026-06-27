@@ -3084,3 +3084,64 @@ export write action.
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local
   HTTP server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 4A.1 Validation
+
+Phase 4A.1 is the Statistics / Export read-only hardening phase. It is a
+hardening-only phase: no new features, no new backend write capability, no
+new DB schema, no export write action, no file creation, no save dialog,
+no Project Rules migration, no Settings / Privacy migration, and no legacy
+UI removal.
+
+### Phase 4A.1 Automated Validation
+
+- `python -m pytest` — all tests pass (including the 18 new Phase 4A.1
+  regression tests in `tests/test_webview_resources.py`).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` — build
+  succeeds; WebView static resources (`index.html`, `app.js`,
+  `styles.css`) are bundled.
+
+### Phase 4A.1 Read-Only Path
+
+- The service/API/bridge path remains read-only: no INSERT, no UPDATE,
+  no DELETE, no file write, no save dialog, no folder open.
+- The service documents status inclusion semantics: all closed,
+  non-hidden, non-deleted activities are aggregated regardless of status
+  (`normal` / `idle` / `paused` / `excluded` / `error` are all included).
+- The service rejects `bool` / `None` / non-string inputs as
+  `invalid_date`.
+- The API delegates date validation to the service layer; unknown
+  `ValueError` collapses to `operation_failed`.
+- The bridge rejects `bool` / `None` / non-string / empty-string inputs
+  with `请选择有效日期` before calling the API.
+- The frontend adds a client-side date range pre-check and a loading
+  double-click guard.
+
+### Phase 4A.1 Release Blockers
+
+- Any export write action is introduced (CSV / Excel / PDF / timesheet
+  file creation).
+- A save file dialog or folder-open call is introduced.
+- Any raw title / `window_title` / `file_path_hint` / `full_path` /
+  clipboard / note leaks into the Statistics / Export page, the bridge
+  return value, or the logs.
+- A traceback / SQL / raw exception string is shown in the Statistics /
+  Export page.
+- Any DB schema change is introduced.
+- Any write API / write bridge method is introduced.
+- Hidden / deleted / in-progress activities are unexpectedly included in
+  the statistics summary.
+- Date range validation is broken (invalid date / invalid range /
+  too-large range not rejected).
+- Project Rules migration to WebView is started.
+- Settings / Privacy migration to WebView is started.
+- The legacy Tkinter / CustomTkinter UI code is deleted.
+- `localStorage` / `sessionStorage` / CDN / external font is introduced.
+- The Overview / Timeline default WebView entry or behavior regresses.
+- Any Phase 4A / 3C.1 / 3C / 3B.9.1 / 3B.9 / 3B.8.1 / 3B.8 / 3B.7.1 /
+  3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A / 3B.4.1 / 3B.4 /
+  3B.3.1 / 3B.3 / 3B.2.1 / 3B.2 / 3B.1.1 / 3B.1 / 3A.1 / 3A /
+  2.1 regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local
+  HTTP server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.

@@ -6,7 +6,6 @@ used by the Overview and Statistics pages.
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 from ..services import statistics_service
@@ -80,26 +79,25 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict[str, Any
     Raises ``StatisticsSummaryError`` with a stable ``code`` for known
     failure modes so the bridge can map to Chinese messages without echoing
     internal details.
+
+    Phase 4A.1 hardening: the service layer performs the canonical date
+    validation; this wrapper maps ``ValueError`` (with its stable code
+    token) to ``StatisticsSummaryError`` and collapses any unexpected
+    exception to ``operation_failed`` so internal details never reach the
+    bridge.
     """
-    if not isinstance(date_from, str) or not isinstance(date_to, str):
-        raise StatisticsSummaryError("invalid_date")
-    try:
-        start = date.fromisoformat(date_from)
-        end = date.fromisoformat(date_to)
-    except ValueError:
-        raise StatisticsSummaryError("invalid_date")
-    if start > end:
-        raise StatisticsSummaryError("invalid_range")
-    if (end - start).days > statistics_service.STATISTICS_SUMMARY_MAX_RANGE_DAYS - 1:
-        raise StatisticsSummaryError("range_too_large")
     try:
         return statistics_service.get_statistics_export_summary(date_from, date_to)
     except StatisticsSummaryError:
         raise
-    except ValueError:
-        # Defensive: the service validates too. Any ValueError that escapes
-        # the validation above is treated as an operation failure so internal
-        # details never reach the bridge.
+    except ValueError as exc:
+        # The service raises ValueError with a stable code token
+        # (``invalid_date`` / ``invalid_range`` / ``range_too_large``).
+        # Map it to StatisticsSummaryError; unknown ValueError text collapses
+        # to ``operation_failed`` so internal details never reach the bridge.
+        code = str(exc)
+        if code in ("invalid_date", "invalid_range", "range_too_large"):
+            raise StatisticsSummaryError(code)
         raise StatisticsSummaryError("operation_failed")
     except Exception:
         raise StatisticsSummaryError("operation_failed")

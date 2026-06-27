@@ -3505,6 +3505,86 @@ Phase 4A does not implement and does not start:
 - Any `localStorage` / `sessionStorage` usage;
 - Any change to the Timeline / Overview existing entry points or behavior.
 
+## Phase 4A.1 Implemented Scope
+
+Phase 4A.1 is the Statistics / Export read-only hardening phase. It is a
+hardening-only phase: no new features, no new backend write capability, no
+new DB schema, no new bridge/API/service write method, no export write
+action, no file creation, no save dialog, no folder opening, no Project
+Rules migration, no Settings / Privacy migration, and no legacy UI removal.
+
+Hardening implemented in Phase 4A.1:
+
+- **Service layer** (`worktrace/services/statistics_service.py`):
+  - Documented status inclusion semantics: all closed, non-hidden,
+    non-deleted activities are aggregated regardless of status
+    (`normal` / `idle` / `paused` / `excluded` / `error` are all included).
+    The `by_status` breakdown surfaces each status group with a display
+    label.
+  - Documented `bool` / `None` / non-string input rejection: the
+    `isinstance(date_from, str)` guard in `_validate_summary_date_range`
+    rejects `bool` (which is not a `str`), `None`, `int`, and any other
+    non-string type as `invalid_date`.
+  - The stable tie-breaker for equal-duration groups (sort by
+    `(-duration_seconds, display_name.casefold())`) is locked by tests so
+    group order is deterministic across runs.
+- **API layer** (`worktrace/api/statistics_api.py`):
+  - Removed the duplicated date validation that was previously performed
+    at both the API and service layers. The service layer now performs
+    the canonical validation; the API wrapper maps `ValueError` (with its
+    stable code token) to `StatisticsSummaryError` and collapses any
+    unexpected exception to `operation_failed`.
+  - A `ValueError` without a known code token (`invalid_date` /
+    `invalid_range` / `range_too_large`) collapses to `operation_failed`
+    so internal details never reach the bridge.
+  - Removed the unused `date` import.
+- **Bridge layer** (`worktrace/webview_ui/bridge.py`):
+  - Added an explicit comment documenting that `isinstance(..., str)`
+    rejects `None`, `bool`, `int`, and any other non-string type so
+    `True` / `False` never reach the API/service validation.
+  - The bridge method remains read-only: it never writes to the DB,
+    never writes a file, and never opens a save dialog.
+- **Frontend** (`worktrace/webview_ui/app.js`):
+  - Added a loading double-click guard: `loadStatisticsExportSummary`
+    checks `statisticsLoading` before doing any work, so concurrent
+    triggers (quick range buttons, lazy load, manual click) cannot fire
+    overlapping requests.
+  - Added a client-side date range validator
+    (`validateStatisticsDateRange`) that catches `invalid_date` /
+    `invalid_range` / `range_too_large` before calling the bridge, giving
+    the user an immediate clear Chinese message without a round-trip.
+    The bridge and service still perform the canonical validation.
+- **Tests**:
+  - Added 18 Phase 4A.1 tests covering loading guard, client-side
+    validator, no export write handler in the statistics section,
+    `bool` / `None` / empty-string rejection at service and bridge
+    layers, stable tie-breaker, all-known-statuses-included semantics,
+    API delegation to service, unknown-ValueError collapse to
+    `operation_failed`, docs mentions, schema unchanged, legacy UI not
+    deleted, and no new WebView pages.
+
+## Phase 4A.1 Not Implemented
+
+Phase 4A.1 does not implement and does not start:
+
+- Any export write action;
+- Any CSV / Excel / PDF / timesheet file creation;
+- Any save file dialog;
+- Any folder opening;
+- Any export write bridge / API / service method;
+- Any DB schema change;
+- Any DB write;
+- Any live-time projection;
+- Any Project Rules migration to WebView;
+- Any Settings / Privacy migration to WebView;
+- Any removal of the legacy Tkinter / CustomTkinter UI code;
+- Any Tkinter fallback path;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any change to the Timeline / Overview existing entry points or behavior.
+
 ## Legacy Tkinter UI Handling
 
 The `worktrace/ui` package is retained in the source tree as legacy code

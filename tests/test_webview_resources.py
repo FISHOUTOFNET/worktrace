@@ -8291,3 +8291,348 @@ def test_docs_release_validation_phase_4a_release_blockers_4a():
         assert blocker in source, (
             "release-validation.md must mention release blocker: " + blocker
         )
+
+
+# ===========================================================================
+# Phase 4A.1: Statistics / Export read-only hardening
+# ===========================================================================
+
+
+def test_app_js_statistics_loading_double_click_guard_4a1():
+    """Phase 4A.1: loadStatisticsExportSummary must refuse concurrent loads
+    by checking ``statisticsLoading`` before doing any work."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    pos = source.find("function loadStatisticsExportSummary")
+    assert pos != -1
+    body = source[pos:pos + 600]
+    assert "if (statisticsLoading) return" in body, (
+        "loadStatisticsExportSummary must guard against concurrent loads"
+    )
+
+
+def test_app_js_statistics_client_side_range_validator_4a1():
+    """Phase 4A.1: app.js must have a client-side date range validator that
+    catches invalid_date / invalid_range / range_too_large before calling the
+    bridge."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function validateStatisticsDateRange" in source, (
+        "app.js must define validateStatisticsDateRange"
+    )
+    pos = source.find("function validateStatisticsDateRange")
+    body = source[pos:pos + 1200]
+    # Must return the same Chinese messages the bridge uses.
+    assert "请选择有效日期" in body
+    assert "请选择有效日期范围" in body
+    assert "日期范围过大" in body
+    # Must check date_from > date_to.
+    assert "from > to" in body
+    # Must check the 31-day max (diffDays > 30 for an inclusive 31-day span).
+    assert "diffDays" in body
+    assert "30" in body
+
+
+def test_app_js_statistics_load_uses_validator_4a1():
+    """Phase 4A.1: loadStatisticsExportSummary must call
+    validateStatisticsDateRange before calling the bridge."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    pos = source.find("function loadStatisticsExportSummary")
+    body = source[pos:pos + 2000]
+    assert "validateStatisticsDateRange" in body
+    assert "if (rangeMsg)" in body
+
+
+def test_app_js_statistics_no_export_write_handler_4a1():
+    """Phase 4A.1: app.js must not contain any export write / file save /
+    save dialog handler anywhere in the statistics section."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # Find the statistics section boundaries.
+    start = source.find("// --- Phase 4A: Statistics")
+    assert start != -1
+    # The statistics section ends at the Utility section.
+    end = source.find("// --- Utility", start)
+    assert end != -1
+    section = source[start:end]
+    forbidden = (
+        "save_dialog",
+        "saveAs",
+        "saveFile",
+        "export_csv",
+        "exportCsv",
+        "export_excel",
+        "exportExcel",
+        "export_pdf",
+        "exportPdf",
+        "export_timesheet",
+        "write_file",
+        "writeFile",
+        "open_folder",
+        "openFolder",
+        "Path.write_text",
+        "Path.write_bytes",
+    )
+    for name in forbidden:
+        assert name not in section, (
+            "statistics section must not reference export write helper: " + name
+        )
+
+
+def test_index_html_statistics_export_hint_mentions_no_file_write_4a1():
+    """Phase 4A.1: the export hint must explicitly say no file write,
+    no save dialog, no folder open, no timesheet auto-submit."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="statistics-export-preview"')
+    assert pos != -1
+    section = source[pos:pos + 2000]
+    assert "本阶段不支持写出" in section
+    assert "CSV" in section
+    assert "Excel" in section
+    assert "PDF" in section
+    assert "timesheet" in section
+    assert "不打开保存对话框" in section
+    assert "不打开文件夹" in section
+
+
+def test_bridge_statistics_explicit_bool_rejection_comment_4a1():
+    """Phase 4A.1: bridge.py must document that bool/None/non-string inputs
+    are rejected by the isinstance str check."""
+    bridge_path = REPO_ROOT / "worktrace" / "webview_ui" / "bridge.py"
+    source = bridge_path.read_text(encoding="utf-8")
+    pos = source.find("def get_statistics_export_summary")
+    body = source[pos:pos + 1500]
+    assert "bool" in body, (
+        "bridge must document bool rejection in get_statistics_export_summary"
+    )
+    assert "isinstance" in body
+
+
+def test_service_statistics_status_inclusion_semantics_documented_4a1():
+    """Phase 4A.1: statistics_service.py must document the status inclusion
+    semantics (normal/idle/paused/excluded/error all included)."""
+    service_path = REPO_ROOT / "worktrace" / "services" / "statistics_service.py"
+    source = service_path.read_text(encoding="utf-8")
+    # The documented semantics block.
+    assert "normal" in source and "idle" in source and "paused" in source
+    assert "excluded" in source and "error" in source
+    assert "included" in source
+
+
+def test_service_statistics_bool_input_rejected_4a1(temp_db):
+    """Phase 4A.1: bool inputs must be rejected as invalid_date."""
+    from worktrace.services import statistics_service
+    import pytest
+    with pytest.raises(ValueError) as exc:
+        statistics_service.get_statistics_export_summary(True, "2026-06-25")
+    assert "invalid_date" in str(exc.value)
+    with pytest.raises(ValueError) as exc:
+        statistics_service.get_statistics_export_summary("2026-06-25", False)
+    assert "invalid_date" in str(exc.value)
+
+
+def test_service_statistics_none_input_rejected_4a1(temp_db):
+    """Phase 4A.1: None inputs must be rejected as invalid_date."""
+    from worktrace.services import statistics_service
+    import pytest
+    with pytest.raises(ValueError) as exc:
+        statistics_service.get_statistics_export_summary(None, "2026-06-25")
+    assert "invalid_date" in str(exc.value)
+    with pytest.raises(ValueError) as exc:
+        statistics_service.get_statistics_export_summary("2026-06-25", None)
+    assert "invalid_date" in str(exc.value)
+
+
+def test_service_statistics_tie_breaker_stable_4a1(temp_db):
+    """Phase 4A.1: groups with equal duration must tie-break by display_name
+    (casefold) so the order is stable across runs."""
+    from worktrace.services import activity_service, project_service, statistics_service
+    pid = project_service.create_project("Client")
+    # Two apps with the same duration but different names. The tie-breaker
+    # should sort by display_name casefold ascending.
+    activity_service.create_activity(
+        "Zebra", "zebra.exe", "Z1.docx", start_time="2026-06-25 09:00:00",
+        project_id=pid,
+    )
+    aid1 = activity_service.create_activity(
+        "Zebra", "zebra.exe", "Z1.docx", start_time="2026-06-25 09:00:00",
+        project_id=pid,
+    )
+    # Close the first (auto-closes any open), then create second.
+    # Actually create_activity auto-closes open ones. Let me finalize and close.
+    activity_service.finalize_created_activity(aid1)
+    activity_service.close_activity(aid1, "2026-06-25 09:30:00")
+    aid2 = activity_service.create_activity(
+        "Apple", "apple.exe", "A1.docx", start_time="2026-06-25 10:00:00",
+        project_id=pid,
+    )
+    activity_service.finalize_created_activity(aid2)
+    activity_service.close_activity(aid2, "2026-06-25 10:30:00")
+    summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
+    by_app = summary["by_app"]
+    # Both have 1800 seconds. Apple should come before Zebra (casefold asc).
+    names = [g["display_name"] for g in by_app]
+    assert names == sorted(names, key=str.casefold), (
+        f"by_app tie-breaker must be stable casefold-ascending; got {names}"
+    )
+    assert "Apple" in names
+    assert "Zebra" in names
+
+
+def test_service_statistics_all_known_statuses_included_4a1(temp_db):
+    """Phase 4A.1: all known statuses (normal/idle/paused/excluded/error)
+    must be included in the summary when closed, non-hidden, non-deleted."""
+    from worktrace.services import activity_service, project_service, statistics_service
+    pid = project_service.create_project("Client")
+    for status in ("normal", "idle", "paused", "excluded", "error"):
+        aid = activity_service.create_activity(
+            "Word", "winword.exe", "A1.docx", status=status,
+            start_time="2026-06-25 09:00:00", project_id=pid,
+        )
+        activity_service.finalize_created_activity(aid)
+        activity_service.close_activity(aid, "2026-06-25 09:30:00")
+    summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
+    by_status = {g["key"]: g for g in summary["by_status"]}
+    assert summary["activity_count"] == 5
+    for status in ("normal", "idle", "paused", "excluded", "error"):
+        assert status in by_status, f"status {status} must be included"
+        assert by_status[status]["activity_count"] == 1
+
+
+def test_api_statistics_delegates_validation_to_service_4a1(temp_db, monkeypatch):
+    """Phase 4A.1: the API layer delegates date validation to the service
+    layer. If the service raises ValueError with a stable code, the API maps
+    it to StatisticsSummaryError with the same code."""
+    from worktrace.api import statistics_api
+    from worktrace.api.statistics_api import StatisticsSummaryError
+    from worktrace.services import statistics_service
+    import pytest
+    # The service raises ValueError("invalid_date"); the API must map it.
+    with pytest.raises(StatisticsSummaryError) as exc:
+        statistics_api.get_statistics_export_summary("not-a-date", "2026-06-25")
+    assert exc.value.code == "invalid_date"
+    with pytest.raises(StatisticsSummaryError) as exc:
+        statistics_api.get_statistics_export_summary("2026-06-26", "2026-06-25")
+    assert exc.value.code == "invalid_range"
+
+
+def test_api_statistics_unknown_value_error_collapses_to_operation_failed_4a1(
+    temp_db, monkeypatch
+):
+    """Phase 4A.1: a ValueError without a known code token must collapse to
+    operation_failed so internal details never reach the bridge."""
+    from worktrace.api import statistics_api
+    from worktrace.api.statistics_api import StatisticsSummaryError
+    from worktrace.services import statistics_service
+    import pytest
+
+    def boom(*args, **kwargs):
+        raise ValueError("some internal detail")
+    monkeypatch.setattr(statistics_service, "get_statistics_export_summary", boom)
+    with pytest.raises(StatisticsSummaryError) as exc:
+        statistics_api.get_statistics_export_summary("2026-06-25", "2026-06-25")
+    assert exc.value.code == "operation_failed"
+    assert "internal" not in str(exc.value).lower()
+
+
+def test_bridge_statistics_bool_input_rejected_4a1(temp_db):
+    """Phase 4A.1: bool inputs must be rejected with 请选择有效日期."""
+    from worktrace.services import settings_service
+    from worktrace.webview_ui.bridge import WebViewBridge
+    settings_service.clear_settings_cache()
+    bridge = WebViewBridge()
+    result = bridge.get_statistics_export_summary(True, "2026-06-25")
+    assert result["ok"] is False
+    assert result["error"] == "请选择有效日期"
+    assert result["summary"] is None
+    result2 = bridge.get_statistics_export_summary("2026-06-25", False)
+    assert result2["ok"] is False
+    assert result2["error"] == "请选择有效日期"
+    assert result2["summary"] is None
+
+
+def test_bridge_statistics_none_input_rejected_4a1(temp_db):
+    """Phase 4A.1: None inputs must be rejected with 请选择有效日期."""
+    from worktrace.services import settings_service
+    from worktrace.webview_ui.bridge import WebViewBridge
+    settings_service.clear_settings_cache()
+    bridge = WebViewBridge()
+    result = bridge.get_statistics_export_summary(None, "2026-06-25")
+    assert result["ok"] is False
+    assert result["error"] == "请选择有效日期"
+    assert result["summary"] is None
+    result2 = bridge.get_statistics_export_summary("2026-06-25", None)
+    assert result2["ok"] is False
+    assert result2["error"] == "请选择有效日期"
+    assert result2["summary"] is None
+
+
+def test_bridge_statistics_empty_string_input_rejected_4a1(temp_db):
+    """Phase 4A.1: empty string inputs must be rejected with 请选择有效日期."""
+    from worktrace.services import settings_service
+    from worktrace.webview_ui.bridge import WebViewBridge
+    settings_service.clear_settings_cache()
+    bridge = WebViewBridge()
+    result = bridge.get_statistics_export_summary("", "2026-06-25")
+    assert result["ok"] is False
+    assert result["error"] == "请选择有效日期"
+    assert result["summary"] is None
+    result2 = bridge.get_statistics_export_summary("2026-06-25", "")
+    assert result2["ok"] is False
+    assert result2["error"] == "请选择有效日期"
+    assert result2["summary"] is None
+
+
+def test_docs_mention_phase_4a1():
+    """Phase 4A.1: docs must mention Phase 4A.1 hardening."""
+    migration_path = REPO_ROOT / "docs" / "ui-webview-migration.md"
+    source = migration_path.read_text(encoding="utf-8")
+    assert "4A.1" in source, (
+        "ui-webview-migration.md must mention Phase 4A.1"
+    )
+    assert "hardening" in source.lower() or "harden" in source.lower()
+
+
+def test_docs_readme_mentions_phase_4a1():
+    """Phase 4A.1: README must mention Phase 4A.1."""
+    readme_path = REPO_ROOT / "README.md"
+    source = readme_path.read_text(encoding="utf-8")
+    assert "4A.1" in source, "README.md must mention Phase 4A.1"
+
+
+def test_docs_release_validation_phase_4a1_section_4a1():
+    """Phase 4A.1: release-validation must have a Phase 4A.1 section."""
+    doc_path = REPO_ROOT / "docs" / "release-validation.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "4A.1" in source, (
+        "release-validation.md must mention Phase 4A.1"
+    )
+
+
+def test_schema_sql_unchanged_4a1():
+    """Phase 4A.1: no DB schema changes."""
+    schema_path = REPO_ROOT / "worktrace" / "schema.sql"
+    source = schema_path.read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS activity_log" in source
+    assert "CREATE TABLE IF NOT EXISTS project" in source
+    # No new statistics table.
+    assert "statistics_export" not in source.lower()
+    assert "stats_summary" not in source.lower()
+
+
+def test_legacy_ui_files_not_deleted_4a1():
+    """Phase 4A.1: legacy Tkinter UI files must not be deleted."""
+    ui_dir = REPO_ROOT / "worktrace" / "ui"
+    assert ui_dir.exists(), "worktrace/ui must still exist (legacy pending removal)"
+    # At least one legacy UI module must remain.
+    py_files = list(ui_dir.glob("*.py"))
+    assert len(py_files) > 0, "legacy UI .py files must not be deleted"
+
+
+def test_index_html_no_new_pages_4a1():
+    """Phase 4A.1: no Project Rules or Settings/Privacy WebView pages."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for page_id in ("page-rules", "page-settings"):
+        pos = source.find('id="{}"'.format(page_id))
+        assert pos != -1, f"{page_id} section must still exist as placeholder"
+        section = source[pos:pos + 500]
+        assert "WebView 迁移中" in section, (
+            f"{page_id} must still be a placeholder in Phase 4A.1"
+        )

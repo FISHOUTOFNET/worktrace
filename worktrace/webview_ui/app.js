@@ -3819,12 +3819,24 @@
     }
 
     function loadStatisticsExportSummary() {
+        // Phase 4A.1 hardening: refuse concurrent loads. The load button is
+        // already disabled while loading, but this guard also covers any
+        // programmatic trigger path (quick range buttons, lazy load).
+        if (statisticsLoading) return;
         var fromEl = document.getElementById("statistics-date-from");
         var toEl = document.getElementById("statistics-date-to");
         var dateFrom = fromEl ? fromEl.value : "";
         var dateTo = toEl ? toEl.value : "";
         if (!dateFrom || !dateTo) {
             showStatisticsError("请选择有效日期");
+            return;
+        }
+        // Phase 4A.1: client-side range pre-check so the user gets an
+        // immediate clear message without a bridge round-trip. The bridge
+        // and service still perform the canonical validation.
+        var rangeMsg = validateStatisticsDateRange(dateFrom, dateTo);
+        if (rangeMsg) {
+            showStatisticsError(rangeMsg);
             return;
         }
         setStatisticsLoading(true);
@@ -3848,6 +3860,31 @@
             // Keep prior data on screen; just surface the error.
             showStatisticsError("加载统计失败");
         });
+    }
+
+    function validateStatisticsDateRange(dateFrom, dateTo) {
+        // Returns a Chinese error message string if the range is invalid,
+        // or null if it passes the client-side pre-check.
+        if (!dateFrom || !dateTo) return "请选择有效日期";
+        var fromParts = dateFrom.split("-");
+        var toParts = dateTo.split("-");
+        if (fromParts.length !== 3 || toParts.length !== 3) return "请选择有效日期";
+        var from = new Date(
+            parseInt(fromParts[0], 10),
+            parseInt(fromParts[1], 10) - 1,
+            parseInt(fromParts[2], 10)
+        );
+        var to = new Date(
+            parseInt(toParts[0], 10),
+            parseInt(toParts[1], 10) - 1,
+            parseInt(toParts[2], 10)
+        );
+        if (isNaN(from.getTime()) || isNaN(to.getTime())) return "请选择有效日期";
+        if (from > to) return "请选择有效日期范围";
+        // 31-day inclusive max (same as service STATISTICS_SUMMARY_MAX_RANGE_DAYS).
+        var diffDays = Math.round((to - from) / (1000 * 60 * 60 * 24));
+        if (diffDays > 30) return "日期范围过大";
+        return null;
     }
 
     function showStatistics(summary) {

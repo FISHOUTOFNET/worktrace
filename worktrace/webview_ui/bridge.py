@@ -1094,6 +1094,10 @@ class WebViewBridge:
         note, and internal exception details are never surfaced.
         """
         try:
+            # ``isinstance(..., str)`` rejects ``None``, ``bool``, ``int``,
+            # and any other non-string type. ``bool`` is explicitly not a
+            # string and is rejected here so ``True``/``False`` never reach
+            # the API/service validation.
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "summary": None}
             if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):

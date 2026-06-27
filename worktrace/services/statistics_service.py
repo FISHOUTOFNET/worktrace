@@ -196,6 +196,16 @@ def _read_current_activity_snapshot() -> dict | None:
 # snapshot via ``include_live=True``; Phase 4A intentionally does NOT project
 # live time so the read-only preview is stable and deterministic.
 #
+# Status inclusion semantics (Phase 4A.1, documented and locked by tests):
+#   - ``normal``  → included
+#   - ``idle``    → included
+#   - ``paused``  → included
+#   - ``excluded``→ included
+#   - ``error``   → included
+#   All closed, non-hidden, non-deleted activities are aggregated regardless
+#   of status. The ``by_status`` breakdown surfaces each status group with a
+#   display label so the user can see how time was spent across states.
+#
 # The payload is display-safe: it contains only aggregated numbers and
 # display names (project name, app name, status label). Raw ``window_title``,
 # ``file_path_hint``, ``full_path``, ``clipboard``, ``note``, SQL, and
@@ -209,6 +219,10 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
     ``date_to`` and the inclusive span must not exceed
     ``STATISTICS_SUMMARY_MAX_RANGE_DAYS`` calendar days. Violations raise
     ``ValueError`` (the API layer maps these to stable error codes).
+
+    Non-string inputs (including ``None`` and ``bool``) are rejected as
+    ``invalid_date``. ``bool`` is rejected explicitly because it is not a
+    date string even though it is a subclass of ``int``.
 
     The returned dict is display-safe and contains no raw DB rows.
     """
