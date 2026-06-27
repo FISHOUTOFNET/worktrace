@@ -1322,3 +1322,81 @@ def test_no_stale_app_js_must_wording_in_this_file_r21():
         "statistics contract must not revive stale monolithic-file wording; "
         "use 'frontend JS must' instead"
     )
+
+
+# --- Phase 4B.1: independent state variable hardening ------------------
+# The statistics load and the CSV export must use SEPARATE state variables
+# (``statisticsLoading`` vs ``statisticsExportSaving``) and each must
+# cross-disable the other's button so a load and a write can never overlap.
+
+
+def test_frontend_js_statistics_load_and_export_use_independent_state_4b1():
+    """Phase 4B.1: ``statisticsLoading`` and ``statisticsExportSaving`` must
+    be declared as distinct boolean state variables (not aliases of each
+    other). The load function guards on ``statisticsLoading`` and the export
+    function guards on ``statisticsExportSaving``; neither may reuse the
+    other's variable as its own guard."""
+    source = read_all_js()
+    # Both state variables must be declared on the App namespace.
+    assert "App.statisticsLoading" in source, (
+        "statisticsLoading must be a declared state variable"
+    )
+    assert "App.statisticsExportSaving" in source, (
+        "statisticsExportSaving must be a declared state variable"
+    )
+    # The export function must check its OWN guard, not the load guard.
+    export_pos = source.find("function exportStatisticsCsv")
+    assert export_pos != -1
+    export_body = source[export_pos:export_pos + 400]
+    assert "if (App.statisticsExportSaving)" in export_body, (
+        "exportStatisticsCsv must guard against duplicate clicks via "
+        "statisticsExportSaving, not statisticsLoading"
+    )
+    # The export function must also refuse while statistics are loading.
+    assert "if (App.statisticsLoading)" in export_body, (
+        "exportStatisticsCsv must refuse to start while a statistics load "
+        "is in flight"
+    )
+    # The load function must guard on statisticsLoading (its own guard).
+    load_pos = source.find("function loadStatisticsExportSummary")
+    assert load_pos != -1
+    load_body = source[load_pos:load_pos + 400]
+    assert "if (App.statisticsLoading)" in load_body, (
+        "loadStatisticsExportSummary must guard via statisticsLoading"
+    )
+
+
+def test_frontend_js_statistics_export_disables_both_buttons_4b1():
+    """Phase 4B.1: ``setStatisticsExportSaving`` must disable BOTH the
+    export button and the statistics load button while a write is in
+    flight, so the user cannot trigger a concurrent load."""
+    source = read_js("statistics.js")
+    pos = source.find("function setStatisticsExportSaving")
+    assert pos != -1
+    body = source[pos:pos + 800]
+    assert "stats-export-action-btn" in body, (
+        "setStatisticsExportSaving must toggle the export button"
+    )
+    assert "statistics-load-btn" in body, (
+        "setStatisticsExportSaving must also disable the load button"
+    )
+    # Both buttons must be disabled by the saving flag.
+    assert "saving" in body
+    assert "App.statisticsLoading" in body, (
+        "the load button disabled state must also consider statisticsLoading"
+    )
+
+
+def test_frontend_js_statistics_load_disables_export_button_4b1():
+    """Phase 4B.1: ``setStatisticsLoading`` must disable the export button
+    while statistics are loading, so a write cannot be triggered mid-load."""
+    source = read_js("statistics.js")
+    pos = source.find("function setStatisticsLoading")
+    assert pos != -1
+    body = source[pos:pos + 800]
+    assert "stats-export-action-btn" in body, (
+        "setStatisticsLoading must disable the export button while loading"
+    )
+    assert "App.statisticsExportSaving" in body, (
+        "the export button disabled state must consider statisticsExportSaving"
+    )

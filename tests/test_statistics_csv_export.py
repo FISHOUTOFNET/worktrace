@@ -50,6 +50,7 @@ from __future__ import annotations
 import csv
 import os
 import re
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -967,3 +968,236 @@ def test_bridge_export_error_messages_are_stable_chinese():
         assert _STATISTICS_EXPORT_ERROR_MESSAGES.get(code) == message, (
             f"error code '{code}' must map to '{message}'"
         )
+
+
+# --- Phase 4B.1: native save dialog hardening --------------------------
+# Precision tests for the pywebview save-dialog return-shape variants and
+# the dialog-constant / dialog-exception collapse paths. The bridge must
+# handle every documented ``create_file_dialog`` return shape (None, empty
+# sequence, single string, sequence of paths) and map every dialog failure
+# to the stable ``导出失败`` message without leaking raw exceptions.
+
+
+class _FakeDialogWindow:
+    """Fake pywebview window with a configurable ``create_file_dialog``.
+
+    ``return_value`` is what the dialog returns; ``raise_exc`` (if set) is
+    raised instead. ``dialog_calls`` counts invocations so tests can assert
+    the dialog was opened exactly once.
+    """
+
+    def __init__(self, return_value=None, raise_exc=None):
+        self._return_value = return_value
+        self._raise_exc = raise_exc
+        self.dialog_calls = 0
+
+    def create_file_dialog(self, *args, **kwargs):
+        self.dialog_calls += 1
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return self._return_value
+
+
+def test_bridge_export_dialog_returns_single_string(temp_db, tmp_path, bridge):
+    """Phase 4B.1: when ``create_file_dialog`` returns a bare string (not
+    wrapped in a tuple/list), the bridge must accept it as a valid path."""
+    _seed_closed_activity(day="2026-06-25")
+    out = tmp_path / "report.csv"
+    bridge.set_window(_FakeDialogWindow(return_value=str(out)))
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    assert result["ok"] is True
+    assert result["cancelled"] is False
+    assert result["filename"] == "report.csv"
+    assert out.exists()
+
+
+def test_bridge_export_dialog_returns_empty_tuple(temp_db, tmp_path, bridge):
+    """Phase 4B.1: an empty tuple from the dialog is treated as a cancel
+    (not as a failure and not as a write attempt)."""
+    _seed_closed_activity(day="2026-06-25")
+    out_dir = tmp_path / "exports"
+    out_dir.mkdir()
+    bridge.set_window(_FakeDialogWindow(return_value=()))
+    with patch(
+        "worktrace.webview_ui.bridge.export_api.export_statistics_csv",
+    ) as fake_write:
+        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+    assert result["error"] == "已取消导出"
+    assert fake_write.call_count == 0
+    assert list(out_dir.iterdir()) == []
+
+
+def test_bridge_export_dialog_returns_empty_list(temp_db, tmp_path, bridge):
+    """Phase 4B.1: an empty list from the dialog is treated as a cancel."""
+    _seed_closed_activity(day="2026-06-25")
+    out_dir = tmp_path / "exports"
+    out_dir.mkdir()
+    bridge.set_window(_FakeDialogWindow(return_value=[]))
+    with patch(
+        "worktrace.webview_ui.bridge.export_api.export_statistics_csv",
+    ) as fake_write:
+        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+    assert result["error"] == "已取消导出"
+    assert fake_write.call_count == 0
+    assert list(out_dir.iterdir()) == []
+
+
+def test_bridge_export_dialog_returns_list_with_path(temp_db, tmp_path, bridge):
+    """Phase 4B.1: a list (not just a tuple) containing a path is accepted."""
+    _seed_closed_activity(day="2026-06-25")
+    out = tmp_path / "report.csv"
+    bridge.set_window(_FakeDialogWindow(return_value=[str(out)]))
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    assert result["ok"] is True
+    assert result["filename"] == "report.csv"
+    assert out.exists()
+
+
+def test_bridge_export_dialog_raises_exception(temp_db, tmp_path, bridge):
+    """Phase 4B.1: when ``create_file_dialog`` raises, the bridge collapses
+    to ``导出失败`` and never leaks the raw exception text."""
+    _seed_closed_activity(day="2026-06-25")
+    bridge.set_window(
+        _FakeDialogWindow(raise_exc=RuntimeError("Traceback SELECT C:\\secret"))
+    )
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    assert result["ok"] is False
+    assert result["error"] == "导出失败"
+    payload_str = str(result)
+    for token in ("traceback", "select", "secret", "c:\\", "runtimeerror"):
+        assert token.lower() not in payload_str.lower(), (
+            f"dialog-exception payload must not leak '{token}': {payload_str!r}"
+        )
+
+
+def test_bridge_export_dialog_missing_file_dialog_constant(
+    temp_db, tmp_path, bridge, monkeypatch
+):
+    """Phase 4B.1: when the installed pywebview exposes neither
+    ``FileDialog.SAVE`` nor the deprecated ``SAVE_DIALOG``, the bridge
+    collapses to ``导出失败`` and never opens the dialog."""
+    _seed_closed_activity(day="2026-06-25")
+    window = _FakeDialogWindow(return_value=str(tmp_path / "x.csv"))
+    bridge.set_window(window)
+
+    class _BareWebview:
+        """A pywebview shim without FileDialog or SAVE_DIALOG."""
+
+    monkeypatch.setitem(sys.modules, "webview", _BareWebview())
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    assert result["ok"] is False
+    assert result["error"] == "导出失败"
+    # The dialog must NOT have been opened because the constant was missing.
+    assert window.dialog_calls == 0
+
+
+def test_bridge_export_dialog_file_dialog_without_save_constant(
+    temp_db, tmp_path, bridge, monkeypatch
+):
+    """Phase 4B.1: when ``webview.FileDialog`` exists but has no ``SAVE``
+    attribute (and no ``SAVE_DIALOG`` fallback), the bridge collapses to
+    ``导出失败``."""
+    _seed_closed_activity(day="2026-06-25")
+    window = _FakeDialogWindow(return_value=str(tmp_path / "x.csv"))
+    bridge.set_window(window)
+
+    class _FileDialogNoSave:
+        """FileDialog shim that is missing the SAVE constant."""
+
+    class _WebviewNoSave:
+        FileDialog = _FileDialogNoSave
+
+    monkeypatch.setitem(sys.modules, "webview", _WebviewNoSave())
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    assert result["ok"] is False
+    assert result["error"] == "导出失败"
+    assert window.dialog_calls == 0
+
+
+def test_bridge_export_dialog_uses_legacy_save_dialog_fallback(
+    temp_db, tmp_path, bridge, monkeypatch
+):
+    """Phase 4B.1: when ``FileDialog`` is absent but the deprecated
+    ``SAVE_DIALOG`` constant exists, the bridge must use it and the export
+    must succeed. This locks the documented fallback behavior."""
+    _seed_closed_activity(day="2026-06-25")
+    out = tmp_path / "report.csv"
+    window = _FakeDialogWindow(return_value=str(out))
+    bridge.set_window(window)
+
+    class _LegacyWebview:
+        SAVE_DIALOG = 10  # deprecated constant
+
+    monkeypatch.setitem(sys.modules, "webview", _LegacyWebview())
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    assert result["ok"] is True
+    assert result["filename"] == "report.csv"
+    assert window.dialog_calls == 1
+    assert out.exists()
+
+
+# --- Phase 4B.1: service path-extension hardening ---------------------
+
+
+def test_write_csv_preserves_uppercase_csv_extension(temp_db, tmp_path):
+    """Phase 4B.1: an uppercase ``.CSV`` suffix must be preserved (not
+    double-suffixed to ``.CSV.csv``). ``with_suffix`` is only applied when
+    the lowercased suffix is not ``.csv``."""
+    _seed_closed_activity(day="2026-06-25")
+    out = tmp_path / "report.CSV"
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+    assert result["filename"] == "report.CSV"
+    written = tmp_path / "report.CSV"
+    assert written.exists()
+    # No double-suffixed file should be created.
+    assert not (tmp_path / "report.CSV.csv").exists()
+
+
+def test_write_csv_preserves_mixed_case_csv_extension(temp_db, tmp_path):
+    """Phase 4B.1: a mixed-case ``.Csv`` suffix must also be preserved."""
+    _seed_closed_activity(day="2026-06-25")
+    out = tmp_path / "report.Csv"
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+    assert result["filename"] == "report.Csv"
+    assert (tmp_path / "report.Csv").exists()
+
+
+def test_write_csv_preserves_lowercase_csv_extension(temp_db, tmp_path):
+    """Phase 4B.1: an existing lowercase ``.csv`` suffix is unchanged
+    (regression lock for the suffix normalization branch)."""
+    _seed_closed_activity(day="2026-06-25")
+    out = tmp_path / "report.csv"
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+    assert result["filename"] == "report.csv"
+    assert out.exists()
+
+
+def test_api_export_uppercase_csv_extension(temp_db, tmp_path):
+    """Phase 4B.1: the API layer must preserve an uppercase ``.CSV`` suffix
+    and return it as the basename (no double-suffixing)."""
+    _seed_closed_activity(day="2026-06-25")
+    out = tmp_path / "report.CSV"
+    result = export_api.export_statistics_csv("2026-06-25", "2026-06-25", out)
+    assert result["filename"] == "report.CSV"
+    assert out.exists()
+
+
+def test_write_csv_chinese_and_space_path(temp_db, tmp_path):
+    """Phase 4B.1: a path containing Chinese characters and spaces must be
+    written successfully. This locks the Windows Chinese-path / space-path
+    write behavior without requiring a real Windows filesystem."""
+    _seed_closed_activity(day="2026-06-25")
+    nested = tmp_path / "导出 目录" / "报表 文件.csv"
+    nested.parent.mkdir(parents=True)
+    result = export_service.write_statistics_csv(
+        "2026-06-25", "2026-06-25", nested,
+    )
+    assert result["filename"] == "报表 文件.csv"
+    assert nested.exists()
+    # The file content must be readable with the UTF-8 BOM.
+    headers, rows = _read_csv(nested)
+    assert len(rows) == 1

@@ -3166,9 +3166,11 @@ schema change, or legacy UI removal.
   13 new frontend static tests).
 - `python -m pytest` — full test suite passes.
 - `python -m PyInstaller --noconfirm --clean WorkTrace.spec` — build
-  succeeds; WebView static resources (`index.html`, `app.js`,
-  `styles.css`) are bundled; the bridge and `webview_main.py` window
-  injection does not break the packaging path.
+  succeeds; WebView static resources (`index.html`, `styles.css`, and the
+  Phase R2 split `js/*.js` modules: `core.js` / `overview.js` /
+  `timeline.js` / `timeline_correction.js` / `statistics.js` / `init.js`)
+  are bundled; the bridge and `webview_main.py` window injection does not
+  break the packaging path.
 
 ### Phase 4B Controlled Write Path
 
@@ -3265,3 +3267,93 @@ schema change, or legacy UI removal.
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local
   HTTP server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 4B.1 Validation
+
+Phase 4B.1 is the **CSV export hardening / native dialog + packaging
+validation only** phase. It is a hardening-only phase: it does **not** add
+any new export format, does **not** add any new product feature, and does
+**not** change any user-visible behavior unless a real bug was found. It
+hardens the Phase 4B CSV export write path to release quality — native
+save dialog compatibility, packaging path, error convergence, static
+contract, documentation boundary, and release validation.
+
+### Phase 4B.1 Automated Validation
+
+- `python -m pytest tests/test_statistics_csv_export.py` — all tests pass,
+  including the new precision tests for save-dialog return shapes (single
+  string, empty tuple, empty list, list-with-path), dialog-exception
+  collapse, missing `FileDialog.SAVE` / `SAVE_DIALOG` constant collapse,
+  legacy `SAVE_DIALOG` fallback, uppercase / mixed-case `.csv` extension
+  preservation, and Chinese / space path write behavior.
+- `python -m pytest tests/test_statistics_api_summary.py
+  tests/test_webview_bridge_statistics.py` — the read-only summary path
+  remains intact.
+- `python -m pytest tests/webview/` — all frontend static-contract tests
+  pass, including the new Phase 4B.1 independent-state-variable tests.
+- `python -m pytest tests/test_webview_packaging.py` — packaging /
+  window-injection / R2-split-JS-bundling tests pass.
+- `python -m pytest` — full test suite passes.
+- `pyinstaller WorkTrace.spec --clean --noconfirm` — build succeeds; the
+  six R2 split `js/*.js` modules and `index.html` / `styles.css` are
+  bundled; the bridge `set_window` injection before `webview.start()` is
+  not broken.
+
+### Phase 4B.1 Hardened Boundaries
+
+- CSV is the **only** open WebView export action. Excel / PDF / timesheet
+  / open-folder / auto-submit remain explicitly unimplemented.
+- The save dialog uses the pywebview native dialog (`FileDialog.SAVE`
+  first, deprecated `SAVE_DIALOG` as fallback). When neither constant is
+  available, the export collapses to `导出失败` without opening the dialog.
+- The success payload surfaces only the basename (`filename`), the
+  activity count, and the total duration. The full local path, parent
+  directory name, and temporary directory name never leave the bridge.
+- User cancel of the save dialog is a clean result
+  (`{"ok": False, "cancelled": True, "error": "已取消导出"}`); the API
+  write is NOT called and no Python exception is raised.
+- `PermissionError` / `OSError` / invalid path / empty data all converge
+  to stable Chinese messages; raw exception text, tracebacks, SQL, full
+  paths, window titles, file paths, and notes are never surfaced.
+- The statistics load and the CSV export use **independent** state
+  variables (`statisticsLoading` vs `statisticsExportSaving`); each
+  cross-disables the other's button so a load and a write can never
+  overlap.
+- The frontend CSV export goes **only** through the bridge
+  (`App.callBridge("export_statistics_csv", ...)`); the frontend never
+  writes a file itself.
+- No new DB schema is introduced.
+- Project Rules / Settings / Privacy are not migrated to WebView.
+- The legacy Tkinter / CustomTkinter UI code is not deleted.
+- The R2 split frontend files are `worktrace/webview_ui/js/*.js`
+  (`core.js` / `overview.js` / `timeline.js` / `timeline_correction.js` /
+  `statistics.js` / `init.js`); the removed monolithic `app.js` is not
+  referenced by `index.html`, `WorkTrace.spec`, or any `js/` module.
+
+### Phase 4B.1 Release Blockers
+
+- Excel / PDF / timesheet / open-folder / auto-submit is implemented.
+- The native save dialog is replaced by a frontend-side file-write
+  control, or the bridge returns a full local path instead of a basename.
+- A dialog return shape (`None` / empty sequence / single string /
+  sequence of paths) is mishandled and causes an uncaught exception or a
+  write to the wrong path.
+- A missing `FileDialog.SAVE` / `SAVE_DIALOG` constant or a dialog
+  exception surfaces as a raw traceback instead of `导出失败`.
+- `statisticsLoading` and `statisticsExportSaving` are collapsed into a
+  single variable, allowing a load and a write to overlap.
+- The export catch block reads `err.message` / `error.message` /
+  `exception.message` or surfaces raw exception text.
+- An uppercase / mixed-case `.csv` extension is double-suffixed
+  (`report.CSV` → `report.CSV.csv`).
+- Any DB schema change is introduced.
+- Project Rules / Settings migration to WebView is started.
+- The legacy Tkinter / CustomTkinter UI code is deleted.
+- The removed monolithic `app.js` is re-introduced or referenced by
+  `index.html`, `WorkTrace.spec`, or any `js/` module.
+- `localStorage` / `sessionStorage` / CDN / external font / Google
+  Fonts / Node / Vite / React / Vue is introduced.
+- Any Phase 4B / 4A.1 / 4A / 3C.1 / 3C / 3B.9.1 / 3B.9 / 3B.8.1 / 3B.8 /
+  3B.7.1 / 3B.7 / 3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A / 3B.4.1 /
+  3B.4 / 3B.3.1 / 3B.3 / 3B.2.1 / 3B.2 / 3B.1.1 / 3B.1 / 3A.1 / 3A /
+  2.1 regression.

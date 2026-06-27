@@ -10,13 +10,17 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **4B (Export actions foundation — CSV export only)**.
+- Current phase: **4B.1 (CSV export hardening / native dialog + packaging
+  validation — hardening-only, no new export format or product feature)**.
+  Phase 4B (CSV export foundation) remains the latest behavior-shipping
+  phase; Phase 4B.1 only hardens the save dialog, packaging, error
+  collapse, static contract, and documentation boundaries.
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime). It is
   the only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview (Phase 1), Timeline / Time Details (read-only in
   Phase 2, hardened in Phase 2.1, editing added across Phase 3A / 3B.x /
   3C.x), Statistics / Export (read-only in Phase 4A / 4A.1, CSV export write
-  in Phase 4B).
+  in Phase 4B, hardened in Phase 4B.1).
 - Unmigrated pages: Project Rules, Settings / Privacy (still legacy Tkinter
   code kept for reference; not a supported runtime path).
 - Detailed phase-by-phase scope, data semantics, and "not implemented" lists

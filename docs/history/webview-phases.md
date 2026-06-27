@@ -1,7 +1,7 @@
 # WorkTrace WebView UI Phase History (Archive)
 
 > **Archive — historical phase log.** This file is the long-form record of
-> every completed WebView migration phase (Phase 0A → Phase 4B). It is kept
+> every completed WebView migration phase (Phase 0A → Phase 4B.1). It is kept
 > for reference and traceability only. For the current state, read
 > [`docs/current-state.md`](../current-state.md); for architecture decisions,
 > read [`docs/ui-webview-migration.md`](../ui-webview-migration.md).
@@ -13,9 +13,9 @@
 
 > This `## Status` block was captured when the migration doc was archived.
 > The **live current phase** is in
-> [`../current-state.md`](../current-state.md) (now Phase 4B). Treat the
+> [`../current-state.md`](../current-state.md) (now Phase 4B.1). Treat the
 > list below as a historical narrative, not a live status claim; this
-> archive also contains the later Phase 4A / 4A.1 / 4B sections below.
+> archive also contains the later Phase 4A / 4A.1 / 4B / 4B.1 sections below.
 
 - Phase at archive time: 3C.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
@@ -485,6 +485,16 @@ The migration is phased so each step is independently shippable:
   formula-injection escaping, no raw window title / file path / note).
   Excel / PDF / timesheet export, folder opening, auto-open, and
   auto-submit remain explicitly unsupported.
+- Phase 4B.1 — CSV export hardening / native dialog + packaging validation —
+  is **completed**: this is a hardening-only phase on top of Phase 4B. It
+  adds no new export format and no new product feature; it locks the save
+  dialog compatibility (all `create_file_dialog` return shapes, missing
+  constants, exceptions -> stable Chinese `导出失败`), verifies the
+  `.csv` suffix is preserved case-insensitively, hardens the frontend
+  static contract (independent load/export state, no raw exception reads,
+  no forbidden handlers), closes the Phase 4B packaging gap with a full
+  PyInstaller / installer validation pass, and updates documentation
+  boundaries. The runtime behavior of Phase 4B is unchanged.
 - Phase 5: Rules.
 - Phase 6: Settings / Privacy / Encrypted Backup.
 - Cleanup: remove the legacy Tkinter UI. This is a cleanup phase reached
@@ -3788,6 +3798,109 @@ Phase 4B does not implement and does not start:
 - Any CDN / external JS / CSS / font / Google Fonts usage;
 - Any `localStorage` / `sessionStorage` usage;
 - Any change to the Timeline / Overview existing entry points or behavior.
+
+## Phase 4B.1 Implemented Scope
+
+Phase 4B.1 is the **CSV export hardening / native dialog + packaging
+validation** phase. It is a hardening-only phase on top of Phase 4B: it
+adds **no** new export format, no new product feature, and no new
+user-visible behavior. The CSV export write path is locked down to
+release quality, and the Phase 4B packaging gap (full PyInstaller /
+installer validation) is closed.
+
+Implemented / hardened in Phase 4B.1:
+
+- **Native save dialog compatibility hardening** —
+  `WebViewBridge._choose_csv_save_path` / `export_statistics_csv` were
+  verified and locked with precision tests:
+  - `FileDialog.SAVE` is tried first; the deprecated `SAVE_DIALOG`
+    constant is kept as a fallback for older pywebview releases.
+  - All `create_file_dialog` return shapes are handled stably:
+    `None`, empty `list`/`tuple`, a single string, a `list`/`tuple`
+    containing one or more paths.
+  - Missing window injection, missing `FileDialog` / `SAVE_DIALOG`
+    constants, and any dialog exception collapse to a stable
+    `StatisticsExportError("operation_failed")` -> Chinese
+    `导出失败`. No raw exception / traceback reaches the frontend.
+  - User cancel returns `{"ok": False, "cancelled": True,
+    "error": "已取消导出"}` and does NOT invoke the API write.
+  - Success payload returns only `filename` (basename); no full path,
+    parent directory name, or temp directory name is leaked.
+- **Service / API path hardening** — `write_statistics_csv` and
+  `export_statistics_csv` were verified to:
+  - Preserve an explicit `.csv` suffix regardless of case (`.csv`,
+    `.CSV`, `.Csv`) instead of re-appending `.csv`.
+  - Replace non-`.csv` suffixes (`.txt`, no extension) with `.csv`.
+  - Reject directory targets and missing parent directories as
+    `invalid_path`.
+  - Raise `empty_data` for empty ranges without creating a file.
+  - Propagate `PermissionError` / `OSError` for API-level mapping to
+    stable Chinese codes; unknown exceptions collapse to
+    `operation_failed`.
+  - Keep the existing UTF-8 BOM, Chinese header, formula-injection
+    escaping (`=`, `+`, `-`, `@`, tab), display-safe field chain, and
+    31-day / closed-only / hidden-excluded / deleted-excluded /
+    in-progress-excluded / no-DB-write invariants.
+- **Frontend split-file static contract hardening** — `js/statistics.js`
+  was verified (and locked with new static tests) to keep:
+  - A separate `statisticsExportSaving` guard distinct from
+    `statisticsLoading`; export refuses to run while loading and vice
+    versa.
+  - `setStatisticsExportSaving` disables both the export button and
+    the load button; `setStatisticsLoading` disables the export button.
+  - `validateStatisticsDateRange` reuse before export.
+  - Catch branch that never reads `err.message` / `reason.message` /
+    raw exception.
+  - Success display limited to filename / count / duration; cancel
+    display `已取消导出`.
+  - No `localStorage` / `sessionStorage`, no external links, no
+    `export_excel` / `export_pdf` / `export_timesheet` /
+    `open_folder` / `auto_submit` handlers.
+- **WebView entry / packaging path hardening** — `webview_main.main`
+  was verified to call `bridge.set_window(window)` BEFORE
+  `webview.start()`; importing `worktrace.webview_main` does not
+  start the GUI; `resource_path()` resolves for both source and
+  `_MEIPASS`; `WorkTrace.spec` collects all six R2 split
+  `js/*.js` modules (`core.js`, `overview.js`, `timeline.js`,
+  `timeline_correction.js`, `statistics.js`, `init.js`) and does NOT
+  collect `app.js`; `index.html` loads the six modules in the
+  documented order and does NOT reference `app.js`.
+- **Documentation boundary cleanup** — README, current-state,
+  ui-webview-migration, release-validation, and this file were
+  updated to mark Phase 4B.1 as the current hardening phase and to
+  restate the export / packaging / forbidden-feature boundaries.
+- **PyInstaller / installer validation** — the full
+  `pyinstaller WorkTrace.spec --clean --noconfirm` build was run and
+  the bundle was verified to collect the split `js/*.js` resources.
+
+Phase 4B.1 also re-ran the full pytest suite (csv export, statistics
+api, webview bridge, webview static contract, webview packaging, and
+all earlier-phase regression tests).
+
+## Phase 4B.1 Not Implemented
+
+Phase 4B.1 does not implement and does not start:
+
+- Any Excel export;
+- Any PDF export;
+- Any timesheet advanced template;
+- Any folder opening;
+- Any auto-open of the exported CSV file;
+- Any auto-submit of a timesheet;
+- Any DB schema change;
+- Any migration of Project Rules to WebView;
+- Any migration of Settings / Privacy to WebView;
+- Any removal of the legacy Tkinter / CustomTkinter UI code;
+- Any Tkinter fallback path;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any change to the Timeline / Overview existing entry points or
+  behavior;
+- Any rewrite of the existing, already-stable Phase 4B runtime code
+  (per the Phase 4B.1 instruction: "如当前实现已满足，补充更精确测试
+  即可；不要重写稳定代码").
 
 ## Legacy Tkinter UI Handling
 

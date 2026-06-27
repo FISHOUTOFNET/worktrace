@@ -4,8 +4,10 @@ WorkTrace is a lightweight Windows local work-trace and timesheet helper. It
 runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports draft timesheets.
 
-> **Current state**: WebView Phase 4B (CSV export foundation) is the latest
-> shipped phase. For a one-screen snapshot read
+> **Current state**: WebView Phase 4B.1 (CSV export hardening — native save
+> dialog, packaging, error collapse, static contract; hardening-only, no new
+> export format) is the latest shipped phase. Phase 4B (CSV export foundation)
+> remains the latest behavior-shipping phase. For a one-screen snapshot read
 > [`docs/current-state.md`](docs/current-state.md). For the full per-phase
 > history read [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
 > AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)

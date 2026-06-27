@@ -7,9 +7,13 @@
 
 ## Current Phase
 
-**Phase 4B — Export actions foundation (CSV export only).** All earlier
-WebView migration phases (Phase 0A → Phase 4A.1) are completed. README, this
-file, and `ui-webview-migration.md` all describe the current phase as 4B.
+**Phase 4B.1 — CSV export hardening (native save dialog + packaging
+validation; hardening-only, no new export format).** Phase 4B (CSV export
+foundation) remains the latest behavior-shipping phase; Phase 4B.1 only
+hardens the save dialog compatibility, packaging path, error collapse,
+frontend static contract, and documentation boundaries. All earlier WebView
+migration phases (Phase 0A → Phase 4B) are completed. README, this file,
+and `ui-webview-migration.md` all describe the current phase as 4B.1.
 
 ## Default UI
 
@@ -30,9 +34,9 @@ file, and `ui-webview-migration.md` all describe the current phase as 4B.
   daily total, session list, per-session activity details, read-only
   rendering hardened for real-run reliability, plus the editing /
   correction capabilities listed below.
-- **Statistics / Export** (Phase 4A / 4A.1 / 4B): read-only summary cards,
-  grouped tables (by project / by app / by status), export preview, and
-  CSV export write.
+- **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
+  cards, grouped tables (by project / by app / by status), export preview,
+  CSV export write, and hardened save dialog / packaging / static contract.
 
 ## Unmigrated Pages (Legacy Tkinter, Reference-Only)
 
@@ -60,9 +64,14 @@ file, and `ui-webview-migration.md` all describe the current phase as 4B.
 
 - Read-only statistics summary (closed, non-hidden, non-deleted activities)
   with date-range validation (≤ 31 days).
-- **CSV export write** (Phase 4B): native save dialog, display-safe CSV
+- **CSV export write** (Phase 4B / 4B.1): native save dialog, display-safe CSV
   (UTF-8 BOM, Chinese headers, formula-injection escaping). Returns basename
   only; never the full path, window title, file path, note, or clipboard.
+  Phase 4B.1 hardened the save dialog compatibility (all return shapes,
+  missing constants, exceptions -> stable Chinese), verified the `.csv` suffix
+  is preserved case-insensitively, and locked the frontend static contract
+  (independent load/export state, no raw exception reads, no forbidden
+  handlers).
 
 ## Explicitly Unsupported Capabilities
 
