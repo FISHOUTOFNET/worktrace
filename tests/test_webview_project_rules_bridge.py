@@ -376,17 +376,175 @@ def test_get_project_rules_exception_collapses_without_sensitive_text(monkeypatc
         assert forbidden not in lowered
 
 
+def test_set_project_rule_enabled_keyword_success(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": True,
+            "rule_type": rule_type,
+            "rule_id": rule_id,
+            "enabled": enabled,
+        },
+    )
+
+    assert WebViewBridge().set_project_rule_enabled("keyword", 11, False) == {
+        "ok": True,
+        "rule_type": "keyword",
+        "rule_id": 11,
+        "enabled": False,
+    }
+    assert WebViewBridge().set_project_rule_enabled("keyword", 11, True) == {
+        "ok": True,
+        "rule_type": "keyword",
+        "rule_id": 11,
+        "enabled": True,
+    }
+
+
+def test_set_project_rule_enabled_folder_success(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": True,
+            "rule_type": rule_type,
+            "rule_id": rule_id,
+            "enabled": enabled,
+        },
+    )
+
+    assert WebViewBridge().set_project_rule_enabled("folder", 10, False) == {
+        "ok": True,
+        "rule_type": "folder",
+        "rule_id": 10,
+        "enabled": False,
+    }
+    assert WebViewBridge().set_project_rule_enabled("folder", 10, True) == {
+        "ok": True,
+        "rule_type": "folder",
+        "rule_id": 10,
+        "enabled": True,
+    }
+
+
+def test_set_project_rule_enabled_rejects_invalid_bridge_input():
+    bridge = WebViewBridge()
+
+    assert bridge.set_project_rule_enabled("project", 1, True) == {
+        "ok": False,
+        "error": "操作无效",
+    }
+    for bad_id in (None, True, False, "1", 0, -1, 1.0):
+        assert bridge.set_project_rule_enabled("keyword", bad_id, True) == {
+            "ok": False,
+            "error": "操作无效",
+        }
+    for bad_enabled in (None, 0, 1, "true", "false"):
+        assert bridge.set_project_rule_enabled("keyword", 1, bad_enabled) == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_set_project_rule_enabled_not_found(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {"ok": False, "error": "not_found"},
+    )
+
+    assert WebViewBridge().set_project_rule_enabled("keyword", 999, False) == {
+        "ok": False,
+        "error": "规则不存在",
+    }
+
+
+def test_set_project_rule_enabled_unknown_api_exception_collapses(monkeypatch):
+    def fail(rule_type, rule_id, enabled):
+        raise RuntimeError(
+            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", fail)
+
+    result = WebViewBridge().set_project_rule_enabled("folder", 10, False)
+
+    assert result == {"ok": False, "error": "更新规则状态失败"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select",
+        "boom",
+        "window_title",
+        "clipboard",
+        "note",
+        "activity_log",
+        "secret",
+    ):
+        assert forbidden not in lowered
+
+
+def test_set_project_rule_enabled_api_error_codes_are_stable(monkeypatch):
+    messages = {
+        "invalid_input": "操作无效",
+        "operation_failed": "更新规则状态失败",
+        "unexpected raw exception": "更新规则状态失败",
+    }
+
+    for code, message in messages.items():
+        monkeypatch.setattr(
+            bridge_module.rule_api,
+            "set_project_rule_enabled",
+            lambda rule_type, rule_id, enabled, code=code: {"ok": False, "error": code},
+        )
+        result = WebViewBridge().set_project_rule_enabled("folder", 10, False)
+        assert result == {"ok": False, "error": message}
+
+
+def test_set_project_rule_enabled_payload_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": True,
+            "rule_type": rule_type,
+            "rule_id": rule_id,
+            "enabled": enabled,
+        },
+    )
+
+    result = WebViewBridge().set_project_rule_enabled("keyword", 20, True)
+
+    json.dumps(result, ensure_ascii=False)
+    assert "Traceback" not in repr(result)
+    assert "SELECT" not in repr(result)
+
+
 def test_project_rules_bridge_import_boundary():
     source = Path(bridge_module.__file__).read_text(encoding="utf-8")
     forbidden_patterns = (
         r"^\s*from\s+\.\.services(\s|\.)",
         r"^\s*from\s+\.\.db(\s|\.)",
+        r"^\s*from\s+\.\.collector(\s|\.)",
+        r"^\s*from\s+\.\.security(\s|\.)",
+        r"^\s*from\s+\.\.runtime(\s|\.)",
+        r"^\s*from\s+\.\.config(\s|\.)",
         r"^\s*from\s+\.\.ui(\s|\.)",
         r"^\s*from\s+worktrace\.services(\s|\.)",
         r"^\s*from\s+worktrace\.db(\s|\.)",
+        r"^\s*from\s+worktrace\.collector(\s|\.)",
+        r"^\s*from\s+worktrace\.security(\s|\.)",
+        r"^\s*from\s+worktrace\.runtime(\s|\.)",
+        r"^\s*from\s+worktrace\.config(\s|\.)",
         r"^\s*from\s+worktrace\.ui(\s|\.)",
         r"^\s*import\s+worktrace\.services(\s|$)",
         r"^\s*import\s+worktrace\.db(\s|$)",
+        r"^\s*import\s+worktrace\.collector(\s|$)",
+        r"^\s*import\s+worktrace\.security(\s|$)",
+        r"^\s*import\s+worktrace\.runtime(\s|$)",
+        r"^\s*import\s+worktrace\.config(\s|$)",
         r"^\s*import\s+worktrace\.ui(\s|$)",
     )
     for pattern in forbidden_patterns:

@@ -1,5 +1,5 @@
-// WorkTrace WebView frontend — Project Rules module (Phase 5A).
-// Read-only rendering for project-bound folder / keyword rules.
+// WorkTrace WebView frontend — Project Rules module (Phase 5B).
+// Existing project-bound folder / keyword rules can be enabled or disabled.
 
 (function () {
     "use strict";
@@ -46,6 +46,7 @@
         list.innerHTML = projects.map(function (project) {
             return App.renderProjectRuleProject(project);
         }).join("");
+        App.bindProjectRuleToggles();
     }
     App.showProjectRules = showProjectRules;
 
@@ -91,7 +92,13 @@
         var detail = text(rule && rule.detail, "");
         var enabled = !!(rule && rule.enabled);
         var stateLabel = enabled ? "已启用" : "已禁用";
-        var kind = text(rule && rule.kind, "unknown");
+        var actionLabel = enabled ? "停用" : "启用";
+        var kind = ruleKind(rule && rule.kind);
+        var ruleId = positiveInt(rule && rule.id);
+        var ruleKey = kind + ":" + ruleId;
+        var saving = App.rulesSavingRuleKey === ruleKey;
+        var disabledAttr = (App.rulesSavingRuleKey || !ruleId) ? " disabled" : "";
+        var buttonLabel = saving ? "正在更新…" : actionLabel;
         return [
             '<div class="rules-row ' + (enabled ? "" : "is-disabled") + '">',
             '  <span class="rules-kind-badge rules-kind-' + kind + '">' + label + '</span>',
@@ -100,10 +107,63 @@
             '    <div class="rules-detail">' + detail + '</div>',
             '  </div>',
             '  <span class="rules-status ' + (enabled ? "is-enabled" : "is-disabled") + '">' + stateLabel + '</span>',
+            '  <button class="rules-toggle-btn" type="button" data-rule-type="' + kind + '" data-rule-id="' + count(ruleId) + '" data-next-enabled="' + (!enabled ? "true" : "false") + '"' + disabledAttr + '>' + buttonLabel + '</button>',
             '</div>'
         ].join("");
     }
     App.renderProjectRuleRow = renderProjectRuleRow;
+
+    function bindProjectRuleToggles() {
+        var list = document.getElementById("rules-list");
+        if (!list || list.getAttribute("data-rules-toggle-bound") === "1") return;
+        list.setAttribute("data-rules-toggle-bound", "1");
+        list.addEventListener("click", App.handleProjectRuleToggle);
+    }
+    App.bindProjectRuleToggles = bindProjectRuleToggles;
+
+    function handleProjectRuleToggle(event) {
+        var button = event.target && event.target.closest ? event.target.closest(".rules-toggle-btn") : null;
+        if (!button || App.rulesSavingRuleKey) return;
+        var ruleType = button.getAttribute("data-rule-type");
+        var ruleId = parseInt(button.getAttribute("data-rule-id"), 10);
+        var nextEnabled = button.getAttribute("data-next-enabled") === "true";
+        if ((ruleType !== "folder" && ruleType !== "keyword") || !ruleId) {
+            App.showRulesError("更新规则状态失败");
+            return;
+        }
+        if (!nextEnabled && !window.confirm("确定停用这条规则吗？停用后它将不再用于自动归类。")) {
+            return;
+        }
+        App.setProjectRuleSaving(ruleType + ":" + ruleId);
+        App.clearRulesError();
+        App.callBridge("set_project_rule_enabled", ruleType, ruleId, nextEnabled).then(function (result) {
+            if (result && result.ok === false) {
+                App.showRulesError(result.error || "更新规则状态失败");
+                return;
+            }
+            return App.loadProjectRules().then(function () {
+                App.showRulesError("规则状态已更新");
+            });
+        }).catch(function () {
+            App.showRulesError("更新规则状态失败");
+        }).then(function () {
+            App.setProjectRuleSaving(null);
+        });
+    }
+    App.handleProjectRuleToggle = handleProjectRuleToggle;
+
+    function setProjectRuleSaving(ruleKey) {
+        App.rulesSavingRuleKey = ruleKey || null;
+        var buttons = document.querySelectorAll(".rules-toggle-btn");
+        Array.prototype.forEach.call(buttons, function (button) {
+            var currentKey = button.getAttribute("data-rule-type") + ":" + button.getAttribute("data-rule-id");
+            button.disabled = !!App.rulesSavingRuleKey;
+            if (currentKey === App.rulesSavingRuleKey) {
+                button.textContent = "正在更新…";
+            }
+        });
+    }
+    App.setProjectRuleSaving = setProjectRuleSaving;
 
     function setRulesLoading(loading) {
         App.rulesLoading = loading;
@@ -136,6 +196,15 @@
 
     function count(value) {
         return App.escapeHtml(String(parseInt(value, 10) || 0));
+    }
+
+    function positiveInt(value) {
+        var parsed = parseInt(value, 10);
+        return parsed > 0 ? parsed : 0;
+    }
+
+    function ruleKind(value) {
+        return value === "folder" ? "folder" : (value === "keyword" ? "keyword" : "unknown");
     }
 
 })();

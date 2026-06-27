@@ -1,7 +1,7 @@
 # WorkTrace WebView UI Phase History (Archive)
 
 > **Archive — historical phase log.** This file is the long-form record of
-> every completed WebView migration phase (Phase 0A → Phase 5A.1). It is kept
+> every completed WebView migration phase (Phase 0A → Phase 5B). It is kept
 > for reference and traceability only. For the current state, read
 > [`docs/current-state.md`](../current-state.md); for architecture decisions,
 > read [`docs/ui-webview-migration.md`](../ui-webview-migration.md).
@@ -13,7 +13,7 @@
 
 > This `## Status` block was captured when the migration doc was archived.
 > The **live current phase** is in
-> [`../current-state.md`](../current-state.md) (now Phase 5A.1). Treat the
+> [`../current-state.md`](../current-state.md) (now Phase 5B). Treat the
 > list below as a historical narrative, not a live status claim; this
 > archive also contains the later Phase 4A / 4A.1 / 4B / 4B.1 sections below.
 
@@ -4067,6 +4067,106 @@ Phase 5A.1 does not implement and does not start:
   WebView;
 - Folder rule creation, editing, deletion, or enable/disable in WebView;
 - Keyword rule creation, editing, deletion, or enable/disable in WebView;
+- Folder rule conflict preview;
+- Folder rule backfill;
+- Automatic rules;
+- Batch Project Rules operations;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
+## Phase 5B Implemented Scope
+
+Phase 5B is the **Project Rules rule enable/disable foundation** phase. It is
+the first minimal Project Rules WebView write phase and only allows enabling
+or disabling one existing folder rule or keyword rule at a time. The write is
+reversible, refreshes the current Project Rules list after success, and does
+not change historical activity classification or schema.
+
+Implemented in Phase 5B:
+
+- **API layer** (`worktrace/api/rule_api.py`):
+  - Added a narrow `set_project_rule_enabled(rule_type, rule_id, enabled)`
+    facade for WebView writes.
+  - `rule_type` is limited to `folder` / `keyword`; `rule_id` must be a
+    positive `int` and explicitly rejects bool, `None`, strings, floats, zero,
+    and negative ids; `enabled` must be a real bool and rejects `0` / `1` /
+    strings / `None`.
+  - Existing rule existence is checked before update, so SQLite UPDATE no-op
+    behavior is not used as success.
+  - Errors return stable codes (`invalid_input`, `not_found`,
+    `operation_failed`) for the bridge to map to Chinese text. Raw service
+    `ValueError` text does not cross the API boundary.
+  - The facade delegates to the existing keyword / folder service write paths,
+    preserving keyword rule cache, folder rule cache, and privacy exclude cache
+    invalidation semantics. It does not call backfill and does not touch
+    `activity_log`, `activity_project_assignment`, or `project_session_note`.
+- **Bridge layer** (`worktrace/webview_ui/bridge.py`):
+  - Added `set_project_rule_enabled(rule_type, rule_id, enabled)`.
+  - Bridge validation rejects invalid `rule_type`, bool-as-int ids, non-positive
+    ids, and non-bool enabled values before calling `rule_api`.
+  - Success returns `{"ok": True, "rule_type": "...", "rule_id": n,
+    "enabled": true/false}`.
+  - Failure returns stable Chinese messages only: `操作无效`, `规则不存在`, or
+    `更新规则状态失败`. Tracebacks, SQL, raw exception text, paths, window
+    titles, clipboard, notes, and internal fields are not returned.
+  - The bridge still imports only `worktrace.api` from the backend. It does
+    not import services, db, collector, security, runtime, or config.
+- **Frontend** (`worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/js/core.js`, `worktrace/webview_ui/js/rules.js`,
+  `worktrace/webview_ui/styles.css`):
+  - Rules rows now show `已启用` / `已停用` state and an `启用` / `停用`
+    button for existing folder / keyword rules only.
+  - Clicking a rule toggle calls only
+    `App.callBridge("set_project_rule_enabled", ruleType, ruleId, nextEnabled)`.
+  - Added `rulesSavingRuleKey` so one rule update is in flight at a time; the
+    active button shows `正在更新…`.
+  - Disabling asks for confirmation: `确定停用这条规则吗？停用后它将不再用于自动归类。`
+  - Success refreshes Project Rules and shows `规则状态已更新`; failure keeps the
+    existing rendered list visible and shows stable Chinese fallback text.
+  - Catch paths do not read `err.message` / `error.message`; dynamic fields
+    continue to render through escaping helpers.
+  - No `app.js` was reintroduced. No React / Vue / Vite / Node, local HTTP
+    server, CDN, external JS/CSS/fonts, network requests, or browser storage
+    were introduced.
+- **Tests**:
+  - Added `tests/test_project_rules_enable_disable.py` for API/service behavior,
+    stable error codes, invalid input, existing-rule toggles, cache
+    invalidation paths, no backfill, no new/deleted project/rule rows, and no
+    changes to activity, assignment, or session-note row counts.
+  - Updated `tests/test_webview_project_rules_bridge.py` for bridge success,
+    invalid input, bool id rejection, invalid enabled rejection, not-found
+    mapping, unknown exception collapse, JSON-serializable payloads, no
+    sensitive leakage, import boundary, and unchanged `get_project_rules`.
+  - Updated `tests/webview/test_project_rules_static_contract.py` for the
+    allowed `set_project_rule_enabled` call, saving guard, confirmation,
+    success refresh, stable failure behavior, no raw exception reads, no
+    forbidden Project Rules handlers, no project enable/disable handler, no
+    storage/network, script order, and no `app.js`.
+- **Documentation**:
+  - README, current-state, migration summary, and this history now mark Phase
+    5B as current, describe the existing-rule enable/disable-only scope, and
+    restate all not-yet-open boundaries.
+
+## Phase 5B Not Implemented
+
+Phase 5B does not implement and does not start:
+
+- Project creation, editing, deletion, archive, or enable/disable in WebView;
+- Folder rule creation, editing, or deletion in WebView;
+- Keyword rule creation, editing, or deletion in WebView;
 - Folder rule conflict preview;
 - Folder rule backfill;
 - Automatic rules;

@@ -5,13 +5,12 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5A.1 (Project Rules read-only hardening) is
-> the latest shipped phase. Phase 5A was the last Project Rules behavior-change
-> phase: it added a read-only Project Rules page for viewing project-grouped
-> folder / keyword rules. Phase 5A.1 is hardening-only and adds regression
-> coverage for payload, frontend, refresh, static, packaging, and documentation
-> contracts; Project/Rule creation, editing, deletion, enable/disable, conflict
-> preview, backfill, and automatic rules remain unsupported in WebView. For a
+> **Current state**: WebView Phase 5B (Project Rules rule enable/disable
+> foundation) is the latest shipped phase. Project Rules now supports the
+> minimal reversible WebView write path: enabling or disabling one existing
+> folder or keyword rule at a time. Project enable/disable, project
+> create/edit/delete/archive, rule create/edit/delete, conflict preview,
+> backfill, and automatic rules remain unsupported in WebView. For a
 > one-screen snapshot read
 > [`docs/current-state.md`](docs/current-state.md). For the full per-phase
 > history read [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
@@ -36,11 +35,12 @@ records.
 - Statistics / Export page: read-only summary cards and grouped tables, plus
   CSV export (display-safe, UTF-8 BOM, no raw window title / file path /
   note). Excel / PDF / timesheet export are not supported.
-- Project Rules page: read-only project-grouped folder / keyword rule list,
-  including project/rule enabled state and the special local `排除规则`.
-  Project/Rule creation, editing, deletion, enable/disable, conflict preview,
-  backfill, and automatic rule workflows are not supported in WebView. Phase
-  5A.1 only hardens this read-only page and does not add write behavior.
+- Project Rules page: project-grouped folder / keyword rule list, including
+  project/rule enabled state and the special local `排除规则`. Phase 5B only
+  enables/disables existing folder / keyword rules one at a time. Project
+  enable/disable, Project creation/editing/deletion/archive, Rule
+  creation/editing/deletion, conflict preview, backfill, and automatic rule
+  workflows are not supported in WebView.
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.
 
@@ -154,6 +154,7 @@ database file or use the Settings page to clear and rebuild all data.
   recording, or automatic startup.
 - Settings / Privacy / Encrypted Backup pages are not yet migrated to
   WebView (legacy Tkinter reference code remains only as reference).
-- Project Rules write actions, conflict preview, backfill, automatic rules,
-  Excel / PDF / timesheet export, folder opening, and auto-submit are not
-  supported.
+- Project enable/disable; Project create/edit/delete/archive; Rule
+  create/edit/delete; Project Rules conflict preview, backfill, automatic
+  rules, and batch operations; Excel / PDF / timesheet export; folder opening;
+  and auto-submit are not supported.

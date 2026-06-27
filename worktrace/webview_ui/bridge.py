@@ -120,15 +120,15 @@ echoing tracebacks, SQL, window titles, file paths, notes, or internal
 exception details. This phase does NOT implement batch restore, undo
 stack, permanent delete, or any new DB schema.
 
-Phase 5A adds the Project Rules WebView read-only foundation:
-``get_project_rules`` is the only Project Rules bridge method introduced
-in this phase. It reuses ``project_api.list_project_bindings()`` and
-returns a display-oriented project/rule payload for viewing folder and
-keyword rules by project. It does NOT create, edit, delete, enable, or
-disable projects or rules; it does NOT perform conflict preview,
-backfill, automatic rules, DB schema changes, native dialogs, file writes,
-or network access. Errors collapse to ``"加载项目规则失败"`` without
-tracebacks, SQL, raw exception text, window titles, clipboard, or notes.
+Phase 5B adds the first minimal Project Rules WebView write foundation:
+``get_project_rules`` remains the display-safe read path, and
+``set_project_rule_enabled`` may only enable/disable one existing folder or
+keyword rule per call. It does NOT create, edit, delete, enable, or disable
+projects; it does NOT create, edit, or delete rules; it does NOT perform
+conflict preview, backfill, automatic rules, DB schema changes, native
+dialogs, file writes, or network access. Errors collapse to stable Chinese
+messages without tracebacks, SQL, raw exception text, window titles,
+clipboard, notes, paths, or internal fields.
 """
 
 from __future__ import annotations
@@ -137,7 +137,7 @@ import logging
 import re
 from typing import Any
 
-from ..api import app_api, settings_api, statistics_api, timeline_api, project_api, export_api
+from ..api import app_api, settings_api, statistics_api, timeline_api, project_api, export_api, rule_api
 from ..api.export_api import StatisticsExportError
 from ..api.statistics_api import StatisticsSummaryError
 from ..api.timeline_api import (
@@ -283,6 +283,14 @@ _STATISTICS_EXPORT_ERROR_MESSAGES = {
     "file_busy": "无法写入文件，请检查权限或文件是否被占用",
     "write_failed": "无法写入文件，请检查权限或文件是否被占用",
     "operation_failed": "导出失败",
+}
+
+# Maps Project Rules write API stable codes to Phase 5B user-facing messages.
+# Unknown codes collapse to the generic update failure.
+_PROJECT_RULE_WRITE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "规则不存在",
+    "operation_failed": "更新规则状态失败",
 }
 
 
@@ -1121,12 +1129,12 @@ class WebViewBridge:
             logger.exception("webview bridge get_timeline_restorable_activities failed")
             return {"ok": False, "error": "加载可恢复记录失败", "activities": []}
 
-    # --- Phase 5A: Project Rules read-only foundation -------------------
+    # --- Phase 5B: Project Rules rule enable/disable foundation ---------
 
     def get_project_rules(self) -> dict[str, Any]:
         """Return display-safe Project Rules data for the WebView page.
 
-        Read-only path only: this method delegates to
+        Read path: this method delegates to
         ``project_api.list_project_bindings()`` and projects the result into
         a stable display payload. It never writes projects/rules, never opens
         native dialogs, and never exposes traceback / SQL / raw exception
@@ -1141,6 +1149,37 @@ class WebViewBridge:
         except Exception:
             logger.exception("webview bridge get_project_rules failed")
             return {"ok": False, "error": "加载项目规则失败", "projects": []}
+
+    def set_project_rule_enabled(self, rule_type, rule_id, enabled) -> dict[str, Any]:
+        """Enable/disable one existing folder or keyword rule.
+
+        Phase 5B write path only: strict bridge validation rejects bool-as-int
+        ids and non-bool enabled values before calling ``rule_api``. The bridge
+        never exposes raw exceptions or backend details in the payload.
+        """
+        try:
+            if rule_type not in {"folder", "keyword"}:
+                return {"ok": False, "error": "操作无效"}
+            if type(rule_id) is not int or rule_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            if type(enabled) is not bool:
+                return {"ok": False, "error": "操作无效"}
+            result = rule_api.set_project_rule_enabled(rule_type, rule_id, enabled)
+            if result.get("ok") is True:
+                return {
+                    "ok": True,
+                    "rule_type": str(result.get("rule_type") or rule_type),
+                    "rule_id": int(result.get("rule_id") or rule_id),
+                    "enabled": bool(result.get("enabled")),
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_WRITE_MESSAGES.get(code, "更新规则状态失败"),
+            }
+        except Exception:
+            logger.exception("webview bridge set_project_rule_enabled failed")
+            return {"ok": False, "error": "更新规则状态失败"}
 
     # --- Phase 4A: Statistics / Export read-only summary ----------------
 

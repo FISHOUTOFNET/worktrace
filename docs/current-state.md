@@ -7,17 +7,16 @@
 
 ## Current Phase
 
-**Phase 5A.1 — Project Rules WebView read-only hardening.** Phase 5A was the
-last Project Rules behavior-change phase: it migrated Project Rules to a
-WebView read-only page for viewing project-grouped folder / keyword rules.
-Phase 5A.1 is hardening-only / regression-only for that read-only page
-(payload contract, display safety, loading / stale response, active-page
-refresh, static contract, packaging validation, and documentation boundary).
-It does not add Project Rules write actions, conflict preview, backfill,
-automatic rules, schema changes, new frontend dependencies, or new export
-formats. All earlier WebView migration phases (Phase 0A → Phase 5A) are
+**Phase 5B — Project Rules rule enable/disable foundation.** Phase 5B is the
+first minimal Project Rules WebView write phase. It only enables/disables one
+existing folder rule or keyword rule at a time, then refreshes the current
+Project Rules list. It does not implement project enable/disable, project
+create/edit/delete/archive, rule create/edit/delete, conflict preview,
+backfill, automatic rules, batch Project Rules operations, schema changes,
+new frontend dependencies, browser storage, network requests, or new export
+formats. All earlier WebView migration phases (Phase 0A → Phase 5A.1) are
 completed. README, this file, and `ui-webview-migration.md` all describe the
-current phase as 5A.1.
+current phase as 5B.
 
 ## Default UI
 
@@ -41,13 +40,13 @@ current phase as 5A.1.
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A / 5A.1): read-only project-grouped rule list
+- **Project Rules** (Phase 5A / 5A.1 / 5B): project-grouped rule list
   showing project name / description, project enabled state, special
   `排除规则` marker, rule counts, folder rules, keyword rules, rule enabled
-  state, and folder recursion scope. Phase 5A.1 hardens the read-only
-  contracts only. Project/Rule creation, editing, deletion, enable/disable,
-  conflict preview, backfill, and automatic rules are still not open in
-  WebView.
+  state, and folder recursion scope. Phase 5B only adds existing folder /
+  keyword rule enable/disable. Project enable/disable, Project/Rule creation,
+  editing, deletion, conflict preview, backfill, and automatic rules are still
+  not open in WebView.
 
 ## Unmigrated Pages (Legacy Tkinter, Reference-Only)
 
@@ -87,8 +86,8 @@ current phase as 5A.1.
 
 - Excel / PDF / timesheet-template export; folder opening; auto-open of the
   exported file; auto-submit of a timesheet.
-- Project Rules creation / editing / deletion; Project or Rule
-  enable/disable; folder-rule conflict preview; folder-rule backfill;
+- Project enable/disable; Project create/edit/delete/archive; Rule
+  create/edit/delete; folder-rule conflict preview; folder-rule backfill;
   automatic rules; batch Project Rules operations.
 - Settings / Privacy / Encrypted Backup WebView migration.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
@@ -97,7 +96,7 @@ current phase as 5A.1.
 - AI, server, payment, license, token, subscription, login, cloud sync, OCR,
   screenshots, screen recording, keyboard logging, automatic startup.
 - Any DB schema change during development; `schema.sql` is the single source
-  of truth.
+  of truth. Phase 5B made no schema change.
 
 ## Architecture Boundary
 
@@ -117,7 +116,8 @@ namespace, state, bridge call, generic helpers), `overview.js`,
 `timeline.js`, `timeline_correction.js`, `statistics.js`, `rules.js`,
 `init.js` —
 loaded in that order via plain `<script src="js/...">` tags. No ES
-modules, no bundler, no Node/build step. Product behavior is unchanged.
+modules, no bundler, no Node/build step, no browser storage, and no network
+requests.
 
 - The bridge may import `worktrace.api` and nothing else from the backend.
 - The bridge returns `{"ok": false, "error": "<chinese>"}` on failure; it

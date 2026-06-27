@@ -1,8 +1,8 @@
-"""Project Rules WebView static-contract tests for Phase 5A.
+"""Project Rules WebView static-contract tests for Phase 5B.
 
 These tests read bundled frontend resources directly. They lock the
-Project Rules read-only foundation without starting pywebview or touching
-the database.
+Project Rules existing-rule enable/disable foundation without starting
+pywebview or touching the database.
 """
 
 from __future__ import annotations
@@ -42,6 +42,20 @@ PROJECT_RULE_WRITE_METHODS = (
     "backfill_folder_rule",
 )
 
+FORBIDDEN_RULES_JS_HANDLER_TOKENS = (
+    "createProject",
+    "updateProject",
+    "deleteProject",
+    "setProjectEnabled",
+    "createKeywordRule",
+    "createOrUpdateFolderRule",
+    "deleteKeywordRule",
+    "deleteFolderRule",
+    "previewFolderRuleConflicts",
+    "backfillFolderRule",
+    "automaticRules",
+)
+
 
 def _rules_section() -> str:
     source = read_resource("index.html")
@@ -78,14 +92,14 @@ def test_project_rules_required_dom_ids_exist():
         assert 'id="' + dom_id + '"' in section
 
 
-def test_project_rules_readonly_boundary_copy_present():
+def test_project_rules_phase_5b_boundary_copy_present():
     section = _rules_section()
-    assert "只读" in section or "本阶段仅支持查看" in section
-    for term in ("新增", "编辑", "启用禁用", "删除"):
+    assert "当前支持启用/停用已有规则" in section
+    for term in ("新增", "编辑", "删除", "冲突预览", "回填"):
         assert term in section
 
 
-def test_project_rules_page_has_no_action_buttons():
+def test_project_rules_page_has_no_static_action_buttons():
     section = _rules_section()
     assert "<button" not in section.lower()
     forbidden = (
@@ -136,6 +150,7 @@ def test_project_rules_state_variables_declared():
     assert "App.rulesLoaded = false" in source
     assert "App.rulesLoading = false" in source
     assert "App.rulesRequestToken = 0" in source
+    assert "App.rulesSavingRuleKey = null" in source
 
 
 def test_project_rules_js_defines_load_and_render_functions():
@@ -146,9 +161,11 @@ def test_project_rules_js_defines_load_and_render_functions():
     assert "function renderProjectRuleRow" in source
 
 
-def test_project_rules_js_calls_readonly_bridge_method():
+def test_project_rules_js_calls_allowed_bridge_methods_only():
     source = read_js("rules.js")
     assert 'callBridge("get_project_rules")' in source
+    assert 'callBridge("set_project_rule_enabled"' in source
+    assert 'callBridge("set_project_enabled"' not in source
 
 
 def test_project_rules_load_has_loading_guard_and_stale_guard():
@@ -176,6 +193,33 @@ def test_project_rules_failure_paths_use_stable_fallback_only():
         assert forbidden not in body
 
 
+def test_project_rules_toggle_handler_uses_single_rule_write_contract():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    assert 'App.callBridge("set_project_rule_enabled", ruleType, ruleId, nextEnabled)' in body
+    assert 'ruleType !== "folder" && ruleType !== "keyword"' in body
+    assert "App.rulesSavingRuleKey" in body
+    assert "window.confirm" in body
+    assert "确定停用这条规则吗？停用后它将不再用于自动归类。" in body
+
+
+def test_project_rules_toggle_success_refreshes_and_failure_keeps_rendered_data():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    assert "App.loadProjectRules()" in body
+    assert "规则状态已更新" in body
+    assert "更新规则状态失败" in body
+    assert "list.innerHTML" not in body
+
+
+def test_project_rules_toggle_catch_never_reads_raw_exception_message():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleToggle")
+    assert ".catch(function ()" in body
+    for forbidden in ("err.message", "error.message", ".toString", "reason.message"):
+        assert forbidden not in body
+
+
 def test_project_rules_rendering_uses_escape_helper():
     source = read_js("rules.js")
     text_body = func_body(source, "text")
@@ -188,12 +232,21 @@ def test_project_rules_rendering_uses_escape_helper():
     assert "renderProjectRuleRow(rule)" in source
 
 
-def test_project_rules_js_does_not_call_write_methods():
+def test_project_rules_js_does_not_call_forbidden_write_methods():
     source = read_all_js()
     for method in PROJECT_RULE_WRITE_METHODS:
         assert method not in source, (
             "Project Rules frontend must not call write bridge method: " + method
         )
+    assert "set_project_rule_enabled" in source
+
+
+def test_project_rules_js_has_no_create_edit_delete_backfill_preview_handlers():
+    source = read_js("rules.js")
+    for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
+        assert token not in source
+    for forbidden in ("project-enable", "project-disable", "projectToggle"):
+        assert forbidden not in source
 
 
 def test_project_rules_js_catch_path_never_reads_raw_exception_message():
@@ -245,6 +298,23 @@ def test_project_rules_frontend_resources_keep_global_boundaries():
         source = read_resource(filename)
         assert "localStorage" not in source
         assert "sessionStorage" not in source
+    assert "app.js" not in read_resource("index.html")
+
+
+def test_project_rules_js_has_no_direct_file_or_network_write():
+    source = read_js("rules.js")
+    for forbidden in (
+        "fetch(",
+        "XMLHttpRequest",
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "FileReader",
+        "showSaveFilePicker",
+        "writeText",
+        "download",
+    ):
+        assert forbidden not in source
 
 
 def test_project_rules_page_does_not_add_export_or_auto_submit_controls():

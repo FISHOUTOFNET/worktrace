@@ -417,8 +417,8 @@ def test_styles_css_timeline_and_correction_shell_not_removed_4a():
 
 
 
-def test_index_html_project_rules_page_migrated_after_5a():
-    """Phase 5A: Project Rules is no longer a migration placeholder."""
+def test_index_html_project_rules_page_migrated_after_5b():
+    """Phase 5B: Project Rules is migrated and supports existing rule toggles."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-rules"')
     assert pos != -1
@@ -426,7 +426,8 @@ def test_index_html_project_rules_page_migrated_after_5a():
     section = source[pos:end]
     assert "WebView 迁移中" not in section
     assert "项目规则" in section
-    assert "只读" in section
+    assert "启用/停用已有规则" in section
+    assert "新增、编辑、删除、冲突预览和回填仍未开放" in section
 
 
 

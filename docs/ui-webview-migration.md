@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5A.1 "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5B "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -10,22 +10,21 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **5A.1 (Project Rules WebView read-only hardening)**. Phase
-  5A was the last Project Rules behavior-change phase: the Project Rules page
-  now renders a read-only project-grouped folder / keyword rule list in
-  WebView. Phase 5A.1 is hardening-only / regression-only and locks payload,
-  display-safety, loading / stale response, active-page refresh, static,
-  packaging, and documentation contracts. Project/Rule creation, editing,
-  deletion, enable/disable, conflict preview, backfill, automatic rules,
-  schema changes, and new frontend dependencies remain out of scope.
+- Current phase: **5B (Project Rules rule enable/disable foundation)**.
+  Phase 5B is the first minimal Project Rules write phase: the WebView may
+  enable or disable one existing folder / keyword rule at a time. Project
+  enable/disable, Project create/edit/delete/archive, Rule create/edit/delete,
+  conflict preview, backfill, automatic rules, batch operations, schema
+  changes, frontend frameworks / Node, browser storage, and network requests
+  remain out of scope.
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime). It is
   the only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview (Phase 1), Timeline / Time Details (read-only in
   Phase 2, hardened in Phase 2.1, editing added across Phase 3A / 3B.x /
   3C.x), Statistics / Export (read-only in Phase 4A / 4A.1, CSV export write
   in Phase 4B, hardened in Phase 4B.1), Project Rules (read-only in Phase
-  5A: folder / keyword rules, project/rule enabled state, and special
-  excluded-project marker).
+  5A, hardened in 5A.1, existing folder / keyword rule enable/disable in
+  Phase 5B).
 - Unmigrated pages: Settings / Privacy / Encrypted Backup (still legacy
   Tkinter code kept for reference; not a supported runtime path).
 - Detailed phase-by-phase scope, data semantics, and "not implemented" lists
@@ -174,9 +173,11 @@ the high-level order is:
   validation. **Completed.**
 - Phase 5A — Project Rules read-only foundation. **Completed.**
 - Phase 5A.1 — Project Rules read-only hardening / regression. **Completed.**
-- Phase 5B+ — Project Rules write workflows (create / edit / delete /
-  enable-disable / conflict preview / backfill / automatic rules). Not
-  started.
+- Phase 5B — Project Rules rule enable/disable foundation for existing
+  folder / keyword rules only. **Completed.**
+- Phase 5C+ — remaining Project Rules write workflows (project
+  create/edit/delete/archive, project enable/disable, rule create/edit/delete,
+  conflict preview, backfill, automatic rules). Not started.
 - Phase 6 — Settings / Privacy / Encrypted Backup. Not started.
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.

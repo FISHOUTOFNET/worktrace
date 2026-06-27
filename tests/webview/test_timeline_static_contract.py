@@ -87,7 +87,7 @@ def test_index_html_timeline_page_has_total_and_current():
 
 
 def test_index_html_unmigrated_pages_still_have_placeholders():
-    """Phase 5A: Settings remains a placeholder; Rules is read-only WebView."""
+    """Phase 5B: Settings remains a placeholder; Rules is migrated WebView."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     rules_start = source.find('id="page-rules"')
     assert rules_start != -1, "rules section must exist"
@@ -95,7 +95,8 @@ def test_index_html_unmigrated_pages_still_have_placeholders():
     rules_section = source[rules_start:rules_end]
     assert "WebView 迁移中" not in rules_section
     assert "项目规则" in rules_section
-    assert "只读" in rules_section
+    assert "启用/停用已有规则" in rules_section
+    assert "新增、编辑、删除、冲突预览和回填仍未开放" in rules_section
 
     settings_start = source.find('id="page-settings"')
     assert settings_start != -1, "settings section must exist"
