@@ -183,6 +183,85 @@
         if (el) el.hidden = !loading;
     }
 
+    // --- Phase 3C: Unified Timeline status semantics -------------------
+    // Centralized status TYPE → CSS class mapping and standard Chinese
+    // text so loading / empty / error / success / info / saving states are
+    // consistent across the Timeline list, detail panel, edit panel, and
+    // correction shell. These helpers are ADDITIVE: the existing per-area
+    // helpers (showEditStatus, showTimeStatus, setCorrectionShellStatus,
+    // etc.) remain unchanged and continue to own their DOM elements. The
+    // unified helpers centralize the vocabulary so future code and tests
+    // can rely on a single status-type contract.
+    var STATUS_TYPE_CLASS = {
+        info: "edit-status-info",
+        success: "edit-status-success",
+        error: "edit-status-error",
+        loading: "edit-status-loading",
+        empty: "edit-status-empty"
+    };
+
+    function statusClassFor(type) {
+        return STATUS_TYPE_CLASS[type] || STATUS_TYPE_CLASS.info;
+    }
+
+    // Apply a status type class to a status element that uses the shared
+    // ``edit-status`` base. Used by the per-area helpers when they want to
+    // express info / loading / empty states in addition to error / success.
+    function applyStatusType(el, type) {
+        if (!el) return;
+        el.className = "edit-status " + statusClassFor(type);
+    }
+
+    // Unified Timeline list-level status (loading / empty / error / info).
+    // Delegates to the existing #timeline-error banner and #timeline-loading
+    // indicator so the DOM contract is unchanged.
+    function setTimelineStatus(message, type) {
+        if (!message) {
+            clearTimelineError();
+            setTimelineLoading(false);
+            return;
+        }
+        if (type === "loading") {
+            setTimelineLoading(true);
+            clearTimelineError();
+            return;
+        }
+        setTimelineLoading(false);
+        if (type === "error") {
+            showTimelineError(message);
+            return;
+        }
+        clearTimelineError();
+    }
+
+    // Unified detail panel status (header text). When message is empty the
+    // header returns to the stable "请选择一条时间记录" prompt.
+    function setDetailStatus(message, type) {
+        var header = document.getElementById("timeline-details-header");
+        if (!header) return;
+        if (!message) {
+            header.textContent = "请选择一条时间记录";
+            return;
+        }
+        header.textContent = message;
+    }
+
+    // Unified edit panel status. Delegates to showEditStatus for backward
+    // compatibility while mapping the unified type to error/success.
+    function setEditStatus(message, type) {
+        if (!message) {
+            showEditStatus("", false);
+            return;
+        }
+        showEditStatus(message, type === "error");
+    }
+
+    // Unified correction shell status. Delegates to
+    // setCorrectionShellStatus for backward compatibility.
+    function setCorrectionStatus(message, type) {
+        setCorrectionShellStatus(message, type === "error");
+    }
+
     // --- Generic result handler -----------------------------------------
 
     function handleResult(result, onError) {
@@ -3581,10 +3660,12 @@
             if (!data) return;
             timelineLoaded = true;
             showTimeline(data);
-        }).catch(function (err) {
+        }).catch(function () {
             if (token !== timelineRequestToken) return;  // stale response
             setTimelineLoading(false);
-            showTimelineError(err && err.message ? err.message : "加载时间详情失败，请稍后重试。");
+            // Phase 3C: never surface raw exception text; use the stable
+            // fallback so internal details do not leak into the UI.
+            showTimelineError("加载时间详情失败，请稍后重试。");
         });
     }
 
@@ -3735,7 +3816,9 @@
             });
             showStatus(status);
         }).catch(function (err) {
-            showError(err && err.message ? err.message : "无法连接采集器状态，请稍后重试。");
+            // Phase 3C: never surface raw exception text; use the stable
+            // fallback so internal details do not leak into the UI.
+            showError("无法连接采集器状态，请稍后重试。");
             throw err;
         });
 
@@ -3745,7 +3828,9 @@
             });
             showOverview(overview);
         }).catch(function (err) {
-            showError(err && err.message ? err.message : "加载今日概览失败，请稍后重试。");
+            // Phase 3C: never surface raw exception text; use the stable
+            // fallback so internal details do not leak into the UI.
+            showError("加载今日概览失败，请稍后重试。");
             throw err;
         });
 
@@ -3755,7 +3840,9 @@
             });
             showRecent(recent);
         }).catch(function (err) {
-            showError(err && err.message ? err.message : "加载最近活动失败，请稍后重试。");
+            // Phase 3C: never surface raw exception text; use the stable
+            // fallback so internal details do not leak into the UI.
+            showError("加载最近活动失败，请稍后重试。");
             throw err;
         });
 

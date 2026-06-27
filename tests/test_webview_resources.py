@@ -6714,3 +6714,556 @@ def test_docs_release_validation_mentions_phase_3b9_1():
     assert "3B.9.1" in source, (
         "release-validation.md must mention Phase 3B.9.1"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3C: Timeline UI release stabilization
+#
+# Phase 3C is a stabilization-only phase. It does NOT add any backend write
+# capability, bridge / API / service method, DB schema, correction action,
+# or UI control. The tests below lock the Phase 3C contract: the unified
+# status helpers, the unified status-type CSS classes, the err.message leak
+# closure, the stable Chinese fallback strings, and the regression locks
+# for every prior-phase invariant that must survive the stabilization.
+# ---------------------------------------------------------------------------
+
+
+def test_app_js_has_unified_status_type_class_map_3c():
+    """Phase 3C: app.js must define the STATUS_TYPE_CLASS map with the five
+    unified status types (info / success / error / loading / empty)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "STATUS_TYPE_CLASS" in source, (
+        "app.js must define STATUS_TYPE_CLASS map"
+    )
+    for key in ("info", "success", "error", "loading", "empty"):
+        assert key + ":" in source or key + ' :' in source, (
+            "STATUS_TYPE_CLASS must include the '" + key + "' type"
+        )
+
+
+def test_app_js_has_status_class_for_helper_3c():
+    """Phase 3C: app.js must define the statusClassFor helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function statusClassFor" in source, (
+        "app.js must define statusClassFor helper"
+    )
+
+
+def test_app_js_has_apply_status_type_helper_3c():
+    """Phase 3C: app.js must define the applyStatusType helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function applyStatusType" in source, (
+        "app.js must define applyStatusType helper"
+    )
+
+
+def test_app_js_has_set_timeline_status_helper_3c():
+    """Phase 3C: app.js must define the unified setTimelineStatus helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function setTimelineStatus" in source, (
+        "app.js must define setTimelineStatus helper"
+    )
+
+
+def test_app_js_has_set_detail_status_helper_3c():
+    """Phase 3C: app.js must define the unified setDetailStatus helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function setDetailStatus" in source, (
+        "app.js must define setDetailStatus helper"
+    )
+
+
+def test_app_js_has_set_edit_status_helper_3c():
+    """Phase 3C: app.js must define the unified setEditStatus helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function setEditStatus" in source, (
+        "app.js must define setEditStatus helper"
+    )
+
+
+def test_app_js_has_set_correction_status_helper_3c():
+    """Phase 3C: app.js must define the unified setCorrectionStatus helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function setCorrectionStatus" in source, (
+        "app.js must define setCorrectionStatus helper"
+    )
+
+
+def test_app_js_unified_helpers_delegate_to_existing_helpers_3c():
+    """Phase 3C: the unified status helpers must delegate to the existing
+    per-area helpers (showEditStatus, setCorrectionShellStatus,
+    clearTimelineError, setTimelineLoading, showTimelineError) so the DOM
+    contract is unchanged."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    set_timeline = _func_body(source, "setTimelineStatus")
+    set_edit = _func_body(source, "setEditStatus")
+    set_correction = _func_body(source, "setCorrectionStatus")
+    assert "clearTimelineError" in set_timeline, (
+        "setTimelineStatus must delegate to clearTimelineError"
+    )
+    assert "setTimelineLoading" in set_timeline, (
+        "setTimelineStatus must delegate to setTimelineLoading"
+    )
+    assert "showTimelineError" in set_timeline, (
+        "setTimelineStatus must delegate to showTimelineError"
+    )
+    assert "showEditStatus" in set_edit, (
+        "setEditStatus must delegate to showEditStatus"
+    )
+    assert "setCorrectionShellStatus" in set_correction, (
+        "setCorrectionStatus must delegate to setCorrectionShellStatus"
+    )
+
+
+def test_app_js_set_detail_status_uses_safe_textcontent_3c():
+    """Phase 3C: setDetailStatus must write to textContent (display-safe),
+    never to innerHTML."""
+    body = _func_body(
+        (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8"),
+        "setDetailStatus",
+    )
+    assert "textContent" in body, (
+        "setDetailStatus must use textContent for display safety"
+    )
+    assert "innerHTML" not in body, (
+        "setDetailStatus must not use innerHTML"
+    )
+
+
+def test_app_js_set_detail_status_default_text_3c():
+    """Phase 3C: setDetailStatus must reset the header to the stable
+    '请选择一条时间记录' prompt when message is empty."""
+    body = _func_body(
+        (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8"),
+        "setDetailStatus",
+    )
+    assert "请选择一条时间记录" in body, (
+        "setDetailStatus must use the stable '请选择一条时间记录' default"
+    )
+
+
+def test_app_js_no_err_message_in_catch_blocks_3c():
+    """Phase 3C: no catch block in app.js may surface raw exception text
+    via err.message / err.toString() / error.message / error.toString().
+    This is the display-safe hardening closure."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("err.message", "err.toString",
+                      "error.message", "error.toString",
+                      "exception.message"):
+        assert forbidden not in source, (
+            "app.js must not surface raw exception text via " + forbidden
+        )
+
+
+def test_app_js_load_timeline_catch_uses_stable_fallback_3c():
+    """Phase 3C: the loadTimeline catch block must use the stable Chinese
+    fallback '加载时间详情失败，请稍后重试。' instead of err.message."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "加载时间详情失败，请稍后重试。" in source, (
+        "loadTimeline catch must use the stable fallback string"
+    )
+
+
+def test_app_js_refresh_all_catch_uses_stable_fallbacks_3c():
+    """Phase 3C: the refreshAll catch blocks (status / overview / recent)
+    must use the stable Chinese fallbacks instead of err.message."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for fallback in ("无法连接采集器状态，请稍后重试。",
+                     "加载今日概览失败，请稍后重试。",
+                     "加载最近活动失败，请稍后重试。"):
+        assert fallback in source, (
+            "refreshAll catch must use the stable fallback: " + fallback
+        )
+
+
+def test_app_js_standard_loading_text_present_3c():
+    """Phase 3C: the standard loading text must still be present in the
+    frontend resources (Timeline loading indicator)."""
+    html = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "加载中" in html or "加载中" in (
+        WEBVIEW_UI_DIR / "app.js"
+    ).read_text(encoding="utf-8"), (
+        "standard loading text '加载中' must be present"
+    )
+
+
+def test_app_js_standard_empty_text_present_3c():
+    """Phase 3C: the standard empty text must still be present in the
+    frontend resources."""
+    html = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "暂无" in html, (
+        "standard empty text '暂无' must be present in index.html"
+    )
+
+
+def test_app_js_standard_error_text_present_3c():
+    """Phase 3C: the standard error text must still be present in the
+    frontend resources."""
+    html = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "加载失败" in html, (
+        "standard error text '加载失败' must be present in index.html"
+    )
+
+
+def test_app_js_cross_save_guard_text_still_present_3c():
+    """Phase 3C: the cross-save guard text '请等待当前操作完成' must
+    still be present (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "请等待当前操作完成" in source, (
+        "cross-save guard text '请等待当前操作完成' must remain"
+    )
+
+
+def test_app_js_dirty_guard_text_still_present_3c():
+    """Phase 3C: the dirty guard text '请先保存或取消当前编辑' must
+    still be present (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "请先保存或取消当前编辑" in source, (
+        "dirty guard text '请先保存或取消当前编辑' must remain"
+    )
+
+
+def test_index_html_soft_delete_copy_still_present_3c():
+    """Phase 3C: the soft delete copy '本阶段不会物理删除数据' must
+    still be present (regression lock — delete is still soft delete)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "本阶段不会物理删除数据" in source, (
+        "soft delete copy '本阶段不会物理删除数据' must remain"
+    )
+
+
+def test_styles_css_has_edit_status_info_class_3c():
+    """Phase 3C: styles.css must define .edit-status-info."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".edit-status-info" in source, (
+        "styles.css must define .edit-status-info"
+    )
+
+
+def test_styles_css_has_edit_status_loading_class_3c():
+    """Phase 3C: styles.css must define .edit-status-loading."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".edit-status-loading" in source, (
+        "styles.css must define .edit-status-loading"
+    )
+
+
+def test_styles_css_has_edit_status_empty_class_3c():
+    """Phase 3C: styles.css must define .edit-status-empty."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".edit-status-empty" in source, (
+        "styles.css must define .edit-status-empty"
+    )
+
+
+def test_styles_css_unified_status_classes_share_prefix_3c():
+    """Phase 3C: all five unified status classes must share the
+    .edit-status-* prefix family."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    for cls in (".edit-status-info", ".edit-status-success",
+                ".edit-status-error", ".edit-status-loading",
+                ".edit-status-empty"):
+        assert cls in source, (
+            "styles.css must contain the unified status class " + cls
+        )
+
+
+def test_styles_css_correction_shell_hidden_still_display_none_3c():
+    """Phase 3C: .correction-shell[hidden] must still set display:none
+    (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".correction-shell[hidden]" in source, (
+        "styles.css must have .correction-shell[hidden] rule"
+    )
+    pos = source.find(".correction-shell[hidden]")
+    rule = source[pos:pos + 80]
+    assert "display: none" in rule, (
+        ".correction-shell[hidden] must set display: none"
+    )
+
+
+def test_styles_css_highlight_still_present_3c():
+    """Phase 3C: the transient highlight CSS must still be present
+    (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert "highlight" in source, (
+        "styles.css must still contain the transient highlight rule"
+    )
+
+
+def test_styles_css_no_external_resources_3c():
+    """Phase 3C: styles.css must not import external CSS / fonts / CDN
+    (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("@import", "http://", "https://", "cdn",
+                      "google fonts", "googleapis"):
+        assert forbidden not in lowered, (
+            "styles.css must not reference external resource: " + forbidden
+        )
+
+
+def test_index_html_correction_shell_cards_still_present_3c():
+    """Phase 3C: all six correction shell cards must still be present
+    (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for card_id in (
+        "correction-shell-context-card",
+        "correction-shell-activity-card",
+        "correction-shell-single-action-card",
+        "correction-shell-batch-action-card",
+        "correction-shell-restore-card",
+        "correction-shell-not-implemented-card",
+    ):
+        assert card_id in source, (
+            "index.html must still contain correction shell card: " + card_id
+        )
+
+
+def test_index_html_no_forbidden_batch_ui_3c():
+    """Phase 3C: no batch hide / batch delete / batch restore /
+    permanent delete / undo stack UI controls may be present
+    (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("batch-hide", "batch-delete", "batch-restore",
+                      "permanent-delete", "undo-stack",
+                      "restore-all", "批量隐藏按钮", "批量删除按钮"):
+        assert forbidden not in lowered, (
+            "index.html must not contain forbidden batch UI: " + forbidden
+        )
+
+
+def test_index_html_not_implemented_card_lists_unavailable_3c():
+    """Phase 3C: the not-implemented card must still list all unavailable
+    capabilities (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    not_impl_pos = source.find("correction-shell-not-implemented-card")
+    assert not_impl_pos != -1
+    not_impl_section = source[not_impl_pos:not_impl_pos + 600]
+    for keyword in ("批量隐藏", "批量删除", "批量恢复", "撤销栈",
+                    "永久删除", "批量时间", "批量拆分", "批量合并",
+                    "自动规则", "重叠检测"):
+        assert keyword in not_impl_section, (
+            "not-implemented card must list: " + keyword
+        )
+
+
+def test_index_html_no_new_top_level_pages_3c():
+    """Phase 3C: no Statistics / Export, Project Rules, or Settings / Privacy
+    WebView pages may be added beyond the existing placeholders
+    (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    # The sidebar nav must still list exactly the five known items.
+    for nav_item in ("概览", "时间详情", "统计与导出",
+                     "项目规则", "设置与隐私"):
+        assert nav_item in source, (
+            "sidebar must still list nav item: " + nav_item
+        )
+    # The Statistics / Export / Project Rules / Settings pages must remain
+    # placeholders, not migrated WebView pages.
+    for placeholder_id in ("page-statistics", "page-rules",
+                           "page-settings"):
+        pos = source.find('id="' + placeholder_id + '"')
+        assert pos != -1, (
+            "index.html must still contain the placeholder: " + placeholder_id
+        )
+
+
+def test_app_js_correction_shell_no_local_storage_3c():
+    """Phase 3C: app.js must not use localStorage / sessionStorage
+    (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("localStorage", "sessionStorage"):
+        assert forbidden not in source, (
+            "app.js must not use " + forbidden
+        )
+
+
+def test_app_js_correction_shell_no_external_links_3c():
+    """Phase 3C: app.js must not reference external links / CDN
+    (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("http://", "https://", "cdn", "google fonts",
+                      "googleapis"):
+        assert forbidden not in lowered, (
+            "app.js must not reference external resource: " + forbidden
+        )
+
+
+def test_app_js_correction_shell_no_traceback_display_3c():
+    """Phase 3C: app.js must not display tracebacks (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    lowered = source.lower()
+    assert "traceback" not in lowered, (
+        "app.js must not display tracebacks"
+    )
+
+
+def test_app_js_correction_shell_no_raw_sensitive_fields_3c():
+    """Phase 3C: app.js must not render raw window_title / file_path_hint /
+    full_path / clipboard fields (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The literal field names must not appear as rendered display values.
+    # (They may appear in comments explaining what is NOT rendered, but
+    # the test asserts the literals are absent from the rendering paths.)
+    for forbidden in ("window_title", "file_path_hint",
+                      "full_path", "clipboard"):
+        assert forbidden not in source, (
+            "app.js must not reference raw sensitive field: " + forbidden
+        )
+
+
+def test_bridge_no_new_methods_for_phase_3c():
+    """Phase 3C: no new bridge methods beyond the known 21-method set
+    (regression lock — same set as Phase 3B.9.1)."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    known_methods = (
+        "get_status", "toggle_pause", "get_overview",
+        "get_recent_activities", "get_timeline",
+        "get_timeline_session_details", "list_projects_for_timeline",
+        "update_timeline_project", "update_timeline_note",
+        "update_timeline_activity_time", "update_timeline_session_time",
+        "split_timeline_activity", "split_timeline_session",
+        "merge_timeline_activities", "hide_timeline_activity",
+        "soft_delete_timeline_activity", "hide_timeline_session",
+        "soft_delete_timeline_session",
+        "batch_update_timeline_activities_project",
+        "batch_update_timeline_activities_note",
+        "get_timeline_restorable_activities", "restore_timeline_activity",
+    )
+    for method in known_methods:
+        assert method in bridge_src, (
+            "bridge must still expose " + method
+        )
+
+
+def test_bridge_imports_only_allowed_modules_3c():
+    """Phase 3C: the bridge must still only import worktrace.api and
+    worktrace.formatters (regression lock)."""
+    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    for forbidden in ("from ..services", "from ..db",
+                      "from ..collector", "from ..security",
+                      "from ..runtime", "from ..config",
+                      "import worktrace.services",
+                      "import worktrace.db"):
+        assert forbidden not in bridge_src, (
+            "bridge must not import " + forbidden
+        )
+
+
+def test_api_has_no_new_methods_for_phase_3c():
+    """Phase 3C: the timeline API must still expose the known Phase 3B.8
+    method set and error classes (regression lock — no new API methods)."""
+    api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(
+        encoding="utf-8"
+    )
+    for symbol in (
+        "class TimelineTimeEditError",
+        "class TimelineSplitError",
+        "class TimelineMergeError",
+        "class TimelineVisibilityError",
+        "class TimelineBatchProjectError",
+        "class TimelineBatchNoteError",
+        "class TimelineRestoreActivityError",
+        "def reclassify_timeline_session_project",
+        "def update_timeline_session_note",
+        "def update_timeline_activity_time",
+        "def update_timeline_session_time",
+        "def split_timeline_activity",
+        "def split_timeline_session",
+        "def merge_timeline_activities",
+        "def hide_timeline_activity",
+        "def soft_delete_timeline_activity",
+        "def hide_timeline_session",
+        "def soft_delete_timeline_session",
+        "def batch_update_timeline_activities_project",
+        "def batch_update_timeline_activities_note",
+        "def restore_timeline_activity",
+        "def get_timeline_restorable_activities",
+    ):
+        assert symbol in api_src, (
+            "timeline_api must still define " + symbol
+        )
+
+
+def test_no_new_db_schema_for_phase_3c():
+    """Phase 3C: schema.sql must still define the known core tables
+    (regression lock — no new DB schema)."""
+    schema_src = (REPO_ROOT / "worktrace" / "schema.sql").read_text(
+        encoding="utf-8"
+    )
+    for table in (
+        "CREATE TABLE IF NOT EXISTS project",
+        "CREATE TABLE IF NOT EXISTS activity_log",
+        "CREATE TABLE IF NOT EXISTS activity_project_assignment",
+        "CREATE TABLE IF NOT EXISTS activity_resource",
+        "CREATE TABLE IF NOT EXISTS project_session_note",
+    ):
+        assert table in schema_src, (
+            "schema.sql must still define table: " + table
+        )
+
+
+def test_default_webview_entry_preserved_3c():
+    """Phase 3C: the default entry point must still delegate to
+    worktrace.webview_main (regression lock — no Tkinter fallback)."""
+    main_src = (REPO_ROOT / "worktrace" / "main.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from .webview_main import main as webview_main" in main_src, (
+        "worktrace.main must still delegate to worktrace.webview_main"
+    )
+    assert "webview_main()" in main_src, (
+        "worktrace.main must still call webview_main()"
+    )
+
+
+def test_docs_mention_phase_3c():
+    """Phase 3C: the migration doc must mention Phase 3C."""
+    doc_path = REPO_ROOT / "docs" / "ui-webview-migration.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "3C" in source, (
+        "ui-webview-migration.md must mention Phase 3C"
+    )
+    assert "Phase 3C Implemented Scope" in source, (
+        "ui-webview-migration.md must have a Phase 3C Implemented Scope section"
+    )
+
+
+def test_docs_readme_mentions_phase_3c():
+    """Phase 3C: README must mention Phase 3C."""
+    doc_path = REPO_ROOT / "README.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "3C" in source, (
+        "README.md must mention Phase 3C"
+    )
+
+
+def test_docs_release_validation_mentions_phase_3c():
+    """Phase 3C: release-validation must mention Phase 3C."""
+    doc_path = REPO_ROOT / "docs" / "release-validation.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "3C" in source, (
+        "release-validation.md must mention Phase 3C"
+    )
+    assert "WebView Phase 3C Validation" in source, (
+        "release-validation.md must have a WebView Phase 3C Validation section"
+    )
+
+
+def test_docs_release_validation_phase_3c_release_blockers_3c():
+    """Phase 3C: release-validation must list the Phase 3C release blockers."""
+    doc_path = REPO_ROOT / "docs" / "release-validation.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "Phase 3C Release Blockers" in source, (
+        "release-validation.md must have a Phase 3C Release Blockers section"
+    )
+    for blocker in ("new backend write capability",
+                    "new bridge", "new DB schema",
+                    "new correction action",
+                    "localStorage", "Tkinter fallback"):
+        assert blocker in source, (
+            "release-validation.md must mention release blocker: " + blocker
+        )

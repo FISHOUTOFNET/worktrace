@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: 3B.9.1 (Overview fully migrated; Timeline read-only page
+- Current phase: 3C (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
   and session-note editing — implemented and hardened; Timeline time
   correction foundation — single-activity start/end time editing —
@@ -51,7 +51,31 @@
   recovery list returns display-safe fields for hidden/deleted activities
   for the current date; only `is_hidden` / `is_deleted` / `updated_at` are
   modified; no batch restore, undo stack, or permanent delete —
-  implemented; WebView is the default and only shipping UI).
+  implemented; Timeline correction shell consolidation — reorganized the
+  shell's internal UI into unified cards (context / activity /
+  single-action / batch-action / restore / not-implemented) with stable
+  IDs, shared `.correction-shell-card` styling, unified display-safe
+  helper (`safeText`), and a cross-save guard
+  (`isAnyCorrectionWriteSaving`) blocking batch project / batch note /
+  single restore saves with `请等待当前操作完成` — implemented; Timeline
+  correction shell consolidation hardening — unified cross-save guard
+  message, auto-refresh re-render guard, and render-section status
+  preservation during in-flight saves — implemented; Timeline UI release
+  stabilization (Phase 3C) — stabilization-only: unified Timeline list /
+  detail / edit / correction-shell status semantics (loading / empty /
+  error / success / info / saving), additive unified status-type CSS
+  classes (`.edit-status-info` / `.edit-status-loading` /
+  `.edit-status-empty`), closed four `err.message` leaks in
+  `loadTimeline` / `refreshAll` catch blocks so raw exception text never
+  reaches the UI, and additive unified status helpers
+  (`setTimelineStatus` / `setDetailStatus` / `setEditStatus` /
+  `setCorrectionStatus`) delegating to existing per-area helpers without
+  changing any DOM contract; no new backend write capability, bridge /
+  API / service method, DB schema, correction action, batch
+  hide / delete / restore, undo stack, permanent delete, batch
+  time / split / merge, note append / merge, auto-rule, global overlap
+  detection, or Statistics / Export / Project Rules / Settings / Privacy
+  migration — implemented; WebView is the default and only shipping UI).
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime).
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
@@ -3066,6 +3090,142 @@ Phase 3B.9.1 does not implement and does not start:
 - Any CDN / external JS / CSS / font / Google Fonts usage;
 - Any `localStorage` / `sessionStorage` usage;
 - Any Tkinter fallback path.
+
+## Phase 3C Implemented Scope
+
+Phase 3C is the **Timeline UI release stabilization** phase. It is a
+stabilization-only phase, not a feature expansion phase. The goal is to
+push the Timeline / Time Details page from "feature-complete" to
+"release-ready" without adding any new backend write capability,
+bridge / API / service method, DB schema, correction action, or UI
+control.
+
+Stabilization scope:
+
+1. **Unified Timeline status semantics.** Added additive unified
+   status helpers in `worktrace/webview_ui/app.js`:
+   - `STATUS_TYPE_CLASS` map (info / success / error / loading / empty);
+   - `statusClassFor(type)`;
+   - `applyStatusType(el, type)`;
+   - `setTimelineStatus(message, type)` — delegates to the existing
+     `#timeline-error` banner and `#timeline-loading` indicator;
+   - `setDetailStatus(message, type)` — delegates to the existing
+     `#timeline-details-header` text;
+   - `setEditStatus(message, type)` — delegates to `showEditStatus`;
+   - `setCorrectionStatus(message, type)` — delegates to
+     `setCorrectionShellStatus`.
+
+   These helpers are **additive**: the existing per-area helpers
+   (`showEditStatus`, `showTimeStatus`, `setCorrectionShellStatus`,
+   `clearTimelineError`, `setTimelineLoading`, `showTimelineError`)
+   remain unchanged and continue to own their DOM elements. The
+   unified helpers centralize the status-type vocabulary so future
+   code and tests can rely on a single contract.
+
+2. **Unified status-type CSS classes.** Added three additive CSS
+   classes in `worktrace/webview_ui/styles.css`:
+   - `.edit-status-info` (blue);
+   - `.edit-status-loading` (slate);
+   - `.edit-status-empty` (light slate).
+
+   The existing `.edit-status-error` / `.edit-status-success` rules
+   remain the primary error / success styles; the new classes extend
+   the vocabulary for info / loading / empty states.
+
+3. **Display-safe hardening — `err.message` leak closure.** Closed
+   four `err.message` leaks in `app.js` catch blocks so raw exception
+   text never reaches the UI:
+   - `loadTimeline().catch()` now uses the stable fallback
+     `"加载时间详情失败，请稍后重试。"` instead of `err.message`;
+   - `refreshAll()` status / overview / recent catch blocks now use
+     stable Chinese fallback strings
+     (`"无法连接采集器状态，请稍后重试。"` /
+     `"加载今日概览失败，请稍后重试。"` /
+     `"加载最近活动失败，请稍后重试。"`) instead of `err.message`,
+     and still re-throw the original error so the existing
+     `refreshAll` chain semantics are unchanged.
+
+   No `err.message` (or `err.toString()`) reference now reaches a
+   status / error DOM element in the Timeline code path.
+
+4. **No new backend write capability.** `bridge.py`,
+   `timeline_api.py`, `timeline_service.py`, `activity_service.py`,
+   and `schema.sql` are unchanged in Phase 3C. The locked bridge
+   method set (21 methods asserted by
+   `test_bridge_no_new_methods_for_phase_3b9_1`) is preserved. No
+   new API method, service method, DB column, DB table, DB index, or
+   DB trigger is introduced.
+
+5. **No new UI control or correction action.** No new sidebar nav
+   item, no new top-level page, no new action button, no new
+   destructive-action UI, no new card. The correction shell card
+   structure (context / activity / single-action / batch-action /
+   restore / not-implemented) is preserved.
+
+6. **No DOM contract change.** All existing JS-dependent IDs, CSS
+   classes, function names, and Chinese status / button / copy
+   strings asserted by `tests/test_webview_resources.py` and the
+   Phase 3B.9 / 3B.9.1 test suite are preserved. The unified
+   helpers do not rename or relocate any existing DOM element.
+
+7. **Display-safe rendering audit re-confirmed.** The Timeline list,
+   detail panel, edit panel, and correction shell still render only
+   display-safe fields. The forbidden-field set
+   (`window_title` / `file_path_hint` / `full_path` / `clipboard` /
+   note internals / SQL / traceback / raw exception text) is still
+   absent from the frontend resources and from the bridge return
+   values. The four `err.message` leak closures above close the
+   last known exception-text leak surface in the Timeline code path.
+
+8. **CSS cleanup is additive.** No existing CSS rule was removed or
+   renamed. The three new classes share the same `.edit-status-*`
+   prefix family so they participate in the existing status-element
+   cascade without colliding with the Phase 3B.1+ card / section
+   styles.
+
+9. **Default WebView entry preserved.** `python -m worktrace.main`
+   (and the packaged `WorkTrace.exe`) still start the WebView UI
+   directly. The Overview, Timeline, and Time Details default
+   WebView entries are unchanged. No Tkinter fallback path was
+   introduced.
+
+10. **Release validation checklist updated.**
+    `docs/release-validation.md` now includes a Phase 3C Validation
+    section with the stabilization acceptance items and the release
+    blockers list.
+
+## Phase 3C Not Implemented
+
+Phase 3C does not implement and does not start:
+
+- Any new backend write capability;
+- Any new bridge / API / service method;
+- Any new DB schema;
+- Any new correction action;
+- Batch hide;
+- Batch delete;
+- Batch restore;
+- Restore all;
+- Undo stack;
+- Permanent delete;
+- Batch time correction;
+- Batch split;
+- Batch merge;
+- Batch note append;
+- Batch note merge;
+- Auto-rule creation;
+- Global overlap detection;
+- Arbitrary-length merge;
+- Multi-activity session whole-hide / whole-delete;
+- Statistics / Export migration to WebView;
+- Project Rules migration to WebView;
+- Settings / Privacy migration to WebView;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any Tkinter fallback path;
+- Any removal of an existing feature, bridge call, or test.
 
 ## Legacy Tkinter UI Handling
 

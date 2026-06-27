@@ -798,6 +798,32 @@ body {
     border: 1px solid #bbf7d0;
 }
 
+/* --- Phase 3C: Unified status type classes ------------------------- */
+/* Additional status types so loading / empty / info states share the same
+   visual vocabulary as error / success across the Timeline list, detail
+   panel, edit panel, and correction shell. These are additive: the existing
+   .edit-status-error / .edit-status-success rules above remain the primary
+   error/success styles; the new classes extend the vocabulary for info,
+   loading, and empty states so every Timeline area can express a consistent
+   set of states. */
+.edit-status-info {
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+}
+
+.edit-status-loading {
+    background: #f1f5f9;
+    color: #475569;
+    border: 1px solid #e2e8f0;
+}
+
+.edit-status-empty {
+    background: #f8fafc;
+    color: #94a3b8;
+    border: 1px solid #f1f5f9;
+}
+
 /* --- Phase 3B.1: Timeline time correction ---------------------------- */
 
 /* The time-correction section is visually separated from the project/note

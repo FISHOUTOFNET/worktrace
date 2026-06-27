@@ -2816,3 +2816,91 @@ service method, DB schema, or new correction action.
 - Any Tkinter fallback, React / Vue / Vite / Node dependency, local HTTP
   server, CDN, external font, or `localStorage` / `sessionStorage`
   usage is introduced.
+
+## WebView Phase 3C Validation
+
+Phase 3C is the **Timeline UI release stabilization** phase. It is a
+**stabilization-only** phase, not a feature expansion phase. It does NOT
+add any backend write capability, bridge / API / service method, DB
+schema, correction action, or UI control.
+
+### Phase 3C Scope
+
+- Unified Timeline status semantics: additive unified status helpers
+  (`setTimelineStatus` / `setDetailStatus` / `setEditStatus` /
+  `setCorrectionStatus`) plus `STATUS_TYPE_CLASS` map,
+  `statusClassFor(type)`, and `applyStatusType(el, type)` are added to
+  `worktrace/webview_ui/app.js`. They delegate to the existing
+  per-area helpers without changing any DOM contract.
+- Unified status-type CSS classes: `.edit-status-info` /
+  `.edit-status-loading` / `.edit-status-empty` are added to
+  `worktrace/webview_ui/styles.css` as additive rules sharing the
+  existing `.edit-status-*` prefix family.
+- Display-safe hardening — `err.message` leak closure: four
+  `err.message` references in `loadTimeline().catch()` and the three
+  `refreshAll()` catch blocks (status / overview / recent) are
+  replaced with stable Chinese fallback strings so raw exception text
+  never reaches the UI.
+- No backend change: `bridge.py`, `timeline_api.py`,
+  `timeline_service.py`, `activity_service.py`, and `schema.sql` are
+  unchanged. The locked bridge method set (21 methods asserted by
+  `test_bridge_no_new_methods_for_phase_3b9_1`) is preserved.
+- No DOM contract change: all existing JS-dependent IDs, CSS classes,
+  function names, and Chinese status / button / copy strings asserted
+  by `tests/test_webview_resources.py` and the Phase 3B.9 / 3B.9.1
+  test suite are preserved.
+- No new UI control: no new sidebar nav item, top-level page, action
+  button, destructive-action UI, or correction shell card.
+
+### Phase 3C Verification
+
+- `python -m pytest` passes (all Phase 3C stabilization tests pass; all
+  prior-phase tests continue to pass).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds.
+- No new bridge / API / service method is introduced.
+- No new DB schema is introduced.
+- No new correction action is introduced.
+- No `err.message` (or `err.toString()`) reference reaches a status /
+  error DOM element in the Timeline code path.
+- The unified status helpers exist and are referenced from
+  `app.js`.
+- The three new CSS classes (`.edit-status-info` /
+  `.edit-status-loading` / `.edit-status-empty`) exist in
+  `styles.css`.
+- The Overview / Timeline / Time Details default WebView entry tests
+  continue to pass.
+- The PyInstaller resource path tests continue to pass.
+
+### Phase 3C Release Blockers
+
+- Any new backend write capability is introduced.
+- Any new bridge / API / service method is introduced.
+- Any new DB schema is introduced.
+- Any new correction action is introduced.
+- Timeline loading / empty / error states are broken.
+- Edit / correction saving state gets stuck (saving flag never resets).
+- A dirty guard regression (any write path proceeds while
+  `isEditDirty()` is true).
+- A cross-save bypass (two correction-shell writes run concurrently).
+- Auto-refresh overwrites dirty / saving state.
+- Raw `window_title` / `file_path_hint` / `full_path` / clipboard /
+  note / traceback / SQL / raw exception text is leaked in the
+  Timeline list, detail panel, edit panel, or correction shell.
+- A soft delete is described as permanent delete.
+- Batch hide / delete / restore / permanent delete / undo stack UI is
+  introduced.
+- `localStorage` / `sessionStorage` / CDN / external font is
+  introduced.
+- The bridge imports `services` / `db` / `collector` / `runtime` /
+  `security` / `config` directly.
+- Any Phase 3B.9.1 / 3B.9 / 3B.8.1 / 3B.8 / 3B.7.1 / 3B.7 /
+  3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A / 3B.4.1 / 3B.4 /
+  3B.3.1 / 3B.3 / 3B.2.1 / 3B.2 / 3B.1.1 / 3B.1 / 3A.1 / 3A /
+  2.1 regression.
+- The Overview / Timeline / Time Details default WebView entry
+  regresses.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local
+  HTTP server, CDN, external font, or `localStorage` /
+  `sessionStorage` usage is introduced.
+- Statistics / Export / Project Rules / Settings / Privacy migration
+  to WebView is started.
