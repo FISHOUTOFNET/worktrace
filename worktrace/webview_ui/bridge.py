@@ -128,6 +128,7 @@ import re
 from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api
+from ..api.statistics_api import StatisticsSummaryError
 from ..api.timeline_api import (
     TimelineBatchNoteError,
     TimelineBatchProjectError,
@@ -242,6 +243,17 @@ _RESTORE_ERROR_MESSAGES = {
     "in_progress": "进行中记录暂不支持恢复",
     "invalid_date": "日期无效",
     "operation_failed": "恢复失败",
+}
+
+# Maps ``StatisticsSummaryError.code`` to stable Chinese user-facing messages
+# for the Phase 4A read-only statistics / export summary. Unknown codes
+# collapse to the load-focused "加载统计失败" so internal details are never
+# surfaced and a statistics load failure never echoes a write-focused message.
+_STATISTICS_ERROR_MESSAGES = {
+    "invalid_date": "请选择有效日期",
+    "invalid_range": "请选择有效日期范围",
+    "range_too_large": "日期范围过大",
+    "operation_failed": "加载统计失败",
 }
 
 
@@ -1063,6 +1075,41 @@ class WebViewBridge:
             logger.exception("webview bridge get_timeline_restorable_activities failed")
             return {"ok": False, "error": "加载可恢复记录失败", "activities": []}
 
+    # --- Phase 4A: Statistics / Export read-only summary ----------------
+
+    def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:
+        """Return a read-only statistics + export-preview summary.
+
+        Phase 4A read-only path: this method only reads closed activities
+        through ``worktrace.api`` and never writes to the DB, never writes a
+        file, and never opens a save dialog. ``date_from`` and ``date_to``
+        must be ``YYYY-MM-DD`` strings with ``date_from <= date_to`` and an
+        inclusive span of at most 31 calendar days.
+
+        Returns ``{"ok": true, "summary": {...}}`` on success or
+        ``{"ok": false, "error": "<chinese message>", "summary": null}`` on
+        failure. Known failure modes map to clear Chinese messages; unknown
+        failures collapse to ``"加载统计失败"``. Tracebacks, SQL errors, raw
+        ``window_title`` / ``file_path_hint`` / ``full_path`` / clipboard /
+        note, and internal exception details are never surfaced.
+        """
+        try:
+            if not isinstance(date_from, str) or not isinstance(date_to, str):
+                return {"ok": False, "error": "请选择有效日期", "summary": None}
+            if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):
+                return {"ok": False, "error": "请选择有效日期", "summary": None}
+            summary = statistics_api.get_statistics_export_summary(date_from, date_to)
+            return {"ok": True, "summary": _statistics_summary_payload(summary)}
+        except StatisticsSummaryError as exc:
+            return {
+                "ok": False,
+                "error": _STATISTICS_ERROR_MESSAGES.get(exc.code, "加载统计失败"),
+                "summary": None,
+            }
+        except Exception:
+            logger.exception("webview bridge get_statistics_export_summary failed")
+            return {"ok": False, "error": "加载统计失败", "summary": None}
+
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
     """Validate and normalize the ``activity_ids`` argument from JS.
@@ -1184,6 +1231,74 @@ def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "active": True,
         "display": f"{name}｜{project}｜{elapsed}｜{state}",
+    }
+
+
+def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
+    """Build the display-safe Phase 4A statistics summary for JS.
+
+    The service already returns a display-safe dict; this helper adds
+    pre-formatted duration strings (matching the Timeline bridge convention)
+    so the frontend can render without a second bridge round-trip. Only
+    aggregated numbers and display names are surfaced — raw ``window_title``,
+    ``file_path_hint``, ``full_path``, ``clipboard``, ``note``, SQL, and
+    tracebacks are never present.
+    """
+    by_project = [
+        {
+            "key": str(group.get("key") or ""),
+            "display_name": str(group.get("display_name") or ""),
+            "duration_seconds": int(group.get("duration_seconds") or 0),
+            "duration": format_duration(group.get("duration_seconds") or 0),
+            "activity_count": int(group.get("activity_count") or 0),
+            "percentage": float(group.get("percentage") or 0.0),
+        }
+        for group in (summary.get("by_project") or [])
+    ]
+    by_app = [
+        {
+            "key": str(group.get("key") or ""),
+            "display_name": str(group.get("display_name") or ""),
+            "duration_seconds": int(group.get("duration_seconds") or 0),
+            "duration": format_duration(group.get("duration_seconds") or 0),
+            "activity_count": int(group.get("activity_count") or 0),
+            "percentage": float(group.get("percentage") or 0.0),
+        }
+        for group in (summary.get("by_app") or [])
+    ]
+    by_status = [
+        {
+            "key": str(group.get("key") or ""),
+            "display_name": str(group.get("display_name") or ""),
+            "duration_seconds": int(group.get("duration_seconds") or 0),
+            "duration": format_duration(group.get("duration_seconds") or 0),
+            "activity_count": int(group.get("activity_count") or 0),
+            "percentage": float(group.get("percentage") or 0.0),
+        }
+        for group in (summary.get("by_status") or [])
+    ]
+    total_seconds = int(summary.get("total_duration_seconds") or 0)
+    preview = summary.get("export_preview") or {}
+    return {
+        "date_from": str(summary.get("date_from") or ""),
+        "date_to": str(summary.get("date_to") or ""),
+        "total_duration_seconds": total_seconds,
+        "total_duration": format_duration(total_seconds),
+        "activity_count": int(summary.get("activity_count") or 0),
+        "project_count": int(summary.get("project_count") or 0),
+        "app_count": int(summary.get("app_count") or 0),
+        "by_project": by_project,
+        "by_app": by_app,
+        "by_status": by_status,
+        "export_preview": {
+            "date_from": str(preview.get("date_from") or ""),
+            "date_to": str(preview.get("date_to") or ""),
+            "included_activity_count": int(preview.get("included_activity_count") or 0),
+            "included_duration_seconds": int(preview.get("included_duration_seconds") or 0),
+            "included_duration": format_duration(preview.get("included_duration_seconds") or 0),
+            "available_formats": list(preview.get("available_formats") or []),
+            "export_actions_enabled": bool(preview.get("export_actions_enabled")),
+        },
     }
 
 

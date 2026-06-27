@@ -3020,4 +3020,67 @@ regression tests.
   HTTP server, CDN, external font, or `localStorage` /
   `sessionStorage` usage is introduced.
 - Statistics / Export / Project Rules / Settings / Privacy migration
-  to WebView is started.
+  to WebView is started. (Phase 4A lifts this blocker for the
+  Statistics / Export read-only page only; Project Rules and Settings /
+  Privacy must still remain placeholders.)
+
+## WebView Phase 4A Validation
+
+Phase 4A migrates the Statistics / Export page from the legacy Tkinter
+placeholder to a read-only WebView page. The page shows a statistics
+summary, grouped tables, and an export preview, but does not perform any
+export write action.
+
+### Phase 4A Automated Validation
+
+- `python -m pytest` passes (all prior-phase tests plus the new
+  `tests/test_statistics_api_summary.py`,
+  `tests/test_webview_bridge_statistics.py`, and the Phase 4A additions
+  to `tests/test_webview_resources.py`).
+- `python -m PyInstaller --noconfirm --clean WorkTrace.spec` succeeds and
+  the bundled WebView resources include the updated `index.html`,
+  `app.js`, and `styles.css`.
+
+### Phase 4A Read-Only Path
+
+- The Statistics / Export page is reached via the sidebar `统计与导出`
+  entry and lazy-loads the summary on first navigation.
+- The default date range is today; the user can change the range and
+  click `加载统计`, or use the quick-range buttons (`今天` / `最近 7 天`
+  / `本月`).
+- The summary cards show total duration, activity count, project count,
+  and app count.
+- The grouped tables show `按项目` / `按应用` / `按状态` breakdowns with
+  display name, duration, activity count, and percentage.
+- The export preview shows the current range, included activity count,
+  included duration, and available formats. The export action button is
+  disabled and says `导出动作将在后续阶段开放`.
+- The service / API / bridge path is read-only: no DB write, no file
+  write, no save dialog, no export action.
+- The payload is display-safe: no raw `window_title`, `file_path_hint`,
+  `full_path`, `clipboard`, `note`, SQL, or traceback is surfaced.
+
+### Phase 4A Release Blockers
+
+- Any export write action is introduced (CSV / Excel / PDF / timesheet
+  file creation).
+- A save file dialog or folder-open call is introduced.
+- Any raw title / `window_title` / `file_path_hint` / `full_path` / clipboard /
+  note leaks into the Statistics / Export page, the bridge return
+  value, or the logs.
+- A traceback / SQL / raw exception string is shown in the Statistics /
+  Export page.
+- Any DB schema change is introduced.
+- Any write API / write bridge method is introduced.
+- Project Rules migration to WebView is started.
+- Settings / Privacy migration to WebView is started.
+- The legacy Tkinter / CustomTkinter UI code is deleted.
+- `localStorage` / `sessionStorage` / CDN / external font is introduced.
+- The Overview / Timeline default WebView entry or behavior regresses.
+- Any Phase 3C.1 / 3C / 3B.9.1 / 3B.9 / 3B.8.1 / 3B.8 / 3B.7.1 / 3B.7 /
+  3B.6.1 / 3B.6 / 3B.5B.1 / 3B.5B / 3B.5A / 3B.4.1 / 3B.4 /
+  3B.3.1 / 3B.3 / 3B.2.1 / 3B.2 / 3B.1.1 / 3B.1 / 3A.1 / 3A /
+  2.1 regression.
+- Any Tkinter fallback, React / Vue / Vite / Node dependency, local
+  HTTP server, CDN, external font, or `localStorage` / `sessionStorage`
+  usage is introduced.

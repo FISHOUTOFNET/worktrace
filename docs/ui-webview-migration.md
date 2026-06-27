@@ -451,7 +451,13 @@ The migration is phased so each step is independently shippable:
   implemented; other batch operations (batch hide / batch delete / batch
   time / batch split / batch merge) and the wider correction page remain
   not yet started.
-- Phase 4: Statistics / Export.
+- Phase 4: Statistics / Export. Phase 4A — read-only WebView migration
+  foundation — is **completed**: the Statistics / Export page is migrated
+  from the legacy Tkinter placeholder to a read-only WebView page that
+  shows statistics summary cards, grouped tables (by project / by app /
+  by status), and an export preview. No export write action, no file
+  creation, no save dialog, no DB schema change, and no write API is
+  introduced in Phase 4A.
 - Phase 5: Rules.
 - Phase 6: Settings / Privacy / Encrypted Backup.
 - Cleanup: remove the legacy Tkinter UI. This is a cleanup phase reached
@@ -3404,6 +3410,100 @@ Phase 3C.1 does not implement and does not start:
 - Any `localStorage` / `sessionStorage` usage;
 - Any Tkinter fallback path;
 - Any removal of an existing feature, bridge call, or test.
+
+## Phase 4A Implemented Scope
+
+Phase 4A is the **Statistics / Export read-only WebView migration
+foundation**. It migrates the Statistics / Export page from the legacy
+Tkinter placeholder to a read-only WebView page. The page shows a
+statistics summary, grouped tables, and an export preview, but does not
+perform any export write action.
+
+Implemented in Phase 4A:
+
+- **WebView navigation entry**: the sidebar still lists `统计与导出`; the
+  page section `#page-statistics` is now a real migrated page (no longer
+  the `WebView 迁移中` placeholder).
+- **Read-only page header**: the header says `统计 / 导出` with the
+  subtitle `本阶段仅提供只读统计和导出预览，暂不写入文件。`.
+- **Date range controls**: `statistics-date-from` / `statistics-date-to`
+  date inputs, a `加载统计` load button, and quick-range buttons
+  (`今天` / `最近 7 天` / `本月`). The page lazy-loads the summary on
+  first navigation; the default range is today.
+- **Summary cards**: four cards show total duration, activity count,
+  project count, and app count.
+- **Grouped tables**: three tables show `按项目` / `按应用` / `按状态`
+  breakdowns. Each row has a display name, duration, activity count, and
+  percentage. Each table has an empty-state line `暂无统计数据`.
+- **Export preview**: a card shows the current range, included activity
+  count, included duration, and available formats (`csv`, `timesheet`).
+  The export action button is disabled and says
+  `导出动作将在后续阶段开放`. A hint explicitly states the page does
+  not write CSV / Excel / PDF / timesheet files, does not open a save
+  dialog, does not open a folder, and does not auto-submit a timesheet.
+- **Read-only service**: `statistics_service.get_statistics_export_summary`
+  reads closed activities via `timeline_service.get_report_activity_rows`
+  (which already excludes `is_deleted = 1` and, with `include_hidden=False`,
+  excludes `is_hidden = 1`). In-progress activities (`end_time IS NULL`)
+  are excluded; Phase 4A intentionally does NOT project live time (unlike
+  the legacy Tkinter page) so the read-only preview is stable. The
+  inclusive date span is capped at `STATISTICS_SUMMARY_MAX_RANGE_DAYS`
+  (31 days). The payload is display-safe: it contains only aggregated
+  numbers and display names (project name, app name, status label). Raw
+  `window_title`, `file_path_hint`, `full_path`, `clipboard`, `note`,
+  SQL, and tracebacks are never surfaced.
+- **Read-only API**: `statistics_api.get_statistics_export_summary`
+  validates the date range and raises `StatisticsSummaryError` with
+  stable codes (`invalid_date` / `invalid_range` / `range_too_large` /
+  `operation_failed`). Unexpected service exceptions collapse to
+  `operation_failed` so internal details never reach the bridge.
+- **Read-only bridge**: `WebViewBridge.get_statistics_export_summary`
+  calls the API, maps `StatisticsSummaryError` codes to stable Chinese
+  messages (`请选择有效日期` / `请选择有效日期范围` / `日期范围过大` /
+  `加载统计失败`), and returns `{"ok": true, "summary": {...}}` on
+  success or `{"ok": false, "error": "<chinese>", "summary": null}` on
+  failure. The bridge payload includes pre-formatted duration strings so
+  the frontend does not need a second bridge round-trip. Unexpected
+  exceptions collapse to `加载统计失败` without echoing tracebacks, SQL,
+  raw exception text, `window_title`, `file_path_hint`, `full_path`,
+  `clipboard`, or `note`.
+- **CSS**: the page uses the existing WebView visual system (white cards,
+  slate borders, tabular-numeric alignment). Summary cards wrap to 2 / 1
+  columns on narrow windows; grouped tables stack on narrow windows;
+  long names truncate with ellipsis; date controls wrap. The disabled
+  export action button uses `cursor: not-allowed`.
+- **Tests**: `tests/test_statistics_api_summary.py` covers the
+  service / API read-only contract (aggregation, hidden / deleted / in-
+  progress exclusion, date range validation, no DB writes, no raw
+  fields). `tests/test_webview_bridge_statistics.py` covers the bridge
+  read-only contract (success, error code mapping, unexpected-exception
+  collapse, no raw fields, no export write method, bridge import
+  boundary). `tests/test_webview_resources.py` adds Phase 4A
+  frontend / CSS / boundary / doc regression locks.
+
+## Phase 4A Not Implemented
+
+Phase 4A does not implement and does not start:
+
+- Any export write action;
+- Any CSV / Excel / PDF / timesheet file creation;
+- Any save file dialog;
+- Any folder opening;
+- Any export write bridge / API / service method;
+- Any DB schema change;
+- Any DB write;
+- Any live-time projection (the legacy Tkinter Statistics page projects
+  the live snapshot via `include_live=True`; Phase 4A intentionally does
+  not, so the read-only preview is stable);
+- Any Project Rules migration to WebView;
+- Any Settings / Privacy migration to WebView;
+- Any removal of the legacy Tkinter / CustomTkinter UI code;
+- Any Tkinter fallback path;
+- Any React / Vue / Vite / Node dependency;
+- Any local HTTP server;
+- Any CDN / external JS / CSS / font / Google Fonts usage;
+- Any `localStorage` / `sessionStorage` usage;
+- Any change to the Timeline / Overview existing entry points or behavior.
 
 ## Legacy Tkinter UI Handling
 

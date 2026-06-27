@@ -131,6 +131,19 @@
     var restoreSaving = false;
     var restoreSavingActivityId = null;
 
+    // --- Phase 4A: Statistics / Export read-only state ------------------
+    // The Statistics / Export page is a read-only page: it only loads
+    // display-safe aggregated data via get_statistics_export_summary and
+    // never writes a file, opens a save dialog, or calls an export action.
+    // statisticsLoaded tracks whether the page has been loaded at least
+    // once; statisticsLoading guards the load button against double-clicks;
+    // statisticsRequestToken prevents stale responses from overwriting newer
+    // data when the user rapidly changes the date range. No state is ever
+    // persisted to browser storage.
+    var statisticsLoaded = false;
+    var statisticsLoading = false;
+    var statisticsRequestToken = 0;
+
     // --- Bridge helper --------------------------------------------------
 
     function callBridge(method) {
@@ -3761,6 +3774,166 @@
         loadTimeline(null);
     }
 
+    // --- Phase 4A: Statistics / Export read-only page -------------------
+
+    function localTodayStr() {
+        var d = new Date();
+        var y = d.getFullYear();
+        var m = String(d.getMonth() + 1).padStart(2, "0");
+        var day = String(d.getDate()).padStart(2, "0");
+        return y + "-" + m + "-" + day;
+    }
+
+    function formatDuration(seconds) {
+        var s = Math.max(0, parseInt(seconds, 10) || 0);
+        var h = Math.floor(s / 3600);
+        var rem = s % 3600;
+        var m = Math.floor(rem / 60);
+        var sec = rem % 60;
+        function pad(n) { return n < 10 ? "0" + n : String(n); }
+        return pad(h) + ":" + pad(m) + ":" + pad(sec);
+    }
+
+    function showStatisticsError(message) {
+        var banner = document.getElementById("statistics-error");
+        if (!banner) return;
+        if (!message) {
+            banner.hidden = true;
+            banner.textContent = "加载统计失败";
+            return;
+        }
+        banner.hidden = false;
+        banner.textContent = message;
+    }
+
+    function clearStatisticsError() {
+        showStatisticsError("");
+    }
+
+    function setStatisticsLoading(loading) {
+        statisticsLoading = loading;
+        var el = document.getElementById("statistics-loading");
+        if (el) el.hidden = !loading;
+        var btn = document.getElementById("statistics-load-btn");
+        if (btn) btn.disabled = loading;
+    }
+
+    function loadStatisticsExportSummary() {
+        var fromEl = document.getElementById("statistics-date-from");
+        var toEl = document.getElementById("statistics-date-to");
+        var dateFrom = fromEl ? fromEl.value : "";
+        var dateTo = toEl ? toEl.value : "";
+        if (!dateFrom || !dateTo) {
+            showStatisticsError("请选择有效日期");
+            return;
+        }
+        setStatisticsLoading(true);
+        clearStatisticsError();
+        var token = ++statisticsRequestToken;
+        callBridge("get_statistics_export_summary", dateFrom, dateTo).then(function (result) {
+            if (token !== statisticsRequestToken) return;  // stale response
+            var data = handleResult(result, function (msg) {
+                // Phase 4A: never surface raw exception text; the bridge
+                // already collapsed to a stable Chinese message.
+                showStatisticsError(msg || "加载统计失败");
+            });
+            setStatisticsLoading(false);
+            if (!data) return;  // keep prior rendered data on error
+            statisticsLoaded = true;
+            showStatistics(data.summary);
+            clearStatisticsError();
+        }).catch(function () {
+            if (token !== statisticsRequestToken) return;  // stale response
+            setStatisticsLoading(false);
+            // Keep prior data on screen; just surface the error.
+            showStatisticsError("加载统计失败");
+        });
+    }
+
+    function showStatistics(summary) {
+        if (!summary) return;
+        document.getElementById("stats-total").textContent = summary.total_duration || "00:00:00";
+        document.getElementById("stats-activity-count").textContent = String(summary.activity_count || 0);
+        document.getElementById("stats-project-count").textContent = String(summary.project_count || 0);
+        document.getElementById("stats-app-count").textContent = String(summary.app_count || 0);
+        renderStatsTable("stats-by-project", "stats-empty-project", summary.by_project || []);
+        renderStatsTable("stats-by-app", "stats-empty-app", summary.by_app || []);
+        renderStatsTable("stats-by-status", "stats-empty-status", summary.by_status || []);
+        renderExportPreview(summary.export_preview || {}, summary.date_from, summary.date_to);
+    }
+
+    function renderStatsTable(tbodyId, emptyId, groups) {
+        var tbody = document.getElementById(tbodyId);
+        var empty = document.getElementById(emptyId);
+        if (!tbody) return;
+        if (!groups || !groups.length) {
+            tbody.innerHTML = "";
+            if (empty) empty.hidden = false;
+            return;
+        }
+        if (empty) empty.hidden = true;
+        var html = "";
+        for (var i = 0; i < groups.length; i++) {
+            var g = groups[i];
+            var name = safeText(g.display_name, "");
+            var duration = safeText(g.duration, "00:00:00");
+            var count = String(g.activity_count || 0);
+            var pct = String(g.percentage || 0) + "%";
+            html += '<tr class="stats-table-row">'
+                + '<td class="stats-table-name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</td>'
+                + '<td class="stats-table-duration">' + escapeHtml(duration) + '</td>'
+                + '<td class="stats-table-count">' + escapeHtml(count) + '</td>'
+                + '<td class="stats-table-pct">' + escapeHtml(pct) + '</td>'
+                + '</tr>';
+        }
+        tbody.innerHTML = html;
+    }
+
+    function renderExportPreview(preview, dateFrom, dateTo) {
+        var rangeEl = document.getElementById("stats-export-range");
+        var countEl = document.getElementById("stats-export-count");
+        var durationEl = document.getElementById("stats-export-duration");
+        var formatsEl = document.getElementById("stats-export-formats");
+        if (rangeEl) rangeEl.textContent = escapeHtml(safeText(dateFrom, "") + " 至 " + safeText(dateTo, ""));
+        if (countEl) countEl.textContent = String(preview.included_activity_count || 0);
+        if (durationEl) durationEl.textContent = preview.included_duration || "00:00:00";
+        if (formatsEl) {
+            var formats = preview.available_formats || [];
+            formatsEl.textContent = formats.length ? escapeHtml(formats.join("、")) : "--";
+        }
+    }
+
+    function applyStatisticsQuickRange(type) {
+        var today = localTodayStr();
+        var from, to;
+        if (type === "today") {
+            from = today;
+            to = today;
+        } else if (type === "7d") {
+            from = shiftDate(today, -6);
+            to = today;
+        } else if (type === "month") {
+            var parts = today.split("-");
+            from = parts[0] + "-" + parts[1] + "-01";
+            to = today;
+        } else {
+            return;
+        }
+        var fromEl = document.getElementById("statistics-date-from");
+        var toEl = document.getElementById("statistics-date-to");
+        if (fromEl) fromEl.value = from;
+        if (toEl) toEl.value = to;
+        loadStatisticsExportSummary();
+    }
+
+    function initStatisticsDefaults() {
+        var today = localTodayStr();
+        var fromEl = document.getElementById("statistics-date-from");
+        var toEl = document.getElementById("statistics-date-to");
+        if (fromEl && !fromEl.value) fromEl.value = today;
+        if (toEl && !toEl.value) toEl.value = today;
+    }
+
     // --- Utility --------------------------------------------------------
 
     function escapeHtml(text) {
@@ -3946,6 +4119,13 @@
         if (pageId === "timeline" && !timelineLoaded && !timelineLoading) {
             loadTimeline(timelineDate);
         }
+        // Phase 4A: lazy-load Statistics / Export read-only summary when
+        // navigating to the page for the first time. Defaults to today's
+        // date range. No write / file / dialog action is triggered.
+        if (pageId === "statistics" && !statisticsLoaded && !statisticsLoading) {
+            initStatisticsDefaults();
+            loadStatisticsExportSummary();
+        }
     }
 
     function initNav() {
@@ -4022,6 +4202,32 @@
         // delegation on the list container handles clicks without
         // re-binding on every render.
         bindRestoreControls();
+        // Phase 4A: Statistics / Export read-only page controls. The load
+        // button triggers a read-only bridge call; the quick-range buttons
+        // only update the in-memory date inputs and re-trigger the read.
+        // No export / file / dialog action is wired here.
+        var statsLoadBtn = document.getElementById("statistics-load-btn");
+        if (statsLoadBtn) {
+            statsLoadBtn.addEventListener("click", loadStatisticsExportSummary);
+        }
+        var statsTodayBtn = document.getElementById("statistics-today-btn");
+        if (statsTodayBtn) {
+            statsTodayBtn.addEventListener("click", function () {
+                applyStatisticsQuickRange("today");
+            });
+        }
+        var stats7dBtn = document.getElementById("statistics-7d-btn");
+        if (stats7dBtn) {
+            stats7dBtn.addEventListener("click", function () {
+                applyStatisticsQuickRange("7d");
+            });
+        }
+        var statsMonthBtn = document.getElementById("statistics-month-btn");
+        if (statsMonthBtn) {
+            statsMonthBtn.addEventListener("click", function () {
+                applyStatisticsQuickRange("month");
+            });
+        }
     }
 
     function startAutoRefresh() {

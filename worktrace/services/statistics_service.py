@@ -9,6 +9,26 @@ from . import timeline_service
 from .live_time_service import safe_int, snapshot_elapsed_seconds, snapshot_extra_seconds
 from .settings_service import get_setting
 
+# Phase 4A: maximum inclusive calendar-day span accepted by the read-only
+# statistics/export summary. A 31-day span (e.g. 2026-06-01..2026-07-01) is
+# allowed; anything wider is rejected as ``range_too_large`` so the first
+# version does not read an unbounded amount of data.
+STATISTICS_SUMMARY_MAX_RANGE_DAYS = 31
+
+# Phase 4A: display-safe Chinese labels for the by_status breakdown. The raw
+# status codes (``normal`` / ``idle`` / ``paused`` / ``excluded`` / ``error``)
+# are used as the stable ``key``; these labels are the ``display_name``.
+_STATUS_DISPLAY_LABELS = {
+    STATUS_NORMAL: "正常",
+    STATUS_IDLE: "空闲",
+    STATUS_PAUSED: "已暂停",
+    STATUS_EXCLUDED: "已排除",
+    "error": "异常",
+}
+
+_UNKNOWN_APP_LABEL = "未知应用"
+_UNKNOWN_STATUS_LABEL = "未知状态"
+
 
 def get_summary(start_date: str, end_date: str, ensure_context: bool = True, include_live: bool = False) -> dict:
     if ensure_context:
@@ -160,3 +180,144 @@ def _read_current_activity_snapshot() -> dict | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
+
+
+# --- Phase 4A: read-only statistics / export preview ---------------------
+#
+# ``get_statistics_export_summary`` is a READ-ONLY aggregation used by the
+# WebView Statistics / Export page. It never writes to the DB, never writes a
+# file, and never opens a save dialog. It only reads closed activities via
+# ``timeline_service.get_report_activity_rows`` (which already excludes
+# ``is_deleted = 1`` and, with ``include_hidden=False``, ``is_hidden = 1``).
+#
+# In-progress activities (``end_time IS NULL``) are excluded: they have no
+# finalized duration. This matches the documented Phase 4A semantics and is
+# locked by tests. The legacy Tkinter Statistics page projects the live
+# snapshot via ``include_live=True``; Phase 4A intentionally does NOT project
+# live time so the read-only preview is stable and deterministic.
+#
+# The payload is display-safe: it contains only aggregated numbers and
+# display names (project name, app name, status label). Raw ``window_title``,
+# ``file_path_hint``, ``full_path``, ``clipboard``, ``note``, SQL, and
+# tracebacks are never surfaced.
+
+
+def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
+    """Return a read-only statistics + export-preview payload for a date range.
+
+    Inputs are ``YYYY-MM-DD`` strings. ``date_from`` must be on or before
+    ``date_to`` and the inclusive span must not exceed
+    ``STATISTICS_SUMMARY_MAX_RANGE_DAYS`` calendar days. Violations raise
+    ``ValueError`` (the API layer maps these to stable error codes).
+
+    The returned dict is display-safe and contains no raw DB rows.
+    """
+    _validate_summary_date_range(date_from, date_to)
+    rows = timeline_service.get_report_activity_rows(
+        date_from,
+        date_to,
+        include_hidden=False,
+        ensure_context=True,
+    )
+    # Only closed activities have a finalized duration. ``is_in_progress`` is
+    # set by the timeline service before it projects an open activity's
+    # ``end_time``, so this flag is reliable regardless of the projected
+    # ``end_time`` value.
+    closed_rows = [row for row in rows if not row.get("is_in_progress")]
+
+    total_duration = 0
+    all_activity_ids: set[int] = set()
+    by_project: dict[str, dict] = {}
+    by_app: dict[str, dict] = {}
+    by_status: dict[str, dict] = {}
+
+    for row in closed_rows:
+        duration = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
+        total_duration += duration
+        activity_id = int(row.get("id") or 0)
+        if activity_id:
+            all_activity_ids.add(activity_id)
+
+        project_name = str(row.get("report_project_name") or row.get("display_project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
+        app_name = str(row.get("app_name") or "").strip() or _UNKNOWN_APP_LABEL
+        status_code = str(row.get("status") or "").strip()
+        status_label = _STATUS_DISPLAY_LABELS.get(status_code, _UNKNOWN_STATUS_LABEL)
+
+        _accumulate_summary_group(by_project, project_name, project_name, duration, activity_id)
+        _accumulate_summary_group(by_app, app_name, app_name, duration, activity_id)
+        _accumulate_summary_group(by_status, status_code or "unknown", status_label, duration, activity_id)
+
+    activity_count = len(all_activity_ids)
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "total_duration_seconds": total_duration,
+        "activity_count": activity_count,
+        "project_count": len(by_project),
+        "app_count": len(by_app),
+        "by_project": _build_summary_groups(by_project, total_duration),
+        "by_app": _build_summary_groups(by_app, total_duration),
+        "by_status": _build_summary_groups(by_status, total_duration),
+        "export_preview": {
+            "date_from": date_from,
+            "date_to": date_to,
+            "included_activity_count": activity_count,
+            "included_duration_seconds": total_duration,
+            "available_formats": ["csv", "timesheet"],
+            "export_actions_enabled": False,
+        },
+    }
+
+
+def _validate_summary_date_range(date_from: str, date_to: str) -> None:
+    """Validate the date range for the read-only statistics summary.
+
+    Raises ``ValueError`` with a stable code token (``invalid_date`` /
+    ``invalid_range`` / ``range_too_large``) so callers can map to
+    user-facing messages without echoing internal details.
+    """
+    if not isinstance(date_from, str) or not isinstance(date_to, str):
+        raise ValueError("invalid_date")
+    try:
+        start = date.fromisoformat(date_from)
+        end = date.fromisoformat(date_to)
+    except ValueError:
+        raise ValueError("invalid_date")
+    if start > end:
+        raise ValueError("invalid_range")
+    if (end - start).days > STATISTICS_SUMMARY_MAX_RANGE_DAYS - 1:
+        raise ValueError("range_too_large")
+
+
+def _accumulate_summary_group(
+    groups: dict[str, dict],
+    key: str,
+    display_name: str,
+    duration: int,
+    activity_id: int,
+) -> None:
+    group = groups.setdefault(
+        key,
+        {"display_name": display_name, "duration_seconds": 0, "activity_ids": set()},
+    )
+    group["duration_seconds"] += duration
+    if activity_id:
+        group["activity_ids"].add(activity_id)
+
+
+def _build_summary_groups(groups: dict[str, dict], total_duration: int) -> list[dict]:
+    items: list[dict] = []
+    for key, group in groups.items():
+        duration = int(group["duration_seconds"])
+        percentage = round(duration / total_duration * 100, 1) if total_duration > 0 else 0.0
+        items.append(
+            {
+                "key": key,
+                "display_name": str(group["display_name"]),
+                "duration_seconds": duration,
+                "activity_count": len(group["activity_ids"]),
+                "percentage": percentage,
+            }
+        )
+    items.sort(key=lambda item: (-item["duration_seconds"], str(item["display_name"]).casefold()))
+    return items

@@ -256,7 +256,124 @@
                 </div>
             </section>
             <section id="page-statistics" class="page">
-                <div class="placeholder">WebView 迁移中，当前页面仍由旧 UI 支持。</div>
+                <header class="page-header stats-header">
+                    <div class="stats-header-text">
+                        <h1>统计 / 导出</h1>
+                        <p class="stats-subtitle">本阶段仅提供只读统计和导出预览，暂不写入文件。</p>
+                    </div>
+                </header>
+                <div class="stats-controls">
+                    <div class="stats-date-range">
+                        <label for="statistics-date-from" class="stats-date-label">开始</label>
+                        <input type="date" id="statistics-date-from" class="stats-date-input">
+                        <label for="statistics-date-to" class="stats-date-label">结束</label>
+                        <input type="date" id="statistics-date-to" class="stats-date-input">
+                        <button id="statistics-load-btn" class="stats-load-btn" type="button">加载统计</button>
+                    </div>
+                    <div class="stats-quick-range">
+                        <button id="statistics-today-btn" class="stats-quick-btn" type="button">今天</button>
+                        <button id="statistics-7d-btn" class="stats-quick-btn" type="button">最近 7 天</button>
+                        <button id="statistics-month-btn" class="stats-quick-btn" type="button">本月</button>
+                    </div>
+                </div>
+                <div id="statistics-error" class="error-banner" hidden>加载统计失败</div>
+                <div id="statistics-loading" class="stats-loading" hidden>正在加载统计…</div>
+                <div class="stats-summary-grid">
+                    <div class="stats-summary-card">
+                        <div class="stats-summary-label">总时长</div>
+                        <div id="stats-total" class="stats-summary-value">00:00:00</div>
+                    </div>
+                    <div class="stats-summary-card">
+                        <div class="stats-summary-label">活动数</div>
+                        <div id="stats-activity-count" class="stats-summary-value">0</div>
+                    </div>
+                    <div class="stats-summary-card">
+                        <div class="stats-summary-label">项目数</div>
+                        <div id="stats-project-count" class="stats-summary-value">0</div>
+                    </div>
+                    <div class="stats-summary-card">
+                        <div class="stats-summary-label">应用数</div>
+                        <div id="stats-app-count" class="stats-summary-value">0</div>
+                    </div>
+                </div>
+                <div class="stats-tables">
+                    <div class="stats-table-card">
+                        <div class="card-title">按项目</div>
+                        <div class="stats-table-wrap">
+                            <table class="stats-table">
+                                <thead>
+                                    <tr>
+                                        <th>名称</th>
+                                        <th>时长</th>
+                                        <th>活动数</th>
+                                        <th>占比</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="stats-by-project"></tbody>
+                            </table>
+                        </div>
+                        <div id="stats-empty-project" class="stats-empty" hidden>暂无统计数据</div>
+                    </div>
+                    <div class="stats-table-card">
+                        <div class="card-title">按应用</div>
+                        <div class="stats-table-wrap">
+                            <table class="stats-table">
+                                <thead>
+                                    <tr>
+                                        <th>名称</th>
+                                        <th>时长</th>
+                                        <th>活动数</th>
+                                        <th>占比</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="stats-by-app"></tbody>
+                            </table>
+                        </div>
+                        <div id="stats-empty-app" class="stats-empty" hidden>暂无统计数据</div>
+                    </div>
+                    <div class="stats-table-card">
+                        <div class="card-title">按状态</div>
+                        <div class="stats-table-wrap">
+                            <table class="stats-table">
+                                <thead>
+                                    <tr>
+                                        <th>名称</th>
+                                        <th>时长</th>
+                                        <th>活动数</th>
+                                        <th>占比</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="stats-by-status"></tbody>
+                            </table>
+                        </div>
+                        <div id="stats-empty-status" class="stats-empty" hidden>暂无统计数据</div>
+                    </div>
+                </div>
+                <div id="statistics-export-preview" class="stats-export-preview">
+                    <div class="card-title">导出预览</div>
+                    <div class="stats-export-rows">
+                        <div class="stats-export-row">
+                            <span class="stats-export-label">当前范围</span>
+                            <span id="stats-export-range" class="stats-export-value">--</span>
+                        </div>
+                        <div class="stats-export-row">
+                            <span class="stats-export-label">纳入活动数</span>
+                            <span id="stats-export-count" class="stats-export-value">0</span>
+                        </div>
+                        <div class="stats-export-row">
+                            <span class="stats-export-label">纳入总时长</span>
+                            <span id="stats-export-duration" class="stats-export-value">00:00:00</span>
+                        </div>
+                        <div class="stats-export-row">
+                            <span class="stats-export-label">可导出格式</span>
+                            <span id="stats-export-formats" class="stats-export-value">--</span>
+                        </div>
+                    </div>
+                    <div class="stats-export-hint">
+                        本阶段不支持写出 CSV、Excel、PDF 或 timesheet 文件，不打开保存对话框，不打开文件夹，不自动提交工时。
+                    </div>
+                    <button id="stats-export-action-btn" class="stats-export-action-btn" type="button" disabled>导出动作将在后续阶段开放</button>
+                </div>
             </section>
             <section id="page-rules" class="page">
                 <div class="placeholder">WebView 迁移中，当前页面仍由旧 UI 支持。</div>

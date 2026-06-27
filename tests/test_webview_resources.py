@@ -221,10 +221,11 @@ def test_index_html_timeline_page_has_total_and_current():
 
 
 def test_index_html_unmigrated_pages_still_have_placeholders():
-    """Phase 2: Statistics, Rules, and Settings pages are not yet migrated
-    and must still show the placeholder text."""
+    """Phase 2: Rules and Settings pages are not yet migrated
+    and must still show the placeholder text. Statistics is migrated
+    in Phase 4A."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    for page_id in ["statistics", "rules", "settings"]:
+    for page_id in ["rules", "settings"]:
         start = source.find('id="page-{}"'.format(page_id))
         assert start != -1, f"{page_id} section must exist"
         end = source.find('</section>', start)
@@ -7047,9 +7048,10 @@ def test_index_html_not_implemented_card_lists_unavailable_3c():
 
 
 def test_index_html_no_new_top_level_pages_3c():
-    """Phase 3C: no Statistics / Export, Project Rules, or Settings / Privacy
-    WebView pages may be added beyond the existing placeholders
-    (regression lock)."""
+    """Phase 3C / 4A: the sidebar nav must still list exactly the five known
+    items. As of Phase 4A the Statistics / Export page is migrated to a real
+    read-only WebView page; Project Rules and Settings / Privacy must remain
+    placeholders (regression lock)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     # The sidebar nav must still list exactly the five known items.
     for nav_item in ("概览", "时间详情", "统计与导出",
@@ -7057,13 +7059,18 @@ def test_index_html_no_new_top_level_pages_3c():
         assert nav_item in source, (
             "sidebar must still list nav item: " + nav_item
         )
-    # The Statistics / Export / Project Rules / Settings pages must remain
-    # placeholders, not migrated WebView pages.
-    for placeholder_id in ("page-statistics", "page-rules",
-                           "page-settings"):
+    # The Project Rules / Settings pages must remain placeholders, not
+    # migrated WebView pages. The Statistics / Export page is now a real
+    # read-only page (Phase 4A) and is no longer a placeholder.
+    for placeholder_id in ("page-rules", "page-settings"):
         pos = source.find('id="' + placeholder_id + '"')
         assert pos != -1, (
             "index.html must still contain the placeholder: " + placeholder_id
+        )
+        # The placeholder section must still contain the migration notice.
+        section = source[pos:pos + 400]
+        assert "WebView 迁移中" in section, (
+            "placeholder " + placeholder_id + " must still show the migration notice"
         )
 
 
@@ -7074,6 +7081,425 @@ def test_app_js_correction_shell_no_local_storage_3c():
     for forbidden in ("localStorage", "sessionStorage"):
         assert forbidden not in source, (
             "app.js must not use " + forbidden
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4A: Statistics / Export read-only WebView migration
+#
+# Phase 4A migrates the Statistics / Export page from the legacy Tkinter
+# placeholder to a read-only WebView page. The tests below lock the Phase 4A
+# contract: the page exists, the navigation entry exists, the date range
+# controls exist, the summary cards / grouped tables / export preview exist,
+# the export action is disabled, the frontend calls the read-only bridge
+# method, the loading / empty / error strings are present, no export write
+# button handler is wired, no localStorage / sessionStorage / CDN / external
+# resources are introduced, and the Overview / Timeline pages are not
+# regressed.
+# ---------------------------------------------------------------------------
+
+
+def test_index_html_statistics_nav_entry_4a():
+    """Phase 4A: the sidebar nav must contain the 统计与导出 entry."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'data-page="statistics"' in source
+    assert "统计与导出" in source
+
+
+def test_index_html_statistics_page_section_exists_4a():
+    """Phase 4A: the page-statistics section must exist and not be a
+    placeholder."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="page-statistics"')
+    assert pos != -1
+    section = source[pos:pos + 2000]
+    # The migrated page must NOT show the migration placeholder.
+    assert "WebView 迁移中" not in section
+
+
+def test_index_html_statistics_header_read_only_subtitle_4a():
+    """Phase 4A: the page header must say read-only / no file write."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="page-statistics"')
+    section = source[pos:pos + 600]
+    assert "统计 / 导出" in section
+    assert "本阶段仅提供只读统计和导出预览" in section
+    assert "暂不写入文件" in section
+
+
+def test_index_html_statistics_date_range_controls_4a():
+    """Phase 4A: date range controls must exist."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="statistics-date-from"' in source
+    assert 'id="statistics-date-to"' in source
+    assert 'id="statistics-load-btn"' in source
+    assert "加载统计" in source
+
+
+def test_index_html_statistics_quick_range_buttons_4a():
+    """Phase 4A: quick range buttons (today / 7d / month) exist."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="statistics-today-btn"' in source
+    assert 'id="statistics-7d-btn"' in source
+    assert 'id="statistics-month-btn"' in source
+
+
+def test_index_html_statistics_summary_cards_4a():
+    """Phase 4A: the four summary cards exist (total / activity / project /
+    app)."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="stats-total"' in source
+    assert 'id="stats-activity-count"' in source
+    assert 'id="stats-project-count"' in source
+    assert 'id="stats-app-count"' in source
+
+
+def test_index_html_statistics_grouped_tables_4a():
+    """Phase 4A: by_project / by_app / by_status tables exist."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="stats-by-project"' in source
+    assert 'id="stats-by-app"' in source
+    assert 'id="stats-by-status"' in source
+    assert "按项目" in source
+    assert "按应用" in source
+    assert "按状态" in source
+
+
+def test_index_html_statistics_empty_states_4a():
+    """Phase 4A: each table has an empty-state element."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="stats-empty-project"' in source
+    assert 'id="stats-empty-app"' in source
+    assert 'id="stats-empty-status"' in source
+    assert "暂无统计数据" in source
+
+
+def test_index_html_statistics_export_preview_4a():
+    """Phase 4A: the export preview card exists with range / count /
+    duration / formats fields."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="statistics-export-preview"' in source
+    assert 'id="stats-export-range"' in source
+    assert 'id="stats-export-count"' in source
+    assert 'id="stats-export-duration"' in source
+    assert 'id="stats-export-formats"' in source
+    assert "导出预览" in source
+
+
+def test_index_html_statistics_export_action_disabled_4a():
+    """Phase 4A: the export action button must be disabled and say the
+    action will be available in a later phase."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="stats-export-action-btn"' in source
+    assert "disabled" in source
+    assert "导出动作将在后续阶段开放" in source
+
+
+def test_index_html_statistics_export_hint_no_file_write_4a():
+    """Phase 4A: the export hint must explicitly say no CSV / Excel / PDF /
+    timesheet file write, no save dialog, no folder open, no auto-submit."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find("stats-export-hint")
+    assert pos != -1
+    section = source[pos:pos + 400]
+    for keyword in ("CSV", "Excel", "PDF", "timesheet", "保存对话框", "文件夹"):
+        assert keyword in section, (
+            "export hint must mention: " + keyword
+        )
+
+
+def test_index_html_statistics_loading_text_4a():
+    """Phase 4A: the loading text 正在加载统计… must be present."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert "正在加载统计" in source
+
+
+def test_index_html_statistics_error_text_4a():
+    """Phase 4A: the error banner default text 加载统计失败 must be present."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="statistics-error"' in source
+    assert "加载统计失败" in source
+
+
+def test_index_html_statistics_no_real_export_button_4a():
+    """Phase 4A: no real export write button may be present. The only
+    export-related button must be the disabled placeholder."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("export-csv-btn", "export-excel-btn", "export-pdf-btn",
+                      "export-timesheet-btn", "save-file-btn",
+                      "open-folder-btn", "导出csv", "导出excel",
+                      "导出pdf"):
+        assert forbidden not in lowered, (
+            "index.html must not contain real export button: " + forbidden
+        )
+
+
+def test_index_html_overview_and_timeline_nav_not_regressed_4a():
+    """Phase 4A: Overview and Timeline nav entries must still exist."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'data-page="overview"' in source
+    assert 'data-page="timeline"' in source
+
+
+# --- app.js Phase 4A --------------------------------------------------
+
+
+def test_app_js_statistics_state_variables_4a():
+    """Phase 4A: app.js must declare the statistics state variables."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "statisticsLoaded" in source
+    assert "statisticsLoading" in source
+    assert "statisticsRequestToken" in source
+
+
+def test_app_js_statistics_load_function_4a():
+    """Phase 4A: app.js must define loadStatisticsExportSummary and call the
+    bridge method get_statistics_export_summary."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function loadStatisticsExportSummary" in source
+    assert "get_statistics_export_summary" in source
+
+
+def test_app_js_statistics_render_function_4a():
+    """Phase 4A: app.js must define showStatistics and renderStatsTable."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function showStatistics" in source
+    assert "function renderStatsTable" in source
+    assert "function renderExportPreview" in source
+
+
+def test_app_js_statistics_quick_range_function_4a():
+    """Phase 4A: app.js must define applyStatisticsQuickRange and
+    initStatisticsDefaults."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function applyStatisticsQuickRange" in source
+    assert "function initStatisticsDefaults" in source
+
+
+def test_app_js_statistics_lazy_load_in_switch_page_4a():
+    """Phase 4A: switchPage must lazy-load the statistics summary on first
+    navigation to the page."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # Find the switchPage function body and verify the statistics branch.
+    pos = source.find("function switchPage")
+    assert pos != -1
+    body = source[pos:pos + 1500]
+    assert "statistics" in body
+    assert "loadStatisticsExportSummary" in body
+    assert "initStatisticsDefaults" in body
+
+
+def test_app_js_statistics_event_binding_in_init_buttons_4a():
+    """Phase 4A: initButtons must bind the statistics load + quick range
+    buttons."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    pos = source.find("function initButtons")
+    assert pos != -1
+    body = source[pos:pos + 5000]
+    assert "statistics-load-btn" in body
+    assert "statistics-today-btn" in body
+    assert "statistics-7d-btn" in body
+    assert "statistics-month-btn" in body
+    assert "loadStatisticsExportSummary" in body
+    assert "applyStatisticsQuickRange" in body
+
+
+def test_app_js_statistics_uses_escape_html_4a():
+    """Phase 4A: renderStatsTable must use escapeHtml for dynamic values."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    pos = source.find("function renderStatsTable")
+    assert pos != -1
+    body = source[pos:pos + 1200]
+    assert "escapeHtml" in body
+    assert "safeText" in body
+
+
+def test_app_js_statistics_no_export_write_handler_4a():
+    """Phase 4A: app.js must not wire any export write / save dialog / file
+    creation handler for the statistics page."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("exportcsv", "exportexcel", "exportpdf",
+                      "exporttimesheet", "savefile", "saveas",
+                      "opensavefile", "window.pywebview.api.export"):
+        assert forbidden not in lowered, (
+            "app.js must not wire export write handler: " + forbidden
+        )
+
+
+def test_app_js_statistics_no_local_storage_4a():
+    """Phase 4A: the statistics page must not use localStorage /
+    sessionStorage (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("localStorage", "sessionStorage"):
+        assert forbidden not in source, (
+            "app.js must not use " + forbidden
+        )
+
+
+def test_app_js_statistics_error_text_4a():
+    """Phase 4A: the statistics error path must surface 加载统计失败."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "加载统计失败" in source
+
+
+def test_app_js_statistics_loading_text_4a():
+    """Phase 4A: the statistics loading path must surface 正在加载统计…."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    # The loading text is in index.html; app.js toggles the hidden flag on
+    # the statistics-loading element. Verify the element id is referenced.
+    assert "statistics-loading" in source
+
+
+# --- styles.css Phase 4A ----------------------------------------------
+
+
+def test_styles_css_statistics_page_classes_4a():
+    """Phase 4A: styles.css must contain the statistics page classes."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    for cls in (".stats-header", ".stats-controls", ".stats-summary-grid",
+                ".stats-summary-card", ".stats-table", ".stats-table-card",
+                ".stats-export-preview", ".stats-loading", ".stats-empty",
+                ".stats-export-action-btn"):
+        assert cls in source, (
+            "styles.css must define class: " + cls
+        )
+
+
+def test_styles_css_statistics_responsive_wrap_4a():
+    """Phase 4A: styles.css must include responsive wrap rules for narrow
+    windows."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert "flex-wrap" in source
+    assert "@media" in source
+    assert "overflow-x" in source
+
+
+def test_styles_css_statistics_export_action_disabled_style_4a():
+    """Phase 4A: the disabled export action button must have a
+    cursor: not-allowed style."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    pos = source.find(".stats-export-action-btn")
+    assert pos != -1
+    body = source[pos:pos + 300]
+    assert "not-allowed" in body
+
+
+def test_styles_css_no_external_assets_4a():
+    """Phase 4A: styles.css must not reference external assets (regression
+    lock)."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert not re.search(r"https?://", source, re.IGNORECASE)
+    assert not re.search(r"cdn", source, re.IGNORECASE)
+    assert not re.search(r"google\s*fonts", source, re.IGNORECASE)
+
+
+def test_styles_css_timeline_and_correction_shell_not_removed_4a():
+    """Phase 4A: Timeline and correction shell CSS must not be removed
+    (regression lock)."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".timeline-date-nav" in source
+    assert ".correction-shell" in source
+
+
+# --- Boundary: no export write / no DB schema / no premature migration -
+
+
+def test_index_html_no_project_rules_page_4a():
+    """Phase 4A: the Project Rules page must remain a placeholder, not a
+    migrated WebView page."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="page-rules"')
+    assert pos != -1
+    section = source[pos:pos + 400]
+    assert "WebView 迁移中" in section
+
+
+def test_index_html_no_settings_privacy_page_4a():
+    """Phase 4A: the Settings / Privacy page must remain a placeholder, not
+    a migrated WebView page."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="page-settings"')
+    assert pos != -1
+    section = source[pos:pos + 400]
+    assert "WebView 迁移中" in section
+
+
+def test_app_js_no_save_dialog_or_folder_open_4a():
+    """Phase 4A: app.js must not call any save dialog or folder open helper."""
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("saveasdialog", "save_dialog", "createfile",
+                      "openfolder", "open_folder", "shell.open"):
+        assert forbidden not in lowered, (
+            "app.js must not call: " + forbidden
+        )
+
+
+def test_bridge_no_export_write_method_4a():
+    """Phase 4A: the bridge must not expose any export write / file save
+    method."""
+    bridge_path = WEBVIEW_UI_DIR / "bridge.py"
+    source = bridge_path.read_text(encoding="utf-8")
+    forbidden_methods = [
+        "def export_csv",
+        "def export_excel",
+        "def export_pdf",
+        "def export_timesheet",
+        "def save_file",
+        "def open_folder",
+        "def export_activities",
+    ]
+    for method in forbidden_methods:
+        assert method not in source, (
+            "bridge.py must not define export write method: " + method
+        )
+
+
+def test_schema_sql_unchanged_4a():
+    """Phase 4A: schema.sql must not have been modified for this phase. We
+    verify the known Phase 4A tables/columns are still present and no new
+    statistics-specific table has been added."""
+    schema_path = REPO_ROOT / "worktrace" / "schema.sql"
+    source = schema_path.read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS activity_log" in source
+    assert "CREATE TABLE IF NOT EXISTS project" in source
+    # No new statistics table should have been added.
+    assert "statistics_export" not in source.lower()
+    assert "statistics_summary" not in source.lower()
+
+
+def test_legacy_ui_files_not_deleted_4a():
+    """Phase 4A: legacy Tkinter / CustomTkinter UI files must still exist
+    (regression lock)."""
+    legacy_dir = REPO_ROOT / "worktrace" / "ui"
+    assert legacy_dir.is_dir()
+    assert (legacy_dir / "statistics_view.py").is_file()
+    assert (legacy_dir / "app.py").is_file()
+
+
+def test_index_html_no_react_vue_vite_node_4a():
+    """Phase 4A: no React / Vue / Vite / Node references may be introduced."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("react", "vue", "vite", "node_modules"):
+        assert forbidden not in lowered, (
+            "index.html must not reference: " + forbidden
+        )
+
+
+def test_app_js_no_react_vue_vite_node_4a():
+    """Phase 4A: app.js must not reference React / Vue / Vite / Node.
+    Uses word-boundary matching to avoid false positives on substrings
+    like ``navItems`` containing ``vite``."""
+    import re
+    source = (WEBVIEW_UI_DIR / "app.js").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("react", "vue", "vite", "node_modules"):
+        pattern = r'\b' + re.escape(forbidden) + r'\b'
+        assert not re.search(pattern, lowered), (
+            "app.js must not reference: " + forbidden
         )
 
 
@@ -7657,8 +8083,9 @@ def test_app_js_no_local_http_server_3c1():
 
 
 def test_bridge_no_new_methods_for_phase_3c1():
-    """Phase 3C.1: no new bridge methods beyond the known 21-method set
-    (regression lock — same set as Phase 3C)."""
+    """Phase 3C.1 / 4A: no new bridge methods beyond the known 22-method set
+    (regression lock — Phase 4A adds get_statistics_export_summary as a
+    read-only method; no other methods may be added)."""
     bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
     known_methods = (
         "get_status", "toggle_pause", "get_overview",
@@ -7673,6 +8100,7 @@ def test_bridge_no_new_methods_for_phase_3c1():
         "batch_update_timeline_activities_project",
         "batch_update_timeline_activities_note",
         "get_timeline_restorable_activities", "restore_timeline_activity",
+        "get_statistics_export_summary",
     )
     for method in known_methods:
         assert method in bridge_src, (
@@ -7803,6 +8231,63 @@ def test_docs_release_validation_phase_3c1_release_blockers_3c1():
                     "saving", "dirty guard", "cross-save",
                     "stale id", "soft delete",
                     "localStorage", "new bridge"):
+        assert blocker in source, (
+            "release-validation.md must mention release blocker: " + blocker
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4A: documentation regression locks
+# ---------------------------------------------------------------------------
+
+
+def test_docs_mention_phase_4a():
+    """Phase 4A: the migration doc must mention Phase 4A."""
+    doc_path = REPO_ROOT / "docs" / "ui-webview-migration.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "4A" in source, (
+        "ui-webview-migration.md must mention Phase 4A"
+    )
+    assert "Phase 4A" in source, (
+        "ui-webview-migration.md must mention 'Phase 4A'"
+    )
+
+
+def test_docs_readme_mentions_phase_4a():
+    """Phase 4A: README must mention Phase 4A."""
+    doc_path = REPO_ROOT / "README.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "4A" in source, (
+        "README.md must mention Phase 4A"
+    )
+
+
+def test_docs_release_validation_mentions_phase_4a():
+    """Phase 4A: release-validation must mention Phase 4A."""
+    doc_path = REPO_ROOT / "docs" / "release-validation.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "4A" in source, (
+        "release-validation.md must mention Phase 4A"
+    )
+    assert "WebView Phase 4A Validation" in source, (
+        "release-validation.md must have a WebView Phase 4A Validation section"
+    )
+
+
+def test_docs_release_validation_phase_4a_release_blockers_4a():
+    """Phase 4A: release-validation must list the Phase 4A release blockers."""
+    doc_path = REPO_ROOT / "docs" / "release-validation.md"
+    source = doc_path.read_text(encoding="utf-8")
+    assert "Phase 4A Release Blockers" in source, (
+        "release-validation.md must have a Phase 4A Release Blockers section"
+    )
+    for blocker in ("export write", "save dialog",
+                    "raw title", "clipboard", "note",
+                    "traceback", "SQL",
+                    "DB schema", "write API",
+                    "Project Rules", "Settings",
+                    "legacy UI", "localStorage",
+                    "Timeline", "regression"):
         assert blocker in source, (
             "release-validation.md must mention release blocker: " + blocker
         )

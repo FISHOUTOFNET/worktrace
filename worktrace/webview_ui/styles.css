@@ -1522,6 +1522,271 @@ body {
     box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
 }
 
+/* --- Statistics / Export page (Phase 4A, read-only) ------------------ */
+/* Read-only page: only renders display-safe aggregated data. No export
+   write button is ever enabled in this phase. */
+
+.stats-header {
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.stats-header-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.stats-subtitle {
+    font-size: 12px;
+    color: #64748b;
+    margin: 0;
+}
+
+.stats-controls {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.stats-date-range {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.stats-date-label {
+    font-size: 13px;
+    color: #475569;
+}
+
+.stats-date-input {
+    padding: 5px 8px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #1e293b;
+}
+
+.stats-load-btn {
+    padding: 6px 16px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #334155;
+    cursor: pointer;
+}
+
+.stats-load-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+}
+
+.stats-load-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.stats-quick-range {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.stats-quick-btn {
+    padding: 4px 12px;
+    font-size: 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #f8fafc;
+    color: #475569;
+    cursor: pointer;
+}
+
+.stats-quick-btn:hover {
+    background: #eef2ff;
+    border-color: #c7d2fe;
+    color: #4338ca;
+}
+
+.stats-loading {
+    font-size: 13px;
+    color: #64748b;
+    padding: 8px 14px;
+    margin-bottom: 12px;
+}
+
+.stats-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+@media (max-width: 900px) {
+    .stats-summary-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 520px) {
+    .stats-summary-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.stats-summary-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.stats-summary-label {
+    font-size: 12px;
+    color: #64748b;
+    margin-bottom: 6px;
+}
+
+.stats-summary-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #0f172a;
+    word-break: break-all;
+}
+
+.stats-tables {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+@media (max-width: 1100px) {
+    .stats-tables {
+        grid-template-columns: 1fr;
+    }
+}
+
+.stats-table-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.stats-table-wrap {
+    overflow-x: auto;
+}
+
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.stats-table th,
+.stats-table td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: top;
+}
+
+.stats-table th {
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+    background: #f8fafc;
+}
+
+.stats-table-row:hover {
+    background: #f8fafc;
+}
+
+.stats-table-name {
+    color: #1e293b;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stats-table-duration,
+.stats-table-count,
+.stats-table-pct {
+    color: #475569;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.stats-empty {
+    font-size: 13px;
+    color: #94a3b8;
+    padding: 12px 4px;
+}
+
+.stats-export-preview {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.stats-export-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.stats-export-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.stats-export-label {
+    color: #64748b;
+    min-width: 96px;
+}
+
+.stats-export-value {
+    color: #1e293b;
+    font-weight: 500;
+    word-break: break-all;
+}
+
+.stats-export-hint {
+    font-size: 12px;
+    color: #64748b;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 12px;
+    line-height: 1.6;
+}
+
+.stats-export-action-btn {
+    padding: 6px 16px;
+    font-size: 13px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+}
+
 /* Phase 3B.5B.1: a shell activity row whose activity id is missing / non-
    numeric is rendered non-clickable so it never produces a stale-target
    error. It keeps the summary text but drops the pointer cursor. */
