@@ -153,13 +153,59 @@ the current database on a wrong passphrase or corrupted backup.
 
 ## Tests
 
-Run tests without requiring a real Windows foreground window:
+Tests run without requiring a real Windows foreground window and use
+`worktrace.platforms.fake_adapter.FakeAdapter`.
+
+### Local Test Strategy
+
+The suite has grown past 2000 cases, so running the full `pytest` on every
+small change is wasteful. Default to the affected-test runner for day-to-day
+iteration; reserve the full suite for cross-cutting changes, pre-push, and
+release validation.
 
 ```powershell
-pytest
+# Day-to-day: run only the tests affected by the current workspace changes
+# (staged + unstaged vs HEAD). Pure standard library; no new dependencies.
+python scripts/run_affected_tests.py
+
+# Print the detected changed files and selected targets without running pytest
+python scripts/run_affected_tests.py --list
+
+# Print the final pytest command without executing it
+python scripts/run_affected_tests.py --print-only
+
+# Explicit full-suite fallback
+python scripts/run_affected_tests.py --all
+
+# Only consider staged changes; or diff against a custom base ref
+python scripts/run_affected_tests.py --staged
+python scripts/run_affected_tests.py --base HEAD
+
+# Pass extra pytest arguments after --
+python scripts/run_affected_tests.py -- --maxfail=1 -q
 ```
 
-Tests use `worktrace.platforms.fake_adapter.FakeAdapter`.
+The runner maps changed source / docs / packaging paths to a conservative,
+finite set of pytest targets. When nothing changed it runs a light smoke set
+(startup imports, WebView bridge boundary, WebView static-contract suite) plus
+the `import worktrace.webview_main` import smoke — it never silently runs the
+full suite. PyInstaller and the per-user installer are **not** part of the
+affected runner; they remain manual release-validation steps.
+
+### Targeted and Full Test Commands
+
+```powershell
+# Single point of failure / known-failing tests from the last run
+pytest --lf
+
+# A specific test file or test case
+pytest tests/test_timeline_service.py
+pytest tests/test_timeline_service.py::TestClassName::test_case
+
+# Full suite — use for core cross-cutting changes, pre-push, or release
+# validation. Also runs in GitHub Actions CI.
+pytest
+```
 
 ## Local Paths
 

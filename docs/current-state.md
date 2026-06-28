@@ -178,8 +178,16 @@ requests.
 ## Common Test Commands
 
 ```powershell
-# Full suite (uses worktrace.platforms.fake_adapter.FakeAdapter)
-pytest
+# Affected tests (default for day-to-day iteration). Pure stdlib; maps
+# changed source / docs / packaging paths to a finite pytest target set
+# and never silently runs the full suite. When nothing changed it runs a
+# light smoke set (startup imports + WebView boundary + WebView static
+# contracts) plus the import smoke below.
+python scripts/run_affected_tests.py
+python scripts/run_affected_tests.py --list
+python scripts/run_affected_tests.py --print-only
+python scripts/run_affected_tests.py --staged
+python scripts/run_affected_tests.py --all   # explicit full-suite fallback
 
 # Only the split WebView static-contract tests
 pytest tests/webview/
@@ -187,7 +195,13 @@ pytest tests/webview/
 # Entry-point sanity (does not start a GUI on import)
 python -c "import worktrace.webview_main; print('ok')"
 
-# Build the single-file executable
+# Full suite (uses worktrace.platforms.fake_adapter.FakeAdapter) — reserve
+# for core cross-cutting changes, pre-push, or release validation. Also
+# runs in GitHub Actions CI.
+pytest
+
+# Build the single-file executable (release validation only; not run by
+# the affected runner)
 python -m PyInstaller --noconfirm --clean WorkTrace.spec
 ```
 

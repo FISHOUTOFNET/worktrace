@@ -7,6 +7,7 @@ This checklist is the release-candidate validation baseline for WorkTrace v0.1 L
 - Current validation target: WorkTrace v0.1 Lite.
 - This document does not cover v0.2 AI, server features, payments, licensing, database encryption, automatic updates, or frontend migration.
 - The goal is to confirm that Windows users can install, start, collect active-window metadata, classify activity, export, clear local data, and exit without crossing the documented privacy boundary.
+- The local affected-test runner (`scripts/run_affected_tests.py`) is a **development accelerator only**. It selects a finite pytest subset based on changed paths and never invokes PyInstaller or the installer. It does **not** replace this release validation: a release still requires the full `pytest` suite to pass plus the PyInstaller exe and the per-user installer builds validated below.
 
 ## Validation Environment
 

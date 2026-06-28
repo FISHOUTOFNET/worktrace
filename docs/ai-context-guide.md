@@ -68,3 +68,29 @@ memory: WebView bridge may only import `worktrace.api`; no external links /
 CDN / Google Fonts / `localStorage` in frontend resources; no tracebacks to
 JS; `schema.sql` is the single source of DB structure; no new product
 features or dependencies are introduced by a docs/tests-only phase.
+
+## 7. Default Test Selection (Phase TG1)
+
+Keep the "narrow read, narrow test" principle. The WorkTrace suite has grown
+past 2000 cases, so do **not** default to the full `pytest` on every change.
+
+- **Default for ordinary feature / hardening phases**: run
+  `python scripts/run_affected_tests.py`. It maps the changed source / docs /
+  packaging paths to a finite, conservative pytest target set, runs the
+  `import worktrace.webview_main` smoke when WebView frontend resources
+  change, and — when nothing changed — falls back to a light smoke set
+  (startup imports, WebView bridge boundary, WebView static contracts). It
+  never silently runs the full suite and introduces no new dependencies
+  (pure standard library).
+- **Default to the full `pytest` only** when the change is DB / schema /
+  core cross-cutting (collector, resource model, path utils), or when
+  validating a release / pre-push. The affected runner prints an explicit
+  warning recommending full pytest for DB/schema and unknown `worktrace/`
+  source changes.
+- **Never** move PyInstaller or the per-user installer build into the
+  affected runner; those remain manual release-validation steps.
+- For a single known failure, prefer `pytest --lf` or a specific test file
+  / case over the full suite.
+
+See [`docs/release-validation.md`](release-validation.md) for the release
+baseline the affected runner does **not** replace.
