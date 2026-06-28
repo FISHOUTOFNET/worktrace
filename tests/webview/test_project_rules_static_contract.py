@@ -94,30 +94,35 @@ def test_project_rules_required_dom_ids_exist():
 
 def test_project_rules_phase_5b_boundary_copy_present():
     section = _rules_section()
-    # Phase 5C: the boundary copy now mentions keyword rule creation as a
-    # supported capability. The supported-ops clause still references
-    # enable/disable, and the unsupported-ops clause still references the
-    # remaining future capabilities.
+    # Phase 5E: the boundary copy now mentions folder rule create/edit/delete
+    # as supported capabilities alongside keyword rule create/delete. The
+    # unsupported-ops clause still references the remaining future
+    # capabilities (keyword edit, project management, conflict preview, backfill).
     assert "启用/停用" in section
     assert "新增关键词规则" in section
+    assert "删除已有关键词规则" in section
+    assert "新增、编辑、删除文件夹规则" in section
     for term in ("编辑", "删除", "冲突预览", "回填"):
         assert term in section
 
 
 def test_project_rules_page_has_no_static_action_buttons():
     section = _rules_section()
-    # Phase 5C: the only allowed static button in the section is the
-    # keyword create submit button. All other action buttons (folder
-    # create, project create/edit/delete, rule edit/delete, etc.) remain
-    # forbidden as static DOM.
+    # Phase 5E: the only allowed static buttons in the section are the
+    # keyword create submit button and the folder create submit button.
+    # All other action buttons (project create/edit/delete, rule edit/delete,
+    # etc.) remain forbidden as static DOM.
     import re as _re
 
     buttons = _re.findall(r"<button[^>]*>", section, _re.IGNORECASE)
-    assert len(buttons) == 1, (
-        "Project Rules page must have exactly one static button (keyword "
-        "create submit); found: " + repr(buttons)
+    assert len(buttons) == 2, (
+        "Project Rules page must have exactly two static buttons (keyword "
+        "create submit + folder create submit); found: " + repr(buttons)
     )
-    assert 'id="rules-keyword-create-submit"' in buttons[0]
+    button_ids = [_re.search(r'id="([^"]+)"', b) for b in buttons]
+    button_ids = [m.group(1) for m in button_ids if m]
+    assert "rules-keyword-create-submit" in button_ids
+    assert "rules-folder-create-submit" in button_ids
     forbidden = (
         "rules-add",
         "rules-create",
@@ -135,7 +140,6 @@ def test_project_rules_page_has_no_static_action_buttons():
         "rule-delete",
         "rule-enable",
         "rule-disable",
-        "rules-folder-create",
         "rules-project-create",
         "rules-keyword-edit",
         "rules-keyword-delete",
@@ -189,6 +193,10 @@ def test_project_rules_js_calls_allowed_bridge_methods_only():
     assert 'callBridge("set_project_rule_enabled"' in source
     # Phase 5D: delete_project_keyword_rule is the new allowed write bridge.
     assert 'callBridge("delete_project_keyword_rule"' in source
+    # Phase 5E: folder rule create/update/delete are the new allowed write bridges.
+    assert 'callBridge("create_project_folder_rule"' in source
+    assert 'callBridge("update_project_folder_rule"' in source
+    assert 'callBridge("delete_project_folder_rule"' in source
     assert 'callBridge("set_project_enabled"' not in source
 
 
@@ -262,6 +270,9 @@ def test_project_rules_js_does_not_call_forbidden_write_methods():
     # <method>"``) rather than bare method names so that the allowed
     # ``create_project_keyword_rule`` call is not falsely flagged by the
     # ``create_project`` substring check.
+    # Phase 5E: ``create_project_folder_rule``, ``update_project_folder_rule``,
+    # and ``delete_project_folder_rule`` are the allowed folder write bridges
+    # and are NOT in PROJECT_RULE_WRITE_METHODS.
     for method in PROJECT_RULE_WRITE_METHODS:
         forbidden_call = 'callBridge("' + method + '"'
         assert forbidden_call not in source, (
@@ -271,6 +282,10 @@ def test_project_rules_js_does_not_call_forbidden_write_methods():
     assert 'callBridge("create_project_keyword_rule"' in source
     # Phase 5D: delete_project_keyword_rule is the new allowed write bridge.
     assert 'callBridge("delete_project_keyword_rule"' in source
+    # Phase 5E: folder rule create/update/delete are the new allowed write bridges.
+    assert 'callBridge("create_project_folder_rule"' in source
+    assert 'callBridge("update_project_folder_rule"' in source
+    assert 'callBridge("delete_project_folder_rule"' in source
 
 
 def test_project_rules_js_has_no_create_edit_delete_backfill_preview_handlers():
@@ -544,8 +559,10 @@ def test_project_rules_state_isolation_across_loading_saving_error():
 
 def test_project_rules_bridge_call_only_allows_toggle_write():
     # Phase 5B.1 regression lock: ``set_project_rule_enabled``,
-    # ``create_project_keyword_rule`` (Phase 5C), and
-    # ``delete_project_keyword_rule`` (Phase 5D) are the only Project Rules
+    # ``create_project_keyword_rule`` (Phase 5C),
+    # ``delete_project_keyword_rule`` (Phase 5D), and
+    # ``create_project_folder_rule`` / ``update_project_folder_rule`` /
+    # ``delete_project_folder_rule`` (Phase 5E) are the only Project Rules
     # write bridge calls anywhere in the frontend. No other write bridge
     # call (project toggle / create / edit / delete / preview / backfill)
     # may be introduced even in init.js / core.js.
@@ -554,6 +571,10 @@ def test_project_rules_bridge_call_only_allows_toggle_write():
     assert 'callBridge("create_project_keyword_rule"' in source
     # Phase 5D: delete_project_keyword_rule is the new allowed write bridge.
     assert 'callBridge("delete_project_keyword_rule"' in source
+    # Phase 5E: folder rule create/update/delete are the new allowed write bridges.
+    assert 'callBridge("create_project_folder_rule"' in source
+    assert 'callBridge("update_project_folder_rule"' in source
+    assert 'callBridge("delete_project_folder_rule"' in source
     # The forbidden write method names are already covered by
     # ``test_project_rules_js_does_not_call_forbidden_write_methods``; here
     # we additionally guard against accidental bridge call strings.
@@ -643,17 +664,20 @@ def test_project_rules_keyword_create_submit_button_exists():
 
 
 def test_project_rules_keyword_create_submit_is_only_new_create_action():
-    # Phase 5C regression lock: the keyword create submit button is the
-    # only new create action on the Project Rules page. No folder create,
-    # project create/edit/delete, or rule edit/delete buttons may appear.
+    # Phase 5C regression lock (updated in Phase 5E): the keyword create
+    # submit button and the folder create submit button are the only new
+    # create actions on the Project Rules page. No project create/edit/delete
+    # or rule edit/delete buttons may appear.
     section = _rules_section()
     import re as _re
 
     buttons = _re.findall(r"<button[^>]*>", section, _re.IGNORECASE)
-    assert len(buttons) == 1
-    assert 'id="rules-keyword-create-submit"' in buttons[0]
+    assert len(buttons) == 2
+    button_ids = [_re.search(r'id="([^"]+)"', b) for b in buttons]
+    button_ids = [m.group(1) for m in button_ids if m]
+    assert "rules-keyword-create-submit" in button_ids
+    assert "rules-folder-create-submit" in button_ids
     for forbidden_id in (
-        "rules-folder-create",
         "rules-project-create",
         "rules-project-edit",
         "rules-project-delete",
@@ -1542,3 +1566,764 @@ def test_project_rules_keyword_delete_button_disabled_coordination_uses_deleting
     assert "rules-toggle-btn" in body
     assert "rules-keyword-delete-button" in body
     assert "App.rulesCreatingKeyword" not in body
+
+
+# --- Phase 5E: folder rule CRUD foundation static contract ---------------
+
+
+def test_project_rules_folder_create_form_anchors_exist():
+    # Phase 5E regression lock: the Project Rules page must contain the
+    # stable folder create form DOM anchors.
+    section = _rules_section()
+    for dom_id in (
+        "rules-folder-create-form",
+        "rules-folder-create-project",
+        "rules-folder-create-input",
+        "rules-folder-create-recursive",
+        "rules-folder-create-submit",
+        "rules-folder-create-status",
+    ):
+        assert 'id="' + dom_id + '"' in section, (
+            "Project Rules page must contain folder create anchor: " + dom_id
+        )
+
+
+def test_project_rules_folder_create_form_has_project_selector():
+    section = _rules_section()
+    assert '<select id="rules-folder-create-project"' in section
+
+
+def test_project_rules_folder_create_form_has_folder_path_input():
+    section = _rules_section()
+    assert '<input id="rules-folder-create-input"' in section
+
+
+def test_project_rules_folder_create_form_has_recursive_checkbox():
+    section = _rules_section()
+    assert '<input id="rules-folder-create-recursive"' in section
+    assert 'type="checkbox"' in section
+
+
+def test_project_rules_folder_create_submit_button_exists():
+    section = _rules_section()
+    assert '<button id="rules-folder-create-submit"' in section
+    assert 'type="button"' in section
+
+
+def test_project_rules_folder_create_form_has_empty_hint():
+    section = _rules_section()
+    assert 'id="rules-folder-create-empty"' in section
+
+
+def test_project_rules_folder_create_state_variable_declared():
+    # Phase 5E regression lock: the folder create saving state must be a
+    # separate state variable from the Phase 5B toggle saving state, the
+    # Phase 5C keyword create state, and the Phase 5D keyword delete state
+    # so the five write paths can never pollute each other.
+    source = read_js("core.js")
+    assert "App.rulesCreatingFolder = false" in source
+    assert "App.rulesEditingFolderKey = null" in source
+    assert "App.rulesDeletingFolderKey = null" in source
+    assert "App.lastProjectRulesData = null" in source
+    # The earlier state variables must still exist alongside the new ones.
+    assert "App.rulesSavingRuleKey = null" in source
+    assert "App.rulesCreatingKeyword = false" in source
+    assert "App.rulesDeletingRuleKey = null" in source
+
+
+def test_project_rules_folder_create_js_calls_bridge_method():
+    # Phase 5E regression lock: the JS must call the
+    # ``create_project_folder_rule`` bridge method.
+    source = read_js("rules.js")
+    assert 'callBridge("create_project_folder_rule"' in source
+
+
+def test_project_rules_folder_update_js_calls_bridge_method():
+    # Phase 5E regression lock: the JS must call the
+    # ``update_project_folder_rule`` bridge method.
+    source = read_js("rules.js")
+    assert 'callBridge("update_project_folder_rule"' in source
+
+
+def test_project_rules_folder_delete_js_calls_bridge_method():
+    # Phase 5E regression lock: the JS must call the
+    # ``delete_project_folder_rule`` bridge method.
+    source = read_js("rules.js")
+    assert 'callBridge("delete_project_folder_rule"' in source
+
+
+def test_project_rules_folder_create_js_does_not_call_keyword_create_or_delete():
+    # Phase 5E regression lock: the folder create handler must not call
+    # keyword create or keyword delete bridge methods.
+    source = read_js("rules.js")
+    create_body = func_body(source, "handleFolderCreateSubmit")
+    for forbidden in (
+        'callBridge("create_project_keyword_rule"',
+        'callBridge("delete_project_keyword_rule"',
+        'callBridge("delete_keyword_rule"',
+    ):
+        assert forbidden not in create_body
+
+
+def test_project_rules_folder_delete_js_does_not_call_keyword_delete():
+    # Phase 5E regression lock: the folder delete handler must not call
+    # the keyword delete bridge method.
+    source = read_js("rules.js")
+    delete_body = func_body(source, "handleFolderDelete")
+    for forbidden in (
+        'callBridge("delete_project_keyword_rule"',
+        'callBridge("delete_keyword_rule"',
+        'callBridge("create_project_keyword_rule"',
+    ):
+        assert forbidden not in delete_body
+
+
+def test_project_rules_folder_update_js_does_not_call_keyword_or_create():
+    # Phase 5E regression lock: the folder update handler must not call
+    # keyword create/delete or folder create/delete bridge methods.
+    source = read_js("rules.js")
+    update_body = func_body(source, "handleFolderEditSave")
+    for forbidden in (
+        'callBridge("create_project_keyword_rule"',
+        'callBridge("delete_project_keyword_rule"',
+        'callBridge("create_project_folder_rule"',
+        'callBridge("delete_project_folder_rule"',
+    ):
+        assert forbidden not in update_body
+
+
+def test_project_rules_folder_js_does_not_call_preview_or_backfill():
+    source = read_js("rules.js")
+    assert 'callBridge("preview_folder_rule_conflicts"' not in source
+    assert 'callBridge("backfill_folder_rule"' not in source
+
+
+def test_project_rules_folder_js_does_not_call_project_write():
+    source = read_js("rules.js")
+    for forbidden in (
+        'callBridge("create_project"',
+        'callBridge("update_project"',
+        'callBridge("delete_project"',
+        'callBridge("archive_project"',
+        'callBridge("set_project_enabled"',
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_folder_create_js_validates_project_id_before_bridge():
+    # Phase 5E regression lock: the JS must parse and validate the project
+    # id (``projectId > 0``) before calling the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderCreateSubmit")
+    assert "parseInt(select.value, 10)" in body
+    assert "!(projectId > 0)" in body
+    guard_pos = body.find("!(projectId > 0)")
+    bridge_pos = body.find('callBridge("create_project_folder_rule"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_folder_create_js_validates_folder_path_before_bridge():
+    # Phase 5E regression lock: the JS must validate the folder_path is
+    # non-empty before calling the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderCreateSubmit")
+    assert "!folderPath" in body
+    guard_pos = body.find("!folderPath")
+    bridge_pos = body.find('callBridge("create_project_folder_rule"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_folder_create_js_trims_folder_path_before_bridge():
+    # Phase 5E regression lock: the JS must trim the folder_path before
+    # validation and before the bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderCreateSubmit")
+    assert ".trim()" in body
+    trim_pos = body.find(".trim()")
+    bridge_pos = body.find('callBridge("create_project_folder_rule"')
+    assert trim_pos != -1 and bridge_pos != -1
+    assert trim_pos < bridge_pos
+
+
+def test_project_rules_folder_create_js_has_creating_guard():
+    # Phase 5E regression lock: the handler must early-return when a
+    # folder create is already in flight, before any bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderCreateSubmit")
+    assert "if (App.rulesCreatingFolder) return" in body
+    guard_pos = body.find("if (App.rulesCreatingFolder) return")
+    bridge_pos = body.find('callBridge("create_project_folder_rule"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_folder_create_js_has_creating_button_label():
+    # Phase 5E regression lock: the creating button text must remain the
+    # stable ``正在新增…`` label.
+    source = read_js("rules.js")
+    body = func_body(source, "setFolderCreateCreating")
+    assert "正在新增…" in body
+
+
+def test_project_rules_folder_create_js_success_refreshes_project_rules():
+    # Phase 5E regression lock: the success path must call
+    # ``loadProjectRules()`` to refresh the Project Rules list.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderCreateSubmit")
+    assert "App.loadProjectRules()" in body
+
+
+def test_project_rules_folder_create_js_success_clears_folder_path_input():
+    # Phase 5E regression lock: the success path must clear the folder_path
+    # input so the user can immediately create another rule.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderCreateSubmit")
+    assert 'input.value = ""' in body
+
+
+def test_project_rules_folder_create_js_failure_preserves_rendered_list():
+    # Phase 5E regression lock: the failure path must not clear the
+    # already-rendered Project Rules list.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderCreateSubmit")
+    assert "list.innerHTML" not in body
+
+
+def test_project_rules_folder_create_js_catch_never_reads_raw_exception():
+    # Phase 5E regression lock: the catch path must never read
+    # ``.message`` from the error.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderCreateSubmit")
+    for forbidden in ("err.message", "error.message", "reason.message"):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_folder_create_js_uses_textcontent_for_status():
+    # Phase 5E regression lock: the folder create status must use
+    # ``textContent`` (HTML-safe), not ``innerHTML``.
+    source = read_js("rules.js")
+    status_body = func_body(source, "showFolderCreateStatus")
+    assert "textContent" in status_body
+    assert ".innerHTML" not in status_body
+
+
+def test_project_rules_folder_create_state_isolation_from_other_write_paths():
+    # Phase 5E regression lock: the folder create saving state
+    # (``rulesCreatingFolder``) must be separate from the toggle saving
+    # state (``rulesSavingRuleKey``), the keyword create state
+    # (``rulesCreatingKeyword``), the keyword delete state
+    # (``rulesDeletingRuleKey``), the folder edit state
+    # (``rulesEditingFolderKey``), and the folder delete state
+    # (``rulesDeletingFolderKey``).
+    source = read_js("core.js")
+    assert "App.rulesCreatingFolder" in source
+    assert "App.rulesEditingFolderKey" in source
+    assert "App.rulesDeletingFolderKey" in source
+    rules_source = read_js("rules.js")
+    # The folder create handler must not read the toggle saving state or
+    # keyword create/delete state.
+    create_body = func_body(rules_source, "handleFolderCreateSubmit")
+    assert "App.rulesSavingRuleKey" not in create_body
+    assert "App.rulesCreatingKeyword" not in create_body
+    assert "App.rulesDeletingRuleKey" not in create_body
+
+
+def test_project_rules_folder_create_selector_population_guard():
+    # Phase 5E regression lock: the project selector must not be
+    # re-populated while a folder create is in flight, so the user's
+    # selection is never displaced by an auto-refresh.
+    source = read_js("rules.js")
+    body = func_body(source, "populateFolderCreateProjectSelector")
+    assert "if (App.rulesCreatingFolder) return" in body
+
+
+def test_project_rules_folder_edit_buttons_only_on_folder_rows():
+    # Phase 5E regression lock: the edit / delete buttons must be rendered
+    # only on folder rule rows, never on keyword rule rows or project cards.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert 'kind === "folder"' in row_body
+    assert "rules-folder-edit-button" in row_body
+    assert "rules-folder-delete-button" in row_body
+    project_body = func_body(source, "renderProjectRuleProject")
+    assert "rules-folder-edit-button" not in project_body
+    assert "rules-folder-delete-button" not in project_body
+
+
+def test_project_rules_folder_edit_button_uses_stable_class_and_attributes():
+    # Phase 5E regression lock: the folder edit / delete buttons must use
+    # the stable class / data attributes.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert 'class="rules-folder-edit-button"' in row_body
+    assert 'class="rules-folder-delete-button"' in row_body
+    assert 'data-rule-kind="folder"' in row_body
+
+
+def test_project_rules_folder_edit_js_validates_rule_id_before_bridge():
+    # Phase 5E regression lock: the JS must parse and validate the rule id
+    # before calling the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditSave")
+    assert "parseInt(rawId, 10)" in body
+    assert "ruleId <= 0" in body
+    guard_pos = body.find("ruleId <= 0")
+    bridge_pos = body.find('callBridge("update_project_folder_rule"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_folder_edit_js_validates_rule_kind_before_bridge():
+    # Phase 5E regression lock: the dataset ``data-rule-kind`` must be
+    # validated against ``folder`` before the bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditSave")
+    assert 'kind !== "folder"' in body
+    type_check_pos = body.find('kind !== "folder"')
+    bridge_pos = body.find('callBridge("update_project_folder_rule"')
+    assert type_check_pos < bridge_pos
+
+
+def test_project_rules_folder_edit_js_has_editing_guard():
+    # Phase 5E regression lock: the handler must early-return when no
+    # folder edit is in flight.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditSave")
+    assert "if (!App.rulesEditingFolderKey) return" in body
+
+
+def test_project_rules_folder_edit_js_has_saving_button_label():
+    # Phase 5E regression lock: the saving button text must remain the
+    # stable ``正在保存…`` label.
+    source = read_js("rules.js")
+    body = func_body(source, "setFolderSaving")
+    assert "正在保存…" in body
+
+
+def test_project_rules_folder_edit_js_success_refreshes_project_rules():
+    # Phase 5E regression lock: the success path must call
+    # ``loadProjectRules()`` to refresh the Project Rules list.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditSave")
+    assert "App.loadProjectRules()" in body
+
+
+def test_project_rules_folder_edit_js_catch_never_reads_raw_exception():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditSave")
+    for forbidden in ("err.message", "error.message", "reason.message"):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_folder_edit_js_saving_state_clears_on_all_paths():
+    # Phase 5E regression lock: the saving state must clear on success,
+    # on failure, and on rejected promise.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditSave")
+    assert "App.setFolderSaving(true)" in body
+    assert ".catch(function ()" in body
+    catch_pos = body.find(".catch(function ()")
+    cleanup_pos = body.find("App.setFolderSaving(false)", catch_pos)
+    assert cleanup_pos != -1
+
+
+def test_project_rules_folder_edit_js_editing_state_clears_on_success():
+    # Phase 5E regression lock: the editing state must clear on success.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditSave")
+    assert "App.setFolderEditing(null)" in body
+
+
+def test_project_rules_folder_delete_js_validates_rule_id_before_bridge():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    assert "parseInt(rawId, 10)" in body
+    assert "ruleId <= 0" in body
+    guard_pos = body.find("ruleId <= 0")
+    bridge_pos = body.find('callBridge("delete_project_folder_rule"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_folder_delete_js_validates_rule_kind_before_bridge():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    assert 'kind !== "folder"' in body
+    type_check_pos = body.find('kind !== "folder"')
+    bridge_pos = body.find('callBridge("delete_project_folder_rule"')
+    assert type_check_pos < bridge_pos
+
+
+def test_project_rules_folder_delete_js_has_deleting_guard():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    assert "if (App.rulesDeletingFolderKey) return" in body
+    guard_pos = body.find("if (App.rulesDeletingFolderKey) return")
+    confirm_pos = body.find("window.confirm")
+    bridge_pos = body.find('callBridge("delete_project_folder_rule"')
+    assert guard_pos != -1 and confirm_pos != -1 and bridge_pos != -1
+    assert guard_pos < confirm_pos < bridge_pos
+
+
+def test_project_rules_folder_delete_js_has_deleting_button_label():
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "正在删除…" in row_body
+    set_deleting_body = func_body(source, "setFolderDeleting")
+    assert "正在删除…" in set_deleting_body
+
+
+def test_project_rules_folder_delete_js_confirmation_text_present():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    assert "确定删除这条文件夹规则吗？删除后该文件夹将不再用于自动归类。" in body
+
+
+def test_project_rules_folder_delete_js_cancellation_does_not_call_bridge():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    confirm_pos = body.find("window.confirm")
+    bridge_pos = body.find('callBridge("delete_project_folder_rule"')
+    assert confirm_pos < bridge_pos
+    cancellation_return = body.find("return;", confirm_pos)
+    assert cancellation_return != -1 and cancellation_return < bridge_pos
+
+
+def test_project_rules_folder_delete_js_success_refreshes_project_rules():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    assert "App.loadProjectRules()" in body
+
+
+def test_project_rules_folder_delete_js_success_shows_stable_message():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    refresh_pos = body.find("App.loadProjectRules()")
+    success_pos = body.find("文件夹规则已删除")
+    assert refresh_pos != -1 and success_pos != -1
+    assert refresh_pos < success_pos
+
+
+def test_project_rules_folder_delete_js_failure_preserves_rendered_list():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    assert "list.innerHTML" not in body
+    assert "删除文件夹规则失败" in body
+
+
+def test_project_rules_folder_delete_js_catch_never_reads_raw_exception():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    for forbidden in ("err.message", "error.message", "reason.message"):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_folder_delete_js_deleting_state_clears_on_all_paths():
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderDelete")
+    assert "App.setFolderDeleting(" in body
+    assert ".catch(function ()" in body
+    catch_pos = body.find(".catch(function ()")
+    cleanup_pos = body.find("App.setFolderDeleting(null)", catch_pos)
+    assert cleanup_pos != -1
+
+
+def test_project_rules_folder_delete_js_does_not_call_keyword_delete():
+    source = read_js("rules.js")
+    delete_body = func_body(source, "handleFolderDelete")
+    assert 'callBridge("delete_project_keyword_rule"' not in delete_body
+    assert 'callBridge("delete_keyword_rule"' not in delete_body
+
+
+def test_project_rules_folder_delete_button_does_not_appear_on_keyword_rows():
+    # Phase 5E regression lock: the folder edit / delete buttons are rendered
+    # only inside the ``if (kind === "folder" && ruleId)`` block. Keyword rows
+    # never enter that block, so they never get folder buttons.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    folder_guard_pos = row_body.find('kind === "folder"')
+    folder_html_pos = row_body.find("rules-folder-edit-button", folder_guard_pos)
+    assert folder_guard_pos != -1 and folder_html_pos != -1
+    assert folder_guard_pos < folder_html_pos
+
+
+def test_project_rules_folder_buttons_disabled_when_any_write_in_flight():
+    # Phase 5E regression lock: the folder edit / delete buttons must be
+    # disabled when any rule write is in flight on this row.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "App.rulesCreatingFolder" in row_body
+    assert "App.rulesEditingFolderKey" in row_body
+    assert "App.rulesDeletingFolderKey" in row_body
+    assert "App.rulesSavingRuleKey" in row_body
+    assert "App.rulesDeletingRuleKey" in row_body
+
+
+def test_project_rules_folder_delete_set_deleting_updates_toggle_buttons():
+    # Phase 5E regression lock: ``setFolderDeleting`` must disable toggle
+    # buttons while a folder delete is in flight.
+    source = read_js("rules.js")
+    body = func_body(source, "setFolderDeleting")
+    assert "rules-toggle-btn" in body
+    assert "App.rulesDeletingFolderKey" in body
+
+
+def test_project_rules_folder_create_init_binds_submit_button():
+    # Phase 5E regression lock: the init module must bind the folder
+    # create submit button click event.
+    source = read_js("init.js")
+    assert 'getElementById("rules-folder-create-submit")' in source
+    assert "App.handleFolderCreateSubmit" in source
+
+
+def test_project_rules_folder_create_no_app_js_reintroduced():
+    source = read_resource("index.html")
+    assert "app.js" not in source
+
+
+def test_project_rules_folder_create_no_forbidden_handler_tokens():
+    source = read_js("rules.js")
+    for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
+        assert token not in source
+
+
+def test_project_rules_folder_create_no_storage_or_network():
+    source = read_js("rules.js")
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "fetch(",
+        "XMLHttpRequest",
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_folder_create_no_duplicate_static_dom_ids_in_form():
+    import re as _re
+
+    section = _rules_section()
+    form_start = section.find('id="rules-folder-create-form"')
+    assert form_start != -1
+    form_end = section.find("</form>", form_start)
+    assert form_end != -1
+    form_html = section[form_start : form_end + len("</form>")]
+    ids = _re.findall(r'\sid="([^"]+)"', form_html)
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for dom_id in ids:
+        if dom_id in seen:
+            duplicates.append(dom_id)
+        seen.add(dom_id)
+    assert not duplicates, "duplicate DOM id in folder create form: " + ", ".join(duplicates)
+
+
+def test_project_rules_folder_css_class_exists():
+    # Phase 5E regression lock: the folder CRUD CSS classes must exist in
+    # styles.css so the dynamically-rendered folder buttons and the static
+    # folder create form have stable visual styles.
+    source = read_resource("styles.css")
+    for css_class in (
+        ".rules-folder-create-form",
+        ".rules-folder-create-submit",
+        ".rules-folder-edit-button",
+        ".rules-folder-delete-button",
+        ".rules-folder-edit-form",
+        ".rules-folder-edit-save",
+        ".rules-folder-edit-cancel",
+    ):
+        assert css_class in source, "styles.css must contain: " + css_class
+    # The CSS must not depend on external resources.
+    assert not re.search(r"https?://", source, re.IGNORECASE)
+    assert not re.search(r"cdn", source, re.IGNORECASE)
+    assert not re.search(r"google\s*fonts", source, re.IGNORECASE)
+
+
+def test_project_rules_folder_css_class_scoped_to_rules_page():
+    # Phase 5E regression lock: the folder CRUD CSS classes must be
+    # namespaced with the ``rules-`` prefix and must not be referenced by
+    # the Overview / Timeline / Statistics static HTML sections.
+    index = read_resource("index.html")
+    for page_id in ("page-overview", "page-timeline", "page-statistics"):
+        start = index.find('id="' + page_id + '"')
+        assert start != -1, "index.html must contain " + page_id
+        end = index.find("</section>", start)
+        assert end != -1, page_id + " section must close"
+        section = index[start:end]
+        for css_class in (
+            "rules-folder-create-form",
+            "rules-folder-edit-button",
+            "rules-folder-delete-button",
+        ):
+            assert css_class not in section, (
+                page_id + " section must not reference folder CRUD class: " + css_class
+            )
+
+
+def test_project_rules_folder_create_stale_guard_preserved():
+    # Phase 5E regression lock: the existing ``rulesRequestToken`` stale
+    # guard in ``loadProjectRules`` must remain intact. The folder create
+    # success path calls ``loadProjectRules()`` which inherits this
+    # protection.
+    source = read_js("rules.js")
+    load_body = func_body(source, "loadProjectRules")
+    assert "var token = ++App.rulesRequestToken" in load_body
+    assert load_body.count("token !== App.rulesRequestToken") >= 2
+
+
+def test_project_rules_folder_create_no_export_or_auto_submit_controls():
+    # Phase 5E regression lock: the Project Rules page must not contain
+    # Excel / PDF / timesheet / open-folder / auto-submit controls.
+    section = _rules_section().lower()
+    for token in (
+        "excel",
+        "pdf",
+        "timesheet",
+        "open-folder",
+        "open_folder",
+        "auto-submit",
+        "auto_submit",
+        "自动提交工时",
+        "打开文件夹",
+    ):
+        assert token not in section
+
+
+def test_project_rules_folder_create_no_project_management_controls():
+    # Phase 5E regression lock: the Project Rules page must not contain
+    # project create / edit / delete / archive / enable / disable controls.
+    section = _rules_section().lower()
+    for token in (
+        "project-add",
+        "project-edit",
+        "project-delete",
+        "project-archive",
+        "project-enable",
+        "project-disable",
+    ):
+        assert token not in section
+
+
+def test_project_rules_folder_events_use_event_delegation_on_rules_list():
+    # Phase 5E regression lock: the folder edit / delete / edit-save /
+    # edit-cancel events must be delegated via a single click handler on
+    # ``#rules-list``, not via per-button listeners in init.js.
+    source = read_js("rules.js")
+    bind_body = func_body(source, "bindProjectRuleFolderEvents")
+    assert 'getElementById("rules-list")' in bind_body
+    assert "addEventListener" in bind_body
+    assert "handleProjectRuleFolderEvent" in bind_body
+
+
+def test_project_rules_folder_event_handler_routes_by_button_class():
+    # Phase 5E regression lock: the delegated folder event handler must
+    # route to the correct sub-handler based on the button class.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleFolderEvent")
+    assert "rules-folder-edit-button" in body
+    assert "rules-folder-delete-button" in body
+    assert "rules-folder-edit-save" in body
+    assert "rules-folder-edit-cancel" in body
+    assert "handleFolderEditStart" in body
+    assert "handleFolderDelete" in body
+    assert "handleFolderEditSave" in body
+    assert "handleFolderEditCancel" in body
+
+
+def test_project_rules_folder_create_js_creating_state_clears_on_all_paths():
+    # Phase 5E regression lock: the creating state must clear on success,
+    # on failure, and on rejected promise.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderCreateSubmit")
+    assert "App.setFolderCreateCreating(true)" in body
+    assert ".catch(function ()" in body
+    catch_pos = body.find(".catch(function ()")
+    cleanup_pos = body.find("App.setFolderCreateCreating(false)", catch_pos)
+    assert cleanup_pos != -1
+
+
+def test_project_rules_folder_delete_state_isolation_from_other_write_paths():
+    # Phase 5E regression lock: the folder delete handler must not read
+    # the toggle saving state, keyword create state, or keyword delete
+    # state directly.
+    source = read_js("rules.js")
+    delete_body = func_body(source, "handleFolderDelete")
+    assert "App.rulesSavingRuleKey" not in delete_body
+    assert "App.rulesCreatingKeyword" not in delete_body
+    assert "App.rulesDeletingRuleKey" not in delete_body
+    assert "App.rulesCreatingFolder" in delete_body
+    assert "App.rulesDeletingFolderKey" in delete_body
+
+
+def test_project_rules_folder_edit_state_isolation_from_other_write_paths():
+    # Phase 5E regression lock: the folder edit save handler must not read
+    # the toggle saving state, keyword create state, or keyword delete
+    # state directly.
+    source = read_js("rules.js")
+    edit_body = func_body(source, "handleFolderEditSave")
+    assert "App.rulesSavingRuleKey" not in edit_body
+    assert "App.rulesCreatingKeyword" not in edit_body
+    assert "App.rulesDeletingRuleKey" not in edit_body
+
+
+def test_project_rules_folder_inline_edit_form_renders_in_place_of_row():
+    # Phase 5E regression lock: when a folder row is being edited, the
+    # renderProjectRuleRow function must render the inline edit form
+    # (with input + checkbox + save / cancel buttons) in place of the
+    # normal row body.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "is-folder-editing" in row_body
+    assert "rules-folder-edit-form" in row_body
+    assert "rules-folder-edit-input" in row_body
+    assert "rules-folder-edit-recursive" in row_body
+    assert "rules-folder-edit-save" in row_body
+    assert "rules-folder-edit-cancel" in row_body
+
+
+def test_project_rules_folder_show_project_rules_caches_last_data():
+    # Phase 5E regression lock: the ``showProjectRules`` function must
+    # cache the last-loaded data so the inline folder edit form can
+    # re-render the list immediately without a round-trip.
+    source = read_js("rules.js")
+    body = func_body(source, "showProjectRules")
+    assert "App.lastProjectRulesData" in body
+
+
+def test_project_rules_folder_show_project_rules_populates_folder_selector():
+    # Phase 5E regression lock: ``showProjectRules`` must call
+    # ``populateFolderCreateProjectSelector`` so the folder create form's
+    # project selector stays in sync with the loaded data.
+    source = read_js("rules.js")
+    body = func_body(source, "showProjectRules")
+    assert "populateFolderCreateProjectSelector" in body
+
+
+def test_project_rules_folder_show_project_rules_binds_folder_events():
+    # Phase 5E regression lock: ``showProjectRules`` must call
+    # ``bindProjectRuleFolderEvents`` so the folder edit / delete
+    # delegation is set up after every render.
+    source = read_js("rules.js")
+    body = func_body(source, "showProjectRules")
+    assert "bindProjectRuleFolderEvents" in body
+
+
+def test_project_rules_folder_rerender_uses_cached_data():
+    # Phase 5E regression lock: ``rerenderProjectRulesList`` must use the
+    # cached ``lastProjectRulesData`` instead of calling the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "rerenderProjectRulesList")
+    assert "App.lastProjectRulesData" in body
+
+
+def test_project_rules_folder_packaging_spec_still_includes_rules_js():
+    # Phase 5E regression lock: the packaging spec must still include
+    # rules.js so the folder CRUD handlers ship in the packaged build.
+    source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
+    assert "'rules.js'" in source or '"rules.js"' in source
+    assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source

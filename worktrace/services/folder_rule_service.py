@@ -80,6 +80,50 @@ def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: b
     return rule_id
 
 
+def update_folder_rule(rule_id: int, folder_path: str, recursive: bool = True) -> None:
+    """Update one existing folder rule's ``folder_path`` and ``recursive`` by id.
+
+    Unlike ``create_or_update_folder_rule``, this preserves the row's ``id``
+    even when the new ``folder_path`` produces a different
+    ``normalized_folder_key``. ``project_id`` and ``enabled`` are preserved
+    as-is; this function does not move a folder rule to a different project
+    and does not toggle its enabled state. The folder index for this rule is
+    rebuilt because the path may have changed.
+
+    Raises ``ValueError`` if ``folder_path`` is empty or ``rule_id`` does not
+    match any row. Raises ``sqlite3.IntegrityError`` (surfaced to the caller
+    as ``operation_failed`` by the API facade) if the new normalized key
+    already belongs to a different folder rule.
+    """
+    folder = (folder_path or "").strip()
+    if not folder:
+        raise ValueError("folder path is required")
+    key = normalize_folder_key(folder)
+    if not key:
+        raise ValueError("folder path is required")
+    ts = now_str()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE folder_project_rule
+            SET folder_path = ?,
+                normalized_folder_key = ?,
+                recursive = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (folder, key, int(recursive), ts, rule_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("folder rule not found")
+    invalidate_folder_rule_cache()
+    from .privacy_service import clear_exclude_rules_cache
+    from .folder_index_service import request_rebuild_for_rule
+
+    clear_exclude_rules_cache()
+    request_rebuild_for_rule(rule_id)
+
+
 def delete_folder_rule(rule_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))

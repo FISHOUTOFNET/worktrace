@@ -2197,6 +2197,251 @@ body {
     border: 1px solid #bbf7d0;
 }
 
+/* Phase 5E: folder rule creation form. Mirrors the keyword create form
+   visual style so the two create forms read as siblings. Only the folder
+   create submit button is a static action button in this section. */
+.rules-folder-create-form {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.rules-folder-create-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.rules-folder-create-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rules-folder-create-label {
+    font-size: 12px;
+    color: #475569;
+}
+
+.rules-folder-create-select,
+.rules-folder-create-input {
+    padding: 6px 8px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #1e293b;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.rules-folder-create-recursive-row {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+}
+
+.rules-folder-create-recursive-label {
+    font-size: 13px;
+    color: #1e293b;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.rules-folder-create-recursive {
+    cursor: pointer;
+}
+
+.rules-folder-create-select:disabled,
+.rules-folder-create-input:disabled,
+.rules-folder-create-recursive:disabled,
+.rules-folder-create-submit:disabled {
+    background: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+    opacity: 0.75;
+}
+
+.rules-folder-create-actions {
+    display: flex;
+    justify-content: flex-start;
+}
+
+.rules-folder-create-submit {
+    padding: 7px 16px;
+    font-size: 13px;
+    border: 1px solid #4338ca;
+    border-radius: 4px;
+    background: #4338ca;
+    color: #ffffff;
+    cursor: pointer;
+}
+
+.rules-folder-create-submit:hover:not(:disabled) {
+    background: #3730a3;
+    border-color: #3730a3;
+}
+
+.rules-folder-create-empty {
+    font-size: 12px;
+    color: #94a3b8;
+    padding: 6px 0;
+}
+
+.rules-folder-create-status {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    line-height: 1.5;
+}
+
+.rules-folder-create-status.is-error {
+    background: #fef2f2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+}
+
+.rules-folder-create-status.is-success {
+    background: #f0fdf4;
+    color: #15803d;
+    border: 1px solid #bbf7d0;
+}
+
+/* Phase 5E: folder rule row edit / delete buttons. Mirrors the existing
+   keyword delete button visual style so destructive / write actions read
+   consistently across rule kinds. Only folder rules render these buttons;
+   keyword rules and project cards never do. */
+.rules-folder-edit-button,
+.rules-folder-delete-button {
+    min-width: 64px;
+    min-height: 30px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.rules-folder-edit-button:hover:not(:disabled),
+.rules-folder-delete-button:hover:not(:disabled) {
+    border-color: #94a3b8;
+    background: #f8fafc;
+}
+
+.rules-folder-delete-button {
+    color: #b91c1c;
+    border-color: #fca5a5;
+}
+
+.rules-folder-delete-button:hover:not(:disabled) {
+    border-color: #f87171;
+    background: #fef2f2;
+}
+
+.rules-folder-edit-button:disabled,
+.rules-folder-delete-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+/* Phase 5E: inline folder rule edit form. Rendered in place of the normal
+   row body when the user enters edit mode for a folder rule. The form
+   collapses the row into a single column so the input has room. */
+.rules-row.is-folder-editing {
+    grid-template-columns: auto minmax(0, 1fr);
+}
+
+.rules-folder-edit-form {
+    grid-column: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.rules-folder-edit-input {
+    flex: 1;
+    min-width: 200px;
+    padding: 6px 8px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #1e293b;
+    box-sizing: border-box;
+}
+
+.rules-folder-edit-input:disabled {
+    background: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+    opacity: 0.75;
+}
+
+.rules-folder-edit-recursive-label {
+    font-size: 13px;
+    color: #1e293b;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.rules-folder-edit-recursive {
+    cursor: pointer;
+}
+
+.rules-folder-edit-recursive:disabled {
+    cursor: not-allowed;
+    opacity: 0.75;
+}
+
+.rules-folder-edit-save,
+.rules-folder-edit-cancel {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.rules-folder-edit-save {
+    border: 1px solid #4338ca;
+    background: #4338ca;
+    color: #ffffff;
+}
+
+.rules-folder-edit-save:hover:not(:disabled) {
+    background: #3730a3;
+    border-color: #3730a3;
+}
+
+.rules-folder-edit-save:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+.rules-folder-edit-cancel {
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #0f172a;
+}
+
+.rules-folder-edit-cancel:hover:not(:disabled) {
+    border-color: #94a3b8;
+    background: #f8fafc;
+}
+
 @media (max-width: 900px) {
     .rules-project-head {
         flex-direction: column;
@@ -2216,8 +2461,17 @@ body {
         white-space: normal;
     }
     .rules-row > .rules-status,
-    .rules-row > .rules-toggle-btn {
+    .rules-row > .rules-toggle-btn,
+    .rules-row > .rules-folder-edit-button,
+    .rules-row > .rules-folder-delete-button {
         justify-self: flex-start;
+    }
+    .rules-folder-edit-form {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .rules-folder-edit-input {
+        min-width: 0;
     }
 }
 

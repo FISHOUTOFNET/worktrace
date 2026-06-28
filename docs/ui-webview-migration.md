@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5D.1 "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5E "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -10,27 +10,26 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **5D.1 (Project Rules keyword deletion hardening)**.
-  Phase 5D.1 is a hardening-only / regression-only follow-up to Phase 5D.
-  It locks the keyword rule deletion write path (API input validation,
-  keyword-only delete boundary, folder-rule-id not-deleted regression
-  lock, bridge error collapse and narrow-payload hardening, frontend
-  confirm/deleting/stale/refresh/failure behavior, toggle / create /
-  delete state isolation, sensitive-field boundaries, CSS page scoping,
-  and packaging / static-resource contracts) without opening any new
-  Project Rules capability. Phase 5D is the most recent behavior-change
-  phase: it opened one minimal new Project Rules write capability —
-  deleting a single existing keyword rule from the WebView Project Rules
-  page, then refreshing the list on success. It preserves the Phase 5B /
-  5B.1 existing folder / keyword rule enable/disable path and its
-  hardening (input validation, error collapse, saving-and-stale-state,
-  sensitive-field-boundary regression locks, plus the unhashable-`rule_type`
-  fix), the Phase 5C keyword rule creation path, and the Phase 5C.1 keyword
-  creation hardening. Project enable/disable, Project
-  create/edit/delete/archive, folder rule create/edit/delete, keyword rule
-  edit, conflict preview, backfill, automatic rules, batch operations,
-  schema changes, frontend frameworks / Node, browser storage, and network
-  requests remain out of scope.
+- Current phase: **5E (Project Rules folder rule CRUD foundation)**.
+  Phase 5E opens three new Project Rules folder rule write capabilities on
+  an existing rule-target project: creating one folder rule, editing an
+  existing folder rule, and deleting a single existing folder rule, then
+  refreshing the list on success. The API / bridge / frontend three layers
+  are wired through the stable `create_project_folder_rule` /
+  `update_project_folder_rule` / `delete_project_folder_rule` facade with
+  input validation (true int excluding bool, true str with trim, true bool
+  recursive), stable error codes (`invalid_input` / `not_found` /
+  `project_not_found` / `operation_failed`), Chinese error mapping at the
+  bridge, narrow payloads, independent frontend state keys for folder
+  create / edit / delete, and explicit Project Rules page boundary copy.
+  It preserves the Phase 5B / 5B.1 existing folder / keyword rule
+  enable/disable path and its hardening, the Phase 5C keyword rule creation
+  path, the Phase 5C.1 keyword creation hardening, the Phase 5D keyword rule
+  deletion path, and the Phase 5D.1 keyword deletion hardening. Project
+  enable/disable, Project create/edit/delete/archive, keyword rule edit,
+  folder rule conflict preview, folder rule backfill, automatic rules,
+  batch operations, schema changes, frontend frameworks / Node, browser
+  storage, and network requests remain out of scope.
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime). It is
   the only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview (Phase 1), Timeline / Time Details (read-only in
@@ -40,7 +39,8 @@ Implemented" sections) lives in
   5A, hardened in 5A.1, existing folder / keyword rule enable/disable in
   Phase 5B, hardened in Phase 5B.1, keyword rule creation foundation in
   Phase 5C, keyword creation hardening in Phase 5C.1, keyword rule deletion
-  foundation in Phase 5D, keyword deletion hardening in Phase 5D.1).
+  foundation in Phase 5D, keyword deletion hardening in Phase 5D.1, folder
+  rule CRUD foundation in Phase 5E).
 - Unmigrated pages: Settings / Privacy / Encrypted Backup (still legacy
   Tkinter code kept for reference; not a supported runtime path).
 - Detailed phase-by-phase scope, data semantics, and "not implemented" lists

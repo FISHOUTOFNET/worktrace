@@ -263,6 +263,14 @@
         if (keywordCreateBtn) {
             keywordCreateBtn.addEventListener("click", App.handleKeywordCreateSubmit);
         }
+        // Phase 5E: Project Rules folder create submit handler. Same pattern
+        // as the keyword create submit handler; the folder edit / delete
+        // / edit-save / edit-cancel use event delegation set up inside
+        // rules.js on the #rules-list container.
+        var folderCreateBtn = document.getElementById("rules-folder-create-submit");
+        if (folderCreateBtn) {
+            folderCreateBtn.addEventListener("click", App.handleFolderCreateSubmit);
+        }
     }
     App.initButtons = initButtons;
 

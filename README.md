@@ -5,25 +5,21 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5D.1 (Project Rules keyword deletion
-> hardening) is the latest shipped phase. Phase 5D.1 is a
-> hardening-only / regression-only follow-up to Phase 5D: it locks the
-> keyword rule deletion write path (API input validation, keyword-only
-> delete boundary, folder-rule-id not-deleted regression lock, bridge
-> error collapse and narrow-payload hardening, frontend
-> confirm/deleting/stale/refresh/failure behavior, toggle / create /
-> delete state isolation, sensitive-field boundaries, CSS page scoping,
-> and packaging / static-resource contracts) without opening any new
-> Project Rules capability. Phase 5D is the most recent behavior-change
-> phase: it opened one minimal new Project Rules write capability —
-> deleting a single existing keyword rule from the WebView Project Rules
-> page, then refreshing the list on success. It preserves the Phase 5B /
-> 5B.1 existing folder / keyword rule enable/disable path and its
-> hardening, the Phase 5C keyword rule creation path, and the Phase 5C.1
-> keyword creation hardening. Project enable/disable, project
-> create/edit/delete/archive, folder rule create/edit/delete, keyword rule
-> edit, conflict preview, backfill, and automatic rules remain unsupported
-> in WebView. For a one-screen snapshot read
+> **Current state**: WebView Phase 5E (Project Rules folder rule CRUD
+> foundation) is the latest shipped phase. Phase 5E opens three new
+> Project Rules folder rule write capabilities on an existing rule-target
+> project: creating one folder rule, editing an existing folder rule, and
+> deleting a single existing folder rule, then refreshing the list on
+> success. The API / bridge / frontend three layers are wired through the
+> stable `create_project_folder_rule` / `update_project_folder_rule` /
+> `delete_project_folder_rule` facade. It preserves the Phase 5B / 5B.1
+> existing folder / keyword rule enable/disable path and its hardening,
+> the Phase 5C keyword rule creation path, the Phase 5C.1 keyword creation
+> hardening, the Phase 5D keyword rule deletion path, and the Phase 5D.1
+> keyword deletion hardening. Project enable/disable, project
+> create/edit/delete/archive, keyword rule edit, conflict preview,
+> backfill, automatic rules, and batch Project Rules operations remain
+> unsupported in WebView. For a one-screen snapshot read
 > [`docs/current-state.md`](docs/current-state.md). For the full
 > per-phase history read
 > [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
@@ -64,10 +60,14 @@ records.
   sensitive-field boundaries, and packaging / static-resource contracts)
   without opening any new Project Rules capability. Phase 5D adds the
   second new Project Rules write capability: deleting a single existing
-  keyword rule, then refreshing the list on success. Project enable/disable,
-  Project creation/editing/deletion/archive, folder rule
-  creation/editing/deletion, keyword rule editing, conflict preview,
-  backfill, and automatic rule workflows are not supported in WebView.
+  keyword rule, then refreshing the list on success. Phase 5D.1 is a
+  hardening-only / regression-only follow-up that locks the Phase 5D keyword
+  delete path without opening any new capability. Phase 5E opens the
+  folder rule CRUD foundation: creating, editing, and deleting a single
+  existing folder rule, then refreshing the list on success. Project
+  enable/disable, Project creation/editing/deletion/archive, keyword rule
+  editing, conflict preview, backfill, and automatic rule workflows are not
+  supported in WebView.
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.
 

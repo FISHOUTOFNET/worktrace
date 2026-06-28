@@ -1827,3 +1827,964 @@ def test_delete_project_keyword_rule_bridge_input_validation_payloads_json_seria
         lowered = repr(result).lower()
         for forbidden in ("traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret"):
             assert forbidden not in lowered
+
+
+# --- Phase 5E: folder rule create bridge tests ---------------------------
+
+
+def test_create_project_folder_rule_success_payload(monkeypatch):
+    # Phase 5E regression lock: the success payload is the narrow created-rule
+    # summary only (``kind`` / ``id`` / ``project_id`` / ``folder_path`` /
+    # ``recursive`` / ``enabled``). It must NOT echo the full refreshed
+    # Project Rules list back to JS — the frontend re-fetches via
+    # ``get_project_rules`` after success.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": 456,
+                "project_id": project_id,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
+
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "folder",
+            "id": 456,
+            "project_id": 1,
+            "folder_path": r"D:\Work",
+            "recursive": True,
+            "enabled": True,
+        },
+    }
+    assert "projects" not in result
+    assert "rules" not in result
+
+
+@pytest.mark.parametrize("bad_id", [None, True, False, "1", "abc", 0, -1, 1.0, 2.5, [], {}, (), {1, 2}, (1,), frozenset({1})])
+def test_create_project_folder_rule_rejects_invalid_project_id(bad_id):
+    result = WebViewBridge().create_project_folder_rule(bad_id, r"D:\Work", True)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize("bad_path", [None, True, False, 1, 1.0, 2.5, [], {}, (), (1,), frozenset({1}), "", "   ", "\t", "\n", "  \t  "])
+def test_create_project_folder_rule_rejects_invalid_folder_path(bad_path):
+    result = WebViewBridge().create_project_folder_rule(1, bad_path, True)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize("bad_recursive", [None, "true", 1, 0, 1.0, 2.5, [], {}, (), (1,), frozenset({1})])
+def test_create_project_folder_rule_rejects_non_bool_recursive(bad_recursive):
+    result = WebViewBridge().create_project_folder_rule(1, r"D:\Work", bad_recursive)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_create_project_folder_rule_invalid_input_payload_excludes_sensitive_text():
+    bridge = WebViewBridge()
+    for args in (
+        (None, r"D:\Work", True),
+        (True, r"D:\Work", True),
+        (False, r"D:\Work", True),
+        ("1", r"D:\Work", True),
+        (1.0, r"D:\Work", True),
+        ([], r"D:\Work", True),
+        ({}, r"D:\Work", True),
+        (0, r"D:\Work", True),
+        (-1, r"D:\Work", True),
+        (1, None, True),
+        (1, True, True),
+        (1, 1, True),
+        (1, 1.0, True),
+        (1, [], True),
+        (1, {}, True),
+        (1, "", True),
+        (1, "   ", True),
+        (1, r"D:\Work", None),
+        (1, r"D:\Work", "true"),
+        (1, r"D:\Work", 1),
+        (1, r"D:\Work", []),
+        (1, r"D:\Work", {}),
+    ):
+        result = bridge.create_project_folder_rule(*args)
+        assert result == {"ok": False, "error": "操作无效"}
+        lowered = repr(result).lower()
+        for forbidden in ("traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret"):
+            assert forbidden not in lowered
+
+
+def test_create_project_folder_rule_project_not_found_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {"ok": False, "error": "project_not_found"},
+    )
+
+    result = WebViewBridge().create_project_folder_rule(9999, r"D:\Work", True)
+
+    assert result == {"ok": False, "error": "项目不存在或不可用"}
+
+
+def test_create_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {"ok": False, "error": "operation_failed"},
+    )
+
+    result = WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
+
+    assert result == {"ok": False, "error": "新增文件夹规则失败"}
+
+
+def test_create_project_folder_rule_unknown_error_code_collapses(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {"ok": False, "error": "unknown_code"},
+    )
+
+    result = WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
+
+    assert result == {"ok": False, "error": "新增文件夹规则失败"}
+
+
+def test_create_project_folder_rule_unknown_exception_collapses(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom: sensitive SQL SELECT * FROM ...")
+
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _boom)
+
+    result = WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
+
+    assert result == {"ok": False, "error": "新增文件夹规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("boom", "select", "sensitive", "traceback", "runtimeerror", "window_title", "clipboard", "note"):
+        assert forbidden not in lowered
+
+
+def test_create_project_folder_rule_failure_payload_excludes_backend_codes(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": False,
+            "error": "operation_failed",
+            "sql": "SELECT * FROM folder_project_rule",
+            "traceback": "RuntimeError: ...",
+            "details": "C:\\Secret window_title clipboard note",
+        },
+    )
+
+    result = WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
+
+    assert result == {"ok": False, "error": "新增文件夹规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("operation_failed", "sql", "select", "traceback", "details", "window_title", "clipboard", "note", "secret"):
+        assert forbidden not in lowered
+
+
+def test_create_project_folder_rule_success_payload_types_are_stable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": 789,
+                "project_id": project_id,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
+
+    assert isinstance(result["ok"], bool)
+    rule = result["rule"]
+    assert isinstance(rule["kind"], str)
+    assert isinstance(rule["id"], int)
+    assert isinstance(rule["project_id"], int)
+    assert isinstance(rule["folder_path"], str)
+    assert isinstance(rule["recursive"], bool)
+    assert isinstance(rule["enabled"], bool)
+
+
+def test_create_project_folder_rule_payload_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": 1,
+                "project_id": project_id,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().create_project_folder_rule(1, r"D:\Work\Client\路径", True)
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_create_project_folder_rule_bridge_passes_trimmed_path_to_api(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_create(project_id, folder_path, recursive):
+        captured["project_id"] = project_id
+        captured["folder_path"] = folder_path
+        captured["recursive"] = recursive
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": 1,
+                "project_id": project_id,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+            },
+        }
+
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", fake_create)
+
+    WebViewBridge().create_project_folder_rule(1, "  D:\\Work  ", True)
+
+    assert captured["folder_path"] == r"D:\Work"
+
+
+def test_create_project_folder_rule_success_payload_strips_extra_api_keys(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": 1,
+                "project_id": project_id,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+                "normalized_folder_key": "d:\\work",
+                "created_at": "2026-06-28T10:00:00",
+                "updated_at": "2026-06-28T10:00:00",
+                "internal_note": "C:\\Secret window_title clipboard note",
+            },
+        },
+    )
+
+    result = WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
+
+    rule = result["rule"]
+    assert set(rule.keys()) == {"kind", "id", "project_id", "folder_path", "recursive", "enabled"}
+    lowered = repr(result).lower()
+    for forbidden in ("normalized_folder_key", "created_at", "updated_at", "internal_note", "secret", "window_title", "clipboard", "note"):
+        assert forbidden not in lowered
+
+
+def test_create_project_folder_rule_never_calls_other_project_rules_write_apis(monkeypatch):
+    # Phase 5E regression lock: the folder create bridge must only call
+    # ``rule_api.create_project_folder_rule``. It must not call any other
+    # write API (toggle / keyword create / keyword delete / folder update /
+    # folder delete / preview / backfill / project write).
+    called: dict[str, int] = {}
+
+    def _track(name):
+        def _impl(*args, **kwargs):
+            called[name] = called.get(name, 0) + 1
+            return {"ok": True, "rule": {"kind": "folder", "id": 1, "deleted": True}}
+
+        return _impl
+
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+
+    WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
+
+    assert called == {"create_folder": 1}
+
+
+def test_create_project_folder_rule_does_not_regress_get_project_rules(monkeypatch):
+    called = {"get_project_rules": 0}
+
+    def _track(*args, **kwargs):
+        called["get_project_rules"] += 1
+        return []
+
+    monkeypatch.setattr(bridge_module.project_api, "list_project_bindings", _track)
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {"kind": "folder", "id": 1, "project_id": project_id, "folder_path": folder_path, "recursive": recursive, "enabled": True},
+        },
+    )
+
+    bridge = WebViewBridge()
+    bridge.create_project_folder_rule(1, r"D:\Work", True)
+    result = bridge.get_project_rules()
+
+    assert called["get_project_rules"] == 1
+    assert result["ok"] is True
+
+
+def test_create_project_folder_rule_does_not_regress_set_project_rule_enabled(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {"kind": "folder", "id": 1, "project_id": project_id, "folder_path": folder_path, "recursive": recursive, "enabled": True},
+        },
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {"ok": True, "rule": {"kind": rule_type, "id": rule_id, "enabled": enabled}},
+    )
+
+    bridge = WebViewBridge()
+    create_result = bridge.create_project_folder_rule(1, r"D:\Work", True)
+    toggle_result = bridge.set_project_rule_enabled("folder", create_result["rule"]["id"], False)
+
+    assert create_result["ok"] is True
+    assert toggle_result["ok"] is True
+
+
+def test_create_project_folder_rule_does_not_regress_create_project_keyword_rule(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {"kind": "folder", "id": 1, "project_id": project_id, "folder_path": folder_path, "recursive": recursive, "enabled": True},
+        },
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {
+            "ok": True,
+            "rule": {"kind": "keyword", "id": 2, "project_id": project_id, "keyword": keyword.strip(), "enabled": True},
+        },
+    )
+
+    bridge = WebViewBridge()
+    folder_result = bridge.create_project_folder_rule(1, r"D:\Work", True)
+    keyword_result = bridge.create_project_keyword_rule(1, "Spec")
+
+    assert folder_result["ok"] is True
+    assert keyword_result["ok"] is True
+
+
+def test_create_project_folder_rule_does_not_regress_delete_project_keyword_rule(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {"kind": "folder", "id": 1, "project_id": project_id, "folder_path": folder_path, "recursive": recursive, "enabled": True},
+        },
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
+    )
+
+    bridge = WebViewBridge()
+    folder_result = bridge.create_project_folder_rule(1, r"D:\Work", True)
+    delete_result = bridge.delete_project_keyword_rule(99)
+
+    assert folder_result["ok"] is True
+    assert delete_result["ok"] is True
+
+
+# --- Phase 5E: folder rule update bridge tests ---------------------------
+
+
+def test_update_project_folder_rule_success_payload(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": rule_id,
+                "project_id": 1,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().update_project_folder_rule(10, r"D:\New", False)
+
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "folder",
+            "id": 10,
+            "project_id": 1,
+            "folder_path": r"D:\New",
+            "recursive": False,
+            "enabled": True,
+        },
+    }
+    assert "projects" not in result
+
+
+@pytest.mark.parametrize("bad_id", [None, True, False, "1", "abc", 0, -1, 1.0, 2.5, [], {}, (), {1, 2}, (1,), frozenset({1})])
+def test_update_project_folder_rule_rejects_invalid_rule_id(bad_id):
+    result = WebViewBridge().update_project_folder_rule(bad_id, r"D:\New", True)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize("bad_path", [None, True, False, 1, 1.0, 2.5, [], {}, (), (1,), frozenset({1}), "", "   ", "\t", "\n", "  \t  "])
+def test_update_project_folder_rule_rejects_invalid_folder_path(bad_path):
+    result = WebViewBridge().update_project_folder_rule(1, bad_path, True)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize("bad_recursive", [None, "true", 1, 0, 1.0, 2.5, [], {}, (), (1,), frozenset({1})])
+def test_update_project_folder_rule_rejects_non_bool_recursive(bad_recursive):
+    result = WebViewBridge().update_project_folder_rule(1, r"D:\New", bad_recursive)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_update_project_folder_rule_not_found_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {"ok": False, "error": "not_found"},
+    )
+
+    result = WebViewBridge().update_project_folder_rule(9999, r"D:\New", True)
+
+    assert result == {"ok": False, "error": "文件夹规则不存在"}
+
+
+def test_update_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {"ok": False, "error": "operation_failed"},
+    )
+
+    result = WebViewBridge().update_project_folder_rule(1, r"D:\New", True)
+
+    assert result == {"ok": False, "error": "保存文件夹规则失败"}
+
+
+def test_update_project_folder_rule_unknown_error_code_collapses(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {"ok": False, "error": "unknown_code"},
+    )
+
+    result = WebViewBridge().update_project_folder_rule(1, r"D:\New", True)
+
+    assert result == {"ok": False, "error": "保存文件夹规则失败"}
+
+
+def test_update_project_folder_rule_unknown_exception_collapses(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom: sensitive SQL UPDATE ...")
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _boom)
+
+    result = WebViewBridge().update_project_folder_rule(1, r"D:\New", True)
+
+    assert result == {"ok": False, "error": "保存文件夹规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("boom", "update", "sensitive", "traceback", "runtimeerror", "window_title", "clipboard", "note"):
+        assert forbidden not in lowered
+
+
+def test_update_project_folder_rule_failure_payload_excludes_backend_codes(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {
+            "ok": False,
+            "error": "operation_failed",
+            "sql": "UPDATE folder_project_rule SET ...",
+            "traceback": "RuntimeError: ...",
+            "details": "C:\\Secret window_title clipboard note",
+        },
+    )
+
+    result = WebViewBridge().update_project_folder_rule(1, r"D:\New", True)
+
+    assert result == {"ok": False, "error": "保存文件夹规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("operation_failed", "sql", "update", "traceback", "details", "window_title", "clipboard", "note", "secret"):
+        assert forbidden not in lowered
+
+
+def test_update_project_folder_rule_success_payload_types_are_stable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": rule_id,
+                "project_id": 1,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().update_project_folder_rule(1, r"D:\New", True)
+
+    assert isinstance(result["ok"], bool)
+    rule = result["rule"]
+    assert isinstance(rule["kind"], str)
+    assert isinstance(rule["id"], int)
+    assert isinstance(rule["project_id"], int)
+    assert isinstance(rule["folder_path"], str)
+    assert isinstance(rule["recursive"], bool)
+    assert isinstance(rule["enabled"], bool)
+
+
+def test_update_project_folder_rule_payload_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": rule_id,
+                "project_id": 1,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().update_project_folder_rule(1, r"D:\Work\路径", True)
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_update_project_folder_rule_bridge_passes_trimmed_path_to_api(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_update(rule_id, folder_path, recursive):
+        captured["folder_path"] = folder_path
+        captured["rule_id"] = rule_id
+        captured["recursive"] = recursive
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": rule_id,
+                "project_id": 1,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+            },
+        }
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", fake_update)
+
+    WebViewBridge().update_project_folder_rule(10, "  D:\\New  ", True)
+
+    assert captured["folder_path"] == r"D:\New"
+    assert captured["rule_id"] == 10
+
+
+def test_update_project_folder_rule_success_payload_strips_extra_api_keys(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": rule_id,
+                "project_id": 1,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+                "normalized_folder_key": "d:\\new",
+                "created_at": "2026-06-28T10:00:00",
+                "updated_at": "2026-06-28T10:00:00",
+                "internal_note": "C:\\Secret window_title clipboard note",
+            },
+        },
+    )
+
+    result = WebViewBridge().update_project_folder_rule(1, r"D:\New", True)
+
+    rule = result["rule"]
+    assert set(rule.keys()) == {"kind", "id", "project_id", "folder_path", "recursive", "enabled"}
+    lowered = repr(result).lower()
+    for forbidden in ("normalized_folder_key", "created_at", "updated_at", "internal_note", "secret", "window_title", "clipboard", "note"):
+        assert forbidden not in lowered
+
+
+def test_update_project_folder_rule_never_calls_other_project_rules_write_apis(monkeypatch):
+    called: dict[str, int] = {}
+
+    def _track(name):
+        def _impl(*args, **kwargs):
+            called[name] = called.get(name, 0) + 1
+            return {"ok": True, "rule": {"kind": "folder", "id": 1, "deleted": True}}
+
+        return _impl
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+
+    WebViewBridge().update_project_folder_rule(1, r"D:\New", True)
+
+    assert called == {"update_folder": 1}
+
+
+# --- Phase 5E: folder rule delete bridge tests ---------------------------
+
+
+def test_delete_project_folder_rule_success_payload(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {
+            "ok": True,
+            "rule": {"kind": "folder", "id": rule_id, "deleted": True},
+        },
+    )
+
+    result = WebViewBridge().delete_project_folder_rule(10)
+
+    assert result == {
+        "ok": True,
+        "rule": {"kind": "folder", "id": 10, "deleted": True},
+    }
+    assert "projects" not in result
+
+
+@pytest.mark.parametrize("bad_id", [None, True, False, "1", "abc", 0, -1, 1.0, 2.5, [], {}, (), {1, 2}, (1,), frozenset({1})])
+def test_delete_project_folder_rule_rejects_invalid_rule_id(bad_id):
+    result = WebViewBridge().delete_project_folder_rule(bad_id)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_delete_project_folder_rule_invalid_input_payload_excludes_sensitive_text():
+    bridge = WebViewBridge()
+    for bad_id in (None, True, False, "1", "abc", 1.0, 2.5, 0, -1, [], {}, (), {1, 2}, (1,), frozenset({1})):
+        result = bridge.delete_project_folder_rule(bad_id)
+        assert result == {"ok": False, "error": "操作无效"}
+        lowered = repr(result).lower()
+        for forbidden in ("traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret"):
+            assert forbidden not in lowered
+
+
+def test_delete_project_folder_rule_not_found_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": False, "error": "not_found"},
+    )
+
+    result = WebViewBridge().delete_project_folder_rule(9999)
+
+    assert result == {"ok": False, "error": "文件夹规则不存在"}
+
+
+def test_delete_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": False, "error": "operation_failed"},
+    )
+
+    result = WebViewBridge().delete_project_folder_rule(1)
+
+    assert result == {"ok": False, "error": "删除文件夹规则失败"}
+
+
+def test_delete_project_folder_rule_unknown_error_code_collapses(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": False, "error": "unknown_code"},
+    )
+
+    result = WebViewBridge().delete_project_folder_rule(1)
+
+    assert result == {"ok": False, "error": "删除文件夹规则失败"}
+
+
+def test_delete_project_folder_rule_unknown_exception_collapses(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom: sensitive SQL DELETE FROM ...")
+
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _boom)
+
+    result = WebViewBridge().delete_project_folder_rule(1)
+
+    assert result == {"ok": False, "error": "删除文件夹规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("boom", "delete", "sensitive", "traceback", "runtimeerror", "window_title", "clipboard", "note"):
+        assert forbidden not in lowered
+
+
+def test_delete_project_folder_rule_failure_payload_excludes_backend_codes(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {
+            "ok": False,
+            "error": "operation_failed",
+            "sql": "DELETE FROM folder_project_rule WHERE ...",
+            "traceback": "RuntimeError: ...",
+            "details": "C:\\Secret window_title clipboard note",
+        },
+    )
+
+    result = WebViewBridge().delete_project_folder_rule(1)
+
+    assert result == {"ok": False, "error": "删除文件夹规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("operation_failed", "sql", "delete", "traceback", "details", "window_title", "clipboard", "note", "secret"):
+        assert forbidden not in lowered
+
+
+def test_delete_project_folder_rule_success_payload_types_are_stable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {
+            "ok": True,
+            "rule": {"kind": "folder", "id": rule_id, "deleted": True},
+        },
+    )
+
+    result = WebViewBridge().delete_project_folder_rule(1)
+
+    assert isinstance(result["ok"], bool)
+    rule = result["rule"]
+    assert isinstance(rule["kind"], str)
+    assert isinstance(rule["id"], int)
+    assert isinstance(rule["deleted"], bool)
+
+
+def test_delete_project_folder_rule_payload_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {
+            "ok": True,
+            "rule": {"kind": "folder", "id": rule_id, "deleted": True},
+        },
+    )
+
+    result = WebViewBridge().delete_project_folder_rule(1)
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_delete_project_folder_rule_success_payload_strips_extra_api_keys(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": rule_id,
+                "deleted": True,
+                "folder_path": r"C:\Secret",
+                "project_id": 99,
+                "normalized_folder_key": "c:\\secret",
+                "internal_note": "C:\\Secret window_title clipboard note",
+            },
+        },
+    )
+
+    result = WebViewBridge().delete_project_folder_rule(1)
+
+    rule = result["rule"]
+    assert set(rule.keys()) == {"kind", "id", "deleted"}
+    lowered = repr(result).lower()
+    for forbidden in ("folder_path", "project_id", "normalized_folder_key", "internal_note", "secret", "window_title", "clipboard", "note"):
+        assert forbidden not in lowered
+
+
+def test_delete_project_folder_rule_never_calls_other_project_rules_write_apis(monkeypatch):
+    called: dict[str, int] = {}
+
+    def _track(name):
+        def _impl(*args, **kwargs):
+            called[name] = called.get(name, 0) + 1
+            return {"ok": True, "rule": {"kind": "folder", "id": 1, "deleted": True}}
+
+        return _impl
+
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+
+    WebViewBridge().delete_project_folder_rule(1)
+
+    assert called == {"delete_folder": 1}
+
+
+def test_delete_project_folder_rule_keyword_rule_id_maps_to_stable_not_found(monkeypatch):
+    # A keyword rule id reaches the bridge as a normal positive int. The API
+    # returns ``not_found`` for keyword rule ids, and the bridge must map
+    # that to the stable ``文件夹规则不存在`` message without revealing that
+    # the id was a keyword rule or surfacing any keyword-table detail.
+    captured: dict[str, object] = {}
+
+    def fake_delete(rule_id):
+        captured["rule_id"] = rule_id
+        return {
+            "ok": False,
+            "error": "not_found",
+            "table": "project_rule",
+            "details": "Spec keyword window_title clipboard note",
+        }
+
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", fake_delete)
+
+    result = WebViewBridge().delete_project_folder_rule(77)
+
+    assert captured["rule_id"] == 77
+    assert result == {"ok": False, "error": "文件夹规则不存在"}
+    lowered = repr(result).lower()
+    for forbidden in ("project_rule", "table", "details", "traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret", "spec", "keyword"):
+        assert forbidden not in lowered
+
+
+def test_delete_project_folder_rule_bridge_input_validation_payloads_json_serializable():
+    bridge = WebViewBridge()
+    for bad_id in (None, True, False, "1", "abc", 1.0, 2.5, 0, -1, [], {}, (), {1, 2}, (1,), frozenset({1})):
+        result = bridge.delete_project_folder_rule(bad_id)
+        assert result == {"ok": False, "error": "操作无效"}
+        json.dumps(result, ensure_ascii=False)
+        lowered = repr(result).lower()
+        for forbidden in ("traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret"):
+            assert forbidden not in lowered
+
+
+def test_delete_project_folder_rule_does_not_regress_get_project_rules(monkeypatch):
+    called = {"get_project_rules": 0}
+
+    def _track(*args, **kwargs):
+        called["get_project_rules"] += 1
+        return []
+
+    monkeypatch.setattr(bridge_module.project_api, "list_project_bindings", _track)
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+    )
+
+    bridge = WebViewBridge()
+    bridge.delete_project_folder_rule(1)
+    result = bridge.get_project_rules()
+
+    assert called["get_project_rules"] == 1
+    assert result["ok"] is True
+
+
+def test_delete_project_folder_rule_does_not_regress_set_project_rule_enabled(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {"ok": True, "rule": {"kind": rule_type, "id": rule_id, "enabled": enabled}},
+    )
+
+    bridge = WebViewBridge()
+    delete_result = bridge.delete_project_folder_rule(1)
+    toggle_result = bridge.set_project_rule_enabled("folder", 10, False)
+
+    assert delete_result["ok"] is True
+    assert toggle_result["ok"] is True
+
+
+def test_delete_project_folder_rule_does_not_regress_create_project_keyword_rule(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {
+            "ok": True,
+            "rule": {"kind": "keyword", "id": 2, "project_id": project_id, "keyword": keyword.strip(), "enabled": True},
+        },
+    )
+
+    bridge = WebViewBridge()
+    delete_result = bridge.delete_project_folder_rule(1)
+    keyword_result = bridge.create_project_keyword_rule(1, "Spec")
+
+    assert delete_result["ok"] is True
+    assert keyword_result["ok"] is True
+
+
+def test_delete_project_folder_rule_does_not_regress_delete_project_keyword_rule(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
+    )
+
+    bridge = WebViewBridge()
+    folder_result = bridge.delete_project_folder_rule(1)
+    keyword_result = bridge.delete_project_keyword_rule(99)
+
+    assert folder_result["ok"] is True
+    assert keyword_result["ok"] is True

@@ -192,6 +192,237 @@ def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
         return {"ok": False, "error": "operation_failed"}
 
 
+# --- Phase 5E: Project Rules folder rule CRUD foundation -----------------
+
+
+def _folder_rule_row(rule_id: int) -> dict | None:
+    """Return the folder rule row for ``rule_id`` or ``None`` if absent.
+
+    Only resolves ids in the ``folder_project_rule`` table; keyword rule ids
+    return ``None`` so the folder CRUD paths can never touch keyword rules.
+    """
+    for row in folder_rule_service.list_folder_rules():
+        if int(row.get("id") or 0) == rule_id:
+            return dict(row)
+    return None
+
+
+def create_project_folder_rule(
+    project_id: Any, folder_path: Any, recursive: Any
+) -> dict[str, Any]:
+    """Create one new folder rule on an existing rule-target project.
+
+    Phase 5E narrow WebView-facing facade. ``project_id`` must identify a
+    project returned by ``project_api.list_rule_target_projects()`` (the
+    same eligibility rule the legacy Tkinter dialog and Phase 5C keyword
+    creation use), so the special local ``排除规则`` project — which is
+    created with ``enabled = 0`` and is therefore not a rule target — is
+    rejected as ``project_not_found`` without bypassing the service. The
+    existing ``folder_rule_service.create_or_update_folder_rule`` write path
+    uses ``INSERT ... ON CONFLICT(normalized_folder_key) DO UPDATE`` and so
+    has create-or-update semantics: if a folder rule with the same
+    normalized folder key already exists, it is updated in place (the
+    folder_path / project_id / recursive / enabled fields are overwritten
+    and ``enabled`` is reset to ``1``). This facade wraps that behavior as
+    a stable "create/update single folder rule" contract and returns the
+    resulting rule id, so callers cannot distinguish a fresh insert from an
+    in-place update at the API boundary.
+
+    It does NOT create projects, keyword rules, or edit/delete existing
+    folder rules; it does NOT perform conflict preview, backfill,
+    automatic rules, DB schema changes, native file picker dialogs, or
+    network access.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``project_id`` is not a real positive ``int``
+      (bool / float / numeric string / ``None`` / list / dict / tuple /
+      set / frozenset / zero / negative), or ``folder_path`` is not a real
+      non-empty ``str`` after trim, or ``recursive`` is not a real ``bool``.
+    - ``project_not_found`` — the project is not a rule target (covers both
+      unknown ids and disabled / archived / excluded projects).
+    - ``operation_failed`` — any unexpected service failure.
+    """
+
+    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
+    # ``float``, ``str``, ``None``, and container types in one check.
+    if type(project_id) is not int or project_id <= 0:
+        return {"ok": False, "error": "invalid_input"}
+    if type(folder_path) is not str:
+        return {"ok": False, "error": "invalid_input"}
+    trimmed = folder_path.strip()
+    if not trimmed:
+        return {"ok": False, "error": "invalid_input"}
+    if type(recursive) is not bool:
+        return {"ok": False, "error": "invalid_input"}
+    try:
+        target_ids = {
+            int(row.get("id") or 0)
+            for row in project_api.list_rule_target_projects()
+        }
+        if project_id not in target_ids:
+            return {"ok": False, "error": "project_not_found"}
+        rule_id = folder_rule_service.create_or_update_folder_rule(
+            trimmed, project_id, recursive=recursive
+        )
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": int(rule_id),
+                "project_id": int(project_id),
+                "folder_path": trimmed,
+                "recursive": bool(recursive),
+                "enabled": True,
+            },
+        }
+    except ProjectRuleWriteError as exc:
+        return {"ok": False, "error": exc.code}
+    except Exception:
+        return {"ok": False, "error": "operation_failed"}
+
+
+def update_project_folder_rule(
+    rule_id: Any, folder_path: Any, recursive: Any
+) -> dict[str, Any]:
+    """Update one existing folder rule's ``folder_path`` and ``recursive``.
+
+    Phase 5E narrow WebView-facing facade. ``rule_id`` must identify an
+    existing row in ``folder_project_rule`` (the folder rule table). A
+    ``rule_id`` that points at a keyword rule (``project_rule``) is rejected
+    as ``not_found`` rather than modifying the keyword rule — the folder
+    update path must never touch keyword rules. The folder rule's
+    ``project_id`` is intentionally preserved: this facade does not support
+    moving a folder rule to a different project. ``enabled`` is preserved
+    as-is (use the existing ``set_project_rule_enabled`` toggle path to
+    change enabled state).
+
+    The existing ``folder_rule_service.update_folder_rule`` write path
+    performs a direct ``UPDATE`` on the row identified by ``rule_id`` so
+    the row id is preserved even when the new ``folder_path`` produces a
+    different ``normalized_folder_key``. If the new normalized key already
+    belongs to a different folder rule, the service's
+    ``UNIQUE`` constraint raises ``IntegrityError`` which this facade
+    collapses to ``operation_failed`` — the update path does NOT merge or
+    delete the other rule. The folder rule cache invalidation, privacy
+    exclude cache clearing, and folder index rebuild hooks fire exactly as
+    they do on create.
+
+    It does NOT create projects or keyword rules, edit/delete existing
+    rules or projects, or perform conflict preview / backfill / automatic
+    rules / DB schema changes / native dialogs / file writes / network
+    access.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``rule_id`` is not a real positive ``int``
+      (bool / float / numeric string / ``None`` / list / dict / tuple /
+      set / frozenset / zero / negative), or ``folder_path`` is not a real
+      non-empty ``str`` after trim, or ``recursive`` is not a real ``bool``.
+    - ``not_found`` — no folder rule exists with this id (covers both
+      "id does not exist at all" and "id is a keyword rule").
+    - ``operation_failed`` — any unexpected service failure.
+    """
+
+    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
+    # ``float``, ``str``, ``None``, and container types in one check.
+    if type(rule_id) is not int or rule_id <= 0:
+        return {"ok": False, "error": "invalid_input"}
+    if type(folder_path) is not str:
+        return {"ok": False, "error": "invalid_input"}
+    trimmed = folder_path.strip()
+    if not trimmed:
+        return {"ok": False, "error": "invalid_input"}
+    if type(recursive) is not bool:
+        return {"ok": False, "error": "invalid_input"}
+    try:
+        # ``_folder_rule_row`` only resolves ids in ``folder_project_rule``;
+        # a keyword rule id resolves to ``None`` and therefore returns
+        # ``not_found``, so the folder update path can never modify a
+        # keyword rule.
+        existing = _folder_rule_row(rule_id)
+        if existing is None:
+            return {"ok": False, "error": "not_found"}
+        # Preserve the existing project_id and enabled state: this facade
+        # does not move a folder rule to a different project and does not
+        # toggle its enabled state. Delegate to the dedicated
+        # ``update_folder_rule`` service write path (which preserves the
+        # row id even when the normalized folder key changes) so the cache
+        # invalidation / privacy exclude cache clearing / folder index
+        # rebuild hooks all fire exactly as they do on create.
+        project_id = int(existing.get("project_id") or 0)
+        enabled = bool(int(existing.get("enabled") or 0))
+        folder_rule_service.update_folder_rule(
+            rule_id, trimmed, recursive=recursive
+        )
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": int(rule_id),
+                "project_id": project_id,
+                "folder_path": trimmed,
+                "recursive": bool(recursive),
+                "enabled": enabled,
+            },
+        }
+    except ProjectRuleWriteError as exc:
+        return {"ok": False, "error": exc.code}
+    except Exception:
+        return {"ok": False, "error": "operation_failed"}
+
+
+def delete_project_folder_rule(rule_id: Any) -> dict[str, Any]:
+    """Delete one existing folder rule.
+
+    Phase 5E narrow WebView-facing facade. It only deletes a folder rule;
+    it does not delete keyword rules, projects, or edit/enable/disable any
+    rule or project. ``rule_id`` must identify an existing row in
+    ``folder_project_rule`` (the folder rule table). A ``rule_id`` that
+    points at a keyword rule (``project_rule``) is rejected as
+    ``not_found`` rather than deleting the keyword rule — the folder delete
+    path must never touch keyword rules. The facade delegates to the
+    existing ``folder_rule_service.delete_folder_rule`` write path, which
+    performs a hard ``DELETE FROM folder_project_rule`` and preserves the
+    existing folder rule cache invalidation, privacy exclude cache
+    clearing, and folder index deletion. No soft-delete is invented.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``rule_id`` is not a real positive ``int``
+      (bool / float / numeric string / ``None`` / list / dict / tuple /
+      set / frozenset / zero / negative).
+    - ``not_found`` — no folder rule exists with this id (covers both
+      "id does not exist at all" and "id is a keyword rule").
+    - ``operation_failed`` — any unexpected service failure.
+    """
+
+    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
+    # ``float``, ``str``, ``None``, and container types in one check.
+    if type(rule_id) is not int or rule_id <= 0:
+        return {"ok": False, "error": "invalid_input"}
+    try:
+        # ``_folder_rule_row`` only resolves ids in ``folder_project_rule``;
+        # a keyword rule id resolves to ``None`` and therefore returns
+        # ``not_found``, so the folder delete path can never delete a
+        # keyword rule.
+        if _folder_rule_row(rule_id) is None:
+            return {"ok": False, "error": "not_found"}
+        folder_rule_service.delete_folder_rule(rule_id)
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": int(rule_id),
+                "deleted": True,
+            },
+        }
+    except ProjectRuleWriteError as exc:
+        return {"ok": False, "error": exc.code}
+    except Exception:
+        return {"ok": False, "error": "operation_failed"}
+
+
 # --- keyword rules -------------------------------------------------------
 
 def create_keyword_rule(keyword: str, project_id: int) -> int:
@@ -232,13 +463,16 @@ __all__ = [
     "backfill_folder_rule",
     "create_keyword_rule",
     "create_or_update_folder_rule",
+    "create_project_folder_rule",
     "create_project_keyword_rule",
     "delete_folder_rule",
     "delete_keyword_rule",
+    "delete_project_folder_rule",
     "delete_project_keyword_rule",
     "ProjectRuleWriteError",
     "preview_folder_rule_conflicts",
     "set_project_rule_enabled",
     "set_folder_rule_enabled",
     "set_keyword_rule_enabled",
+    "update_project_folder_rule",
 ]

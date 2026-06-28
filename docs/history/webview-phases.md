@@ -4930,6 +4930,191 @@ Phase 5D.1 does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
+## Phase 5E Implemented Scope
+
+Phase 5E is the **Project Rules folder rule CRUD foundation** phase. It opens
+three new Project Rules folder rule write capabilities on an existing
+rule-target project — creating one folder rule, editing an existing folder
+rule, and deleting a single existing folder rule — then refreshing the list
+on success. The API / bridge / frontend three layers are wired through the
+stable `create_project_folder_rule` / `update_project_folder_rule` /
+`delete_project_folder_rule` facade.
+
+Implemented in Phase 5E:
+
+- API facade in `worktrace/api/rule_api.py`:
+  - `create_project_folder_rule(project_id, folder_path, recursive)`:
+    validates `project_id` (true int, > 0, bool rejected), `folder_path`
+    (true str, trim non-empty), and `recursive` (true bool); rejects None /
+    float / numeric-string / container types; verifies the project exists and
+    is a rule-target project (excludes `排除规则` / archived / disabled);
+    delegates to `folder_rule_service.create_or_update_folder_rule`
+    (create-or-update semantics on `normalized_folder_key`, always resets
+    `enabled = 1`); returns `{"ok": True, "rule": {"kind": "folder", "id":
+    <id>, "folder_path": <normalized>, "recursive": <bool>, "project_id":
+    <id>}}` on success, or `{"ok": False, "error": "invalid_input" |
+    "project_not_found" | "operation_failed"}` on failure. The success payload
+    never exposes traceback / SQL / local scan path / window title / clipboard
+    / note.
+  - `update_project_folder_rule(rule_id, folder_path, recursive)`: validates
+    `rule_id` (true int, > 0, bool rejected), `folder_path`, and `recursive`;
+    resolves the row via the folder-only helper `_folder_rule_row(rule_id)`
+    (keyword rule ids return None and produce `not_found` so the keyword rule
+    is never modified); preserves the existing `project_id` (no cross-project
+    move); returns `{"ok": True, "rule": {"kind": "folder", "id": <id>,
+    "folder_path": <normalized>, "recursive": <bool>, "project_id": <id>}}`
+    on success, or `{"ok": False, "error": "invalid_input" | "not_found" |
+    "operation_failed"}` on failure.
+  - `delete_project_folder_rule(rule_id)`: validates `rule_id`; resolves via
+    `_folder_rule_row(rule_id)` (keyword rule ids return `not_found` so the
+    keyword rule is never deleted); a second delete on the same id returns
+    `not_found` (no silent success); returns `{"ok": True, "rule": {"kind":
+    "folder", "id": <id>, "deleted": True}}` on success, or `{"ok": False,
+    "error": "invalid_input" | "not_found" | "operation_failed"}` on failure.
+  - All payloads are JSON-serializable and collapse any unexpected
+    exception to `operation_failed` without leaking traceback / SQL / local
+    path / window_title / clipboard / note.
+  - Folder rule CRUD does not modify project rows, keyword rules,
+    `activity_log`, `activity_project_assignment`, `project_session_note`,
+    Timeline / Statistics / Export semantics, or the DB schema.
+
+- Bridge methods in `worktrace/webview_ui/bridge.py`:
+  - `create_project_folder_rule(project_id, folder_path, recursive)`,
+    `update_project_folder_rule(rule_id, folder_path, recursive)`, and
+    `delete_project_folder_rule(rule_id)`: each performs the same input
+    validation as the API before delegating to `rule_api`; narrows the API
+    payload to JS-essential fields only (strips any extra sensitive keys the
+    API might add); maps stable error codes to stable Chinese messages
+    (`invalid_input -> 操作无效`, `project_not_found -> 项目不存在或不可用`,
+    `not_found -> 文件夹规则不存在`, `operation_failed -> 新增文件夹规则失败
+    / 保存文件夹规则失败 / 删除文件夹规则失败`); collapses any unexpected
+    exception to the same Chinese fallback without forwarding
+    `exception.message` / `repr(exception)` / traceback / SQL / path /
+    window_title / clipboard / note.
+  - The bridge never returns a full refreshed project list; the frontend
+    triggers `get_project_rules` separately on success.
+  - Existing `get_project_rules` / `set_project_rule_enabled` /
+    `create_project_keyword_rule` / `delete_project_keyword_rule` behavior
+    is unchanged.
+  - The bridge still imports `worktrace.api` only — it never imports
+    `worktrace.services`, `worktrace.db`, `worktrace.collector`,
+    `worktrace.security`, or `worktrace.runtime`.
+
+- Frontend (`worktrace/webview_ui/js/rules.js` + `core.js` + `init.js` +
+  `index.html`):
+  - Create: a project selector + folder path input + recursive checkbox +
+    submit button at the top of the Project Rules page; on submit it calls
+    `create_project_folder_rule`, disables the submit button while saving,
+    preserves the user input on failure, and calls `get_project_rules` on
+    success to refresh the list.
+  - Edit: each existing folder rule row renders an inline edit form (path
+    input + recursive checkbox + save / cancel buttons) that calls
+    `update_project_folder_rule` on save, disables its own buttons while
+    saving, preserves the in-progress edit input on failure, and refreshes
+    the list on success. Keyword rows do not render this form.
+  - Delete: each existing folder rule row renders a delete button that
+    requires `window.confirm`, calls `delete_project_folder_rule` (never
+    `delete_project_keyword_rule`), shows a deleting state, preserves the
+    rendered list on failure, and refreshes the list on success.
+  - Independent state keys: `App.rulesCreatingFolder`,
+    `App.rulesEditingFolderKey`, `App.rulesDeletingFolderKey` — kept
+    separate from `App.rulesSavingRuleKey`, `App.rulesCreatingKeyword`,
+    `App.rulesDeletingRuleKey`. Same-row write coordination disables the
+    row's other write buttons while a write is in flight.
+  - The global stale-response guard (`App.rulesRequestToken`) is preserved;
+    a refresh response whose token no longer matches is dropped.
+  - Catch paths never read `err.message` / `error.message` / `.toString` /
+    raw backend payloads; failures fall back to the stable Chinese text the
+    bridge returned, or to a hardcoded Chinese fallback.
+  - No new DOM id duplicates; no `localStorage` / `sessionStorage`; no
+    `fetch` / `XMLHttpRequest`; no external JS / CSS / CDN / Google Fonts;
+    no `app.js` restoration; no Excel / PDF / timesheet / open-folder /
+    auto-submit controls; no project management controls.
+
+- CSS in `worktrace/webview_ui/styles.css`:
+  - New `rules-folder-*` classes for the create form, project selector,
+    folder path input, recursive checkbox, submit button, status text,
+    inline edit form, save / cancel buttons, edit / delete buttons, and
+    deleting / saving disabled states.
+  - All `rules-folder-*` classes are scoped to the Project Rules page and
+    do not touch Overview / Timeline / Statistics styles.
+  - No external fonts or network resources are introduced; the existing
+    page style is preserved.
+
+- Tests:
+  - New `tests/test_project_rules_folder_crud.py` covering API/service
+    regression: create success / trim / non-recursive; excluded / archived /
+    disabled project rejection; create-or-update semantics; invalid inputs
+    (bool / None / string / float / list / dict / tuple / set / frozenset /
+    zero / negative for `project_id`, `folder_path`, `recursive`);
+    `project_not_found`; exception collapse; no side effects; JSON
+    serializable; update success / preserves `project_id` / trims / invalid
+    inputs / `not_found` / keyword isolation; delete success /
+    second-time-`not_found` / keyword isolation / invalid inputs; cross-
+    contamination locks (no keyword create / delete, no preview / backfill,
+    no project modifications).
+  - Extended `tests/test_webview_project_rules_bridge.py` covering create /
+    update / delete input validation, success payload narrowing, sensitive
+    text exclusion, error-code-to-Chinese mapping, unknown-code collapse,
+    unknown-exception collapse, JSON-serializable payloads, trimmed path
+    forwarding, extra-key stripping, never calling other write APIs, and
+    regression locks for `get_project_rules` / `set_project_rule_enabled` /
+    `create_project_keyword_rule` / `delete_project_keyword_rule`.
+  - Extended `tests/webview/test_project_rules_static_contract.py`
+    covering static DOM anchors, state variable declarations, bridge call
+    strings, input validation guards, creating / editing / deleting button
+    states, success / failure refresh paths, state isolation between
+    folder create / edit / delete and keyword create / delete / toggle,
+    same-row write coordination, no duplicate DOM ids, no browser storage,
+    no remote resources / CDN / Google Fonts, no `app.js`, no Excel / PDF /
+    timesheet / open-folder / auto-submit / project management controls,
+    `rules-folder-*` CSS class existence and scoping, and packaging spec
+    inclusion of `rules.js`.
+
+- Documentation: `README.md`, `docs/current-state.md`,
+  `docs/ui-webview-migration.md`, and this file now describe the current
+  phase as 5E, list folder rule create / edit / delete as a supported
+  Project Rules capability, and explicitly enumerate the still-unsupported
+  Project Rules workflows.
+
+Phase 5E does not modify `WorkTrace.spec`, resource loading, packaging
+paths, or the entry point. The WebView packaging static test
+(`tests/test_webview_packaging.py`) and the `worktrace.webview_main` import
+check were run and pass; the full PyInstaller build was not re-run because
+no packaging behavior changed.
+
+## Phase 5E Not Implemented
+
+Phase 5E does not implement and does not start:
+
+- Folder rule conflict preview in WebView;
+- Folder rule backfill in WebView;
+- Automatic rules in WebView;
+- Batch folder rule operations (including batch folder delete and batch
+  folder edit);
+- Batch Project Rules operations (including batch keyword delete);
+- Project enable/disable in WebView;
+- Project creation, editing, deletion, or archive in WebView;
+- Keyword rule editing in WebView (Phase 5E only opens folder rule create /
+  edit / delete);
+- Project / folder-rule conflict preview, backfill, and automatic rule
+  workflows;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

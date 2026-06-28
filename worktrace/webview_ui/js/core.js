@@ -93,6 +93,20 @@
     // deleted so the deleting button label can be flipped to ``正在删除…``.
     App.rulesDeletingRuleKey = null;
 
+    // --- Phase 5E: Project Rules folder rule CRUD state ----------------
+    // Separate from rulesSavingRuleKey (Phase 5B toggle),
+    // rulesCreatingKeyword (Phase 5C keyword create), and
+    // rulesDeletingRuleKey (Phase 5D keyword delete) so the four write
+    // paths can never pollute each other. Only one folder write may be in
+    // flight per kind at a time.
+    App.rulesCreatingFolder = false;
+    App.rulesEditingFolderKey = null;   // "folder:<id>" of the row being edited
+    App.rulesDeletingFolderKey = null;  // "folder:<id>" of the row being deleted
+    // Phase 5E: cache of the last-loaded Project Rules data so the inline
+    // folder edit form can re-render the list immediately without a
+    // round-trip through loadProjectRules (which would lose input focus).
+    App.lastProjectRulesData = null;
+
     // --- Phase 3C: Unified Timeline status semantics -------------------
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",

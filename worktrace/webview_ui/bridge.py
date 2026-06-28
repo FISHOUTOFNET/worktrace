@@ -154,6 +154,25 @@ re-fetches the full Project Rules list via ``get_project_rules`` after
 success. Errors are mapped from stable codes to Chinese messages without
 tracebacks, SQL, raw exception text, window titles, clipboard, notes,
 paths, or internal fields.
+
+Phase 5E opens the Project Rules folder rule CRUD foundation:
+``create_project_folder_rule`` creates one new folder rule on an existing
+rule-target project (validated via ``project_api.list_rule_target_projects``,
+the same eligibility rule the legacy Tkinter dialog and Phase 5C keyword
+creation use). ``update_project_folder_rule`` updates one existing folder
+rule's ``folder_path`` and ``recursive`` (a ``rule_id`` that points at a
+keyword rule is rejected as ``文件夹规则不存在``; the existing ``project_id``
+is preserved). ``delete_project_folder_rule`` deletes one existing folder
+rule (a ``rule_id`` that points at a keyword rule is rejected as
+``文件夹规则不存在``). The three facades together open the folder rule
+create / edit / delete foundation; they do NOT perform conflict preview,
+backfill, automatic rules, DB schema changes, native file picker dialogs,
+file writes (beyond the rule row itself), or network access. The success
+payload is the narrow written-rule summary only; the frontend re-fetches
+the full Project Rules list via ``get_project_rules`` after success. Errors
+are mapped from stable codes to Chinese messages without tracebacks, SQL,
+raw exception text, window titles, clipboard, notes, paths, or internal
+fields.
 """
 
 from __future__ import annotations
@@ -337,6 +356,37 @@ _PROJECT_RULE_DELETE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "关键词规则不存在",
     "operation_failed": "删除关键词规则失败",
+}
+
+# Maps Project Rules folder-create API stable codes to Phase 5E user-facing
+# messages. Unknown codes collapse to the generic create failure so internal
+# details are never surfaced.
+_PROJECT_RULE_FOLDER_CREATE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "project_not_found": "项目不存在或不可用",
+    "operation_failed": "新增文件夹规则失败",
+}
+
+# Maps Project Rules folder-update API stable codes to Phase 5E user-facing
+# messages. Unknown codes collapse to the generic update failure so internal
+# details are never surfaced. ``not_found`` covers both "id does not exist"
+# and "id is a keyword rule" — both are reported as ``文件夹规则不存在`` so the
+# user never learns which table the id belonged to.
+_PROJECT_RULE_FOLDER_UPDATE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "文件夹规则不存在",
+    "operation_failed": "保存文件夹规则失败",
+}
+
+# Maps Project Rules folder-delete API stable codes to Phase 5E user-facing
+# messages. Unknown codes collapse to the generic delete failure so internal
+# details are never surfaced. ``not_found`` covers both "id does not exist"
+# and "id is a keyword rule" — both are reported as ``文件夹规则不存在`` so the
+# user never learns which table the id belonged to.
+_PROJECT_RULE_FOLDER_DELETE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "文件夹规则不存在",
+    "operation_failed": "删除文件夹规则失败",
 }
 
 
@@ -1325,6 +1375,169 @@ class WebViewBridge:
         except Exception:
             logger.exception("webview bridge delete_project_keyword_rule failed")
             return {"ok": False, "error": "删除关键词规则失败"}
+
+    # --- Phase 5E: Project Rules folder rule CRUD foundation ---------
+
+    def create_project_folder_rule(self, project_id, folder_path, recursive) -> dict[str, Any]:
+        """Create one new folder rule on an existing rule-target project.
+
+        Phase 5E write path only. Strict bridge validation rejects
+        bool-as-int ``project_id``, non-int ``project_id``, non-positive
+        ids, non-string ``folder_path``, whitespace-only ``folder_path``,
+        and non-bool ``recursive`` before calling
+        ``rule_api.create_project_folder_rule``. The bridge never exposes
+        raw exceptions, tracebacks, SQL, paths, window titles, clipboard, or
+        notes in the payload.
+
+        Returns ``{"ok": True, "rule": {"kind": "folder", "id": int,
+        "project_id": int, "folder_path": str, "recursive": bool,
+        "enabled": True}}`` on success (the narrow created-rule summary
+        only — the frontend re-fetches the full Project Rules list via
+        ``get_project_rules`` after success) or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            # ``type(...) is not int`` rejects ``bool`` (``type(True) is
+            # bool``), ``float``, ``str``, ``None``, and container types in
+            # one check, matching the Phase 5B / 5C / 5D validation pattern.
+            if type(project_id) is not int or project_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            if type(folder_path) is not str or not folder_path.strip():
+                return {"ok": False, "error": "操作无效"}
+            if type(recursive) is not bool:
+                return {"ok": False, "error": "操作无效"}
+            # Pass the trimmed folder_path to the API so the bridge never
+            # forwards leading/trailing whitespace even if a future API
+            # change drops the trim. Behavior-neutral: the API already trims.
+            trimmed_path = folder_path.strip()
+            result = rule_api.create_project_folder_rule(
+                project_id, trimmed_path, recursive
+            )
+            if result.get("ok") is True:
+                rule = result.get("rule") or {}
+                return {
+                    "ok": True,
+                    "rule": {
+                        "kind": "folder",
+                        "id": int(rule.get("id") or 0),
+                        "project_id": int(rule.get("project_id") or project_id),
+                        "folder_path": str(rule.get("folder_path") or ""),
+                        "recursive": bool(rule.get("recursive")),
+                        "enabled": bool(rule.get("enabled")),
+                    },
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_FOLDER_CREATE_MESSAGES.get(
+                    code, "新增文件夹规则失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge create_project_folder_rule failed")
+            return {"ok": False, "error": "新增文件夹规则失败"}
+
+    def update_project_folder_rule(self, rule_id, folder_path, recursive) -> dict[str, Any]:
+        """Update one existing folder rule's ``folder_path`` and ``recursive``.
+
+        Phase 5E write path only. Strict bridge validation rejects
+        bool-as-int ``rule_id``, non-int ``rule_id``, non-positive ids,
+        non-string ``folder_path``, whitespace-only ``folder_path``, and
+        non-bool ``recursive`` before calling
+        ``rule_api.update_project_folder_rule``. The bridge never exposes
+        raw exceptions, tracebacks, SQL, paths, window titles, clipboard, or
+        notes in the payload. A ``rule_id`` that points at a keyword rule is
+        rejected as ``文件夹规则不存在`` rather than modifying the keyword rule.
+
+        Returns ``{"ok": True, "rule": {"kind": "folder", "id": int,
+        "project_id": int, "folder_path": str, "recursive": bool,
+        "enabled": True}}`` on success (the narrow updated-rule summary
+        only — the frontend re-fetches the full Project Rules list via
+        ``get_project_rules`` after success) or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            # ``type(...) is not int`` rejects ``bool`` (``type(True) is
+            # bool``), ``float``, ``str``, ``None``, and container types in
+            # one check, matching the Phase 5B / 5C / 5D validation pattern.
+            if type(rule_id) is not int or rule_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            if type(folder_path) is not str or not folder_path.strip():
+                return {"ok": False, "error": "操作无效"}
+            if type(recursive) is not bool:
+                return {"ok": False, "error": "操作无效"}
+            trimmed_path = folder_path.strip()
+            result = rule_api.update_project_folder_rule(
+                rule_id, trimmed_path, recursive
+            )
+            if result.get("ok") is True:
+                rule = result.get("rule") or {}
+                return {
+                    "ok": True,
+                    "rule": {
+                        "kind": "folder",
+                        "id": int(rule.get("id") or rule_id),
+                        "project_id": int(rule.get("project_id") or 0),
+                        "folder_path": str(rule.get("folder_path") or ""),
+                        "recursive": bool(rule.get("recursive")),
+                        "enabled": bool(rule.get("enabled")),
+                    },
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_FOLDER_UPDATE_MESSAGES.get(
+                    code, "保存文件夹规则失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge update_project_folder_rule failed")
+            return {"ok": False, "error": "保存文件夹规则失败"}
+
+    def delete_project_folder_rule(self, rule_id) -> dict[str, Any]:
+        """Delete one existing folder rule.
+
+        Phase 5E write path only. Strict bridge validation rejects
+        bool-as-int ``rule_id``, non-int ``rule_id``, and non-positive ids
+        before calling ``rule_api.delete_project_folder_rule``. The bridge
+        never exposes raw exceptions, tracebacks, SQL, paths, window titles,
+        clipboard, or notes in the payload. A ``rule_id`` that points at a
+        keyword rule is rejected as ``文件夹规则不存在`` rather than deleting the
+        keyword rule.
+
+        Returns ``{"ok": True, "rule": {"kind": "folder", "id": int,
+        "deleted": True}}`` on success (the narrow deleted-rule summary
+        only — the frontend re-fetches the full Project Rules list via
+        ``get_project_rules`` after success) or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            # ``type(...) is not int`` rejects ``bool`` (``type(True) is
+            # bool``), ``float``, ``str``, ``None``, and container types in
+            # one check, matching the Phase 5B / 5C / 5D validation pattern.
+            if type(rule_id) is not int or rule_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            result = rule_api.delete_project_folder_rule(rule_id)
+            if result.get("ok") is True:
+                rule = result.get("rule") or {}
+                return {
+                    "ok": True,
+                    "rule": {
+                        "kind": "folder",
+                        "id": int(rule.get("id") or rule_id),
+                        "deleted": bool(rule.get("deleted")),
+                    },
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_FOLDER_DELETE_MESSAGES.get(
+                    code, "删除文件夹规则失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge delete_project_folder_rule failed")
+            return {"ok": False, "error": "删除文件夹规则失败"}
 
     # --- Phase 4A: Statistics / Export read-only summary ----------------
 

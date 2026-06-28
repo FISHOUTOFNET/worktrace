@@ -384,7 +384,7 @@
                     </div>
                 </header>
                 <div id="rules-readonly-hint" class="rules-readonly-hint">
-                    当前支持查看项目规则、启用/停用已有文件夹或关键词规则、新增关键词规则，并删除已有关键词规则。文件夹规则新增/删除、规则编辑、项目管理、冲突预览和回填将在后续阶段开放。
+                    当前支持查看项目规则、启用/停用已有文件夹或关键词规则、新增关键词规则、删除已有关键词规则，以及新增、编辑、删除文件夹规则。关键词规则编辑、项目管理、冲突预览和回填将在后续阶段开放。
                 </div>
                 <form id="rules-keyword-create-form" class="rules-keyword-create-form" autocomplete="off" onsubmit="return false;">
                     <div class="rules-keyword-create-title">新增关键词规则</div>
@@ -401,6 +401,25 @@
                     </div>
                     <div id="rules-keyword-create-empty" class="rules-keyword-create-empty" hidden>暂无可选目标项目，请先在项目管理中创建并启用项目。</div>
                     <div id="rules-keyword-create-status" class="rules-keyword-create-status" hidden></div>
+                </form>
+                <form id="rules-folder-create-form" class="rules-folder-create-form" autocomplete="off" onsubmit="return false;">
+                    <div class="rules-folder-create-title">新增文件夹规则</div>
+                    <div class="rules-folder-create-row">
+                        <label for="rules-folder-create-project" class="rules-folder-create-label">目标项目</label>
+                        <select id="rules-folder-create-project" class="rules-folder-create-select" disabled></select>
+                    </div>
+                    <div class="rules-folder-create-row">
+                        <label for="rules-folder-create-input" class="rules-folder-create-label">文件夹路径</label>
+                        <input id="rules-folder-create-input" class="rules-folder-create-input" type="text" maxlength="512" placeholder="输入文件夹路径" disabled />
+                    </div>
+                    <div class="rules-folder-create-row rules-folder-create-recursive-row">
+                        <label class="rules-folder-create-recursive-label"><input id="rules-folder-create-recursive" class="rules-folder-create-recursive" type="checkbox" checked disabled /> 包含子文件夹</label>
+                    </div>
+                    <div class="rules-folder-create-actions">
+                        <button id="rules-folder-create-submit" class="rules-folder-create-submit" type="button" disabled>新增文件夹规则</button>
+                    </div>
+                    <div id="rules-folder-create-empty" class="rules-folder-create-empty" hidden>暂无可选目标项目，请先在项目管理中创建并启用项目。</div>
+                    <div id="rules-folder-create-status" class="rules-folder-create-status" hidden></div>
                 </form>
                 <div id="rules-error" class="error-banner" hidden>加载项目规则失败</div>
                 <div id="rules-loading" class="rules-loading" hidden>正在加载项目规则…</div>
