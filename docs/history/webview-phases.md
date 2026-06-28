@@ -5247,6 +5247,173 @@ Phase 5E.1 does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
+## Phase 5F Implemented Scope
+
+Phase 5F is the **Project Rules keyword rule edit foundation + in-phase
+hardening** phase. It opens one new user-visible Project Rules capability
+and ships the hardening regression locks in the same phase rather than
+splitting into a separate 5F.1.
+
+Implemented in Phase 5F:
+
+- New user-visible capability: editing the keyword text of a single
+  existing keyword rule via an inline edit form on the keyword rule row,
+  then refreshing the Project Rules list on success. The edit form
+  contains a keyword text input (`maxlength="200"`), a "保存" button,
+  and a "取消" button. The toggle and delete buttons stay disabled while
+  keyword edit / save is in flight so the write paths cannot pollute
+  each other.
+- Service layer (`worktrace/services/rule_service.py`):
+  - `update_rule(rule_id, keyword)` trims the keyword, raises
+    `ValueError` on empty, updates only `pattern` and `updated_at` on
+    `project_rule` rows where `id = rule_id` and `rule_type = 'keyword'`,
+    and invokes `invalidate_keyword_rule_cache()` +
+    `privacy_service.clear_exclude_rules_cache()` on success. It does
+    not modify `project_id` / `enabled` / `created_by` / `created_at`
+    and introduces no schema change.
+- API layer (`worktrace/api/rule_api.py`):
+  - `update_project_keyword_rule(rule_id, keyword)` with strict type
+    validation (`type(rule_id) is int` excluding bool, `> 0`;
+    `type(keyword) is str`, trimmed non-empty), stable error codes
+    (`invalid_input` / `not_found` / `duplicate_rule` /
+    `operation_failed`), duplicate check scoped to the same project and
+    excluding the rule being updated (updating to its own current
+    keyword succeeds), folder-rule-id returns `not_found` without
+    modifying the folder rule, narrow success payload
+    (`{"ok": True, "rule": {"kind": "keyword", "id": int, "project_id":
+    int, "keyword": str, "enabled": bool}}`), unexpected exceptions
+    collapsed to `operation_failed`, no traceback / SQL / path /
+    window_title / clipboard / note leak. Cache hooks fire only on the
+    success path. Exported via `__all__`.
+- Bridge layer (`worktrace/webview_ui/bridge.py`):
+  - `update_project_keyword_rule(rule_id, keyword)` bridge method with
+    strict type validation (bool-as-int rejected, non-positive rule_id
+    rejected, non-string / empty / whitespace keyword rejected),
+    forwards the trimmed keyword to the API, maps the four stable error
+    codes to Chinese via `_PROJECT_RULE_UPDATE_MESSAGES` (unknown codes
+    collapse to "保存关键词规则失败"), returns a narrow payload with
+    only `ok` / `rule.kind` / `rule.id` / `rule.project_id` /
+    `rule.keyword` / `rule.enabled`, never exposes traceback / SQL /
+    path / window_title / clipboard / note, and never imports
+    services/db/collector/runtime/config. It does not affect
+    `create_project_keyword_rule`, `delete_project_keyword_rule`,
+    `set_project_rule_enabled`, or folder CRUD behavior.
+- Frontend (`worktrace/webview_ui/js/core.js`,
+  `worktrace/webview_ui/js/rules.js`,
+  `worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/styles.css`):
+  - Two new state variables `App.rulesEditingKeywordKey` and
+    `App.rulesUpdatingKeywordKey`, independent of all other write-path
+    states (rulesSavingRuleKey / rulesCreatingKeyword /
+    rulesDeletingRuleKey / rulesCreatingFolder / rulesEditingFolderKey /
+    rulesDeletingFolderKey).
+  - Keyword rows render an "编辑" button only when `kind === "keyword"`
+    and `ruleId` is valid; folder rows never get a keyword edit button.
+  - Clicking the edit button sets `rulesEditingKeywordKey` to
+    `"keyword:<id>"` and re-renders the row into an inline edit form.
+  - Save trims the input, rejects empty client-side, calls
+    `update_project_keyword_rule`, clears editing + saving state and
+    refreshes the list on success, preserves the input and editing
+    state on failure, shows "正在保存…" and disables save/cancel
+    while saving.
+  - Cancel does not call the bridge; clears editing state and
+    re-renders from cached data.
+  - Event delegation via `#rules-list` with a
+    `data-rules-keyword-edit-bound` idempotency guard; bound in both
+    `showProjectRules` and `rerenderProjectRulesList`.
+  - New CSS classes `.rules-keyword-edit-button`,
+    `.rules-keyword-edit-form`, `.rules-keyword-edit-input`,
+    `.rules-keyword-edit-save`, `.rules-keyword-edit-cancel` scoped to
+    the Project Rules page (not referenced by Overview / Timeline /
+    Statistics sections).
+  - `index.html` boundary copy updated: "编辑已有关键词规则" added to
+    the supported capabilities list; the "关键词规则编辑将在后续阶段
+    开放" wording removed.
+- API / service regression locks in
+  `tests/test_project_rules_keyword_edit.py`: valid update, trim,
+  preserve `rule_id` / `project_id` / `enabled` / `created_by` /
+  `created_at`, input validation (bool / None / str / float / list /
+  dict / tuple / set / frozenset / zero / negative rule_id, non-string
+  keyword, whitespace-only keyword), missing id `not_found`, folder
+  rule id `not_found` without modifying the folder rule, duplicate in
+  same project `duplicate_rule`, same keyword in different project
+  allowed, updating to own current keyword succeeds, unexpected
+  exception collapses to `operation_failed`, cache hooks fire only on
+  success, JSON-serializable payloads, sensitive-metadata exclusion,
+  no side effects on folder rules / project table / enabled /
+  created_by, regression locks for existing create/delete/toggle.
+- Bridge regression locks in
+  `tests/test_webview_project_rules_bridge.py`: bool-as-int rejection,
+  non-int / non-positive rule_id rejection, non-string / empty /
+  whitespace keyword rejection, trimmed keyword forwarded, error code
+  mappings (all four codes + unknown collapse), exception collapse,
+  narrow success payload, failure payload JSON-serializable, no
+  sensitive-text leak, update keyword does not call other write APIs,
+  other write APIs do not call update keyword, bool rule_id not
+  forwarded to API.
+- Frontend static contract regression locks in
+  `tests/webview/test_project_rules_static_contract.py`: keyword edit
+  button only on keyword rows, folder rows have no keyword edit
+  button, edit start sets `"keyword:<id>"` key, cancel does not call
+  bridge, save calls `update_project_keyword_rule`, save trims input,
+  empty rejected client-side, save failure preserves editing state /
+  input, save success clears editing state and reloads Project Rules,
+  saving disables save and cancel buttons, input `maxlength="200"`,
+  CSS classes exist and are Project Rules scoped, handlers do not read
+  `.message`, no `fetch` / `XMLHttpRequest` / `localStorage` /
+  `sessionStorage`, classic scripts (no `import` / `export`), no new
+  external URLs / CDN / Google Fonts, state variables declared exactly
+  once in `core.js`, event binding idempotent.
+- Affected runner mapping (`scripts/run_affected_tests.py`):
+  `tests/test_project_rules_keyword_edit.py` added to the Project
+  Rules API / service / UI rule and the DB / schema rule so changes to
+  `rule_api.py` / `rule_service.py` / `rules.js` / `db.py` / `schema.sql`
+  run the new test file.
+- Documentation: `README.md`, `docs/current-state.md`,
+  `docs/ui-webview-migration.md`, and this file now describe the
+  current phase as 5F and explicitly note that 5F ships the in-phase
+  hardening regression locks rather than splitting into a separate
+  5F.1.
+
+Phase 5F does not modify `WorkTrace.spec` resource list (it only adds a
+regression lock verifying the existing entries), `worktrace/db.py`,
+`worktrace/schema.sql`, or any collector / privacy / encrypted backup /
+statistics / export / timeline code. No DB schema change. The WebView
+packaging static test (`tests/test_webview_packaging.py`) and the
+`worktrace.webview_main` import check were run and pass; the full
+PyInstaller build was not re-run because no packaging or runtime
+behavior changed.
+
+## Phase 5F Not Implemented
+
+Phase 5F does not implement and does not start:
+
+- Any new user-visible Project Rules capability other than editing the
+  keyword text of a single existing keyword rule;
+- Batch keyword edit;
+- Batch keyword delete;
+- Batch folder edit / delete;
+- Folder rule conflict preview in WebView;
+- Folder rule backfill in WebView;
+- Automatic rules in WebView;
+- Project enable/disable in WebView;
+- Project creation, editing, deletion, or archive in WebView;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

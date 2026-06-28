@@ -60,6 +60,22 @@ def set_rule_enabled(rule_id: int, enabled: bool) -> None:
     clear_exclude_rules_cache()
 
 
+def update_rule(rule_id: int, keyword: str) -> None:
+    keyword = keyword.strip()
+    if not keyword:
+        raise ValueError("keyword is required")
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE project_rule SET pattern = ?, updated_at = ? "
+            "WHERE id = ? AND rule_type = 'keyword'",
+            (keyword, now_str(), rule_id),
+        )
+    invalidate_keyword_rule_cache()
+    from .privacy_service import clear_exclude_rules_cache
+
+    clear_exclude_rules_cache()
+
+
 def delete_rule(rule_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM project_rule WHERE id = ?", (rule_id,))

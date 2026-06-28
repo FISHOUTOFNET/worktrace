@@ -2463,16 +2463,115 @@ body {
     .rules-row > .rules-status,
     .rules-row > .rules-toggle-btn,
     .rules-row > .rules-folder-edit-button,
-    .rules-row > .rules-folder-delete-button {
+    .rules-row > .rules-folder-delete-button,
+    .rules-row > .rules-keyword-edit-button {
         justify-self: flex-start;
     }
-    .rules-folder-edit-form {
+    .rules-folder-edit-form,
+    .rules-keyword-edit-form {
         flex-direction: column;
         align-items: stretch;
     }
-    .rules-folder-edit-input {
+    .rules-folder-edit-input,
+    .rules-keyword-edit-input {
         min-width: 0;
     }
+}
+
+/* Phase 5F: keyword rule row edit button. Mirrors the existing folder edit
+   button visual style so write actions read consistently across rule kinds.
+   Only keyword rules render this button; folder rules and project cards
+   never do. */
+.rules-keyword-edit-button {
+    min-width: 64px;
+    min-height: 30px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.rules-keyword-edit-button:hover:not(:disabled) {
+    border-color: #94a3b8;
+    background: #f8fafc;
+}
+
+.rules-keyword-edit-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+/* Phase 5F: inline keyword rule edit form. Rendered in place of the normal
+   row body when the user enters edit mode for a keyword rule. The form
+   collapses the row into a single column so the input has room. */
+.rules-row.is-keyword-editing {
+    grid-template-columns: auto minmax(0, 1fr);
+}
+
+.rules-keyword-edit-form {
+    grid-column: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.rules-keyword-edit-input {
+    flex: 1;
+    min-width: 200px;
+    padding: 6px 8px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #1e293b;
+    box-sizing: border-box;
+}
+
+.rules-keyword-edit-input:disabled {
+    background: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+    opacity: 0.75;
+}
+
+.rules-keyword-edit-save,
+.rules-keyword-edit-cancel {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.rules-keyword-edit-save {
+    border: 1px solid #4338ca;
+    background: #4338ca;
+    color: #ffffff;
+}
+
+.rules-keyword-edit-save:hover:not(:disabled) {
+    background: #3730a3;
+    border-color: #3730a3;
+}
+
+.rules-keyword-edit-save:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+.rules-keyword-edit-cancel {
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #0f172a;
+}
+
+.rules-keyword-edit-cancel:hover:not(:disabled) {
+    border-color: #94a3b8;
+    background: #f8fafc;
 }
 
 /* Phase 3B.5B.1: a shell activity row whose activity id is missing / non-

@@ -358,6 +358,18 @@ _PROJECT_RULE_DELETE_MESSAGES = {
     "operation_failed": "删除关键词规则失败",
 }
 
+# Maps Project Rules keyword-update API stable codes to Phase 5F user-facing
+# messages. Unknown codes collapse to the generic update failure so internal
+# details are never surfaced. ``not_found`` covers both "id does not exist"
+# and "id is a folder rule" — both are reported as ``关键词规则不存在`` so the
+# user never learns which table the id belonged to.
+_PROJECT_RULE_UPDATE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "关键词规则不存在",
+    "duplicate_rule": "关键词规则已存在",
+    "operation_failed": "保存关键词规则失败",
+}
+
 # Maps Project Rules folder-create API stable codes to Phase 5E user-facing
 # messages. Unknown codes collapse to the generic create failure so internal
 # details are never surfaced.
@@ -1375,6 +1387,58 @@ class WebViewBridge:
         except Exception:
             logger.exception("webview bridge delete_project_keyword_rule failed")
             return {"ok": False, "error": "删除关键词规则失败"}
+
+    # --- Phase 5F: Project Rules keyword rule edit foundation --------
+
+    def update_project_keyword_rule(self, rule_id, keyword) -> dict[str, Any]:
+        """Update one existing keyword rule's ``keyword`` text.
+
+        Phase 5F write path only. Strict bridge validation rejects
+        bool-as-int ``rule_id``, non-int ``rule_id``, non-positive ids,
+        non-string ``keyword``, and whitespace-only ``keyword`` before
+        calling ``rule_api.update_project_keyword_rule``. The bridge never
+        exposes raw exceptions, tracebacks, SQL, paths, window titles,
+        clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "rule": {"kind": "keyword", "id": int,
+        "project_id": int, "keyword": str, "enabled": bool}}`` on success
+        (the narrow updated-rule summary only — the frontend re-fetches the
+        full Project Rules list via ``get_project_rules`` after success) or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            # ``type(...) is not int`` rejects ``bool`` (``type(True) is
+            # bool``), ``float``, ``str``, ``None``, and container types in
+            # one check, matching the Phase 5B / 5C / 5D validation pattern.
+            if type(rule_id) is not int or rule_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            if type(keyword) is not str or not keyword.strip():
+                return {"ok": False, "error": "操作无效"}
+            # Pass the trimmed keyword to the API so the bridge never
+            # forwards leading/trailing whitespace even if a future API
+            # change drops the trim. Behavior-neutral: the API already trims.
+            trimmed_keyword = keyword.strip()
+            result = rule_api.update_project_keyword_rule(rule_id, trimmed_keyword)
+            if result.get("ok") is True:
+                rule = result.get("rule") or {}
+                return {
+                    "ok": True,
+                    "rule": {
+                        "kind": "keyword",
+                        "id": int(rule.get("id") or rule_id),
+                        "project_id": int(rule.get("project_id") or 0),
+                        "keyword": str(rule.get("keyword") or ""),
+                        "enabled": bool(rule.get("enabled")),
+                    },
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_UPDATE_MESSAGES.get(code, "保存关键词规则失败"),
+            }
+        except Exception:
+            logger.exception("webview bridge update_project_keyword_rule failed")
+            return {"ok": False, "error": "保存关键词规则失败"}
 
     # --- Phase 5E: Project Rules folder rule CRUD foundation ---------
 

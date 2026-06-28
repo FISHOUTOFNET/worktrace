@@ -192,6 +192,109 @@ def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
         return {"ok": False, "error": "operation_failed"}
 
 
+# --- Phase 5F: Project Rules keyword rule edit foundation ----------------
+
+
+def _keyword_rule_row(rule_id: int) -> dict | None:
+    """Return the keyword rule row for ``rule_id`` or ``None`` if absent.
+
+    Only resolves ids in the ``project_rule`` table; folder rule ids return
+    ``None`` so the keyword edit path can never touch folder rules.
+    """
+    for row in rule_service.list_rules(include_system=True):
+        if int(row.get("id") or 0) == rule_id:
+            return dict(row)
+    return None
+
+
+def update_project_keyword_rule(rule_id: Any, keyword: Any) -> dict[str, Any]:
+    """Update one existing keyword rule's ``keyword`` text.
+
+    Phase 5F narrow WebView-facing facade. ``rule_id`` must identify an
+    existing row in ``project_rule`` (the keyword rule table). A ``rule_id``
+    that points at a folder rule (``folder_project_rule``) is rejected as
+    ``not_found`` rather than modifying the folder rule — the keyword edit
+    path must never touch folder rules. The keyword rule's ``project_id``
+    is intentionally preserved: this facade does not support moving a
+    keyword rule to a different project. ``enabled`` is preserved as-is
+    (use the existing ``set_project_rule_enabled`` toggle path to change
+    enabled state). ``created_by`` and ``created_at`` are preserved as-is.
+
+    The existing ``rule_service.update_rule`` write path performs a direct
+    ``UPDATE`` on the row identified by ``rule_id`` (guarded by
+    ``rule_type = 'keyword'``), updating only ``pattern`` and ``updated_at``.
+    The keyword rule cache invalidation and privacy exclude cache clearing
+    hooks fire exactly as they do on create.
+
+    An exact duplicate (same ``project_id`` + same trimmed keyword) bound to
+    a different keyword rule in the same project is rejected as
+    ``duplicate_rule``. Updating a rule to its own current trimmed keyword
+    is allowed and succeeds. Different projects may share the same keyword.
+
+    It does NOT create projects or folder rules, edit/delete existing rules
+    or projects, or perform conflict preview / backfill / automatic rules /
+    DB schema changes / native dialogs / file writes / network access.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``rule_id`` is not a real positive ``int``
+      (bool / float / numeric string / ``None`` / list / dict / tuple /
+      set / frozenset / zero / negative), or ``keyword`` is not a real
+      non-empty ``str`` after trim.
+    - ``not_found`` — no keyword rule exists with this id (covers both
+      "id does not exist at all" and "id is a folder rule").
+    - ``duplicate_rule`` — another keyword rule in the same project already
+      binds the same trimmed keyword.
+    - ``operation_failed`` — any unexpected service failure.
+    """
+
+    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
+    # ``float``, ``str``, ``None``, and container types in one check.
+    if type(rule_id) is not int or rule_id <= 0:
+        return {"ok": False, "error": "invalid_input"}
+    if type(keyword) is not str:
+        return {"ok": False, "error": "invalid_input"}
+    trimmed = keyword.strip()
+    if not trimmed:
+        return {"ok": False, "error": "invalid_input"}
+    try:
+        # ``_keyword_rule_row`` only resolves ids in ``project_rule``; a
+        # folder rule id resolves to ``None`` and therefore returns
+        # ``not_found``, so the keyword edit path can never modify a folder
+        # rule.
+        existing = _keyword_rule_row(rule_id)
+        if existing is None:
+            return {"ok": False, "error": "not_found"}
+        project_id = int(existing.get("project_id") or 0)
+        enabled = bool(int(existing.get("enabled") or 0))
+        # Duplicate check: reject if another keyword rule in the same
+        # project already binds the same trimmed keyword. The rule being
+        # updated is excluded so updating to its own current keyword
+        # succeeds. Different projects may share the same keyword.
+        for row in rule_service.list_rules(include_system=True):
+            if (
+                int(row.get("project_id") or 0) == project_id
+                and str(row.get("keyword") or "") == trimmed
+                and int(row.get("id") or 0) != rule_id
+            ):
+                return {"ok": False, "error": "duplicate_rule"}
+        rule_service.update_rule(rule_id, trimmed)
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": int(rule_id),
+                "project_id": project_id,
+                "keyword": trimmed,
+                "enabled": enabled,
+            },
+        }
+    except ProjectRuleWriteError as exc:
+        return {"ok": False, "error": exc.code}
+    except Exception:
+        return {"ok": False, "error": "operation_failed"}
+
+
 # --- Phase 5E: Project Rules folder rule CRUD foundation -----------------
 
 
@@ -475,4 +578,5 @@ __all__ = [
     "set_folder_rule_enabled",
     "set_keyword_rule_enabled",
     "update_project_folder_rule",
+    "update_project_keyword_rule",
 ]

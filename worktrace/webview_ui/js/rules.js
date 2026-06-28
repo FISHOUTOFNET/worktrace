@@ -63,6 +63,7 @@
         App.bindProjectRuleToggles();
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
+        App.bindProjectRuleKeywordEditEvents();
     }
     App.showProjectRules = showProjectRules;
 
@@ -120,11 +121,27 @@
         // from concurrently polluting the same row.
         var disabledAttr = (App.rulesSavingRuleKey || App.rulesDeletingRuleKey || !ruleId) ? " disabled" : "";
         var buttonLabel = saving ? "正在更新…" : actionLabel;
-        // Phase 5D: only keyword rules get a delete button. Folder rules,
-        // project cards, and unknown-kind rows never get one.
+        // Phase 5D / 5F: only keyword rules get delete + edit buttons. When
+        // editing this row, render the inline edit form in place of the
+        // normal row body so the user can edit the keyword text without
+        // leaving the row. The toggle and delete buttons stay disabled while
+        // keyword edit / save is in flight so the write paths cannot pollute
+        // each other.
         var deleteButton = "";
+        var keywordEditButton = "";
+        var keywordEditing = false;
         if (kind === "keyword" && ruleId) {
-            var deleteDisabled = (App.rulesSavingRuleKey || App.rulesDeletingRuleKey) ? " disabled" : "";
+            keywordEditing = App.rulesEditingKeywordKey === ruleKey;
+            var keywordWriteInProgress = !!(
+                App.rulesSavingRuleKey ||
+                App.rulesDeletingRuleKey ||
+                App.rulesEditingKeywordKey ||
+                App.rulesUpdatingKeywordKey
+            );
+            var keywordBtnDisabled = keywordWriteInProgress ? " disabled" : "";
+            var editLabel = (App.rulesUpdatingKeywordKey === ruleKey) ? "正在保存…" : "编辑";
+            keywordEditButton = '  <button class="rules-keyword-edit-button" type="button" data-rule-kind="keyword" data-rule-id="' + count(ruleId) + '"' + keywordBtnDisabled + '>' + editLabel + '</button>';
+            var deleteDisabled = keywordWriteInProgress ? " disabled" : "";
             var deleteLabel = deleting ? "正在删除…" : "删除";
             deleteButton = '  <button class="rules-keyword-delete-button" type="button" data-rule-kind="keyword" data-rule-id="' + count(ruleId) + '"' + deleteDisabled + '>' + deleteLabel + '</button>';
         }
@@ -167,6 +184,26 @@
                 '</div>'
             ].join("");
         }
+        // Phase 5F: when this keyword row is being edited, render the inline
+        // edit form in place of the normal body. The edit form holds its own
+        // keyword input + save / cancel buttons. The maxlength matches the
+        // keyword create input (200 chars).
+        if (keywordEditing) {
+            var currentKeyword = text(rule && rule.target, "");
+            var keywordSaving = App.rulesUpdatingKeywordKey === ruleKey;
+            var keywordSaveLabel = keywordSaving ? "正在保存…" : "保存";
+            var keywordEditFormDisabled = keywordSaving ? " disabled" : "";
+            return [
+                '<div class="rules-row is-keyword-editing">',
+                '  <span class="rules-kind-badge rules-kind-' + kind + '">' + label + '</span>',
+                '  <div class="rules-keyword-edit-form">',
+                '    <input class="rules-keyword-edit-input" type="text" maxlength="200" value="' + currentKeyword + '" placeholder="输入关键词" />',
+                '    <button class="rules-keyword-edit-save" type="button" data-rule-kind="keyword" data-rule-id="' + count(ruleId) + '"' + keywordEditFormDisabled + '>' + keywordSaveLabel + '</button>',
+                '    <button class="rules-keyword-edit-cancel" type="button" data-rule-kind="keyword" data-rule-id="' + count(ruleId) + '"' + keywordEditFormDisabled + '>取消</button>',
+                '  </div>',
+                '</div>'
+            ].join("");
+        }
         return [
             '<div class="rules-row ' + (enabled ? "" : "is-disabled") + '">',
             '  <span class="rules-kind-badge rules-kind-' + kind + '">' + label + '</span>',
@@ -177,6 +214,7 @@
             '  <span class="rules-status ' + (enabled ? "is-enabled" : "is-disabled") + '">' + stateLabel + '</span>',
             '  <button class="rules-toggle-btn" type="button" data-rule-type="' + kind + '" data-rule-id="' + count(ruleId) + '" data-next-enabled="' + (!enabled ? "true" : "false") + '"' + disabledAttr + '>' + buttonLabel + '</button>',
             deleteButton,
+            keywordEditButton,
             folderButtons,
             '</div>'
         ].join("");
@@ -314,6 +352,149 @@
         });
     }
     App.setRuleDeleting = setRuleDeleting;
+
+    // --- Phase 5F: keyword rule edit -----------------------------------
+
+    function bindProjectRuleKeywordEditEvents() {
+        // Phase 5F: event-delegated binding for keyword edit / edit-save /
+        // edit-cancel. Re-uses the same #rules-list container as the toggle,
+        // delete, and folder bindings so no extra per-row listeners are
+        // needed. Bound once per page lifecycle via the data attribute guard.
+        var list = document.getElementById("rules-list");
+        if (!list || list.getAttribute("data-rules-keyword-edit-bound") === "1") return;
+        list.setAttribute("data-rules-keyword-edit-bound", "1");
+        list.addEventListener("click", App.handleProjectRuleKeywordEditEvent);
+    }
+    App.bindProjectRuleKeywordEditEvents = bindProjectRuleKeywordEditEvents;
+
+    function handleProjectRuleKeywordEditEvent(event) {
+        // Phase 5F: single delegated click handler for all keyword edit
+        // operations (edit start, edit save, edit cancel). Routes to the
+        // matching sub-handler based on the button class.
+        var button = event.target && event.target.closest ? event.target.closest("button") : null;
+        if (!button) return;
+        if (button.classList.contains("rules-keyword-edit-button")) {
+            App.handleKeywordEditStart(button);
+            return;
+        }
+        if (button.classList.contains("rules-keyword-edit-save")) {
+            App.handleKeywordEditSave(button);
+            return;
+        }
+        if (button.classList.contains("rules-keyword-edit-cancel")) {
+            App.handleKeywordEditCancel(button);
+            return;
+        }
+    }
+    App.handleProjectRuleKeywordEditEvent = handleProjectRuleKeywordEditEvent;
+
+    function handleKeywordEditStart(button) {
+        // Phase 5F: enter inline edit mode for one keyword rule row. Only
+        // one keyword edit may be in flight at a time. Setting the editing
+        // key triggers a re-render of that row into the edit form.
+        if (App.rulesEditingKeywordKey) return;
+        if (App.rulesUpdatingKeywordKey) return;
+        if (App.rulesDeletingRuleKey) return;
+        var kind = button.getAttribute("data-rule-kind");
+        if (kind !== "keyword") {
+            App.showRulesError("保存关键词规则失败");
+            return;
+        }
+        var rawId = button.getAttribute("data-rule-id");
+        var ruleId = parseInt(rawId, 10);
+        if (!rawId || String(ruleId) !== String(rawId).trim() || ruleId <= 0) {
+            App.showRulesError("保存关键词规则失败");
+            return;
+        }
+        App.setKeywordEditing("keyword:" + ruleId);
+        App.clearRulesError();
+    }
+    App.handleKeywordEditStart = handleKeywordEditStart;
+
+    function handleKeywordEditSave(button) {
+        // Phase 5F: save the inline keyword edit. Validates the edited
+        // keyword locally, then calls the bridge. On success the editing
+        // state clears and the Project Rules list refreshes; on failure
+        // the editing form is preserved so the user can retry. The catch
+        // path never reads .message.
+        if (!App.rulesEditingKeywordKey) return;
+        var kind = button.getAttribute("data-rule-kind");
+        if (kind !== "keyword") {
+            App.showRulesError("保存关键词规则失败");
+            return;
+        }
+        var rawId = button.getAttribute("data-rule-id");
+        var ruleId = parseInt(rawId, 10);
+        if (!rawId || String(ruleId) !== String(rawId).trim() || ruleId <= 0) {
+            App.showRulesError("保存关键词规则失败");
+            return;
+        }
+        var row = button.closest(".rules-row");
+        var input = row ? row.querySelector(".rules-keyword-edit-input") : null;
+        if (!input) {
+            App.showRulesError("保存关键词规则失败");
+            return;
+        }
+        var keyword = (input.value || "").trim();
+        if (!keyword) {
+            App.showRulesError("请输入关键词");
+            return;
+        }
+        App.setKeywordSaving("keyword:" + ruleId);
+        App.clearRulesError();
+        App.callBridge("update_project_keyword_rule", ruleId, keyword).then(function (result) {
+            if (result && result.ok === false) {
+                App.showRulesError(result.error || "保存关键词规则失败");
+                return;
+            }
+            App.setKeywordEditing(null);
+            return App.loadProjectRules().then(function () {
+                App.showRulesError("关键词规则已保存");
+            });
+        }).catch(function () {
+            App.showRulesError("保存关键词规则失败");
+        }).then(function () {
+            App.setKeywordSaving(null);
+        });
+    }
+    App.handleKeywordEditSave = handleKeywordEditSave;
+
+    function handleKeywordEditCancel(button) {
+        // Phase 5F: cancel the inline keyword edit. Just clears the editing
+        // state and re-renders. No bridge call is made.
+        if (!App.rulesEditingKeywordKey) return;
+        App.setKeywordEditing(null);
+        App.clearRulesError();
+    }
+    App.handleKeywordEditCancel = handleKeywordEditCancel;
+
+    function setKeywordEditing(keywordKey) {
+        // Phase 5F: enter / leave inline edit mode for one keyword rule row.
+        // Setting the key triggers a re-render of the list from cached data
+        // so the edit form appears / disappears immediately.
+        App.rulesEditingKeywordKey = keywordKey || null;
+        App.rerenderProjectRulesList();
+    }
+    App.setKeywordEditing = setKeywordEditing;
+
+    function setKeywordSaving(keywordKey) {
+        // Phase 5F: toggle the in-flight state for a keyword edit save.
+        // Flips the save / cancel button disabled state on the edit form
+        // so the user cannot double-submit. State is separate from the
+        // editing key (which stays set until success clears it).
+        App.rulesUpdatingKeywordKey = keywordKey || null;
+        var saveButtons = document.querySelectorAll(".rules-keyword-edit-save");
+        var cancelButtons = document.querySelectorAll(".rules-keyword-edit-cancel");
+        Array.prototype.forEach.call(saveButtons, function (btn) {
+            btn.disabled = !!App.rulesUpdatingKeywordKey;
+            if (App.rulesUpdatingKeywordKey) btn.textContent = "正在保存…";
+            else btn.textContent = "保存";
+        });
+        Array.prototype.forEach.call(cancelButtons, function (btn) {
+            btn.disabled = !!App.rulesUpdatingKeywordKey;
+        });
+    }
+    App.setKeywordSaving = setKeywordSaving;
 
     // --- Phase 5E: folder rule CRUD -----------------------------------
 
@@ -700,6 +881,7 @@
         App.bindProjectRuleToggles();
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
+        App.bindProjectRuleKeywordEditEvents();
     }
     App.rerenderProjectRulesList = rerenderProjectRulesList;
 

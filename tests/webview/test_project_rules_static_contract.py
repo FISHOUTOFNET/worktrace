@@ -2561,3 +2561,812 @@ def test_project_rules_folder_event_delegation_bound_once():
     assert "data-rules-folder-bound" in body
     assert 'getAttribute("data-rules-folder-bound")' in body
     assert 'setAttribute("data-rules-folder-bound", "1")' in body
+
+
+# --- Phase 5F: keyword rule edit foundation + in-phase hardening ---------
+#
+# These locks cover the new keyword rule edit capability. They verify the
+# edit button appears only on keyword rows, the inline edit form uses the
+# stable anchors / attributes, the save / cancel handlers obey the
+# Phase 5F contract (trim, empty reject, success refresh, failure preserve,
+# no bridge on cancel, no .message reads, etc.), and the new CSS classes
+# are scoped to the Project Rules page.
+
+
+def test_project_rules_keyword_edit_state_variables_declared():
+    # Phase 5F regression lock: the keyword edit saving state and the
+    # keyword edit updating (in-flight save) state must each be a separate
+    # state variable from the existing write-path states (toggle saving,
+    # keyword create, keyword delete, folder create/edit/delete) so the
+    # seven write paths can never pollute each other.
+    source = read_js("core.js")
+    assert "App.rulesEditingKeywordKey = null" in source
+    assert "App.rulesUpdatingKeywordKey = null" in source
+    # Earlier state variables must still exist alongside the new ones.
+    assert "App.rulesSavingRuleKey = null" in source
+    assert "App.rulesCreatingKeyword = false" in source
+    assert "App.rulesDeletingRuleKey = null" in source
+    assert "App.rulesCreatingFolder = false" in source
+    assert "App.rulesEditingFolderKey = null" in source
+    assert "App.rulesDeletingFolderKey = null" in source
+
+
+def test_project_rules_keyword_edit_state_variables_declared_once():
+    # Phase 5F regression lock: each keyword edit state variable must be
+    # declared exactly once in core.js so there is no accidental duplicate
+    # declaration that could shadow or reset the state.
+    source = read_js("core.js")
+    for var_decl in (
+        "App.rulesEditingKeywordKey = null",
+        "App.rulesUpdatingKeywordKey = null",
+    ):
+        assert source.count(var_decl) == 1, (
+            var_decl + " must be declared exactly once in core.js"
+        )
+
+
+def test_project_rules_keyword_edit_js_calls_bridge_method():
+    # Phase 5F regression lock: the JS must call the
+    # ``update_project_keyword_rule`` bridge method.
+    source = read_js("rules.js")
+    assert 'callBridge("update_project_keyword_rule"' in source
+
+
+def test_project_rules_keyword_edit_buttons_only_on_keyword_rows():
+    # Phase 5F regression lock: the edit button must be rendered only on
+    # keyword rule rows, never on folder rule rows or project cards. The
+    # renderProjectRuleRow function must gate the edit button on
+    # ``kind === "keyword"``.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert 'kind === "keyword"' in row_body
+    assert "rules-keyword-edit-button" in row_body
+    # The project card template must not contain an edit button.
+    project_body = func_body(source, "renderProjectRuleProject")
+    assert "rules-keyword-edit-button" not in project_body
+
+
+def test_project_rules_keyword_edit_button_does_not_appear_on_folder_rows():
+    # Phase 5F regression lock: the keyword edit button is rendered
+    # conditionally inside the ``if (kind === "keyword" && ruleId)`` block.
+    # Folder rows (kind === "folder") never enter that block, so they never
+    # get a keyword edit button.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    keyword_guard_pos = row_body.find('kind === "keyword"')
+    edit_html_assign_pos = row_body.find("keywordEditButton = '", keyword_guard_pos)
+    assert keyword_guard_pos != -1 and edit_html_assign_pos != -1
+    assert keyword_guard_pos < edit_html_assign_pos
+
+
+def test_project_rules_keyword_edit_button_uses_stable_class_and_attributes():
+    # Phase 5F regression lock: the keyword edit button must use the stable
+    # class / data attributes specified in the Phase 5F contract.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert 'class="rules-keyword-edit-button"' in row_body
+    assert 'data-rule-kind="keyword"' in row_body
+    assert 'data-rule-id="' in row_body
+
+
+def test_project_rules_keyword_edit_button_disabled_when_any_write_in_flight():
+    # Phase 5F regression lock: the keyword edit button must be disabled
+    # when any rule write is in flight on this row (toggle saving, keyword
+    # delete, keyword edit, or keyword save). This keeps the four keyword
+    # write paths from concurrently polluting the same row.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "App.rulesSavingRuleKey" in row_body
+    assert "App.rulesDeletingRuleKey" in row_body
+    assert "App.rulesEditingKeywordKey" in row_body
+    assert "App.rulesUpdatingKeywordKey" in row_body
+
+
+def test_project_rules_keyword_edit_start_sets_editing_key():
+    # Phase 5F regression lock: the edit-start handler must set the editing
+    # key to ``"keyword:<id>"`` so the inline edit form renders for the
+    # correct row only.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditStart")
+    assert "App.setKeywordEditing" in body
+    assert '"keyword:"' in body or "'keyword:'" in body
+
+
+def test_project_rules_keyword_edit_start_has_in_flight_guard():
+    # Phase 5F regression lock: the edit-start handler must early-return
+    # when a keyword edit / save / delete is already in flight, before any
+    # state mutation.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditStart")
+    assert "if (App.rulesEditingKeywordKey) return" in body
+    assert "if (App.rulesUpdatingKeywordKey) return" in body
+    assert "if (App.rulesDeletingRuleKey) return" in body
+
+
+def test_project_rules_keyword_edit_start_validates_rule_kind_before_state():
+    # Phase 5F regression lock: the dataset ``data-rule-kind`` must be
+    # validated against ``keyword`` before the editing state is set so a
+    # malformed dataset cannot trigger an arbitrary edit.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditStart")
+    assert 'kind !== "keyword"' in body
+    type_check_pos = body.find('kind !== "keyword"')
+    set_editing_pos = body.find("App.setKeywordEditing(")
+    assert type_check_pos < set_editing_pos
+
+
+def test_project_rules_keyword_edit_start_validates_rule_id_before_state():
+    # Phase 5F regression lock: the JS must parse and validate the rule id
+    # before setting the editing state. Malformed dataset must not enter
+    # edit mode.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditStart")
+    assert 'parseInt(rawId, 10)' in body
+    assert "ruleId <= 0" in body
+    guard_pos = body.find("ruleId <= 0")
+    set_editing_pos = body.find("App.setKeywordEditing(")
+    assert guard_pos < set_editing_pos
+
+
+def test_project_rules_keyword_edit_save_calls_bridge_method():
+    # Phase 5F regression lock: the save handler must call the
+    # ``update_project_keyword_rule`` bridge method.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert 'callBridge("update_project_keyword_rule"' in body
+
+
+def test_project_rules_keyword_edit_save_validates_rule_kind_before_bridge():
+    # Phase 5F regression lock: the dataset ``data-rule-kind`` must be
+    # validated against ``keyword`` before the bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert 'kind !== "keyword"' in body
+    type_check_pos = body.find('kind !== "keyword"')
+    bridge_pos = body.find('callBridge("update_project_keyword_rule"')
+    assert type_check_pos < bridge_pos
+
+
+def test_project_rules_keyword_edit_save_validates_rule_id_before_bridge():
+    # Phase 5F regression lock: the JS must parse and validate the rule id
+    # before calling the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert 'parseInt(rawId, 10)' in body
+    assert "ruleId <= 0" in body
+    guard_pos = body.find("ruleId <= 0")
+    bridge_pos = body.find('callBridge("update_project_keyword_rule"')
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_keyword_edit_save_trims_input_before_bridge():
+    # Phase 5F regression lock: the JS must trim the input value before
+    # validation and before the bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert ".trim()" in body
+    trim_pos = body.find(".trim()")
+    bridge_pos = body.find('callBridge("update_project_keyword_rule"')
+    assert trim_pos != -1 and bridge_pos != -1
+    assert trim_pos < bridge_pos
+
+
+def test_project_rules_keyword_edit_save_rejects_empty_input_client_side():
+    # Phase 5F regression lock: an empty (after trim) keyword must be
+    # rejected before any bridge call. The handler must ``return``
+    # immediately after showing the status, without calling
+    # ``App.callBridge``.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert "!keyword" in body
+    empty_guard_pos = body.find("!keyword")
+    bridge_pos = body.find('callBridge("update_project_keyword_rule"')
+    assert empty_guard_pos < bridge_pos
+    return_pos = body.find("return;", empty_guard_pos)
+    assert return_pos != -1 and return_pos < bridge_pos
+
+
+def test_project_rules_keyword_edit_save_has_editing_guard():
+    # Phase 5F regression lock: the save handler must early-return when no
+    # keyword edit is in flight, before any bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert "if (!App.rulesEditingKeywordKey) return" in body
+    guard_pos = body.find("if (!App.rulesEditingKeywordKey) return")
+    bridge_pos = body.find('callBridge("update_project_keyword_rule"')
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_keyword_edit_save_has_saving_button_label():
+    # Phase 5F regression lock: the saving button text must remain the
+    # stable ``正在保存…`` label.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "正在保存…" in row_body
+    set_saving_body = func_body(source, "setKeywordSaving")
+    assert "正在保存…" in set_saving_body
+
+
+def test_project_rules_keyword_edit_save_success_refreshes_project_rules():
+    # Phase 5F regression lock: the success path must call
+    # ``loadProjectRules()`` to refresh the Project Rules list.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert "App.loadProjectRules()" in body
+
+
+def test_project_rules_keyword_edit_save_success_clears_editing_state():
+    # Phase 5F regression lock: the success path must clear the editing
+    # state by calling ``setKeywordEditing(null)`` so the inline edit form
+    # closes after a successful save.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert "App.setKeywordEditing(null)" in body
+
+
+def test_project_rules_keyword_edit_save_success_shows_stable_message():
+    # Phase 5F regression lock: the success path must show the stable
+    # ``关键词规则已保存`` message after refresh.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    refresh_pos = body.find("App.loadProjectRules()")
+    success_pos = body.find("关键词规则已保存")
+    assert refresh_pos != -1 and success_pos != -1
+    assert refresh_pos < success_pos
+
+
+def test_project_rules_keyword_edit_save_failure_preserves_editing_state():
+    # Phase 5F regression lock: the failure path (ok=false) must not clear
+    # the editing state. The handler may only show a status message, never
+    # call ``setKeywordEditing(null)`` inside the failure branch. The
+    # cleanup ``setKeywordSaving(null)`` only clears the saving state, not
+    # the editing state, so the user can edit and retry. The success branch
+    # (after the failure guard returns) does call ``setKeywordEditing(null)``
+    # — that is expected and correct.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    failure_guard = body.find("result && result.ok === false")
+    assert failure_guard != -1
+    # The failure branch is the block inside the ``if (result && result.ok
+    # === false) { ... }``. Extract just that block (up to the first
+    # ``return;`` after the guard) and verify it does not clear the editing
+    # state.
+    failure_return = body.find("return;", failure_guard)
+    assert failure_return != -1
+    failure_block = body[failure_guard:failure_return]
+    assert "App.setKeywordEditing(null)" not in failure_block
+    assert "App.setKeywordEditing(" not in failure_block
+
+
+def test_project_rules_keyword_edit_save_failure_preserves_rendered_list():
+    # Phase 5F regression lock: the failure path must not clear the
+    # already-rendered Project Rules list. The handler may only show a
+    # status message on failure, never ``list.innerHTML = ""`` or
+    # ``showProjectRules`` with an empty payload.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert "list.innerHTML" not in body
+    assert 'showProjectRules({ projects: [] })' not in body
+    assert 'showProjectRules([])' not in body
+    assert "保存关键词规则失败" in body
+
+
+def test_project_rules_keyword_edit_save_catch_never_reads_raw_exception():
+    # Phase 5F regression lock: the catch path must never read
+    # ``.message`` from the error.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    for forbidden in ("err.message", "error.message", "reason.message"):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_keyword_edit_save_saving_state_clears_on_all_paths():
+    # Phase 5F regression lock: the saving state must clear on success,
+    # on failure (ok=false), and on rejected promise. The handler achieves
+    # this by chaining ``App.setKeywordSaving(null)`` in the final
+    # ``.then`` that runs after ``.catch`` (which always resolves).
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditSave")
+    assert "App.setKeywordSaving(" in body
+    assert ".catch(function ()" in body
+    catch_pos = body.find(".catch(function ()")
+    cleanup_pos = body.find("App.setKeywordSaving(null)", catch_pos)
+    assert cleanup_pos != -1, (
+        "App.setKeywordSaving(null) must run after .catch so the saving "
+        "state clears on success, failure, and rejected-promise paths"
+    )
+
+
+def test_project_rules_keyword_edit_cancel_does_not_call_bridge():
+    # Phase 5F regression lock: the cancel handler must not call any bridge
+    # method. It only clears the editing state and re-renders.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditCancel")
+    assert "callBridge(" not in body
+
+
+def test_project_rules_keyword_edit_cancel_clears_editing_state():
+    # Phase 5F regression lock: the cancel handler must clear the editing
+    # state by calling ``setKeywordEditing(null)``.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditCancel")
+    assert "App.setKeywordEditing(null)" in body
+
+
+def test_project_rules_keyword_edit_cancel_has_early_return_guard():
+    # Phase 5F regression lock: the cancel handler must early-return when
+    # no keyword edit is in flight.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordEditCancel")
+    assert "if (!App.rulesEditingKeywordKey) return" in body
+
+
+def test_project_rules_keyword_edit_set_keyword_editing_rerenders_from_cache():
+    # Phase 5F regression lock: ``setKeywordEditing`` must re-render the
+    # list from cached data (via ``rerenderProjectRulesList``) so the edit
+    # form appears / disappears immediately without a round-trip through
+    # ``loadProjectRules``.
+    source = read_js("rules.js")
+    body = func_body(source, "setKeywordEditing")
+    assert "App.rerenderProjectRulesList()" in body
+
+
+def test_project_rules_keyword_edit_set_keyword_saving_disables_save_and_cancel():
+    # Phase 5F regression lock: ``setKeywordSaving`` must disable both the
+    # save and cancel buttons while a save is in flight so the user cannot
+    # double-submit or cancel mid-save.
+    source = read_js("rules.js")
+    body = func_body(source, "setKeywordSaving")
+    assert "rules-keyword-edit-save" in body
+    assert "rules-keyword-edit-cancel" in body
+    assert "btn.disabled" in body
+
+
+def test_project_rules_keyword_edit_inline_form_renders_in_place_of_row():
+    # Phase 5F regression lock: when a keyword row is being edited, the
+    # renderProjectRuleRow function must render the inline edit form
+    # (with input + save / cancel buttons) in place of the normal row body.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "is-keyword-editing" in row_body
+    assert "rules-keyword-edit-form" in row_body
+    assert "rules-keyword-edit-input" in row_body
+    assert "rules-keyword-edit-save" in row_body
+    assert "rules-keyword-edit-cancel" in row_body
+
+
+def test_project_rules_keyword_edit_form_has_maxlength_on_input():
+    # Phase 5F regression lock: the inline edit form input must have a
+    # ``maxlength="200"`` attribute so the user cannot enter an over-long
+    # keyword. This matches the keyword create input maxlength.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert 'maxlength="200"' in row_body
+
+
+def test_project_rules_keyword_edit_form_uses_stable_class_and_attributes():
+    # Phase 5F regression lock: the inline edit form save / cancel buttons
+    # must use the stable class / data attributes.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert 'class="rules-keyword-edit-save"' in row_body
+    assert 'class="rules-keyword-edit-cancel"' in row_body
+    assert 'data-rule-kind="keyword"' in row_body
+
+
+def test_project_rules_keyword_edit_events_use_event_delegation_on_rules_list():
+    # Phase 5F regression lock: the keyword edit / edit-save / edit-cancel
+    # events must be delegated via a single click handler on
+    # ``#rules-list``, not via per-button listeners in init.js.
+    source = read_js("rules.js")
+    bind_body = func_body(source, "bindProjectRuleKeywordEditEvents")
+    assert 'getElementById("rules-list")' in bind_body
+    assert "addEventListener" in bind_body
+    assert "handleProjectRuleKeywordEditEvent" in bind_body
+
+
+def test_project_rules_keyword_edit_event_handler_routes_by_button_class():
+    # Phase 5F regression lock: the delegated keyword edit event handler
+    # must route to the correct sub-handler based on the button class.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleKeywordEditEvent")
+    assert "rules-keyword-edit-button" in body
+    assert "rules-keyword-edit-save" in body
+    assert "rules-keyword-edit-cancel" in body
+    assert "handleKeywordEditStart" in body
+    assert "handleKeywordEditSave" in body
+    assert "handleKeywordEditCancel" in body
+
+
+def test_project_rules_keyword_edit_event_delegation_bound_once():
+    # Phase 5F regression lock: ``bindProjectRuleKeywordEditEvents`` must
+    # use the same ``data-*-bound`` idempotency pattern as the toggle /
+    # delete / folder binders so repeated renders do not attach duplicate
+    # click handlers to ``#rules-list``.
+    source = read_js("rules.js")
+    body = func_body(source, "bindProjectRuleKeywordEditEvents")
+    assert "data-rules-keyword-edit-bound" in body
+    assert 'getAttribute("data-rules-keyword-edit-bound")' in body
+    assert 'setAttribute("data-rules-keyword-edit-bound", "1")' in body
+
+
+def test_project_rules_keyword_edit_show_project_rules_binds_events():
+    # Phase 5F regression lock: ``showProjectRules`` must call
+    # ``bindProjectRuleKeywordEditEvents`` so the keyword edit delegation
+    # is set up after every render.
+    source = read_js("rules.js")
+    body = func_body(source, "showProjectRules")
+    assert "bindProjectRuleKeywordEditEvents" in body
+
+
+def test_project_rules_keyword_edit_rerender_binds_events():
+    # Phase 5F regression lock: ``rerenderProjectRulesList`` must call
+    # ``bindProjectRuleKeywordEditEvents`` so the keyword edit delegation
+    # is set up after every re-render from cached data.
+    source = read_js("rules.js")
+    body = func_body(source, "rerenderProjectRulesList")
+    assert "bindProjectRuleKeywordEditEvents" in body
+
+
+def test_project_rules_keyword_edit_state_isolation_from_other_write_paths():
+    # Phase 5F regression lock: the keyword edit save handler must not read
+    # the toggle saving state, keyword create state, keyword delete state,
+    # or folder create/edit/delete states directly. The seven write paths
+    # are coordinated only through per-row render-time disabled attributes
+    # — never by cross-reading the other handlers' state inside
+    # ``handleKeywordEditSave``. The handler accesses its own state via the
+    # ``setKeywordSaving`` helper (which internally sets
+    # ``rulesUpdatingKeywordKey``) and reads ``rulesEditingKeywordKey`` for
+    # the in-flight guard.
+    source = read_js("rules.js")
+    edit_body = func_body(source, "handleKeywordEditSave")
+    assert "App.rulesSavingRuleKey" not in edit_body
+    assert "App.rulesCreatingKeyword" not in edit_body
+    assert "App.rulesDeletingRuleKey" not in edit_body
+    assert "App.rulesCreatingFolder" not in edit_body
+    assert "App.rulesEditingFolderKey" not in edit_body
+    assert "App.rulesDeletingFolderKey" not in edit_body
+    # The edit state itself must be present (editing key guard + saving
+    # helper which internally manages the updating key).
+    assert "App.rulesEditingKeywordKey" in edit_body
+    assert "App.setKeywordSaving" in edit_body
+
+
+def test_project_rules_keyword_edit_start_state_isolation_from_other_write_paths():
+    # Phase 5F regression lock: the keyword edit start handler must not
+    # read the toggle saving state, keyword create state, or folder
+    # create/edit/delete states directly.
+    source = read_js("rules.js")
+    start_body = func_body(source, "handleKeywordEditStart")
+    assert "App.rulesSavingRuleKey" not in start_body
+    assert "App.rulesCreatingKeyword" not in start_body
+    assert "App.rulesCreatingFolder" not in start_body
+    assert "App.rulesEditingFolderKey" not in start_body
+    assert "App.rulesDeletingFolderKey" not in start_body
+
+
+def test_project_rules_keyword_edit_cancel_state_isolation_from_other_write_paths():
+    # Phase 5F regression lock: the keyword edit cancel handler must not
+    # read the toggle saving state, keyword create state, keyword delete
+    # state, or folder create/edit/delete states directly.
+    source = read_js("rules.js")
+    cancel_body = func_body(source, "handleKeywordEditCancel")
+    assert "App.rulesSavingRuleKey" not in cancel_body
+    assert "App.rulesCreatingKeyword" not in cancel_body
+    assert "App.rulesDeletingRuleKey" not in cancel_body
+    assert "App.rulesCreatingFolder" not in cancel_body
+    assert "App.rulesEditingFolderKey" not in cancel_body
+    assert "App.rulesDeletingFolderKey" not in cancel_body
+
+
+def test_project_rules_keyword_edit_set_keyword_editing_state_isolation():
+    # Phase 5F regression lock: ``setKeywordEditing`` must only touch the
+    # keyword editing state, not any other write-path state.
+    source = read_js("rules.js")
+    body = func_body(source, "setKeywordEditing")
+    assert "App.rulesEditingKeywordKey" in body
+    assert "App.rulesSavingRuleKey" not in body
+    assert "App.rulesCreatingKeyword" not in body
+    assert "App.rulesDeletingRuleKey" not in body
+    assert "App.rulesCreatingFolder" not in body
+    assert "App.rulesEditingFolderKey" not in body
+    assert "App.rulesDeletingFolderKey" not in body
+
+
+def test_project_rules_keyword_edit_set_keyword_saving_state_isolation():
+    # Phase 5F regression lock: ``setKeywordSaving`` must only touch the
+    # keyword saving state, not any other write-path state.
+    source = read_js("rules.js")
+    body = func_body(source, "setKeywordSaving")
+    assert "App.rulesUpdatingKeywordKey" in body
+    assert "App.rulesSavingRuleKey" not in body
+    assert "App.rulesCreatingKeyword" not in body
+    assert "App.rulesDeletingRuleKey" not in body
+    assert "App.rulesCreatingFolder" not in body
+    assert "App.rulesEditingFolderKey" not in body
+    assert "App.rulesDeletingFolderKey" not in body
+
+
+def test_project_rules_keyword_edit_js_does_not_call_other_write_bridges():
+    # Phase 5F regression lock: the keyword edit save handler must not
+    # call any other Project Rules write bridge (create / delete / toggle /
+    # folder CRUD).
+    source = read_js("rules.js")
+    save_body = func_body(source, "handleKeywordEditSave")
+    for forbidden in (
+        'callBridge("create_project_keyword_rule"',
+        'callBridge("delete_project_keyword_rule"',
+        'callBridge("set_project_rule_enabled"',
+        'callBridge("create_project_folder_rule"',
+        'callBridge("update_project_folder_rule"',
+        'callBridge("delete_project_folder_rule"',
+    ):
+        assert forbidden not in save_body, (
+            "keyword edit save must not call: " + forbidden
+        )
+
+
+def test_project_rules_keyword_edit_js_does_not_call_preview_or_backfill():
+    # Phase 5F regression lock: the keyword edit handlers must not call
+    # preview / backfill bridges.
+    source = read_js("rules.js")
+    for forbidden in (
+        'callBridge("preview_folder_rule_conflicts"',
+        'callBridge("backfill_folder_rule"',
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_keyword_edit_js_does_not_call_project_write():
+    # Phase 5F regression lock: the keyword edit handlers must not call
+    # any project write bridge.
+    source = read_js("rules.js")
+    for forbidden in (
+        'callBridge("create_project"',
+        'callBridge("update_project"',
+        'callBridge("delete_project"',
+        'callBridge("archive_project"',
+        'callBridge("set_project_enabled"',
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_keyword_edit_no_storage_or_network():
+    # Phase 5F regression lock: the keyword edit handlers must not use
+    # browser storage or network APIs.
+    source = read_js("rules.js")
+    for handler_name in (
+        "handleKeywordEditStart",
+        "handleKeywordEditSave",
+        "handleKeywordEditCancel",
+        "setKeywordEditing",
+        "setKeywordSaving",
+        "bindProjectRuleKeywordEditEvents",
+        "handleProjectRuleKeywordEditEvent",
+    ):
+        body = func_body(source, handler_name)
+        for forbidden in (
+            "localStorage",
+            "sessionStorage",
+            "document.cookie",
+            "fetch(",
+            "XMLHttpRequest",
+        ):
+            assert forbidden not in body, (
+                handler_name + " must not use forbidden storage/network API: " + forbidden
+            )
+
+
+def test_project_rules_keyword_edit_no_forbidden_handler_tokens():
+    # Phase 5F regression lock: the keyword edit JS must not introduce any
+    # of the forbidden camelCase handler tokens.
+    source = read_js("rules.js")
+    for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
+        assert token not in source
+
+
+def test_project_rules_keyword_edit_no_app_js_reintroduced():
+    # Phase 5F regression lock: the frontend must not reintroduce app.js.
+    source = read_resource("index.html")
+    assert "app.js" not in source
+
+
+def test_project_rules_keyword_edit_no_static_edit_button_in_html():
+    # Phase 5F regression lock: the static ``page-rules`` section in
+    # ``index.html`` must not contain a keyword edit button. The edit
+    # button is rendered dynamically by JS only on keyword rule rows.
+    section = _rules_section()
+    assert "rules-keyword-edit-button" not in section
+    assert "rules-keyword-edit-form" not in section
+    assert "rules-keyword-edit-save" not in section
+    assert "rules-keyword-edit-cancel" not in section
+
+
+def test_project_rules_keyword_edit_no_duplicate_static_dom_ids():
+    # Phase 5F regression lock: the static ``page-rules`` section in
+    # ``index.html`` must not declare the same DOM id twice. The Phase 5F
+    # addition does not introduce any new static DOM (the edit form is
+    # rendered dynamically by JS).
+    import re as _re
+
+    section = _rules_section()
+    ids = _re.findall(r'\sid="([^"]+)"', section)
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for dom_id in ids:
+        if dom_id in seen:
+            duplicates.append(dom_id)
+        seen.add(dom_id)
+    assert not duplicates, "duplicate DOM id in page-rules section: " + ", ".join(duplicates)
+
+
+def test_project_rules_keyword_edit_no_export_or_auto_submit_controls():
+    # Phase 5F regression lock: the Project Rules page must not contain
+    # Excel / PDF / timesheet / open-folder / auto-submit controls.
+    section = _rules_section().lower()
+    for token in (
+        "excel",
+        "pdf",
+        "timesheet",
+        "open-folder",
+        "open_folder",
+        "auto-submit",
+        "auto_submit",
+        "自动提交工时",
+        "打开文件夹",
+    ):
+        assert token not in section
+
+
+def test_project_rules_keyword_edit_no_project_management_controls():
+    # Phase 5F regression lock: the Project Rules page must not contain
+    # project create / edit / delete / archive / enable / disable controls.
+    section = _rules_section().lower()
+    for token in (
+        "project-add",
+        "project-edit",
+        "project-delete",
+        "project-archive",
+        "project-enable",
+        "project-disable",
+    ):
+        assert token not in section
+
+
+def test_project_rules_keyword_edit_css_class_exists():
+    # Phase 5F regression lock: the keyword edit CSS classes must exist in
+    # styles.css so the dynamically-rendered edit button and inline edit
+    # form have stable visual styles.
+    source = read_resource("styles.css")
+    for css_class in (
+        ".rules-keyword-edit-button",
+        ".rules-keyword-edit-form",
+        ".rules-keyword-edit-input",
+        ".rules-keyword-edit-save",
+        ".rules-keyword-edit-cancel",
+    ):
+        assert css_class in source, "styles.css must contain: " + css_class
+    # The CSS must not depend on external resources.
+    assert not re.search(r"https?://", source, re.IGNORECASE)
+    assert not re.search(r"cdn", source, re.IGNORECASE)
+    assert not re.search(r"google\s*fonts", source, re.IGNORECASE)
+
+
+def test_project_rules_keyword_edit_css_class_scoped_to_rules_page():
+    # Phase 5F regression lock: the keyword edit CSS classes must be
+    # namespaced with the ``rules-`` prefix and must not be referenced by
+    # the Overview / Timeline / Statistics static HTML sections, so the
+    # Project Rules edit button / form style cannot leak into (or be
+    # re-styled by) the other pages.
+    index = read_resource("index.html")
+    for page_id in ("page-overview", "page-timeline", "page-statistics"):
+        start = index.find('id="' + page_id + '"')
+        assert start != -1, "index.html must contain " + page_id
+        end = index.find("</section>", start)
+        assert end != -1, page_id + " section must close"
+        section = index[start:end]
+        for css_class in (
+            "rules-keyword-edit-button",
+            "rules-keyword-edit-form",
+            "rules-keyword-edit-input",
+            "rules-keyword-edit-save",
+            "rules-keyword-edit-cancel",
+        ):
+            assert css_class not in section, (
+                page_id + " section must not reference keyword edit class: " + css_class
+            )
+
+
+def test_project_rules_keyword_edit_js_no_external_urls():
+    # Phase 5F regression lock: rules.js must not reference any external
+    # URL (http/https) or CDN or Google Fonts.
+    source = read_js("rules.js")
+    assert not re.search(r"https?://", source, re.IGNORECASE)
+    assert not re.search(r"\bcdn\b", source, re.IGNORECASE)
+    assert not re.search(r"google\s*fonts", source, re.IGNORECASE)
+
+
+def test_project_rules_keyword_edit_js_no_es_module_syntax():
+    # Phase 5F regression lock: rules.js must not use ES module syntax
+    # (import / export). The frontend uses classic scripts only.
+    source = read_js("rules.js")
+    assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
+    assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
+
+
+def test_project_rules_keyword_edit_core_js_no_es_module_syntax():
+    # Phase 5F regression lock: core.js must not use ES module syntax.
+    source = read_js("core.js")
+    assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
+    assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
+
+
+def test_project_rules_keyword_edit_init_js_no_es_module_syntax():
+    # Phase 5F regression lock: init.js must not use ES module syntax.
+    source = read_js("init.js")
+    assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
+    assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
+
+
+def test_project_rules_keyword_edit_init_does_not_bind_edit_event():
+    # Phase 5F regression lock: the init module must not bind any keyword
+    # edit event directly. The edit button uses event delegation on the
+    # rules-list container, set up inside ``rules.js`` (Phase 5F), not in
+    # init.js.
+    source = read_js("init.js")
+    for forbidden in (
+        "rules-keyword-edit",
+        "handleKeywordEditStart",
+        "handleKeywordEditSave",
+        "handleKeywordEditCancel",
+        "setKeywordEditing",
+        "setKeywordSaving",
+        "bindProjectRuleKeywordEditEvents",
+    ):
+        assert forbidden not in source, (
+            "init.js must not bind Project Rules keyword edit event: " + forbidden
+        )
+
+
+def test_project_rules_keyword_edit_packaging_spec_still_includes_rules_js():
+    # Phase 5F regression lock: the packaging spec must still include
+    # rules.js so the keyword edit handlers ship in the packaged build.
+    source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
+    assert "'rules.js'" in source or '"rules.js"' in source
+    assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source
+
+
+def test_project_rules_keyword_edit_stale_guard_preserved():
+    # Phase 5F regression lock: the existing ``rulesRequestToken`` stale
+    # guard in ``loadProjectRules`` must remain intact. The keyword edit
+    # success path calls ``loadProjectRules()`` which inherits this
+    # protection.
+    source = read_js("rules.js")
+    load_body = func_body(source, "loadProjectRules")
+    assert "var token = ++App.rulesRequestToken" in load_body
+    assert load_body.count("token !== App.rulesRequestToken") >= 2
+
+
+def test_project_rules_keyword_edit_boundary_copy_present():
+    # Phase 5F regression lock: the boundary copy must mention keyword rule
+    # edit as a supported capability and still reference the remaining
+    # future capabilities.
+    section = _rules_section()
+    assert "启用/停用" in section
+    assert "新增关键词规则" in section
+    assert "编辑已有关键词规则" in section
+    assert "删除已有关键词规则" in section
+    for term in ("编辑", "删除", "冲突预览", "回填"):
+        assert term in section
+
+
+def test_project_rules_keyword_edit_js_uses_escape_helper_for_dynamic_text():
+    # Phase 5F regression lock: dynamic text rendering in the edit button
+    # and inline edit form must use the escape helper. The rule id is
+    # rendered via ``count()`` which calls ``App.escapeHtml``.
+    source = read_js("rules.js")
+    count_body = func_body(source, "count")
+    assert "App.escapeHtml" in count_body
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "count(ruleId)" in row_body

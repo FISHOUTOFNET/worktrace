@@ -93,6 +93,16 @@
     // deleted so the deleting button label can be flipped to ``正在删除…``.
     App.rulesDeletingRuleKey = null;
 
+    // --- Phase 5F: Project Rules keyword rule edit state ----------------
+    // Separate from rulesSavingRuleKey (Phase 5B toggle),
+    // rulesCreatingKeyword (Phase 5C create), rulesDeletingRuleKey
+    // (Phase 5D delete), and the folder CRUD states (Phase 5E) so the
+    // five write paths can never pollute each other. Only one keyword
+    // edit may be in flight at a time; it carries the "keyword:<id>" key
+    // of the row being edited.
+    App.rulesEditingKeywordKey = null;   // "keyword:<id>" of the row being edited
+    App.rulesUpdatingKeywordKey = null;  // "keyword:<id>" of the row being saved
+
     // --- Phase 5E: Project Rules folder rule CRUD state ----------------
     // Separate from rulesSavingRuleKey (Phase 5B toggle),
     // rulesCreatingKeyword (Phase 5C keyword create), and

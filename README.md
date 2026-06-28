@@ -5,28 +5,31 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5E.1 (Project Rules folder rule CRUD
-> hardening) is the latest shipped phase. Phase 5E opened three new
-> Project Rules folder rule write capabilities on an existing rule-target
-> project: creating one folder rule, editing an existing folder rule, and
-> deleting a single existing folder rule, then refreshing the list on
-> success. The API / bridge / frontend three layers are wired through the
-> stable `create_project_folder_rule` / `update_project_folder_rule` /
-> `delete_project_folder_rule` facade. Phase 5E.1 is a hardening-only /
-> regression-only follow-up that locks the Phase 5E folder rule
-> create / edit / delete write path (API/service normalized-key collision,
-> update-by-id semantics, cache invalidation hooks, sensitive-field
-> boundaries; bridge bool-as-int rejection, consistent error mapping,
-> narrow payload; frontend DOM anchors, state isolation, CSS scoping,
-> no-forbidden-features, packaging inclusion) without opening any new
-> Project Rules capability. It preserves the Phase 5B / 5B.1
-> existing folder / keyword rule enable/disable path and its hardening,
-> the Phase 5C keyword rule creation path, the Phase 5C.1 keyword creation
-> hardening, the Phase 5D keyword rule deletion path, and the Phase 5D.1
-> keyword deletion hardening. Project enable/disable, project
-> create/edit/delete/archive, keyword rule edit, conflict preview,
-> backfill, automatic rules, and batch Project Rules operations remain
-> unsupported in WebView. For a one-screen snapshot read
+> **Current state**: WebView Phase 5F (Project Rules keyword rule edit
+> foundation + in-phase hardening) is the latest shipped phase. Phase 5F
+> opens one new Project Rules write capability: editing the keyword text
+> of a single existing keyword rule, then refreshing the list on success.
+> The API / bridge / frontend three layers are wired through the stable
+> `update_project_keyword_rule` facade with input validation (true int
+> excluding bool, true str with trim), stable error codes (`invalid_input`
+> / `not_found` / `duplicate_rule` / `operation_failed`), Chinese error
+> mapping at the bridge, narrow payloads, independent frontend state keys
+> for keyword edit / save, and explicit Project Rules page boundary copy.
+> Phase 5F also ships the in-phase hardening regression locks (API/service
+> update-by-id semantics, duplicate check excluding self, cache
+> invalidation hooks, sensitive-field boundaries; bridge bool-as-int
+> rejection, consistent error mapping, narrow payload; frontend DOM
+> anchors, state isolation, CSS scoping, no-forbidden-features, packaging
+> inclusion) in the same phase rather than splitting into a separate
+> 5F.1. It preserves the Phase 5B / 5B.1 existing folder / keyword rule
+> enable/disable path and its hardening, the Phase 5C keyword rule
+> creation path, the Phase 5C.1 keyword creation hardening, the Phase 5D
+> keyword rule deletion path, the Phase 5D.1 keyword deletion hardening,
+> the Phase 5E folder rule CRUD foundation, and the Phase 5E.1 folder
+> rule CRUD hardening. Project enable/disable, project
+> create/edit/delete/archive, conflict preview, backfill, automatic
+> rules, and batch Project Rules operations remain unsupported in
+> WebView. For a one-screen snapshot read
 > [`docs/current-state.md`](docs/current-state.md). For the full
 > per-phase history read
 > [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
@@ -75,9 +78,12 @@ records.
   is a hardening-only / regression-only follow-up that locks the Phase 5E
   folder rule create / edit / delete write path across API / service /
   bridge / frontend / static contract layers without opening any new
-  Project Rules capability. Project
-  enable/disable, Project creation/editing/deletion/archive, keyword rule
-  editing, conflict preview, backfill, and automatic rule workflows are not
+  Project Rules capability. Phase 5F opens the keyword rule edit
+  foundation: editing the keyword text of a single existing keyword rule,
+  then refreshing the list on success, with the in-phase hardening
+  regression locks shipped in the same phase rather than a separate 5F.1.
+  Project enable/disable, Project creation/editing/deletion/archive,
+  conflict preview, backfill, and automatic rule workflows are not
   supported in WebView.
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.
@@ -239,6 +245,6 @@ database file or use the Settings page to clear and rebuild all data.
 - Settings / Privacy / Encrypted Backup pages are not yet migrated to
   WebView (legacy Tkinter reference code remains only as reference).
 - Project enable/disable; Project create/edit/delete/archive; folder rule
-  create/edit/delete; keyword rule edit; Project Rules conflict preview,
-  backfill, automatic rules, and batch operations; Excel / PDF / timesheet
-  export; folder opening; and auto-submit are not supported.
+  conflict preview, backfill, automatic rules, and batch operations;
+  Excel / PDF / timesheet export; folder opening; and auto-submit are not
+  supported.

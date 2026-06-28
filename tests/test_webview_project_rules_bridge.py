@@ -3020,3 +3020,434 @@ def test_folder_bridge_success_payloads_never_include_api_error_keys(monkeypatch
         assert "error" not in result
         assert "projects" not in result
         assert "rules" not in result
+
+
+# --- Phase 5F: keyword rule edit bridge tests ----------------------------
+
+
+def test_update_project_keyword_rule_success_payload(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "project_id": 1,
+                "keyword": keyword,
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(123, "NewSpec")
+
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "keyword",
+            "id": 123,
+            "project_id": 1,
+            "keyword": "NewSpec",
+            "enabled": True,
+        },
+    }
+    assert "projects" not in result
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [None, True, False, "1", "abc", 0, -1, 1.0, 2.5, [], {}, (), {1, 2}, (1,), frozenset({1})],
+)
+def test_update_project_keyword_rule_rejects_invalid_rule_id(bad_id):
+    result = WebViewBridge().update_project_keyword_rule(bad_id, "Spec")
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize(
+    "bad_keyword",
+    [None, True, False, 1, 1.0, [], {}, (), {1, 2}, (1,), frozenset({1})],
+)
+def test_update_project_keyword_rule_rejects_non_string_keyword(bad_keyword):
+    result = WebViewBridge().update_project_keyword_rule(1, bad_keyword)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize("bad_keyword", ["", "   ", "\t", "\n", "  \t  "])
+def test_update_project_keyword_rule_rejects_empty_or_whitespace_keyword(bad_keyword):
+    result = WebViewBridge().update_project_keyword_rule(1, bad_keyword)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_update_project_keyword_rule_bridge_passes_trimmed_keyword_to_api(monkeypatch):
+    captured: list = []
+
+    def _spy(rule_id, keyword):
+        captured.append((rule_id, keyword))
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "project_id": 1,
+                "keyword": keyword,
+                "enabled": True,
+            },
+        }
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", _spy)
+
+    WebViewBridge().update_project_keyword_rule(5, "  NewSpec  ")
+
+    assert captured == [(5, "NewSpec")]
+
+
+def test_update_project_keyword_rule_invalid_input_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {"ok": False, "error": "invalid_input"},
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_update_project_keyword_rule_not_found_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {"ok": False, "error": "not_found"},
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(999, "Spec")
+
+    assert result == {"ok": False, "error": "关键词规则不存在"}
+
+
+def test_update_project_keyword_rule_duplicate_rule_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {"ok": False, "error": "duplicate_rule"},
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "关键词规则已存在"}
+
+
+def test_update_project_keyword_rule_operation_failed_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {"ok": False, "error": "operation_failed"},
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "保存关键词规则失败"}
+
+
+def test_update_project_keyword_rule_unknown_error_code_collapses(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {"ok": False, "error": "unexpected raw code"},
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "保存关键词规则失败"}
+
+
+def test_update_project_keyword_rule_unknown_exception_collapses(monkeypatch):
+    def fail(rule_id, keyword):
+        raise RuntimeError(
+            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", fail)
+
+    result = WebViewBridge().update_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "保存关键词规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select",
+        "boom",
+        "window_title",
+        "clipboard",
+        "note",
+        "activity_log",
+        "secret",
+    ):
+        assert forbidden not in lowered
+
+
+def test_update_project_keyword_rule_failure_payload_excludes_backend_codes(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {
+            "ok": False,
+            "error": "not_found",
+            "code": "not_found",
+            "internal_field": "should not leak",
+            "traceback": "SELECT * FROM project_rule",
+            "details": "C:\\Secret window_title clipboard note",
+        },
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(999, "Spec")
+
+    assert result == {"ok": False, "error": "关键词规则不存在"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "internal_field",
+        "should not leak",
+        "code",
+        "not_found",
+        "traceback",
+        "sqlite",
+        "select",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+        "details",
+    ):
+        assert forbidden not in lowered
+
+
+def test_update_project_keyword_rule_success_payload_types_are_stable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "project_id": 1,
+                "keyword": keyword,
+                "enabled": 1,
+            },
+        },
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(25, "NewSpec")
+
+    assert type(result["ok"]) is bool
+    rule = result["rule"]
+    assert type(rule["kind"]) is str
+    assert type(rule["id"]) is int
+    assert type(rule["project_id"]) is int
+    assert type(rule["keyword"]) is str
+    assert type(rule["enabled"]) is bool
+
+
+def test_update_project_keyword_rule_payload_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "project_id": 1,
+                "keyword": keyword,
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(20, "NewSpec")
+
+    json.dumps(result, ensure_ascii=False)
+    assert "Traceback" not in repr(result)
+    assert "SELECT" not in repr(result)
+
+
+def test_update_project_keyword_rule_success_payload_strips_extra_api_keys(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "project_id": 1,
+                "keyword": keyword,
+                "enabled": True,
+                "created_by": "user",
+                "created_at": "2026-06-28T10:00:00",
+                "updated_at": "2026-06-28T10:00:00",
+                "rule_type": "keyword",
+                "pattern": keyword,
+                "internal_field": "should not leak",
+                "traceback": "SELECT * FROM project_rule",
+                "details": "C:\\Secret window_title clipboard note",
+            },
+        },
+    )
+
+    result = WebViewBridge().update_project_keyword_rule(7, "NewSpec")
+
+    rule = result["rule"]
+    assert set(rule.keys()) == {"kind", "id", "project_id", "keyword", "enabled"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "created_by",
+        "created_at",
+        "updated_at",
+        "rule_type",
+        "pattern",
+        "should not leak",
+        "internal_field",
+        "traceback",
+        "sqlite",
+        "select",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+        "details",
+    ):
+        assert forbidden not in lowered
+
+
+def test_update_project_keyword_rule_never_calls_other_project_rules_write_apis(monkeypatch):
+    called: dict[str, int] = {}
+
+    def _track(name):
+        def _impl(*args, **kwargs):
+            called[name] = called.get(name, 0) + 1
+            return {"ok": True, "rule": {"kind": "keyword", "id": 1, "deleted": True}}
+
+        return _impl
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", _track("update_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+
+    WebViewBridge().update_project_keyword_rule(1, "NewSpec")
+
+    assert called == {"update_keyword": 1}
+
+
+def test_update_project_keyword_rule_never_forwards_bool_rule_id_to_api(monkeypatch):
+    called: list = []
+
+    def _spy(*args, **kwargs):
+        called.append(args)
+        return {"ok": True, "rule": {"kind": "keyword", "id": 1, "project_id": 1, "keyword": "x", "enabled": True}}
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", _spy)
+    WebViewBridge().update_project_keyword_rule(True, "NewSpec")
+    assert called == []
+
+
+def test_other_write_apis_do_not_call_update_project_keyword_rule(monkeypatch):
+    # Phase 5F regression lock: create/delete/toggle/folder APIs must not
+    # invoke the new update-keyword path.
+    called: list = []
+
+    def _spy(*args, **kwargs):
+        called.append(args)
+        return {"ok": True, "rule": {"kind": "keyword", "id": 1, "keyword": "x", "enabled": True}}
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", _spy)
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {"ok": True, "rule": {"kind": "keyword", "id": 1, "project_id": project_id, "keyword": keyword, "enabled": True}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {"ok": True, "rule_type": rule_type, "rule_id": rule_id, "enabled": enabled},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": project_id, "folder_path": folder_path, "recursive": recursive, "enabled": True}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "project_id": 1, "folder_path": folder_path, "recursive": recursive, "enabled": True}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+    )
+
+    bridge = WebViewBridge()
+    bridge.create_project_keyword_rule(1, "Spec")
+    bridge.delete_project_keyword_rule(1)
+    bridge.set_project_rule_enabled("keyword", 1, False)
+    bridge.create_project_folder_rule(1, r"D:\Work", True)
+    bridge.update_project_folder_rule(1, r"D:\New", False)
+    bridge.delete_project_folder_rule(1)
+
+    assert called == []
+
+
+def test_update_project_keyword_rule_invalid_input_payload_excludes_sensitive_text():
+    bridge = WebViewBridge()
+    for bad_id in (None, True, False, "1", 1.0, [], {}, 0, -1, (), {1, 2}, (1,), frozenset({1})):
+        result = bridge.update_project_keyword_rule(bad_id, "Spec")
+        assert result == {"ok": False, "error": "操作无效"}
+        lowered = repr(result).lower()
+        for forbidden in ("traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret"):
+            assert forbidden not in lowered
+    for bad_keyword in (None, True, False, 1, 1.0, [], {}, "", "   ", (), {1, 2}, (1,), frozenset({1})):
+        result = bridge.update_project_keyword_rule(1, bad_keyword)
+        assert result == {"ok": False, "error": "操作无效"}
+        lowered = repr(result).lower()
+        for forbidden in ("traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret"):
+            assert forbidden not in lowered
+
+
+def test_update_project_keyword_rule_failure_payloads_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_keyword_rule",
+        lambda rule_id, keyword: {"ok": False, "error": "operation_failed"},
+    )
+
+    # Invalid input failures.
+    for bad_id in (True, None, 0, -1, "1", 1.0, [], {}):
+        result = WebViewBridge().update_project_keyword_rule(bad_id, "Spec")
+        json.dumps(result, ensure_ascii=False)
+    for bad_keyword in (None, True, 1, "", "   "):
+        result = WebViewBridge().update_project_keyword_rule(1, bad_keyword)
+        json.dumps(result, ensure_ascii=False)
+
+    # API error code failures.
+    for code in ("invalid_input", "not_found", "duplicate_rule", "operation_failed", "unknown"):
+        monkeypatch.setattr(
+            bridge_module.rule_api,
+            "update_project_keyword_rule",
+            lambda rule_id, keyword, c=code: {"ok": False, "error": c},
+        )
+        result = WebViewBridge().update_project_keyword_rule(1, "Spec")
+        json.dumps(result, ensure_ascii=False)
+        assert "Traceback" not in repr(result)

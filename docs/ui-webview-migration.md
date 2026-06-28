@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5E.1 "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5F "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -10,31 +10,31 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **5E.1 (Project Rules folder rule CRUD hardening)**.
-  Phase 5E opened three new Project Rules folder rule write capabilities on
-  an existing rule-target project: creating one folder rule, editing an
-  existing folder rule, and deleting a single existing folder rule, then
-  refreshing the list on success. The API / bridge / frontend three layers
-  are wired through the stable `create_project_folder_rule` /
-  `update_project_folder_rule` / `delete_project_folder_rule` facade with
-  input validation (true int excluding bool, true str with trim, true bool
-  recursive), stable error codes (`invalid_input` / `not_found` /
-  `project_not_found` / `operation_failed`), Chinese error mapping at the
-  bridge, narrow payloads, independent frontend state keys for folder
-  create / edit / delete, and explicit Project Rules page boundary copy.
-  Phase 5E.1 is a hardening-only / regression-only follow-up that locks
-  the Phase 5E folder rule create / edit / delete write path across API /
-  service / bridge / frontend / static contract layers with additional
-  regression tests (normalized-key collision on update, update-by-id
-  semantics, cache invalidation hooks, sensitive-field boundaries,
-  bool-as-int rejection, consistent error mapping, DOM anchors, state
-  isolation, CSS scoping, no-forbidden-features, packaging inclusion)
-  without opening any new Project Rules capability. It preserves the
+- Current phase: **5F (Project Rules keyword rule edit foundation +
+  in-phase hardening)**. Phase 5F opens one new Project Rules write
+  capability: editing the keyword text of a single existing keyword rule,
+  then refreshing the list on success. The API / bridge / frontend three
+  layers are wired through the stable `update_project_keyword_rule` facade
+  with input validation (true int excluding bool, true str with trim),
+  stable error codes (`invalid_input` / `not_found` / `duplicate_rule` /
+  `operation_failed`), Chinese error mapping at the bridge, narrow
+  payloads, independent frontend state keys for keyword edit / save, and
+  explicit Project Rules page boundary copy. The duplicate check is
+  scoped to the same project and excludes the rule being updated. Only
+  `pattern` and `updated_at` are updated; `rule_id` / `project_id` /
+  `enabled` / `created_by` / `created_at` are preserved. Phase 5F also
+  ships the in-phase hardening regression locks (API/service update-by-id
+  semantics, duplicate check excluding self, cache invalidation hooks,
+  sensitive-field boundaries; bridge bool-as-int rejection, consistent
+  error mapping, narrow payload; frontend DOM anchors, state isolation,
+  CSS scoping, no-forbidden-features, packaging inclusion) in the same
+  phase rather than splitting into a separate 5F.1. It preserves the
   Phase 5B / 5B.1 existing folder / keyword rule enable/disable path and
   its hardening, the Phase 5C keyword rule creation path, the Phase 5C.1
-  keyword creation hardening, the Phase 5D keyword rule deletion path, and
-  the Phase 5D.1 keyword deletion hardening. Project enable/disable,
-  Project create/edit/delete/archive, keyword rule edit, folder rule
+  keyword creation hardening, the Phase 5D keyword rule deletion path,
+  the Phase 5D.1 keyword deletion hardening, the Phase 5E folder rule
+  CRUD foundation, and the Phase 5E.1 folder rule CRUD hardening.
+  Project enable/disable, Project create/edit/delete/archive, folder rule
   conflict preview, folder rule backfill, automatic rules, batch
   operations, schema changes, frontend frameworks / Node, browser storage,
   and network requests remain out of scope.
@@ -49,7 +49,7 @@ Implemented" sections) lives in
   Phase 5C, keyword creation hardening in Phase 5C.1, keyword rule deletion
   foundation in Phase 5D, keyword deletion hardening in Phase 5D.1, folder
   rule CRUD foundation in Phase 5E, folder rule CRUD hardening in Phase
-  5E.1).
+  5E.1, keyword rule edit foundation + in-phase hardening in Phase 5F).
 - Unmigrated pages: Settings / Privacy / Encrypted Backup (still legacy
   Tkinter code kept for reference; not a supported runtime path).
 - Detailed phase-by-phase scope, data semantics, and "not implemented" lists
@@ -210,10 +210,16 @@ the high-level order is:
   existing keyword rule). **Completed.**
 - Phase 5D.1 — Project Rules keyword deletion hardening (regression-only
   follow-up to Phase 5D). **Completed.**
+- Phase 5E — Project Rules folder rule CRUD foundation (create / edit /
+  delete one existing folder rule). **Completed.**
+- Phase 5E.1 — Project Rules folder rule CRUD hardening (regression-only
+  follow-up to Phase 5E). **Completed.**
+- Phase 5F — Project Rules keyword rule edit foundation + in-phase
+  hardening (edit the keyword text of one existing keyword rule).
+  **Completed.**
 - Phase 5D+ — remaining Project Rules write workflows (project
-  create/edit/delete/archive, project enable/disable, folder rule
-  create/edit/delete, keyword rule edit, conflict preview, backfill,
-  automatic rules, batch operations). Not started.
+  create/edit/delete/archive, project enable/disable, conflict preview,
+  backfill, automatic rules, batch operations). Not started.
 - Phase 6 — Settings / Privacy / Encrypted Backup. Not started.
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.
