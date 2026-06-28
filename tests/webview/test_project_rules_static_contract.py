@@ -187,6 +187,8 @@ def test_project_rules_js_calls_allowed_bridge_methods_only():
     source = read_js("rules.js")
     assert 'callBridge("get_project_rules")' in source
     assert 'callBridge("set_project_rule_enabled"' in source
+    # Phase 5D: delete_project_keyword_rule is the new allowed write bridge.
+    assert 'callBridge("delete_project_keyword_rule"' in source
     assert 'callBridge("set_project_enabled"' not in source
 
 
@@ -267,6 +269,8 @@ def test_project_rules_js_does_not_call_forbidden_write_methods():
         )
     assert 'callBridge("set_project_rule_enabled"' in source
     assert 'callBridge("create_project_keyword_rule"' in source
+    # Phase 5D: delete_project_keyword_rule is the new allowed write bridge.
+    assert 'callBridge("delete_project_keyword_rule"' in source
 
 
 def test_project_rules_js_has_no_create_edit_delete_backfill_preview_handlers():
@@ -539,14 +543,17 @@ def test_project_rules_state_isolation_across_loading_saving_error():
 
 
 def test_project_rules_bridge_call_only_allows_toggle_write():
-    # Phase 5B.1 regression lock: ``set_project_rule_enabled`` and
-    # ``create_project_keyword_rule`` (Phase 5C) are the only Project Rules
+    # Phase 5B.1 regression lock: ``set_project_rule_enabled``,
+    # ``create_project_keyword_rule`` (Phase 5C), and
+    # ``delete_project_keyword_rule`` (Phase 5D) are the only Project Rules
     # write bridge calls anywhere in the frontend. No other write bridge
     # call (project toggle / create / edit / delete / preview / backfill)
     # may be introduced even in init.js / core.js.
     source = read_all_js()
     assert 'callBridge("set_project_rule_enabled"' in source
     assert 'callBridge("create_project_keyword_rule"' in source
+    # Phase 5D: delete_project_keyword_rule is the new allowed write bridge.
+    assert 'callBridge("delete_project_keyword_rule"' in source
     # The forbidden write method names are already covered by
     # ``test_project_rules_js_does_not_call_forbidden_write_methods``; here
     # we additionally guard against accidental bridge call strings.
@@ -1018,3 +1025,460 @@ def test_project_rules_keyword_create_status_uses_textcontent_not_innerhtml():
     status_body = func_body(source, "showKeywordCreateStatus")
     assert "textContent" in status_body
     assert ".innerHTML" not in status_body
+
+
+# --- Phase 5D: keyword rule deletion foundation static contract ----------
+
+
+def test_project_rules_keyword_delete_state_variable_declared():
+    # Phase 5D regression lock: the keyword delete saving state must be a
+    # separate state variable from the Phase 5B toggle saving state and
+    # the Phase 5C keyword create state so the three write paths can never
+    # pollute each other.
+    source = read_js("core.js")
+    assert "App.rulesDeletingRuleKey = null" in source
+    # The toggle saving state and the keyword create state must still exist
+    # alongside it.
+    assert "App.rulesSavingRuleKey = null" in source
+    assert "App.rulesCreatingKeyword = false" in source
+
+
+def test_project_rules_keyword_delete_js_calls_bridge_method():
+    # Phase 5D regression lock: the JS must call the
+    # ``delete_project_keyword_rule`` bridge method.
+    source = read_js("rules.js")
+    assert 'callBridge("delete_project_keyword_rule"' in source
+
+
+def test_project_rules_keyword_delete_js_does_not_call_folder_delete():
+    source = read_js("rules.js")
+    assert 'callBridge("delete_folder_rule"' not in source
+    assert "deleteFolderRule" not in source
+
+
+def test_project_rules_keyword_delete_js_does_not_call_project_write():
+    source = read_js("rules.js")
+    for forbidden in (
+        'callBridge("create_project"',
+        'callBridge("update_project"',
+        'callBridge("delete_project"',
+        'callBridge("archive_project"',
+        'callBridge("set_project_enabled"',
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_keyword_delete_js_does_not_call_rule_edit_or_toggle():
+    # Phase 5D regression lock: the delete path must not invoke the toggle
+    # or any edit API.
+    source = read_js("rules.js")
+    for forbidden in (
+        'callBridge("set_keyword_rule_enabled"',
+        'callBridge("set_folder_rule_enabled"',
+        'callBridge("set_project_rule_enabled"',
+    ):
+        # The toggle handler may call ``set_project_rule_enabled``; the
+        # delete handler must not. Verify by checking the delete handler
+        # body specifically.
+        delete_body = func_body(source, "handleProjectRuleDelete")
+        assert forbidden not in delete_body
+
+
+def test_project_rules_keyword_delete_js_does_not_call_preview_or_backfill():
+    source = read_js("rules.js")
+    assert 'callBridge("preview_folder_rule_conflicts"' not in source
+    assert 'callBridge("backfill_folder_rule"' not in source
+
+
+def test_project_rules_keyword_delete_js_validates_rule_id_before_bridge():
+    # Phase 5D regression lock: the JS must parse and validate the rule id
+    # before calling the bridge. Malformed dataset must not call bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    assert 'parseInt(rawId, 10)' in body
+    assert "ruleId <= 0" in body
+    guard_pos = body.find("ruleId <= 0")
+    bridge_pos = body.find('callBridge("delete_project_keyword_rule"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_keyword_delete_js_validates_rule_kind_before_bridge():
+    # Phase 5D regression lock: the dataset ``data-rule-kind`` must be
+    # validated against ``keyword`` before the bridge call so a malformed
+    # dataset cannot trigger an arbitrary write.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    assert 'kind !== "keyword"' in body
+    type_check_pos = body.find('kind !== "keyword"')
+    bridge_pos = body.find('callBridge("delete_project_keyword_rule"')
+    assert type_check_pos < bridge_pos
+
+
+def test_project_rules_keyword_delete_js_has_deleting_guard():
+    # Phase 5D regression lock: the handler must early-return when a
+    # keyword delete is already in flight, before any bridge call or
+    # confirmation dialog.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    assert "if (App.rulesDeletingRuleKey) return" in body
+    guard_pos = body.find("if (App.rulesDeletingRuleKey) return")
+    confirm_pos = body.find("window.confirm")
+    bridge_pos = body.find('callBridge("delete_project_keyword_rule"')
+    assert guard_pos != -1 and confirm_pos != -1 and bridge_pos != -1
+    assert guard_pos < confirm_pos < bridge_pos, (
+        "in-flight guard must run before confirmation dialog and bridge call"
+    )
+
+
+def test_project_rules_keyword_delete_js_has_deleting_button_label():
+    # Phase 5D regression lock: the deleting button text must remain the
+    # stable ``正在删除…`` label.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "正在删除…" in row_body
+    set_deleting_body = func_body(source, "setRuleDeleting")
+    assert "正在删除…" in set_deleting_body
+
+
+def test_project_rules_keyword_delete_js_confirmation_text_present():
+    # Phase 5D regression lock: the confirmation text must explicitly
+    # mention deleting this keyword rule and that it will no longer be
+    # used for auto-classification.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    assert "确定删除这条关键词规则吗？删除后该关键词将不再用于自动归类。" in body
+
+
+def test_project_rules_keyword_delete_js_cancellation_does_not_call_bridge():
+    # Phase 5D regression lock: when the user cancels the delete
+    # confirmation, the handler must ``return`` immediately without calling
+    # ``App.setRuleDeleting`` or the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    confirm_pos = body.find("window.confirm")
+    bridge_pos = body.find('callBridge("delete_project_keyword_rule"')
+    assert confirm_pos < bridge_pos
+    # Locate the cancellation ``return;`` that closes the confirm branch.
+    cancellation_return = body.find("return;", confirm_pos)
+    assert cancellation_return != -1 and cancellation_return < bridge_pos
+
+
+def test_project_rules_keyword_delete_js_success_refreshes_project_rules():
+    # Phase 5D regression lock: the success path must call
+    # ``loadProjectRules()`` to refresh the Project Rules list.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    assert "App.loadProjectRules()" in body
+
+
+def test_project_rules_keyword_delete_js_success_shows_stable_message():
+    # Phase 5D regression lock: the success path must show the stable
+    # ``关键词规则已删除`` message after refresh.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    refresh_pos = body.find("App.loadProjectRules()")
+    success_pos = body.find("关键词规则已删除")
+    assert refresh_pos != -1 and success_pos != -1
+    assert refresh_pos < success_pos
+
+
+def test_project_rules_keyword_delete_js_failure_preserves_rendered_list():
+    # Phase 5D regression lock: the failure path must not clear the
+    # already-rendered Project Rules list. The handler may only show a
+    # stable error message, never ``list.innerHTML = ""`` or
+    # ``showProjectRules`` with an empty payload.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    assert "list.innerHTML" not in body
+    assert 'showProjectRules({ projects: [] })' not in body
+    assert 'showProjectRules([])' not in body
+    assert "删除关键词规则失败" in body
+
+
+def test_project_rules_keyword_delete_js_catch_never_reads_raw_exception():
+    # Phase 5D regression lock: the catch path must never read
+    # ``.message`` from the error.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    for forbidden in ("err.message", "error.message", "reason.message"):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_keyword_delete_js_deleting_state_clears_on_all_paths():
+    # Phase 5D regression lock: the deleting state must clear on success,
+    # on failure (ok=false), and on rejected promise. The handler achieves
+    # this by chaining ``App.setRuleDeleting(null)`` in the final
+    # ``.then`` that runs after ``.catch`` (which always resolves).
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectRuleDelete")
+    assert "App.setRuleDeleting(" in body
+    # The final cleanup must run unconditionally after the catch.
+    assert ".catch(function ()" in body
+    catch_pos = body.find(".catch(function ()")
+    cleanup_pos = body.find("App.setRuleDeleting(null)", catch_pos)
+    assert cleanup_pos != -1, (
+        "App.setRuleDeleting(null) must run after .catch so the deleting "
+        "state clears on success, failure, and rejected-promise paths"
+    )
+
+
+def test_project_rules_keyword_delete_state_isolation_from_toggle_saving():
+    # Phase 5D regression lock: the keyword delete saving state
+    # (``rulesDeletingRuleKey``) must be separate from the toggle saving
+    # state (``rulesSavingRuleKey``) and the keyword create state
+    # (``rulesCreatingKeyword``). The three write paths must not pollute
+    # each other's button / input disabled state.
+    source = read_js("core.js")
+    assert "App.rulesDeletingRuleKey" in source
+    assert "App.rulesSavingRuleKey" in source
+    assert "App.rulesCreatingKeyword" in source
+    # The toggle saving handler must not read or write the delete state.
+    rules_source = read_js("rules.js")
+    toggle_body = func_body(rules_source, "setProjectRuleSaving")
+    assert "App.rulesDeletingRuleKey" not in toggle_body
+    # The delete handler must not read or write the toggle saving state
+    # directly (it may only read the global state for disable coordination
+    # in ``setRuleDeleting``, not in ``handleProjectRuleDelete``).
+    delete_body = func_body(rules_source, "handleProjectRuleDelete")
+    assert "App.rulesSavingRuleKey" not in delete_body
+    assert "App.rulesCreatingKeyword" not in delete_body
+
+
+def test_project_rules_keyword_delete_state_isolation_from_keyword_create():
+    # Phase 5D regression lock: the keyword create saving handler must not
+    # read or write the delete state.
+    source = read_js("rules.js")
+    create_body = func_body(source, "setKeywordCreateCreating")
+    assert "App.rulesDeletingRuleKey" not in create_body
+
+
+def test_project_rules_keyword_delete_button_only_on_keyword_rows():
+    # Phase 5D regression lock: the delete button must be rendered only on
+    # keyword rule rows, never on folder rule rows or project cards. The
+    # renderProjectRuleRow function must gate the delete button on
+    # ``kind === "keyword"``.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert 'kind === "keyword"' in row_body
+    assert "rules-keyword-delete-button" in row_body
+    # The project card template must not contain a delete button.
+    project_body = func_body(source, "renderProjectRuleProject")
+    assert "rules-keyword-delete-button" not in project_body
+
+
+def test_project_rules_keyword_delete_button_uses_stable_class_and_attributes():
+    # Phase 5D regression lock: the delete button must use the stable
+    # class / data attributes specified in the Phase 5D contract.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert 'class="rules-keyword-delete-button"' in row_body
+    assert 'data-rule-kind="keyword"' in row_body
+    assert 'data-rule-id="' in row_body
+
+
+def test_project_rules_keyword_delete_button_does_not_appear_on_folder_rows():
+    # Phase 5D regression lock: the delete button is rendered conditionally
+    # inside the ``if (kind === "keyword" && ruleId)`` block. Folder rows
+    # (kind === "folder") never enter that block, so they never get a
+    # delete button.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    # The delete button HTML assignment (``deleteButton = '  <button ...``)
+    # is inside the keyword-only branch. The ``var deleteButton = ""``
+    # initialization is outside the branch and must not be confused with it.
+    keyword_guard_pos = row_body.find('kind === "keyword"')
+    delete_html_assign_pos = row_body.find("deleteButton = '", keyword_guard_pos)
+    assert keyword_guard_pos != -1 and delete_html_assign_pos != -1
+    assert keyword_guard_pos < delete_html_assign_pos
+
+
+def test_project_rules_keyword_delete_button_disabled_when_any_write_in_flight():
+    # Phase 5D regression lock: the delete button must be disabled when any
+    # rule write (toggle saving or keyword delete) is in flight on this row.
+    # The toggle button must likewise be disabled when a delete is in
+    # flight. This keeps the two write paths from concurrently polluting
+    # the same row.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    # The delete button disabled condition must check both saving states.
+    assert "App.rulesSavingRuleKey" in row_body
+    assert "App.rulesDeletingRuleKey" in row_body
+    # The toggle button disabled condition must also check both states.
+    toggle_disabled_pos = row_body.find("disabledAttr")
+    assert toggle_disabled_pos != -1
+    toggle_disabled_clause = row_body[toggle_disabled_pos:row_body.find("?", toggle_disabled_pos)]
+    assert "rulesSavingRuleKey" in toggle_disabled_clause
+    assert "rulesDeletingRuleKey" in toggle_disabled_clause
+
+
+def test_project_rules_keyword_delete_set_rule_deleting_updates_toggle_buttons():
+    # Phase 5D regression lock: ``setRuleDeleting`` must disable toggle
+    # buttons while a delete is in flight so the toggle and delete paths
+    # cannot run concurrently on one row.
+    source = read_js("rules.js")
+    body = func_body(source, "setRuleDeleting")
+    assert "rules-toggle-btn" in body
+    assert "App.rulesSavingRuleKey" in body
+    assert "App.rulesDeletingRuleKey" in body
+
+
+def test_project_rules_keyword_delete_stale_guard_preserved():
+    # Phase 5D regression lock: the existing ``rulesRequestToken`` stale
+    # guard in ``loadProjectRules`` must remain intact. The keyword delete
+    # success path calls ``loadProjectRules()`` which inherits this
+    # protection.
+    source = read_js("rules.js")
+    load_body = func_body(source, "loadProjectRules")
+    assert "var token = ++App.rulesRequestToken" in load_body
+    assert load_body.count("token !== App.rulesRequestToken") >= 2
+
+
+def test_project_rules_keyword_delete_no_storage_or_network():
+    # Phase 5D regression lock: the keyword delete handler must not use
+    # browser storage or network APIs.
+    source = read_js("rules.js")
+    delete_body = func_body(source, "handleProjectRuleDelete")
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "fetch(",
+        "XMLHttpRequest",
+    ):
+        assert forbidden not in delete_body
+
+
+def test_project_rules_keyword_delete_js_uses_escape_helper_for_dynamic_text():
+    # Phase 5D regression lock: dynamic text rendering in the delete button
+    # must use the escape helper. The rule id is rendered via ``count()``
+    # which calls ``App.escapeHtml``.
+    source = read_js("rules.js")
+    count_body = func_body(source, "count")
+    assert "App.escapeHtml" in count_body
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "count(ruleId)" in row_body
+
+
+def test_project_rules_keyword_delete_no_forbidden_handler_tokens():
+    # Phase 5D regression lock: the keyword delete JS must not introduce
+    # any of the forbidden camelCase handler tokens.
+    source = read_js("rules.js")
+    for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
+        assert token not in source
+
+
+def test_project_rules_keyword_delete_init_does_not_bind_delete_event():
+    # Phase 5D regression lock: the init module must not bind any delete
+    # event directly. The delete button uses event delegation on the
+    # rules-list container, set up inside ``rules.js`` (Phase 5D), not in
+    # init.js.
+    source = read_js("init.js")
+    for forbidden in (
+        "rules-keyword-delete",
+        "handleProjectRuleDelete",
+        "setRuleDeleting",
+    ):
+        assert forbidden not in source, (
+            "init.js must not bind Project Rules delete event: " + forbidden
+        )
+
+
+def test_project_rules_keyword_delete_no_app_js_reintroduced():
+    # Phase 5D regression lock: the frontend must not reintroduce app.js.
+    source = read_resource("index.html")
+    assert "app.js" not in source
+
+
+def test_project_rules_keyword_delete_no_duplicate_static_dom_ids():
+    # Phase 5D regression lock: the static ``page-rules`` section in
+    # ``index.html`` must not declare the same DOM id twice. The Phase 5D
+    # addition does not introduce any new static DOM (the delete button is
+    # rendered dynamically by JS).
+    import re as _re
+
+    section = _rules_section()
+    ids = _re.findall(r'\sid="([^"]+)"', section)
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for dom_id in ids:
+        if dom_id in seen:
+            duplicates.append(dom_id)
+        seen.add(dom_id)
+    assert not duplicates, "duplicate DOM id in page-rules section: " + ", ".join(duplicates)
+
+
+def test_project_rules_keyword_delete_no_static_delete_button_in_html():
+    # Phase 5D regression lock: the static ``page-rules`` section in
+    # ``index.html`` must not contain a delete button. The delete button is
+    # rendered dynamically by JS only on keyword rule rows.
+    section = _rules_section()
+    assert "rules-keyword-delete-button" not in section
+    assert "rules-folder-delete-button" not in section
+    assert "rules-keyword-edit-button" not in section
+    assert "rules-folder-edit-button" not in section
+
+
+def test_project_rules_keyword_delete_page_has_no_export_or_auto_submit_controls():
+    # Phase 5D regression lock: the Project Rules page must not contain
+    # Excel / PDF / timesheet / open-folder / auto-submit controls.
+    section = _rules_section().lower()
+    for token in (
+        "excel",
+        "pdf",
+        "timesheet",
+        "open-folder",
+        "open_folder",
+        "auto-submit",
+        "auto_submit",
+        "自动提交工时",
+        "打开文件夹",
+    ):
+        assert token not in section
+
+
+def test_project_rules_keyword_delete_css_class_exists():
+    # Phase 5D regression lock: the ``.rules-keyword-delete-button`` CSS
+    # class must exist in styles.css so the dynamically-rendered delete
+    # button has a stable visual style.
+    source = read_resource("styles.css")
+    assert ".rules-keyword-delete-button" in source
+    # The CSS must not depend on external resources.
+    assert not re.search(r"https?://", source, re.IGNORECASE)
+    assert not re.search(r"cdn", source, re.IGNORECASE)
+    assert not re.search(r"google\s*fonts", source, re.IGNORECASE)
+
+
+def test_project_rules_keyword_delete_packaging_spec_still_includes_rules_js():
+    # Phase 5D regression lock: the packaging spec must still include
+    # rules.js so the delete button handler ships in the packaged build.
+    source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
+    assert "'rules.js'" in source or '"rules.js"' in source
+    assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source
+
+
+def test_project_rules_keyword_delete_boundary_copy_present():
+    # Phase 5D regression lock: the boundary copy must mention keyword rule
+    # deletion as a supported capability and still reference the remaining
+    # future capabilities.
+    section = _rules_section()
+    assert "启用/停用" in section
+    assert "新增关键词规则" in section
+    assert "删除已有关键词规则" in section
+    for term in ("编辑", "删除", "冲突预览", "回填"):
+        assert term in section
+
+
+def test_project_rules_keyword_delete_js_does_not_call_create_or_folder_create():
+    # Phase 5D regression lock: the delete handler must not call create
+    # APIs or folder create APIs.
+    source = read_js("rules.js")
+    delete_body = func_body(source, "handleProjectRuleDelete")
+    for forbidden in (
+        'callBridge("create_project_keyword_rule"',
+        'callBridge("create_or_update_folder_rule"',
+        'callBridge("create_keyword_rule"',
+        'callBridge("create_project"',
+    ):
+        assert forbidden not in delete_body

@@ -141,6 +141,19 @@ narrow created-rule summary only; the frontend re-fetches the full Project
 Rules list via ``get_project_rules`` after success. Errors are mapped from
 stable codes to Chinese messages without tracebacks, SQL, raw exception
 text, window titles, clipboard, notes, paths, or internal fields.
+
+Phase 5D adds the third minimal Project Rules WebView write foundation:
+``delete_project_keyword_rule`` deletes one existing keyword rule. It only
+deletes a keyword rule; it does not delete folder rules, projects, or
+edit/enable/disable any rule or project. A ``rule_id`` that points at a
+folder rule is rejected as ``关键词规则不存在`` rather than deleting the
+folder rule. It does NOT perform conflict preview, backfill, automatic
+rules, DB schema changes, native dialogs, file writes, or network access.
+The success payload is the narrow deleted-rule summary only; the frontend
+re-fetches the full Project Rules list via ``get_project_rules`` after
+success. Errors are mapped from stable codes to Chinese messages without
+tracebacks, SQL, raw exception text, window titles, clipboard, notes,
+paths, or internal fields.
 """
 
 from __future__ import annotations
@@ -313,6 +326,17 @@ _PROJECT_RULE_CREATE_MESSAGES = {
     "project_not_found": "项目不存在",
     "duplicate_rule": "关键词规则已存在",
     "operation_failed": "新增关键词规则失败",
+}
+
+# Maps Project Rules keyword-delete API stable codes to Phase 5D user-facing
+# messages. Unknown codes collapse to the generic delete failure so internal
+# details are never surfaced. ``not_found`` covers both "id does not exist"
+# and "id is a folder rule" — both are reported as ``关键词规则不存在`` so the
+# user never learns which table the id belonged to.
+_PROJECT_RULE_DELETE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "关键词规则不存在",
+    "operation_failed": "删除关键词规则失败",
 }
 
 
@@ -1258,6 +1282,49 @@ class WebViewBridge:
         except Exception:
             logger.exception("webview bridge create_project_keyword_rule failed")
             return {"ok": False, "error": "新增关键词规则失败"}
+
+    # --- Phase 5D: Project Rules keyword rule deletion foundation -------
+
+    def delete_project_keyword_rule(self, rule_id) -> dict[str, Any]:
+        """Delete one existing keyword rule.
+
+        Phase 5D write path only. Strict bridge validation rejects
+        bool-as-int ``rule_id``, non-int ``rule_id``, and non-positive ids
+        before calling ``rule_api.delete_project_keyword_rule``. The bridge
+        never exposes raw exceptions, tracebacks, SQL, paths, window titles,
+        clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "rule": {"kind": "keyword", "id": int,
+        "deleted": True}}`` on success (the narrow deleted-rule summary
+        only — the frontend re-fetches the full Project Rules list via
+        ``get_project_rules`` after success) or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            # ``type(...) is not int`` rejects ``bool`` (``type(True) is
+            # bool``), ``float``, ``str``, ``None``, and container types in
+            # one check, matching the Phase 5B / 5C validation pattern.
+            if type(rule_id) is not int or rule_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            result = rule_api.delete_project_keyword_rule(rule_id)
+            if result.get("ok") is True:
+                rule = result.get("rule") or {}
+                return {
+                    "ok": True,
+                    "rule": {
+                        "kind": "keyword",
+                        "id": int(rule.get("id") or rule_id),
+                        "deleted": bool(rule.get("deleted")),
+                    },
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_DELETE_MESSAGES.get(code, "删除关键词规则失败"),
+            }
+        except Exception:
+            logger.exception("webview bridge delete_project_keyword_rule failed")
+            return {"ok": False, "error": "删除关键词规则失败"}
 
     # --- Phase 4A: Statistics / Export read-only summary ----------------
 

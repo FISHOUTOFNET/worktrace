@@ -4622,6 +4622,181 @@ pending removal:
 - No dual entry, automatic fallback, configuration switch, or UI selector is
   added for backwards compatibility.
 
+## Phase 5D Implemented Scope
+
+Phase 5D is the **Project Rules keyword rule delete foundation** phase. It
+opens one minimal new Project Rules write capability: deleting a single
+existing keyword rule from the WebView Project Rules page, then refreshing
+the list on success. It is the second new Project Rules write path beyond
+the Phase 5B / 5B.1 existing folder / keyword rule enable/disable toggle
+(after the Phase 5C keyword rule creation path), and it deliberately does
+not open any other Project Rules write workflow. The write does not change
+historical activity classification or schema.
+
+Implemented in Phase 5D:
+
+- **API layer** (`worktrace/api/rule_api.py`):
+  - Added a narrow `delete_project_keyword_rule(rule_id)` facade for
+    WebView writes. It deletes exactly one existing keyword rule and
+    nothing else.
+  - `rule_id` must be a real `int` and `> 0`; bool-as-int, `None`,
+    numeric strings, floats, zero, negative ints, lists, dicts, tuples,
+    sets, and frozensets are rejected with the stable `invalid_input`
+    code.
+  - The rule must exist and must be a keyword rule. A `rule_id` that
+    points at a folder rule (or at an unknown id) returns the stable
+    `not_found` code; the facade never deletes a folder rule and never
+    reveals which table the id belongs to.
+  - Raw service exceptions collapse to `operation_failed`. Tracebacks,
+    SQL, raw exception text, paths, window titles, clipboard, and notes
+    never cross the API boundary.
+  - The facade delegates to the existing `rule_service.delete_rule` write
+    path, preserving keyword rule cache invalidation and privacy exclude
+    cache clearing. It does not call conflict preview, backfill, or any
+    folder-rule write path, and does not touch `activity_log`,
+    `activity_project_assignment`, `project_session_note`, folder rules,
+    or project rows.
+  - Success returns `{"ok": True, "rule": {"kind": "keyword", "id": int,
+    "deleted": True}}`. The API does not return a refreshed Project Rules
+    list (the frontend calls `get_project_rules` after success).
+- **Bridge layer** (`worktrace/webview_ui/bridge.py`):
+  - Added `delete_project_keyword_rule(rule_id)`.
+  - Bridge validation mirrors the API: rejects bool-as-int `rule_id`,
+    non-positive ids, non-int `rule_id` (numeric strings, floats, `None`,
+    containers) before calling `rule_api`, returning `操作无效`.
+  - Success returns the narrow `{"ok": True, "rule": {...}}` shape with
+    coerced `int` field types.
+  - Failure returns stable Chinese messages only: `操作无效`
+    (`invalid_input`), `关键词规则不存在` (`not_found`),
+    `删除关键词规则失败` (`operation_failed` and any unknown code /
+    exception). Tracebacks, SQL, raw exception text, paths, window
+    titles, clipboard, notes, backend error codes, and internal fields
+    are never surfaced.
+  - The bridge still imports only `worktrace.api` from the backend. It
+    does not import services, db, collector, security, runtime, or
+    config, and does not call any other Project Rules write API.
+- **Frontend** (`worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/js/core.js`, `worktrace/webview_ui/js/rules.js`,
+  `worktrace/webview_ui/styles.css`):
+  - Added a minimal per-keyword-row delete button with stable DOM
+    attributes: `.rules-keyword-delete-button`,
+    `data-rule-kind="keyword"`, and `data-rule-id="<int>"`. The button
+    is rendered only on keyword rule rows; folder rule rows and project
+    cards never render it.
+  - Added `App.rulesDeletingRuleKey` state, separate from the Phase 5B
+    `App.rulesSavingRuleKey` toggle state and the Phase 5C
+    `App.rulesCreatingKeyword` create state, so the three write paths
+    never pollute each other. Only one keyword delete may be in flight
+    at a time.
+  - The click handler (delegated on `#rules-list`) validates
+    `data-rule-kind === "keyword"` and parses / validates `data-rule-id`
+    (`parseInt` + `> 0` + round-trip string check) before calling
+    `App.callBridge("delete_project_keyword_rule", ruleId)`. Malformed
+    dataset values never call the bridge.
+  - The handler requires a `window.confirm` with the stable text
+    `确定删除这条关键词规则吗？删除后该关键词将不再用于自动归类。`.
+    Cancellation does not call the bridge.
+  - During deletion the active button shows `正在删除…` and repeats are
+    blocked; toggle buttons are also disabled while any delete is in
+    flight.
+  - Success calls `App.loadProjectRules()` to refresh the list and shows
+    a stable success status. Failure preserves the rendered list and
+    shows a stable error status.
+  - Catch paths do not read `err.message` / `error.message`; dynamic
+    text is rendered through escaping / safe-text helpers.
+  - The `App.rulesRequestToken` stale guard is preserved.
+  - No `app.js` was reintroduced. No React / Vue / Vite / Node, local
+    HTTP server, CDN, external JS/CSS/fonts, network requests, or
+    browser storage were introduced.
+  - The Project Rules page hint copy was updated to mention keyword
+    deletion: `当前支持查看项目规则、启用/停用已有文件夹或关键词规则、新增关键词规则，并删除已有关键词规则。文件夹规则新增/删除、规则编辑、项目管理、冲突预览和回填将在后续阶段开放。`
+- **CSS** (`worktrace/webview_ui/styles.css`):
+  - Added a `.rules-keyword-delete-button` style block mirroring the
+    existing toggle button visual style (same border / radius / padding)
+    with a red text color to signal destructive intent, plus
+    `:hover:not(:disabled)` and `:disabled` states. The style is scoped
+    to the Project Rules page and does not affect Timeline / Statistics
+    / Overview.
+- **Tests**:
+  - Added `tests/test_project_rules_keyword_delete.py` for API/service
+    behavior: valid deletion for normal and `排除规则` projects,
+    disabled-rule deletion, full `rule_id` invalid-input matrix,
+    unknown-id / folder-rule-id → stable `not_found` (folder rule row
+    preserved), service-exception collapse to `operation_failed`, no
+    folder-rule / project / activity / assignment / session-note row
+    changes, no conflict-preview / backfill / folder-delete calls,
+    keyword rule cache invalidation, JSON-serializable payloads, stable
+    success field types, and unchanged `create_project_keyword_rule` /
+    `set_project_rule_enabled` behavior.
+  - Updated `tests/test_webview_project_rules_bridge.py` for the new
+    bridge method: success payload shape, full invalid-input matrix →
+    `操作无效`, `not_found` → `关键词规则不存在`, `operation_failed` /
+    unknown code / exception → `删除关键词规则失败`, sensitive-text
+    exclusion on every failure path, success never returns a full
+    refreshed project list, the delete path never calls any other
+    Project Rules write API, stable success field types,
+    JSON-serializable payloads, and unchanged `get_project_rules` /
+    `set_project_rule_enabled` / `create_project_keyword_rule`.
+  - Updated `tests/webview/test_project_rules_static_contract.py` for
+    the new delete button anchors, `App.rulesDeletingRuleKey` state, the
+    allowed `delete_project_keyword_rule` bridge call, JS validation /
+    deleting guard / `正在删除…` label / confirmation text /
+    cancellation path, success-then-refresh / failure-preserves-list,
+    no raw exception reads, escape-helper usage, state isolation from
+    the Phase 5B toggle saving state and the Phase 5C keyword creating
+    state, stale-guard preservation, no storage / network, no
+    `app.js`, no forbidden handler tokens, and no Excel / PDF /
+    timesheet / open-folder / auto-submit controls.
+  - Updated `tests/webview/test_statistics_static_contract.py` and
+    `tests/webview/test_timeline_static_contract.py` so their Project
+    Rules boundary-copy assertions match the Phase 5D copy (which now
+    references `删除已有关键词规则` as supported and `编辑` as
+    not-yet-open).
+- **Documentation**:
+  - README, current-state, migration summary, and this history now mark
+    Phase 5D as current, describe the keyword-rule-deletion-only scope,
+    preserve the Phase 5B / 5B.1 enable/disable path and its hardening,
+    preserve the Phase 5C keyword creation path and the Phase 5C.1
+    hardening, and restate all not-yet-open boundaries. Phase 4B / 4B.1
+    CSV export boundaries are preserved.
+  - No DB schema change. No legacy Tkinter UI removal. No new
+    dependency. No new frontend framework / network / browser storage.
+
+Phase 5D did not modify `WorkTrace.spec`, resource loading, packaging
+paths, or PyInstaller-related logic. The packaging static test
+(`tests/test_webview_packaging.py`) and the `worktrace.webview_main`
+import check were run and pass; the full PyInstaller build was not
+re-run because no packaging behavior changed.
+
+## Phase 5D Not Implemented
+
+Phase 5D does not implement and does not start:
+
+- Project enable/disable in WebView;
+- Project creation, editing, deletion, or archive in WebView;
+- Folder rule creation, editing, or deletion in WebView;
+- Keyword rule editing in WebView (Phase 5D only opens keyword rule
+  deletion);
+- Folder rule conflict preview;
+- Folder rule backfill;
+- Automatic rules;
+- Batch Project Rules operations (including batch keyword delete);
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

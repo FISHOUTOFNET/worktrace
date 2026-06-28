@@ -5,25 +5,19 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5C.1 (Project Rules keyword creation
-> hardening) is the latest shipped phase. Phase 5C is the most recent
-> behavior-changing phase: it opened one minimal new Project Rules write
-> capability — creating a single keyword rule on an existing rule-target
-> project from the WebView Project Rules page, then refreshing the list on
-> success. Phase 5C.1 is a hardening-only / regression-only follow-up that
-> locks the keyword create write path (API input validation, project
-> eligibility, duplicate detection, trim/empty boundaries, bridge error
-> collapse and trimmed-keyword forwarding, frontend creating/stale/refresh
-> state, failure input preservation, toggle/create state isolation,
-> sensitive-field boundaries, and packaging / static-resource contracts)
-> without opening any new Project Rules capability. It preserves the Phase
-> 5B / 5B.1 existing folder / keyword rule enable/disable path and its
-> hardening. Project enable/disable, project create/edit/delete/archive,
-> folder rule create/edit/delete, keyword rule edit/delete, conflict
-> preview, backfill, and automatic rules remain unsupported in WebView. For
-> a one-screen snapshot read
-> [`docs/current-state.md`](docs/current-state.md). For the full per-phase
-> history read [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
+> **Current state**: WebView Phase 5D (Project Rules keyword rule delete
+> foundation) is the latest shipped phase. Phase 5D opens one minimal new
+> Project Rules write capability — deleting a single existing keyword rule
+> from the WebView Project Rules page, then refreshing the list on success.
+> It preserves the Phase 5B / 5B.1 existing folder / keyword rule
+> enable/disable path and its hardening, the Phase 5C keyword rule
+> creation path, and the Phase 5C.1 keyword creation hardening. Project
+> enable/disable, project create/edit/delete/archive, folder rule
+> create/edit/delete, keyword rule edit, conflict preview, backfill, and
+> automatic rules remain unsupported in WebView. For a one-screen snapshot
+> read [`docs/current-state.md`](docs/current-state.md). For the full
+> per-phase history read
+> [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
 > AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)
 > before touching the repo.
 
@@ -59,11 +53,12 @@ records.
   error collapse and trimmed-keyword forwarding, frontend creating/stale/
   refresh state, failure input preservation, toggle/create state isolation,
   sensitive-field boundaries, and packaging / static-resource contracts)
-  without opening any new Project Rules capability. Project enable/disable,
+  without opening any new Project Rules capability. Phase 5D adds the
+  second new Project Rules write capability: deleting a single existing
+  keyword rule, then refreshing the list on success. Project enable/disable,
   Project creation/editing/deletion/archive, folder rule
-  creation/editing/deletion, keyword rule editing/deletion, conflict
-  preview, backfill, and automatic rule workflows are not supported in
-  WebView.
+  creation/editing/deletion, keyword rule editing, conflict preview,
+  backfill, and automatic rule workflows are not supported in WebView.
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.
 
@@ -177,7 +172,7 @@ database file or use the Settings page to clear and rebuild all data.
   recording, or automatic startup.
 - Settings / Privacy / Encrypted Backup pages are not yet migrated to
   WebView (legacy Tkinter reference code remains only as reference).
-- Project enable/disable; Project create/edit/delete/archive; Rule
-  create/edit/delete; Project Rules conflict preview, backfill, automatic
-  rules, and batch operations; Excel / PDF / timesheet export; folder opening;
-  and auto-submit are not supported.
+- Project enable/disable; Project create/edit/delete/archive; folder rule
+  create/edit/delete; keyword rule edit; Project Rules conflict preview,
+  backfill, automatic rules, and batch operations; Excel / PDF / timesheet
+  export; folder opening; and auto-submit are not supported.

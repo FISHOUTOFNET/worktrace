@@ -1330,3 +1330,380 @@ def test_create_project_keyword_rule_bridge_rejects_tuple_and_set_keyword():
     for bad_keyword in ((), (1,), {1, 2}, frozenset({1})):
         result = WebViewBridge().create_project_keyword_rule(1, bad_keyword)
         assert result == {"ok": False, "error": "操作无效"}
+
+
+# --- Phase 5D: Project Rules keyword rule deletion foundation ------------
+
+
+def test_delete_project_keyword_rule_success_payload(monkeypatch):
+    # Phase 5D regression lock: the success payload is the narrow
+    # deleted-rule summary only (``kind`` / ``id`` / ``deleted``). It must
+    # NOT echo the full refreshed Project Rules list back to JS — the
+    # frontend re-fetches via ``get_project_rules`` after success.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "deleted": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().delete_project_keyword_rule(123)
+
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "keyword",
+            "id": 123,
+            "deleted": True,
+        },
+    }
+    # The narrow payload must not surface a full project list.
+    assert "projects" not in result
+    assert "rules" not in result
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [None, True, False, "1", "abc", 0, -1, 1.0, 2.5, [], {}, (), {1, 2}, (1,), frozenset({1})],
+)
+def test_delete_project_keyword_rule_rejects_invalid_rule_id(bad_id):
+    # Phase 5D regression lock: ``rule_id`` must be a real positive int.
+    # bool / float / numeric string / None / list / dict / tuple / set /
+    # frozenset / zero / negative all collapse to ``操作无效`` at the bridge
+    # layer before any API call.
+    result = WebViewBridge().delete_project_keyword_rule(bad_id)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_delete_project_keyword_rule_invalid_input_payload_excludes_sensitive_text():
+    # Phase 5D regression lock: invalid-input failure payloads never carry
+    # traceback / SQL / path / note / clipboard / window_title text even
+    # when the bridge has access to rich exception context.
+    bridge = WebViewBridge()
+    for bad_id in (None, True, False, "1", 1.0, [], {}, 0, -1, (), {1, 2}, (1,), frozenset({1})):
+        result = bridge.delete_project_keyword_rule(bad_id)
+        assert result == {"ok": False, "error": "操作无效"}
+        lowered = repr(result).lower()
+        for forbidden in (
+            "traceback",
+            "sqlite",
+            "select",
+            "window_title",
+            "clipboard",
+            "note",
+            "secret",
+        ):
+            assert forbidden not in lowered
+
+
+def test_delete_project_keyword_rule_not_found_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {"ok": False, "error": "not_found"},
+    )
+
+    result = WebViewBridge().delete_project_keyword_rule(999)
+
+    assert result == {"ok": False, "error": "关键词规则不存在"}
+
+
+def test_delete_project_keyword_rule_invalid_input_code_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {"ok": False, "error": "invalid_input"},
+    )
+
+    result = WebViewBridge().delete_project_keyword_rule(1)
+
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_delete_project_keyword_rule_operation_failed_code_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {"ok": False, "error": "operation_failed"},
+    )
+
+    result = WebViewBridge().delete_project_keyword_rule(1)
+
+    assert result == {"ok": False, "error": "删除关键词规则失败"}
+
+
+def test_delete_project_keyword_rule_unknown_error_code_collapses_to_delete_failed(monkeypatch):
+    # Phase 5D regression lock: unknown API error codes collapse to the
+    # generic delete-failed message so internal details are never surfaced.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {"ok": False, "error": "unexpected raw code"},
+    )
+
+    result = WebViewBridge().delete_project_keyword_rule(1)
+
+    assert result == {"ok": False, "error": "删除关键词规则失败"}
+
+
+def test_delete_project_keyword_rule_unknown_exception_collapses(monkeypatch):
+    def fail(rule_id):
+        raise RuntimeError(
+            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", fail)
+
+    result = WebViewBridge().delete_project_keyword_rule(1)
+
+    assert result == {"ok": False, "error": "删除关键词规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select",
+        "boom",
+        "window_title",
+        "clipboard",
+        "note",
+        "activity_log",
+        "secret",
+    ):
+        assert forbidden not in lowered
+
+
+def test_delete_project_keyword_rule_failure_payload_excludes_backend_codes(monkeypatch):
+    # Phase 5D regression lock: the failure payload surfaces only the stable
+    # Chinese message, not the underlying code or any backend-internal fields
+    # the API might have attached.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {
+            "ok": False,
+            "error": "not_found",
+            "code": "not_found",
+            "internal_field": "should not leak",
+            "traceback": "SELECT * FROM project_rule",
+            "details": "C:\\Secret window_title clipboard note",
+        },
+    )
+
+    result = WebViewBridge().delete_project_keyword_rule(999)
+
+    assert result == {"ok": False, "error": "关键词规则不存在"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "internal_field",
+        "should not leak",
+        "code",
+        "not_found",
+        "traceback",
+        "sqlite",
+        "select",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+        "details",
+    ):
+        assert forbidden not in lowered
+
+
+def test_delete_project_keyword_rule_success_payload_types_are_stable(monkeypatch):
+    # Phase 5D regression lock: success payload field types must remain
+    # ``str`` / ``int`` / ``bool`` so JS consumers can rely on the contract
+    # even when the backend returns loose numeric / string variants.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "deleted": 1,  # backend may return int instead of bool
+            },
+        },
+    )
+
+    result = WebViewBridge().delete_project_keyword_rule(25)
+
+    assert type(result["ok"]) is bool
+    rule = result["rule"]
+    assert type(rule["kind"]) is str
+    assert type(rule["id"]) is int
+    assert type(rule["deleted"]) is bool
+
+
+def test_delete_project_keyword_rule_payload_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "deleted": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().delete_project_keyword_rule(20)
+
+    json.dumps(result, ensure_ascii=False)
+    assert "Traceback" not in repr(result)
+    assert "SELECT" not in repr(result)
+
+
+def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(monkeypatch):
+    # Phase 5D regression lock: the delete-keyword path must only ever call
+    # ``rule_api.delete_project_keyword_rule``. It must not invoke any other
+    # Project Rules write APIs (project toggle / create / edit / delete,
+    # folder create / edit / delete, rule create / edit / toggle, conflict
+    # preview, backfill).
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "deleted": True,
+            },
+        },
+    )
+
+    forbidden_calls: list[str] = []
+
+    def make_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(name + " must not be called by delete-keyword path")
+        return _fail
+
+    for name in (
+        "create_project_keyword_rule",
+        "set_project_rule_enabled",
+        "create_or_update_folder_rule",
+        "set_keyword_rule_enabled",
+        "set_folder_rule_enabled",
+        "delete_keyword_rule",
+        "delete_folder_rule",
+        "preview_folder_rule_conflicts",
+        "backfill_folder_rule",
+    ):
+        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+
+    forbidden_project_calls: list[str] = []
+
+    def make_project_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_project_calls.append(name)
+            raise AssertionError(name + " must not be called by delete-keyword path")
+        return _fail
+
+    for name in (
+        "create_project",
+        "update_project",
+        "delete_project",
+        "archive_project",
+        "set_project_enabled",
+    ):
+        if hasattr(bridge_module.project_api, name):
+            monkeypatch.setattr(bridge_module.project_api, name, make_project_forbidden(name))
+
+    result = WebViewBridge().delete_project_keyword_rule(1)
+    assert result["ok"] is True
+    assert forbidden_calls == []
+    assert forbidden_project_calls == []
+
+
+def test_delete_project_keyword_rule_does_not_regress_get_project_rules(monkeypatch):
+    # Phase 5D regression lock: ``get_project_rules`` remains the read path
+    # and is not affected by the keyword-delete addition.
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [
+            {
+                "id": 1,
+                "name": "Client",
+                "description": "Billable",
+                "enabled": 1,
+                "created_by": "user",
+                "folder_rules": [
+                    {"id": 10, "folder_path": "D:\\Client", "enabled": 1, "recursive": 1},
+                ],
+                "keyword_rules": [
+                    {"id": 11, "keyword": "Spec", "enabled": 0},
+                ],
+            },
+        ],
+    )
+
+    result = WebViewBridge().get_project_rules()
+
+    assert result["ok"] is True
+    project = result["projects"][0]
+    assert project["id"] == 1
+    assert project["name"] == "Client"
+    assert project["rule_count"] == 2
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_delete_project_keyword_rule_does_not_regress_set_project_rule_enabled(monkeypatch):
+    # Phase 5D regression lock: the existing Phase 5B toggle path remains
+    # intact after the Phase 5D delete-keyword addition.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": True,
+            "rule_type": rule_type,
+            "rule_id": rule_id,
+            "enabled": enabled,
+        },
+    )
+
+    result = WebViewBridge().set_project_rule_enabled("keyword", 11, False)
+
+    assert result == {
+        "ok": True,
+        "rule_type": "keyword",
+        "rule_id": 11,
+        "enabled": False,
+    }
+
+
+def test_delete_project_keyword_rule_does_not_regress_create_project_keyword_rule(monkeypatch):
+    # Phase 5D regression lock: the existing Phase 5C create path remains
+    # intact after the Phase 5D delete-keyword addition.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": 42,
+                "project_id": project_id,
+                "keyword": keyword.strip(),
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+
+    assert result["ok"] is True
+    assert result["rule"]["id"] == 42
+    assert result["rule"]["keyword"] == "Spec"

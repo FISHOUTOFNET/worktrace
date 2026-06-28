@@ -2062,6 +2062,33 @@ body {
     opacity: 0.65;
 }
 
+/* Phase 5D: keyword rule delete button. Mirrors the existing toggle button
+   visual style so the delete action reads as part of the row. Only keyword
+   rules render this button; folder rules and project cards never do. The
+   red text color signals the destructive intent while keeping the same
+   border / radius / padding as the toggle button for visual consistency. */
+.rules-keyword-delete-button {
+    min-width: 64px;
+    min-height: 30px;
+    border: 1px solid #fca5a5;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #b91c1c;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.rules-keyword-delete-button:hover:not(:disabled) {
+    border-color: #f87171;
+    background: #fef2f2;
+}
+
+.rules-keyword-delete-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
 .rules-project-empty,
 .rules-empty {
     font-size: 13px;

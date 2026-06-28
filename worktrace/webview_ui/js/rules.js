@@ -1,7 +1,8 @@
-// WorkTrace WebView frontend — Project Rules module (Phase 5B / 5C).
+// WorkTrace WebView frontend — Project Rules module (Phase 5B / 5C / 5D).
 // Existing project-bound folder / keyword rules can be enabled or disabled
-// (Phase 5B), and one new keyword rule can be created on an existing
-// rule-target project (Phase 5C).
+// (Phase 5B), one new keyword rule can be created on an existing
+// rule-target project (Phase 5C), and one existing keyword rule can be
+// deleted (Phase 5D). Folder rules cannot be deleted.
 
 (function () {
     "use strict";
@@ -54,6 +55,7 @@
             return App.renderProjectRuleProject(project);
         }).join("");
         App.bindProjectRuleToggles();
+        App.bindProjectRuleDelete();
     }
     App.showProjectRules = showProjectRules;
 
@@ -104,8 +106,21 @@
         var ruleId = positiveInt(rule && rule.id);
         var ruleKey = kind + ":" + ruleId;
         var saving = App.rulesSavingRuleKey === ruleKey;
-        var disabledAttr = (App.rulesSavingRuleKey || !ruleId) ? " disabled" : "";
+        var deleting = App.rulesDeletingRuleKey === ruleKey;
+        // Phase 5D: disable the toggle button while any rule write is in
+        // flight on this row (toggle saving or keyword delete) or when the
+        // rule id is missing. This keeps the toggle and delete write paths
+        // from concurrently polluting the same row.
+        var disabledAttr = (App.rulesSavingRuleKey || App.rulesDeletingRuleKey || !ruleId) ? " disabled" : "";
         var buttonLabel = saving ? "正在更新…" : actionLabel;
+        // Phase 5D: only keyword rules get a delete button. Folder rules,
+        // project cards, and unknown-kind rows never get one.
+        var deleteButton = "";
+        if (kind === "keyword" && ruleId) {
+            var deleteDisabled = (App.rulesSavingRuleKey || App.rulesDeletingRuleKey) ? " disabled" : "";
+            var deleteLabel = deleting ? "正在删除…" : "删除";
+            deleteButton = '  <button class="rules-keyword-delete-button" type="button" data-rule-kind="keyword" data-rule-id="' + count(ruleId) + '"' + deleteDisabled + '>' + deleteLabel + '</button>';
+        }
         return [
             '<div class="rules-row ' + (enabled ? "" : "is-disabled") + '">',
             '  <span class="rules-kind-badge rules-kind-' + kind + '">' + label + '</span>',
@@ -115,6 +130,7 @@
             '  </div>',
             '  <span class="rules-status ' + (enabled ? "is-enabled" : "is-disabled") + '">' + stateLabel + '</span>',
             '  <button class="rules-toggle-btn" type="button" data-rule-type="' + kind + '" data-rule-id="' + count(ruleId) + '" data-next-enabled="' + (!enabled ? "true" : "false") + '"' + disabledAttr + '>' + buttonLabel + '</button>',
+            deleteButton,
             '</div>'
         ].join("");
     }
@@ -171,6 +187,86 @@
         });
     }
     App.setProjectRuleSaving = setProjectRuleSaving;
+
+    // --- Phase 5D: keyword rule deletion -------------------------------
+
+    function bindProjectRuleDelete() {
+        // Phase 5D: event-delegated binding for keyword delete buttons.
+        // Re-uses the same #rules-list container as the toggle binding so
+        // no extra per-row listeners are needed. Bound once per page
+        // lifecycle via the data attribute guard.
+        var list = document.getElementById("rules-list");
+        if (!list || list.getAttribute("data-rules-delete-bound") === "1") return;
+        list.setAttribute("data-rules-delete-bound", "1");
+        list.addEventListener("click", App.handleProjectRuleDelete);
+    }
+    App.bindProjectRuleDelete = bindProjectRuleDelete;
+
+    function handleProjectRuleDelete(event) {
+        // Phase 5D: delete one existing keyword rule. Confirms first, then
+        // validates the dataset rule id locally before calling the bridge.
+        // Only one keyword delete may be in flight at a time. The deleting
+        // state is intentionally separate from rulesSavingRuleKey (toggle)
+        // and rulesCreatingKeyword (create) so the three write paths can
+        // never pollute each other. The catch path never reads .message.
+        var button = event.target && event.target.closest ? event.target.closest(".rules-keyword-delete-button") : null;
+        if (!button) return;
+        if (App.rulesDeletingRuleKey) return;
+        var kind = button.getAttribute("data-rule-kind");
+        if (kind !== "keyword") {
+            App.showRulesError("删除关键词规则失败");
+            return;
+        }
+        var rawId = button.getAttribute("data-rule-id");
+        var ruleId = parseInt(rawId, 10);
+        // Malformed dataset must not call the bridge.
+        if (!rawId || String(ruleId) !== String(rawId).trim() || ruleId <= 0) {
+            App.showRulesError("删除关键词规则失败");
+            return;
+        }
+        if (!window.confirm("确定删除这条关键词规则吗？删除后该关键词将不再用于自动归类。")) {
+            return;
+        }
+        App.setRuleDeleting("keyword:" + ruleId);
+        App.clearRulesError();
+        App.callBridge("delete_project_keyword_rule", ruleId).then(function (result) {
+            if (result && result.ok === false) {
+                App.showRulesError(result.error || "删除关键词规则失败");
+                return;
+            }
+            return App.loadProjectRules().then(function () {
+                App.showRulesError("关键词规则已删除");
+            });
+        }).catch(function () {
+            App.showRulesError("删除关键词规则失败");
+        }).then(function () {
+            App.setRuleDeleting(null);
+        });
+    }
+    App.handleProjectRuleDelete = handleProjectRuleDelete;
+
+    function setRuleDeleting(ruleKey) {
+        // Phase 5D: toggle the keyword delete saving state. Updates every
+        // delete button label / disabled state and the matching toggle
+        // button disabled state on the same row so the two write paths
+        // cannot run concurrently on one row.
+        App.rulesDeletingRuleKey = ruleKey || null;
+        var deleteButtons = document.querySelectorAll(".rules-keyword-delete-button");
+        Array.prototype.forEach.call(deleteButtons, function (button) {
+            var currentKey = "keyword:" + button.getAttribute("data-rule-id");
+            button.disabled = !!App.rulesDeletingRuleKey;
+            if (currentKey === App.rulesDeletingRuleKey) {
+                button.textContent = "正在删除…";
+            } else if (button.textContent === "正在删除…") {
+                button.textContent = "删除";
+            }
+        });
+        var toggleButtons = document.querySelectorAll(".rules-toggle-btn");
+        Array.prototype.forEach.call(toggleButtons, function (button) {
+            button.disabled = !!(App.rulesSavingRuleKey || App.rulesDeletingRuleKey);
+        });
+    }
+    App.setRuleDeleting = setRuleDeleting;
 
     function setRulesLoading(loading) {
         App.rulesLoading = loading;

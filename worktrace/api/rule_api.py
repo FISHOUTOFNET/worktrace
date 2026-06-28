@@ -141,6 +141,57 @@ def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]
         return {"ok": False, "error": "operation_failed"}
 
 
+def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
+    """Delete one existing keyword rule.
+
+    Phase 5D narrow WebView-facing facade. It only deletes a keyword rule;
+    it does not delete folder rules, projects, or edit/enable/disable any
+    rule or project. ``rule_id`` must identify an existing row in
+    ``project_rule`` (the keyword rule table). A ``rule_id`` that points at
+    a folder rule (``folder_project_rule``) is rejected as ``not_found``
+    rather than deleting the folder rule — the keyword delete path must
+    never touch folder rules. The facade delegates to the existing
+    ``rule_service.delete_rule`` write path, which performs a hard
+    ``DELETE FROM project_rule`` and preserves the existing keyword rule
+    cache invalidation and privacy exclude cache clearing. No soft-delete
+    is invented.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``rule_id`` is not a real positive ``int``
+      (bool / float / numeric string / ``None`` / list / dict / tuple /
+      set / frozenset / zero / negative).
+    - ``not_found`` — no keyword rule exists with this id (covers both
+      "id does not exist at all" and "id is a folder rule").
+    - ``operation_failed`` — any unexpected service failure.
+    """
+
+    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
+    # ``float``, ``str``, ``None``, and container types in one check.
+    if type(rule_id) is not int or rule_id <= 0:
+        return {"ok": False, "error": "invalid_input"}
+    try:
+        # Reuse the existing existence helper: it only returns True when the
+        # id resolves to a row in ``project_rule`` (keyword table). A folder
+        # rule id resolves to ``folder_project_rule`` and therefore returns
+        # False, so the keyword delete path can never delete a folder rule.
+        if not _rule_exists("keyword", rule_id):
+            return {"ok": False, "error": "not_found"}
+        rule_service.delete_rule(rule_id)
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": int(rule_id),
+                "deleted": True,
+            },
+        }
+    except ProjectRuleWriteError as exc:
+        return {"ok": False, "error": exc.code}
+    except Exception:
+        return {"ok": False, "error": "operation_failed"}
+
+
 # --- keyword rules -------------------------------------------------------
 
 def create_keyword_rule(keyword: str, project_id: int) -> int:
@@ -184,6 +235,7 @@ __all__ = [
     "create_project_keyword_rule",
     "delete_folder_rule",
     "delete_keyword_rule",
+    "delete_project_keyword_rule",
     "ProjectRuleWriteError",
     "preview_folder_rule_conflicts",
     "set_project_rule_enabled",

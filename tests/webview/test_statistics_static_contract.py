@@ -418,9 +418,9 @@ def test_styles_css_timeline_and_correction_shell_not_removed_4a():
 
 
 def test_index_html_project_rules_page_migrated_after_5b():
-    """Phase 5B/5C: Project Rules is migrated; supports existing rule toggles
-    (5B) and keyword rule creation (5C). The boundary copy lists the supported
-    ops (enable/disable, keyword create) and the not-yet-open ops."""
+    """Phase 5B/5C/5D: Project Rules is migrated; supports existing rule
+    toggles (5B), keyword rule creation (5C), and keyword rule deletion (5D).
+    The boundary copy lists the supported ops and the not-yet-open ops."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-rules"')
     assert pos != -1
@@ -432,8 +432,10 @@ def test_index_html_project_rules_page_migrated_after_5b():
     # supported-ops clause still references enable/disable.
     assert "启用/停用" in section
     assert "新增关键词规则" in section
-    # Not-yet-open capabilities (edit/delete/conflict preview/backfill).
-    assert "编辑/删除" in section
+    # Phase 5D: boundary copy updated to mention keyword deletion.
+    assert "删除已有关键词规则" in section
+    # Not-yet-open capabilities (edit/conflict preview/backfill).
+    assert "编辑" in section
     assert "冲突预览和回填将在后续阶段开放" in section
 
 

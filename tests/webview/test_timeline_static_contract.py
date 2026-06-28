@@ -87,9 +87,9 @@ def test_index_html_timeline_page_has_total_and_current():
 
 
 def test_index_html_unmigrated_pages_still_have_placeholders():
-    """Phase 5B/5C: Settings remains a placeholder; Rules is migrated WebView
+    """Phase 5B/5C/5D: Settings remains a placeholder; Rules is migrated WebView
     and its boundary copy lists the supported ops (enable/disable, keyword
-    create) and the not-yet-open ops."""
+    create, keyword delete) and the not-yet-open ops."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     rules_start = source.find('id="page-rules"')
     assert rules_start != -1, "rules section must exist"
@@ -100,7 +100,9 @@ def test_index_html_unmigrated_pages_still_have_placeholders():
     # Phase 5C: boundary copy updated to mention keyword creation.
     assert "启用/停用" in rules_section
     assert "新增关键词规则" in rules_section
-    assert "编辑/删除" in rules_section
+    # Phase 5D: boundary copy updated to mention keyword deletion.
+    assert "删除已有关键词规则" in rules_section
+    assert "编辑" in rules_section
     assert "冲突预览和回填将在后续阶段开放" in rules_section
 
     settings_start = source.find('id="page-settings"')

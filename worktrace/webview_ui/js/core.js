@@ -85,6 +85,14 @@
     // keyword create may be in flight at a time.
     App.rulesCreatingKeyword = false;
 
+    // --- Phase 5D: Project Rules keyword deletion state ---------------
+    // Separate from rulesSavingRuleKey (Phase 5B toggle) and
+    // rulesCreatingKeyword (Phase 5C create) so the three write paths can
+    // never pollute each other. Only one keyword delete may be in flight
+    // at a time; it carries the "<kind>:<id>" key of the row being
+    // deleted so the deleting button label can be flipped to ``正在删除…``.
+    App.rulesDeletingRuleKey = null;
+
     // --- Phase 3C: Unified Timeline status semantics -------------------
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",
