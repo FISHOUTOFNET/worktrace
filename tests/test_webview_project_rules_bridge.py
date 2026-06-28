@@ -2788,3 +2788,235 @@ def test_delete_project_folder_rule_does_not_regress_delete_project_keyword_rule
 
     assert folder_result["ok"] is True
     assert keyword_result["ok"] is True
+
+
+# --- Phase 5E.1: folder rule CRUD bridge hardening regression locks -------
+#
+# These locks consolidate the bool-as-int rejection, the error-message-map
+# consistency, the API-call boundary (the bridge never forwards bool /
+# non-int / non-bool values to the API), the failure-path JSON
+# serializability, and the cross-method state isolation that guarantees
+# the three folder bridge methods do not pollute each other or the
+# keyword / toggle bridge methods.
+
+
+@pytest.mark.parametrize("bad_id", [True, False])
+def test_create_project_folder_rule_rejects_bool_as_int_project_id_consolidated(bad_id):
+    # Phase 5E.1 regression lock: ``bool`` is a subclass of ``int``, so
+    # ``True``/``False`` must be rejected before reaching the API. The bridge
+    # uses ``type(...) is not int`` which excludes ``bool``.
+    result = WebViewBridge().create_project_folder_rule(bad_id, r"D:\Work", True)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize("bad_id", [True, False])
+def test_update_project_folder_rule_rejects_bool_as_int_rule_id_consolidated(bad_id):
+    result = WebViewBridge().update_project_folder_rule(bad_id, r"D:\New", True)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize("bad_id", [True, False])
+def test_delete_project_folder_rule_rejects_bool_as_int_rule_id_consolidated(bad_id):
+    result = WebViewBridge().delete_project_folder_rule(bad_id)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_folder_bridge_methods_invalid_input_return_consistent_message():
+    # Phase 5E.1 regression lock: all three folder bridge methods must
+    # return the same stable ``操作无效`` message for invalid input so the
+    # user never sees a method-specific validation string.
+    bridge = WebViewBridge()
+    create_result = bridge.create_project_folder_rule(True, r"D:\Work", True)
+    update_result = bridge.update_project_folder_rule(True, r"D:\New", True)
+    delete_result = bridge.delete_project_folder_rule(True)
+    assert create_result == update_result == delete_result == {"ok": False, "error": "操作无效"}
+
+
+def test_folder_bridge_methods_error_message_maps_are_distinct_and_stable():
+    # Phase 5E.1 regression lock: the three folder bridge methods must map
+    # ``not_found`` and ``operation_failed`` to distinct, stable Chinese
+    # messages so a folder-update failure is never reported with a
+    # folder-delete message and vice versa.
+    assert bridge_module._PROJECT_RULE_FOLDER_CREATE_MESSAGES["operation_failed"] == "新增文件夹规则失败"
+    assert bridge_module._PROJECT_RULE_FOLDER_UPDATE_MESSAGES["not_found"] == "文件夹规则不存在"
+    assert bridge_module._PROJECT_RULE_FOLDER_UPDATE_MESSAGES["operation_failed"] == "保存文件夹规则失败"
+    assert bridge_module._PROJECT_RULE_FOLDER_DELETE_MESSAGES["not_found"] == "文件夹规则不存在"
+    assert bridge_module._PROJECT_RULE_FOLDER_DELETE_MESSAGES["operation_failed"] == "删除文件夹规则失败"
+    # The create map must NOT have a ``not_found`` entry (create uses
+    # ``project_not_found`` instead).
+    assert "not_found" not in bridge_module._PROJECT_RULE_FOLDER_CREATE_MESSAGES
+    assert bridge_module._PROJECT_RULE_FOLDER_CREATE_MESSAGES["project_not_found"] == "项目不存在或不可用"
+
+
+def test_create_project_folder_rule_never_forwards_bool_project_id_to_api(monkeypatch):
+    # Phase 5E.1 regression lock: the bridge must validate before calling
+    # the API, so a bool ``project_id`` never reaches ``rule_api``.
+    called: list = []
+
+    def _spy(*args, **kwargs):
+        called.append(args)
+        return {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": 1, "folder_path": "x", "recursive": True, "enabled": True}}
+
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _spy)
+    WebViewBridge().create_project_folder_rule(True, r"D:\Work", True)
+    assert called == []
+
+
+def test_update_project_folder_rule_never_forwards_bool_rule_id_to_api(monkeypatch):
+    called: list = []
+
+    def _spy(*args, **kwargs):
+        called.append(args)
+        return {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": 1, "folder_path": "x", "recursive": True, "enabled": True}}
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _spy)
+    WebViewBridge().update_project_folder_rule(True, r"D:\New", True)
+    assert called == []
+
+
+def test_delete_project_folder_rule_never_forwards_bool_rule_id_to_api(monkeypatch):
+    called: list = []
+
+    def _spy(*args, **kwargs):
+        called.append(args)
+        return {"ok": True, "rule": {"kind": "folder", "id": 1, "deleted": True}}
+
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _spy)
+    WebViewBridge().delete_project_folder_rule(True)
+    assert called == []
+
+
+def test_create_project_folder_rule_never_forwards_non_bool_recursive_to_api(monkeypatch):
+    # Phase 5E.1 regression lock: the bridge must reject non-bool
+    # ``recursive`` (including int 1/0) before calling the API.
+    called: list = []
+
+    def _spy(*args, **kwargs):
+        called.append(args)
+        return {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": 1, "folder_path": "x", "recursive": True, "enabled": True}}
+
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _spy)
+    for bad_recursive in (1, 0, "true", None, 1.0):
+        WebViewBridge().create_project_folder_rule(1, r"D:\Work", bad_recursive)
+    assert called == []
+
+
+def test_update_project_folder_rule_never_forwards_non_bool_recursive_to_api(monkeypatch):
+    called: list = []
+
+    def _spy(*args, **kwargs):
+        called.append(args)
+        return {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": 1, "folder_path": "x", "recursive": True, "enabled": True}}
+
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _spy)
+    for bad_recursive in (1, 0, "true", None, 1.0):
+        WebViewBridge().update_project_folder_rule(1, r"D:\New", bad_recursive)
+    assert called == []
+
+
+def test_folder_bridge_failure_payloads_are_json_serializable(monkeypatch):
+    # Phase 5E.1 regression lock: failure payloads must be JSON serializable
+    # so pywebview can deliver them to JS. Covers both invalid-input and
+    # API-error-code paths for all three folder methods.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {"ok": False, "error": "operation_failed"},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {"ok": False, "error": "not_found"},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": False, "error": "operation_failed"},
+    )
+    bridge = WebViewBridge()
+    json.dumps(bridge.create_project_folder_rule(True, r"D:\Work", True), ensure_ascii=False)
+    json.dumps(bridge.create_project_folder_rule(1, r"D:\Work", True), ensure_ascii=False)
+    json.dumps(bridge.update_project_folder_rule(True, r"D:\New", True), ensure_ascii=False)
+    json.dumps(bridge.update_project_folder_rule(1, r"D:\New", True), ensure_ascii=False)
+    json.dumps(bridge.delete_project_folder_rule(True), ensure_ascii=False)
+    json.dumps(bridge.delete_project_folder_rule(1), ensure_ascii=False)
+
+
+def test_folder_bridge_methods_do_not_cross_pollute_keyword_or_toggle(monkeypatch):
+    # Phase 5E.1 regression lock: calling the three folder bridge methods
+    # must never trigger any keyword or toggle API call, and vice versa.
+    called: dict[str, int] = {}
+
+    def _track(name):
+        def _impl(*args, **kwargs):
+            called[name] = called.get(name, 0) + 1
+            return {"ok": True, "rule": {"kind": "folder", "id": 1, "deleted": True}}
+
+        return _impl
+
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+
+    bridge = WebViewBridge()
+    bridge.create_project_folder_rule(1, r"D:\Work", True)
+    bridge.update_project_folder_rule(1, r"D:\New", False)
+    bridge.delete_project_folder_rule(1)
+
+    assert called == {"create_folder": 1, "update_folder": 1, "delete_folder": 1}
+    # Now call keyword / toggle methods and confirm they don't trigger folder APIs.
+    before = dict(called)
+    bridge.create_project_keyword_rule(1, "Spec")
+    bridge.delete_project_keyword_rule(99)
+    bridge.set_project_rule_enabled("folder", 1, False)
+    assert called["create_folder"] == before["create_folder"]
+    assert called["update_folder"] == before["update_folder"]
+    assert called["delete_folder"] == before["delete_folder"]
+    assert called["create_keyword"] == 1
+    assert called["delete_keyword"] == 1
+    assert called["toggle"] == 1
+
+
+def test_folder_bridge_success_payloads_never_include_api_error_keys(monkeypatch):
+    # Phase 5E.1 regression lock: success payloads must never carry the
+    # ``error`` key or any API-internal key. This complements the existing
+    # strip-extra-keys tests by asserting the full key set in one place.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_folder_rule",
+        lambda project_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {"kind": "folder", "id": 7, "project_id": project_id, "folder_path": folder_path, "recursive": recursive, "enabled": True},
+        },
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "update_project_folder_rule",
+        lambda rule_id, folder_path, recursive: {
+            "ok": True,
+            "rule": {"kind": "folder", "id": rule_id, "project_id": 1, "folder_path": folder_path, "recursive": recursive, "enabled": True},
+        },
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_folder_rule",
+        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+    )
+    bridge = WebViewBridge()
+    create_result = bridge.create_project_folder_rule(1, r"D:\Work", True)
+    update_result = bridge.update_project_folder_rule(1, r"D:\New", False)
+    delete_result = bridge.delete_project_folder_rule(1)
+
+    assert set(create_result.keys()) == {"ok", "rule"}
+    assert set(create_result["rule"].keys()) == {"kind", "id", "project_id", "folder_path", "recursive", "enabled"}
+    assert set(update_result.keys()) == {"ok", "rule"}
+    assert set(update_result["rule"].keys()) == {"kind", "id", "project_id", "folder_path", "recursive", "enabled"}
+    assert set(delete_result.keys()) == {"ok", "rule"}
+    assert set(delete_result["rule"].keys()) == {"kind", "id", "deleted"}
+    for result in (create_result, update_result, delete_result):
+        assert "error" not in result
+        assert "projects" not in result
+        assert "rules" not in result

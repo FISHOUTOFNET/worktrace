@@ -5,14 +5,21 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5E (Project Rules folder rule CRUD
-> foundation) is the latest shipped phase. Phase 5E opens three new
+> **Current state**: WebView Phase 5E.1 (Project Rules folder rule CRUD
+> hardening) is the latest shipped phase. Phase 5E opened three new
 > Project Rules folder rule write capabilities on an existing rule-target
 > project: creating one folder rule, editing an existing folder rule, and
 > deleting a single existing folder rule, then refreshing the list on
 > success. The API / bridge / frontend three layers are wired through the
 > stable `create_project_folder_rule` / `update_project_folder_rule` /
-> `delete_project_folder_rule` facade. It preserves the Phase 5B / 5B.1
+> `delete_project_folder_rule` facade. Phase 5E.1 is a hardening-only /
+> regression-only follow-up that locks the Phase 5E folder rule
+> create / edit / delete write path (API/service normalized-key collision,
+> update-by-id semantics, cache invalidation hooks, sensitive-field
+> boundaries; bridge bool-as-int rejection, consistent error mapping,
+> narrow payload; frontend DOM anchors, state isolation, CSS scoping,
+> no-forbidden-features, packaging inclusion) without opening any new
+> Project Rules capability. It preserves the Phase 5B / 5B.1
 > existing folder / keyword rule enable/disable path and its hardening,
 > the Phase 5C keyword rule creation path, the Phase 5C.1 keyword creation
 > hardening, the Phase 5D keyword rule deletion path, and the Phase 5D.1
@@ -64,7 +71,11 @@ records.
   hardening-only / regression-only follow-up that locks the Phase 5D keyword
   delete path without opening any new capability. Phase 5E opens the
   folder rule CRUD foundation: creating, editing, and deleting a single
-  existing folder rule, then refreshing the list on success. Project
+  existing folder rule, then refreshing the list on success. Phase 5E.1
+  is a hardening-only / regression-only follow-up that locks the Phase 5E
+  folder rule create / edit / delete write path across API / service /
+  bridge / frontend / static contract layers without opening any new
+  Project Rules capability. Project
   enable/disable, Project creation/editing/deletion/archive, keyword rule
   editing, conflict preview, backfill, and automatic rule workflows are not
   supported in WebView.

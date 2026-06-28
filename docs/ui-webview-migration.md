@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5E "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5E.1 "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -10,8 +10,8 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **5E (Project Rules folder rule CRUD foundation)**.
-  Phase 5E opens three new Project Rules folder rule write capabilities on
+- Current phase: **5E.1 (Project Rules folder rule CRUD hardening)**.
+  Phase 5E opened three new Project Rules folder rule write capabilities on
   an existing rule-target project: creating one folder rule, editing an
   existing folder rule, and deleting a single existing folder rule, then
   refreshing the list on success. The API / bridge / frontend three layers
@@ -22,14 +22,22 @@ Implemented" sections) lives in
   `project_not_found` / `operation_failed`), Chinese error mapping at the
   bridge, narrow payloads, independent frontend state keys for folder
   create / edit / delete, and explicit Project Rules page boundary copy.
-  It preserves the Phase 5B / 5B.1 existing folder / keyword rule
-  enable/disable path and its hardening, the Phase 5C keyword rule creation
-  path, the Phase 5C.1 keyword creation hardening, the Phase 5D keyword rule
-  deletion path, and the Phase 5D.1 keyword deletion hardening. Project
-  enable/disable, Project create/edit/delete/archive, keyword rule edit,
-  folder rule conflict preview, folder rule backfill, automatic rules,
-  batch operations, schema changes, frontend frameworks / Node, browser
-  storage, and network requests remain out of scope.
+  Phase 5E.1 is a hardening-only / regression-only follow-up that locks
+  the Phase 5E folder rule create / edit / delete write path across API /
+  service / bridge / frontend / static contract layers with additional
+  regression tests (normalized-key collision on update, update-by-id
+  semantics, cache invalidation hooks, sensitive-field boundaries,
+  bool-as-int rejection, consistent error mapping, DOM anchors, state
+  isolation, CSS scoping, no-forbidden-features, packaging inclusion)
+  without opening any new Project Rules capability. It preserves the
+  Phase 5B / 5B.1 existing folder / keyword rule enable/disable path and
+  its hardening, the Phase 5C keyword rule creation path, the Phase 5C.1
+  keyword creation hardening, the Phase 5D keyword rule deletion path, and
+  the Phase 5D.1 keyword deletion hardening. Project enable/disable,
+  Project create/edit/delete/archive, keyword rule edit, folder rule
+  conflict preview, folder rule backfill, automatic rules, batch
+  operations, schema changes, frontend frameworks / Node, browser storage,
+  and network requests remain out of scope.
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime). It is
   the only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview (Phase 1), Timeline / Time Details (read-only in
@@ -40,7 +48,8 @@ Implemented" sections) lives in
   Phase 5B, hardened in Phase 5B.1, keyword rule creation foundation in
   Phase 5C, keyword creation hardening in Phase 5C.1, keyword rule deletion
   foundation in Phase 5D, keyword deletion hardening in Phase 5D.1, folder
-  rule CRUD foundation in Phase 5E).
+  rule CRUD foundation in Phase 5E, folder rule CRUD hardening in Phase
+  5E.1).
 - Unmigrated pages: Settings / Privacy / Encrypted Backup (still legacy
   Tkinter code kept for reference; not a supported runtime path).
 - Detailed phase-by-phase scope, data semantics, and "not implemented" lists

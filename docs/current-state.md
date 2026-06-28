@@ -7,8 +7,8 @@
 
 ## Current Phase
 
-**Phase 5E — Project Rules folder rule CRUD foundation.** Phase 5E opens
-three new Project Rules folder rule write capabilities on an existing
+**Phase 5E.1 — Project Rules folder rule CRUD hardening.** Phase 5E
+opened three new Project Rules folder rule write capabilities on an existing
 rule-target project: creating one folder rule, editing an existing folder
 rule, and deleting a single existing folder rule, then refreshing the list
 on success. The API / bridge / frontend three layers are wired through the
@@ -19,19 +19,36 @@ codes (`invalid_input` / `not_found` / `project_not_found` /
 `operation_failed`), Chinese error mapping at the bridge, narrow payloads
 (no traceback / SQL / local path / window_title / clipboard / note),
 independent frontend state keys for folder create / edit / delete, and
-explicit Project Rules page boundary copy. It preserves the Phase 5B /
-5B.1 existing folder / keyword rule enable/disable path and its hardening
-(input validation, error collapse, saving-and-stale-state,
-sensitive-field-boundary regression locks, plus the unhashable-`rule_type`
-fix), the Phase 5C keyword rule creation path, the Phase 5C.1 keyword
-creation hardening, the Phase 5D keyword rule deletion path, and the Phase
-5D.1 keyword deletion hardening. Phase 5E does not implement project
-enable/disable, project create/edit/delete/archive, keyword rule edit,
-folder rule conflict preview, folder rule backfill, automatic rules, batch
-Project Rules operations, schema changes, new frontend dependencies, browser
-storage, network requests, or new export formats. All earlier WebView
-migration phases (Phase 0A → Phase 5D.1) are completed. README, this file,
-and `ui-webview-migration.md` all describe the current phase as 5E.
+explicit Project Rules page boundary copy. Phase 5E.1 is a hardening-only /
+regression-only follow-up that locks the Phase 5E folder rule
+create / edit / delete write path with additional regression tests:
+API/service normalized-key collision on update (IntegrityError →
+operation_failed), update-by-id semantics (preserves rule_id / project_id /
+enabled), cache invalidation hooks (invalidate_folder_rule_cache /
+clear_exclude_rules_cache / request_rebuild_for_rule / delete_index_for_rule)
+with no-hook-on-rejection locks, sensitive-field exclusion in success
+payloads; bridge consolidated bool-as-int rejection, consistent Chinese
+error mapping across all three folder methods, no-cross-pollution with
+keyword create/delete/toggle paths, JSON-serializable payloads; frontend
+DOM anchors for edit cancel / edit start / save+cancel disabling, inline
+edit input maxlength, CSS class existence and page scoping, no-storage /
+no-network / no-ES-module locks for core.js / init.js / rules.js, packaging
+spec inclusion of core.js / init.js / rules.js, state variable declaration
+count locks, no-innerHTML in folder handlers, failure input preservation,
+success editing-state clear, idempotent event delegation binding. It
+preserves the Phase 5B / 5B.1 existing folder / keyword rule enable/disable
+path and its hardening (input validation, error collapse,
+saving-and-stale-state, sensitive-field-boundary regression locks, plus the
+unhashable-`rule_type` fix), the Phase 5C keyword rule creation path, the
+Phase 5C.1 keyword creation hardening, the Phase 5D keyword rule deletion
+path, and the Phase 5D.1 keyword deletion hardening. Phase 5E.1 does not
+implement project enable/disable, project create/edit/delete/archive,
+keyword rule edit, folder rule conflict preview, folder rule backfill,
+automatic rules, batch Project Rules operations, schema changes, new
+frontend dependencies, browser storage, network requests, or new export
+formats. All earlier WebView migration phases (Phase 0A → Phase 5E) are
+completed. README, this file, and `ui-webview-migration.md` all describe
+the current phase as 5E.1.
 
 ## Default UI
 
@@ -55,7 +72,7 @@ and `ui-webview-migration.md` all describe the current phase as 5E.
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1 / 5C / 5C.1 / 5D / 5D.1 / 5E):
+- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1 / 5C / 5C.1 / 5D / 5D.1 / 5E / 5E.1):
   project-grouped rule list showing project name / description, project
   enabled state, special `排除规则` marker, rule counts, folder rules,
   keyword rules, rule enabled state, and folder recursion scope. Phase 5B
@@ -83,10 +100,13 @@ and `ui-webview-migration.md` all describe the current phase as 5E.
   without opening any new Project Rules capability. Phase 5E opens the
   folder rule CRUD foundation: creating one folder rule on an existing
   rule-target project, editing an existing folder rule, and deleting a
-  single existing folder rule, then refreshing the list on success. Project
-  enable/disable, Project creation/editing/deletion/archive, keyword rule
-  editing, conflict preview, backfill, and automatic rules are still not
-  open in WebView.
+  single existing folder rule, then refreshing the list on success. Phase
+  5E.1 is a hardening-only / regression-only follow-up that locks the
+  Phase 5E folder rule create / edit / delete write path across API /
+  service / bridge / frontend / static contract layers without opening any
+  new Project Rules capability. Project enable/disable, Project
+  creation/editing/deletion/archive, keyword rule editing, conflict
+  preview, backfill, and automatic rules are still not open in WebView.
 
 ## Unmigrated Pages (Legacy Tkinter, Reference-Only)
 
@@ -131,8 +151,9 @@ and `ui-webview-migration.md` all describe the current phase as 5E.
   rules; batch Project Rules operations. (Phase 5C only opens keyword rule
   creation on an existing rule-target project; Phase 5D only opens keyword
   rule deletion; Phase 5D.1 only hardens that deletion path; Phase 5E only
-  opens folder rule create / edit / delete. All other Project Rules write
-  workflows remain unsupported.)
+  opens folder rule create / edit / delete; Phase 5E.1 only hardens that
+  folder rule CRUD path. All other Project Rules write workflows remain
+  unsupported.)
 - Settings / Privacy / Encrypted Backup WebView migration.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
 - Batch time / batch split / batch merge; note append / merge; auto-rule
@@ -141,7 +162,7 @@ and `ui-webview-migration.md` all describe the current phase as 5E.
   screenshots, screen recording, keyboard logging, automatic startup.
 - Any DB schema change during development; `schema.sql` is the single source
   of truth. Phase 5B, Phase 5B.1, Phase 5C, Phase 5C.1, Phase 5D, Phase
-  5D.1, and Phase 5E made no schema change.
+  5D.1, Phase 5E, and Phase 5E.1 made no schema change.
 
 ## Architecture Boundary
 

@@ -2327,3 +2327,237 @@ def test_project_rules_folder_packaging_spec_still_includes_rules_js():
     source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
     assert "'rules.js'" in source or '"rules.js"' in source
     assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source
+
+
+# --- Phase 5E.1: folder rule CRUD static contract hardening ---------------
+#
+# These locks complement the Phase 5E static contract with additional
+# DOM-anchor, CSS-scoping, no-forbidden-features, packaging-inclusion,
+# edit-cancel, and state-declaration regression locks. They do not open
+# any new capability; they only harden the existing folder rule
+# create / edit / delete static contract.
+
+
+def test_project_rules_folder_edit_cancel_does_not_call_bridge():
+    # Phase 5E.1 regression lock: the folder edit cancel handler must not
+    # call any bridge method. It only clears the editing state and
+    # re-renders. This complements the existing delete-cancel guard.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditCancel")
+    assert "callBridge(" not in body
+
+
+def test_project_rules_folder_edit_cancel_clears_editing_state():
+    # Phase 5E.1 regression lock: the cancel handler must clear the
+    # editing state by calling ``setFolderEditing(null)``.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditCancel")
+    assert "App.setFolderEditing(null)" in body
+
+
+def test_project_rules_folder_edit_cancel_has_early_return_guard():
+    # Phase 5E.1 regression lock: the cancel handler must early-return
+    # when no folder edit is in flight.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditCancel")
+    assert "if (!App.rulesEditingFolderKey) return" in body
+
+
+def test_project_rules_folder_edit_start_sets_editing_key():
+    # Phase 5E.1 regression lock: the edit-start handler must set the
+    # editing key to ``"folder:<id>"`` so the inline edit form renders
+    # for the correct row only.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditStart")
+    assert "App.setFolderEditing" in body
+    assert '"folder:"' in body or "'folder:'" in body
+
+
+def test_project_rules_folder_edit_save_disables_save_and_cancel_buttons():
+    # Phase 5E.1 regression lock: ``setFolderSaving`` must disable both
+    # the save and cancel buttons while a save is in flight so the user
+    # cannot double-submit or cancel mid-save.
+    source = read_js("rules.js")
+    body = func_body(source, "setFolderSaving")
+    assert "rules-folder-edit-save" in body
+    assert "rules-folder-edit-cancel" in body
+    assert "btn.disabled = !!saving" in body
+
+
+def test_project_rules_folder_edit_form_has_maxlength_on_input():
+    # Phase 5E.1 regression lock: the inline edit form input must have a
+    # ``maxlength`` attribute so the user cannot enter an over-long path.
+    source = read_js("rules.js")
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert 'maxlength="512"' in row_body
+
+
+def test_project_rules_folder_edit_form_css_classes_exist():
+    # Phase 5E.1 regression lock: the additional folder edit form CSS
+    # classes (input, recursive, recursive-label) must exist in
+    # styles.css so the inline edit form has stable visual styles. The
+    # existing Phase 5E test only checks a subset of these.
+    source = read_resource("styles.css")
+    for css_class in (
+        ".rules-folder-edit-input",
+        ".rules-folder-edit-recursive",
+        ".rules-folder-edit-recursive-label",
+        ".rules-folder-create-input",
+        ".rules-folder-create-recursive",
+        ".rules-folder-create-status",
+    ):
+        assert css_class in source, "styles.css must contain: " + css_class
+
+
+def test_project_rules_folder_edit_form_css_scoped_to_rules_page():
+    # Phase 5E.1 regression lock: the folder edit form CSS classes must
+    # not be referenced by the Overview / Timeline / Statistics static
+    # HTML sections. This complements the existing Phase 5E CSS scoping
+    # test with the edit-form-specific classes.
+    index = read_resource("index.html")
+    for page_id in ("page-overview", "page-timeline", "page-statistics"):
+        start = index.find('id="' + page_id + '"')
+        assert start != -1, "index.html must contain " + page_id
+        end = index.find("</section>", start)
+        assert end != -1, page_id + " section must close"
+        section = index[start:end]
+        for css_class in (
+            "rules-folder-edit-input",
+            "rules-folder-edit-recursive",
+            "rules-folder-edit-form",
+            "rules-folder-edit-save",
+            "rules-folder-edit-cancel",
+        ):
+            assert css_class not in section, (
+                page_id + " section must not reference folder edit class: " + css_class
+            )
+
+
+def test_project_rules_core_js_no_storage_or_network():
+    # Phase 5E.1 regression lock: core.js (which declares the folder
+    # state variables) must not use forbidden storage / network / module
+    # features. The existing Phase 5E test only checks rules.js.
+    source = read_js("core.js")
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "fetch(",
+        "XMLHttpRequest",
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_init_js_no_storage_or_network():
+    # Phase 5E.1 regression lock: init.js (which binds the folder create
+    # submit button) must not use forbidden storage / network / module
+    # features.
+    source = read_js("init.js")
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "fetch(",
+        "XMLHttpRequest",
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_folder_js_no_external_urls():
+    # Phase 5E.1 regression lock: rules.js must not reference any
+    # external URL (http/https) or CDN or Google Fonts.
+    source = read_js("rules.js")
+    assert not re.search(r"https?://", source, re.IGNORECASE)
+    assert not re.search(r"\bcdn\b", source, re.IGNORECASE)
+    assert not re.search(r"google\s*fonts", source, re.IGNORECASE)
+
+
+def test_project_rules_folder_js_no_es_module_syntax():
+    # Phase 5E.1 regression lock: rules.js must not use ES module syntax
+    # (import / export). The frontend uses classic scripts only.
+    source = read_js("rules.js")
+    assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
+    assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
+
+
+def test_project_rules_folder_core_js_no_es_module_syntax():
+    source = read_js("core.js")
+    assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
+    assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
+
+
+def test_project_rules_folder_init_js_no_es_module_syntax():
+    source = read_js("init.js")
+    assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
+    assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
+
+
+def test_project_rules_folder_packaging_spec_includes_core_and_init_js():
+    # Phase 5E.1 regression lock: the packaging spec must include core.js
+    # and init.js (not just rules.js) so the folder state variables and
+    # event bindings ship in the packaged build.
+    source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
+    for js_file in ("core.js", "init.js", "rules.js"):
+        assert ("'" + js_file + "'") in source or ('"' + js_file + '"') in source, (
+            "WorkTrace.spec must include: " + js_file
+        )
+
+
+def test_project_rules_folder_state_variables_declared_once():
+    # Phase 5E.1 regression lock: each folder state variable must be
+    # declared exactly once in core.js so there is no accidental
+    # duplicate declaration that could shadow or reset the state.
+    source = read_js("core.js")
+    for var_decl in (
+        "App.rulesCreatingFolder = false",
+        "App.rulesEditingFolderKey = null",
+        "App.rulesDeletingFolderKey = null",
+        "App.lastProjectRulesData = null",
+    ):
+        assert source.count(var_decl) == 1, (
+            var_decl + " must be declared exactly once in core.js"
+        )
+
+
+def test_project_rules_folder_create_status_uses_textcontent():
+    # Phase 5E.1 regression lock: the folder create status helper must
+    # use ``textContent`` (HTML-safe), not ``innerHTML``. The existing
+    # test checks ``showFolderCreateStatus``; this is a consolidation
+    # lock that also verifies no ``innerHTML`` appears anywhere in the
+    # folder create / edit / delete handlers.
+    source = read_js("rules.js")
+    create_body = func_body(source, "handleFolderCreateSubmit")
+    edit_save_body = func_body(source, "handleFolderEditSave")
+    delete_body = func_body(source, "handleFolderDelete")
+    for body in (create_body, edit_save_body, delete_body):
+        assert ".innerHTML" not in body
+
+
+def test_project_rules_folder_edit_save_failure_preserves_rendered_list():
+    # Phase 5E.1 regression lock: the folder edit save failure path must
+    # not clear the already-rendered Project Rules list. This mirrors the
+    # existing create / delete failure-list-preservation locks.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditSave")
+    assert "list.innerHTML" not in body
+
+
+def test_project_rules_folder_edit_save_clears_editing_state_on_success():
+    # Phase 5E.1 regression lock: the edit save success path must clear
+    # the editing state so the inline edit form closes after a successful
+    # save.
+    source = read_js("rules.js")
+    body = func_body(source, "handleFolderEditSave")
+    assert "App.setFolderEditing(null)" in body
+
+
+def test_project_rules_folder_event_delegation_bound_once():
+    # Phase 5E.1 regression lock: ``bindProjectRuleFolderEvents`` must
+    # use the same ``data-*-bound`` idempotency pattern as the toggle /
+    # delete binders so repeated renders do not attach duplicate click
+    # handlers to ``#rules-list``.
+    source = read_js("rules.js")
+    body = func_body(source, "bindProjectRuleFolderEvents")
+    assert "data-rules-folder-bound" in body
+    assert 'getAttribute("data-rules-folder-bound")' in body
+    assert 'setAttribute("data-rules-folder-bound", "1")' in body
