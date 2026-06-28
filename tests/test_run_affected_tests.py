@@ -102,6 +102,7 @@ def test_rule_api_py_selects_project_rules_suite(runner):
         "tests/test_project_rules_keyword_edit.py",
         "tests/test_project_rules_folder_crud.py",
         "tests/test_project_rules_enable_disable.py",
+        "tests/test_project_rules_rule_impact.py",
         "tests/test_webview_project_rules_bridge.py",
         "tests/test_project_rules_view.py",
         "tests/test_ui_backend_boundary.py",
@@ -140,6 +141,7 @@ def test_write_contract_helper_selects_broad_project_rules_suite(runner):
         "tests/test_project_rules_folder_crud.py",
         "tests/test_project_rules_enable_disable.py",
         "tests/test_project_rules_project_lifecycle.py",
+        "tests/test_project_rules_rule_impact.py",
         "tests/test_webview_project_rules_bridge.py",
         "tests/test_ui_backend_boundary.py",
     ]:
@@ -160,6 +162,7 @@ def test_rule_service_py_selects_keyword_tests_only(runner):
         "tests/test_project_rules_keyword_delete.py",
         "tests/test_project_rules_keyword_edit.py",
         "tests/test_project_rules_enable_disable.py",
+        "tests/test_project_rules_rule_impact.py",
         "tests/test_project_rules_view.py",
         "tests/test_webview_project_rules_bridge.py",
         "tests/test_ui_backend_boundary.py",
@@ -182,6 +185,7 @@ def test_folder_rule_service_py_selects_folder_tests_only(runner):
         "tests/test_folder_rule_service.py",
         "tests/test_project_rules_folder_crud.py",
         "tests/test_project_rules_view.py",
+        "tests/test_project_rules_rule_impact.py",
         "tests/test_webview_project_rules_bridge.py",
         "tests/test_ui_backend_boundary.py",
     ]:
@@ -201,6 +205,7 @@ def test_project_api_py_selects_lifecycle_tests_only(runner):
     for expected in [
         "tests/test_project_rules_project_lifecycle.py",
         "tests/test_project_rules_view.py",
+        "tests/test_project_rules_rule_impact.py",
         "tests/test_webview_project_rules_bridge.py",
         "tests/test_ui_backend_boundary.py",
     ]:
@@ -217,6 +222,7 @@ def test_project_service_py_selects_lifecycle_tests_only(runner):
     for expected in [
         "tests/test_project_rules_project_lifecycle.py",
         "tests/test_project_rules_view.py",
+        "tests/test_project_rules_rule_impact.py",
         "tests/test_webview_project_rules_bridge.py",
         "tests/test_ui_backend_boundary.py",
     ]:
@@ -234,6 +240,7 @@ def test_bridge_rules_py_selects_project_rules_bridge_tests_only(runner):
     sel = runner.select_targets(["worktrace/webview_ui/bridge_rules.py"])
     for expected in [
         "tests/test_webview_project_rules_bridge.py",
+        "tests/test_project_rules_rule_impact.py",
         "tests/test_ui_backend_boundary.py",
     ]:
         assert expected in sel.pytest_targets, f"missing {expected}"
@@ -324,6 +331,34 @@ def test_mc2_split_module_does_not_trigger_api_or_service_tests(runner, js_modul
 
 
 # ---------------------------------------------------------------------------
+# C7. rule_impact_service.py -> rule impact tests + bridge + boundary (Phase 5H)
+# ---------------------------------------------------------------------------
+
+
+def test_rule_impact_service_py_selects_impact_tests(runner):
+    # Phase 5H: the new rule_impact_service.py triggers the impact test
+    # file plus the bridge and boundary tests. It must not trigger
+    # keyword/folder/lifecycle CRUD tests since the service is scoped to
+    # preview + safe backfill only.
+    sel = runner.select_targets(["worktrace/services/rule_impact_service.py"])
+    for expected in [
+        "tests/test_project_rules_rule_impact.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+    # rule_impact_service.py must NOT trigger CRUD/lifecycle/static tests.
+    assert "tests/test_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_folder_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_keyword_create.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_folder_crud.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_project_lifecycle.py" not in sel.pytest_targets
+    assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
+    # rule_impact_service.py is not a frontend resource, so no import smoke.
+    assert sel.smoke_commands == []
+
+
+# ---------------------------------------------------------------------------
 # I. docs-only -> not full pytest
 # ---------------------------------------------------------------------------
 
@@ -358,6 +393,7 @@ def test_db_schema_change_gives_broad_suite_and_warning(runner):
         "tests/test_folder_rule_service.py",
         "tests/test_project_rules_keyword_create.py",
         "tests/test_project_rules_keyword_delete.py",
+        "tests/test_project_rules_rule_impact.py",
         "tests/test_ui_backend_boundary.py",
     ]:
         assert expected in sel.pytest_targets, f"missing {expected}"

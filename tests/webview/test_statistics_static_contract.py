@@ -434,10 +434,13 @@ def test_index_html_project_rules_page_migrated_after_5b():
     assert "新增关键词规则" in section
     # Phase 5D: boundary copy updated to mention keyword deletion.
     assert "删除已有关键词规则" in section
-    # Not-yet-open capabilities (edit/conflict preview/backfill/hard delete).
+    # Phase 5H: single-rule impact preview + safe backfill are now supported;
+    # automatic rules / batch ops / hard delete remain not-yet-open.
     assert "编辑" in section
-    assert "冲突预览" in section
-    assert "回填" in section
+    assert "预览单条规则影响" in section
+    assert "安全应用" in section
+    assert "自动规则" in section
+    assert "批量" in section
     assert "项目硬删除" in section
 
 

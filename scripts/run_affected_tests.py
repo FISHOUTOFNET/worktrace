@@ -76,7 +76,7 @@ CONFTEST_BROAD_SUITE: list[str] = [
 
 
 # ---------------------------------------------------------------------------
-# Path -> tests mapping (sections A..L; C refined into C1..C6 in Phase TG2).
+# Path -> tests mapping (sections A..L; C refined into C1..C7 in Phase TG2/5H).
 #
 # Each rule is a dict with:
 #   id        : human label
@@ -150,6 +150,7 @@ RULES: list[dict] = [
             "tests/test_project_rules_folder_crud.py",
             "tests/test_project_rules_enable_disable.py",
             "tests/test_project_rules_project_lifecycle.py",
+            "tests/test_project_rules_rule_impact.py",
             "tests/test_webview_project_rules_bridge.py",
             "tests/test_ui_backend_boundary.py",
         ],
@@ -171,6 +172,7 @@ RULES: list[dict] = [
             "tests/test_project_rules_keyword_edit.py",
             "tests/test_project_rules_enable_disable.py",
             "tests/test_project_rules_view.py",
+            "tests/test_project_rules_rule_impact.py",
             "tests/test_webview_project_rules_bridge.py",
             "tests/test_ui_backend_boundary.py",
         ],
@@ -187,6 +189,7 @@ RULES: list[dict] = [
             "tests/test_folder_rule_service.py",
             "tests/test_project_rules_folder_crud.py",
             "tests/test_project_rules_view.py",
+            "tests/test_project_rules_rule_impact.py",
             "tests/test_webview_project_rules_bridge.py",
             "tests/test_ui_backend_boundary.py",
         ],
@@ -203,6 +206,7 @@ RULES: list[dict] = [
         "tests": [
             "tests/test_project_rules_project_lifecycle.py",
             "tests/test_project_rules_view.py",
+            "tests/test_project_rules_rule_impact.py",
             "tests/test_webview_project_rules_bridge.py",
             "tests/test_ui_backend_boundary.py",
         ],
@@ -216,6 +220,7 @@ RULES: list[dict] = [
         ],
         "tests": [
             "tests/test_webview_project_rules_bridge.py",
+            "tests/test_project_rules_rule_impact.py",
             "tests/test_ui_backend_boundary.py",
         ],
         "smoke": [],
@@ -235,6 +240,19 @@ RULES: list[dict] = [
             "tests/webview/test_project_rules_static_contract.py",
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
+        "warnings": [],
+    },
+    {
+        "id": "C7. Rule impact service (Phase 5H)",
+        "triggers": [
+            "worktrace/services/rule_impact_service.py",
+        ],
+        "tests": [
+            "tests/test_project_rules_rule_impact.py",
+            "tests/test_webview_project_rules_bridge.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [],
         "warnings": [],
     },
     {
@@ -298,6 +316,7 @@ RULES: list[dict] = [
             "tests/test_project_rules_keyword_delete.py",
             "tests/test_project_rules_keyword_edit.py",
             "tests/test_project_rules_project_lifecycle.py",
+            "tests/test_project_rules_rule_impact.py",
             "tests/test_ui_backend_boundary.py",
         ],
         "smoke": [],
@@ -425,7 +444,7 @@ def _matches_trigger(changed: str, trigger: str) -> bool:
 def select_targets(changed_files: Iterable[str]) -> Selection:
     """Map changed files to a conservative, ordered, de-duplicated test set.
 
-    Sections A..L (C refined into C1..C6 in Phase TG2) are matched against
+    Sections A..L (C refined into C1..C7 in Phase TG2/5H) are matched against
     every non-test changed file. Test-file
     changes (section L) are matched first so the most directly-affected test
     runs first. Unknown ``worktrace/`` source changes (section K) fall back

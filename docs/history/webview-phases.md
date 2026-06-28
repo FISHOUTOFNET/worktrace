@@ -5618,6 +5618,127 @@ Phase 5G does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
+## Phase 5H Implemented Scope
+
+Phase 5H is the **Rule impact preview + safe single-rule backfill
+foundation + in-phase hardening** phase. It opens single-rule impact
+preview and explicit safe single-rule backfill for folder / keyword rules
+on the Project Rules page and ships the hardening regression locks in the
+same phase rather than splitting into a separate 5H.1.
+
+Implemented in Phase 5H:
+
+- New user-visible capabilities:
+  - Single-rule impact preview for folder rules and keyword rules. The
+    preview returns display-safe counts (match count, would-update count,
+    manual-record skip count, hidden / deleted / in-progress / non-normal
+    skip count) plus up to 20 display-safe sample rows. No raw window
+    title, file path, or note is exposed.
+  - Explicit safe single-rule backfill for folder rules and keyword rules.
+    Backfill is capped at 100 updates per call. Backfill does NOT
+    overwrite manual records (`manual_override=1` or `is_manual=1` are
+    skipped). Backfill skips hidden / deleted / in-progress / non-normal
+    activities. `too_many_matches` returns a stable error code and writes
+    nothing.
+- Service layer (`worktrace/services/rule_impact_service.py` — new file):
+  - Encapsulates impact preview + safe backfill for folder / keyword
+    rules. Reuses the existing folder / keyword rule match helpers; no
+    new DB schema, no new table, no new column.
+  - Preview returns display-safe counts + ≤ 20 sample rows; backfill is
+    capped at 100 updates per call and skips manual / hidden / deleted /
+    in-progress / non-normal activities.
+- API layer (`worktrace/api/rule_api.py`):
+  - Two new facades: `preview_project_rule_impact(rule_type, rule_id)` and
+    `backfill_project_rule(rule_type, rule_id)`. Strict type validation
+    on `rule_type` (folder / keyword) and `rule_id` (int, > 0).
+  - Stable error codes: `invalid_input` / `not_found` / `too_many_matches`
+    / `operation_failed`. `too_many_matches` returns the stable code and
+    writes nothing.
+  - Narrow display-safe payload: counts + ≤ 20 sample rows; no raw window
+    title / file path / note / traceback / SQL leak.
+- Bridge layer (`worktrace/webview_ui/bridge_rules.py`):
+  - Two new bridge methods: `preview_project_rule_impact` and
+    `backfill_project_rule`. They only call `worktrace.api.rule_api`; they
+    never import services / db / collector / runtime / config.
+  - Strict type validation at the bridge too. Stable Chinese error
+    mapping; unknown codes collapse to a per-action Chinese message. No
+    `.message` reads, no traceback / SQL / path / window_title /
+    clipboard / note leak.
+- Frontend (`worktrace/webview_ui/js/rules_render.js`,
+  `worktrace/webview_ui/js/rules_rule_actions.js`,
+  `worktrace/webview_ui/js/core.js`,
+  `worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/styles.css`):
+  - Impact buttons rendered per rule in `rules_render.js`; handlers in
+    `rules_rule_actions.js`; preview / backfill panel in `index.html`;
+    CSS in `styles.css`.
+  - New state variables in `core.js` for preview / backfill in-flight
+    state, isolated from existing keyword / folder / project lifecycle
+    write states.
+  - Backfill uses `confirm` before calling the bridge; preview and
+    backfill refresh / reset the panel on success and preserve state on
+    failure.
+  - No `fetch` / `XMLHttpRequest` / `localStorage` / `sessionStorage`
+    / ES module / external URL / new dependency / new JS file.
+- Tests:
+  - New `tests/test_project_rules_rule_impact.py` covering service / API /
+    bridge regression locks: preview counts + sample rows, display-safe
+    payload, backfill cap of 100, manual records preserved, hidden /
+    deleted / in-progress / non-normal skipped, `too_many_matches`
+    returns stable code and writes nothing, invalid / not_found paths,
+    no sensitive-string leak, JSON-serializable payload.
+  - Extended bridge tests in `tests/test_webview_project_rules_bridge.py`
+    and static contract tests in
+    `tests/webview/test_project_rules_static_contract.py` for the two new
+    bridge methods, impact buttons, panel anchors, state variable
+    declarations, CSS scoping, and no-forbidden-tokens.
+- Affected runner mapping (`scripts/run_affected_tests.py`):
+  - New C7 section for `rule_impact_service.py` mapping changes to
+    `rule_impact_service.py` / `rule_api.py` / `bridge_rules.py` /
+    `rules_render.js` / `rules_rule_actions.js` to the new
+    `tests/test_project_rules_rule_impact.py` plus the extended bridge /
+    static contract tests.
+- Documentation: `README.md`, `docs/current-state.md`,
+  `docs/ui-webview-migration.md`, and this file now describe the current
+  phase as 5H and explicitly note that 5H ships single-rule impact
+  preview + safe single-rule backfill (folder / keyword), not the raw
+  folder-rule conflict preview / raw / batch backfill.
+
+Phase 5H does not modify `WorkTrace.spec` resource list, `worktrace/db.py`,
+`worktrace/schema.sql`, or any collector / privacy / encrypted backup /
+statistics / export / timeline code. No DB schema change. No new
+dependency. No new JS file. The WebView packaging static test
+(`tests/test_webview_packaging.py`) and the `worktrace.webview_main`
+import check were run and pass; the full PyInstaller build was not re-run
+because no packaging or runtime behavior changed.
+
+## Phase 5H Not Implemented
+
+Phase 5H does not implement and does not start:
+
+- Automatic rules (deferred to 5I);
+- Batch Project Rules operations (deferred to 5I);
+- Raw folder-rule conflict preview in WebView (the raw
+  `folder_rule_service.preview_folder_rule_conflicts` is NOT exposed to
+  WebView; 5H ships a separate display-safe rule impact preview facade);
+- Raw / batch folder-rule backfill (5H ships only safe single-rule
+  backfill, capped at 100 updates per call);
+- Hard delete project (deferred);
+- Project restore (un-archive) in WebView (deferred);
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel / PDF / timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

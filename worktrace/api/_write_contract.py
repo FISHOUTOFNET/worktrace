@@ -45,6 +45,10 @@ ERROR_DUPLICATE_RULE = "duplicate_rule"
 ERROR_DUPLICATE_PROJECT = "duplicate_project"
 ERROR_SYSTEM_PROJECT = "system_project"
 ERROR_OPERATION_FAILED = "operation_failed"
+# Phase 5H: rule impact preview / safe single-rule backfill stable codes.
+ERROR_RULE_DISABLED = "rule_disabled"
+ERROR_PROJECT_NOT_AVAILABLE = "project_not_available"
+ERROR_TOO_MANY_MATCHES = "too_many_matches"
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +136,11 @@ __all__ = [
     "ERROR_INVALID_INPUT",
     "ERROR_NOT_FOUND",
     "ERROR_OPERATION_FAILED",
+    "ERROR_PROJECT_NOT_AVAILABLE",
     "ERROR_PROJECT_NOT_FOUND",
+    "ERROR_RULE_DISABLED",
     "ERROR_SYSTEM_PROJECT",
+    "ERROR_TOO_MANY_MATCHES",
     "fail_payload",
     "ok_payload",
     "valid_bool",

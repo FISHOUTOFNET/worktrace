@@ -384,7 +384,7 @@
                     </div>
                 </header>
                 <div id="rules-readonly-hint" class="rules-readonly-hint">
-                    当前支持查看项目规则、启用/停用已有文件夹或关键词规则、新增关键词规则、编辑已有关键词规则、删除已有关键词规则、新增/编辑/删除文件夹规则，以及新增、编辑、启用/停用、归档已有用户项目。冲突预览、回填和项目硬删除将在后续阶段开放。
+                    当前支持查看项目规则、启用/停用已有文件夹或关键词规则、新增关键词规则、编辑已有关键词规则、删除已有关键词规则、新增/编辑/删除文件夹规则，新增、编辑、启用/停用、归档已有用户项目，以及预览单条规则影响并安全应用到符合条件的历史记录。自动规则、批量 Project Rules 操作和项目硬删除将在后续阶段开放。
                 </div>
                 <form id="rules-project-create-form" class="rules-project-create-form" autocomplete="off" onsubmit="return false;">
                     <div class="rules-project-create-title">新增项目</div>
@@ -438,6 +438,7 @@
                 </form>
                 <div id="rules-error" class="error-banner" hidden>加载项目规则失败</div>
                 <div id="rules-loading" class="rules-loading" hidden>正在加载项目规则…</div>
+                <div id="rules-impact-panel" class="rules-impact-panel" hidden></div>
                 <div id="rules-list" class="rules-list"></div>
                 <div id="rules-empty" class="rules-empty" hidden>暂无项目规则。</div>
             </section>

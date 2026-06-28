@@ -145,6 +145,29 @@ _PROJECT_LIFECYCLE_ARCHIVE_MESSAGES = {
     "operation_failed": "归档项目失败",
 }
 
+# Maps Phase 5H rule impact preview API stable codes to user-facing messages.
+# Unknown codes collapse to the generic preview failure so internal details
+# are never surfaced. ``not_found`` covers both "id does not exist" and "id
+# belongs to the other rule table" — both reported as ``规则不存在`` so the
+# user never learns which table the id belonged to.
+_PROJECT_RULE_IMPACT_PREVIEW_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "规则不存在",
+    "operation_failed": "预览规则影响失败",
+}
+
+# Maps Phase 5H safe single-rule backfill API stable codes to user-facing
+# messages. Unknown codes collapse to the generic backfill failure so
+# internal details are never surfaced.
+_PROJECT_RULE_BACKFILL_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "规则不存在",
+    "rule_disabled": "规则未启用，无法应用",
+    "project_not_available": "目标项目不可用",
+    "too_many_matches": "命中记录过多，请先缩小范围",
+    "operation_failed": "应用规则失败",
+}
+
 
 # ---------------------------------------------------------------------------
 # Payload helpers.
@@ -879,6 +902,81 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge archive_project_for_rules failed")
             return {"ok": False, "error": "归档项目失败"}
 
+    # --- Phase 5H: rule impact preview + safe single-rule backfill ------
+
+    def preview_project_rule_impact(self, rule_type, rule_id) -> dict[str, Any]:
+        """Preview the impact of applying one existing folder / keyword rule.
+
+        Phase 5H read path only. Strict bridge validation rejects non-string
+        ``rule_type``, unknown rule types, bool-as-int ``rule_id``,
+        non-int ``rule_id``, and non-positive ids before calling
+        ``rule_api.preview_project_rule_impact``. The bridge never exposes
+        raw exceptions, tracebacks, SQL, paths, window titles, clipboard, or
+        notes in the payload.
+
+        Returns ``{"ok": True, "impact": {...}}`` on success (the narrow
+        impact payload: ``rule`` summary, ``counts``, and up to 20
+        display-safe ``samples``) or ``{"ok": False, "error": "<chinese
+        message>"}`` on failure. Preview never refreshes the Project Rules
+        list and never writes anything.
+        """
+        try:
+            # ``isinstance(rule_type, str)`` short-circuits the set membership
+            # check so unhashable non-string types (list / dict) collapse to
+            # ``操作无效`` instead of leaking a ``TypeError``.
+            if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
+                return {"ok": False, "error": "操作无效"}
+            if type(rule_id) is not int or rule_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            result = rule_api.preview_project_rule_impact(rule_type, rule_id)
+            if result.get("ok") is True:
+                return {"ok": True, "impact": result.get("impact") or {}}
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES.get(
+                    code, "预览规则影响失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge preview_project_rule_impact failed")
+            return {"ok": False, "error": "预览规则影响失败"}
+
+    def backfill_project_rule(self, rule_type, rule_id) -> dict[str, Any]:
+        """Apply one existing enabled folder / keyword rule to eligible history.
+
+        Phase 5H write path only. Strict bridge validation rejects non-string
+        ``rule_type``, unknown rule types, bool-as-int ``rule_id``,
+        non-int ``rule_id``, and non-positive ids before calling
+        ``rule_api.backfill_project_rule``. The bridge never exposes raw
+        exceptions, tracebacks, SQL, paths, window titles, clipboard, or notes
+        in the payload.
+
+        Returns ``{"ok": True, "result": {...}}`` on success (the narrow
+        result payload: ``updated_count`` and skip/count fields + rule
+        summary) or ``{"ok": False, "error": "<chinese message>"}`` on
+        failure. On success the frontend re-fetches the full Project Rules
+        list via ``get_project_rules``; on failure the list is not refreshed.
+        Backfill never overwrites manual records and is capped at 100 updates
+        per call (``too_many_matches`` writes nothing).
+        """
+        try:
+            if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
+                return {"ok": False, "error": "操作无效"}
+            if type(rule_id) is not int or rule_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            result = rule_api.backfill_project_rule(rule_type, rule_id)
+            if result.get("ok") is True:
+                return {"ok": True, "result": result.get("result") or {}}
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_BACKFILL_MESSAGES.get(code, "应用规则失败"),
+            }
+        except Exception:
+            logger.exception("webview bridge backfill_project_rule failed")
+            return {"ok": False, "error": "应用规则失败"}
+
 
 __all__ = [
     "ProjectRulesBridgeMixin",
@@ -886,11 +984,13 @@ __all__ = [
     "_PROJECT_LIFECYCLE_CREATE_MESSAGES",
     "_PROJECT_LIFECYCLE_TOGGLE_MESSAGES",
     "_PROJECT_LIFECYCLE_UPDATE_MESSAGES",
+    "_PROJECT_RULE_BACKFILL_MESSAGES",
     "_PROJECT_RULE_CREATE_MESSAGES",
     "_PROJECT_RULE_DELETE_MESSAGES",
     "_PROJECT_RULE_FOLDER_CREATE_MESSAGES",
     "_PROJECT_RULE_FOLDER_DELETE_MESSAGES",
     "_PROJECT_RULE_FOLDER_UPDATE_MESSAGES",
+    "_PROJECT_RULE_IMPACT_PREVIEW_MESSAGES",
     "_PROJECT_RULE_UPDATE_MESSAGES",
     "_PROJECT_RULE_WRITE_MESSAGES",
     "_project_lifecycle_summary",

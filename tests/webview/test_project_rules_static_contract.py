@@ -105,15 +105,16 @@ def test_project_rules_required_dom_ids_exist():
 
 def test_project_rules_phase_5b_boundary_copy_present():
     section = _rules_section()
-    # Phase 5G: the boundary copy now mentions project lifecycle
-    # (create/edit/enable-disable/archive) as supported capabilities alongside
-    # the existing folder/keyword rule CRUD. The unsupported-ops clause still
-    # references conflict preview, backfill, and project hard delete.
+    # Phase 5H: the boundary copy now mentions project lifecycle
+    # (create/edit/enable-disable/archive) and single-rule impact preview +
+    # safe backfill as supported capabilities alongside the existing
+    # folder/keyword rule CRUD. The unsupported-ops clause references
+    # automatic rules, batch operations, and project hard delete.
     assert "启用/停用" in section
     assert "新增关键词规则" in section
     assert "删除已有关键词规则" in section
     assert "新增/编辑/删除文件夹规则" in section
-    for term in ("编辑", "删除", "冲突预览", "回填"):
+    for term in ("编辑", "删除", "预览单条规则影响", "安全应用"):
         assert term in section
 
 
@@ -1523,7 +1524,7 @@ def test_project_rules_keyword_delete_boundary_copy_present():
     assert "启用/停用" in section
     assert "新增关键词规则" in section
     assert "删除已有关键词规则" in section
-    for term in ("编辑", "删除", "冲突预览", "回填"):
+    for term in ("编辑", "删除", "预览单条规则影响", "安全应用"):
         assert term in section
 
 
@@ -3392,7 +3393,7 @@ def test_project_rules_keyword_edit_boundary_copy_present():
     assert "新增关键词规则" in section
     assert "编辑已有关键词规则" in section
     assert "删除已有关键词规则" in section
-    for term in ("编辑", "删除", "冲突预览", "回填"):
+    for term in ("编辑", "删除", "预览单条规则影响", "安全应用"):
         assert term in section
 
 
@@ -4158,4 +4159,380 @@ def test_project_rules_mc2_split_modules_no_external_resources():
         )
         assert not re.search(r"google\s*fonts", source, re.IGNORECASE), (
             f"{name} must not reference Google Fonts"
+        )
+
+
+# --- Phase 5H: rule impact preview + safe single-rule backfill ---
+#
+# Phase 5H added two read-only / safe-write user capabilities to the
+# Project Rules page:
+#   1. "预览影响" button  -> preview_project_rule_impact(rule_type, rule_id)
+#      renders a read-only panel with counts + up to 20 display-safe
+#      sample rows (no list refresh).
+#   2. "应用到历史记录" button -> backfill_project_rule(rule_type, rule_id)
+#      after a window.confirm() dialog; refreshes the Project Rules list
+#      on success.
+# The tests below lock down the static contract for both paths.
+
+
+def test_project_rules_impact_panel_dom_id_exists():
+    # Phase 5H: the rules page must contain the impact / backfill result
+    # panel container between rules-loading and rules-list.
+    section = _rules_section()
+    assert 'id="rules-impact-panel"' in section
+
+
+def test_project_rules_impact_readonly_hint_mentions_5h_capabilities():
+    # Phase 5H: the readonly hint must mention the new single-rule
+    # preview + safe backfill capability and still flag the deferred
+    # capabilities (automatic rules, batch ops, project hard delete).
+    section = _rules_section()
+    for term in (
+        "预览单条规则影响",
+        "安全应用",
+        "自动规则",
+        "项目硬删除",
+    ):
+        assert term in section, (
+            "rules-readonly-hint must mention Phase 5H capability: " + term
+        )
+
+
+def test_project_rules_impact_state_variables_declared():
+    # Phase 5H: core.js must declare the four new impact / backfill
+    # state keys so the render + action modules can coordinate disabled
+    # button state and the cached preview payload.
+    core = read_js("core.js")
+    for key in (
+        "rulesPreviewingImpactKey",
+        "rulesBackfillingRuleKey",
+        "rulesImpactPreviewKey",
+        "rulesImpactPreviewData",
+    ):
+        assert ("App." + key + " =") in core, (
+            f"core.js must declare state key: App.{key}"
+        )
+
+
+def test_project_rules_impact_preview_button_rendered_for_folder_and_keyword():
+    # Phase 5H: the preview impact button class appears in the shared
+    # renderProjectRuleRow body (rendered for any rule with a valid id,
+    # both folder and keyword paths).
+    source = read_rules_module_js()
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "rules-preview-impact-button" in row_body
+
+
+def test_project_rules_impact_backfill_button_rendered_for_folder_and_keyword():
+    # Phase 5H: the backfill button class appears in the shared
+    # renderProjectRuleRow body (rendered for any rule with a valid id).
+    source = read_rules_module_js()
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "rules-backfill-button" in row_body
+
+
+def test_project_rules_impact_buttons_have_data_rule_kind_and_data_rule_id():
+    # Phase 5H: both impact buttons must carry data-rule-kind and
+    # data-rule-id attributes so the delegated click handler can resolve
+    # the rule type and id. The render builds them via string concat:
+    #   data-rule-kind="' + kind + '"
+    #   data-rule-id="' + count(ruleId) + '"
+    source = read_rules_module_js()
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert '''data-rule-kind="' + kind + '"''' in row_body
+    assert '''data-rule-id="' + count(ruleId) + '"''' in row_body
+
+
+def test_project_rules_impact_preview_button_label_is_preview_impact():
+    # Phase 5H: the preview button label is "预览影响" (with a "正在预览…"
+    # in-flight variant handled separately).
+    source = read_rules_module_js()
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "预览影响" in row_body
+
+
+def test_project_rules_impact_backfill_button_label_is_apply_to_history():
+    # Phase 5H: the backfill button label is "应用到历史记录" (with a
+    # "正在应用…" in-flight variant handled separately).
+    source = read_rules_module_js()
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "应用到历史记录" in row_body
+
+
+def test_project_rules_impact_backfill_button_disabled_for_disabled_rules():
+    # Phase 5H: the backfill button must be rendered disabled when the
+    # rule is not enabled, because the bridge refuses to backfill a
+    # disabled rule (``rule_disabled``). The render uses ``!enabled`` in
+    # the backfillDisabled expression.
+    source = read_rules_module_js()
+    row_body = func_body(source, "renderProjectRuleRow")
+    assert "backfillDisabled" in row_body
+    assert "!enabled" in row_body
+
+
+def test_project_rules_impact_preview_handler_calls_bridge_preview():
+    # Phase 5H: the preview handler must call the new
+    # preview_project_rule_impact bridge method.
+    source = read_rules_module_js()
+    assert 'callBridge("preview_project_rule_impact"' in source
+
+
+def test_project_rules_impact_backfill_handler_calls_bridge_backfill():
+    # Phase 5H: the backfill handler must call the new
+    # backfill_project_rule bridge method.
+    source = read_rules_module_js()
+    assert 'callBridge("backfill_project_rule"' in source
+
+
+def test_project_rules_impact_backfill_confirm_text_mentions_manual_records():
+    # Phase 5H: the backfill confirm dialog must warn the user that
+    # manually-modified records will not be overwritten, and must use
+    # the exact determinate Chinese prompt.
+    source = read_rules_module_js()
+    assert "手动修改过的记录不会被覆盖" in source
+    assert "确定将这条规则应用到符合条件的历史记录吗" in source
+
+
+def test_project_rules_impact_preview_success_renders_panel_not_list_refresh():
+    # Phase 5H: on preview success the handler shows the impact panel
+    # via showProjectRuleImpactPanel and must NOT refresh the list
+    # (preview is read-only and does not mutate data).
+    source = read_rules_module_js()
+    body = func_body(source, "handleProjectRuleImpactPreview")
+    assert "showProjectRuleImpactPanel" in body
+    assert "loadProjectRules()" not in body
+
+
+def test_project_rules_impact_backfill_success_refreshes_list():
+    # Phase 5H: on backfill success the handler must refresh the
+    # Project Rules list via loadProjectRules() so the updated counts
+    # are reflected.
+    source = read_rules_module_js()
+    body = func_body(source, "handleProjectRuleBackfill")
+    assert "loadProjectRules()" in body
+
+
+def test_project_rules_impact_close_button_does_not_call_bridge():
+    # Phase 5H: the impact panel close button only clears the panel; it
+    # must not call any bridge method (close is a pure UI tear-down).
+    source = read_rules_module_js()
+    body = func_body(source, "handleProjectRuleImpactPanelClick")
+    assert "clearProjectRuleImpactPanel" in body
+    assert "callBridge(" not in body
+
+
+def test_project_rules_impact_preview_catch_never_reads_raw_exception():
+    # Phase 5H: the preview catch handler must use a hardcoded Chinese
+    # error string and never read ``.message`` off the raw exception.
+    source = read_rules_module_js()
+    body = func_body(source, "handleProjectRuleImpactPreview")
+    assert ".message" not in body
+
+
+def test_project_rules_impact_backfill_catch_never_reads_raw_exception():
+    # Phase 5H: the backfill catch handler must use a hardcoded Chinese
+    # error string and never read ``.message`` off the raw exception.
+    source = read_rules_module_js()
+    body = func_body(source, "handleProjectRuleBackfill")
+    assert ".message" not in body
+
+
+def test_project_rules_impact_no_storage_or_network():
+    # Phase 5H regression lock: the impact render + action modules must
+    # not use browser storage or network APIs.
+    for name in ("rules_render.js", "rules_rule_actions.js"):
+        source = read_js(name)
+        for forbidden in (
+            "localStorage",
+            "sessionStorage",
+            "document.cookie",
+            "fetch(",
+            "XMLHttpRequest",
+        ):
+            assert forbidden not in source, (
+                f"{name} must not use forbidden storage/network API: {forbidden}"
+            )
+
+
+def test_project_rules_impact_no_external_resources():
+    # Phase 5H regression lock: the impact render + action modules must
+    # not reference external network resources (CDN, Google Fonts,
+    # http/https links).
+    for name in ("rules_render.js", "rules_rule_actions.js"):
+        source = read_js(name)
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{name} must not reference external URLs"
+        )
+        assert not re.search(r"cdn", source, re.IGNORECASE), (
+            f"{name} must not reference CDN"
+        )
+        assert not re.search(r"google\s*fonts", source, re.IGNORECASE), (
+            f"{name} must not reference Google Fonts"
+        )
+
+
+def test_project_rules_impact_no_forbidden_handler_tokens():
+    # Phase 5H regression lock: the impact action module must not
+    # reintroduce any forbidden camelCase handler tokens.
+    source = read_js("rules_rule_actions.js")
+    for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
+        assert token not in source, (
+            f"rules_rule_actions.js must not contain forbidden handler token: {token}"
+        )
+
+
+def test_project_rules_impact_no_es_module_syntax():
+    # Phase 5H regression lock: the impact render + action modules must
+    # stay classic IIFEs (no ES module export / import syntax).
+    for name in ("rules_render.js", "rules_rule_actions.js"):
+        source = read_js(name)
+        assert "export " not in source, (
+            f"{name} must not use ES module export syntax"
+        )
+        assert "import " not in source, (
+            f"{name} must not use ES module import syntax"
+        )
+
+
+def test_project_rules_impact_css_classes_exist():
+    # Phase 5H: styles.css must define every impact panel CSS class used
+    # by the render module.
+    css = read_resource("styles.css")
+    for cls in (
+        ".rules-preview-impact-button",
+        ".rules-backfill-button",
+        ".rules-impact-panel",
+        ".rules-impact-panel-inner",
+        ".rules-impact-header",
+        ".rules-impact-title",
+        ".rules-impact-subtitle",
+        ".rules-impact-counts",
+        ".rules-impact-samples",
+        ".rules-impact-actions",
+        ".rules-impact-close-button",
+    ):
+        assert cls in css, (
+            "styles.css must define class: " + cls
+        )
+
+
+def test_project_rules_impact_css_classes_scoped_to_rules_page():
+    # Phase 5H: every impact CSS class must be scoped under the
+    # ``rules-`` namespace (no bare ``.impact-`` / ``.preview-``
+    # classes leaking outside the rules page namespace).
+    for cls in (
+        ".rules-preview-impact-button",
+        ".rules-backfill-button",
+        ".rules-impact-panel",
+        ".rules-impact-panel-inner",
+        ".rules-impact-header",
+        ".rules-impact-title",
+        ".rules-impact-subtitle",
+        ".rules-impact-counts",
+        ".rules-impact-samples",
+        ".rules-impact-actions",
+        ".rules-impact-close-button",
+    ):
+        assert cls.startswith(".rules-"), (
+            "impact CSS class must be scoped under .rules-: " + cls
+        )
+
+
+def test_project_rules_impact_state_isolation_from_other_write_paths():
+    # Phase 5H: both the preview and backfill handlers must early-return
+    # when the other impact write path is in flight, guarding against
+    # concurrent pollution. Each handler must reference both
+    # rulesPreviewingImpactKey and rulesBackfillingRuleKey.
+    source = read_rules_module_js()
+    preview_body = func_body(source, "handleProjectRuleImpactPreview")
+    backfill_body = func_body(source, "handleProjectRuleBackfill")
+    for body, label in (
+        (preview_body, "handleProjectRuleImpactPreview"),
+        (backfill_body, "handleProjectRuleBackfill"),
+    ):
+        assert "App.rulesPreviewingImpactKey" in body, (
+            f"{label} must reference App.rulesPreviewingImpactKey guard"
+        )
+        assert "App.rulesBackfillingRuleKey" in body, (
+            f"{label} must reference App.rulesBackfillingRuleKey guard"
+        )
+
+
+def test_project_rules_impact_render_panel_function_exists():
+    # Phase 5H: rules_render.js must define the two impact panel render
+    # helpers and attach them to App.
+    source = read_js("rules_render.js")
+    assert "App.renderProjectRuleImpactPreview = renderProjectRuleImpactPreview" in source
+    assert "App.renderProjectRuleBackfillResult = renderProjectRuleBackfillResult" in source
+
+
+def test_project_rules_impact_render_panel_does_not_call_bridge():
+    # Phase 5H regression lock: the render module must stay pure — no
+    # bridge calls. Bridge calls live in the action modules.
+    source = read_js("rules_render.js")
+    assert "callBridge(" not in source, (
+        "rules_render.js must not call bridge (pure render module)"
+    )
+
+
+def test_project_rules_impact_render_panel_uses_escape_helper():
+    # Phase 5H: the render module must use the escape helper for
+    # dynamic text so display-safe sample rows cannot inject HTML.
+    source = read_js("rules_render.js")
+    assert "App.escapeHtml" in source
+
+
+def test_project_rules_impact_packaging_spec_still_includes_rules_js():
+    # Phase 5H regression lock: the packaging spec must still bundle
+    # rules_render.js and rules_rule_actions.js so the impact modules
+    # ship in the frozen executable.
+    spec = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
+    assert "rules_render.js" in spec
+    assert "rules_rule_actions.js" in spec
+
+
+def test_project_rules_impact_no_new_js_file_added():
+    # Phase 5H regression lock: the impact logic was added to the
+    # existing split modules; no new rules_impact_actions.js file was
+    # introduced. ALL_JS_FILES must still list rules_rule_actions.js
+    # and must NOT list rules_impact_actions.js.
+    assert "rules_rule_actions.js" in ALL_JS_FILES
+    assert "rules_impact_actions.js" not in ALL_JS_FILES
+
+
+def test_project_rules_impact_init_does_not_bind_impact_buttons_directly():
+    # Phase 5H regression lock: init.js must not bind the impact
+    # buttons directly. Event delegation is wired in
+    # rules_rule_actions.js via bindProjectRuleImpactEvents.
+    source = read_js("init.js")
+    assert "rules-preview-impact-button" not in source
+    assert "rules-backfill-button" not in source
+
+
+def test_project_rules_impact_bind_function_called_in_show_and_rerender():
+    # Phase 5H regression lock: rules.js must call
+    # App.bindProjectRuleImpactEvents in both showProjectRules and
+    # rerenderProjectRulesList so the impact event delegation is
+    # re-bound after every re-render.
+    source = read_js("rules.js")
+    assert "App.bindProjectRuleImpactEvents" in source
+    # At least two call sites (show + rerender).
+    assert source.count("App.bindProjectRuleImpactEvents") >= 2
+
+
+def test_project_rules_impact_buttons_disabled_during_other_writes():
+    # Phase 5H regression lock: the impact button section in
+    # renderProjectRuleRow must reference the other rule write state
+    # keys so the impact buttons are disabled while any rule write is
+    # in flight (preventing cross-path pollution).
+    source = read_rules_module_js()
+    row_body = func_body(source, "renderProjectRuleRow")
+    for key in (
+        "App.rulesSavingRuleKey",
+        "App.rulesDeletingRuleKey",
+        "App.rulesEditingKeywordKey",
+        "App.rulesEditingFolderKey",
+    ):
+        assert key in row_body, (
+            "renderProjectRuleRow impact section must reference " + key
         )

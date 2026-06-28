@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5G "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5H "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -140,8 +140,23 @@ order:
 - Phase 5A – 5G — Project Rules read-only through project lifecycle
   foundation (rule enable/disable, keyword create/edit/delete, folder rule
   CRUD, user project lifecycle). **Completed.**
-- Phase 5D+ — remaining Project Rules write workflows (hard delete project,
-  conflict preview, backfill, automatic rules, batch operations). Not started.
+- Phase 5H — Rule impact preview + safe single-rule backfill foundation +
+  in-phase hardening. Adds single-rule impact preview (folder / keyword,
+  display-safe counts + ≤ 20 sample rows), safe single-rule backfill
+  (folder / keyword, capped at 100 updates per call, manual records
+  preserved), new `worktrace/services/rule_impact_service.py`, new API
+  facades `preview_project_rule_impact` / `backfill_project_rule` in
+  `rule_api.py`, new bridge methods of the same names in `bridge_rules.py`,
+  impact buttons (`rules_render.js`) + handlers (`rules_rule_actions.js`)
+  + preview/backfill panel (`index.html`) + CSS (`styles.css`) + state
+  vars (`core.js`) in the frontend, in-phase hardening tests
+  (`tests/test_project_rules_rule_impact.py` + extended bridge / static
+  contract tests), and a new affected-runner C7 section for
+  `rule_impact_service.py`. No schema change, no new dependencies, no new
+  JS file. **Completed.**
+- Phase 5I+ — remaining Project Rules write workflows (hard delete project,
+  raw folder-rule conflict preview, raw / batch backfill, automatic rules,
+  batch operations). Not started.
 - Phase 6 — Settings / Privacy / Encrypted Backup. Not started.
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.

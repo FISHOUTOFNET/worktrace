@@ -63,6 +63,7 @@
         App.bindProjectRuleFolderEvents();
         App.bindProjectRuleKeywordEditEvents();
         App.bindProjectLifecycleEvents();
+        App.bindProjectRuleImpactEvents();
     }
     App.showProjectRules = showProjectRules;
 
@@ -89,6 +90,7 @@
         App.bindProjectRuleFolderEvents();
         App.bindProjectRuleKeywordEditEvents();
         App.bindProjectLifecycleEvents();
+        App.bindProjectRuleImpactEvents();
     }
     App.rerenderProjectRulesList = rerenderProjectRulesList;
 

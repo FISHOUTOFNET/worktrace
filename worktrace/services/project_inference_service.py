@@ -180,6 +180,29 @@ def _safe_classification_text(activity: dict, resource: dict, clipboard_text: st
     return " ".join(parts).casefold()
 
 
+def keyword_pattern_matches(
+    pattern_casefold: str,
+    activity: dict,
+    resource: dict,
+    clipboard_text: str = "",
+) -> bool:
+    """Return True if a casefolded keyword pattern matches the activity's
+    safe classification text via substring containment.
+
+    Phase 5H display-safe internal helper. It reuses ``_safe_classification_text``
+    so there is a single keyword text-building code path shared with
+    ``_infer_project_resource_first`` instead of a second divergent matcher.
+    The built text may include clipboard content and must NEVER be returned
+    to an API / bridge / frontend payload — callers only use the boolean
+    result. ``pattern_casefold`` must already be casefolded and stripped by
+    the caller (matching how ``_enabled_keyword_rules`` normalizes patterns).
+    """
+    if not pattern_casefold:
+        return False
+    text = _safe_classification_text(activity, resource, clipboard_text)
+    return pattern_casefold in text
+
+
 def candidate_project_name_for_resource(resource: dict) -> str | None:
     """Generate a candidate project name from a resource dict."""
     is_anchor = bool(resource.get("is_anchor"))

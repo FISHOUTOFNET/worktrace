@@ -103,8 +103,10 @@ def test_index_html_unmigrated_pages_still_have_placeholders():
     # Phase 5D: boundary copy updated to mention keyword deletion.
     assert "删除已有关键词规则" in rules_section
     assert "编辑" in rules_section
-    assert "冲突预览" in rules_section
-    assert "回填" in rules_section
+    assert "预览单条规则影响" in rules_section
+    assert "安全应用" in rules_section
+    assert "自动规则" in rules_section
+    assert "批量" in rules_section
     assert "项目硬删除" in rules_section
 
     settings_start = source.find('id="page-settings"')

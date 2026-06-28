@@ -2504,6 +2504,178 @@ body {
     opacity: 0.65;
 }
 
+/* Phase 5H: rule impact preview + backfill buttons. Each folder / keyword
+   rule row gets a "预览影响" (read-only preview) and "应用到历史记录"
+   (safe single-rule backfill) button. The preview button uses a neutral
+   border; the backfill button uses an indigo accent so the write action
+   reads as the primary action on the row. Both stay disabled while any
+   rule write is in flight so the impact paths never pollute the toggle /
+   delete / edit / lifecycle write paths. */
+.rules-preview-impact-button,
+.rules-backfill-button {
+    min-width: 72px;
+    min-height: 30px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.rules-preview-impact-button:hover:not(:disabled),
+.rules-backfill-button:hover:not(:disabled) {
+    border-color: #94a3b8;
+    background: #f8fafc;
+}
+
+.rules-backfill-button {
+    border-color: #6366f1;
+    background: #6366f1;
+    color: #ffffff;
+}
+
+.rules-backfill-button:hover:not(:disabled) {
+    border-color: #4f46e5;
+    background: #4f46e5;
+}
+
+.rules-preview-impact-button:disabled,
+.rules-backfill-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+/* Phase 5H: rule impact preview / backfill result panel. Rendered in
+   #rules-impact-panel between the loading indicator and the rules list.
+   The panel shows the rule summary, a counts grid, and (for preview) up
+   to 20 display-safe sample rows. Scoped to Project Rules so the styles
+   never leak into Timeline / Statistics / Overview. */
+.rules-impact-panel {
+    margin-bottom: 12px;
+    padding: 14px 16px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+}
+
+.rules-impact-panel[hidden] {
+    display: none;
+}
+
+.rules-impact-panel-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.rules-impact-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rules-impact-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e293b;
+}
+
+.rules-impact-subtitle {
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.5;
+}
+
+.rules-impact-counts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+}
+
+.rules-impact-counts > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+}
+
+.rules-impact-counts > div > span {
+    font-size: 11px;
+    color: #64748b;
+}
+
+.rules-impact-counts > div > strong {
+    font-size: 16px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.rules-impact-samples {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.rules-impact-samples-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+}
+
+.rules-impact-samples-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.rules-impact-samples-table th,
+.rules-impact-samples-table td {
+    padding: 6px 8px;
+    text-align: left;
+    border: 1px solid #e2e8f0;
+    color: #1e293b;
+}
+
+.rules-impact-samples-table th {
+    background: #f1f5f9;
+    font-weight: 600;
+    color: #475569;
+}
+
+.rules-impact-samples-empty {
+    font-size: 12px;
+    color: #64748b;
+    padding: 8px 0;
+}
+
+.rules-impact-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.rules-impact-close-button {
+    min-width: 64px;
+    min-height: 30px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.rules-impact-close-button:hover:not(:disabled) {
+    border-color: #94a3b8;
+    background: #f8fafc;
+}
+
 /* Phase 5F: inline keyword rule edit form. Rendered in place of the normal
    row body when the user enters edit mode for a keyword rule. The form
    collapses the row into a single column so the input has room. */

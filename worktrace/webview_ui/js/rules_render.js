@@ -167,6 +167,39 @@
             folderButtons = '  <button class="rules-folder-edit-button" type="button" data-rule-kind="folder" data-rule-id="' + count(ruleId) + '"' + folderBtnDisabled + '>' + editLabel + '</button>';
             folderButtons += '  <button class="rules-folder-delete-button" type="button" data-rule-kind="folder" data-rule-id="' + count(ruleId) + '"' + folderBtnDisabled + '>' + folderDeleteLabel + '</button>';
         }
+        // Phase 5H: every folder / keyword rule with a valid id gets a
+        // "预览影响" (read-only impact preview) and "应用到历史记录" (safe
+        // single-rule backfill) button. The preview button stays enabled for
+        // disabled rules (preview is informational and returns zero counts);
+        // the backfill button is disabled for disabled rules because backfill
+        // refuses to apply a disabled rule (``rule_disabled``). Both buttons
+        // are disabled while any rule write is in flight so the impact paths
+        // can never pollute the toggle / delete / edit / lifecycle write
+        // paths, and vice versa.
+        var impactButtons = "";
+        if (ruleId) {
+            var impactWriteInProgress = !!(
+                App.rulesBackfillingRuleKey ||
+                App.rulesSavingRuleKey ||
+                App.rulesDeletingRuleKey ||
+                App.rulesEditingKeywordKey ||
+                App.rulesUpdatingKeywordKey ||
+                App.rulesEditingFolderKey ||
+                App.rulesCreatingFolder ||
+                App.rulesDeletingFolderKey
+            );
+            var previewingThis = App.rulesPreviewingImpactKey === ruleKey;
+            var previewingOther = App.rulesPreviewingImpactKey && App.rulesPreviewingImpactKey !== ruleKey;
+            var previewBtnDisabled = (App.rulesBackfillingRuleKey || previewingOther || !ruleId) ? " disabled" : "";
+            var previewLabel = previewingThis ? "正在预览…" : "预览影响";
+            // Backfill is refused for disabled rules; render it disabled so
+            // the user gets immediate visual feedback instead of an error.
+            var backfillDisabled = (!enabled || impactWriteInProgress || App.rulesPreviewingImpactKey) ? " disabled" : "";
+            var backfillingThis = App.rulesBackfillingRuleKey === ruleKey;
+            var backfillLabel = backfillingThis ? "正在应用…" : "应用到历史记录";
+            impactButtons = '  <button class="rules-preview-impact-button" type="button" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + previewBtnDisabled + '>' + previewLabel + '</button>';
+            impactButtons += '  <button class="rules-backfill-button" type="button" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + backfillDisabled + '>' + backfillLabel + '</button>';
+        }
         // When this folder row is being edited, render the inline edit form
         // in place of the normal body. The edit form holds its own folder
         // path input + recursive checkbox + save / cancel buttons.
@@ -217,10 +250,126 @@
             deleteButton,
             keywordEditButton,
             folderButtons,
+            impactButtons,
             '</div>'
         ].join("");
     }
     App.renderProjectRuleRow = renderProjectRuleRow;
+
+    // --- Phase 5H: rule impact preview / backfill result panel render ---
+
+    function renderProjectRuleImpactPreview(ruleKey, impact) {
+        // Phase 5H: render the read-only impact preview panel below the
+        // rules list. The panel shows the rule summary, the skip / count
+        // grid, and up to 20 display-safe sample rows. No raw sensitive
+        // metadata is ever surfaced — the bridge already filtered the
+        // payload to display-safe fields.
+        if (!impact) return "";
+        var rule = impact.rule || {};
+        var counts = impact.counts || {};
+        var samples = impact.samples || [];
+        var kindLabel = rule.kind === "folder" ? "文件夹规则" : "关键词规则";
+        var target = text(rule.target, "未设置");
+        var projectName = text(rule.project_name, "未知项目");
+        var enabledLabel = rule.enabled ? "已启用" : "已禁用";
+        var availLabel = rule.project_available === false ? "目标项目不可用" : "";
+        var headerParts = [kindLabel + "：" + target, "归属项目：" + projectName, enabledLabel];
+        if (availLabel) headerParts.push(availLabel);
+        var header = headerParts.join(" | ");
+        var countsGrid = [
+            '<div class="rules-impact-counts">',
+            '  <div><span>命中数量</span><strong>' + count(counts.matched_count) + '</strong></div>',
+            '  <div><span>符合条件</span><strong>' + count(counts.eligible_count) + '</strong></div>',
+            '  <div><span>将被更新</span><strong>' + count(counts.would_update_count) + '</strong></div>',
+            '  <div><span>已是目标</span><strong>' + count(counts.already_target_count) + '</strong></div>',
+            '  <div><span>手动跳过</span><strong>' + count(counts.manual_skipped_count) + '</strong></div>',
+            '  <div><span>隐藏跳过</span><strong>' + count(counts.hidden_skipped_count) + '</strong></div>',
+            '  <div><span>删除跳过</span><strong>' + count(counts.deleted_skipped_count) + '</strong></div>',
+            '  <div><span>进行中跳过</span><strong>' + count(counts.in_progress_skipped_count) + '</strong></div>',
+            '  <div><span>非正常跳过</span><strong>' + count(counts.non_normal_skipped_count) + '</strong></div>',
+            '</div>'
+        ].join("");
+        var samplesBlock = "";
+        if (samples.length) {
+            var rows = samples.map(function (sample) {
+                return [
+                    '<tr>',
+                    '  <td>' + count(sample.activity_id) + '</td>',
+                    '  <td>' + text(sample.start_time, "") + '</td>',
+                    '  <td>' + text(sample.end_time, "") + '</td>',
+                    '  <td>' + App.escapeHtml(App.formatDuration(sample.duration_seconds || 0)) + '</td>',
+                    '  <td>' + text(sample.resource_name, "未知") + '</td>',
+                    '  <td>' + text(sample.current_project_name, "未归类") + '</td>',
+                    '  <td>' + text(sample.target_project_name, "未知项目") + '</td>',
+                    '  <td>' + text(sample.match_source, "") + '</td>',
+                    '</tr>'
+                ].join("");
+            }).join("");
+            samplesBlock = [
+                '<div class="rules-impact-samples">',
+                '  <div class="rules-impact-samples-title">预览样本（最多 20 条）</div>',
+                '  <table class="rules-impact-samples-table">',
+                '    <thead><tr><th>ID</th><th>开始时间</th><th>结束时间</th><th>时长</th><th>资源名称</th><th>当前项目</th><th>目标项目</th><th>匹配来源</th></tr></thead>',
+                '    <tbody>' + rows + '</tbody>',
+                '  </table>',
+                '</div>'
+            ].join("");
+        } else {
+            samplesBlock = '<div class="rules-impact-samples-empty">暂无可预览的样本记录。</div>';
+        }
+        return [
+            '<div class="rules-impact-panel-inner" data-rule-key="' + App.escapeHtml(String(ruleKey || "")) + '">',
+            '  <div class="rules-impact-header">',
+            '    <div class="rules-impact-title">规则影响预览</div>',
+            '    <div class="rules-impact-subtitle">' + header + '</div>',
+            '  </div>',
+            countsGrid,
+            samplesBlock,
+            '  <div class="rules-impact-actions">',
+            '    <button class="rules-impact-close-button" type="button">关闭</button>',
+            '  </div>',
+            '</div>'
+        ].join("");
+    }
+    App.renderProjectRuleImpactPreview = renderProjectRuleImpactPreview;
+
+    function renderProjectRuleBackfillResult(ruleKey, result) {
+        // Phase 5H: render the narrow backfill result panel. Shows the
+        // updated count and skip summary only; no sample rows. The panel
+        // auto-includes a close button.
+        if (!result) return "";
+        var rule = result.rule || {};
+        var kindLabel = rule.kind === "folder" ? "文件夹规则" : "关键词规则";
+        var target = text(rule.target, "未设置");
+        var projectName = text(rule.project_name, "未知项目");
+        var header = kindLabel + "：" + target + " | 归属项目：" + projectName;
+        var summary = [
+            '<div class="rules-impact-counts">',
+            '  <div><span>已更新</span><strong>' + count(result.updated_count) + '</strong></div>',
+            '  <div><span>命中数量</span><strong>' + count(result.matched_count) + '</strong></div>',
+            '  <div><span>符合条件</span><strong>' + count(result.eligible_count) + '</strong></div>',
+            '  <div><span>已是目标</span><strong>' + count(result.already_target_count) + '</strong></div>',
+            '  <div><span>手动跳过</span><strong>' + count(result.manual_skipped_count) + '</strong></div>',
+            '  <div><span>隐藏跳过</span><strong>' + count(result.hidden_skipped_count) + '</strong></div>',
+            '  <div><span>删除跳过</span><strong>' + count(result.deleted_skipped_count) + '</strong></div>',
+            '  <div><span>进行中跳过</span><strong>' + count(result.in_progress_skipped_count) + '</strong></div>',
+            '  <div><span>非正常跳过</span><strong>' + count(result.non_normal_skipped_count) + '</strong></div>',
+            '</div>'
+        ].join("");
+        return [
+            '<div class="rules-impact-panel-inner" data-rule-key="' + App.escapeHtml(String(ruleKey || "")) + '">',
+            '  <div class="rules-impact-header">',
+            '    <div class="rules-impact-title">应用规则结果</div>',
+            '    <div class="rules-impact-subtitle">' + header + '</div>',
+            '  </div>',
+            summary,
+            '  <div class="rules-impact-actions">',
+            '    <button class="rules-impact-close-button" type="button">关闭</button>',
+            '  </div>',
+            '</div>'
+        ].join("");
+    }
+    App.renderProjectRuleBackfillResult = renderProjectRuleBackfillResult;
 
     // --- Private render helpers (used only by render functions above) ---
 

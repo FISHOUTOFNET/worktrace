@@ -280,9 +280,9 @@ def test_current_state_line_count_under_hard_max():
     )
 
 
-def test_current_state_contains_phase_5g():
+def test_current_state_contains_phase_5h():
     text = _read_text(CURRENT_STATE_PATH)
-    assert "Phase 5G" in text, "current-state.md must mention Phase 5G"
+    assert "Phase 5H" in text, "current-state.md must mention Phase 5H"
 
 
 def test_current_state_contains_csv_export():
@@ -478,15 +478,14 @@ def test_current_state_remains_under_one_screen_hard_max_after_dg1_1():
 
 
 def test_current_state_phase_description_is_unambiguous_after_dg1_1():
-    """The Phase 5G description must use the unambiguous DG1.1 wording:
-    "user project create, plus existing user project edit / enable-disable /
-    archive" — not the old "on existing user projects" form that could be
-    misread as "create only on existing user projects"."""
+    """The Phase 5H description must use unambiguous wording that lists
+    user project create / edit / enable-disable / archive as distinct
+    capabilities — not the old "on existing user projects" form that could
+    be misread as "create only on existing user projects"."""
     text = _read_text(CURRENT_STATE_PATH)
-    assert "user project create, plus existing user project" in text, (
-        "current-state.md Phase 5G description must use the DG1.1 unambiguous "
-        "wording: 'user project create, plus existing user project edit / "
-        "enable-disable / archive'"
+    assert "user project create / edit / enable-disable / archive" in text, (
+        "current-state.md must list user project create / edit / enable-disable "
+        "/ archive as distinct capabilities (unambiguous wording)"
     )
     assert "on existing user projects" not in text, (
         "current-state.md must not retain the DG1.1-removed ambiguous wording "

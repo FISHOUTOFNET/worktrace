@@ -129,6 +129,22 @@
     App.rulesTogglingProjectId = null;  // project id being toggled (int or null)
     App.rulesArchivingProjectId = null; // project id being archived (int or null)
 
+    // --- Phase 5H: rule impact preview + safe single-rule backfill state ---
+    // Separate from all rule write states (5B toggle, 5C keyword create,
+    // 5D keyword delete, 5E folder CRUD, 5F keyword edit, 5G project
+    // lifecycle) so preview / backfill can never pollute any other write
+    // button / input disabled state. ``rulesPreviewingImpactKey`` carries
+    // the "<kind>:<id>" key of the rule whose preview is loading;
+    // ``rulesBackfillingRuleKey`` carries the key of the rule being applied;
+    // ``rulesImpactPreviewKey`` is the key of the rule whose preview is
+    // currently rendered (null = no preview shown);
+    // ``rulesImpactPreviewData`` caches the last preview payload so the
+    // panel can be re-rendered from cache without a round-trip.
+    App.rulesPreviewingImpactKey = null;
+    App.rulesBackfillingRuleKey = null;
+    App.rulesImpactPreviewKey = null;
+    App.rulesImpactPreviewData = null;
+
     // --- Phase 3C: Unified Timeline status semantics -------------------
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",

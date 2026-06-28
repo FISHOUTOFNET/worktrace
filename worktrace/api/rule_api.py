@@ -21,7 +21,10 @@ from ._write_contract import (
     ERROR_INVALID_INPUT,
     ERROR_NOT_FOUND,
     ERROR_OPERATION_FAILED,
+    ERROR_PROJECT_NOT_AVAILABLE,
     ERROR_PROJECT_NOT_FOUND,
+    ERROR_RULE_DISABLED,
+    ERROR_TOO_MANY_MATCHES,
     fail_payload,
     ok_payload,
     valid_bool,
@@ -522,6 +525,113 @@ def delete_project_folder_rule(rule_id: Any) -> dict[str, Any]:
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
+# --- Phase 5H: rule impact preview + safe single-rule backfill ----------
+
+
+def preview_project_rule_impact(rule_type: Any, rule_id: Any) -> dict[str, Any]:
+    """Preview the impact of applying one existing folder / keyword rule.
+
+    Phase 5H narrow WebView-facing facade. ``rule_type`` must be a real
+    ``str`` in ``{"folder", "keyword"}``; ``rule_id`` must be a real positive
+    ``int`` (bool / float / numeric string / ``None`` / container / zero /
+    negative rejected as ``invalid_input``). A folder id resolved on the
+    keyword path (or vice versa) is ``not_found`` — the keyword path only
+    resolves ids in ``project_rule`` and the folder path only resolves ids in
+    ``folder_project_rule``, so the two paths can never touch each other's
+    rules.
+
+    The facade delegates the read-only preview to
+    ``rule_impact_service.preview_rule_impact`` and wraps its result in the
+    stable ``ok_payload(impact=...)`` envelope. Disabled rules and
+    unavailable target projects return ``ok`` with zero counts and empty
+    samples (availability is surfaced in the rule summary). Only ``not_found``
+    and unexpected service failures produce a fail payload.
+
+    It does NOT write anything, NOT perform backfill / automatic rules /
+    batch operations / DB schema changes, and does NOT expose
+    ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard / note /
+    SQL / traceback / raw activity rows in the payload.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``rule_type`` is not ``"folder"`` / ``"keyword"``
+      or ``rule_id`` is not a real positive ``int``.
+    - ``not_found`` — no folder/keyword rule exists with this id (covers both
+      "id does not exist at all" and "id belongs to the other rule table").
+    - ``operation_failed`` — any unexpected service failure.
+    """
+
+    if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
+        return fail_payload(ERROR_INVALID_INPUT)
+    if not valid_int(rule_id):
+        return fail_payload(ERROR_INVALID_INPUT)
+    try:
+        from ..services import rule_impact_service
+
+        impact = rule_impact_service.preview_rule_impact(rule_type, rule_id)
+        return ok_payload(impact=impact)
+    except rule_impact_service.RuleImpactError as exc:
+        return fail_payload(exc.code)
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
+def backfill_project_rule(rule_type: Any, rule_id: Any) -> dict[str, Any]:
+    """Apply one existing enabled folder / keyword rule to eligible history.
+
+    Phase 5H narrow WebView-facing facade. ``rule_type`` must be a real
+    ``str`` in ``{"folder", "keyword"}``; ``rule_id`` must be a real positive
+    ``int`` (bool / float / numeric string / ``None`` / container / zero /
+    negative rejected as ``invalid_input``). A folder id resolved on the
+    keyword path (or vice versa) is ``not_found``.
+
+    The facade delegates to ``rule_impact_service.backfill_rule_impact``,
+    which only affects eligible existing activities (not deleted / hidden /
+    in-progress / non-normal / manual_override / is_manual), never sets
+    ``manual_override = 1``, writes ``auto_classified = 1`` and upserts the
+    assignment with ``is_manual = 0``, ``source = "folder_rule" |
+    "keyword_rule"``, and the inference confidence (85 folder / 80 keyword).
+    A single call is capped at ``MAX_RULE_BACKFILL_ACTIVITIES`` (100) updates;
+    exceeding the cap returns ``too_many_matches`` and writes nothing. The
+    write runs in one transaction with a rowcount guard so any partial write
+    is rolled back.
+
+    It does NOT perform automatic rules / batch Project Rules operations /
+    hard delete project / project restore / DB schema changes, does NOT
+    modify Timeline / Statistics / Export / collector / privacy / encrypted
+    backup behavior, and does NOT expose ``window_title`` / ``file_path_hint``
+    / ``path_hint`` / clipboard / note / SQL / traceback / raw activity rows
+    in the payload.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``rule_type`` is not ``"folder"`` / ``"keyword"``
+      or ``rule_id`` is not a real positive ``int``.
+    - ``not_found`` — no folder/keyword rule exists with this id.
+    - ``rule_disabled`` — the rule is disabled; backfill refuses to write.
+    - ``project_not_available`` — the rule's target project is disabled /
+      archived / the special ``排除规则`` project; backfill refuses to write.
+    - ``too_many_matches`` — matched eligible activities exceed the per-call
+      cap; nothing is written.
+    - ``operation_failed`` — any unexpected service failure (including a
+      rowcount-guard rollback).
+    """
+
+    if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
+        return fail_payload(ERROR_INVALID_INPUT)
+    if not valid_int(rule_id):
+        return fail_payload(ERROR_INVALID_INPUT)
+    try:
+        from ..services import rule_impact_service
+
+        result = rule_impact_service.backfill_rule_impact(rule_type, rule_id)
+        return ok_payload(result=result)
+    except rule_impact_service.RuleImpactError as exc:
+        return fail_payload(exc.code)
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
 # --- keyword rules -------------------------------------------------------
 
 def create_keyword_rule(keyword: str, project_id: int) -> int:
@@ -560,6 +670,7 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict[str, Any]:
 
 __all__ = [
     "backfill_folder_rule",
+    "backfill_project_rule",
     "create_keyword_rule",
     "create_or_update_folder_rule",
     "create_project_folder_rule",
@@ -570,6 +681,7 @@ __all__ = [
     "delete_project_keyword_rule",
     "ProjectRuleWriteError",
     "preview_folder_rule_conflicts",
+    "preview_project_rule_impact",
     "set_project_rule_enabled",
     "set_folder_rule_enabled",
     "set_keyword_rule_enabled",

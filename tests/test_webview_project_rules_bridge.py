@@ -4180,3 +4180,548 @@ def test_get_project_rules_read_payload_excludes_sensitive_internal_fields(monke
             assert isinstance(project[flag], bool), (
                 f"display-safe flag {flag!r} must be bool"
             )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5H: rule impact preview + safe single-rule backfill bridge tests
+# ---------------------------------------------------------------------------
+
+# Sensitive tokens that must never appear in any bridge payload (success or
+# failure). The bridge must collapse verbose backend exceptions to stable
+# Chinese messages.
+_SENSITIVE_FORBIDDEN_TOKENS = (
+    "traceback",
+    "sqlite",
+    "select ",
+    "insert ",
+    "update ",
+    "window_title",
+    "file_path_hint",
+    "path_hint",
+    "clipboard",
+    "note",
+    "secret",
+    "details",
+    "C:\\",
+)
+
+
+def _assert_no_sensitive_tokens(result) -> None:
+    lowered = repr(result).lower()
+    for forbidden in _SENSITIVE_FORBIDDEN_TOKENS:
+        assert forbidden not in lowered, (
+            f"bridge payload must not leak {forbidden!r}: {result!r}"
+        )
+
+
+def test_preview_project_rule_impact_success_returns_narrow_impact_payload(monkeypatch):
+    # Phase 5H regression lock: the preview success payload is
+    # ``{"ok": True, "impact": {...}}``. The bridge must project the API
+    # result to a narrow ``impact`` key and never echo the full API dict.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rule_impact",
+        lambda rule_type, rule_id: {
+            "ok": True,
+            "impact": {
+                "rule": {
+                    "kind": "folder",
+                    "id": rule_id,
+                    "enabled": True,
+                    "project_id": 5,
+                    "project_name": "Client",
+                    "target": r"D:\Client",
+                },
+                "counts": {
+                    "matched_count": 3,
+                    "eligible_count": 3,
+                    "would_update_count": 2,
+                    "already_target_count": 1,
+                    "manual_skipped_count": 0,
+                    "hidden_skipped_count": 0,
+                    "deleted_skipped_count": 0,
+                    "in_progress_skipped_count": 0,
+                    "non_normal_skipped_count": 0,
+                },
+                "samples": [
+                    {
+                        "activity_id": 100,
+                        "start_time": "2026-06-28 09:00:00",
+                        "end_time": "2026-06-28 10:00:00",
+                        "duration_seconds": 3600,
+                        "resource_name": "report.docx",
+                        "current_project_name": "未归类",
+                        "target_project_name": "Client",
+                        "match_source": "folder_rule",
+                    }
+                ],
+            },
+            # Defensive: even if the API tried to echo extra fields, the
+            # bridge must not surface them on the preview read path.
+            "projects": [{"id": 1, "name": "should not leak"}],
+            "traceback": "SELECT * FROM activity_log",
+        },
+    )
+
+    result = WebViewBridge().preview_project_rule_impact("folder", 10)
+
+    assert result["ok"] is True
+    assert "impact" in result
+    assert "projects" not in result
+    assert "traceback" not in result
+    impact = result["impact"]
+    assert impact["rule"]["kind"] == "folder"
+    assert impact["rule"]["id"] == 10
+    assert impact["counts"]["would_update_count"] == 2
+    assert len(impact["samples"]) == 1
+    assert impact["samples"][0]["activity_id"] == 100
+    _assert_no_sensitive_tokens(result)
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_preview_project_rule_impact_invalid_rule_type_does_not_call_api(monkeypatch):
+    # Phase 5H regression lock: non-string / unknown rule_type must be
+    # rejected by the bridge BEFORE calling the API. The API must never be
+    # invoked.
+    calls: list[tuple] = []
+
+    def _fail(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("preview API must not be called for invalid rule_type")
+
+    monkeypatch.setattr(bridge_module.rule_api, "preview_project_rule_impact", _fail)
+
+    for bad_type in (None, 123, True, False, [], {}, "invalid", "Folder", "KEYWORD", ""):
+        result = WebViewBridge().preview_project_rule_impact(bad_type, 10)
+        assert result == {"ok": False, "error": "操作无效"}, (
+            f"expected invalid_input for rule_type={bad_type!r}, got {result!r}"
+        )
+    assert calls == []
+
+
+def test_preview_project_rule_impact_invalid_rule_id_does_not_call_api(monkeypatch):
+    # Phase 5H regression lock: bool-as-int / non-int / non-positive rule_id
+    # must be rejected by the bridge BEFORE calling the API.
+    calls: list[tuple] = []
+
+    def _fail(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("preview API must not be called for invalid rule_id")
+
+    monkeypatch.setattr(bridge_module.rule_api, "preview_project_rule_impact", _fail)
+
+    for bad_id in (True, False, 0, -1, -100, "10", 10.0, None, [], {}):
+        result = WebViewBridge().preview_project_rule_impact("folder", bad_id)
+        assert result == {"ok": False, "error": "操作无效"}, (
+            f"expected invalid_input for rule_id={bad_id!r}, got {result!r}"
+        )
+    assert calls == []
+
+
+def test_preview_project_rule_impact_not_found_maps_to_chinese_message(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rule_impact",
+        lambda rule_type, rule_id: {
+            "ok": False,
+            "error": "not_found",
+            "traceback": "SELECT * FROM folder_project_rule WHERE id=999",
+            "details": "C:\\Secret window_title clipboard note",
+        },
+    )
+
+    result = WebViewBridge().preview_project_rule_impact("folder", 999)
+
+    assert result == {"ok": False, "error": "规则不存在"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_preview_project_rule_impact_operation_failed_maps_to_chinese_message(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rule_impact",
+        lambda rule_type, rule_id: {
+            "ok": False,
+            "error": "operation_failed",
+            "internal_field": "should not leak",
+        },
+    )
+
+    result = WebViewBridge().preview_project_rule_impact("keyword", 25)
+
+    assert result == {"ok": False, "error": "预览规则影响失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("operation_failed", "internal_field", "should not leak"):
+        assert forbidden not in lowered
+
+
+def test_preview_project_rule_impact_unknown_error_code_collapses_to_generic_message(monkeypatch):
+    # Phase 5H regression lock: unknown error codes must collapse to the
+    # generic preview failure message so internal details are never surfaced.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rule_impact",
+        lambda rule_type, rule_id: {
+            "ok": False,
+            "error": "some_new_internal_code",
+            "internal_field": "should not leak",
+        },
+    )
+
+    result = WebViewBridge().preview_project_rule_impact("folder", 10)
+
+    assert result == {"ok": False, "error": "预览规则影响失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("some_new_internal_code", "internal_field", "should not leak"):
+        assert forbidden not in lowered
+
+
+def test_preview_project_rule_impact_unknown_exception_collapses_to_generic_message(monkeypatch):
+    # Phase 5H regression lock: if the API raises an unexpected exception,
+    # the bridge must collapse it to the generic preview failure message
+    # without surfacing the exception text.
+    def _raise(*args, **kwargs):
+        raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
+
+    monkeypatch.setattr(bridge_module.rule_api, "preview_project_rule_impact", _raise)
+
+    result = WebViewBridge().preview_project_rule_impact("folder", 10)
+
+    assert result == {"ok": False, "error": "预览规则影响失败"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_backfill_project_rule_success_returns_narrow_result_payload(monkeypatch):
+    # Phase 5H regression lock: the backfill success payload is
+    # ``{"ok": True, "result": {...}}``. The bridge must project the API
+    # result to a narrow ``result`` key and never echo the full API dict.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rule",
+        lambda rule_type, rule_id: {
+            "ok": True,
+            "result": {
+                "rule": {
+                    "kind": "keyword",
+                    "id": rule_id,
+                    "enabled": True,
+                    "project_id": 7,
+                    "project_name": "Marketing",
+                    "target": "campaign",
+                },
+                "updated_count": 5,
+                "matched_count": 8,
+                "eligible_count": 8,
+                "would_update_count": 5,
+                "already_target_count": 3,
+                "manual_skipped_count": 0,
+                "hidden_skipped_count": 0,
+                "deleted_skipped_count": 0,
+                "in_progress_skipped_count": 0,
+                "non_normal_skipped_count": 0,
+                "too_many_matches": False,
+            },
+            # Defensive: even if the API tried to echo extra fields, the
+            # bridge must not surface them on the backfill write path.
+            "projects": [{"id": 1, "name": "should not leak"}],
+            "traceback": "UPDATE activity_log SET project_id=7",
+        },
+    )
+
+    result = WebViewBridge().backfill_project_rule("keyword", 25)
+
+    assert result["ok"] is True
+    assert "result" in result
+    assert "projects" not in result
+    assert "traceback" not in result
+    backfill = result["result"]
+    assert backfill["updated_count"] == 5
+    assert backfill["rule"]["kind"] == "keyword"
+    _assert_no_sensitive_tokens(result)
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_backfill_project_rule_invalid_rule_type_does_not_call_api(monkeypatch):
+    calls: list[tuple] = []
+
+    def _fail(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("backfill API must not be called for invalid rule_type")
+
+    monkeypatch.setattr(bridge_module.rule_api, "backfill_project_rule", _fail)
+
+    for bad_type in (None, 123, True, False, [], {}, "invalid", "Folder", ""):
+        result = WebViewBridge().backfill_project_rule(bad_type, 10)
+        assert result == {"ok": False, "error": "操作无效"}, (
+            f"expected invalid_input for rule_type={bad_type!r}, got {result!r}"
+        )
+    assert calls == []
+
+
+def test_backfill_project_rule_invalid_rule_id_does_not_call_api(monkeypatch):
+    calls: list[tuple] = []
+
+    def _fail(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("backfill API must not be called for invalid rule_id")
+
+    monkeypatch.setattr(bridge_module.rule_api, "backfill_project_rule", _fail)
+
+    for bad_id in (True, False, 0, -1, "10", 10.0, None, [], {}):
+        result = WebViewBridge().backfill_project_rule("keyword", bad_id)
+        assert result == {"ok": False, "error": "操作无效"}, (
+            f"expected invalid_input for rule_id={bad_id!r}, got {result!r}"
+        )
+    assert calls == []
+
+
+def test_backfill_project_rule_not_found_maps_to_chinese_message(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rule",
+        lambda rule_type, rule_id: {
+            "ok": False,
+            "error": "not_found",
+            "traceback": "SELECT * FROM project_rule WHERE id=999",
+            "details": "C:\\Secret clipboard note",
+        },
+    )
+
+    result = WebViewBridge().backfill_project_rule("keyword", 999)
+
+    assert result == {"ok": False, "error": "规则不存在"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_backfill_project_rule_rule_disabled_maps_to_chinese_message(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rule",
+        lambda rule_type, rule_id: {
+            "ok": False,
+            "error": "rule_disabled",
+            "internal_field": "should not leak",
+        },
+    )
+
+    result = WebViewBridge().backfill_project_rule("folder", 10)
+
+    assert result == {"ok": False, "error": "规则未启用，无法应用"}
+    lowered = repr(result).lower()
+    for forbidden in ("rule_disabled", "internal_field", "should not leak"):
+        assert forbidden not in lowered
+
+
+def test_backfill_project_rule_project_not_available_maps_to_chinese_message(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rule",
+        lambda rule_type, rule_id: {
+            "ok": False,
+            "error": "project_not_available",
+            "internal_field": "should not leak",
+        },
+    )
+
+    result = WebViewBridge().backfill_project_rule("keyword", 25)
+
+    assert result == {"ok": False, "error": "目标项目不可用"}
+    lowered = repr(result).lower()
+    for forbidden in ("project_not_available", "internal_field", "should not leak"):
+        assert forbidden not in lowered
+
+
+def test_backfill_project_rule_too_many_matches_maps_to_chinese_message(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rule",
+        lambda rule_type, rule_id: {
+            "ok": False,
+            "error": "too_many_matches",
+            "internal_field": "should not leak",
+        },
+    )
+
+    result = WebViewBridge().backfill_project_rule("folder", 10)
+
+    assert result == {"ok": False, "error": "命中记录过多，请先缩小范围"}
+    lowered = repr(result).lower()
+    for forbidden in ("too_many_matches", "internal_field", "should not leak"):
+        assert forbidden not in lowered
+
+
+def test_backfill_project_rule_operation_failed_maps_to_chinese_message(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rule",
+        lambda rule_type, rule_id: {
+            "ok": False,
+            "error": "operation_failed",
+            "internal_field": "should not leak",
+        },
+    )
+
+    result = WebViewBridge().backfill_project_rule("keyword", 25)
+
+    assert result == {"ok": False, "error": "应用规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("operation_failed", "internal_field", "should not leak"):
+        assert forbidden not in lowered
+
+
+def test_backfill_project_rule_unknown_error_code_collapses_to_generic_message(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rule",
+        lambda rule_type, rule_id: {
+            "ok": False,
+            "error": "some_new_internal_code",
+            "internal_field": "should not leak",
+        },
+    )
+
+    result = WebViewBridge().backfill_project_rule("folder", 10)
+
+    assert result == {"ok": False, "error": "应用规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in ("some_new_internal_code", "internal_field", "should not leak"):
+        assert forbidden not in lowered
+
+
+def test_backfill_project_rule_unknown_exception_collapses_to_generic_message(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise RuntimeError("C:\\Secret window_title clipboard note UPDATE activity_log")
+
+    monkeypatch.setattr(bridge_module.rule_api, "backfill_project_rule", _raise)
+
+    result = WebViewBridge().backfill_project_rule("folder", 10)
+
+    assert result == {"ok": False, "error": "应用规则失败"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_preview_and_backfill_do_not_cross_call_other_project_rules_apis(monkeypatch):
+    # Phase 5H regression lock: the preview and backfill paths must only
+    # ever call their own API facade. They must not invoke any other
+    # Project Rules write APIs (project enable/disable, project / rule
+    # create / edit / delete, toggle, lifecycle).
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rule_impact",
+        lambda rule_type, rule_id: {"ok": True, "impact": {"rule": {}, "counts": {}, "samples": []}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rule",
+        lambda rule_type, rule_id: {"ok": True, "result": {"updated_count": 0}},
+    )
+
+    forbidden_calls: list[str] = []
+
+    def make_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(name + " must not be called by 5H paths")
+
+        return _fail
+
+    for name in (
+        "set_project_rule_enabled",
+        "create_keyword_rule",
+        "create_or_update_folder_rule",
+        "set_keyword_rule_enabled",
+        "set_folder_rule_enabled",
+        "delete_keyword_rule",
+        "delete_folder_rule",
+        "preview_folder_rule_conflicts",
+        "backfill_folder_rule",
+    ):
+        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+
+    for name in (
+        "create_project",
+        "update_project",
+        "delete_project",
+        "archive_project",
+        "set_project_enabled",
+    ):
+        if hasattr(bridge_module.project_api, name):
+            monkeypatch.setattr(bridge_module.project_api, name, make_forbidden(name))
+
+    # Preview path
+    result = WebViewBridge().preview_project_rule_impact("folder", 10)
+    assert result["ok"] is True
+    # Backfill path
+    result = WebViewBridge().backfill_project_rule("keyword", 25)
+    assert result["ok"] is True
+    assert forbidden_calls == []
+
+
+def test_preview_and_backfill_payloads_are_json_serializable(monkeypatch):
+    # Phase 5H regression lock: all bridge payloads must be JSON-serializable
+    # so the WebView bridge can pass them to JS.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rule_impact",
+        lambda rule_type, rule_id: {
+            "ok": True,
+            "impact": {
+                "rule": {"kind": "folder", "id": rule_id, "enabled": True, "project_id": 1, "project_name": "P", "target": "D:\\X"},
+                "counts": {"matched_count": 0, "eligible_count": 0, "would_update_count": 0,
+                            "already_target_count": 0, "manual_skipped_count": 0,
+                            "hidden_skipped_count": 0, "deleted_skipped_count": 0,
+                            "in_progress_skipped_count": 0, "non_normal_skipped_count": 0},
+                "samples": [],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rule",
+        lambda rule_type, rule_id: {
+            "ok": True,
+            "result": {
+                "rule": {"kind": "keyword", "id": rule_id, "enabled": True, "project_id": 1, "project_name": "P", "target": "kw"},
+                "updated_count": 0,
+                "matched_count": 0,
+                "eligible_count": 0,
+                "would_update_count": 0,
+                "already_target_count": 0,
+                "manual_skipped_count": 0,
+                "hidden_skipped_count": 0,
+                "deleted_skipped_count": 0,
+                "in_progress_skipped_count": 0,
+                "non_normal_skipped_count": 0,
+                "too_many_matches": False,
+            },
+        },
+    )
+
+    preview = WebViewBridge().preview_project_rule_impact("folder", 10)
+    backfill = WebViewBridge().backfill_project_rule("keyword", 25)
+
+    json.dumps(preview, ensure_ascii=False)
+    json.dumps(backfill, ensure_ascii=False)
+    assert preview["ok"] is True
+    assert backfill["ok"] is True
+
+
+def test_bridge_re_exports_5h_message_maps_for_test_compatibility():
+    # Phase 5H regression lock: ``bridge.py`` must re-export the 5H message
+    # maps so existing tests that import from ``bridge`` (not
+    # ``bridge_rules``) continue to work.
+    from worktrace.webview_ui.bridge import (
+        _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES,
+        _PROJECT_RULE_BACKFILL_MESSAGES,
+    )
+
+    assert _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES["invalid_input"] == "操作无效"
+    assert _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES["not_found"] == "规则不存在"
+    assert _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES["operation_failed"] == "预览规则影响失败"
+
+    assert _PROJECT_RULE_BACKFILL_MESSAGES["invalid_input"] == "操作无效"
+    assert _PROJECT_RULE_BACKFILL_MESSAGES["not_found"] == "规则不存在"
+    assert _PROJECT_RULE_BACKFILL_MESSAGES["rule_disabled"] == "规则未启用，无法应用"
+    assert _PROJECT_RULE_BACKFILL_MESSAGES["project_not_available"] == "目标项目不可用"
+    assert _PROJECT_RULE_BACKFILL_MESSAGES["too_many_matches"] == "命中记录过多，请先缩小范围"
+    assert _PROJECT_RULE_BACKFILL_MESSAGES["operation_failed"] == "应用规则失败"
