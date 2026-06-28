@@ -1233,7 +1233,11 @@ class WebViewBridge:
                 return {"ok": False, "error": "操作无效"}
             if type(keyword) is not str or not keyword.strip():
                 return {"ok": False, "error": "操作无效"}
-            result = rule_api.create_project_keyword_rule(project_id, keyword)
+            # Phase 5C.1: pass the trimmed keyword to the API so the bridge
+            # never forwards leading/trailing whitespace even if a future API
+            # change drops the trim. Behavior-neutral: the API already trims.
+            trimmed_keyword = keyword.strip()
+            result = rule_api.create_project_keyword_rule(project_id, trimmed_keyword)
             if result.get("ok") is True:
                 rule = result.get("rule") or {}
                 return {

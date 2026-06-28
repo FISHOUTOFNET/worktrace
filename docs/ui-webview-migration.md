@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5C "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5C.1 "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -10,18 +10,25 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **5C (Project Rules keyword rule creation foundation)**.
-  Phase 5C opens one minimal new Project Rules write capability: creating a
-  single keyword rule on an existing rule-target project from the WebView
-  Project Rules page, then refreshing the list on success. It preserves the
-  Phase 5B / 5B.1 existing folder / keyword rule enable/disable path and its
-  hardening (input validation, error collapse, saving-and-stale-state,
-  sensitive-field-boundary regression locks, plus the unhashable-`rule_type`
-  fix). Project enable/disable, Project create/edit/delete/archive, folder
-  rule create/edit/delete, keyword rule edit/delete, conflict preview,
-  backfill, automatic rules, batch operations, schema changes, frontend
-  frameworks / Node, browser storage, and network requests remain out of
-  scope.
+- Current phase: **5C.1 (Project Rules keyword creation hardening)**. Phase
+  5C is the most recent behavior-changing phase: it opened one minimal new
+  Project Rules write capability — creating a single keyword rule on an
+  existing rule-target project from the WebView Project Rules page, then
+  refreshing the list on success. Phase 5C.1 is a hardening-only /
+  regression-only follow-up that locks the keyword create write path (API
+  input validation, project eligibility, duplicate detection, trim/empty
+  boundaries, bridge error collapse and trimmed-keyword forwarding, frontend
+  creating/stale/refresh state, failure input preservation, toggle/create
+  state isolation, sensitive-field boundaries, and packaging /
+  static-resource contracts) without opening any new Project Rules
+  capability. It preserves the Phase 5B / 5B.1 existing folder / keyword
+  rule enable/disable path and its hardening (input validation, error
+  collapse, saving-and-stale-state, sensitive-field-boundary regression
+  locks, plus the unhashable-`rule_type` fix). Project enable/disable,
+  Project create/edit/delete/archive, folder rule create/edit/delete,
+  keyword rule edit/delete, conflict preview, backfill, automatic rules,
+  batch operations, schema changes, frontend frameworks / Node, browser
+  storage, and network requests remain out of scope.
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime). It is
   the only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview (Phase 1), Timeline / Time Details (read-only in
@@ -30,7 +37,7 @@ Implemented" sections) lives in
   in Phase 4B, hardened in Phase 4B.1), Project Rules (read-only in Phase
   5A, hardened in 5A.1, existing folder / keyword rule enable/disable in
   Phase 5B, hardened in Phase 5B.1, keyword rule creation foundation in
-  Phase 5C).
+  Phase 5C, keyword creation hardening in Phase 5C.1).
 - Unmigrated pages: Settings / Privacy / Encrypted Backup (still legacy
   Tkinter code kept for reference; not a supported runtime path).
 - Detailed phase-by-phase scope, data semantics, and "not implemented" lists
@@ -185,6 +192,8 @@ the high-level order is:
   follow-up to Phase 5B). **Completed.**
 - Phase 5C — Project Rules keyword rule creation foundation (one new keyword
   rule on an existing rule-target project). **Completed.**
+- Phase 5C.1 — Project Rules keyword creation hardening (regression-only
+  follow-up to Phase 5C). **Completed.**
 - Phase 5D+ — remaining Project Rules write workflows (project
   create/edit/delete/archive, project enable/disable, folder rule
   create/edit/delete, keyword rule edit/delete, conflict preview, backfill,

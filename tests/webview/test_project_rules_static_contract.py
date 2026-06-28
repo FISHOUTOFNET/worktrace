@@ -917,3 +917,104 @@ def test_project_rules_keyword_create_no_forbidden_handler_tokens():
     source = read_js("rules.js")
     for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
         assert token not in source
+
+
+# --- Phase 5C.1: keyword creation hardening static-contract locks ---------
+
+
+def test_project_rules_keyword_create_creating_state_clears_on_all_paths():
+    # Phase 5C.1 regression lock: the creating state must clear on success,
+    # on failure (ok=false), and on rejected promise. The handler achieves
+    # this by chaining ``App.setKeywordCreateCreating(false)`` in the final
+    # ``.then`` that runs after ``.catch`` (which always resolves).
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    assert "App.setKeywordCreateCreating(true)" in body
+    # The final cleanup must run unconditionally after the catch.
+    assert ".catch(function ()" in body
+    catch_pos = body.find(".catch(function ()")
+    cleanup_pos = body.find("App.setKeywordCreateCreating(false)", catch_pos)
+    assert cleanup_pos != -1, (
+        "App.setKeywordCreateCreating(false) must run after .catch so the "
+        "creating state clears on success, failure, and rejected-promise paths"
+    )
+
+
+def test_project_rules_keyword_create_whitespace_keyword_does_not_call_bridge():
+    # Phase 5C.1 regression lock: a whitespace-only keyword must be trimmed
+    # to empty and rejected before any bridge call. The handler must
+    # ``return`` immediately after showing the status, without calling
+    # ``App.callBridge``.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    # The trim happens before the empty check.
+    trim_pos = body.find(".trim()")
+    empty_guard_pos = body.find("!keyword")
+    bridge_pos = body.find('callBridge("create_project_keyword_rule"')
+    assert trim_pos != -1 and empty_guard_pos != -1 and bridge_pos != -1
+    assert trim_pos < empty_guard_pos < bridge_pos
+    # The return after the empty guard must precede the bridge call.
+    return_pos = body.find("return;", empty_guard_pos)
+    assert return_pos != -1 and return_pos < bridge_pos
+
+
+def test_project_rules_keyword_create_success_path_order_clear_then_refresh():
+    # Phase 5C.1 regression lock: the success path must clear the keyword
+    # input, then refresh the Project Rules list, then show the success
+    # status — in that order.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    clear_pos = body.find('input.value = ""')
+    refresh_pos = body.find("App.loadProjectRules()")
+    success_pos = body.find('showKeywordCreateStatus("关键词规则已新增"')
+    assert clear_pos != -1 and refresh_pos != -1 and success_pos != -1
+    assert clear_pos < refresh_pos < success_pos
+
+
+def test_project_rules_keyword_create_failure_does_not_clear_selector():
+    # Phase 5C.1 regression lock: the failure path must not clear the
+    # project selector. The handler may only show a status message on
+    # failure, never reset ``select.value`` or ``select.innerHTML``.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    failure_guard = body.find("result && result.ok === false")
+    assert failure_guard != -1
+    # The failure branch runs from the ``ok === false`` guard to the
+    # ``.catch`` that follows it. Selector writes (``select.value =`` /
+    # ``select.innerHTML``) must not appear in that branch.
+    failure_branch = body[failure_guard : body.find(".catch(function ()", failure_guard)]
+    assert "select.value =" not in failure_branch
+    assert "select.innerHTML" not in failure_branch
+
+
+def test_project_rules_keyword_create_no_duplicate_static_dom_ids_in_form():
+    # Phase 5C.1 regression lock: the keyword create form must not declare
+    # the same DOM id twice.
+    import re as _re
+
+    section = _rules_section()
+    # Extract just the form portion.
+    form_start = section.find('id="rules-keyword-create-form"')
+    assert form_start != -1
+    form_end = section.find("</form>", form_start)
+    assert form_end != -1
+    form_html = section[form_start : form_end + len("</form>")]
+    ids = _re.findall(r'\sid="([^"]+)"', form_html)
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for dom_id in ids:
+        if dom_id in seen:
+            duplicates.append(dom_id)
+        seen.add(dom_id)
+    assert not duplicates, "duplicate DOM id in keyword create form: " + ", ".join(duplicates)
+
+
+def test_project_rules_keyword_create_status_uses_textcontent_not_innerhtml():
+    # Phase 5C.1 regression lock: the keyword create status element must be
+    # updated via ``textContent`` (HTML-safe), never ``innerHTML``. This
+    # ensures a keyword containing HTML/script content can never execute in
+    # the status banner even if it appears in an error message.
+    source = read_js("rules.js")
+    status_body = func_body(source, "showKeywordCreateStatus")
+    assert "textContent" in status_body
+    assert ".innerHTML" not in status_body

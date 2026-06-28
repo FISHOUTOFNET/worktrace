@@ -5,14 +5,20 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5C (Project Rules keyword rule creation
-> foundation) is the latest shipped phase. Phase 5C opens one minimal new
-> Project Rules write capability: creating a single keyword rule on an
-> existing rule-target project from the WebView Project Rules page, then
-> refreshing the list on success. It preserves the Phase 5B / 5B.1 existing
-> folder / keyword rule enable/disable path and its hardening (input
-> validation, error collapse, saving-and-stale-state, sensitive-field
-> boundaries). Project enable/disable, project create/edit/delete/archive,
+> **Current state**: WebView Phase 5C.1 (Project Rules keyword creation
+> hardening) is the latest shipped phase. Phase 5C is the most recent
+> behavior-changing phase: it opened one minimal new Project Rules write
+> capability — creating a single keyword rule on an existing rule-target
+> project from the WebView Project Rules page, then refreshing the list on
+> success. Phase 5C.1 is a hardening-only / regression-only follow-up that
+> locks the keyword create write path (API input validation, project
+> eligibility, duplicate detection, trim/empty boundaries, bridge error
+> collapse and trimmed-keyword forwarding, frontend creating/stale/refresh
+> state, failure input preservation, toggle/create state isolation,
+> sensitive-field boundaries, and packaging / static-resource contracts)
+> without opening any new Project Rules capability. It preserves the Phase
+> 5B / 5B.1 existing folder / keyword rule enable/disable path and its
+> hardening. Project enable/disable, project create/edit/delete/archive,
 > folder rule create/edit/delete, keyword rule edit/delete, conflict
 > preview, backfill, and automatic rules remain unsupported in WebView. For
 > a one-screen snapshot read
@@ -47,10 +53,17 @@ records.
   sensitive-field boundaries without opening any new Project Rules write
   path. Phase 5C adds the first new Project Rules write capability: creating
   one keyword rule on an existing rule-target project, then refreshing the
-  list on success. Project enable/disable, Project
-  creation/editing/deletion/archive, folder rule creation/editing/deletion,
-  keyword rule editing/deletion, conflict preview, backfill, and automatic
-  rule workflows are not supported in WebView.
+  list on success. Phase 5C.1 is a hardening-only / regression-only
+  follow-up that locks the keyword create write path (API input validation,
+  project eligibility, duplicate detection, trim/empty boundaries, bridge
+  error collapse and trimmed-keyword forwarding, frontend creating/stale/
+  refresh state, failure input preservation, toggle/create state isolation,
+  sensitive-field boundaries, and packaging / static-resource contracts)
+  without opening any new Project Rules capability. Project enable/disable,
+  Project creation/editing/deletion/archive, folder rule
+  creation/editing/deletion, keyword rule editing/deletion, conflict
+  preview, backfill, and automatic rule workflows are not supported in
+  WebView.
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.
 

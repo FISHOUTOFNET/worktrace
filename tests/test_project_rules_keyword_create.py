@@ -145,8 +145,11 @@ def test_create_keyword_rule_rejects_zero_and_negative_project_id(temp_db, bad_i
     assert result == {"ok": False, "error": "invalid_input"}
 
 
-@pytest.mark.parametrize("bad_id", [None, [], {}])
+@pytest.mark.parametrize("bad_id", [None, [], {}, (), {1, 2}, (1,), frozenset({1})])
 def test_create_keyword_rule_rejects_other_invalid_project_id_types(temp_db, bad_id):
+    # Phase 5C.1 regression lock: container types (list / dict / tuple / set /
+    # frozenset) all collapse to ``invalid_input`` via the ``type(...) is not
+    # int`` guard before reaching the service layer.
     result = rule_api.create_project_keyword_rule(bad_id, "Spec")
     assert result == {"ok": False, "error": "invalid_input"}
 
@@ -167,8 +170,11 @@ def test_create_keyword_rule_rejects_bool_keyword(temp_db, bad_keyword):
     assert result == {"ok": False, "error": "invalid_input"}
 
 
-@pytest.mark.parametrize("bad_keyword", [1, 1.0, 2.5, [], {}])
+@pytest.mark.parametrize("bad_keyword", [1, 1.0, 2.5, [], {}, (), {1, 2}, (1,), frozenset({1})])
 def test_create_keyword_rule_rejects_non_string_keyword(temp_db, bad_keyword):
+    # Phase 5C.1 regression lock: container types (list / dict / tuple / set /
+    # frozenset) all collapse to ``invalid_input`` via the ``type(...) is not
+    # str`` guard.
     project = project_service.create_project("Client")
     result = rule_api.create_project_keyword_rule(project, bad_keyword)
     assert result == {"ok": False, "error": "invalid_input"}
@@ -196,6 +202,39 @@ def test_create_keyword_rule_trims_keyword_before_create(temp_db):
     assert result["rule"]["keyword"] == "Spec"
     row = _keyword_rule_row(result["rule"]["id"])
     assert row["pattern"] == "Spec"
+
+
+def test_create_keyword_rule_html_script_keyword_saved_as_plain_text(temp_db):
+    # Phase 5C.1 regression lock: HTML / script-like content in the keyword
+    # must not cause the API or bridge to leak an exception. The API saves
+    # the keyword as ordinary plain text; frontend rendering is responsible
+    # for escaping (locked by the static-contract escape-helper test). The
+    # success payload must be JSON-serializable and must not execute or
+    # transform the content.
+    project = project_service.create_project("Client")
+    html_keyword = "<script>alert('xss')</script>"
+
+    result = rule_api.create_project_keyword_rule(project, html_keyword)
+
+    assert result["ok"] is True
+    assert result["rule"]["keyword"] == html_keyword
+    row = _keyword_rule_row(result["rule"]["id"])
+    assert row["pattern"] == html_keyword
+    # The payload must be JSON-serializable without raising.
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_create_keyword_rule_html_script_keyword_duplicate_detection(temp_db):
+    # Phase 5C.1 regression lock: the duplicate check must treat the
+    # HTML/script keyword as ordinary plain text — a second identical
+    # keyword must be rejected as ``duplicate_rule``.
+    project = project_service.create_project("Client")
+    html_keyword = "<img src=x onerror=alert(1)>"
+    first = rule_api.create_project_keyword_rule(project, html_keyword)
+    assert first["ok"] is True
+
+    second = rule_api.create_project_keyword_rule(project, html_keyword)
+    assert second == {"ok": False, "error": "duplicate_rule"}
 
 
 # --- project_not_found / duplicate_rule ---------------------------------

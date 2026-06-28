@@ -1250,3 +1250,83 @@ def test_create_project_keyword_rule_does_not_regress_set_project_rule_enabled(m
         "rule_id": 11,
         "enabled": False,
     }
+
+
+# --- Phase 5C.1: keyword creation hardening regression locks -------------
+
+
+def test_create_project_keyword_rule_bridge_passes_trimmed_keyword_to_api(monkeypatch):
+    # Phase 5C.1 regression lock: the bridge must pass the trimmed keyword to
+    # the API, not the raw keyword with leading/trailing whitespace. This is
+    # a defense-in-depth hardening so the bridge never forwards whitespace
+    # even if a future API change drops the trim.
+    captured: dict[str, object] = {}
+
+    def capture(project_id, keyword):
+        captured["project_id"] = project_id
+        captured["keyword"] = keyword
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": 42,
+                "project_id": project_id,
+                "keyword": keyword,
+                "enabled": True,
+            },
+        }
+
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", capture)
+
+    result = WebViewBridge().create_project_keyword_rule(1, "  Spec  ")
+
+    assert result["ok"] is True
+    # The API must receive the trimmed keyword, not "  Spec  ".
+    assert captured["keyword"] == "Spec"
+    assert captured["project_id"] == 1
+
+
+def test_create_project_keyword_rule_bridge_html_script_keyword_safe(monkeypatch):
+    # Phase 5C.1 regression lock: HTML / script-like content in the keyword
+    # must pass through the bridge as ordinary plain text without leaking an
+    # exception. The bridge success payload carries the plain-text keyword;
+    # frontend rendering is responsible for escaping (locked by the
+    # static-contract escape-helper test).
+    html_keyword = "<script>alert('xss')</script>"
+
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": 99,
+                "project_id": project_id,
+                "keyword": keyword,
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(1, html_keyword)
+
+    assert result["ok"] is True
+    assert result["rule"]["keyword"] == html_keyword
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_create_project_keyword_rule_bridge_rejects_tuple_and_set_project_id():
+    # Phase 5C.1 regression lock: tuple / set / frozenset project_id values
+    # all collapse to ``操作无效`` at the bridge layer.
+    for bad_id in ((), (1,), {1, 2}, frozenset({1})):
+        result = WebViewBridge().create_project_keyword_rule(bad_id, "Spec")
+        assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_create_project_keyword_rule_bridge_rejects_tuple_and_set_keyword():
+    # Phase 5C.1 regression lock: tuple / set / frozenset keyword values all
+    # collapse to ``操作无效`` at the bridge layer.
+    for bad_keyword in ((), (1,), {1, 2}, frozenset({1})):
+        result = WebViewBridge().create_project_keyword_rule(1, bad_keyword)
+        assert result == {"ok": False, "error": "操作无效"}

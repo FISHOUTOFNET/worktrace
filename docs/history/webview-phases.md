@@ -4487,6 +4487,127 @@ Phase 5C does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
+## Phase 5C.1 Implemented Scope
+
+Phase 5C.1 is the **Project Rules keyword creation hardening** phase. It is
+a hardening-only / regression-only follow-up to Phase 5C. It does not open
+any new Project Rules capability; it locks the Phase 5C keyword rule
+creation write path so the behavior stays stable. Phase 5C remains the most
+recent behavior-changing phase.
+
+Implemented in Phase 5C.1:
+
+- **API layer hardening** (`worktrace/api/rule_api.create_project_keyword_rule`):
+  - Regression-locked `project_id` validation: real `int > 0`, rejecting
+    `bool` / `float` / numeric string / `None` / list / dict / tuple / set /
+    frozenset / zero / negative.
+  - Regression-locked `keyword` validation: real `str`, rejecting `None` /
+    `bool` / `int` / `float` / list / dict / tuple / set / frozenset, plus
+    trim-then-empty rejection.
+  - Regression-locked HTML / script-like keyword handling: the API saves the
+    keyword as ordinary plain text; the success payload is JSON-serializable
+    and never transforms or executes the content. Frontend rendering escape
+    is locked by the static-contract escape-helper test.
+  - Regression-locked duplicate detection (same `project_id` + same trimmed
+    keyword, case-sensitive) returning the stable `duplicate_rule` code
+    without creating a second row.
+  - Regression-locked project eligibility reusing
+    `project_api.list_rule_target_projects()` (archived / disabled / excluded
+    projects rejected as `project_not_found`).
+  - Regression-locked service exception collapse to `operation_failed`
+    without surfacing traceback / SQL / raw exception / local path /
+    window_title / clipboard / note.
+  - Regression-locked no-side-effect guarantees: no folder rule / project /
+    activity_log / activity_project_assignment / project_session_note rows
+    touched; no conflict preview / backfill / folder create called; cache
+    invalidation preserved; success and failure payloads JSON-serializable;
+    existing `set_project_rule_enabled` not regressed.
+
+- **Bridge layer hardening**
+  (`worktrace/webview_ui.bridge.WebViewBridge.create_project_keyword_rule`):
+  - Regression-locked bridge input validation: rejects bool-as-int
+    `project_id`, non-positive `project_id`, non-string `keyword`, and
+    whitespace-only `keyword` before any API call.
+  - Hardened the bridge to forward the **trimmed** keyword to the API
+    (behavior-neutral defense-in-depth: the API already trims, so observable
+    behavior is unchanged).
+  - Regression-locked success payload shape (`ok` / `rule.{kind, id,
+    project_id, keyword, enabled}`) and stable Chinese failure messages
+    (`操作无效` / `项目不存在` / `关键词规则已存在` / `新增关键词规则失败`).
+  - Regression-locked that the success payload does not return a refreshed
+    project list, does not surface backend error codes / traceback / SQL /
+    path / window_title / clipboard / note, and does not call project
+    create/edit/delete/enable-disable, folder create/edit/delete, keyword
+    edit/delete, or conflict preview/backfill.
+  - Regression-locked bridge import boundary (only `worktrace.api`) and
+    that `get_project_rules` / `set_project_rule_enabled` are not regressed.
+
+- **Frontend hardening** (`worktrace/webview_ui/js/rules.js`):
+  - Regression-locked the creating guard (`App.rulesCreatingKeyword`),
+    single-in-flight submit prevention, creating button label (`正在新增…`),
+    and creating state clearing on success / failure / rejected-promise
+    paths.
+  - Regression-locked project id parse/validate, keyword trim/validate, and
+    whitespace-only keyword rejection before any bridge call.
+  - Regression-locked success path (clear input → refresh list → show
+    success status) and failure path (preserve keyword input, preserve
+    rendered list, do not clear selector).
+  - Regression-locked catch path never reads `.message`; stable fallback
+    text locked.
+  - Regression-locked that the keyword create status uses `textContent`
+    (HTML-safe), never `innerHTML`.
+  - Regression-locked toggle/create state isolation
+    (`rulesCreatingKeyword` vs `rulesSavingRuleKey`), stale response guard,
+    selector in-flight guard, no duplicate static DOM ids, no
+    localStorage/sessionStorage, no remote resource/CDN/Google Fonts, no
+    `app.js`, script order, and packaging/static-resource contract.
+  - Regression-locked that the Project Rules page has no Excel / PDF /
+    timesheet / open-folder / auto-submit controls.
+
+- **Documentation**: README, `current-state.md`, `ui-webview-migration.md`,
+  and this file are updated to mark the current phase as 5C.1, clarify that
+  Phase 5C is the most recent behavior-changing phase, clarify that Phase
+  5C.1 is hardening-only / regression-only, restate the open capabilities
+  (existing folder / keyword rule enable-disable; keyword rule creation on
+  existing rule-target project), restate all not-yet-open boundaries,
+  preserve Phase 4B / 4B.1 CSV export boundaries, and confirm no DB schema
+  change. No legacy Tkinter runtime support is re-promised.
+
+Phase 5C.1 did not modify `WorkTrace.spec`, resource loading, packaging
+paths, or PyInstaller-related logic. The packaging static test
+(`tests/test_webview_packaging.py`) and the `worktrace.webview_main` import
+check were run and pass; the full PyInstaller build was not re-run because
+no packaging behavior changed.
+
+## Phase 5C.1 Not Implemented
+
+Phase 5C.1 does not implement and does not start:
+
+- Project enable/disable in WebView;
+- Project creation, editing, deletion, or archive in WebView;
+- Folder rule creation, editing, or deletion in WebView;
+- Keyword rule editing or deletion in WebView (Phase 5C.1 only hardens the
+  Phase 5C keyword rule creation path);
+- Folder rule conflict preview;
+- Folder rule backfill;
+- Automatic rules;
+- Batch Project Rules operations;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
 The `worktrace/ui` package is retained in the source tree as legacy code
 pending removal:
 
