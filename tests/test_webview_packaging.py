@@ -29,8 +29,11 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.webview.static_helpers import ALL_JS_FILES
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = REPO_ROOT / "WorkTrace.spec"
+INDEX_HTML_PATH = REPO_ROOT / "worktrace" / "webview_ui" / "index.html"
 ENTRY_PATH = REPO_ROOT / "scripts" / "pyinstaller_entry.py"
 MAIN_PATH = REPO_ROOT / "worktrace" / "main.py"
 
@@ -44,22 +47,47 @@ def _read(path: Path) -> str:
 
 
 def test_spec_bundles_webview_ui_static_resources():
-    """Phase R2: the spec must bundle index.html, styles.css, and the six
-    js/ modules that replaced the monolithic app.js. The old app.js must
-    no longer be referenced since the file was removed."""
+    """Phase MC2: the spec must bundle index.html, styles.css, and every
+    ``js/`` module listed in ``static_helpers.ALL_JS_FILES`` (the single
+    source of truth). The old monolithic app.js must no longer be
+    referenced since the file was removed."""
     spec = _read(SPEC_PATH)
     for name in ("index.html", "styles.css"):
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/{name}"
-    # Phase R2: the six split JS modules must each be bundled.
-    for name in (
-        "core.js", "overview.js", "timeline.js",
-        "timeline_correction.js", "statistics.js", "init.js",
-    ):
+    # Phase MC2: every JS module in ALL_JS_FILES must be bundled.
+    for name in ALL_JS_FILES:
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/js/{name}"
     # The removed monolithic app.js must no longer be referenced.
     assert "app.js" not in spec, (
         "WorkTrace.spec must not reference the removed app.js"
     )
+
+
+def test_index_html_loads_all_js_in_order():
+    """Phase MC2: index.html must load every file in ``ALL_JS_FILES`` and in
+    the exact same order. This guards against a new JS module being added
+    to ``ALL_JS_FILES`` without being wired into ``index.html`` (or vice
+    versa)."""
+    html = _read(INDEX_HTML_PATH)
+    # Collect every <script src="js/..."> tag in document order.
+    import re
+
+    scripts = re.findall(r'<script\s+src="js/([^"]+)"\s*>\s*</script>', html)
+    assert scripts, "expected at least one <script src=js/...> tag in index.html"
+    assert scripts == ALL_JS_FILES, (
+        "index.html script order must match ALL_JS_FILES exactly; "
+        f"got {scripts}"
+    )
+
+
+def test_all_js_files_exist_on_disk():
+    """Phase MC2: every entry in ``ALL_JS_FILES`` must resolve to an actual
+    JS module on disk so the static-contract tests and PyInstaller spec
+    never silently reference a missing file."""
+    js_dir = REPO_ROOT / "worktrace" / "webview_ui" / "js"
+    for name in ALL_JS_FILES:
+        path = js_dir / name
+        assert path.is_file(), f"missing JS module: {path}"
 
 
 def test_spec_bundles_webview_resources_under_webview_ui_dir():

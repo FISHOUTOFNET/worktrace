@@ -29,6 +29,16 @@ README_PATH = REPO_ROOT / "README.md"
 # index.html. read_all_js() concatenates them in this order so that
 # func_body() and substring checks see the same logical source the
 # browser would execute.
+#
+# Phase MC2 split the Project Rules surface into:
+#   rules.js (core load / refresh / wiring)
+#   rules_render.js (render helpers)
+#   rules_rule_actions.js (rule toggle)
+#   rules_keyword_actions.js (keyword create / edit / delete)
+#   rules_folder_actions.js (folder create / edit / delete)
+#   rules_project_actions.js (project lifecycle)
+# ALL_JS_FILES is the single source of truth for both the static-contract
+# tests and the packaging tests; do not hard-code the JS list elsewhere.
 ALL_JS_FILES = [
     "core.js",
     "overview.js",
@@ -36,6 +46,10 @@ ALL_JS_FILES = [
     "timeline_correction.js",
     "statistics.js",
     "rules.js",
+    "rules_render.js",
+    "rules_rule_actions.js",
+    "rules_keyword_actions.js",
+    "rules_folder_actions.js",
     "rules_project_actions.js",
     "init.js",
 ]
@@ -82,18 +96,33 @@ def read_all_js() -> str:
 def read_rules_module_js() -> str:
     """Return the concatenated source of all Project Rules JS modules.
 
-    After the Phase M3 split, Project Rules logic spans ``rules.js``
-    (core / render / rule toggle / keyword / folder actions / shared
-    helpers) and ``rules_project_actions.js`` (project lifecycle:
-    create / edit / toggle / archive). Tests that need to check
-    substring contracts or ``func_body`` across the full Project Rules
-    surface should use this helper instead of ``read_js("rules.js")``
-    so the split does not silently break contracts that moved.
+    After the Phase MC2 split, Project Rules logic spans six classic
+    IIFE modules loaded in order:
+      rules.js                (core load / refresh / wiring)
+      rules_render.js         (render helpers)
+      rules_rule_actions.js  (rule toggle)
+      rules_keyword_actions.js (keyword create / edit / delete)
+      rules_folder_actions.js (folder create / edit / delete)
+      rules_project_actions.js (project lifecycle: create / edit /
+                                toggle / archive)
+    Tests that need to check substring contracts or ``func_body`` across
+    the full Project Rules surface should use this helper instead of
+    ``read_js("rules.js")`` so the split does not silently break
+    contracts that moved.
     """
-    parts = [read_js("rules.js")]
-    rules_actions = JS_DIR / "rules_project_actions.js"
-    if rules_actions.is_file():
-        parts.append(rules_actions.read_text(encoding="utf-8"))
+    names = [
+        "rules.js",
+        "rules_render.js",
+        "rules_rule_actions.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+        "rules_project_actions.js",
+    ]
+    parts: list[str] = []
+    for name in names:
+        path = JS_DIR / name
+        if path.is_file():
+            parts.append(path.read_text(encoding="utf-8"))
     return "\n".join(parts)
 
 

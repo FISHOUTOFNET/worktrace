@@ -1,8 +1,18 @@
-"""Project Rules WebView static-contract tests for Phase 5B.
+"""Project Rules WebView static-contract tests through Phase 5G / MC2.
 
 These tests read bundled frontend resources directly. They lock the
-Project Rules existing-rule enable/disable foundation without starting
-pywebview or touching the database.
+Project Rules WebView static surface (rule toggle, keyword create /
+edit / delete, folder CRUD, project lifecycle, and the Phase MC2
+frontend modularization) without starting pywebview or touching the
+database.
+
+Phase MC2 split the Project Rules surface into six classic IIFE
+modules loaded in order: rules.js, rules_render.js,
+rules_rule_actions.js, rules_keyword_actions.js,
+rules_folder_actions.js, rules_project_actions.js. Tests that need
+to check substring contracts or ``func_body`` across the full
+Project Rules surface use ``read_rules_module_js()`` so the split
+does not silently break contracts that moved.
 """
 
 from __future__ import annotations
@@ -175,7 +185,13 @@ def test_project_rules_js_in_static_helper_order():
     assert "rules.js" in ALL_JS_FILES
     assert "rules_project_actions.js" in ALL_JS_FILES
     assert ALL_JS_FILES.index("rules.js") == ALL_JS_FILES.index("statistics.js") + 1
-    assert ALL_JS_FILES.index("rules_project_actions.js") == ALL_JS_FILES.index("rules.js") + 1
+    # Phase MC2: rules.js now splits into render / rule actions / keyword
+    # actions / folder actions modules before rules_project_actions.js.
+    assert ALL_JS_FILES.index("rules_render.js") == ALL_JS_FILES.index("rules.js") + 1
+    assert ALL_JS_FILES.index("rules_rule_actions.js") == ALL_JS_FILES.index("rules_render.js") + 1
+    assert ALL_JS_FILES.index("rules_keyword_actions.js") == ALL_JS_FILES.index("rules_rule_actions.js") + 1
+    assert ALL_JS_FILES.index("rules_folder_actions.js") == ALL_JS_FILES.index("rules_keyword_actions.js") + 1
+    assert ALL_JS_FILES.index("rules_project_actions.js") == ALL_JS_FILES.index("rules_folder_actions.js") + 1
     assert ALL_JS_FILES.index("init.js") == ALL_JS_FILES.index("rules_project_actions.js") + 1
 
 
@@ -196,7 +212,7 @@ def test_project_rules_js_defines_load_and_render_functions():
 
 
 def test_project_rules_js_calls_allowed_bridge_methods_only():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("get_project_rules")' in source
     assert 'callBridge("set_project_rule_enabled"' in source
     # Phase 5D: delete_project_keyword_rule is the new allowed write bridge.
@@ -209,7 +225,7 @@ def test_project_rules_js_calls_allowed_bridge_methods_only():
 
 
 def test_project_rules_load_has_loading_guard_and_stale_guard():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "loadProjectRules")
     assert "if (App.rulesLoading)" in body
     assert "var token = ++App.rulesRequestToken" in body
@@ -219,7 +235,7 @@ def test_project_rules_load_has_loading_guard_and_stale_guard():
 
 
 def test_project_rules_failure_paths_use_stable_fallback_only():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "loadProjectRules")
     assert 'App.showRulesError("加载项目规则失败")' in body
     assert "result.error" not in body
@@ -234,7 +250,7 @@ def test_project_rules_failure_paths_use_stable_fallback_only():
 
 
 def test_project_rules_toggle_handler_uses_single_rule_write_contract():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     assert 'App.callBridge("set_project_rule_enabled", ruleType, ruleId, nextEnabled)' in body
     assert 'ruleType !== "folder" && ruleType !== "keyword"' in body
@@ -244,7 +260,7 @@ def test_project_rules_toggle_handler_uses_single_rule_write_contract():
 
 
 def test_project_rules_toggle_success_refreshes_and_failure_keeps_rendered_data():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     assert "App.loadProjectRules()" in body
     assert "规则状态已更新" in body
@@ -253,7 +269,7 @@ def test_project_rules_toggle_success_refreshes_and_failure_keeps_rendered_data(
 
 
 def test_project_rules_toggle_catch_never_reads_raw_exception_message():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     assert ".catch(function ()" in body
     for forbidden in ("err.message", "error.message", ".toString", "reason.message"):
@@ -261,7 +277,7 @@ def test_project_rules_toggle_catch_never_reads_raw_exception_message():
 
 
 def test_project_rules_rendering_uses_escape_helper():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     text_body = func_body(source, "text")
     count_body = func_body(source, "count")
     assert "App.escapeHtml" in text_body
@@ -297,7 +313,7 @@ def test_project_rules_js_does_not_call_forbidden_write_methods():
 
 
 def test_project_rules_js_has_no_create_edit_delete_backfill_preview_handlers():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
         assert token not in source
     for forbidden in ("project-enable", "project-disable", "projectToggle"):
@@ -305,7 +321,7 @@ def test_project_rules_js_has_no_create_edit_delete_backfill_preview_handlers():
 
 
 def test_project_rules_js_catch_path_never_reads_raw_exception_message():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         "err.message",
         "err.toString",
@@ -358,7 +374,7 @@ def test_project_rules_frontend_resources_keep_global_boundaries():
 
 
 def test_project_rules_js_has_no_direct_file_or_network_write():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         "fetch(",
         "XMLHttpRequest",
@@ -403,7 +419,7 @@ def test_project_rules_toggle_button_is_inside_rule_row_not_project_card():
     # is distinct from the rule-level toggle button. The forbidden tokens
     # below protect against accidentally adding a RULE toggle to the
     # project card; they do not forbid the project lifecycle toggle.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     project_body = func_body(source, "renderProjectRuleProject")
     row_body = func_body(source, "renderProjectRuleRow")
     assert "rules-toggle-btn" in row_body
@@ -424,7 +440,7 @@ def test_project_rules_toggle_handler_clears_saving_state_on_all_paths():
     # on failure (ok=false), and on rejected promise. The handler achieves
     # this by chaining ``App.setProjectRuleSaving(null)`` in the final
     # ``.then`` that runs after ``.catch`` (which always resolves).
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     assert "App.setProjectRuleSaving(ruleType" in body
     # The final cleanup must run unconditionally after the catch.
@@ -441,7 +457,7 @@ def test_project_rules_toggle_handler_single_in_flight_guard():
     # Phase 5B.1 regression lock: only one toggle write may be in flight at
     # a time. The handler must early-return when ``App.rulesSavingRuleKey``
     # is set, before any bridge call or confirmation dialog.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     guard_pos = body.find("App.rulesSavingRuleKey")
     confirm_pos = body.find("window.confirm")
@@ -455,7 +471,7 @@ def test_project_rules_toggle_handler_single_in_flight_guard():
 def test_project_rules_toggle_button_saving_label_present():
     # Phase 5B.1 regression lock: the saving button text must remain the
     # stable ``正在更新…`` label so the user sees a clear in-progress state.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert "正在更新…" in row_body
     set_saving_body = func_body(source, "setProjectRuleSaving")
@@ -466,7 +482,7 @@ def test_project_rules_toggle_success_then_refresh_chain():
     # Phase 5B.1 regression lock: the success path must call
     # ``loadProjectRules`` (refresh) before showing the success banner so a
     # stale rendered list is never left on screen after a successful toggle.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     refresh_pos = body.find("App.loadProjectRules()")
     success_pos = body.find("规则状态已更新")
@@ -479,7 +495,7 @@ def test_project_rules_toggle_failure_keeps_existing_list_rendered():
     # already-rendered list. The toggle handler may only call
     # ``showRulesError`` on failure, never ``list.innerHTML = ""`` or
     # ``showProjectRules`` with an empty payload.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     assert "list.innerHTML" not in body
     assert 'showProjectRules({ projects: [] })' not in body
@@ -490,7 +506,7 @@ def test_project_rules_toggle_dataset_id_is_parsed_and_validated():
     # Phase 5B.1 regression lock: the dataset ``data-rule-id`` must be
     # parsed via ``parseInt(..., 10)`` and rejected (``!ruleId``) when the
     # result is NaN or 0, before the bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     assert 'parseInt(button.getAttribute("data-rule-id"), 10)' in body
     assert "!ruleId" in body
@@ -504,7 +520,7 @@ def test_project_rules_toggle_rejects_unknown_rule_type_from_dataset():
     # Phase 5B.1 regression lock: the dataset ``data-rule-type`` must be
     # validated against ``folder`` / ``keyword`` before the bridge call so
     # a malformed dataset cannot trigger an arbitrary write.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     assert 'ruleType !== "folder" && ruleType !== "keyword"' in body
     # The type check must run before the bridge call.
@@ -517,7 +533,7 @@ def test_project_rules_toggle_cancellation_does_not_call_bridge():
     # Phase 5B.1 regression lock: when the user cancels the disable
     # confirmation, the handler must ``return`` immediately without calling
     # ``App.setProjectRuleSaving`` or the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleToggle")
     confirm_pos = body.find("window.confirm")
     # The ``return;`` immediately after the confirm guard is the cancellation
@@ -562,7 +578,7 @@ def test_project_rules_state_isolation_across_loading_saving_error():
     # The saving state lives on the toggle buttons themselves (``正在更新…``
     # label + ``disabled`` attribute), not as a separate top-level banner
     # that could conflict with loading / error / empty banners.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert "正在更新…" in source
     # Loading and error banners are separate DOM nodes.
     assert 'getElementById("rules-loading")' in source
@@ -725,18 +741,18 @@ def test_project_rules_keyword_create_state_variable_declared():
 def test_project_rules_keyword_create_js_calls_bridge_method():
     # Phase 5C regression lock: the JS must call the
     # ``create_project_keyword_rule`` bridge method.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("create_project_keyword_rule"' in source
 
 
 def test_project_rules_keyword_create_js_does_not_call_folder_create():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("create_or_update_folder_rule"' not in source
     assert "createOrUpdateFolderRule" not in source
 
 
 def test_project_rules_keyword_create_js_does_not_call_project_write():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         'callBridge("create_project"',
         'callBridge("update_project"',
@@ -748,7 +764,7 @@ def test_project_rules_keyword_create_js_does_not_call_project_write():
 
 
 def test_project_rules_keyword_create_js_does_not_call_rule_edit_delete():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         'callBridge("delete_keyword_rule"',
         'callBridge("delete_folder_rule"',
@@ -759,7 +775,7 @@ def test_project_rules_keyword_create_js_does_not_call_rule_edit_delete():
 
 
 def test_project_rules_keyword_create_js_does_not_call_preview_or_backfill():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("preview_folder_rule_conflicts"' not in source
     assert 'callBridge("backfill_folder_rule"' not in source
 
@@ -767,7 +783,7 @@ def test_project_rules_keyword_create_js_does_not_call_preview_or_backfill():
 def test_project_rules_keyword_create_js_validates_project_id_before_bridge():
     # Phase 5C regression lock: the JS must parse and validate the project
     # id (``projectId > 0``) before calling the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     assert "parseInt(select.value, 10)" in body
     assert "!(projectId > 0)" in body
@@ -780,7 +796,7 @@ def test_project_rules_keyword_create_js_validates_project_id_before_bridge():
 def test_project_rules_keyword_create_js_validates_keyword_before_bridge():
     # Phase 5C regression lock: the JS must validate the keyword is
     # non-empty before calling the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     assert "!keyword" in body
     guard_pos = body.find("!keyword")
@@ -792,7 +808,7 @@ def test_project_rules_keyword_create_js_validates_keyword_before_bridge():
 def test_project_rules_keyword_create_js_trims_keyword_before_bridge():
     # Phase 5C regression lock: the JS must trim the keyword before
     # validation and before the bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     assert ".trim()" in body
     trim_pos = body.find(".trim()")
@@ -804,7 +820,7 @@ def test_project_rules_keyword_create_js_trims_keyword_before_bridge():
 def test_project_rules_keyword_create_js_has_creating_guard():
     # Phase 5C regression lock: the handler must early-return when a
     # keyword create is already in flight, before any bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     assert "if (App.rulesCreatingKeyword) return" in body
     guard_pos = body.find("if (App.rulesCreatingKeyword) return")
@@ -816,7 +832,7 @@ def test_project_rules_keyword_create_js_has_creating_guard():
 def test_project_rules_keyword_create_js_has_creating_button_label():
     # Phase 5C regression lock: the creating button text must remain the
     # stable ``正在新增…`` label.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setKeywordCreateCreating")
     assert "正在新增…" in body
 
@@ -824,7 +840,7 @@ def test_project_rules_keyword_create_js_has_creating_button_label():
 def test_project_rules_keyword_create_js_success_refreshes_project_rules():
     # Phase 5C regression lock: the success path must call
     # ``loadProjectRules()`` to refresh the Project Rules list.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     assert "App.loadProjectRules()" in body
 
@@ -832,7 +848,7 @@ def test_project_rules_keyword_create_js_success_refreshes_project_rules():
 def test_project_rules_keyword_create_js_success_clears_keyword_input():
     # Phase 5C regression lock: the success path must clear the keyword
     # input so the user can immediately create another rule.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     assert 'input.value = ""' in body
     # The clear must run before the refresh (success path).
@@ -847,7 +863,7 @@ def test_project_rules_keyword_create_js_failure_preserves_rendered_list():
     # already-rendered Project Rules list. The handler may only show a
     # status message on failure, never ``list.innerHTML = ""`` or
     # ``showProjectRules`` with an empty payload.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     assert "list.innerHTML" not in body
     assert 'showProjectRules({ projects: [] })' not in body
@@ -857,7 +873,7 @@ def test_project_rules_keyword_create_js_failure_preserves_rendered_list():
 def test_project_rules_keyword_create_js_failure_preserves_keyword_input():
     # Phase 5C regression lock: the failure path must not clear the
     # keyword input so the user can edit and retry.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     # The only ``input.value = ""`` must be inside the success branch
     # (after the ``result.ok === false`` check). Verify there is exactly
@@ -872,7 +888,7 @@ def test_project_rules_keyword_create_js_failure_preserves_keyword_input():
 def test_project_rules_keyword_create_js_catch_never_reads_raw_exception():
     # Phase 5C regression lock: the catch path must never read
     # ``.message`` from the error.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     for forbidden in ("err.message", "error.message", "reason.message"):
         assert forbidden not in body
@@ -883,7 +899,7 @@ def test_project_rules_keyword_create_js_uses_escape_helper_for_dynamic_text():
     # Phase 5C regression lock: dynamic text rendering must use the escape
     # helper. The keyword create status uses ``textContent`` (which is
     # HTML-safe), not ``innerHTML``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     status_body = func_body(source, "showKeywordCreateStatus")
     assert "textContent" in status_body
     assert ".innerHTML" not in status_body
@@ -901,7 +917,7 @@ def test_project_rules_keyword_create_state_isolation_from_toggle_saving():
     assert "App.rulesSavingRuleKey" in source
     # The toggle saving handler must not read or write the keyword create
     # state variable.
-    rules_source = read_js("rules.js")
+    rules_source = read_rules_module_js()
     toggle_body = func_body(rules_source, "setProjectRuleSaving")
     assert "App.rulesCreatingKeyword" not in toggle_body
     # The keyword create handler must not read or write the toggle saving
@@ -914,7 +930,7 @@ def test_project_rules_keyword_create_selector_population_guard():
     # Phase 5C regression lock: the project selector must not be
     # re-populated while a keyword create is in flight, so the user's
     # selection is never displaced by an auto-refresh.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "populateKeywordCreateProjectSelector")
     assert "if (App.rulesCreatingKeyword) return" in body
 
@@ -924,7 +940,7 @@ def test_project_rules_keyword_create_stale_guard_preserved():
     # guard in ``loadProjectRules`` must remain intact. The keyword create
     # success path calls ``loadProjectRules()`` which inherits this
     # protection.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     load_body = func_body(source, "loadProjectRules")
     assert "var token = ++App.rulesRequestToken" in load_body
     assert load_body.count("token !== App.rulesRequestToken") >= 2
@@ -933,7 +949,7 @@ def test_project_rules_keyword_create_stale_guard_preserved():
 def test_project_rules_keyword_create_no_storage_or_network():
     # Phase 5C regression lock: the keyword create form must not use
     # browser storage or network APIs.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         "localStorage",
         "sessionStorage",
@@ -961,7 +977,7 @@ def test_project_rules_keyword_create_no_app_js_reintroduced():
 def test_project_rules_keyword_create_no_forbidden_handler_tokens():
     # Phase 5C regression lock: the keyword create JS must not introduce
     # any of the forbidden camelCase handler tokens.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
         assert token not in source
 
@@ -974,7 +990,7 @@ def test_project_rules_keyword_create_creating_state_clears_on_all_paths():
     # on failure (ok=false), and on rejected promise. The handler achieves
     # this by chaining ``App.setKeywordCreateCreating(false)`` in the final
     # ``.then`` that runs after ``.catch`` (which always resolves).
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     assert "App.setKeywordCreateCreating(true)" in body
     # The final cleanup must run unconditionally after the catch.
@@ -992,7 +1008,7 @@ def test_project_rules_keyword_create_whitespace_keyword_does_not_call_bridge():
     # to empty and rejected before any bridge call. The handler must
     # ``return`` immediately after showing the status, without calling
     # ``App.callBridge``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     # The trim happens before the empty check.
     trim_pos = body.find(".trim()")
@@ -1009,7 +1025,7 @@ def test_project_rules_keyword_create_success_path_order_clear_then_refresh():
     # Phase 5C.1 regression lock: the success path must clear the keyword
     # input, then refresh the Project Rules list, then show the success
     # status — in that order.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     clear_pos = body.find('input.value = ""')
     refresh_pos = body.find("App.loadProjectRules()")
@@ -1022,7 +1038,7 @@ def test_project_rules_keyword_create_failure_does_not_clear_selector():
     # Phase 5C.1 regression lock: the failure path must not clear the
     # project selector. The handler may only show a status message on
     # failure, never reset ``select.value`` or ``select.innerHTML``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordCreateSubmit")
     failure_guard = body.find("result && result.ok === false")
     assert failure_guard != -1
@@ -1061,7 +1077,7 @@ def test_project_rules_keyword_create_status_uses_textcontent_not_innerhtml():
     # updated via ``textContent`` (HTML-safe), never ``innerHTML``. This
     # ensures a keyword containing HTML/script content can never execute in
     # the status banner even if it appears in an error message.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     status_body = func_body(source, "showKeywordCreateStatus")
     assert "textContent" in status_body
     assert ".innerHTML" not in status_body
@@ -1086,18 +1102,18 @@ def test_project_rules_keyword_delete_state_variable_declared():
 def test_project_rules_keyword_delete_js_calls_bridge_method():
     # Phase 5D regression lock: the JS must call the
     # ``delete_project_keyword_rule`` bridge method.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("delete_project_keyword_rule"' in source
 
 
 def test_project_rules_keyword_delete_js_does_not_call_folder_delete():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("delete_folder_rule"' not in source
     assert "deleteFolderRule" not in source
 
 
 def test_project_rules_keyword_delete_js_does_not_call_project_write():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         'callBridge("create_project"',
         'callBridge("update_project"',
@@ -1111,7 +1127,7 @@ def test_project_rules_keyword_delete_js_does_not_call_project_write():
 def test_project_rules_keyword_delete_js_does_not_call_rule_edit_or_toggle():
     # Phase 5D regression lock: the delete path must not invoke the toggle
     # or any edit API.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         'callBridge("set_keyword_rule_enabled"',
         'callBridge("set_folder_rule_enabled"',
@@ -1125,7 +1141,7 @@ def test_project_rules_keyword_delete_js_does_not_call_rule_edit_or_toggle():
 
 
 def test_project_rules_keyword_delete_js_does_not_call_preview_or_backfill():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("preview_folder_rule_conflicts"' not in source
     assert 'callBridge("backfill_folder_rule"' not in source
 
@@ -1133,7 +1149,7 @@ def test_project_rules_keyword_delete_js_does_not_call_preview_or_backfill():
 def test_project_rules_keyword_delete_js_validates_rule_id_before_bridge():
     # Phase 5D regression lock: the JS must parse and validate the rule id
     # before calling the bridge. Malformed dataset must not call bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     assert 'parseInt(rawId, 10)' in body
     assert "ruleId <= 0" in body
@@ -1147,7 +1163,7 @@ def test_project_rules_keyword_delete_js_validates_rule_kind_before_bridge():
     # Phase 5D regression lock: the dataset ``data-rule-kind`` must be
     # validated against ``keyword`` before the bridge call so a malformed
     # dataset cannot trigger an arbitrary write.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     assert 'kind !== "keyword"' in body
     type_check_pos = body.find('kind !== "keyword"')
@@ -1159,7 +1175,7 @@ def test_project_rules_keyword_delete_js_has_deleting_guard():
     # Phase 5D regression lock: the handler must early-return when a
     # keyword delete is already in flight, before any bridge call or
     # confirmation dialog.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     assert "if (App.rulesDeletingRuleKey) return" in body
     guard_pos = body.find("if (App.rulesDeletingRuleKey) return")
@@ -1174,7 +1190,7 @@ def test_project_rules_keyword_delete_js_has_deleting_guard():
 def test_project_rules_keyword_delete_js_has_deleting_button_label():
     # Phase 5D regression lock: the deleting button text must remain the
     # stable ``正在删除…`` label.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert "正在删除…" in row_body
     set_deleting_body = func_body(source, "setRuleDeleting")
@@ -1185,7 +1201,7 @@ def test_project_rules_keyword_delete_js_confirmation_text_present():
     # Phase 5D regression lock: the confirmation text must explicitly
     # mention deleting this keyword rule and that it will no longer be
     # used for auto-classification.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     assert "确定删除这条关键词规则吗？删除后该关键词将不再用于自动归类。" in body
 
@@ -1194,7 +1210,7 @@ def test_project_rules_keyword_delete_js_cancellation_does_not_call_bridge():
     # Phase 5D regression lock: when the user cancels the delete
     # confirmation, the handler must ``return`` immediately without calling
     # ``App.setRuleDeleting`` or the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     confirm_pos = body.find("window.confirm")
     bridge_pos = body.find('callBridge("delete_project_keyword_rule"')
@@ -1207,7 +1223,7 @@ def test_project_rules_keyword_delete_js_cancellation_does_not_call_bridge():
 def test_project_rules_keyword_delete_js_success_refreshes_project_rules():
     # Phase 5D regression lock: the success path must call
     # ``loadProjectRules()`` to refresh the Project Rules list.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     assert "App.loadProjectRules()" in body
 
@@ -1215,7 +1231,7 @@ def test_project_rules_keyword_delete_js_success_refreshes_project_rules():
 def test_project_rules_keyword_delete_js_success_shows_stable_message():
     # Phase 5D regression lock: the success path must show the stable
     # ``关键词规则已删除`` message after refresh.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     refresh_pos = body.find("App.loadProjectRules()")
     success_pos = body.find("关键词规则已删除")
@@ -1228,7 +1244,7 @@ def test_project_rules_keyword_delete_js_failure_preserves_rendered_list():
     # already-rendered Project Rules list. The handler may only show a
     # stable error message, never ``list.innerHTML = ""`` or
     # ``showProjectRules`` with an empty payload.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     assert "list.innerHTML" not in body
     assert 'showProjectRules({ projects: [] })' not in body
@@ -1239,7 +1255,7 @@ def test_project_rules_keyword_delete_js_failure_preserves_rendered_list():
 def test_project_rules_keyword_delete_js_catch_never_reads_raw_exception():
     # Phase 5D regression lock: the catch path must never read
     # ``.message`` from the error.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     for forbidden in ("err.message", "error.message", "reason.message"):
         assert forbidden not in body
@@ -1251,7 +1267,7 @@ def test_project_rules_keyword_delete_js_deleting_state_clears_on_all_paths():
     # on failure (ok=false), and on rejected promise. The handler achieves
     # this by chaining ``App.setRuleDeleting(null)`` in the final
     # ``.then`` that runs after ``.catch`` (which always resolves).
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleDelete")
     assert "App.setRuleDeleting(" in body
     # The final cleanup must run unconditionally after the catch.
@@ -1275,7 +1291,7 @@ def test_project_rules_keyword_delete_state_isolation_from_toggle_saving():
     assert "App.rulesSavingRuleKey" in source
     assert "App.rulesCreatingKeyword" in source
     # The toggle saving handler must not read or write the delete state.
-    rules_source = read_js("rules.js")
+    rules_source = read_rules_module_js()
     toggle_body = func_body(rules_source, "setProjectRuleSaving")
     assert "App.rulesDeletingRuleKey" not in toggle_body
     # The delete handler must not read or write the toggle saving state
@@ -1289,7 +1305,7 @@ def test_project_rules_keyword_delete_state_isolation_from_toggle_saving():
 def test_project_rules_keyword_delete_state_isolation_from_keyword_create():
     # Phase 5D regression lock: the keyword create saving handler must not
     # read or write the delete state.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     create_body = func_body(source, "setKeywordCreateCreating")
     assert "App.rulesDeletingRuleKey" not in create_body
 
@@ -1299,7 +1315,7 @@ def test_project_rules_keyword_delete_button_only_on_keyword_rows():
     # keyword rule rows, never on folder rule rows or project cards. The
     # renderProjectRuleRow function must gate the delete button on
     # ``kind === "keyword"``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert 'kind === "keyword"' in row_body
     assert "rules-keyword-delete-button" in row_body
@@ -1311,7 +1327,7 @@ def test_project_rules_keyword_delete_button_only_on_keyword_rows():
 def test_project_rules_keyword_delete_button_uses_stable_class_and_attributes():
     # Phase 5D regression lock: the delete button must use the stable
     # class / data attributes specified in the Phase 5D contract.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert 'class="rules-keyword-delete-button"' in row_body
     assert 'data-rule-kind="keyword"' in row_body
@@ -1323,7 +1339,7 @@ def test_project_rules_keyword_delete_button_does_not_appear_on_folder_rows():
     # inside the ``if (kind === "keyword" && ruleId)`` block. Folder rows
     # (kind === "folder") never enter that block, so they never get a
     # delete button.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     # The delete button HTML assignment (``deleteButton = '  <button ...``)
     # is inside the keyword-only branch. The ``var deleteButton = ""``
@@ -1340,7 +1356,7 @@ def test_project_rules_keyword_delete_button_disabled_when_any_write_in_flight()
     # The toggle button must likewise be disabled when a delete is in
     # flight. This keeps the two write paths from concurrently polluting
     # the same row.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     # The delete button disabled condition must check both saving states.
     assert "App.rulesSavingRuleKey" in row_body
@@ -1357,7 +1373,7 @@ def test_project_rules_keyword_delete_set_rule_deleting_updates_toggle_buttons()
     # Phase 5D regression lock: ``setRuleDeleting`` must disable toggle
     # buttons while a delete is in flight so the toggle and delete paths
     # cannot run concurrently on one row.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setRuleDeleting")
     assert "rules-toggle-btn" in body
     assert "App.rulesSavingRuleKey" in body
@@ -1369,7 +1385,7 @@ def test_project_rules_keyword_delete_stale_guard_preserved():
     # guard in ``loadProjectRules`` must remain intact. The keyword delete
     # success path calls ``loadProjectRules()`` which inherits this
     # protection.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     load_body = func_body(source, "loadProjectRules")
     assert "var token = ++App.rulesRequestToken" in load_body
     assert load_body.count("token !== App.rulesRequestToken") >= 2
@@ -1378,7 +1394,7 @@ def test_project_rules_keyword_delete_stale_guard_preserved():
 def test_project_rules_keyword_delete_no_storage_or_network():
     # Phase 5D regression lock: the keyword delete handler must not use
     # browser storage or network APIs.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     delete_body = func_body(source, "handleProjectRuleDelete")
     for forbidden in (
         "localStorage",
@@ -1394,7 +1410,7 @@ def test_project_rules_keyword_delete_js_uses_escape_helper_for_dynamic_text():
     # Phase 5D regression lock: dynamic text rendering in the delete button
     # must use the escape helper. The rule id is rendered via ``count()``
     # which calls ``App.escapeHtml``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     count_body = func_body(source, "count")
     assert "App.escapeHtml" in count_body
     row_body = func_body(source, "renderProjectRuleRow")
@@ -1404,7 +1420,7 @@ def test_project_rules_keyword_delete_js_uses_escape_helper_for_dynamic_text():
 def test_project_rules_keyword_delete_no_forbidden_handler_tokens():
     # Phase 5D regression lock: the keyword delete JS must not introduce
     # any of the forbidden camelCase handler tokens.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
         assert token not in source
 
@@ -1514,7 +1530,7 @@ def test_project_rules_keyword_delete_boundary_copy_present():
 def test_project_rules_keyword_delete_js_does_not_call_create_or_folder_create():
     # Phase 5D regression lock: the delete handler must not call create
     # APIs or folder create APIs.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     delete_body = func_body(source, "handleProjectRuleDelete")
     for forbidden in (
         'callBridge("create_project_keyword_rule"',
@@ -1560,7 +1576,7 @@ def test_project_rules_keyword_delete_handler_does_not_read_global_toggle_or_cre
     # attribute — never by cross-reading the other handlers' state inside
     # ``handleProjectRuleDelete``. This complements the existing state
     # isolation locks with a handler-body-specific check.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     delete_body = func_body(source, "handleProjectRuleDelete")
     assert "App.rulesSavingRuleKey" not in delete_body
     assert "App.rulesCreatingKeyword" not in delete_body
@@ -1576,7 +1592,7 @@ def test_project_rules_keyword_delete_button_disabled_coordination_uses_deleting
     # on the same row. The function must not consult the keyword create
     # state (``rulesCreatingKeyword``), keeping the create and delete paths
     # independent.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setRuleDeleting")
     assert "App.rulesDeletingRuleKey" in body
     assert "App.rulesSavingRuleKey" in body
@@ -1651,28 +1667,28 @@ def test_project_rules_folder_create_state_variable_declared():
 def test_project_rules_folder_create_js_calls_bridge_method():
     # Phase 5E regression lock: the JS must call the
     # ``create_project_folder_rule`` bridge method.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("create_project_folder_rule"' in source
 
 
 def test_project_rules_folder_update_js_calls_bridge_method():
     # Phase 5E regression lock: the JS must call the
     # ``update_project_folder_rule`` bridge method.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("update_project_folder_rule"' in source
 
 
 def test_project_rules_folder_delete_js_calls_bridge_method():
     # Phase 5E regression lock: the JS must call the
     # ``delete_project_folder_rule`` bridge method.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("delete_project_folder_rule"' in source
 
 
 def test_project_rules_folder_create_js_does_not_call_keyword_create_or_delete():
     # Phase 5E regression lock: the folder create handler must not call
     # keyword create or keyword delete bridge methods.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     create_body = func_body(source, "handleFolderCreateSubmit")
     for forbidden in (
         'callBridge("create_project_keyword_rule"',
@@ -1685,7 +1701,7 @@ def test_project_rules_folder_create_js_does_not_call_keyword_create_or_delete()
 def test_project_rules_folder_delete_js_does_not_call_keyword_delete():
     # Phase 5E regression lock: the folder delete handler must not call
     # the keyword delete bridge method.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     delete_body = func_body(source, "handleFolderDelete")
     for forbidden in (
         'callBridge("delete_project_keyword_rule"',
@@ -1698,7 +1714,7 @@ def test_project_rules_folder_delete_js_does_not_call_keyword_delete():
 def test_project_rules_folder_update_js_does_not_call_keyword_or_create():
     # Phase 5E regression lock: the folder update handler must not call
     # keyword create/delete or folder create/delete bridge methods.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     update_body = func_body(source, "handleFolderEditSave")
     for forbidden in (
         'callBridge("create_project_keyword_rule"',
@@ -1710,13 +1726,13 @@ def test_project_rules_folder_update_js_does_not_call_keyword_or_create():
 
 
 def test_project_rules_folder_js_does_not_call_preview_or_backfill():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("preview_folder_rule_conflicts"' not in source
     assert 'callBridge("backfill_folder_rule"' not in source
 
 
 def test_project_rules_folder_js_does_not_call_project_write():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         'callBridge("create_project"',
         'callBridge("update_project"',
@@ -1730,7 +1746,7 @@ def test_project_rules_folder_js_does_not_call_project_write():
 def test_project_rules_folder_create_js_validates_project_id_before_bridge():
     # Phase 5E regression lock: the JS must parse and validate the project
     # id (``projectId > 0``) before calling the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderCreateSubmit")
     assert "parseInt(select.value, 10)" in body
     assert "!(projectId > 0)" in body
@@ -1743,7 +1759,7 @@ def test_project_rules_folder_create_js_validates_project_id_before_bridge():
 def test_project_rules_folder_create_js_validates_folder_path_before_bridge():
     # Phase 5E regression lock: the JS must validate the folder_path is
     # non-empty before calling the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderCreateSubmit")
     assert "!folderPath" in body
     guard_pos = body.find("!folderPath")
@@ -1755,7 +1771,7 @@ def test_project_rules_folder_create_js_validates_folder_path_before_bridge():
 def test_project_rules_folder_create_js_trims_folder_path_before_bridge():
     # Phase 5E regression lock: the JS must trim the folder_path before
     # validation and before the bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderCreateSubmit")
     assert ".trim()" in body
     trim_pos = body.find(".trim()")
@@ -1767,7 +1783,7 @@ def test_project_rules_folder_create_js_trims_folder_path_before_bridge():
 def test_project_rules_folder_create_js_has_creating_guard():
     # Phase 5E regression lock: the handler must early-return when a
     # folder create is already in flight, before any bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderCreateSubmit")
     assert "if (App.rulesCreatingFolder) return" in body
     guard_pos = body.find("if (App.rulesCreatingFolder) return")
@@ -1779,7 +1795,7 @@ def test_project_rules_folder_create_js_has_creating_guard():
 def test_project_rules_folder_create_js_has_creating_button_label():
     # Phase 5E regression lock: the creating button text must remain the
     # stable ``正在新增…`` label.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setFolderCreateCreating")
     assert "正在新增…" in body
 
@@ -1787,7 +1803,7 @@ def test_project_rules_folder_create_js_has_creating_button_label():
 def test_project_rules_folder_create_js_success_refreshes_project_rules():
     # Phase 5E regression lock: the success path must call
     # ``loadProjectRules()`` to refresh the Project Rules list.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderCreateSubmit")
     assert "App.loadProjectRules()" in body
 
@@ -1795,7 +1811,7 @@ def test_project_rules_folder_create_js_success_refreshes_project_rules():
 def test_project_rules_folder_create_js_success_clears_folder_path_input():
     # Phase 5E regression lock: the success path must clear the folder_path
     # input so the user can immediately create another rule.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderCreateSubmit")
     assert 'input.value = ""' in body
 
@@ -1803,7 +1819,7 @@ def test_project_rules_folder_create_js_success_clears_folder_path_input():
 def test_project_rules_folder_create_js_failure_preserves_rendered_list():
     # Phase 5E regression lock: the failure path must not clear the
     # already-rendered Project Rules list.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderCreateSubmit")
     assert "list.innerHTML" not in body
 
@@ -1811,7 +1827,7 @@ def test_project_rules_folder_create_js_failure_preserves_rendered_list():
 def test_project_rules_folder_create_js_catch_never_reads_raw_exception():
     # Phase 5E regression lock: the catch path must never read
     # ``.message`` from the error.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderCreateSubmit")
     for forbidden in ("err.message", "error.message", "reason.message"):
         assert forbidden not in body
@@ -1821,7 +1837,7 @@ def test_project_rules_folder_create_js_catch_never_reads_raw_exception():
 def test_project_rules_folder_create_js_uses_textcontent_for_status():
     # Phase 5E regression lock: the folder create status must use
     # ``textContent`` (HTML-safe), not ``innerHTML``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     status_body = func_body(source, "showFolderCreateStatus")
     assert "textContent" in status_body
     assert ".innerHTML" not in status_body
@@ -1839,7 +1855,7 @@ def test_project_rules_folder_create_state_isolation_from_other_write_paths():
     assert "App.rulesCreatingFolder" in source
     assert "App.rulesEditingFolderKey" in source
     assert "App.rulesDeletingFolderKey" in source
-    rules_source = read_js("rules.js")
+    rules_source = read_rules_module_js()
     # The folder create handler must not read the toggle saving state or
     # keyword create/delete state.
     create_body = func_body(rules_source, "handleFolderCreateSubmit")
@@ -1852,7 +1868,7 @@ def test_project_rules_folder_create_selector_population_guard():
     # Phase 5E regression lock: the project selector must not be
     # re-populated while a folder create is in flight, so the user's
     # selection is never displaced by an auto-refresh.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "populateFolderCreateProjectSelector")
     assert "if (App.rulesCreatingFolder) return" in body
 
@@ -1860,7 +1876,7 @@ def test_project_rules_folder_create_selector_population_guard():
 def test_project_rules_folder_edit_buttons_only_on_folder_rows():
     # Phase 5E regression lock: the edit / delete buttons must be rendered
     # only on folder rule rows, never on keyword rule rows or project cards.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert 'kind === "folder"' in row_body
     assert "rules-folder-edit-button" in row_body
@@ -1873,7 +1889,7 @@ def test_project_rules_folder_edit_buttons_only_on_folder_rows():
 def test_project_rules_folder_edit_button_uses_stable_class_and_attributes():
     # Phase 5E regression lock: the folder edit / delete buttons must use
     # the stable class / data attributes.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert 'class="rules-folder-edit-button"' in row_body
     assert 'class="rules-folder-delete-button"' in row_body
@@ -1883,7 +1899,7 @@ def test_project_rules_folder_edit_button_uses_stable_class_and_attributes():
 def test_project_rules_folder_edit_js_validates_rule_id_before_bridge():
     # Phase 5E regression lock: the JS must parse and validate the rule id
     # before calling the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditSave")
     assert "parseInt(rawId, 10)" in body
     assert "ruleId <= 0" in body
@@ -1896,7 +1912,7 @@ def test_project_rules_folder_edit_js_validates_rule_id_before_bridge():
 def test_project_rules_folder_edit_js_validates_rule_kind_before_bridge():
     # Phase 5E regression lock: the dataset ``data-rule-kind`` must be
     # validated against ``folder`` before the bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditSave")
     assert 'kind !== "folder"' in body
     type_check_pos = body.find('kind !== "folder"')
@@ -1907,7 +1923,7 @@ def test_project_rules_folder_edit_js_validates_rule_kind_before_bridge():
 def test_project_rules_folder_edit_js_has_editing_guard():
     # Phase 5E regression lock: the handler must early-return when no
     # folder edit is in flight.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditSave")
     assert "if (!App.rulesEditingFolderKey) return" in body
 
@@ -1915,7 +1931,7 @@ def test_project_rules_folder_edit_js_has_editing_guard():
 def test_project_rules_folder_edit_js_has_saving_button_label():
     # Phase 5E regression lock: the saving button text must remain the
     # stable ``正在保存…`` label.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setFolderSaving")
     assert "正在保存…" in body
 
@@ -1923,13 +1939,13 @@ def test_project_rules_folder_edit_js_has_saving_button_label():
 def test_project_rules_folder_edit_js_success_refreshes_project_rules():
     # Phase 5E regression lock: the success path must call
     # ``loadProjectRules()`` to refresh the Project Rules list.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditSave")
     assert "App.loadProjectRules()" in body
 
 
 def test_project_rules_folder_edit_js_catch_never_reads_raw_exception():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditSave")
     for forbidden in ("err.message", "error.message", "reason.message"):
         assert forbidden not in body
@@ -1939,7 +1955,7 @@ def test_project_rules_folder_edit_js_catch_never_reads_raw_exception():
 def test_project_rules_folder_edit_js_saving_state_clears_on_all_paths():
     # Phase 5E regression lock: the saving state must clear on success,
     # on failure, and on rejected promise.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditSave")
     assert "App.setFolderSaving(true)" in body
     assert ".catch(function ()" in body
@@ -1950,13 +1966,13 @@ def test_project_rules_folder_edit_js_saving_state_clears_on_all_paths():
 
 def test_project_rules_folder_edit_js_editing_state_clears_on_success():
     # Phase 5E regression lock: the editing state must clear on success.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditSave")
     assert "App.setFolderEditing(null)" in body
 
 
 def test_project_rules_folder_delete_js_validates_rule_id_before_bridge():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     assert "parseInt(rawId, 10)" in body
     assert "ruleId <= 0" in body
@@ -1967,7 +1983,7 @@ def test_project_rules_folder_delete_js_validates_rule_id_before_bridge():
 
 
 def test_project_rules_folder_delete_js_validates_rule_kind_before_bridge():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     assert 'kind !== "folder"' in body
     type_check_pos = body.find('kind !== "folder"')
@@ -1976,7 +1992,7 @@ def test_project_rules_folder_delete_js_validates_rule_kind_before_bridge():
 
 
 def test_project_rules_folder_delete_js_has_deleting_guard():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     assert "if (App.rulesDeletingFolderKey) return" in body
     guard_pos = body.find("if (App.rulesDeletingFolderKey) return")
@@ -1987,7 +2003,7 @@ def test_project_rules_folder_delete_js_has_deleting_guard():
 
 
 def test_project_rules_folder_delete_js_has_deleting_button_label():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert "正在删除…" in row_body
     set_deleting_body = func_body(source, "setFolderDeleting")
@@ -1995,13 +2011,13 @@ def test_project_rules_folder_delete_js_has_deleting_button_label():
 
 
 def test_project_rules_folder_delete_js_confirmation_text_present():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     assert "确定删除这条文件夹规则吗？删除后该文件夹将不再用于自动归类。" in body
 
 
 def test_project_rules_folder_delete_js_cancellation_does_not_call_bridge():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     confirm_pos = body.find("window.confirm")
     bridge_pos = body.find('callBridge("delete_project_folder_rule"')
@@ -2011,13 +2027,13 @@ def test_project_rules_folder_delete_js_cancellation_does_not_call_bridge():
 
 
 def test_project_rules_folder_delete_js_success_refreshes_project_rules():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     assert "App.loadProjectRules()" in body
 
 
 def test_project_rules_folder_delete_js_success_shows_stable_message():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     refresh_pos = body.find("App.loadProjectRules()")
     success_pos = body.find("文件夹规则已删除")
@@ -2026,14 +2042,14 @@ def test_project_rules_folder_delete_js_success_shows_stable_message():
 
 
 def test_project_rules_folder_delete_js_failure_preserves_rendered_list():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     assert "list.innerHTML" not in body
     assert "删除文件夹规则失败" in body
 
 
 def test_project_rules_folder_delete_js_catch_never_reads_raw_exception():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     for forbidden in ("err.message", "error.message", "reason.message"):
         assert forbidden not in body
@@ -2041,7 +2057,7 @@ def test_project_rules_folder_delete_js_catch_never_reads_raw_exception():
 
 
 def test_project_rules_folder_delete_js_deleting_state_clears_on_all_paths():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderDelete")
     assert "App.setFolderDeleting(" in body
     assert ".catch(function ()" in body
@@ -2051,7 +2067,7 @@ def test_project_rules_folder_delete_js_deleting_state_clears_on_all_paths():
 
 
 def test_project_rules_folder_delete_js_does_not_call_keyword_delete():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     delete_body = func_body(source, "handleFolderDelete")
     assert 'callBridge("delete_project_keyword_rule"' not in delete_body
     assert 'callBridge("delete_keyword_rule"' not in delete_body
@@ -2061,7 +2077,7 @@ def test_project_rules_folder_delete_button_does_not_appear_on_keyword_rows():
     # Phase 5E regression lock: the folder edit / delete buttons are rendered
     # only inside the ``if (kind === "folder" && ruleId)`` block. Keyword rows
     # never enter that block, so they never get folder buttons.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     folder_guard_pos = row_body.find('kind === "folder"')
     folder_html_pos = row_body.find("rules-folder-edit-button", folder_guard_pos)
@@ -2072,7 +2088,7 @@ def test_project_rules_folder_delete_button_does_not_appear_on_keyword_rows():
 def test_project_rules_folder_buttons_disabled_when_any_write_in_flight():
     # Phase 5E regression lock: the folder edit / delete buttons must be
     # disabled when any rule write is in flight on this row.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert "App.rulesCreatingFolder" in row_body
     assert "App.rulesEditingFolderKey" in row_body
@@ -2084,7 +2100,7 @@ def test_project_rules_folder_buttons_disabled_when_any_write_in_flight():
 def test_project_rules_folder_delete_set_deleting_updates_toggle_buttons():
     # Phase 5E regression lock: ``setFolderDeleting`` must disable toggle
     # buttons while a folder delete is in flight.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setFolderDeleting")
     assert "rules-toggle-btn" in body
     assert "App.rulesDeletingFolderKey" in body
@@ -2104,13 +2120,13 @@ def test_project_rules_folder_create_no_app_js_reintroduced():
 
 
 def test_project_rules_folder_create_no_forbidden_handler_tokens():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
         assert token not in source
 
 
 def test_project_rules_folder_create_no_storage_or_network():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         "localStorage",
         "sessionStorage",
@@ -2187,7 +2203,7 @@ def test_project_rules_folder_create_stale_guard_preserved():
     # guard in ``loadProjectRules`` must remain intact. The folder create
     # success path calls ``loadProjectRules()`` which inherits this
     # protection.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     load_body = func_body(source, "loadProjectRules")
     assert "var token = ++App.rulesRequestToken" in load_body
     assert load_body.count("token !== App.rulesRequestToken") >= 2
@@ -2230,7 +2246,7 @@ def test_project_rules_folder_events_use_event_delegation_on_rules_list():
     # Phase 5E regression lock: the folder edit / delete / edit-save /
     # edit-cancel events must be delegated via a single click handler on
     # ``#rules-list``, not via per-button listeners in init.js.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     bind_body = func_body(source, "bindProjectRuleFolderEvents")
     assert 'getElementById("rules-list")' in bind_body
     assert "addEventListener" in bind_body
@@ -2240,7 +2256,7 @@ def test_project_rules_folder_events_use_event_delegation_on_rules_list():
 def test_project_rules_folder_event_handler_routes_by_button_class():
     # Phase 5E regression lock: the delegated folder event handler must
     # route to the correct sub-handler based on the button class.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleFolderEvent")
     assert "rules-folder-edit-button" in body
     assert "rules-folder-delete-button" in body
@@ -2255,7 +2271,7 @@ def test_project_rules_folder_event_handler_routes_by_button_class():
 def test_project_rules_folder_create_js_creating_state_clears_on_all_paths():
     # Phase 5E regression lock: the creating state must clear on success,
     # on failure, and on rejected promise.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderCreateSubmit")
     assert "App.setFolderCreateCreating(true)" in body
     assert ".catch(function ()" in body
@@ -2268,7 +2284,7 @@ def test_project_rules_folder_delete_state_isolation_from_other_write_paths():
     # Phase 5E regression lock: the folder delete handler must not read
     # the toggle saving state, keyword create state, or keyword delete
     # state directly.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     delete_body = func_body(source, "handleFolderDelete")
     assert "App.rulesSavingRuleKey" not in delete_body
     assert "App.rulesCreatingKeyword" not in delete_body
@@ -2281,7 +2297,7 @@ def test_project_rules_folder_edit_state_isolation_from_other_write_paths():
     # Phase 5E regression lock: the folder edit save handler must not read
     # the toggle saving state, keyword create state, or keyword delete
     # state directly.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     edit_body = func_body(source, "handleFolderEditSave")
     assert "App.rulesSavingRuleKey" not in edit_body
     assert "App.rulesCreatingKeyword" not in edit_body
@@ -2293,7 +2309,7 @@ def test_project_rules_folder_inline_edit_form_renders_in_place_of_row():
     # renderProjectRuleRow function must render the inline edit form
     # (with input + checkbox + save / cancel buttons) in place of the
     # normal row body.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert "is-folder-editing" in row_body
     assert "rules-folder-edit-form" in row_body
@@ -2307,7 +2323,7 @@ def test_project_rules_folder_show_project_rules_caches_last_data():
     # Phase 5E regression lock: the ``showProjectRules`` function must
     # cache the last-loaded data so the inline folder edit form can
     # re-render the list immediately without a round-trip.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "showProjectRules")
     assert "App.lastProjectRulesData" in body
 
@@ -2316,7 +2332,7 @@ def test_project_rules_folder_show_project_rules_populates_folder_selector():
     # Phase 5E regression lock: ``showProjectRules`` must call
     # ``populateFolderCreateProjectSelector`` so the folder create form's
     # project selector stays in sync with the loaded data.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "showProjectRules")
     assert "populateFolderCreateProjectSelector" in body
 
@@ -2325,7 +2341,7 @@ def test_project_rules_folder_show_project_rules_binds_folder_events():
     # Phase 5E regression lock: ``showProjectRules`` must call
     # ``bindProjectRuleFolderEvents`` so the folder edit / delete
     # delegation is set up after every render.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "showProjectRules")
     assert "bindProjectRuleFolderEvents" in body
 
@@ -2333,7 +2349,7 @@ def test_project_rules_folder_show_project_rules_binds_folder_events():
 def test_project_rules_folder_rerender_uses_cached_data():
     # Phase 5E regression lock: ``rerenderProjectRulesList`` must use the
     # cached ``lastProjectRulesData`` instead of calling the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "rerenderProjectRulesList")
     assert "App.lastProjectRulesData" in body
 
@@ -2360,7 +2376,7 @@ def test_project_rules_folder_edit_cancel_does_not_call_bridge():
     # Phase 5E.1 regression lock: the folder edit cancel handler must not
     # call any bridge method. It only clears the editing state and
     # re-renders. This complements the existing delete-cancel guard.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditCancel")
     assert "callBridge(" not in body
 
@@ -2368,7 +2384,7 @@ def test_project_rules_folder_edit_cancel_does_not_call_bridge():
 def test_project_rules_folder_edit_cancel_clears_editing_state():
     # Phase 5E.1 regression lock: the cancel handler must clear the
     # editing state by calling ``setFolderEditing(null)``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditCancel")
     assert "App.setFolderEditing(null)" in body
 
@@ -2376,7 +2392,7 @@ def test_project_rules_folder_edit_cancel_clears_editing_state():
 def test_project_rules_folder_edit_cancel_has_early_return_guard():
     # Phase 5E.1 regression lock: the cancel handler must early-return
     # when no folder edit is in flight.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditCancel")
     assert "if (!App.rulesEditingFolderKey) return" in body
 
@@ -2385,7 +2401,7 @@ def test_project_rules_folder_edit_start_sets_editing_key():
     # Phase 5E.1 regression lock: the edit-start handler must set the
     # editing key to ``"folder:<id>"`` so the inline edit form renders
     # for the correct row only.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditStart")
     assert "App.setFolderEditing" in body
     assert '"folder:"' in body or "'folder:'" in body
@@ -2395,7 +2411,7 @@ def test_project_rules_folder_edit_save_disables_save_and_cancel_buttons():
     # Phase 5E.1 regression lock: ``setFolderSaving`` must disable both
     # the save and cancel buttons while a save is in flight so the user
     # cannot double-submit or cancel mid-save.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setFolderSaving")
     assert "rules-folder-edit-save" in body
     assert "rules-folder-edit-cancel" in body
@@ -2405,7 +2421,7 @@ def test_project_rules_folder_edit_save_disables_save_and_cancel_buttons():
 def test_project_rules_folder_edit_form_has_maxlength_on_input():
     # Phase 5E.1 regression lock: the inline edit form input must have a
     # ``maxlength`` attribute so the user cannot enter an over-long path.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert 'maxlength="512"' in row_body
 
@@ -2484,7 +2500,7 @@ def test_project_rules_init_js_no_storage_or_network():
 def test_project_rules_folder_js_no_external_urls():
     # Phase 5E.1 regression lock: rules.js must not reference any
     # external URL (http/https) or CDN or Google Fonts.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert not re.search(r"https?://", source, re.IGNORECASE)
     assert not re.search(r"\bcdn\b", source, re.IGNORECASE)
     assert not re.search(r"google\s*fonts", source, re.IGNORECASE)
@@ -2493,7 +2509,7 @@ def test_project_rules_folder_js_no_external_urls():
 def test_project_rules_folder_js_no_es_module_syntax():
     # Phase 5E.1 regression lock: rules.js must not use ES module syntax
     # (import / export). The frontend uses classic scripts only.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
     assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
 
@@ -2543,7 +2559,7 @@ def test_project_rules_folder_create_status_uses_textcontent():
     # test checks ``showFolderCreateStatus``; this is a consolidation
     # lock that also verifies no ``innerHTML`` appears anywhere in the
     # folder create / edit / delete handlers.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     create_body = func_body(source, "handleFolderCreateSubmit")
     edit_save_body = func_body(source, "handleFolderEditSave")
     delete_body = func_body(source, "handleFolderDelete")
@@ -2555,7 +2571,7 @@ def test_project_rules_folder_edit_save_failure_preserves_rendered_list():
     # Phase 5E.1 regression lock: the folder edit save failure path must
     # not clear the already-rendered Project Rules list. This mirrors the
     # existing create / delete failure-list-preservation locks.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditSave")
     assert "list.innerHTML" not in body
 
@@ -2564,7 +2580,7 @@ def test_project_rules_folder_edit_save_clears_editing_state_on_success():
     # Phase 5E.1 regression lock: the edit save success path must clear
     # the editing state so the inline edit form closes after a successful
     # save.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleFolderEditSave")
     assert "App.setFolderEditing(null)" in body
 
@@ -2574,7 +2590,7 @@ def test_project_rules_folder_event_delegation_bound_once():
     # use the same ``data-*-bound`` idempotency pattern as the toggle /
     # delete binders so repeated renders do not attach duplicate click
     # handlers to ``#rules-list``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "bindProjectRuleFolderEvents")
     assert "data-rules-folder-bound" in body
     assert 'getAttribute("data-rules-folder-bound")' in body
@@ -2626,7 +2642,7 @@ def test_project_rules_keyword_edit_state_variables_declared_once():
 def test_project_rules_keyword_edit_js_calls_bridge_method():
     # Phase 5F regression lock: the JS must call the
     # ``update_project_keyword_rule`` bridge method.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("update_project_keyword_rule"' in source
 
 
@@ -2635,7 +2651,7 @@ def test_project_rules_keyword_edit_buttons_only_on_keyword_rows():
     # keyword rule rows, never on folder rule rows or project cards. The
     # renderProjectRuleRow function must gate the edit button on
     # ``kind === "keyword"``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert 'kind === "keyword"' in row_body
     assert "rules-keyword-edit-button" in row_body
@@ -2649,7 +2665,7 @@ def test_project_rules_keyword_edit_button_does_not_appear_on_folder_rows():
     # conditionally inside the ``if (kind === "keyword" && ruleId)`` block.
     # Folder rows (kind === "folder") never enter that block, so they never
     # get a keyword edit button.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     keyword_guard_pos = row_body.find('kind === "keyword"')
     edit_html_assign_pos = row_body.find("keywordEditButton = '", keyword_guard_pos)
@@ -2660,7 +2676,7 @@ def test_project_rules_keyword_edit_button_does_not_appear_on_folder_rows():
 def test_project_rules_keyword_edit_button_uses_stable_class_and_attributes():
     # Phase 5F regression lock: the keyword edit button must use the stable
     # class / data attributes specified in the Phase 5F contract.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert 'class="rules-keyword-edit-button"' in row_body
     assert 'data-rule-kind="keyword"' in row_body
@@ -2672,7 +2688,7 @@ def test_project_rules_keyword_edit_button_disabled_when_any_write_in_flight():
     # when any rule write is in flight on this row (toggle saving, keyword
     # delete, keyword edit, or keyword save). This keeps the four keyword
     # write paths from concurrently polluting the same row.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert "App.rulesSavingRuleKey" in row_body
     assert "App.rulesDeletingRuleKey" in row_body
@@ -2684,7 +2700,7 @@ def test_project_rules_keyword_edit_start_sets_editing_key():
     # Phase 5F regression lock: the edit-start handler must set the editing
     # key to ``"keyword:<id>"`` so the inline edit form renders for the
     # correct row only.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditStart")
     assert "App.setKeywordEditing" in body
     assert '"keyword:"' in body or "'keyword:'" in body
@@ -2694,7 +2710,7 @@ def test_project_rules_keyword_edit_start_has_in_flight_guard():
     # Phase 5F regression lock: the edit-start handler must early-return
     # when a keyword edit / save / delete is already in flight, before any
     # state mutation.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditStart")
     assert "if (App.rulesEditingKeywordKey) return" in body
     assert "if (App.rulesUpdatingKeywordKey) return" in body
@@ -2705,7 +2721,7 @@ def test_project_rules_keyword_edit_start_validates_rule_kind_before_state():
     # Phase 5F regression lock: the dataset ``data-rule-kind`` must be
     # validated against ``keyword`` before the editing state is set so a
     # malformed dataset cannot trigger an arbitrary edit.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditStart")
     assert 'kind !== "keyword"' in body
     type_check_pos = body.find('kind !== "keyword"')
@@ -2717,7 +2733,7 @@ def test_project_rules_keyword_edit_start_validates_rule_id_before_state():
     # Phase 5F regression lock: the JS must parse and validate the rule id
     # before setting the editing state. Malformed dataset must not enter
     # edit mode.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditStart")
     assert 'parseInt(rawId, 10)' in body
     assert "ruleId <= 0" in body
@@ -2729,7 +2745,7 @@ def test_project_rules_keyword_edit_start_validates_rule_id_before_state():
 def test_project_rules_keyword_edit_save_calls_bridge_method():
     # Phase 5F regression lock: the save handler must call the
     # ``update_project_keyword_rule`` bridge method.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert 'callBridge("update_project_keyword_rule"' in body
 
@@ -2737,7 +2753,7 @@ def test_project_rules_keyword_edit_save_calls_bridge_method():
 def test_project_rules_keyword_edit_save_validates_rule_kind_before_bridge():
     # Phase 5F regression lock: the dataset ``data-rule-kind`` must be
     # validated against ``keyword`` before the bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert 'kind !== "keyword"' in body
     type_check_pos = body.find('kind !== "keyword"')
@@ -2748,7 +2764,7 @@ def test_project_rules_keyword_edit_save_validates_rule_kind_before_bridge():
 def test_project_rules_keyword_edit_save_validates_rule_id_before_bridge():
     # Phase 5F regression lock: the JS must parse and validate the rule id
     # before calling the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert 'parseInt(rawId, 10)' in body
     assert "ruleId <= 0" in body
@@ -2760,7 +2776,7 @@ def test_project_rules_keyword_edit_save_validates_rule_id_before_bridge():
 def test_project_rules_keyword_edit_save_trims_input_before_bridge():
     # Phase 5F regression lock: the JS must trim the input value before
     # validation and before the bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert ".trim()" in body
     trim_pos = body.find(".trim()")
@@ -2774,7 +2790,7 @@ def test_project_rules_keyword_edit_save_rejects_empty_input_client_side():
     # rejected before any bridge call. The handler must ``return``
     # immediately after showing the status, without calling
     # ``App.callBridge``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert "!keyword" in body
     empty_guard_pos = body.find("!keyword")
@@ -2787,7 +2803,7 @@ def test_project_rules_keyword_edit_save_rejects_empty_input_client_side():
 def test_project_rules_keyword_edit_save_has_editing_guard():
     # Phase 5F regression lock: the save handler must early-return when no
     # keyword edit is in flight, before any bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert "if (!App.rulesEditingKeywordKey) return" in body
     guard_pos = body.find("if (!App.rulesEditingKeywordKey) return")
@@ -2798,7 +2814,7 @@ def test_project_rules_keyword_edit_save_has_editing_guard():
 def test_project_rules_keyword_edit_save_has_saving_button_label():
     # Phase 5F regression lock: the saving button text must remain the
     # stable ``正在保存…`` label.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert "正在保存…" in row_body
     set_saving_body = func_body(source, "setKeywordSaving")
@@ -2808,7 +2824,7 @@ def test_project_rules_keyword_edit_save_has_saving_button_label():
 def test_project_rules_keyword_edit_save_success_refreshes_project_rules():
     # Phase 5F regression lock: the success path must call
     # ``loadProjectRules()`` to refresh the Project Rules list.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert "App.loadProjectRules()" in body
 
@@ -2817,7 +2833,7 @@ def test_project_rules_keyword_edit_save_success_clears_editing_state():
     # Phase 5F regression lock: the success path must clear the editing
     # state by calling ``setKeywordEditing(null)`` so the inline edit form
     # closes after a successful save.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert "App.setKeywordEditing(null)" in body
 
@@ -2825,7 +2841,7 @@ def test_project_rules_keyword_edit_save_success_clears_editing_state():
 def test_project_rules_keyword_edit_save_success_shows_stable_message():
     # Phase 5F regression lock: the success path must show the stable
     # ``关键词规则已保存`` message after refresh.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     refresh_pos = body.find("App.loadProjectRules()")
     success_pos = body.find("关键词规则已保存")
@@ -2841,7 +2857,7 @@ def test_project_rules_keyword_edit_save_failure_preserves_editing_state():
     # the editing state, so the user can edit and retry. The success branch
     # (after the failure guard returns) does call ``setKeywordEditing(null)``
     # — that is expected and correct.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     failure_guard = body.find("result && result.ok === false")
     assert failure_guard != -1
@@ -2861,7 +2877,7 @@ def test_project_rules_keyword_edit_save_failure_preserves_rendered_list():
     # already-rendered Project Rules list. The handler may only show a
     # status message on failure, never ``list.innerHTML = ""`` or
     # ``showProjectRules`` with an empty payload.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert "list.innerHTML" not in body
     assert 'showProjectRules({ projects: [] })' not in body
@@ -2872,7 +2888,7 @@ def test_project_rules_keyword_edit_save_failure_preserves_rendered_list():
 def test_project_rules_keyword_edit_save_catch_never_reads_raw_exception():
     # Phase 5F regression lock: the catch path must never read
     # ``.message`` from the error.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     for forbidden in ("err.message", "error.message", "reason.message"):
         assert forbidden not in body
@@ -2884,7 +2900,7 @@ def test_project_rules_keyword_edit_save_saving_state_clears_on_all_paths():
     # on failure (ok=false), and on rejected promise. The handler achieves
     # this by chaining ``App.setKeywordSaving(null)`` in the final
     # ``.then`` that runs after ``.catch`` (which always resolves).
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditSave")
     assert "App.setKeywordSaving(" in body
     assert ".catch(function ()" in body
@@ -2899,7 +2915,7 @@ def test_project_rules_keyword_edit_save_saving_state_clears_on_all_paths():
 def test_project_rules_keyword_edit_cancel_does_not_call_bridge():
     # Phase 5F regression lock: the cancel handler must not call any bridge
     # method. It only clears the editing state and re-renders.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditCancel")
     assert "callBridge(" not in body
 
@@ -2907,7 +2923,7 @@ def test_project_rules_keyword_edit_cancel_does_not_call_bridge():
 def test_project_rules_keyword_edit_cancel_clears_editing_state():
     # Phase 5F regression lock: the cancel handler must clear the editing
     # state by calling ``setKeywordEditing(null)``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditCancel")
     assert "App.setKeywordEditing(null)" in body
 
@@ -2915,7 +2931,7 @@ def test_project_rules_keyword_edit_cancel_clears_editing_state():
 def test_project_rules_keyword_edit_cancel_has_early_return_guard():
     # Phase 5F regression lock: the cancel handler must early-return when
     # no keyword edit is in flight.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleKeywordEditCancel")
     assert "if (!App.rulesEditingKeywordKey) return" in body
 
@@ -2925,7 +2941,7 @@ def test_project_rules_keyword_edit_set_keyword_editing_rerenders_from_cache():
     # list from cached data (via ``rerenderProjectRulesList``) so the edit
     # form appears / disappears immediately without a round-trip through
     # ``loadProjectRules``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setKeywordEditing")
     assert "App.rerenderProjectRulesList()" in body
 
@@ -2934,7 +2950,7 @@ def test_project_rules_keyword_edit_set_keyword_saving_disables_save_and_cancel(
     # Phase 5F regression lock: ``setKeywordSaving`` must disable both the
     # save and cancel buttons while a save is in flight so the user cannot
     # double-submit or cancel mid-save.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setKeywordSaving")
     assert "rules-keyword-edit-save" in body
     assert "rules-keyword-edit-cancel" in body
@@ -2945,7 +2961,7 @@ def test_project_rules_keyword_edit_inline_form_renders_in_place_of_row():
     # Phase 5F regression lock: when a keyword row is being edited, the
     # renderProjectRuleRow function must render the inline edit form
     # (with input + save / cancel buttons) in place of the normal row body.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert "is-keyword-editing" in row_body
     assert "rules-keyword-edit-form" in row_body
@@ -2958,7 +2974,7 @@ def test_project_rules_keyword_edit_form_has_maxlength_on_input():
     # Phase 5F regression lock: the inline edit form input must have a
     # ``maxlength="200"`` attribute so the user cannot enter an over-long
     # keyword. This matches the keyword create input maxlength.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert 'maxlength="200"' in row_body
 
@@ -2966,7 +2982,7 @@ def test_project_rules_keyword_edit_form_has_maxlength_on_input():
 def test_project_rules_keyword_edit_form_uses_stable_class_and_attributes():
     # Phase 5F regression lock: the inline edit form save / cancel buttons
     # must use the stable class / data attributes.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     row_body = func_body(source, "renderProjectRuleRow")
     assert 'class="rules-keyword-edit-save"' in row_body
     assert 'class="rules-keyword-edit-cancel"' in row_body
@@ -2977,7 +2993,7 @@ def test_project_rules_keyword_edit_events_use_event_delegation_on_rules_list():
     # Phase 5F regression lock: the keyword edit / edit-save / edit-cancel
     # events must be delegated via a single click handler on
     # ``#rules-list``, not via per-button listeners in init.js.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     bind_body = func_body(source, "bindProjectRuleKeywordEditEvents")
     assert 'getElementById("rules-list")' in bind_body
     assert "addEventListener" in bind_body
@@ -2987,7 +3003,7 @@ def test_project_rules_keyword_edit_events_use_event_delegation_on_rules_list():
 def test_project_rules_keyword_edit_event_handler_routes_by_button_class():
     # Phase 5F regression lock: the delegated keyword edit event handler
     # must route to the correct sub-handler based on the button class.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectRuleKeywordEditEvent")
     assert "rules-keyword-edit-button" in body
     assert "rules-keyword-edit-save" in body
@@ -3002,7 +3018,7 @@ def test_project_rules_keyword_edit_event_delegation_bound_once():
     # use the same ``data-*-bound`` idempotency pattern as the toggle /
     # delete / folder binders so repeated renders do not attach duplicate
     # click handlers to ``#rules-list``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "bindProjectRuleKeywordEditEvents")
     assert "data-rules-keyword-edit-bound" in body
     assert 'getAttribute("data-rules-keyword-edit-bound")' in body
@@ -3013,7 +3029,7 @@ def test_project_rules_keyword_edit_show_project_rules_binds_events():
     # Phase 5F regression lock: ``showProjectRules`` must call
     # ``bindProjectRuleKeywordEditEvents`` so the keyword edit delegation
     # is set up after every render.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "showProjectRules")
     assert "bindProjectRuleKeywordEditEvents" in body
 
@@ -3022,7 +3038,7 @@ def test_project_rules_keyword_edit_rerender_binds_events():
     # Phase 5F regression lock: ``rerenderProjectRulesList`` must call
     # ``bindProjectRuleKeywordEditEvents`` so the keyword edit delegation
     # is set up after every re-render from cached data.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "rerenderProjectRulesList")
     assert "bindProjectRuleKeywordEditEvents" in body
 
@@ -3037,7 +3053,7 @@ def test_project_rules_keyword_edit_state_isolation_from_other_write_paths():
     # ``setKeywordSaving`` helper (which internally sets
     # ``rulesUpdatingKeywordKey``) and reads ``rulesEditingKeywordKey`` for
     # the in-flight guard.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     edit_body = func_body(source, "handleKeywordEditSave")
     assert "App.rulesSavingRuleKey" not in edit_body
     assert "App.rulesCreatingKeyword" not in edit_body
@@ -3055,7 +3071,7 @@ def test_project_rules_keyword_edit_start_state_isolation_from_other_write_paths
     # Phase 5F regression lock: the keyword edit start handler must not
     # read the toggle saving state, keyword create state, or folder
     # create/edit/delete states directly.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     start_body = func_body(source, "handleKeywordEditStart")
     assert "App.rulesSavingRuleKey" not in start_body
     assert "App.rulesCreatingKeyword" not in start_body
@@ -3068,7 +3084,7 @@ def test_project_rules_keyword_edit_cancel_state_isolation_from_other_write_path
     # Phase 5F regression lock: the keyword edit cancel handler must not
     # read the toggle saving state, keyword create state, keyword delete
     # state, or folder create/edit/delete states directly.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     cancel_body = func_body(source, "handleKeywordEditCancel")
     assert "App.rulesSavingRuleKey" not in cancel_body
     assert "App.rulesCreatingKeyword" not in cancel_body
@@ -3081,7 +3097,7 @@ def test_project_rules_keyword_edit_cancel_state_isolation_from_other_write_path
 def test_project_rules_keyword_edit_set_keyword_editing_state_isolation():
     # Phase 5F regression lock: ``setKeywordEditing`` must only touch the
     # keyword editing state, not any other write-path state.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setKeywordEditing")
     assert "App.rulesEditingKeywordKey" in body
     assert "App.rulesSavingRuleKey" not in body
@@ -3095,7 +3111,7 @@ def test_project_rules_keyword_edit_set_keyword_editing_state_isolation():
 def test_project_rules_keyword_edit_set_keyword_saving_state_isolation():
     # Phase 5F regression lock: ``setKeywordSaving`` must only touch the
     # keyword saving state, not any other write-path state.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "setKeywordSaving")
     assert "App.rulesUpdatingKeywordKey" in body
     assert "App.rulesSavingRuleKey" not in body
@@ -3110,7 +3126,7 @@ def test_project_rules_keyword_edit_js_does_not_call_other_write_bridges():
     # Phase 5F regression lock: the keyword edit save handler must not
     # call any other Project Rules write bridge (create / delete / toggle /
     # folder CRUD).
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     save_body = func_body(source, "handleKeywordEditSave")
     for forbidden in (
         'callBridge("create_project_keyword_rule"',
@@ -3128,7 +3144,7 @@ def test_project_rules_keyword_edit_js_does_not_call_other_write_bridges():
 def test_project_rules_keyword_edit_js_does_not_call_preview_or_backfill():
     # Phase 5F regression lock: the keyword edit handlers must not call
     # preview / backfill bridges.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         'callBridge("preview_folder_rule_conflicts"',
         'callBridge("backfill_folder_rule"',
@@ -3139,7 +3155,7 @@ def test_project_rules_keyword_edit_js_does_not_call_preview_or_backfill():
 def test_project_rules_keyword_edit_js_does_not_call_project_write():
     # Phase 5F regression lock: the keyword edit handlers must not call
     # any project write bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         'callBridge("create_project"',
         'callBridge("update_project"',
@@ -3153,7 +3169,7 @@ def test_project_rules_keyword_edit_js_does_not_call_project_write():
 def test_project_rules_keyword_edit_no_storage_or_network():
     # Phase 5F regression lock: the keyword edit handlers must not use
     # browser storage or network APIs.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for handler_name in (
         "handleKeywordEditStart",
         "handleKeywordEditSave",
@@ -3179,7 +3195,7 @@ def test_project_rules_keyword_edit_no_storage_or_network():
 def test_project_rules_keyword_edit_no_forbidden_handler_tokens():
     # Phase 5F regression lock: the keyword edit JS must not introduce any
     # of the forbidden camelCase handler tokens.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
         assert token not in source
 
@@ -3299,7 +3315,7 @@ def test_project_rules_keyword_edit_css_class_scoped_to_rules_page():
 def test_project_rules_keyword_edit_js_no_external_urls():
     # Phase 5F regression lock: rules.js must not reference any external
     # URL (http/https) or CDN or Google Fonts.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert not re.search(r"https?://", source, re.IGNORECASE)
     assert not re.search(r"\bcdn\b", source, re.IGNORECASE)
     assert not re.search(r"google\s*fonts", source, re.IGNORECASE)
@@ -3308,7 +3324,7 @@ def test_project_rules_keyword_edit_js_no_external_urls():
 def test_project_rules_keyword_edit_js_no_es_module_syntax():
     # Phase 5F regression lock: rules.js must not use ES module syntax
     # (import / export). The frontend uses classic scripts only.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
     assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
 
@@ -3361,7 +3377,7 @@ def test_project_rules_keyword_edit_stale_guard_preserved():
     # guard in ``loadProjectRules`` must remain intact. The keyword edit
     # success path calls ``loadProjectRules()`` which inherits this
     # protection.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     load_body = func_body(source, "loadProjectRules")
     assert "var token = ++App.rulesRequestToken" in load_body
     assert load_body.count("token !== App.rulesRequestToken") >= 2
@@ -3384,7 +3400,7 @@ def test_project_rules_keyword_edit_js_uses_escape_helper_for_dynamic_text():
     # Phase 5F regression lock: dynamic text rendering in the edit button
     # and inline edit form must use the escape helper. The rule id is
     # rendered via ``count()`` which calls ``App.escapeHtml``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     count_body = func_body(source, "count")
     assert "App.escapeHtml" in count_body
     row_body = func_body(source, "renderProjectRuleRow")
@@ -3502,7 +3518,7 @@ def test_project_rules_project_lifecycle_buttons_only_on_user_projects():
     # Phase 5G regression lock: the lifecycle buttons (edit / toggle /
     # archive) must only be rendered when ``editable`` is true. System /
     # special projects (``未归类`` / ``排除规则``) never get these buttons.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     project_body = func_body(source, "renderProjectRuleProject")
     assert "rules-project-edit-button" in project_body
     assert "rules-project-toggle-button" in project_body
@@ -3517,7 +3533,7 @@ def test_project_rules_project_lifecycle_buttons_only_on_user_projects():
 def test_project_rules_project_lifecycle_buttons_use_stable_classes_and_attributes():
     # Phase 5G regression lock: the lifecycle buttons must use the stable
     # CSS classes and ``data-project-id`` attributes.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     project_body = func_body(source, "renderProjectRuleProject")
     for cls in (
         "rules-project-edit-button",
@@ -3533,7 +3549,7 @@ def test_project_rules_project_lifecycle_buttons_disabled_when_any_write_in_flig
     # any project lifecycle write is in flight (create / edit / toggle /
     # archive). This keeps the four project lifecycle write paths from
     # running concurrently.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     project_body = func_body(source, "renderProjectRuleProject")
     assert "rulesCreatingProject" in project_body
     assert "rulesEditingProjectId" in project_body
@@ -3547,7 +3563,7 @@ def test_project_rules_project_lifecycle_inline_edit_form_anchors():
     # Phase 5G regression lock: the inline project edit form must use the
     # stable CSS classes for the name input, description input, save button,
     # and cancel button.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     project_body = func_body(source, "renderProjectRuleProject")
     for cls in (
         "rules-project-edit-form",
@@ -3802,4 +3818,344 @@ def test_project_rules_project_lifecycle_no_forbidden_handler_tokens():
     for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
         assert token not in source, (
             "Project Rules JS must not contain forbidden handler token: " + token
+        )
+
+
+# --- Phase MC2: Project Rules frontend modularization static contract ----
+#
+# Phase MC2 split the Project Rules surface from rules.js +
+# rules_project_actions.js into six classic IIFE modules:
+#   rules.js                 (core load / refresh / wiring)
+#   rules_render.js          (renderProjectRuleProject / renderProjectRuleRow)
+#   rules_rule_actions.js    (rule toggle)
+#   rules_keyword_actions.js (keyword create / edit / delete)
+#   rules_folder_actions.js  (folder create / edit / delete)
+#   rules_project_actions.js (project lifecycle)
+#
+# These tests lock the split so a future change cannot silently drop a
+# module from index.html, WorkTrace.spec, or the ALL_JS_FILES list.
+
+
+def test_project_rules_mc2_split_modules_exist_on_disk():
+    # Phase MC2 regression lock: each new split module must exist on disk.
+    import os
+
+    for name in (
+        "rules_render.js",
+        "rules_rule_actions.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+    ):
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "worktrace",
+            "webview_ui",
+            "js",
+            name,
+        )
+        assert os.path.isfile(path), f"missing Phase MC2 split module: {name}"
+
+
+def test_project_rules_mc2_split_modules_in_all_js_files():
+    # Phase MC2 regression lock: ALL_JS_FILES (the test-side single source
+    # of truth) must include every new split module in the correct order.
+    expected_order = [
+        "rules.js",
+        "rules_render.js",
+        "rules_rule_actions.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+        "rules_project_actions.js",
+    ]
+    # Each module must be present.
+    for name in expected_order:
+        assert name in ALL_JS_FILES, (
+            f"ALL_JS_FILES must include Phase MC2 split module: {name}"
+        )
+    # The rules modules must appear consecutively and in the correct order.
+    indices = [ALL_JS_FILES.index(name) for name in expected_order]
+    assert indices == sorted(indices), (
+        "Phase MC2 split modules must appear in ALL_JS_FILES in order: "
+        + ", ".join(expected_order)
+    )
+
+
+def test_project_rules_mc2_split_modules_in_index_html():
+    # Phase MC2 regression lock: index.html must load every split module
+    # in the same order as ALL_JS_FILES.
+    html = read_resource("index.html")
+    import re
+
+    scripts = re.findall(r'<script\s+src="js/([^"]+)"\s*>\s*</script>', html)
+    assert scripts == ALL_JS_FILES, (
+        "index.html script order must match ALL_JS_FILES exactly"
+    )
+    # Specifically check the four new modules are present.
+    for name in (
+        "rules_render.js",
+        "rules_rule_actions.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+    ):
+        assert 'src="js/' + name + '"' in html, (
+            f"index.html must load Phase MC2 split module: {name}"
+        )
+
+
+def test_project_rules_mc2_split_modules_in_spec():
+    # Phase MC2 regression lock: WorkTrace.spec must bundle every split
+    # module so PyInstaller packages them into the release build.
+    spec = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
+    for name in (
+        "rules_render.js",
+        "rules_rule_actions.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+    ):
+        assert name in spec, (
+            f"WorkTrace.spec must bundle Phase MC2 split module: {name}"
+        )
+
+
+def test_project_rules_mc2_split_modules_are_iife_classic_scripts():
+    # Phase MC2 regression lock: each split module must be a classic IIFE
+    # script (no ES module syntax, no import/export, no bundler). This
+    # matches the existing rules.js / rules_project_actions.js pattern.
+    for name in (
+        "rules_render.js",
+        "rules_rule_actions.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+    ):
+        source = read_js(name).strip()
+        # A short leading comment header is permitted before the IIFE
+        # opening (same rule as test_phase_r2_each_js_file_is_iife).
+        assert "(function () {" in source[:400], (
+            f"{name} must open with an IIFE near the top"
+        )
+        assert source.rstrip().endswith("})();"), (
+            f"{name} must end with IIFE close"
+        )
+        # Strict mode.
+        assert '"use strict"' in source, f"{name} must use strict mode"
+        # App namespace.
+        assert "var App = window.WorkTraceApp" in source, (
+            f"{name} must attach to window.WorkTraceApp namespace"
+        )
+        # No ES module syntax.
+        for forbidden in ("export ", "import ", "export default", "import("):
+            assert forbidden not in source, (
+                f"{name} must not use ES module syntax: {forbidden}"
+            )
+
+
+def test_project_rules_mc2_render_helpers_attach_to_app():
+    # Phase MC2 regression lock: renderProjectRuleProject and
+    # renderProjectRuleRow must remain attached to App.* (public surface
+    # preserved) even though they moved to rules_render.js.
+    source = read_js("rules_render.js")
+    assert "App.renderProjectRuleProject = renderProjectRuleProject" in source
+    assert "App.renderProjectRuleRow = renderProjectRuleRow" in source
+
+
+def test_project_rules_mc2_rule_actions_attach_to_app():
+    # Phase MC2 regression lock: rule toggle handlers must remain attached
+    # to App.* even though they moved to rules_rule_actions.js.
+    source = read_js("rules_rule_actions.js")
+    assert "App.bindProjectRuleToggles = bindProjectRuleToggles" in source
+    assert "App.handleProjectRuleToggle = handleProjectRuleToggle" in source
+    assert "App.setProjectRuleSaving = setProjectRuleSaving" in source
+
+
+def test_project_rules_mc2_keyword_actions_attach_to_app():
+    # Phase MC2 regression lock: keyword action handlers must remain
+    # attached to App.* even though they moved to rules_keyword_actions.js.
+    source = read_js("rules_keyword_actions.js")
+    for name in (
+        "bindProjectRuleDelete",
+        "handleProjectRuleDelete",
+        "setRuleDeleting",
+        "bindProjectRuleKeywordEditEvents",
+        "handleProjectRuleKeywordEditEvent",
+        "handleKeywordEditStart",
+        "handleKeywordEditSave",
+        "handleKeywordEditCancel",
+        "setKeywordEditing",
+        "setKeywordSaving",
+        "populateKeywordCreateProjectSelector",
+        "handleKeywordCreateSubmit",
+        "setKeywordCreateCreating",
+        "showKeywordCreateStatus",
+        "clearKeywordCreateStatus",
+    ):
+        assert ("App." + name + " = " + name) in source, (
+            f"rules_keyword_actions.js must attach {name} to App"
+        )
+
+
+def test_project_rules_mc2_folder_actions_attach_to_app():
+    # Phase MC2 regression lock: folder action handlers must remain
+    # attached to App.* even though they moved to rules_folder_actions.js.
+    source = read_js("rules_folder_actions.js")
+    for name in (
+        "populateFolderCreateProjectSelector",
+        "handleFolderCreateSubmit",
+        "setFolderCreateCreating",
+        "showFolderCreateStatus",
+        "clearFolderCreateStatus",
+        "bindProjectRuleFolderEvents",
+        "handleProjectRuleFolderEvent",
+        "handleFolderEditStart",
+        "handleFolderEditSave",
+        "handleFolderEditCancel",
+        "handleFolderDelete",
+        "setFolderEditing",
+        "setFolderSaving",
+        "setFolderDeleting",
+    ):
+        assert ("App." + name + " = " + name) in source, (
+            f"rules_folder_actions.js must attach {name} to App"
+        )
+
+
+def test_project_rules_mc2_core_module_keeps_load_and_refresh():
+    # Phase MC2 regression lock: rules.js (core) must keep loadProjectRules,
+    # showProjectRules, rerenderProjectRulesList, setRulesLoading,
+    # showRulesError, clearRulesError. These are the core entry points
+    # referenced by init.js and other modules.
+    source = read_js("rules.js")
+    for name in (
+        "loadProjectRules",
+        "showProjectRules",
+        "rerenderProjectRulesList",
+        "setRulesLoading",
+        "showRulesError",
+        "clearRulesError",
+    ):
+        assert ("function " + name) in source, (
+            f"rules.js core must still define {name}"
+        )
+        assert ("App." + name + " = " + name) in source, (
+            f"rules.js core must still attach {name} to App"
+        )
+
+
+def test_project_rules_mc2_core_module_does_not_render_html():
+    # Phase MC2 regression lock: rules.js (core) must no longer carry the
+    # large render HTML helpers — they moved to rules_render.js. The
+    # core module may still call App.renderProjectRuleProject (delegating
+    # to the render module) but must not DEFINE it.
+    source = read_js("rules.js")
+    assert "function renderProjectRuleProject" not in source, (
+        "rules.js core must not define renderProjectRuleProject (moved to rules_render.js)"
+    )
+    assert "function renderProjectRuleRow" not in source, (
+        "rules.js core must not define renderProjectRuleRow (moved to rules_render.js)"
+    )
+
+
+def test_project_rules_mc2_render_module_does_not_call_bridge():
+    # Phase MC2 regression lock: rules_render.js must be a pure render
+    # module — no bridge calls. The bridge calls live in the action
+    # modules (rule_actions / keyword_actions / folder_actions /
+    # project_actions).
+    source = read_js("rules_render.js")
+    assert "callBridge(" not in source, (
+        "rules_render.js must not call bridge (pure render module)"
+    )
+
+
+def test_project_rules_mc2_state_keys_unchanged():
+    # Phase MC2 regression lock: all Project Rules frontend state keys
+    # must remain available (declared in core.js) and the split modules
+    # must not re-declare or rename them. The state keys are part of the
+    # stable frontend contract.
+    core = read_js("core.js")
+    for key in (
+        "rulesLoaded",
+        "rulesLoading",
+        "rulesRequestToken",
+        "rulesSavingRuleKey",
+        "rulesDeletingRuleKey",
+        "rulesCreatingKeyword",
+        "rulesEditingKeywordKey",
+        "rulesUpdatingKeywordKey",
+        "rulesCreatingFolder",
+        "rulesEditingFolderKey",
+        "rulesDeletingFolderKey",
+        "rulesCreatingProject",
+        "rulesEditingProjectId",
+        "rulesUpdatingProjectId",
+        "rulesTogglingProjectId",
+        "rulesArchivingProjectId",
+        "lastProjectRulesData",
+    ):
+        assert ("App." + key + " =") in core, (
+            f"core.js must declare state key: App.{key}"
+        )
+
+
+def test_project_rules_mc2_no_app_js_reintroduced():
+    # Phase MC2 regression lock: the removed monolithic app.js must not
+    # be reintroduced by the split.
+    source = read_resource("index.html")
+    assert "app.js" not in source
+
+
+def test_project_rules_mc2_no_forbidden_handler_tokens_in_split_modules():
+    # Phase MC2 regression lock: the new split modules must not introduce
+    # any forbidden camelCase handler tokens.
+    for name in (
+        "rules_render.js",
+        "rules_rule_actions.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+    ):
+        source = read_js(name)
+        for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
+            assert token not in source, (
+                f"{name} must not contain forbidden handler token: {token}"
+            )
+
+
+def test_project_rules_mc2_split_modules_no_storage_or_network():
+    # Phase MC2 regression lock: the new split modules must not use
+    # browser storage or network APIs.
+    for name in (
+        "rules_render.js",
+        "rules_rule_actions.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+    ):
+        source = read_js(name)
+        for forbidden in (
+            "localStorage",
+            "sessionStorage",
+            "document.cookie",
+            "fetch(",
+            "XMLHttpRequest",
+        ):
+            assert forbidden not in source, (
+                f"{name} must not use forbidden storage/network API: {forbidden}"
+            )
+
+
+def test_project_rules_mc2_split_modules_no_external_resources():
+    # Phase MC2 regression lock: the new split modules must not reference
+    # external network resources (CDN, Google Fonts, http/https links).
+    for name in (
+        "rules_render.js",
+        "rules_rule_actions.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+    ):
+        source = read_js(name)
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{name} must not reference external URLs"
+        )
+        assert not re.search(r"cdn", source, re.IGNORECASE), (
+            f"{name} must not reference CDN"
+        )
+        assert not re.search(r"google\s*fonts", source, re.IGNORECASE), (
+            f"{name} must not reference Google Fonts"
         )

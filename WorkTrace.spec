@@ -16,6 +16,10 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_correction.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'statistics.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_render.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_rule_actions.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_keyword_actions.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_folder_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_project_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'init.js'), 'worktrace/webview_ui/js'),
 ]

@@ -268,6 +268,62 @@ def test_rules_project_actions_js_selects_static_contract_and_smoke(runner):
 
 
 # ---------------------------------------------------------------------------
+# C6 (Phase MC2). New split modules -> Project Rules static contract + smoke
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("js_module", [
+    "worktrace/webview_ui/js/rules_render.js",
+    "worktrace/webview_ui/js/rules_rule_actions.js",
+    "worktrace/webview_ui/js/rules_keyword_actions.js",
+    "worktrace/webview_ui/js/rules_folder_actions.js",
+])
+def test_mc2_split_module_selects_static_contract_and_smoke(runner, js_module):
+    # Phase MC2: each new split module must trigger section A (frontend
+    # resources, broad) AND section C6 (Project Rules static contract).
+    # Both contribute the static contract target; dedup ensures it
+    # appears once. The import smoke command must also be selected.
+    sel = runner.select_targets([js_module])
+    assert "tests/webview/test_project_rules_static_contract.py" in sel.pytest_targets
+    assert "tests/webview/" in sel.pytest_targets
+    assert "tests/test_webview_bridge.py" in sel.pytest_targets
+    assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets
+    assert any(
+        "import worktrace.webview_main" in " ".join(s) for s in sel.smoke_commands
+    )
+
+
+@pytest.mark.parametrize("js_module", [
+    "worktrace/webview_ui/js/rules_render.js",
+    "worktrace/webview_ui/js/rules_rule_actions.js",
+    "worktrace/webview_ui/js/rules_keyword_actions.js",
+    "worktrace/webview_ui/js/rules_folder_actions.js",
+])
+def test_mc2_split_module_does_not_trigger_api_or_service_tests(runner, js_module):
+    # Phase MC2: a pure frontend JS change must not unconditionally
+    # trigger the keyword/folder/project API or service tests. Those run
+    # only when the API / service / bridge source files change (sections
+    # C1..C5). Section A's broad frontend mapping is preserved.
+    sel = runner.select_targets([js_module])
+    for unexpected in (
+        "tests/test_rule_service.py",
+        "tests/test_folder_rule_service.py",
+        "tests/test_project_rules_keyword_create.py",
+        "tests/test_project_rules_keyword_delete.py",
+        "tests/test_project_rules_keyword_edit.py",
+        "tests/test_project_rules_folder_crud.py",
+        "tests/test_project_rules_enable_disable.py",
+        "tests/test_project_rules_project_lifecycle.py",
+        "tests/test_project_rules_view.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_api_write_contract.py",
+    ):
+        assert unexpected not in sel.pytest_targets, (
+            f"{js_module} must not trigger API/service test: {unexpected}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # I. docs-only -> not full pytest
 # ---------------------------------------------------------------------------
 
