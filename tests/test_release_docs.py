@@ -398,3 +398,97 @@ def test_ai_context_guide_marks_research_docs_as_non_default_context():
     assert "not default context" in text.lower() or "non-default" in text.lower(), (
         "ai-context-guide.md must mark research docs as non-default context"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase DG1.1: README Current Limitations residual contradiction regression.
+# ---------------------------------------------------------------------------
+
+# Project Rules capabilities that the current-state capability matrix lists
+# as SUPPORTED. The README Current Limitations section must NOT list any of
+# these as unsupported, otherwise the two docs contradict each other.
+_SUPPORTED_PROJECT_RULES_CAPABILITIES = (
+    "Project enable/disable",
+    "Project create/edit/archive",
+    "Project create/edit/delete/archive",
+)
+
+
+def _readme_current_limitations_section() -> str:
+    """Return the README Current Limitations section body (lowercased,
+    with runs of whitespace collapsed to single spaces so wrapped-line
+    substring contracts do not spuriously fail)."""
+    readme = _read_text(README_PATH)
+    assert "## Current Limitations" in readme, (
+        "README must contain a Current Limitations section"
+    )
+    body = readme.split("## Current Limitations", 1)[1]
+    # Stop at the next top-level section.
+    body = body.split("\n## ", 1)[0]
+    return " ".join(body.lower().split())
+
+
+@pytest.mark.parametrize("phrase", _SUPPORTED_PROJECT_RULES_CAPABILITIES)
+def test_readme_current_limitations_does_not_list_supported_project_rules_as_unsupported(phrase):
+    """README Current Limitations must not list Project Rules capabilities
+    that the current-state matrix marks as supported (project enable/disable,
+    project create/edit/archive) as unsupported. This is the DG1.1
+    regression that prevents the DG1 residual contradiction from coming back.
+    """
+    limitations = _readme_current_limitations_section()
+    assert phrase.lower() not in limitations, (
+        f"README Current Limitations must not list supported Project Rules "
+        f"capability as unsupported: {phrase}"
+    )
+
+
+def test_readme_current_limitations_lists_genuinely_unsupported_project_rules():
+    """README Current Limitations must still call out the genuinely
+    unsupported Project Rules capabilities so the boundary stays explicit."""
+    limitations = _readme_current_limitations_section()
+    for term in ("hard delete", "backfill", "automatic rules", "batch"):
+        assert term in limitations, (
+            f"README Current Limitations must mention genuinely unsupported "
+            f"Project Rules term: {term}"
+        )
+
+
+def test_readme_points_to_current_state_history_and_ai_context_after_dg1_1():
+    """Single combined regression: README must still point at all three
+    governance docs after the DG1.1 fix (guards against accidental deletion
+    of the pointer block during a future edit)."""
+    readme = _read_text(README_PATH)
+    for doc in (
+        "docs/current-state.md",
+        "docs/history/webview-phases.md",
+        "docs/ai-context-guide.md",
+    ):
+        assert doc in readme, (
+            f"README must point at governance doc after DG1.1: {doc}"
+        )
+
+
+def test_current_state_remains_under_one_screen_hard_max_after_dg1_1():
+    """DG1.1 must not bloat current-state.md past the one-screen hard max."""
+    count = _line_count(CURRENT_STATE_PATH)
+    assert count <= CURRENT_STATE_HARD_MAX_LINES, (
+        f"docs/current-state.md is {count} lines after DG1.1; hard max is "
+        f"{CURRENT_STATE_HARD_MAX_LINES}."
+    )
+
+
+def test_current_state_phase_description_is_unambiguous_after_dg1_1():
+    """The Phase 5G description must use the unambiguous DG1.1 wording:
+    "user project create, plus existing user project edit / enable-disable /
+    archive" — not the old "on existing user projects" form that could be
+    misread as "create only on existing user projects"."""
+    text = _read_text(CURRENT_STATE_PATH)
+    assert "user project create, plus existing user project" in text, (
+        "current-state.md Phase 5G description must use the DG1.1 unambiguous "
+        "wording: 'user project create, plus existing user project edit / "
+        "enable-disable / archive'"
+    )
+    assert "on existing user projects" not in text, (
+        "current-state.md must not retain the DG1.1-removed ambiguous wording "
+        "'on existing user projects'"
+    )

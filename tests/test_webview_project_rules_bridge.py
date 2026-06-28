@@ -78,7 +78,11 @@ def test_get_project_rules_success_payload(monkeypatch):
     assert client["description"] == "Billable work"
     assert client["enabled"] is True
     assert isinstance(client["enabled"], bool)
-    assert client["created_by"] == "user"
+    # Phase M4: raw ``created_by`` is no longer surfaced to the frontend;
+    # display-safe flags drive UI decisions instead.
+    assert "created_by" not in client
+    assert client["is_system"] is False
+    assert client["editable"] is True
     assert client["is_excluded"] is False
     assert isinstance(client["is_excluded"], bool)
     assert client["rule_count"] == 2
@@ -119,7 +123,10 @@ def test_get_project_rules_success_payload(monkeypatch):
 
     excluded = projects[2]
     assert excluded["is_excluded"] is True
-    assert excluded["created_by"] == "system"
+    # Phase M4: raw ``created_by`` no longer surfaced; ``is_system`` drives
+    # the system-project decision instead.
+    assert "created_by" not in excluded
+    assert excluded["is_system"] is True
     assert "命中后匿名记录" in excluded["summary"]
 
 
@@ -176,7 +183,8 @@ def test_get_project_rules_malformed_rows_are_safe_and_json_serializable(monkeyp
     assert project["name"] == "未知项目"
     assert project["description"] == ""
     assert project["enabled"] is True
-    assert project["created_by"] == ""
+    # Phase M4: raw ``created_by`` no longer surfaced.
+    assert "created_by" not in project
     assert project["rule_count"] == 4
     assert project["folder_rule_count"] == 2
     assert project["keyword_rule_count"] == 2
@@ -814,7 +822,17 @@ def test_set_project_rule_enabled_payload_json_serializable(monkeypatch):
 
 
 def test_project_rules_bridge_import_boundary():
-    source = Path(bridge_module.__file__).read_text(encoding="utf-8")
+    # As of the Phase M3 split, Project Rules bridge code lives in both
+    # ``bridge.py`` and ``bridge_rules.py``. Both must obey the same import
+    # boundary: no services / db / collector / security / runtime / config /
+    # legacy ui imports.
+    bridge_dir = Path(bridge_module.__file__).parent
+    bridge_sources = {
+        "bridge.py": (bridge_dir / "bridge.py").read_text(encoding="utf-8"),
+    }
+    bridge_rules_path = bridge_dir / "bridge_rules.py"
+    if bridge_rules_path.is_file():
+        bridge_sources["bridge_rules.py"] = bridge_rules_path.read_text(encoding="utf-8")
     forbidden_patterns = (
         r"^\s*from\s+\.\.services(\s|\.)",
         r"^\s*from\s+\.\.db(\s|\.)",
@@ -838,10 +856,11 @@ def test_project_rules_bridge_import_boundary():
         r"^\s*import\s+worktrace\.config(\s|$)",
         r"^\s*import\s+worktrace\.ui(\s|$)",
     )
-    for pattern in forbidden_patterns:
-        assert not re.search(pattern, source, re.MULTILINE), (
-            "bridge.py must not import forbidden backend/UI module: " + pattern
-        )
+    for fname, source in bridge_sources.items():
+        for pattern in forbidden_patterns:
+            assert not re.search(pattern, source, re.MULTILINE), (
+                f"{fname} must not import forbidden backend/UI module: " + pattern
+            )
 
 
 # --- Phase 5C: Project Rules keyword rule creation foundation ------------
@@ -4097,3 +4116,67 @@ def test_get_project_rules_payload_includes_display_safe_lifecycle_flags(monkeyp
     assert excluded["can_toggle"] is False
     assert excluded["can_archive"] is False
     json.dumps(result, ensure_ascii=False)
+
+
+def test_get_project_rules_read_payload_excludes_sensitive_internal_fields(monkeypatch):
+    # Phase M4 regression lock: the Project Rules read payload must never
+    # expose raw ``created_by`` / ``created_at`` / ``updated_at`` / raw row
+    # / traceback / SQL. Only display-safe boolean flags (``is_system`` /
+    # ``editable`` / ``can_toggle`` / ``can_archive`` / ``is_excluded``)
+    # carry the frontend decision logic.
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [
+            {
+                "id": 1,
+                "name": "Client",
+                "description": "billable",
+                "enabled": 1,
+                "created_by": "user",
+                "created_at": "2026-06-28T10:00:00",
+                "updated_at": "2026-06-28T10:00:00",
+                "folder_rules": [],
+                "keyword_rules": [],
+            },
+            {
+                "id": 2,
+                "name": "排除规则",
+                "description": "命中后匿名记录",
+                "enabled": 0,
+                "created_by": "system",
+                "created_at": "2026-06-28T10:00:00",
+                "updated_at": "2026-06-28T10:00:00",
+                "folder_rules": [],
+                "keyword_rules": [],
+            },
+        ],
+    )
+
+    result = WebViewBridge().get_project_rules()
+    json.dumps(result, ensure_ascii=False)
+
+    lowered = repr(result).lower()
+    for forbidden in (
+        "created_by",
+        "created_at",
+        "updated_at",
+        "traceback",
+        "select ",
+        "insert ",
+        "update ",
+    ):
+        assert forbidden not in lowered, (
+            f"Project Rules read payload must not leak {forbidden!r}"
+        )
+
+    for project in result["projects"]:
+        assert "created_by" not in project
+        assert "created_at" not in project
+        assert "updated_at" not in project
+        # Display-safe flags must be present and boolean.
+        for flag in ("is_system", "editable", "can_toggle", "can_archive", "is_excluded"):
+            assert flag in project, f"missing display-safe flag {flag!r}"
+            assert isinstance(project[flag], bool), (
+                f"display-safe flag {flag!r} must be bool"
+            )

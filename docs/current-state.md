@@ -9,8 +9,8 @@
 ## Current Phase
 
 **Phase 5G — Project lifecycle foundation + in-phase hardening.** Project
-Rules now supports user project create / edit / enable-disable / archive on
-existing user projects, in addition to the earlier folder / keyword rule
+Rules now supports user project create, plus existing user project edit /
+enable-disable / archive, in addition to the earlier folder / keyword rule
 enable-disable, keyword create / edit / delete, and folder rule create /
 edit / delete capabilities. Hard delete project, conflict preview, backfill,
 automatic rules, and batch Project Rules operations remain unsupported. The

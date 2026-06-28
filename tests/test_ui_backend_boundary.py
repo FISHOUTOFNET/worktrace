@@ -186,18 +186,29 @@ def test_webview_ui_file_has_no_forbidden_backend_imports(wv_file: Path) -> None
 
 
 def test_webview_bridge_has_no_runtime_or_config_imports() -> None:
-    """The bridge module must only use worktrace.api, not runtime/config/db."""
-    bridge_path = WEBVIEW_UI_DIR / "bridge.py"
-    if not bridge_path.is_file():
-        pytest.skip("bridge.py not implemented yet (Phase 1)")
-    source = bridge_path.read_text(encoding="utf-8")
+    """The bridge modules must only use worktrace.api, not runtime/config/db.
+
+    As of the Phase M3 split, the Project Rules bridge methods live in
+    ``bridge_rules.py`` (mixed into ``WebViewBridge`` via
+    ``ProjectRulesBridgeMixin``). Both ``bridge.py`` and ``bridge_rules.py``
+    must obey the same strict boundary: no ``runtime``, ``config``,
+    ``services``, ``db``, ``collector``, or ``security`` imports.
+    """
+    bridge_modules = ["bridge.py", "bridge_rules.py"]
+    # bridge.py is the primary bridge module and must always exist.
+    assert (WEBVIEW_UI_DIR / "bridge.py").is_file(), "bridge.py must exist (Phase 1)"
     violations: list[str] = []
-    for pattern, label in zip(BRIDGE_FORBIDDEN_PATTERNS, BRIDGE_FORBIDDEN_LABELS):
-        for match in pattern.finditer(source):
-            line_no = source.count("\n", 0, match.start()) + 1
-            violations.append(f"webview/bridge.py:{line_no}: {label}")
+    for name in bridge_modules:
+        path = WEBVIEW_UI_DIR / name
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        for pattern, label in zip(BRIDGE_FORBIDDEN_PATTERNS, BRIDGE_FORBIDDEN_LABELS):
+            for match in pattern.finditer(source):
+                line_no = source.count("\n", 0, match.start()) + 1
+                violations.append(f"webview/{name}:{line_no}: {label}")
     assert not violations, (
-        "WebView bridge must not import runtime, config, services, db, "
+        "WebView bridge modules must not import runtime, config, services, db, "
         "collector, or security. Found forbidden imports:\n"
         + "\n".join(violations)
         + "\nUse worktrace.api.* facades instead."

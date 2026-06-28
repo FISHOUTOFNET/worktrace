@@ -76,7 +76,7 @@ CONFTEST_BROAD_SUITE: list[str] = [
 
 
 # ---------------------------------------------------------------------------
-# Path -> tests mapping (sections A..J).
+# Path -> tests mapping (sections A..L; C refined into C1..C6 in Phase TG2).
 #
 # Each rule is a dict with:
 #   id        : human label
@@ -105,6 +105,7 @@ RULES: list[dict] = [
             "worktrace/webview_ui/js/timeline_correction.js",
             "worktrace/webview_ui/js/statistics.js",
             "worktrace/webview_ui/js/rules.js",
+            "worktrace/webview_ui/js/rules_project_actions.js",
             "worktrace/webview_ui/js/init.js",
         ],
         "tests": [
@@ -133,29 +134,99 @@ RULES: list[dict] = [
         "warnings": [],
     },
     {
-        "id": "C. Project Rules API / service / UI",
+        "id": "C1. Project Rules shared API contract helpers",
         "triggers": [
-            "worktrace/api/rule_api.py",
-            "worktrace/api/project_api.py",
-            "worktrace/services/rule_service.py",
-            "worktrace/services/folder_rule_service.py",
-            "worktrace/services/project_service.py",
-            "worktrace/services/project_inference_service.py",
-            "worktrace/webview_ui/js/rules.js",
+            "worktrace/api/_write_contract.py",
         ],
         "tests": [
-            "tests/test_rule_service.py",
-            "tests/test_folder_rule_service.py",
+            "tests/test_api_write_contract.py",
             "tests/test_project_rules_keyword_create.py",
             "tests/test_project_rules_keyword_delete.py",
             "tests/test_project_rules_keyword_edit.py",
+            "tests/test_project_rules_folder_crud.py",
+            "tests/test_project_rules_enable_disable.py",
             "tests/test_project_rules_project_lifecycle.py",
             "tests/test_webview_project_rules_bridge.py",
-            "tests/test_project_rules_view.py",
-            "tests/webview/test_project_rules_static_contract.py",
             "tests/test_ui_backend_boundary.py",
         ],
         "smoke": [],
+        "warnings": [
+            "Shared Project Rules contract helper changed; running broad Project Rules suite.",
+        ],
+    },
+    {
+        "id": "C2. Keyword rule API / service",
+        "triggers": [
+            "worktrace/api/rule_api.py",
+            "worktrace/services/rule_service.py",
+        ],
+        "tests": [
+            "tests/test_rule_service.py",
+            "tests/test_project_rules_keyword_create.py",
+            "tests/test_project_rules_keyword_delete.py",
+            "tests/test_project_rules_keyword_edit.py",
+            "tests/test_project_rules_enable_disable.py",
+            "tests/test_project_rules_view.py",
+            "tests/test_webview_project_rules_bridge.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [],
+        "warnings": [],
+    },
+    {
+        "id": "C3. Folder rule API / service",
+        "triggers": [
+            "worktrace/api/rule_api.py",
+            "worktrace/services/folder_rule_service.py",
+        ],
+        "tests": [
+            "tests/test_folder_rule_service.py",
+            "tests/test_project_rules_folder_crud.py",
+            "tests/test_project_rules_view.py",
+            "tests/test_webview_project_rules_bridge.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [],
+        "warnings": [],
+    },
+    {
+        "id": "C4. Project lifecycle API / service",
+        "triggers": [
+            "worktrace/api/project_api.py",
+            "worktrace/services/project_service.py",
+            "worktrace/services/project_inference_service.py",
+        ],
+        "tests": [
+            "tests/test_project_rules_project_lifecycle.py",
+            "tests/test_project_rules_view.py",
+            "tests/test_webview_project_rules_bridge.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [],
+        "warnings": [],
+    },
+    {
+        "id": "C5. Project Rules bridge",
+        "triggers": [
+            "worktrace/webview_ui/bridge_rules.py",
+        ],
+        "tests": [
+            "tests/test_webview_project_rules_bridge.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [],
+        "warnings": [],
+    },
+    {
+        "id": "C6. Project Rules frontend / static",
+        "triggers": [
+            "worktrace/webview_ui/js/rules.js",
+            "worktrace/webview_ui/js/rules_project_actions.js",
+        ],
+        "tests": [
+            "tests/webview/test_project_rules_static_contract.py",
+        ],
+        "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
     },
     {
@@ -346,7 +417,8 @@ def _matches_trigger(changed: str, trigger: str) -> bool:
 def select_targets(changed_files: Iterable[str]) -> Selection:
     """Map changed files to a conservative, ordered, de-duplicated test set.
 
-    Sections A..J are matched against every non-test changed file. Test-file
+    Sections A..L (C refined into C1..C6 in Phase TG2) are matched against
+    every non-test changed file. Test-file
     changes (section L) are matched first so the most directly-affected test
     runs first. Unknown ``worktrace/`` source changes (section K) fall back
     to a startup + boundary smoke set plus a warning. When nothing changed,
@@ -402,7 +474,7 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
         else:
             add_target(c)
 
-    # A..J for source / docs / packaging files.
+    # A..L for source / docs / packaging files.
     for c in source_changes:
         matched = False
         for rule in RULES:

@@ -203,7 +203,6 @@ database file or use the Settings page to clear and rebuild all data.
   recording, or automatic startup.
 - Settings / Privacy / Encrypted Backup pages are not yet migrated to
   WebView (legacy Tkinter reference code remains only as reference).
-- Project enable/disable; Project create/edit/delete/archive; folder rule
-  conflict preview, backfill, automatic rules, and batch operations;
-  Excel / PDF / timesheet export; folder opening; and auto-submit are not
-  supported.
+- Hard delete project; folder rule conflict preview, backfill, automatic
+  rules, and batch Project Rules operations; Excel / PDF / timesheet
+  export; folder opening; and auto-submit are not supported.

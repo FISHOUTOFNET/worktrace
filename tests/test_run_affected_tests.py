@@ -86,7 +86,9 @@ def test_bridge_py_selects_bridge_tests_and_boundary(runner):
 
 
 # ---------------------------------------------------------------------------
-# C. rule_api.py -> Project Rules API/service/bridge/static tests
+# C. rule_api.py -> Project Rules keyword + folder API/service/bridge tests
+# (Phase TG2: rule_api.py no longer triggers frontend/static contract tests;
+#  it triggers C2 keyword + C3 folder + bridge + boundary only.)
 # ---------------------------------------------------------------------------
 
 
@@ -97,12 +99,172 @@ def test_rule_api_py_selects_project_rules_suite(runner):
         "tests/test_folder_rule_service.py",
         "tests/test_project_rules_keyword_create.py",
         "tests/test_project_rules_keyword_delete.py",
+        "tests/test_project_rules_keyword_edit.py",
+        "tests/test_project_rules_folder_crud.py",
+        "tests/test_project_rules_enable_disable.py",
         "tests/test_webview_project_rules_bridge.py",
         "tests/test_project_rules_view.py",
-        "tests/webview/test_project_rules_static_contract.py",
         "tests/test_ui_backend_boundary.py",
     ]:
         assert expected in sel.pytest_targets, f"missing {expected}"
+
+
+def test_rule_api_py_does_not_trigger_frontend_static_contract(runner):
+    # Phase TG2: rule_api.py changes must NOT unconditionally run frontend
+    # static contract tests; those run only when bridge_rules.py or rules*.js
+    # change (sections C5 / C6 / A).
+    sel = runner.select_targets(["worktrace/api/rule_api.py"])
+    assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
+
+
+def test_rule_api_py_does_not_trigger_project_lifecycle_tests(runner):
+    # Phase TG2: rule_api.py (keyword/folder facades) must NOT trigger
+    # project lifecycle tests; those run only when project_api.py or
+    # project_service.py change (section C4).
+    sel = runner.select_targets(["worktrace/api/rule_api.py"])
+    assert "tests/test_project_rules_project_lifecycle.py" not in sel.pytest_targets
+
+
+# ---------------------------------------------------------------------------
+# C1. _write_contract.py -> broad Project Rules suite (shared helper)
+# ---------------------------------------------------------------------------
+
+
+def test_write_contract_helper_selects_broad_project_rules_suite(runner):
+    sel = runner.select_targets(["worktrace/api/_write_contract.py"])
+    for expected in [
+        "tests/test_api_write_contract.py",
+        "tests/test_project_rules_keyword_create.py",
+        "tests/test_project_rules_keyword_delete.py",
+        "tests/test_project_rules_keyword_edit.py",
+        "tests/test_project_rules_folder_crud.py",
+        "tests/test_project_rules_enable_disable.py",
+        "tests/test_project_rules_project_lifecycle.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+    assert any("Shared Project Rules contract helper" in w for w in sel.warnings)
+
+
+# ---------------------------------------------------------------------------
+# C2. rule_service.py -> keyword rule tests (no folder, no lifecycle, no static)
+# ---------------------------------------------------------------------------
+
+
+def test_rule_service_py_selects_keyword_tests_only(runner):
+    sel = runner.select_targets(["worktrace/services/rule_service.py"])
+    for expected in [
+        "tests/test_rule_service.py",
+        "tests/test_project_rules_keyword_create.py",
+        "tests/test_project_rules_keyword_delete.py",
+        "tests/test_project_rules_keyword_edit.py",
+        "tests/test_project_rules_enable_disable.py",
+        "tests/test_project_rules_view.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+    # rule_service.py must NOT trigger folder rule tests or lifecycle tests.
+    assert "tests/test_folder_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_project_lifecycle.py" not in sel.pytest_targets
+    assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
+
+
+# ---------------------------------------------------------------------------
+# C3. folder_rule_service.py -> folder rule tests (no keyword, no lifecycle)
+# ---------------------------------------------------------------------------
+
+
+def test_folder_rule_service_py_selects_folder_tests_only(runner):
+    sel = runner.select_targets(["worktrace/services/folder_rule_service.py"])
+    for expected in [
+        "tests/test_folder_rule_service.py",
+        "tests/test_project_rules_folder_crud.py",
+        "tests/test_project_rules_view.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+    assert "tests/test_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_project_lifecycle.py" not in sel.pytest_targets
+    assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
+
+
+# ---------------------------------------------------------------------------
+# C4. project_api.py / project_service.py -> project lifecycle tests only
+# ---------------------------------------------------------------------------
+
+
+def test_project_api_py_selects_lifecycle_tests_only(runner):
+    sel = runner.select_targets(["worktrace/api/project_api.py"])
+    for expected in [
+        "tests/test_project_rules_project_lifecycle.py",
+        "tests/test_project_rules_view.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+    # project_api.py must NOT trigger keyword/folder rule tests or static tests.
+    assert "tests/test_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_folder_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_keyword_create.py" not in sel.pytest_targets
+    assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
+
+
+def test_project_service_py_selects_lifecycle_tests_only(runner):
+    sel = runner.select_targets(["worktrace/services/project_service.py"])
+    for expected in [
+        "tests/test_project_rules_project_lifecycle.py",
+        "tests/test_project_rules_view.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+    assert "tests/test_rule_service.py" not in sel.pytest_targets
+    assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
+
+
+# ---------------------------------------------------------------------------
+# C5. bridge_rules.py -> Project Rules bridge tests + boundary only
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_rules_py_selects_project_rules_bridge_tests_only(runner):
+    sel = runner.select_targets(["worktrace/webview_ui/bridge_rules.py"])
+    for expected in [
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+    # bridge_rules.py must NOT trigger all bridge tests (timeline, statistics,
+    # etc.) since it only contains Project Rules methods.
+    assert "tests/test_webview_bridge.py" not in sel.pytest_targets
+    assert "tests/test_webview_bridge_merge.py" not in sel.pytest_targets
+    assert "tests/test_webview_bridge_batch_project.py" not in sel.pytest_targets
+    assert "tests/test_webview_bridge_batch_note.py" not in sel.pytest_targets
+    assert "tests/test_webview_bridge_restore.py" not in sel.pytest_targets
+    # bridge_rules.py is not a frontend resource, so no import smoke.
+    assert sel.smoke_commands == []
+
+
+# ---------------------------------------------------------------------------
+# C6. rules_project_actions.js -> Project Rules static contract + smoke
+# ---------------------------------------------------------------------------
+
+
+def test_rules_project_actions_js_selects_static_contract_and_smoke(runner):
+    sel = runner.select_targets(["worktrace/webview_ui/js/rules_project_actions.js"])
+    # rules_project_actions.js triggers section A (frontend resources, broad)
+    # AND section C6 (Project Rules static contract). Both contribute the
+    # static contract target; dedup ensures it appears once.
+    assert "tests/webview/test_project_rules_static_contract.py" in sel.pytest_targets
+    assert "tests/webview/" in sel.pytest_targets
+    assert "tests/test_webview_bridge.py" in sel.pytest_targets
+    assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets
+    assert any(
+        "import worktrace.webview_main" in " ".join(s) for s in sel.smoke_commands
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ from static_helpers import (  # noqa: E402
     read_all_js,
     read_js,
     read_resource,
+    read_rules_module_js,
 )
 
 
@@ -158,18 +159,24 @@ def test_project_rules_js_loaded_before_init():
     source = read_resource("index.html")
     statistics_pos = source.find('src="js/statistics.js"')
     rules_pos = source.find('src="js/rules.js"')
+    actions_pos = source.find('src="js/rules_project_actions.js"')
     init_pos = source.find('src="js/init.js"')
     assert statistics_pos != -1
     assert rules_pos != -1
     assert init_pos != -1
     assert statistics_pos < rules_pos
     assert rules_pos < init_pos
+    # Phase M3: rules_project_actions.js loads after rules.js and before init.js.
+    assert actions_pos != -1, "index.html must include rules_project_actions.js"
+    assert rules_pos < actions_pos < init_pos
 
 
 def test_project_rules_js_in_static_helper_order():
     assert "rules.js" in ALL_JS_FILES
+    assert "rules_project_actions.js" in ALL_JS_FILES
     assert ALL_JS_FILES.index("rules.js") == ALL_JS_FILES.index("statistics.js") + 1
-    assert ALL_JS_FILES.index("init.js") == ALL_JS_FILES.index("rules.js") + 1
+    assert ALL_JS_FILES.index("rules_project_actions.js") == ALL_JS_FILES.index("rules.js") + 1
+    assert ALL_JS_FILES.index("init.js") == ALL_JS_FILES.index("rules_project_actions.js") + 1
 
 
 def test_project_rules_state_variables_declared():
@@ -333,6 +340,7 @@ def test_project_rules_lazy_loads_on_first_navigation_only():
 def test_project_rules_packaging_spec_includes_rules_js():
     source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
     assert "'rules.js'" in source or '"rules.js"' in source
+    assert "'rules_project_actions.js'" in source or '"rules_project_actions.js"' in source
     assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source
 
 
@@ -1487,6 +1495,7 @@ def test_project_rules_keyword_delete_packaging_spec_still_includes_rules_js():
     # rules.js so the delete button handler ships in the packaged build.
     source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
     assert "'rules.js'" in source or '"rules.js"' in source
+    assert "'rules_project_actions.js'" in source or '"rules_project_actions.js"' in source
     assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source
 
 
@@ -2334,6 +2343,7 @@ def test_project_rules_folder_packaging_spec_still_includes_rules_js():
     # rules.js so the folder CRUD handlers ship in the packaged build.
     source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
     assert "'rules.js'" in source or '"rules.js"' in source
+    assert "'rules_project_actions.js'" in source or '"rules_project_actions.js"' in source
     assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source
 
 
@@ -3342,6 +3352,7 @@ def test_project_rules_keyword_edit_packaging_spec_still_includes_rules_js():
     # rules.js so the keyword edit handlers ship in the packaged build.
     source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
     assert "'rules.js'" in source or '"rules.js"' in source
+    assert "'rules_project_actions.js'" in source or '"rules_project_actions.js"' in source
     assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source
 
 
@@ -3463,7 +3474,7 @@ def test_project_rules_project_lifecycle_state_variables_declared_once():
 def test_project_rules_project_lifecycle_js_calls_bridge_methods():
     # Phase 5G regression lock: the JS must call the four ``*_for_rules``
     # bridge methods.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert 'callBridge("create_project_for_rules"' in source
     assert 'callBridge("update_project_for_rules"' in source
     assert 'callBridge("set_project_enabled_for_rules"' in source
@@ -3473,7 +3484,7 @@ def test_project_rules_project_lifecycle_js_calls_bridge_methods():
 def test_project_rules_project_lifecycle_js_does_not_call_bare_project_write():
     # Phase 5G regression lock: the JS must NOT call the bare (non-_for_rules)
     # project write bridge methods. Hard delete is never exposed.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         'callBridge("create_project"',
         'callBridge("update_project"',
@@ -3554,7 +3565,7 @@ def test_project_rules_project_lifecycle_inline_edit_form_anchors():
 def test_project_rules_project_create_js_validates_name_before_bridge():
     # Phase 5G regression lock: the project create handler must validate
     # the name is non-empty (after trim) before calling the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectCreateSubmit")
     trim_pos = body.find(".trim()")
     empty_check_pos = body.find("请输入项目名称")
@@ -3567,7 +3578,7 @@ def test_project_rules_project_create_js_has_creating_guard():
     # Phase 5G regression lock: only one project create may be in flight at
     # a time. The handler must early-return when ``rulesCreatingProject`` is
     # set, before any bridge call.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectCreateSubmit")
     guard_pos = body.find("App.rulesCreatingProject")
     bridge_pos = body.find('callBridge("create_project_for_rules"')
@@ -3578,7 +3589,7 @@ def test_project_rules_project_create_js_has_creating_guard():
 def test_project_rules_project_create_js_success_clears_inputs_and_refreshes():
     # Phase 5G regression lock: on success the handler must clear both
     # inputs and refresh the Project Rules list.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectCreateSubmit")
     assert 'input.value = ""' in body
     assert "descInput.value" in body
@@ -3589,7 +3600,7 @@ def test_project_rules_project_create_js_failure_preserves_inputs():
     # Phase 5G regression lock: on failure the handler must NOT clear the
     # inputs so the user can edit and retry. The success path (which clears
     # inputs) must be gated on ``result.ok !== false``.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectCreateSubmit")
     ok_check_pos = body.find("result.ok === false")
     clear_pos = body.find('input.value = ""')
@@ -3598,7 +3609,7 @@ def test_project_rules_project_create_js_failure_preserves_inputs():
 
 
 def test_project_rules_project_create_js_catch_never_reads_raw_exception():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectCreateSubmit")
     for forbidden in (
         "err.message",
@@ -3613,7 +3624,7 @@ def test_project_rules_project_create_js_catch_never_reads_raw_exception():
 def test_project_rules_project_edit_save_js_validates_name_before_bridge():
     # Phase 5G regression lock: the project edit save handler must validate
     # the name is non-empty (after trim) before calling the bridge.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectEditSave")
     trim_pos = body.find(".trim()")
     empty_check_pos = body.find("请输入项目名称")
@@ -3623,14 +3634,14 @@ def test_project_rules_project_edit_save_js_validates_name_before_bridge():
 
 
 def test_project_rules_project_edit_save_js_success_refreshes():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectEditSave")
     assert "App.loadProjectRules()" in body
     assert "项目已保存" in body
 
 
 def test_project_rules_project_edit_save_js_catch_never_reads_raw_exception():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectEditSave")
     for forbidden in (
         "err.message",
@@ -3645,7 +3656,7 @@ def test_project_rules_project_edit_save_js_catch_never_reads_raw_exception():
 def test_project_rules_project_edit_cancel_does_not_call_bridge():
     # Phase 5G regression lock: the cancel handler must NOT call any bridge
     # method. It only clears the editing state and re-renders.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectEditCancel")
     assert "callBridge" not in body
     assert "App.setProjectEditing(null)" in body
@@ -3654,7 +3665,7 @@ def test_project_rules_project_edit_cancel_does_not_call_bridge():
 def test_project_rules_project_toggle_js_has_confirmation():
     # Phase 5G regression lock: the toggle handler must show a confirmation
     # dialog before disabling a project.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectToggle")
     assert "window.confirm" in body
     assert "确定停用这个项目吗？" in body
@@ -3662,14 +3673,14 @@ def test_project_rules_project_toggle_js_has_confirmation():
 
 
 def test_project_rules_project_toggle_js_success_refreshes():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectToggle")
     assert "App.loadProjectRules()" in body
     assert "项目状态已更新" in body
 
 
 def test_project_rules_project_toggle_js_catch_never_reads_raw_exception():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectToggle")
     for forbidden in (
         "err.message",
@@ -3684,7 +3695,7 @@ def test_project_rules_project_toggle_js_catch_never_reads_raw_exception():
 def test_project_rules_project_archive_js_has_confirmation():
     # Phase 5G regression lock: the archive handler must show a confirmation
     # dialog before archiving.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectArchive")
     assert "window.confirm" in body
     assert "确定归档这个项目吗？" in body
@@ -3692,14 +3703,14 @@ def test_project_rules_project_archive_js_has_confirmation():
 
 
 def test_project_rules_project_archive_js_success_refreshes():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectArchive")
     assert "App.loadProjectRules()" in body
     assert "项目已归档" in body
 
 
 def test_project_rules_project_archive_js_catch_never_reads_raw_exception():
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "handleProjectArchive")
     for forbidden in (
         "err.message",
@@ -3715,7 +3726,7 @@ def test_project_rules_project_lifecycle_event_delegation_bound_once():
     # Phase 5G regression lock: the event delegation on #rules-list must
     # use the ``data-rules-project-lifecycle-bound`` guard so it is only
     # bound once per page lifecycle.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     body = func_body(source, "bindProjectLifecycleEvents")
     assert "data-rules-project-lifecycle-bound" in body
     assert "handleProjectLifecycleEvent" in body
@@ -3724,7 +3735,7 @@ def test_project_rules_project_lifecycle_event_delegation_bound_once():
 def test_project_rules_project_lifecycle_no_storage_or_network():
     # Phase 5G regression lock: the project lifecycle handlers must not use
     # browser storage, fetch, XMLHttpRequest, or any network API.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     for forbidden in (
         "fetch(",
         "XMLHttpRequest",
@@ -3737,7 +3748,7 @@ def test_project_rules_project_lifecycle_no_storage_or_network():
 
 def test_project_rules_project_lifecycle_no_es_module_syntax():
     # Phase 5G regression lock: rules.js must not use ES module syntax.
-    source = read_js("rules.js")
+    source = read_rules_module_js()
     assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
     assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
 
@@ -3770,22 +3781,25 @@ def test_project_rules_project_lifecycle_packaging_spec_unchanged():
     # rules.js and the js directory.
     source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
     assert "'rules.js'" in source or '"rules.js"' in source
+    assert "'rules_project_actions.js'" in source or '"rules_project_actions.js"' in source
     assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source
 
 
 def test_project_rules_project_lifecycle_no_app_js_reintroduced():
     # Phase 5G regression lock: app.js must not be reintroduced in
-    # index.html. The project lifecycle code lives in rules.js only.
+    # index.html. The project lifecycle code lives in rules.js and
+    # rules_project_actions.js only (Phase M3 split).
     source = read_resource("index.html")
     assert "app.js" not in source
 
 
 def test_project_rules_project_lifecycle_no_forbidden_handler_tokens():
-    # Phase 5G regression lock: rules.js must not contain any of the
+    # Phase 5G regression lock: Project Rules JS must not contain any of the
     # forbidden camelCase handler tokens (these would indicate accidental
-    # exposure of bare project management APIs).
-    source = read_js("rules.js")
+    # exposure of bare project management APIs). After the Phase M3 split
+    # this checks both rules.js and rules_project_actions.js.
+    source = read_rules_module_js()
     for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
         assert token not in source, (
-            "rules.js must not contain forbidden handler token: " + token
+            "Project Rules JS must not contain forbidden handler token: " + token
         )

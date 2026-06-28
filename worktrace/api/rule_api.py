@@ -2,6 +2,13 @@
 
 Wraps ``rule_service`` (keyword rules) and ``folder_rule_service`` (folder
 rules) used by the Project Rules page and the project/rule dialog.
+
+The Phase M2 refactor moved the shared write-path validation / fail
+payload / success payload logic into ``worktrace.api._write_contract`` so
+every Project Rules facade uses the same "true positive int", "true bool",
+"true non-empty str", and stable ``{"ok": False, "error": code}`` /
+``{"ok": True, ...}`` shapes. Behavior is unchanged; only the duplicated
+inline checks were replaced with helper calls.
 """
 
 from __future__ import annotations
@@ -9,6 +16,18 @@ from __future__ import annotations
 from typing import Any
 
 from . import project_api
+from ._write_contract import (
+    ERROR_DUPLICATE_RULE,
+    ERROR_INVALID_INPUT,
+    ERROR_NOT_FOUND,
+    ERROR_OPERATION_FAILED,
+    ERROR_PROJECT_NOT_FOUND,
+    fail_payload,
+    ok_payload,
+    valid_bool,
+    valid_int,
+    valid_nonempty_str,
+)
 from ..services import folder_rule_service, rule_service
 
 
@@ -21,11 +40,15 @@ class ProjectRuleWriteError(Exception):
 
 
 def _valid_rule_id(rule_id: Any) -> bool:
-    return type(rule_id) is int and rule_id > 0
+    """Backward-compatible alias kept for any external caller; new code
+    should use ``_write_contract.valid_int`` directly."""
+    return valid_int(rule_id)
 
 
 def _valid_enabled(enabled: Any) -> bool:
-    return type(enabled) is bool
+    """Backward-compatible alias kept for any external caller; new code
+    should use ``_write_contract.valid_bool`` directly."""
+    return valid_bool(enabled)
 
 
 def _rule_exists(rule_type: str, rule_id: int) -> bool:
@@ -55,26 +78,25 @@ def set_project_rule_enabled(rule_type: str, rule_id: int, enabled: bool) -> dic
     # so unhashable non-string types (list / dict) collapse to
     # ``invalid_input`` instead of leaking a ``TypeError`` to the bridge.
     if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
-        return {"ok": False, "error": "invalid_input"}
-    if not _valid_rule_id(rule_id) or not _valid_enabled(enabled):
-        return {"ok": False, "error": "invalid_input"}
+        return fail_payload(ERROR_INVALID_INPUT)
+    if not valid_int(rule_id) or not valid_bool(enabled):
+        return fail_payload(ERROR_INVALID_INPUT)
     try:
         if not _rule_exists(rule_type, rule_id):
-            return {"ok": False, "error": "not_found"}
+            return fail_payload(ERROR_NOT_FOUND)
         if rule_type == "folder":
             set_folder_rule_enabled(rule_id, enabled)
         else:
             set_keyword_rule_enabled(rule_id, enabled)
-        return {
-            "ok": True,
-            "rule_type": rule_type,
-            "rule_id": rule_id,
-            "enabled": enabled,
-        }
+        return ok_payload(
+            rule_type=rule_type,
+            rule_id=rule_id,
+            enabled=enabled,
+        )
     except ProjectRuleWriteError as exc:
-        return {"ok": False, "error": exc.code}
+        return fail_payload(exc.code)
     except Exception:
-        return {"ok": False, "error": "operation_failed"}
+        return fail_payload(ERROR_OPERATION_FAILED)
 
 
 def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]:
@@ -102,43 +124,38 @@ def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]
     - ``operation_failed`` — any unexpected service failure.
     """
 
-    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
-    # ``float``, ``str``, ``None``, and container types in one check.
-    if type(project_id) is not int or project_id <= 0:
-        return {"ok": False, "error": "invalid_input"}
-    if type(keyword) is not str:
-        return {"ok": False, "error": "invalid_input"}
-    trimmed = keyword.strip()
-    if not trimmed:
-        return {"ok": False, "error": "invalid_input"}
+    if not valid_int(project_id):
+        return fail_payload(ERROR_INVALID_INPUT)
+    trimmed = valid_nonempty_str(keyword)
+    if trimmed is None:
+        return fail_payload(ERROR_INVALID_INPUT)
     try:
         target_ids = {
             int(row.get("id") or 0)
             for row in project_api.list_rule_target_projects()
         }
         if project_id not in target_ids:
-            return {"ok": False, "error": "project_not_found"}
+            return fail_payload(ERROR_PROJECT_NOT_FOUND)
         for row in rule_service.list_rules(include_system=True):
             if (
                 int(row.get("project_id") or 0) == project_id
                 and str(row.get("keyword") or "") == trimmed
             ):
-                return {"ok": False, "error": "duplicate_rule"}
+                return fail_payload(ERROR_DUPLICATE_RULE)
         rule_id = rule_service.create_rule(trimmed, project_id)
-        return {
-            "ok": True,
-            "rule": {
+        return ok_payload(
+            rule={
                 "kind": "keyword",
                 "id": int(rule_id),
                 "project_id": int(project_id),
                 "keyword": trimmed,
                 "enabled": True,
-            },
-        }
+            }
+        )
     except ProjectRuleWriteError as exc:
-        return {"ok": False, "error": exc.code}
+        return fail_payload(exc.code)
     except Exception:
-        return {"ok": False, "error": "operation_failed"}
+        return fail_payload(ERROR_OPERATION_FAILED)
 
 
 def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
@@ -166,30 +183,27 @@ def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
     - ``operation_failed`` — any unexpected service failure.
     """
 
-    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
-    # ``float``, ``str``, ``None``, and container types in one check.
-    if type(rule_id) is not int or rule_id <= 0:
-        return {"ok": False, "error": "invalid_input"}
+    if not valid_int(rule_id):
+        return fail_payload(ERROR_INVALID_INPUT)
     try:
         # Reuse the existing existence helper: it only returns True when the
         # id resolves to a row in ``project_rule`` (keyword table). A folder
         # rule id resolves to ``folder_project_rule`` and therefore returns
         # False, so the keyword delete path can never delete a folder rule.
         if not _rule_exists("keyword", rule_id):
-            return {"ok": False, "error": "not_found"}
+            return fail_payload(ERROR_NOT_FOUND)
         rule_service.delete_rule(rule_id)
-        return {
-            "ok": True,
-            "rule": {
+        return ok_payload(
+            rule={
                 "kind": "keyword",
                 "id": int(rule_id),
                 "deleted": True,
-            },
-        }
+            }
+        )
     except ProjectRuleWriteError as exc:
-        return {"ok": False, "error": exc.code}
+        return fail_payload(exc.code)
     except Exception:
-        return {"ok": False, "error": "operation_failed"}
+        return fail_payload(ERROR_OPERATION_FAILED)
 
 
 # --- Phase 5F: Project Rules keyword rule edit foundation ----------------
@@ -248,15 +262,11 @@ def update_project_keyword_rule(rule_id: Any, keyword: Any) -> dict[str, Any]:
     - ``operation_failed`` — any unexpected service failure.
     """
 
-    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
-    # ``float``, ``str``, ``None``, and container types in one check.
-    if type(rule_id) is not int or rule_id <= 0:
-        return {"ok": False, "error": "invalid_input"}
-    if type(keyword) is not str:
-        return {"ok": False, "error": "invalid_input"}
-    trimmed = keyword.strip()
-    if not trimmed:
-        return {"ok": False, "error": "invalid_input"}
+    if not valid_int(rule_id):
+        return fail_payload(ERROR_INVALID_INPUT)
+    trimmed = valid_nonempty_str(keyword)
+    if trimmed is None:
+        return fail_payload(ERROR_INVALID_INPUT)
     try:
         # ``_keyword_rule_row`` only resolves ids in ``project_rule``; a
         # folder rule id resolves to ``None`` and therefore returns
@@ -264,7 +274,7 @@ def update_project_keyword_rule(rule_id: Any, keyword: Any) -> dict[str, Any]:
         # rule.
         existing = _keyword_rule_row(rule_id)
         if existing is None:
-            return {"ok": False, "error": "not_found"}
+            return fail_payload(ERROR_NOT_FOUND)
         project_id = int(existing.get("project_id") or 0)
         enabled = bool(int(existing.get("enabled") or 0))
         # Duplicate check: reject if another keyword rule in the same
@@ -277,22 +287,21 @@ def update_project_keyword_rule(rule_id: Any, keyword: Any) -> dict[str, Any]:
                 and str(row.get("keyword") or "") == trimmed
                 and int(row.get("id") or 0) != rule_id
             ):
-                return {"ok": False, "error": "duplicate_rule"}
+                return fail_payload(ERROR_DUPLICATE_RULE)
         rule_service.update_rule(rule_id, trimmed)
-        return {
-            "ok": True,
-            "rule": {
+        return ok_payload(
+            rule={
                 "kind": "keyword",
                 "id": int(rule_id),
                 "project_id": project_id,
                 "keyword": trimmed,
                 "enabled": enabled,
-            },
-        }
+            }
+        )
     except ProjectRuleWriteError as exc:
-        return {"ok": False, "error": exc.code}
+        return fail_payload(exc.code)
     except Exception:
-        return {"ok": False, "error": "operation_failed"}
+        return fail_payload(ERROR_OPERATION_FAILED)
 
 
 # --- Phase 5E: Project Rules folder rule CRUD foundation -----------------
@@ -347,42 +356,37 @@ def create_project_folder_rule(
     - ``operation_failed`` — any unexpected service failure.
     """
 
-    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
-    # ``float``, ``str``, ``None``, and container types in one check.
-    if type(project_id) is not int or project_id <= 0:
-        return {"ok": False, "error": "invalid_input"}
-    if type(folder_path) is not str:
-        return {"ok": False, "error": "invalid_input"}
-    trimmed = folder_path.strip()
-    if not trimmed:
-        return {"ok": False, "error": "invalid_input"}
-    if type(recursive) is not bool:
-        return {"ok": False, "error": "invalid_input"}
+    if not valid_int(project_id):
+        return fail_payload(ERROR_INVALID_INPUT)
+    trimmed = valid_nonempty_str(folder_path)
+    if trimmed is None:
+        return fail_payload(ERROR_INVALID_INPUT)
+    if not valid_bool(recursive):
+        return fail_payload(ERROR_INVALID_INPUT)
     try:
         target_ids = {
             int(row.get("id") or 0)
             for row in project_api.list_rule_target_projects()
         }
         if project_id not in target_ids:
-            return {"ok": False, "error": "project_not_found"}
+            return fail_payload(ERROR_PROJECT_NOT_FOUND)
         rule_id = folder_rule_service.create_or_update_folder_rule(
             trimmed, project_id, recursive=recursive
         )
-        return {
-            "ok": True,
-            "rule": {
+        return ok_payload(
+            rule={
                 "kind": "folder",
                 "id": int(rule_id),
                 "project_id": int(project_id),
                 "folder_path": trimmed,
                 "recursive": bool(recursive),
                 "enabled": True,
-            },
-        }
+            }
+        )
     except ProjectRuleWriteError as exc:
-        return {"ok": False, "error": exc.code}
+        return fail_payload(exc.code)
     except Exception:
-        return {"ok": False, "error": "operation_failed"}
+        return fail_payload(ERROR_OPERATION_FAILED)
 
 
 def update_project_folder_rule(
@@ -427,17 +431,13 @@ def update_project_folder_rule(
     - ``operation_failed`` — any unexpected service failure.
     """
 
-    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
-    # ``float``, ``str``, ``None``, and container types in one check.
-    if type(rule_id) is not int or rule_id <= 0:
-        return {"ok": False, "error": "invalid_input"}
-    if type(folder_path) is not str:
-        return {"ok": False, "error": "invalid_input"}
-    trimmed = folder_path.strip()
-    if not trimmed:
-        return {"ok": False, "error": "invalid_input"}
-    if type(recursive) is not bool:
-        return {"ok": False, "error": "invalid_input"}
+    if not valid_int(rule_id):
+        return fail_payload(ERROR_INVALID_INPUT)
+    trimmed = valid_nonempty_str(folder_path)
+    if trimmed is None:
+        return fail_payload(ERROR_INVALID_INPUT)
+    if not valid_bool(recursive):
+        return fail_payload(ERROR_INVALID_INPUT)
     try:
         # ``_folder_rule_row`` only resolves ids in ``folder_project_rule``;
         # a keyword rule id resolves to ``None`` and therefore returns
@@ -445,7 +445,7 @@ def update_project_folder_rule(
         # keyword rule.
         existing = _folder_rule_row(rule_id)
         if existing is None:
-            return {"ok": False, "error": "not_found"}
+            return fail_payload(ERROR_NOT_FOUND)
         # Preserve the existing project_id and enabled state: this facade
         # does not move a folder rule to a different project and does not
         # toggle its enabled state. Delegate to the dedicated
@@ -458,21 +458,20 @@ def update_project_folder_rule(
         folder_rule_service.update_folder_rule(
             rule_id, trimmed, recursive=recursive
         )
-        return {
-            "ok": True,
-            "rule": {
+        return ok_payload(
+            rule={
                 "kind": "folder",
                 "id": int(rule_id),
                 "project_id": project_id,
                 "folder_path": trimmed,
                 "recursive": bool(recursive),
                 "enabled": enabled,
-            },
-        }
+            }
+        )
     except ProjectRuleWriteError as exc:
-        return {"ok": False, "error": exc.code}
+        return fail_payload(exc.code)
     except Exception:
-        return {"ok": False, "error": "operation_failed"}
+        return fail_payload(ERROR_OPERATION_FAILED)
 
 
 def delete_project_folder_rule(rule_id: Any) -> dict[str, Any]:
@@ -500,30 +499,27 @@ def delete_project_folder_rule(rule_id: Any) -> dict[str, Any]:
     - ``operation_failed`` — any unexpected service failure.
     """
 
-    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
-    # ``float``, ``str``, ``None``, and container types in one check.
-    if type(rule_id) is not int or rule_id <= 0:
-        return {"ok": False, "error": "invalid_input"}
+    if not valid_int(rule_id):
+        return fail_payload(ERROR_INVALID_INPUT)
     try:
         # ``_folder_rule_row`` only resolves ids in ``folder_project_rule``;
         # a keyword rule id resolves to ``None`` and therefore returns
         # ``not_found``, so the folder delete path can never delete a
         # keyword rule.
         if _folder_rule_row(rule_id) is None:
-            return {"ok": False, "error": "not_found"}
+            return fail_payload(ERROR_NOT_FOUND)
         folder_rule_service.delete_folder_rule(rule_id)
-        return {
-            "ok": True,
-            "rule": {
+        return ok_payload(
+            rule={
                 "kind": "folder",
                 "id": int(rule_id),
                 "deleted": True,
-            },
-        }
+            }
+        )
     except ProjectRuleWriteError as exc:
-        return {"ok": False, "error": exc.code}
+        return fail_payload(exc.code)
     except Exception:
-        return {"ok": False, "error": "operation_failed"}
+        return fail_payload(ERROR_OPERATION_FAILED)
 
 
 # --- keyword rules -------------------------------------------------------

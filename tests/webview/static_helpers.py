@@ -36,6 +36,7 @@ ALL_JS_FILES = [
     "timeline_correction.js",
     "statistics.js",
     "rules.js",
+    "rules_project_actions.js",
     "init.js",
 ]
 
@@ -76,6 +77,24 @@ def read_all_js() -> str:
     preserves the IIFE-per-module structure and load order.
     """
     return "\n".join(read_js(name) for name in ALL_JS_FILES)
+
+
+def read_rules_module_js() -> str:
+    """Return the concatenated source of all Project Rules JS modules.
+
+    After the Phase M3 split, Project Rules logic spans ``rules.js``
+    (core / render / rule toggle / keyword / folder actions / shared
+    helpers) and ``rules_project_actions.js`` (project lifecycle:
+    create / edit / toggle / archive). Tests that need to check
+    substring contracts or ``func_body`` across the full Project Rules
+    surface should use this helper instead of ``read_js("rules.js")``
+    so the split does not silently break contracts that moved.
+    """
+    parts = [read_js("rules.js")]
+    rules_actions = JS_DIR / "rules_project_actions.js"
+    if rules_actions.is_file():
+        parts.append(rules_actions.read_text(encoding="utf-8"))
+    return "\n".join(parts)
 
 
 def func_body(source: str, name: str) -> str:

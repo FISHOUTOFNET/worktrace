@@ -5721,3 +5721,41 @@ Not Implemented (unchanged boundaries):
 - No historical information was deleted; phase details moved out of README /
   current-state / ui-webview-migration are already present verbatim in this
   history file or were added as the Phase DG1 record above.
+
+## Phase DG1.1 Documentation Residual Consistency Fix
+
+Phase DG1.1 is a **docs/tests-only** follow-up to Phase DG1. It fixes the
+residual contradictions that remained after the DG1 documentation governance
+pass. It does not modify any runtime code, the database schema, the WebView
+frontend behavior, packaging, or dependencies.
+
+Implemented Scope:
+
+- **Removed README Current Limitations contradiction.** The README top
+  Current state block lists Project Rules user project create / edit /
+  enable-disable / archive as supported, but the README Current Limitations
+  section still listed "Project enable/disable" and "Project create/edit /
+  delete/archive" as unsupported. The Current Limitations bullet now only
+  lists the genuinely unsupported Project Rules capabilities (hard delete
+  project, folder rule conflict preview, backfill, automatic rules, and
+  batch Project Rules operations).
+- **Tightened `docs/current-state.md` wording.** The Phase 5G description
+  changed from the ambiguous "user project create / edit / enable-disable /
+  archive on existing user projects" to the more precise "user project
+  create, plus existing user project edit / enable-disable / archive", so
+  the lifecycle scope is unambiguous.
+- **Added regression tests in `tests/test_release_docs.py`.** New tests
+  assert that the README Current Limitations section does not list Project
+  Rules capabilities supported by the current-state matrix (project
+  enable / disable, project create / edit / archive) as unsupported, that
+  README still points at `docs/current-state.md`,
+  `docs/history/webview-phases.md`, and `docs/ai-context-guide.md`, and that
+  `docs/current-state.md` stays within the one-screen hard max.
+
+Not Implemented (unchanged boundaries):
+
+- No runtime code, schema, WebView frontend, packaging, or dependency
+  changes.
+- No PyInstaller or installer build was run; this is docs/tests-only.
+- No new product capability was added or removed; only documentation /
+  comment / test contradictions were fixed.
