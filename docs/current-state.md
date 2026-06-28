@@ -3,59 +3,19 @@
 > **Default entry point for AI tools and developers.** Read this file first.
 > It is a one-screen snapshot of what WorkTrace ships today. For architecture
 > decisions see [`ui-webview-migration.md`](ui-webview-migration.md); for the
-> full per-phase history see [`history/webview-phases.md`](history/webview-phases.md).
+> full per-phase history see
+> [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Current Phase
 
-**Phase 5G — Project lifecycle foundation + in-phase hardening.**
-Phase 5G opens four project-level Project Rules write capabilities on
-existing user projects: creating a user project, editing an existing
-user project's name / description, enabling / disabling an existing user
-project, and archiving an existing user project. The API / bridge /
-frontend three layers are wired through the stable
-`create_project_for_rules` / `update_project_for_rules` /
-`set_project_enabled_for_rules` / `archive_project_for_rules` facades
-with input validation (true int excluding bool, true bool, true str
-with trim), stable error codes (`invalid_input` / `not_found` /
-`system_project` / `duplicate_project` / `operation_failed`), Chinese
-error mapping at the bridge, narrow payloads (no traceback / SQL /
-local path / window_title / clipboard / note / `created_by` /
-`created_at` / `updated_at` / raw row), independent frontend state keys
-per project lifecycle write path, display-safe `editable` /
-`can_toggle` / `can_archive` / `is_system` flags on the Project Rules
-read projection, and explicit Project Rules page boundary copy.
-System / special projects (`created_by == "system"`, `未归类`,
-`排除规则`) are rejected for all four project lifecycle writes;
-enabling `排除规则` is never allowed. Archive only sets `is_archived`
-and triggers the same three cache invalidation hooks
-(`invalidate_folder_rule_cache` /
-`invalidate_keyword_rule_cache` / `clear_exclude_rules_cache`) as
-`set_project_enabled`, mirroring the existing success-only cache
-invalidation contract. Create / update check for duplicate project
-names and collapse SQLite `IntegrityError` to `duplicate_project`.
-Phase 5G also ships the in-phase hardening regression locks
-(API/service system-project rejection, duplicate-name collapse, archive
-cache invalidation mirroring `set_project_enabled`, sensitive-field
-boundaries; bridge bool-as-int rejection, consistent error mapping,
-narrow payload, no cross-API pollution with keyword / folder rule
-writes, `delete_project` never exposed; frontend DOM anchors, state
-isolation, CSS scoping, no-forbidden-features, packaging inclusion) in
-the same phase rather than splitting into a separate 5G.1. It preserves
-the Phase 5B / 5B.1 existing folder / keyword rule enable/disable path
-and its hardening (input validation, error collapse,
-saving-and-stale-state, sensitive-field-boundary regression locks, plus
-the unhashable-`rule_type` fix), the Phase 5C keyword rule creation
-path, the Phase 5C.1 keyword creation hardening, the Phase 5D keyword
-rule deletion path, the Phase 5D.1 keyword deletion hardening, the
-Phase 5E folder rule CRUD foundation, the Phase 5E.1 folder rule CRUD
-hardening, and the Phase 5F keyword rule edit foundation + in-phase
-hardening. Phase 5G does not implement hard delete project, folder
-rule conflict preview, folder rule backfill, automatic rules, batch
-Project Rules operations, schema changes, new frontend dependencies,
-browser storage, network requests, or new export formats. All earlier
-WebView migration phases (Phase 0A → Phase 5F) are completed. README,
-this file, and `ui-webview-migration.md` all describe the current
-phase as 5G.
+**Phase 5G — Project lifecycle foundation + in-phase hardening.** Project
+Rules now supports user project create / edit / enable-disable / archive on
+existing user projects, in addition to the earlier folder / keyword rule
+enable-disable, keyword create / edit / delete, and folder rule create /
+edit / delete capabilities. Hard delete project, conflict preview, backfill,
+automatic rules, and batch Project Rules operations remain unsupported. The
+phase-by-phase chronology (5B / 5B.1 / ... / 5G) is archived in
+[`history/webview-phases.md`](history/webview-phases.md).
 
 ## Default UI
 
@@ -79,50 +39,12 @@ phase as 5G.
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1 / 5C / 5C.1 / 5D / 5D.1 / 5E / 5E.1 / 5F / 5G):
-  project-grouped rule list showing project name / description, project
-  enabled state, special `排除规则` marker, rule counts, folder rules,
-  keyword rules, rule enabled state, and folder recursion scope. Phase 5B
-  adds existing folder / keyword rule enable/disable. Phase 5B.1 is a
-  hardening-only / regression-only follow-up that locks input validation,
-  error collapse, saving / stale-state behavior, sensitive-field boundaries,
-  and packaging / static-resource contracts. Phase 5C adds the first new
-  Project Rules write capability: creating one keyword rule on an existing
-  rule-target project, then refreshing the list on success. Phase 5C.1 is a
-  hardening-only / regression-only follow-up that locks the keyword create
-  write path (API input validation, project eligibility, duplicate
-  detection, trim/empty boundaries, bridge error collapse and
-  trimmed-keyword forwarding, frontend creating/stale/refresh state,
-  failure input preservation, toggle/create state isolation,
-  sensitive-field boundaries, and packaging / static-resource contracts)
-  without opening any new Project Rules capability. Phase 5D adds the
-  second new Project Rules write capability: deleting a single existing
-  keyword rule, then refreshing the list on success. Phase 5D.1 is a
-  hardening-only / regression-only follow-up that locks the keyword delete
-  write path (API input validation, keyword-only delete boundary,
-  folder-rule-id not-deleted regression lock, bridge error collapse and
-  narrow-payload hardening, frontend confirm/deleting/stale/refresh/failure
-  behavior, toggle/create/delete state isolation, sensitive-field
-  boundaries, CSS page scoping, and packaging / static-resource contracts)
-  without opening any new Project Rules capability. Phase 5E opens the
-  folder rule CRUD foundation: creating one folder rule on an existing
-  rule-target project, editing an existing folder rule, and deleting a
-  single existing folder rule, then refreshing the list on success. Phase
-  5E.1 is a hardening-only / regression-only follow-up that locks the
-  Phase 5E folder rule create / edit / delete write path across API /
-  service / bridge / frontend / static contract layers without opening any
-  new Project Rules capability. Phase 5F opens the keyword rule edit
-  foundation: editing the keyword text of a single existing keyword rule,
-  then refreshing the list on success, with the in-phase hardening
-  regression locks (API/service/bridge/frontend/static contract) shipped
-  in the same phase rather than a separate 5F.1. Phase 5G opens the
-  project lifecycle foundation: creating a user project, editing an
-  existing user project's name / description, enabling / disabling an
-  existing user project, and archiving an existing user project, then
-  refreshing the list on success, with the in-phase hardening regression
-  locks (API/service/bridge/frontend/static contract) shipped in the
-  same phase rather than a separate 5G.1. Hard delete project, conflict
-  preview, backfill, and automatic rules are still not open in WebView.
+- **Project Rules** (Phase 5A – 5G): project-grouped rule list showing
+  project name / description, project enabled state, special `排除规则`
+  marker, rule counts, folder rules, keyword rules, rule enabled state, and
+  folder recursion scope. Current write capabilities are listed in the
+  Project Rules matrix below. Per-phase scope details are archived in
+  [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Unmigrated Pages (Legacy Tkinter, Reference-Only)
 
@@ -130,47 +52,46 @@ phase as 5G.
 
 ## Supported Timeline Write Operations
 
-- Project reclassification of a session (Phase 3A).
-- Session-note editing (Phase 3A).
-- Single-activity `start_time` / `end_time` correction, incl. session-level
-  (Phase 3B.1).
-- Single-activity split into two closed activities (Phase 3B.2).
+- Project reclassification of a session.
+- Session-note editing.
+- Single-activity `start_time` / `end_time` correction, incl. session-level.
+- Single-activity split into two closed activities.
 - Two-activity merge of adjacent, same-project / same-resource / same-status /
-  same-source activities (Phase 3B.3).
-- Single-activity hide and soft delete (Phase 3B.4).
-- Batch project reassignment of multiple closed activities (Phase 3B.6).
-- Batch note overwrite on multiple closed activities (Phase 3B.7).
-- Single-activity restore (un-hide + un-soft-delete) (Phase 3B.8).
+  same-source activities.
+- Single-activity hide and soft delete.
+- Batch project reassignment of multiple closed activities.
+- Batch note overwrite on multiple closed activities.
+- Single-activity restore (un-hide + un-soft-delete).
 - Correction shell: a read-only context + navigation workspace reusing the
-  above single/batch capabilities (Phase 3B.5B / 3B.9).
-- Unified, stabilized Timeline status / error semantics (Phase 3C / 3C.1).
+  above single/batch capabilities.
+- Unified, stabilized Timeline status / error semantics.
+
+## Project Rules Capability Matrix
+
+- Read project-grouped folder / keyword rule list.
+- Enable / disable existing folder / keyword rules.
+- Keyword rule create / edit / delete.
+- Folder rule create / edit / delete.
+- User project create / edit / enable-disable / archive.
+- Special `排除规则` boundary enforced (system / special projects rejected
+  for lifecycle writes; enabling `排除规则` is never allowed).
 
 ## Statistics / Export Capability
 
 - Read-only statistics summary (closed, non-hidden, non-deleted activities)
   with date-range validation (≤ 31 days).
-- **CSV export write** (Phase 4B / 4B.1): native save dialog, display-safe CSV
-  (UTF-8 BOM, Chinese headers, formula-injection escaping). Returns basename
-  only; never the full path, window title, file path, note, or clipboard.
-  Phase 4B.1 hardened the save dialog compatibility (all return shapes,
-  missing constants, exceptions -> stable Chinese), verified the `.csv` suffix
-  is preserved case-insensitively, and locked the frontend static contract
-  (independent load/export state, no raw exception reads, no forbidden
-  handlers).
+- **CSV export write**: native save dialog, display-safe CSV (UTF-8 BOM,
+  Chinese headers, formula-injection escaping). Returns basename only; never
+  the full path, window title, file path, note, or clipboard.
+- Excel / PDF / timesheet-template export, folder opening, auto-open, and
+  auto-submit are explicitly unsupported.
 
 ## Explicitly Unsupported Capabilities
 
 - Excel / PDF / timesheet-template export; folder opening; auto-open of the
   exported file; auto-submit of a timesheet.
 - Hard delete project; folder-rule conflict preview; folder-rule backfill;
-  automatic rules; batch Project Rules operations. (Phase 5C only opens
-  keyword rule creation on an existing rule-target project; Phase 5D only
-  opens keyword rule deletion; Phase 5D.1 only hardens that deletion path;
-  Phase 5E only opens folder rule create / edit / delete; Phase 5E.1 only
-  hardens that folder rule CRUD path; Phase 5F only opens keyword rule
-  edit; Phase 5G only opens project create / edit / enable-disable /
-  archive on existing user projects. All other Project Rules write
-  workflows remain unsupported.)
+  automatic rules; batch Project Rules operations.
 - Settings / Privacy / Encrypted Backup WebView migration.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
 - Batch time / batch split / batch merge; note append / merge; auto-rule
@@ -178,9 +99,7 @@ phase as 5G.
 - AI, server, payment, license, token, subscription, login, cloud sync, OCR,
   screenshots, screen recording, keyboard logging, automatic startup.
 - Any DB schema change during development; `schema.sql` is the single source
-  of truth. Phase 5B, Phase 5B.1, Phase 5C, Phase 5C.1, Phase 5D, Phase
-  5D.1, Phase 5E, Phase 5E.1, Phase 5F, and Phase 5G made no schema
-  change.
+  of truth. No Project Rules phase changed the schema.
 
 ## Architecture Boundary
 
@@ -195,10 +114,8 @@ WebView (index.html / js/*.js / styles.css)
 
 Frontend JS layout (Phase R2, no behavior change): the former single
 `app.js` is split by feature into local classic scripts under
-`worktrace/webview_ui/js/` — `core.js` (shared `window.WorkTraceApp`
-namespace, state, bridge call, generic helpers), `overview.js`,
-`timeline.js`, `timeline_correction.js`, `statistics.js`, `rules.js`,
-`init.js` —
+`worktrace/webview_ui/js/` — `core.js`, `overview.js`, `timeline.js`,
+`timeline_correction.js`, `statistics.js`, `rules.js`, `init.js` —
 loaded in that order via plain `<script src="js/...">` tags. No ES
 modules, no bundler, no Node/build step, no browser storage, and no network
 requests.
@@ -224,29 +141,12 @@ requests.
 ```powershell
 # Affected tests (default for day-to-day iteration). Pure stdlib; maps
 # changed source / docs / packaging paths to a finite pytest target set
-# and never silently runs the full suite. When nothing changed it runs a
-# light smoke set (startup imports + WebView boundary + WebView static
-# contracts) plus the import smoke below.
+# and never silently runs the full suite.
 python scripts/run_affected_tests.py
-python scripts/run_affected_tests.py --list
-python scripts/run_affected_tests.py --print-only
-python scripts/run_affected_tests.py --staged
-python scripts/run_affected_tests.py --all   # explicit full-suite fallback
 
-# Only the split WebView static-contract tests
-pytest tests/webview/
-
-# Entry-point sanity (does not start a GUI on import)
-python -c "import worktrace.webview_main; print('ok')"
-
-# Full suite (uses worktrace.platforms.fake_adapter.FakeAdapter) — reserve
-# for core cross-cutting changes, pre-push, or release validation. Also
-# runs in GitHub Actions CI.
+# Full suite — reserve for core cross-cutting changes, pre-push, or
+# release validation. Also runs in GitHub Actions CI.
 pytest
-
-# Build the single-file executable (release validation only; not run by
-# the affected runner)
-python -m PyInstaller --noconfirm --clean WorkTrace.spec
 ```
 
 Local paths: DB at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`; logs at

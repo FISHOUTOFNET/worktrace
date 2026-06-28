@@ -232,7 +232,7 @@ RULES: list[dict] = [
             "worktrace/security/",
             "docs/v0.2-local-security-design.md",
             "docs/v0.2-boundary.md",
-            "docs/v0.2-field-encryption-scan.md",
+            "docs/research/v0.2-field-encryption-scan.md",
         ],
         "tests": [
             "tests/test_security_crypto.py",

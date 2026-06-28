@@ -5661,3 +5661,63 @@ Stop-loss conclusion after Phase 0C.1:
   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1`
   passes directly.
 - Static invariants are guarded by `tests/test_windows_installer_script.py`.
+
+## Phase DG1 Documentation Governance
+
+Phase DG1 is a **docs/tests-only** documentation governance pass. It does
+not modify any runtime code, the database schema, the WebView frontend
+behavior, packaging, or dependencies. Its goal is to establish a "single
+source of truth" documentation model so each future phase does not require
+editing the same facts in multiple places.
+
+Implemented Scope:
+
+- **Established `docs/current-state.md` as the single current behavior
+  source.** It was slimmed back to a one-screen snapshot (≤ 170 lines hard
+  max). Per-phase Project Rules chronology was removed; only the current
+  capability matrix remains.
+- **Slimmed `README.md`.** The top Current state block is now a short
+  pointer to `docs/current-state.md` and `docs/history/webview-phases.md`.
+  The Core Capabilities Project Rules bullet no longer carries Phase 5B /
+  5B.1 / 5C / 5C.1 / 5D / 5D.1 / 5E / 5E.1 / 5F / 5G chronology; it lists
+  current capabilities and unsupported boundaries only.
+- **Restored `docs/ui-webview-migration.md` to an architecture-only
+  document.** The Status section is now a short pointer to current-state
+  and history. The Migration Order is a high-level list; per-phase scope is
+  deferred to this history file. The architecture decisions (destructive
+  migration, why pywebview, no React / Vite / Vue, no local HTTP server,
+  bridge boundary, security boundary, dependency handling, entry points,
+  legacy Tkinter handling, WebView2 runtime handling) are preserved.
+- **Consolidated release validation.** `docs/release-validation.md` is the
+  canonical release baseline. `docs/release-checklist.md` was downgraded to
+  a compatibility-pointer stub (retained, not hard-deleted) so existing
+  references and test paths keep resolving.
+- **Fixed the CSV / Excel export boundary.** The positive Excel export
+  acceptance items in `docs/release-validation.md` (section "### J. Excel
+  Export", "Summary sheet exists", "Activity Logs sheet exists", "Exported
+  file opens in Excel", and the "Excel export is unusable" release blocker)
+  were replaced with CSV-only export acceptance items reflecting the actual
+  product boundary (CSV with UTF-8 BOM, Chinese headers, formula-injection
+  escaping, display-safe content; Excel / PDF / timesheet export remain
+  unsupported).
+- **Downgraded research docs from default context.**
+  `docs/v0.2-field-encryption-scan.md` was moved to
+  `docs/research/v0.2-field-encryption-scan.md`. Research docs are not
+  default reading context.
+- **Updated `docs/ai-context-guide.md`** with a Documentation Governance
+  section, a Research Docs section, and a corrected phase-range description
+  (Phase 0A → current WebView phase instead of the stale Phase 0A → 4B).
+- **Updated `tests/test_release_docs.py`** to lock the new governance
+  rules: release-checklist stub assertions, release-validation canonical
+  baseline assertions, CSV-only export assertions, README doc-diet
+  assertions, current-state one-screen assertions, ui-webview-migration
+  slimness assertions, and AI context governance assertions.
+
+Not Implemented (unchanged boundaries):
+
+- No runtime code, schema, WebView frontend, packaging, or dependency
+  changes.
+- No PyInstaller or installer build was run; this is docs/tests-only.
+- No historical information was deleted; phase details moved out of README /
+  current-state / ui-webview-migration are already present verbatim in this
+  history file or were added as the Phase DG1 record above.

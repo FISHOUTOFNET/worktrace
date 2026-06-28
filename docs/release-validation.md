@@ -144,15 +144,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] UI refresh does not visibly clear and rebuild the whole page.
 - [ ] Minimize, restore, and resize do not crash the app.
 
-### J. Excel Export
+### J. CSV Export
 
-- [ ] A selected date range can be exported.
-- [ ] Output is generated in `Documents\WorkTrace Exports` or a user-selected path.
-- [ ] `Summary` sheet exists.
-- [ ] `Activity Logs` sheet exists.
+- [ ] A selected date range can be exported to CSV.
+- [ ] Output path is user-selected through the native save dialog or the
+      documented export flow.
+- [ ] CSV is UTF-8 BOM so Excel opens Chinese headers correctly.
+- [ ] CSV uses Chinese headers.
+- [ ] Formula-injection escaping is preserved (cells starting with `=` /
+      `+` / `-` / `@` / tab are escaped).
 - [ ] Duration uses `hh:mm:ss`.
-- [ ] Default filtering for `excluded`, `idle`, `paused`, `is_deleted`, and `is_hidden` matches the documentation.
-- [ ] Exported file opens in Excel.
+- [ ] Default filtering for `excluded`, `idle`, `paused`, `is_deleted`, and
+      `is_hidden` matches the documentation.
+- [ ] The exported result does not expose raw window title / file path /
+      note / clipboard text beyond the documented display-safe CSV boundary.
+- [ ] Excel / PDF / timesheet-template export remain unsupported.
 
 ### K. Packaged Exe
 
@@ -172,6 +178,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] App starts from the shortcut.
 - [ ] Installation directory and local data can be deleted for cleanup.
 
+### Privacy Boundary Acceptance
+
+Explicitly verify (these guarantees mirror README.md and the exclusion-rule
+boundary above):
+
+- 不截屏。
+- 不录屏。
+- 不记录键盘。
+- 不主动读取正文。
+- 不上传数据。
+- 剪贴板记录默认关闭。
+- 命中排除规则 的窗口只保存匿名时间块（不保存真实标题/路径）。
+- 打包版和源码版在以上各项行为一致。
+
+In English, for reviewers: no screenshots, no screen recording, no keyboard
+logging, no active body-content reading, no data upload, clipboard recording
+off by default, exclusion-rule matches store only anonymous time blocks, and
+the packaged build behaves identically to the source-run build.
+
 ## Release Blockers
 
 - `pytest` fails.
@@ -182,7 +207,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - Network, login, or cloud-sync dependencies appear.
 - The app records screenshots, keyboard input, body content, browser history, cookies, or passwords.
 - Exclusion rules leak real window titles or paths.
-- Excel export is unusable.
 - PyInstaller exe cannot start.
 - Installer cannot install under normal user permissions.
 - Database contains negative durations or duplicate open records.
