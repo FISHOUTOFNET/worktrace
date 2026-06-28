@@ -256,6 +256,13 @@
         if (statsExportBtn) {
             statsExportBtn.addEventListener("click", App.exportStatisticsCsv);
         }
+        // Phase 5C: Project Rules keyword create submit handler. This is
+        // the only Project Rules create event bound in init; the existing
+        // rule toggle uses event delegation set up inside rules.js.
+        var keywordCreateBtn = document.getElementById("rules-keyword-create-submit");
+        if (keywordCreateBtn) {
+            keywordCreateBtn.addEventListener("click", App.handleKeywordCreateSubmit);
+        }
     }
     App.initButtons = initButtons;
 

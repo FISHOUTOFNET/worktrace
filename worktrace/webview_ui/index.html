@@ -384,8 +384,24 @@
                     </div>
                 </header>
                 <div id="rules-readonly-hint" class="rules-readonly-hint">
-                    当前支持启用/停用已有规则；新增、编辑、删除、冲突预览和回填仍未开放。
+                    当前支持查看项目规则、启用/停用已有文件夹或关键词规则，并新增关键词规则。文件夹规则新增、规则编辑/删除、项目管理、冲突预览和回填将在后续阶段开放。
                 </div>
+                <form id="rules-keyword-create-form" class="rules-keyword-create-form" autocomplete="off" onsubmit="return false;">
+                    <div class="rules-keyword-create-title">新增关键词规则</div>
+                    <div class="rules-keyword-create-row">
+                        <label for="rules-keyword-create-project" class="rules-keyword-create-label">目标项目</label>
+                        <select id="rules-keyword-create-project" class="rules-keyword-create-select" disabled></select>
+                    </div>
+                    <div class="rules-keyword-create-row">
+                        <label for="rules-keyword-create-input" class="rules-keyword-create-label">关键词</label>
+                        <input id="rules-keyword-create-input" class="rules-keyword-create-input" type="text" maxlength="200" placeholder="输入关键词" disabled />
+                    </div>
+                    <div class="rules-keyword-create-actions">
+                        <button id="rules-keyword-create-submit" class="rules-keyword-create-submit" type="button" disabled>新增关键词规则</button>
+                    </div>
+                    <div id="rules-keyword-create-empty" class="rules-keyword-create-empty" hidden>暂无可选目标项目，请先在项目管理中创建并启用项目。</div>
+                    <div id="rules-keyword-create-status" class="rules-keyword-create-status" hidden></div>
+                </form>
                 <div id="rules-error" class="error-banner" hidden>加载项目规则失败</div>
                 <div id="rules-loading" class="rules-loading" hidden>正在加载项目规则…</div>
                 <div id="rules-list" class="rules-list"></div>

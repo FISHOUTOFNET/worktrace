@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5B.1 "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5C "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -10,20 +10,18 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **5B.1 (Project Rules rule enable/disable hardening)**.
-  Phase 5B.1 is a hardening-only / regression-only follow-up to Phase 5B,
-  the most recent behavior-change phase. It does not introduce any new
-  Project Rules capability: the only Project Rules WebView write path
-  remains enabling or disabling one existing folder / keyword rule at a
-  time. Phase 5B.1 adds input validation / error collapse / saving-and-
-  stale-state / sensitive-field-boundary regression locks across the API,
-  bridge, and frontend, plus a fix for an unhashable-`rule_type` (list /
-  dict) edge case that previously surfaced a `TypeError` instead of the
-  stable `invalid_input` / `操作无效` error. Project enable/disable,
-  Project create/edit/delete/archive, Rule create/edit/delete, conflict
-  preview, backfill, automatic rules, batch operations, schema changes,
-  frontend frameworks / Node, browser storage, and network requests remain
-  out of scope.
+- Current phase: **5C (Project Rules keyword rule creation foundation)**.
+  Phase 5C opens one minimal new Project Rules write capability: creating a
+  single keyword rule on an existing rule-target project from the WebView
+  Project Rules page, then refreshing the list on success. It preserves the
+  Phase 5B / 5B.1 existing folder / keyword rule enable/disable path and its
+  hardening (input validation, error collapse, saving-and-stale-state,
+  sensitive-field-boundary regression locks, plus the unhashable-`rule_type`
+  fix). Project enable/disable, Project create/edit/delete/archive, folder
+  rule create/edit/delete, keyword rule edit/delete, conflict preview,
+  backfill, automatic rules, batch operations, schema changes, frontend
+  frameworks / Node, browser storage, and network requests remain out of
+  scope.
 - Default UI: WebView (`pywebview` + Microsoft Edge WebView2 Runtime). It is
   the only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview (Phase 1), Timeline / Time Details (read-only in
@@ -31,7 +29,8 @@ Implemented" sections) lives in
   3C.x), Statistics / Export (read-only in Phase 4A / 4A.1, CSV export write
   in Phase 4B, hardened in Phase 4B.1), Project Rules (read-only in Phase
   5A, hardened in 5A.1, existing folder / keyword rule enable/disable in
-  Phase 5B, hardened in Phase 5B.1).
+  Phase 5B, hardened in Phase 5B.1, keyword rule creation foundation in
+  Phase 5C).
 - Unmigrated pages: Settings / Privacy / Encrypted Backup (still legacy
   Tkinter code kept for reference; not a supported runtime path).
 - Detailed phase-by-phase scope, data semantics, and "not implemented" lists
@@ -182,9 +181,14 @@ the high-level order is:
 - Phase 5A.1 — Project Rules read-only hardening / regression. **Completed.**
 - Phase 5B — Project Rules rule enable/disable foundation for existing
   folder / keyword rules only. **Completed.**
-- Phase 5C+ — remaining Project Rules write workflows (project
-  create/edit/delete/archive, project enable/disable, rule create/edit/delete,
-  conflict preview, backfill, automatic rules). Not started.
+- Phase 5B.1 — Project Rules rule enable/disable hardening (regression-only
+  follow-up to Phase 5B). **Completed.**
+- Phase 5C — Project Rules keyword rule creation foundation (one new keyword
+  rule on an existing rule-target project). **Completed.**
+- Phase 5D+ — remaining Project Rules write workflows (project
+  create/edit/delete/archive, project enable/disable, folder rule
+  create/edit/delete, keyword rule edit/delete, conflict preview, backfill,
+  automatic rules, batch operations). Not started.
 - Phase 6 — Settings / Privacy / Encrypted Backup. Not started.
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.

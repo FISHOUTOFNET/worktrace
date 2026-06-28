@@ -5,19 +5,17 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5B.1 (Project Rules rule enable/disable
-> hardening) is the latest shipped phase. Phase 5B.1 is a hardening-only /
-> regression-only follow-up to Phase 5B and does not open any new Project
-> Rules capability: the only Project Rules WebView write path remains
-> enabling or disabling one existing folder or keyword rule at a time. It
-> adds input validation / error collapse / saving-and-stale-state /
-> sensitive-field-boundary regression locks across the API, bridge, and
-> frontend, plus a fix for an unhashable-`rule_type` (list / dict) edge
-> case that previously surfaced a `TypeError` instead of the stable
-> `invalid_input` / `操作无效` error. Project enable/disable, project
-> create/edit/delete/archive, rule create/edit/delete, conflict preview,
-> backfill, and automatic rules remain unsupported in WebView. For a
-> one-screen snapshot read
+> **Current state**: WebView Phase 5C (Project Rules keyword rule creation
+> foundation) is the latest shipped phase. Phase 5C opens one minimal new
+> Project Rules write capability: creating a single keyword rule on an
+> existing rule-target project from the WebView Project Rules page, then
+> refreshing the list on success. It preserves the Phase 5B / 5B.1 existing
+> folder / keyword rule enable/disable path and its hardening (input
+> validation, error collapse, saving-and-stale-state, sensitive-field
+> boundaries). Project enable/disable, project create/edit/delete/archive,
+> folder rule create/edit/delete, keyword rule edit/delete, conflict
+> preview, backfill, and automatic rules remain unsupported in WebView. For
+> a one-screen snapshot read
 > [`docs/current-state.md`](docs/current-state.md). For the full per-phase
 > history read [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
 > AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)
@@ -47,8 +45,11 @@ records.
   is a hardening-only / regression-only follow-up that locks input
   validation, error collapse, saving / stale-state behavior, and
   sensitive-field boundaries without opening any new Project Rules write
-  path. Project enable/disable, Project creation/editing/deletion/archive,
-  Rule creation/editing/deletion, conflict preview, backfill, and automatic
+  path. Phase 5C adds the first new Project Rules write capability: creating
+  one keyword rule on an existing rule-target project, then refreshing the
+  list on success. Project enable/disable, Project
+  creation/editing/deletion/archive, folder rule creation/editing/deletion,
+  keyword rule editing/deletion, conflict preview, backfill, and automatic
   rule workflows are not supported in WebView.
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.

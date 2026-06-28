@@ -1,5 +1,7 @@
-// WorkTrace WebView frontend — Project Rules module (Phase 5B).
-// Existing project-bound folder / keyword rules can be enabled or disabled.
+// WorkTrace WebView frontend — Project Rules module (Phase 5B / 5C).
+// Existing project-bound folder / keyword rules can be enabled or disabled
+// (Phase 5B), and one new keyword rule can be created on an existing
+// rule-target project (Phase 5C).
 
 (function () {
     "use strict";
@@ -35,6 +37,11 @@
         App.rulesLoaded = true;
         var list = document.getElementById("rules-list");
         var empty = document.getElementById("rules-empty");
+        // Phase 5C: keep the keyword create form's project selector in sync
+        // with the freshly loaded Project Rules data. The selector is only
+        // re-populated when no keyword create is in flight so an in-flight
+        // submit is never displaced by an auto-refresh.
+        App.populateKeywordCreateProjectSelector((data && data.projects) || []);
         if (!list || !empty) return;
         var projects = (data && data.projects) || [];
         if (!projects.length) {
@@ -189,6 +196,145 @@
         App.showRulesError("");
     }
     App.clearRulesError = clearRulesError;
+
+    // --- Phase 5C: keyword rule creation foundation -------------------
+
+    function populateKeywordCreateProjectSelector(projects) {
+        // Phase 5C: populate the keyword-create project selector from the
+        // freshly loaded Project Rules data. Only enabled, non-excluded
+        // projects with a positive id are valid targets — this mirrors the
+        // ``project_api.list_rule_target_projects()`` eligibility rule the
+        // API uses, so the selector only ever offers targets the API will
+        // accept. Re-population is skipped entirely while a keyword create
+        // is in flight so the user's selection is never displaced by an
+        // auto-refresh, and the previous selection is preserved when the
+        // list is re-rendered.
+        if (App.rulesCreatingKeyword) return;
+        var select = document.getElementById("rules-keyword-create-project");
+        var submitBtn = document.getElementById("rules-keyword-create-submit");
+        var input = document.getElementById("rules-keyword-create-input");
+        var emptyHint = document.getElementById("rules-keyword-create-empty");
+        if (!select || !submitBtn || !input) return;
+        var list = projects || [];
+        var targets = [];
+        for (var i = 0; i < list.length; i++) {
+            var p = list[i];
+            if (p && p.enabled && !p.is_excluded && p.id > 0) {
+                targets.push(p);
+            }
+        }
+        var previousValue = select.value;
+        select.innerHTML = "";
+        if (!targets.length) {
+            if (emptyHint) emptyHint.hidden = false;
+            submitBtn.disabled = true;
+            input.disabled = true;
+            select.disabled = true;
+            return;
+        }
+        if (emptyHint) emptyHint.hidden = true;
+        for (var j = 0; j < targets.length; j++) {
+            var opt = document.createElement("option");
+            opt.value = String(targets[j].id);
+            // ``textContent`` is safe here (no HTML parsing) and the name
+            // is already display-safe from the bridge projection.
+            opt.textContent = targets[j].name;
+            select.appendChild(opt);
+        }
+        // Preserve the user's previous selection when the project list is
+        // refreshed without changing the available targets.
+        if (previousValue) {
+            for (var k = 0; k < select.options.length; k++) {
+                if (select.options[k].value === previousValue) {
+                    select.value = previousValue;
+                    break;
+                }
+            }
+        }
+        select.disabled = false;
+        input.disabled = false;
+        submitBtn.disabled = false;
+    }
+    App.populateKeywordCreateProjectSelector = populateKeywordCreateProjectSelector;
+
+    function handleKeywordCreateSubmit() {
+        // Phase 5C: validate project id + keyword locally, then call the
+        // bridge. Only one keyword create may be in flight at a time. The
+        // keyword is trimmed before validation and before the bridge call.
+        // On success the keyword input is cleared and the Project Rules
+        // list is refreshed; on failure the keyword input is preserved so
+        // the user can edit and retry.
+        if (App.rulesCreatingKeyword) return;
+        var select = document.getElementById("rules-keyword-create-project");
+        var input = document.getElementById("rules-keyword-create-input");
+        if (!select || !input) return;
+        var projectId = parseInt(select.value, 10);
+        if (!(projectId > 0)) {
+            App.showKeywordCreateStatus("请选择有效的项目", true);
+            return;
+        }
+        var keyword = (input.value || "").trim();
+        if (!keyword) {
+            App.showKeywordCreateStatus("请输入关键词", true);
+            return;
+        }
+        App.setKeywordCreateCreating(true);
+        App.clearKeywordCreateStatus();
+        App.callBridge("create_project_keyword_rule", projectId, keyword).then(function (result) {
+            if (result && result.ok === false) {
+                App.showKeywordCreateStatus(result.error || "新增关键词规则失败", true);
+                return;
+            }
+            input.value = "";
+            App.clearKeywordCreateStatus();
+            return App.loadProjectRules().then(function () {
+                App.showKeywordCreateStatus("关键词规则已新增", false);
+            });
+        }).catch(function () {
+            App.showKeywordCreateStatus("新增关键词规则失败", true);
+        }).then(function () {
+            App.setKeywordCreateCreating(false);
+        });
+    }
+    App.handleKeywordCreateSubmit = handleKeywordCreateSubmit;
+
+    function setKeywordCreateCreating(creating) {
+        // Phase 5C: toggle the keyword create saving state. The state is
+        // intentionally separate from ``rulesSavingRuleKey`` (Phase 5B
+        // toggle saving) so the two write paths can never pollute each
+        // other's button / input disabled state.
+        App.rulesCreatingKeyword = creating;
+        var btn = document.getElementById("rules-keyword-create-submit");
+        var input = document.getElementById("rules-keyword-create-input");
+        var select = document.getElementById("rules-keyword-create-project");
+        if (btn) {
+            btn.disabled = creating;
+            btn.textContent = creating ? "正在新增…" : "新增关键词规则";
+        }
+        if (input) input.disabled = creating;
+        if (select) select.disabled = creating;
+    }
+    App.setKeywordCreateCreating = setKeywordCreateCreating;
+
+    function showKeywordCreateStatus(message, isError) {
+        var el = document.getElementById("rules-keyword-create-status");
+        if (!el) return;
+        if (!message) {
+            el.hidden = true;
+            el.textContent = "";
+            el.className = "rules-keyword-create-status";
+            return;
+        }
+        el.hidden = false;
+        el.textContent = message;
+        el.className = "rules-keyword-create-status" + (isError ? " is-error" : " is-success");
+    }
+    App.showKeywordCreateStatus = showKeywordCreateStatus;
+
+    function clearKeywordCreateStatus() {
+        App.showKeywordCreateStatus("", false);
+    }
+    App.clearKeywordCreateStatus = clearKeywordCreateStatus;
 
     function text(value, fallback) {
         return App.escapeHtml(App.safeText(value, fallback));

@@ -4326,6 +4326,167 @@ Phase 5B.1 does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
+## Phase 5C Implemented Scope
+
+Phase 5C is the **Project Rules keyword rule creation foundation** phase. It
+opens one minimal new Project Rules write capability: creating a single
+keyword rule on an existing rule-target project from the WebView Project
+Rules page, then refreshing the list on success. It is the first new
+Project Rules write path beyond the Phase 5B / 5B.1 existing folder /
+keyword rule enable/disable toggle, and it deliberately does not open any
+other Project Rules write workflow. The write does not change historical
+activity classification or schema.
+
+Implemented in Phase 5C:
+
+- **API layer** (`worktrace/api/rule_api.py`):
+  - Added a narrow `create_project_keyword_rule(project_id, keyword)` facade
+    for WebView writes. It creates exactly one keyword rule on an existing
+    rule-target project and nothing else.
+  - `project_id` must be a real `int` and `> 0`; bool-as-int, `None`,
+    numeric strings, floats, zero, negative ints, lists, and dicts are
+    rejected with the stable `invalid_input` code.
+  - `keyword` must be a real `str`; `None`, bool, int / float, list / dict
+    are rejected. `keyword.strip()` must be non-empty; the trimmed value is
+    used for creation.
+  - Project eligibility reuses the existing
+    `project_api.list_rule_target_projects()` semantics (active, non-archived
+    user projects plus the special `排除规则` project when it is an eligible
+    target). No new project-eligibility rule is invented.
+  - Duplicate keyword rules (same `project_id` + trimmed `keyword`) return
+    the stable `duplicate_rule` code; no second row is created.
+  - Unknown project returns `project_not_found`. Raw service exceptions
+    collapse to `operation_failed`. Tracebacks, SQL, raw exception text,
+    paths, window titles, clipboard, and notes never cross the API boundary.
+  - The facade delegates to the existing `rule_service.create_rule` write
+    path, preserving keyword rule cache invalidation and privacy exclude
+    cache clearing. It does not call backfill, conflict preview, or any
+    folder-rule write path, and does not touch `activity_log`,
+    `activity_project_assignment`, or `project_session_note`.
+  - Success returns `{"ok": True, "rule": {"kind": "keyword", "id": int,
+    "project_id": int, "keyword": str, "enabled": True}}`. The API does not
+    return a refreshed Project Rules list (the frontend calls
+    `get_project_rules` after success).
+- **Bridge layer** (`worktrace/webview_ui/bridge.py`):
+  - Added `create_project_keyword_rule(project_id, keyword)`.
+  - Bridge validation mirrors the API: rejects bool-as-int `project_id`,
+    non-positive ids, non-string `keyword`, and whitespace-only `keyword`
+    before calling `rule_api`, returning `操作无效`.
+  - Success returns the narrow `{"ok": True, "rule": {...}}` shape with
+    coerced `int` / `str` / `bool` field types.
+  - Failure returns stable Chinese messages only: `操作无效`
+    (`invalid_input`), `项目不存在` (`project_not_found`), `关键词规则已存在`
+    (`duplicate_rule`), `新增关键词规则失败` (`operation_failed` and any
+    unknown code / exception). Tracebacks, SQL, raw exception text, paths,
+    window titles, clipboard, notes, backend error codes, and internal
+    fields are never surfaced.
+  - The bridge still imports only `worktrace.api` from the backend. It does
+    not import services, db, collector, security, runtime, or config, and
+    does not call any other Project Rules write API.
+- **Frontend** (`worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/js/core.js`, `worktrace/webview_ui/js/rules.js`,
+  `worktrace/webview_ui/js/init.js`, `worktrace/webview_ui/styles.css`):
+  - Added a minimal keyword create form with stable DOM anchors:
+    `rules-keyword-create-form`, `rules-keyword-create-project` (a `<select>`
+    populated from the loaded Project Rules data), `rules-keyword-create-input`
+    (a text `<input>`), `rules-keyword-create-submit` (the only new static
+    button), `rules-keyword-create-empty` (empty hint when no target project
+    is available), and `rules-keyword-create-status` (status line).
+  - Added `App.rulesCreatingKeyword` state, separate from the Phase 5B
+    `App.rulesSavingRuleKey` toggle state, so the two write paths never
+    pollute each other. Only one keyword create may be in flight at a time.
+  - The submit handler validates `project_id` (`parseInt` + `> 0`) and
+    `keyword` (non-empty after `trim()`) before calling
+    `App.callBridge("create_project_keyword_rule", projectId, keyword)`.
+    During creation the button shows `正在新增…` and repeats are blocked.
+  - Success clears the keyword input, then calls `App.loadProjectRules()` to
+    refresh the list. Failure keeps the rendered list and the keyword input
+    intact so the user can edit and retry.
+  - The project selector is only re-populated when no keyword create is in
+    flight, so an auto-refresh never displaces an in-flight submit. The
+    existing `App.rulesRequestToken` stale guard is preserved.
+  - Catch paths do not read `err.message` / `error.message`; dynamic text is
+    rendered through escaping / safe-text helpers.
+  - No `app.js` was reintroduced. No React / Vue / Vite / Node, local HTTP
+    server, CDN, external JS/CSS/fonts, network requests, or browser storage
+    were introduced.
+- **Tests**:
+  - Added `tests/test_project_rules_keyword_create.py` for API/service
+    behavior: valid creation for normal and eligible-target projects,
+    `排除规则` target eligibility per existing service semantics, full
+    `project_id` / `keyword` invalid-input matrix, trim-before-create,
+    unknown project / duplicate / service-exception collapse, no folder-rule
+    / project / activity / assignment / session-note row changes, no
+    conflict-preview / backfill / folder-create calls, cache invalidation,
+    JSON-serializable payloads, stable success field types, and unchanged
+    `set_project_rule_enabled` behavior.
+  - Updated `tests/test_webview_project_rules_bridge.py` for the new bridge
+    method: success payload shape, full invalid-input matrix → `操作无效`,
+    `project_not_found` → `项目不存在`, `duplicate_rule` → `关键词规则已存在`,
+    `operation_failed` / unknown code / exception → `新增关键词规则失败`,
+    sensitive-text exclusion on every failure path, success never returns a
+    full refreshed project list, the create path never calls any other
+    Project Rules write API, stable success field types, JSON-serializable
+    payloads, and unchanged `get_project_rules` / `set_project_rule_enabled`.
+  - Updated `tests/webview/test_project_rules_static_contract.py` for the
+    new form anchors, project selector / keyword input / submit button /
+    empty hint, `App.rulesCreatingKeyword` state, the allowed
+    `create_project_keyword_rule` bridge call, JS validation / trim /
+    creating guard / `正在新增…` label, success-then-refresh /
+    success-clears-input / failure-preserves-list-and-input, no raw
+    exception reads, escape-helper usage, state isolation from the Phase 5B
+    toggle saving state, stale-guard preservation, no storage / network,
+    init binds the submit button, no `app.js`, and no forbidden handler
+    tokens. The bridge-call forbidden-method check was switched to
+    `callBridge("<method>"` string patterns so the allowed
+    `create_project_keyword_rule` call is not falsely flagged by the
+    `create_project` substring. The static button count assertion was
+    relaxed to allow exactly one static button
+    (`rules-keyword-create-submit`). The boundary-copy assertion was updated
+    to match the new Phase 5C copy that mentions keyword creation.
+  - Updated `tests/webview/test_statistics_static_contract.py` and
+    `tests/webview/test_timeline_static_contract.py` so their Phase 5B
+    boundary-copy assertions match the Phase 5C copy (which now references
+    `启用/停用`, `新增关键词规则`, `编辑/删除`, and
+    `冲突预览和回填将在后续阶段开放`).
+- **Documentation**:
+  - README, current-state, migration summary, and this history now mark
+    Phase 5C as current, describe the keyword-rule-creation-only scope,
+    preserve the Phase 5B / 5B.1 enable/disable path and its hardening, and
+    restate all not-yet-open boundaries. Phase 4B / 4B.1 CSV export
+    boundaries are preserved.
+  - No DB schema change. No legacy Tkinter UI removal. No new dependency.
+    No new frontend framework / network / browser storage.
+
+## Phase 5C Not Implemented
+
+Phase 5C does not implement and does not start:
+
+- Project enable/disable in WebView;
+- Project creation, editing, deletion, or archive in WebView;
+- Folder rule creation, editing, or deletion in WebView;
+- Keyword rule editing or deletion in WebView (Phase 5C only opens keyword
+  rule creation);
+- Folder rule conflict preview;
+- Folder rule backfill;
+- Automatic rules;
+- Batch Project Rules operations;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
 The `worktrace/ui` package is retained in the source tree as legacy code
 pending removal:
 

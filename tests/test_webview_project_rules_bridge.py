@@ -842,3 +842,411 @@ def test_project_rules_bridge_import_boundary():
         assert not re.search(pattern, source, re.MULTILINE), (
             "bridge.py must not import forbidden backend/UI module: " + pattern
         )
+
+
+# --- Phase 5C: Project Rules keyword rule creation foundation ------------
+
+
+def test_create_project_keyword_rule_success_payload(monkeypatch):
+    # Phase 5C regression lock: the success payload is the narrow created-rule
+    # summary only (``kind`` / ``id`` / ``project_id`` / ``keyword`` /
+    # ``enabled``). It must NOT echo the full refreshed Project Rules list
+    # back to JS — the frontend re-fetches via ``get_project_rules`` after
+    # success.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": 123,
+                "project_id": project_id,
+                "keyword": keyword.strip(),
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "keyword",
+            "id": 123,
+            "project_id": 1,
+            "keyword": "Spec",
+            "enabled": True,
+        },
+    }
+    # The narrow payload must not surface a full project list. The frontend
+    # refreshes via a separate ``get_project_rules`` call.
+    assert "projects" not in result
+    assert "rules" not in result
+
+
+@pytest.mark.parametrize("bad_id", [None, True, False, "1", "abc", 0, -1, 1.0, 2.5, [], {}])
+def test_create_project_keyword_rule_rejects_invalid_project_id(bad_id):
+    # Phase 5C regression lock: ``project_id`` must be a real positive int.
+    # bool / float / numeric string / None / list / dict / zero / negative
+    # all collapse to ``操作无效`` at the bridge layer before any API call.
+    result = WebViewBridge().create_project_keyword_rule(bad_id, "Spec")
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize(
+    "bad_keyword", [None, True, False, 1, 1.0, 2.5, [], {}, ""]
+)
+def test_create_project_keyword_rule_rejects_invalid_keyword(bad_keyword):
+    # Phase 5C regression lock: ``keyword`` must be a real non-empty str.
+    result = WebViewBridge().create_project_keyword_rule(1, bad_keyword)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+@pytest.mark.parametrize("bad_keyword", ["   ", "\t", "\n", "  \t  "])
+def test_create_project_keyword_rule_rejects_whitespace_only_keyword(bad_keyword):
+    # Phase 5C regression lock: whitespace-only keyword collapses to
+    # ``操作无效`` at the bridge layer.
+    result = WebViewBridge().create_project_keyword_rule(1, bad_keyword)
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_create_project_keyword_rule_invalid_input_payload_excludes_sensitive_text():
+    # Phase 5C regression lock: invalid-input failure payloads never carry
+    # traceback / SQL / path / note / clipboard / window_title text even
+    # when the bridge has access to rich exception context.
+    bridge = WebViewBridge()
+    for args in (
+        (None, "Spec"),
+        (True, "Spec"),
+        (False, "Spec"),
+        ("1", "Spec"),
+        (1.0, "Spec"),
+        ([], "Spec"),
+        ({}, "Spec"),
+        (0, "Spec"),
+        (-1, "Spec"),
+        (1, None),
+        (1, True),
+        (1, 1),
+        (1, 1.0),
+        (1, []),
+        (1, {}),
+        (1, ""),
+        (1, "   "),
+    ):
+        result = bridge.create_project_keyword_rule(*args)
+        assert result == {"ok": False, "error": "操作无效"}
+        lowered = repr(result).lower()
+        for forbidden in (
+            "traceback",
+            "sqlite",
+            "select",
+            "window_title",
+            "clipboard",
+            "note",
+            "secret",
+        ):
+            assert forbidden not in lowered
+
+
+def test_create_project_keyword_rule_project_not_found_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {"ok": False, "error": "project_not_found"},
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(9999, "Spec")
+
+    assert result == {"ok": False, "error": "项目不存在"}
+
+
+def test_create_project_keyword_rule_duplicate_rule_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {"ok": False, "error": "duplicate_rule"},
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "关键词规则已存在"}
+
+
+def test_create_project_keyword_rule_invalid_input_code_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {"ok": False, "error": "invalid_input"},
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "操作无效"}
+
+
+def test_create_project_keyword_rule_operation_failed_code_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {"ok": False, "error": "operation_failed"},
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "新增关键词规则失败"}
+
+
+def test_create_project_keyword_rule_unknown_error_code_collapses_to_create_failed(monkeypatch):
+    # Phase 5C regression lock: unknown API error codes collapse to the
+    # generic create-failed message so internal details are never surfaced.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {"ok": False, "error": "unexpected raw code"},
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "新增关键词规则失败"}
+
+
+def test_create_project_keyword_rule_unknown_exception_collapses(monkeypatch):
+    def fail(project_id, keyword):
+        raise RuntimeError(
+            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", fail)
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "新增关键词规则失败"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select",
+        "boom",
+        "window_title",
+        "clipboard",
+        "note",
+        "activity_log",
+        "secret",
+    ):
+        assert forbidden not in lowered
+
+
+def test_create_project_keyword_rule_failure_payload_excludes_backend_codes(monkeypatch):
+    # Phase 5C regression lock: the failure payload surfaces only the stable
+    # Chinese message, not the underlying code or any backend-internal fields
+    # the API might have attached.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {
+            "ok": False,
+            "error": "duplicate_rule",
+            "code": "duplicate_rule",
+            "internal_field": "should not leak",
+            "traceback": "SELECT * FROM project_rule",
+            "details": "C:\\Secret window_title clipboard note",
+        },
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+
+    assert result == {"ok": False, "error": "关键词规则已存在"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "internal_field",
+        "should not leak",
+        "code",
+        "duplicate_rule",
+        "traceback",
+        "sqlite",
+        "select",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+        "details",
+    ):
+        assert forbidden not in lowered
+
+
+def test_create_project_keyword_rule_success_payload_types_are_stable(monkeypatch):
+    # Phase 5C regression lock: success payload field types must remain
+    # ``str`` / ``int`` / ``bool`` so JS consumers can rely on the contract
+    # even when the backend returns loose numeric / string variants.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": 25,
+                "project_id": project_id,
+                "keyword": keyword,
+                "enabled": 1,  # backend may return int instead of bool
+            },
+        },
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(7, "Spec")
+
+    assert type(result["ok"]) is bool
+    rule = result["rule"]
+    assert type(rule["kind"]) is str
+    assert type(rule["id"]) is int
+    assert type(rule["project_id"]) is int
+    assert type(rule["keyword"]) is str
+    assert type(rule["enabled"]) is bool
+
+
+def test_create_project_keyword_rule_payload_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": 20,
+                "project_id": project_id,
+                "keyword": keyword.strip(),
+                "enabled": True,
+            },
+        },
+    )
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+
+    json.dumps(result, ensure_ascii=False)
+    assert "Traceback" not in repr(result)
+    assert "SELECT" not in repr(result)
+
+
+def test_create_project_keyword_rule_never_calls_other_project_rules_write_apis(monkeypatch):
+    # Phase 5C regression lock: the create-keyword path must only ever call
+    # ``rule_api.create_project_keyword_rule``. It must not invoke any other
+    # Project Rules write APIs (project toggle / create / edit / delete,
+    # folder create / edit / delete, rule edit / delete, conflict preview,
+    # backfill).
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_project_keyword_rule",
+        lambda project_id, keyword: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": 1,
+                "project_id": project_id,
+                "keyword": keyword.strip(),
+                "enabled": True,
+            },
+        },
+    )
+
+    forbidden_calls: list[str] = []
+
+    def make_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(name + " must not be called by create-keyword path")
+        return _fail
+
+    for name in (
+        "set_project_rule_enabled",
+        "create_or_update_folder_rule",
+        "set_keyword_rule_enabled",
+        "set_folder_rule_enabled",
+        "delete_keyword_rule",
+        "delete_folder_rule",
+        "preview_folder_rule_conflicts",
+        "backfill_folder_rule",
+    ):
+        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+
+    forbidden_project_calls: list[str] = []
+
+    def make_project_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_project_calls.append(name)
+            raise AssertionError(name + " must not be called by create-keyword path")
+        return _fail
+
+    for name in (
+        "create_project",
+        "update_project",
+        "delete_project",
+        "archive_project",
+        "set_project_enabled",
+    ):
+        if hasattr(bridge_module.project_api, name):
+            monkeypatch.setattr(bridge_module.project_api, name, make_project_forbidden(name))
+
+    result = WebViewBridge().create_project_keyword_rule(1, "Spec")
+    assert result["ok"] is True
+    assert forbidden_calls == []
+    assert forbidden_project_calls == []
+
+
+def test_create_project_keyword_rule_does_not_regress_get_project_rules(monkeypatch):
+    # Phase 5C regression lock: ``get_project_rules`` remains the read path
+    # and is not affected by the keyword-create addition.
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [
+            {
+                "id": 1,
+                "name": "Client",
+                "description": "Billable",
+                "enabled": 1,
+                "created_by": "user",
+                "folder_rules": [
+                    {"id": 10, "folder_path": "D:\\Client", "enabled": 1, "recursive": 1},
+                ],
+                "keyword_rules": [
+                    {"id": 11, "keyword": "Spec", "enabled": 0},
+                ],
+            },
+        ],
+    )
+
+    result = WebViewBridge().get_project_rules()
+
+    assert result["ok"] is True
+    project = result["projects"][0]
+    assert project["id"] == 1
+    assert project["name"] == "Client"
+    assert project["rule_count"] == 2
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_create_project_keyword_rule_does_not_regress_set_project_rule_enabled(monkeypatch):
+    # Phase 5C regression lock: the existing Phase 5B toggle path remains
+    # intact after the Phase 5C create-keyword addition.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rule_enabled",
+        lambda rule_type, rule_id, enabled: {
+            "ok": True,
+            "rule_type": rule_type,
+            "rule_id": rule_id,
+            "enabled": enabled,
+        },
+    )
+
+    result = WebViewBridge().set_project_rule_enabled("keyword", 11, False)
+
+    assert result == {
+        "ok": True,
+        "rule_type": "keyword",
+        "rule_id": 11,
+        "enabled": False,
+    }

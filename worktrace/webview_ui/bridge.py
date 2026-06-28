@@ -129,6 +129,18 @@ conflict preview, backfill, automatic rules, DB schema changes, native
 dialogs, file writes, or network access. Errors collapse to stable Chinese
 messages without tracebacks, SQL, raw exception text, window titles,
 clipboard, notes, paths, or internal fields.
+
+Phase 5C adds the second minimal Project Rules WebView write foundation:
+``create_project_keyword_rule`` creates one new keyword rule on an existing
+rule-target project (validated via ``project_api.list_rule_target_projects``,
+the same eligibility rule the legacy Tkinter dialog uses). It does NOT
+create folder rules, projects, or edit/delete existing rules; it does NOT
+perform conflict preview, backfill, automatic rules, DB schema changes,
+native dialogs, file writes, or network access. The success payload is the
+narrow created-rule summary only; the frontend re-fetches the full Project
+Rules list via ``get_project_rules`` after success. Errors are mapped from
+stable codes to Chinese messages without tracebacks, SQL, raw exception
+text, window titles, clipboard, notes, paths, or internal fields.
 """
 
 from __future__ import annotations
@@ -291,6 +303,16 @@ _PROJECT_RULE_WRITE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "规则不存在",
     "operation_failed": "更新规则状态失败",
+}
+
+# Maps Project Rules keyword-create API stable codes to Phase 5C user-facing
+# messages. Unknown codes collapse to the generic create failure so internal
+# details are never surfaced.
+_PROJECT_RULE_CREATE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "project_not_found": "项目不存在",
+    "duplicate_rule": "关键词规则已存在",
+    "operation_failed": "新增关键词规则失败",
 }
 
 
@@ -1184,6 +1206,54 @@ class WebViewBridge:
         except Exception:
             logger.exception("webview bridge set_project_rule_enabled failed")
             return {"ok": False, "error": "更新规则状态失败"}
+
+    # --- Phase 5C: Project Rules keyword rule creation foundation ------
+
+    def create_project_keyword_rule(self, project_id, keyword) -> dict[str, Any]:
+        """Create one new keyword rule on an existing rule-target project.
+
+        Phase 5C write path only. Strict bridge validation rejects
+        bool-as-int ``project_id``, non-int ``project_id``, non-positive
+        ids, non-string ``keyword``, and whitespace-only ``keyword`` before
+        calling ``rule_api.create_project_keyword_rule``. The bridge never
+        exposes raw exceptions, tracebacks, SQL, paths, window titles,
+        clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "rule": {"kind": "keyword", "id": int,
+        "project_id": int, "keyword": str, "enabled": True}}`` on success
+        (the narrow created-rule summary only — the frontend re-fetches the
+        full Project Rules list via ``get_project_rules`` after success) or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            # ``type(...) is not int`` rejects ``bool`` (``type(True) is
+            # bool``), ``float``, ``str``, ``None``, and container types in
+            # one check, matching the Phase 5B toggle validation pattern.
+            if type(project_id) is not int or project_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            if type(keyword) is not str or not keyword.strip():
+                return {"ok": False, "error": "操作无效"}
+            result = rule_api.create_project_keyword_rule(project_id, keyword)
+            if result.get("ok") is True:
+                rule = result.get("rule") or {}
+                return {
+                    "ok": True,
+                    "rule": {
+                        "kind": "keyword",
+                        "id": int(rule.get("id") or 0),
+                        "project_id": int(rule.get("project_id") or project_id),
+                        "keyword": str(rule.get("keyword") or ""),
+                        "enabled": bool(rule.get("enabled")),
+                    },
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_CREATE_MESSAGES.get(code, "新增关键词规则失败"),
+            }
+        except Exception:
+            logger.exception("webview bridge create_project_keyword_rule failed")
+            return {"ok": False, "error": "新增关键词规则失败"}
 
     # --- Phase 4A: Statistics / Export read-only summary ----------------
 

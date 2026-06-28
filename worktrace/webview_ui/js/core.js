@@ -79,6 +79,12 @@
     App.rulesRequestToken = 0;
     App.rulesSavingRuleKey = null;
 
+    // --- Phase 5C: Project Rules keyword creation state ---------------
+    // Separate from rulesSavingRuleKey so the toggle write state and the
+    // keyword create write state can never pollute each other. Only one
+    // keyword create may be in flight at a time.
+    App.rulesCreatingKeyword = false;
+
     // --- Phase 3C: Unified Timeline status semantics -------------------
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",

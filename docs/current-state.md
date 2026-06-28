@@ -7,22 +7,20 @@
 
 ## Current Phase
 
-**Phase 5B.1 — Project Rules rule enable/disable hardening.** Phase 5B.1 is
-a hardening-only / regression-only follow-up to Phase 5B (the most recent
-behavior-change phase). It does not introduce any new Project Rules
-capability: the only Project Rules WebView write path remains enabling or
-disabling one existing folder rule or keyword rule at a time. Phase 5B.1
-adds input validation / error-collapse / saving-and-stale-state /
-sensitive-field-boundary regression locks across the API, bridge, and
-frontend, plus a fix for an unhashable-`rule_type` (list / dict) edge case
-that previously surfaced a `TypeError` instead of the stable
-`invalid_input` / `操作无效` error. It does not implement project
-enable/disable, project create/edit/delete/archive, rule create/edit/delete,
-conflict preview, backfill, automatic rules, batch Project Rules
-operations, schema changes, new frontend dependencies, browser storage,
-network requests, or new export formats. All earlier WebView migration
-phases (Phase 0A → Phase 5B) are completed. README, this file, and
-`ui-webview-migration.md` all describe the current phase as 5B.1.
+**Phase 5C — Project Rules keyword rule creation foundation.** Phase 5C
+opens one minimal new Project Rules write capability: creating a single
+keyword rule on an existing rule-target project from the WebView Project
+Rules page, then refreshing the list on success. It preserves the Phase 5B /
+5B.1 existing folder / keyword rule enable/disable path and its hardening
+(input validation, error collapse, saving-and-stale-state,
+sensitive-field-boundary regression locks, plus the unhashable-`rule_type`
+fix). It does not implement project enable/disable, project
+create/edit/delete/archive, folder rule create/edit/delete, keyword rule
+edit/delete, conflict preview, backfill, automatic rules, batch Project
+Rules operations, schema changes, new frontend dependencies, browser
+storage, network requests, or new export formats. All earlier WebView
+migration phases (Phase 0A → Phase 5B.1) are completed. README, this file,
+and `ui-webview-migration.md` all describe the current phase as 5C.
 
 ## Default UI
 
@@ -46,16 +44,19 @@ phases (Phase 0A → Phase 5B) are completed. README, this file, and
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1): project-grouped rule list
-  showing project name / description, project enabled state, special
+- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1 / 5C): project-grouped rule
+  list showing project name / description, project enabled state, special
   `排除规则` marker, rule counts, folder rules, keyword rules, rule enabled
-  state, and folder recursion scope. Phase 5B only adds existing folder /
-  keyword rule enable/disable. Phase 5B.1 is a hardening-only / regression-
-  only follow-up: it locks input validation, error collapse, saving /
-  stale-state behavior, sensitive-field boundaries, and packaging /
-  static-resource contracts without opening any new Project Rules capability.
-  Project enable/disable, Project/Rule creation, editing, deletion, conflict
-  preview, backfill, and automatic rules are still not open in WebView.
+  state, and folder recursion scope. Phase 5B adds existing folder / keyword
+  rule enable/disable. Phase 5B.1 is a hardening-only / regression-only
+  follow-up that locks input validation, error collapse, saving / stale-state
+  behavior, sensitive-field boundaries, and packaging / static-resource
+  contracts. Phase 5C adds the first new Project Rules write capability:
+  creating one keyword rule on an existing rule-target project, then
+  refreshing the list on success. Project enable/disable, Project/folder-rule
+  creation, project editing/deletion/archive, keyword rule editing/deletion,
+  conflict preview, backfill, and automatic rules are still not open in
+  WebView.
 
 ## Unmigrated Pages (Legacy Tkinter, Reference-Only)
 
@@ -95,9 +96,11 @@ phases (Phase 0A → Phase 5B) are completed. README, this file, and
 
 - Excel / PDF / timesheet-template export; folder opening; auto-open of the
   exported file; auto-submit of a timesheet.
-- Project enable/disable; Project create/edit/delete/archive; Rule
-  create/edit/delete; folder-rule conflict preview; folder-rule backfill;
-  automatic rules; batch Project Rules operations.
+- Project enable/disable; Project create/edit/delete/archive; folder rule
+  create/edit/delete; keyword rule edit/delete; folder-rule conflict preview;
+  folder-rule backfill; automatic rules; batch Project Rules operations.
+  (Phase 5C only opens keyword rule creation on an existing rule-target
+  project; all other Project Rules write workflows remain unsupported.)
 - Settings / Privacy / Encrypted Backup WebView migration.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
 - Batch time / batch split / batch merge; note append / merge; auto-rule
@@ -105,7 +108,7 @@ phases (Phase 0A → Phase 5B) are completed. README, this file, and
 - AI, server, payment, license, token, subscription, login, cloud sync, OCR,
   screenshots, screen recording, keyboard logging, automatic startup.
 - Any DB schema change during development; `schema.sql` is the single source
-  of truth. Phase 5B and Phase 5B.1 made no schema change.
+  of truth. Phase 5B, Phase 5B.1, and Phase 5C made no schema change.
 
 ## Architecture Boundary
 

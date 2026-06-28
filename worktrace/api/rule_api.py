@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import project_api
 from ..services import folder_rule_service, rule_service
 
 
@@ -76,6 +77,70 @@ def set_project_rule_enabled(rule_type: str, rule_id: int, enabled: bool) -> dic
         return {"ok": False, "error": "operation_failed"}
 
 
+def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]:
+    """Create one new keyword rule on an existing rule-target project.
+
+    Phase 5C narrow WebView-facing facade. It only creates a keyword rule;
+    it does not create folder rules, projects, or edit/delete existing
+    rules. ``project_id`` must identify a project returned by
+    ``project_api.list_rule_target_projects()`` (the same eligibility rule
+    the legacy Tkinter dialog uses), so the special local ``排除规则``
+    project — which is created with ``enabled = 0`` and is therefore not a
+    rule target — is rejected as ``project_not_found`` without bypassing
+    the service. The keyword is trimmed before creation and an exact
+    duplicate (same ``project_id`` + same trimmed keyword) is rejected as
+    ``duplicate_rule``.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``project_id`` is not a real positive ``int``
+      (bool / float / numeric string / ``None`` / list / dict / zero /
+      negative) or ``keyword`` is not a real non-empty ``str`` after trim.
+    - ``project_not_found`` — the project is not a rule target.
+    - ``duplicate_rule`` — an existing keyword rule already binds the same
+      keyword to the same project.
+    - ``operation_failed`` — any unexpected service failure.
+    """
+
+    # ``type(...) is not int`` rejects ``bool`` (since ``type(True) is bool``),
+    # ``float``, ``str``, ``None``, and container types in one check.
+    if type(project_id) is not int or project_id <= 0:
+        return {"ok": False, "error": "invalid_input"}
+    if type(keyword) is not str:
+        return {"ok": False, "error": "invalid_input"}
+    trimmed = keyword.strip()
+    if not trimmed:
+        return {"ok": False, "error": "invalid_input"}
+    try:
+        target_ids = {
+            int(row.get("id") or 0)
+            for row in project_api.list_rule_target_projects()
+        }
+        if project_id not in target_ids:
+            return {"ok": False, "error": "project_not_found"}
+        for row in rule_service.list_rules(include_system=True):
+            if (
+                int(row.get("project_id") or 0) == project_id
+                and str(row.get("keyword") or "") == trimmed
+            ):
+                return {"ok": False, "error": "duplicate_rule"}
+        rule_id = rule_service.create_rule(trimmed, project_id)
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": int(rule_id),
+                "project_id": int(project_id),
+                "keyword": trimmed,
+                "enabled": True,
+            },
+        }
+    except ProjectRuleWriteError as exc:
+        return {"ok": False, "error": exc.code}
+    except Exception:
+        return {"ok": False, "error": "operation_failed"}
+
+
 # --- keyword rules -------------------------------------------------------
 
 def create_keyword_rule(keyword: str, project_id: int) -> int:
@@ -116,6 +181,7 @@ __all__ = [
     "backfill_folder_rule",
     "create_keyword_rule",
     "create_or_update_folder_rule",
+    "create_project_keyword_rule",
     "delete_folder_rule",
     "delete_keyword_rule",
     "ProjectRuleWriteError",

@@ -94,14 +94,30 @@ def test_project_rules_required_dom_ids_exist():
 
 def test_project_rules_phase_5b_boundary_copy_present():
     section = _rules_section()
-    assert "当前支持启用/停用已有规则" in section
-    for term in ("新增", "编辑", "删除", "冲突预览", "回填"):
+    # Phase 5C: the boundary copy now mentions keyword rule creation as a
+    # supported capability. The supported-ops clause still references
+    # enable/disable, and the unsupported-ops clause still references the
+    # remaining future capabilities.
+    assert "启用/停用" in section
+    assert "新增关键词规则" in section
+    for term in ("编辑", "删除", "冲突预览", "回填"):
         assert term in section
 
 
 def test_project_rules_page_has_no_static_action_buttons():
     section = _rules_section()
-    assert "<button" not in section.lower()
+    # Phase 5C: the only allowed static button in the section is the
+    # keyword create submit button. All other action buttons (folder
+    # create, project create/edit/delete, rule edit/delete, etc.) remain
+    # forbidden as static DOM.
+    import re as _re
+
+    buttons = _re.findall(r"<button[^>]*>", section, _re.IGNORECASE)
+    assert len(buttons) == 1, (
+        "Project Rules page must have exactly one static button (keyword "
+        "create submit); found: " + repr(buttons)
+    )
+    assert 'id="rules-keyword-create-submit"' in buttons[0]
     forbidden = (
         "rules-add",
         "rules-create",
@@ -119,6 +135,12 @@ def test_project_rules_page_has_no_static_action_buttons():
         "rule-delete",
         "rule-enable",
         "rule-disable",
+        "rules-folder-create",
+        "rules-project-create",
+        "rules-keyword-edit",
+        "rules-keyword-delete",
+        "rules-folder-edit",
+        "rules-folder-delete",
     )
     lowered = section.lower()
     for token in forbidden:
@@ -234,11 +256,17 @@ def test_project_rules_rendering_uses_escape_helper():
 
 def test_project_rules_js_does_not_call_forbidden_write_methods():
     source = read_all_js()
+    # Phase 5C: the check uses bridge call string patterns (``callBridge("
+    # <method>"``) rather than bare method names so that the allowed
+    # ``create_project_keyword_rule`` call is not falsely flagged by the
+    # ``create_project`` substring check.
     for method in PROJECT_RULE_WRITE_METHODS:
-        assert method not in source, (
+        forbidden_call = 'callBridge("' + method + '"'
+        assert forbidden_call not in source, (
             "Project Rules frontend must not call write bridge method: " + method
         )
-    assert "set_project_rule_enabled" in source
+    assert 'callBridge("set_project_rule_enabled"' in source
+    assert 'callBridge("create_project_keyword_rule"' in source
 
 
 def test_project_rules_js_has_no_create_edit_delete_backfill_preview_handlers():
@@ -511,12 +539,14 @@ def test_project_rules_state_isolation_across_loading_saving_error():
 
 
 def test_project_rules_bridge_call_only_allows_toggle_write():
-    # Phase 5B.1 regression lock: ``set_project_rule_enabled`` is the only
-    # Project Rules write bridge call anywhere in the frontend. No other
-    # write bridge call (project toggle / create / edit / delete / preview /
-    # backfill) may be introduced even in init.js / core.js.
+    # Phase 5B.1 regression lock: ``set_project_rule_enabled`` and
+    # ``create_project_keyword_rule`` (Phase 5C) are the only Project Rules
+    # write bridge calls anywhere in the frontend. No other write bridge
+    # call (project toggle / create / edit / delete / preview / backfill)
+    # may be introduced even in init.js / core.js.
     source = read_all_js()
     assert 'callBridge("set_project_rule_enabled"' in source
+    assert 'callBridge("create_project_keyword_rule"' in source
     # The forbidden write method names are already covered by
     # ``test_project_rules_js_does_not_call_forbidden_write_methods``; here
     # we additionally guard against accidental bridge call strings.
@@ -544,7 +574,8 @@ def test_project_rules_init_does_not_bind_project_or_rule_create_events():
     # Phase 5B.1 regression lock: the init module must not bind any
     # create / edit / delete / project-toggle events for Project Rules.
     # The only Project Rules event binding is the click delegation on the
-    # rules list, set up inside ``rules.js``.
+    # rules list, set up inside ``rules.js`` (Phase 5B), plus the keyword
+    # create submit button (Phase 5C).
     source = read_js("init.js")
     for forbidden in (
         "rules-add",
@@ -566,3 +597,323 @@ def test_project_rules_init_does_not_bind_project_or_rule_create_events():
             "init.js must not bind Project Rules create/edit/delete/project-toggle event: "
             + forbidden
         )
+
+
+# --- Phase 5C: keyword rule creation foundation static contract ----------
+
+
+def test_project_rules_keyword_create_form_anchors_exist():
+    # Phase 5C regression lock: the Project Rules page must contain the
+    # stable keyword create form DOM anchors.
+    section = _rules_section()
+    for dom_id in (
+        "rules-keyword-create-form",
+        "rules-keyword-create-project",
+        "rules-keyword-create-input",
+        "rules-keyword-create-submit",
+        "rules-keyword-create-status",
+    ):
+        assert 'id="' + dom_id + '"' in section, (
+            "Project Rules page must contain keyword create anchor: " + dom_id
+        )
+
+
+def test_project_rules_keyword_create_form_has_project_selector():
+    section = _rules_section()
+    assert '<select id="rules-keyword-create-project"' in section
+
+
+def test_project_rules_keyword_create_form_has_keyword_input():
+    section = _rules_section()
+    assert '<input id="rules-keyword-create-input"' in section
+    assert 'type="text"' in section
+
+
+def test_project_rules_keyword_create_submit_button_exists():
+    section = _rules_section()
+    assert '<button id="rules-keyword-create-submit"' in section
+    assert 'type="button"' in section
+
+
+def test_project_rules_keyword_create_submit_is_only_new_create_action():
+    # Phase 5C regression lock: the keyword create submit button is the
+    # only new create action on the Project Rules page. No folder create,
+    # project create/edit/delete, or rule edit/delete buttons may appear.
+    section = _rules_section()
+    import re as _re
+
+    buttons = _re.findall(r"<button[^>]*>", section, _re.IGNORECASE)
+    assert len(buttons) == 1
+    assert 'id="rules-keyword-create-submit"' in buttons[0]
+    for forbidden_id in (
+        "rules-folder-create",
+        "rules-project-create",
+        "rules-project-edit",
+        "rules-project-delete",
+        "rules-keyword-edit",
+        "rules-keyword-delete",
+        "rules-folder-edit",
+        "rules-folder-delete",
+    ):
+        assert 'id="' + forbidden_id + '"' not in section
+
+
+def test_project_rules_keyword_create_form_has_empty_hint():
+    # Phase 5C regression lock: the form must include an empty hint that
+    # shows when no target projects are available, disabling the submit.
+    section = _rules_section()
+    assert 'id="rules-keyword-create-empty"' in section
+
+
+def test_project_rules_keyword_create_state_variable_declared():
+    # Phase 5C regression lock: the keyword create saving state must be a
+    # separate state variable from the Phase 5B toggle saving state so the
+    # two write paths can never pollute each other.
+    source = read_js("core.js")
+    assert "App.rulesCreatingKeyword = false" in source
+    # The toggle saving state must still exist alongside it.
+    assert "App.rulesSavingRuleKey = null" in source
+
+
+def test_project_rules_keyword_create_js_calls_bridge_method():
+    # Phase 5C regression lock: the JS must call the
+    # ``create_project_keyword_rule`` bridge method.
+    source = read_js("rules.js")
+    assert 'callBridge("create_project_keyword_rule"' in source
+
+
+def test_project_rules_keyword_create_js_does_not_call_folder_create():
+    source = read_js("rules.js")
+    assert 'callBridge("create_or_update_folder_rule"' not in source
+    assert "createOrUpdateFolderRule" not in source
+
+
+def test_project_rules_keyword_create_js_does_not_call_project_write():
+    source = read_js("rules.js")
+    for forbidden in (
+        'callBridge("create_project"',
+        'callBridge("update_project"',
+        'callBridge("delete_project"',
+        'callBridge("archive_project"',
+        'callBridge("set_project_enabled"',
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_keyword_create_js_does_not_call_rule_edit_delete():
+    source = read_js("rules.js")
+    for forbidden in (
+        'callBridge("delete_keyword_rule"',
+        'callBridge("delete_folder_rule"',
+        'callBridge("set_keyword_rule_enabled"',
+        'callBridge("set_folder_rule_enabled"',
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_keyword_create_js_does_not_call_preview_or_backfill():
+    source = read_js("rules.js")
+    assert 'callBridge("preview_folder_rule_conflicts"' not in source
+    assert 'callBridge("backfill_folder_rule"' not in source
+
+
+def test_project_rules_keyword_create_js_validates_project_id_before_bridge():
+    # Phase 5C regression lock: the JS must parse and validate the project
+    # id (``projectId > 0``) before calling the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    assert "parseInt(select.value, 10)" in body
+    assert "!(projectId > 0)" in body
+    guard_pos = body.find("!(projectId > 0)")
+    bridge_pos = body.find('callBridge("create_project_keyword_rule"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_keyword_create_js_validates_keyword_before_bridge():
+    # Phase 5C regression lock: the JS must validate the keyword is
+    # non-empty before calling the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    assert "!keyword" in body
+    guard_pos = body.find("!keyword")
+    bridge_pos = body.find('callBridge("create_project_keyword_rule"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_keyword_create_js_trims_keyword_before_bridge():
+    # Phase 5C regression lock: the JS must trim the keyword before
+    # validation and before the bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    assert ".trim()" in body
+    trim_pos = body.find(".trim()")
+    bridge_pos = body.find('callBridge("create_project_keyword_rule"')
+    assert trim_pos != -1 and bridge_pos != -1
+    assert trim_pos < bridge_pos
+
+
+def test_project_rules_keyword_create_js_has_creating_guard():
+    # Phase 5C regression lock: the handler must early-return when a
+    # keyword create is already in flight, before any bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    assert "if (App.rulesCreatingKeyword) return" in body
+    guard_pos = body.find("if (App.rulesCreatingKeyword) return")
+    bridge_pos = body.find('callBridge("create_project_keyword_rule"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_keyword_create_js_has_creating_button_label():
+    # Phase 5C regression lock: the creating button text must remain the
+    # stable ``正在新增…`` label.
+    source = read_js("rules.js")
+    body = func_body(source, "setKeywordCreateCreating")
+    assert "正在新增…" in body
+
+
+def test_project_rules_keyword_create_js_success_refreshes_project_rules():
+    # Phase 5C regression lock: the success path must call
+    # ``loadProjectRules()`` to refresh the Project Rules list.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    assert "App.loadProjectRules()" in body
+
+
+def test_project_rules_keyword_create_js_success_clears_keyword_input():
+    # Phase 5C regression lock: the success path must clear the keyword
+    # input so the user can immediately create another rule.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    assert 'input.value = ""' in body
+    # The clear must run before the refresh (success path).
+    clear_pos = body.find('input.value = ""')
+    refresh_pos = body.find("App.loadProjectRules()")
+    assert clear_pos != -1 and refresh_pos != -1
+    assert clear_pos < refresh_pos
+
+
+def test_project_rules_keyword_create_js_failure_preserves_rendered_list():
+    # Phase 5C regression lock: the failure path must not clear the
+    # already-rendered Project Rules list. The handler may only show a
+    # status message on failure, never ``list.innerHTML = ""`` or
+    # ``showProjectRules`` with an empty payload.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    assert "list.innerHTML" not in body
+    assert 'showProjectRules({ projects: [] })' not in body
+    assert 'showProjectRules([])' not in body
+
+
+def test_project_rules_keyword_create_js_failure_preserves_keyword_input():
+    # Phase 5C regression lock: the failure path must not clear the
+    # keyword input so the user can edit and retry.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    # The only ``input.value = ""`` must be inside the success branch
+    # (after the ``result.ok === false`` check). Verify there is exactly
+    # one input clear and it appears after the failure-check guard.
+    assert body.count('input.value = ""') == 1
+    failure_guard = body.find("result && result.ok === false")
+    clear_pos = body.find('input.value = ""')
+    assert failure_guard != -1 and clear_pos != -1
+    assert failure_guard < clear_pos
+
+
+def test_project_rules_keyword_create_js_catch_never_reads_raw_exception():
+    # Phase 5C regression lock: the catch path must never read
+    # ``.message`` from the error.
+    source = read_js("rules.js")
+    body = func_body(source, "handleKeywordCreateSubmit")
+    for forbidden in ("err.message", "error.message", "reason.message"):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_keyword_create_js_uses_escape_helper_for_dynamic_text():
+    # Phase 5C regression lock: dynamic text rendering must use the escape
+    # helper. The keyword create status uses ``textContent`` (which is
+    # HTML-safe), not ``innerHTML``.
+    source = read_js("rules.js")
+    status_body = func_body(source, "showKeywordCreateStatus")
+    assert "textContent" in status_body
+    assert ".innerHTML" not in status_body
+
+
+def test_project_rules_keyword_create_state_isolation_from_toggle_saving():
+    # Phase 5C regression lock: the keyword create saving state
+    # (``rulesCreatingKeyword``) must be separate from the toggle saving
+    # state (``rulesSavingRuleKey``). The two write paths must not pollute
+    # each other's button / input disabled state. The check looks for
+    # actual variable reads / writes (``App.rulesCreatingKeyword`` /
+    # ``App.rulesSavingRuleKey``), not bare comment mentions.
+    source = read_js("core.js")
+    assert "App.rulesCreatingKeyword" in source
+    assert "App.rulesSavingRuleKey" in source
+    # The toggle saving handler must not read or write the keyword create
+    # state variable.
+    rules_source = read_js("rules.js")
+    toggle_body = func_body(rules_source, "setProjectRuleSaving")
+    assert "App.rulesCreatingKeyword" not in toggle_body
+    # The keyword create handler must not read or write the toggle saving
+    # state variable.
+    create_body = func_body(rules_source, "setKeywordCreateCreating")
+    assert "App.rulesSavingRuleKey" not in create_body
+
+
+def test_project_rules_keyword_create_selector_population_guard():
+    # Phase 5C regression lock: the project selector must not be
+    # re-populated while a keyword create is in flight, so the user's
+    # selection is never displaced by an auto-refresh.
+    source = read_js("rules.js")
+    body = func_body(source, "populateKeywordCreateProjectSelector")
+    assert "if (App.rulesCreatingKeyword) return" in body
+
+
+def test_project_rules_keyword_create_stale_guard_preserved():
+    # Phase 5C regression lock: the existing ``rulesRequestToken`` stale
+    # guard in ``loadProjectRules`` must remain intact. The keyword create
+    # success path calls ``loadProjectRules()`` which inherits this
+    # protection.
+    source = read_js("rules.js")
+    load_body = func_body(source, "loadProjectRules")
+    assert "var token = ++App.rulesRequestToken" in load_body
+    assert load_body.count("token !== App.rulesRequestToken") >= 2
+
+
+def test_project_rules_keyword_create_no_storage_or_network():
+    # Phase 5C regression lock: the keyword create form must not use
+    # browser storage or network APIs.
+    source = read_js("rules.js")
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "fetch(",
+        "XMLHttpRequest",
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_keyword_create_init_binds_submit_button():
+    # Phase 5C regression lock: the init module must bind the keyword
+    # create submit button click event.
+    source = read_js("init.js")
+    assert 'getElementById("rules-keyword-create-submit")' in source
+    assert "App.handleKeywordCreateSubmit" in source
+
+
+def test_project_rules_keyword_create_no_app_js_reintroduced():
+    # Phase 5C regression lock: the frontend must not reintroduce app.js.
+    source = read_resource("index.html")
+    assert "app.js" not in source
+
+
+def test_project_rules_keyword_create_no_forbidden_handler_tokens():
+    # Phase 5C regression lock: the keyword create JS must not introduce
+    # any of the forbidden camelCase handler tokens.
+    source = read_js("rules.js")
+    for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
+        assert token not in source
