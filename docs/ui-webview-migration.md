@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5D "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5D.1 "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -10,12 +10,20 @@ Implemented" sections) lives in
 
 ## Status
 
-- Current phase: **5D (Project Rules keyword rule delete foundation)**.
-  Phase 5D opens one minimal new Project Rules write capability: deleting a
-  single existing keyword rule from the WebView Project Rules page, then
-  refreshing the list on success. It preserves the Phase 5B / 5B.1 existing
-  folder / keyword rule enable/disable path and its hardening (input
-  validation, error collapse, saving-and-stale-state,
+- Current phase: **5D.1 (Project Rules keyword deletion hardening)**.
+  Phase 5D.1 is a hardening-only / regression-only follow-up to Phase 5D.
+  It locks the keyword rule deletion write path (API input validation,
+  keyword-only delete boundary, folder-rule-id not-deleted regression
+  lock, bridge error collapse and narrow-payload hardening, frontend
+  confirm/deleting/stale/refresh/failure behavior, toggle / create /
+  delete state isolation, sensitive-field boundaries, CSS page scoping,
+  and packaging / static-resource contracts) without opening any new
+  Project Rules capability. Phase 5D is the most recent behavior-change
+  phase: it opened one minimal new Project Rules write capability —
+  deleting a single existing keyword rule from the WebView Project Rules
+  page, then refreshing the list on success. It preserves the Phase 5B /
+  5B.1 existing folder / keyword rule enable/disable path and its
+  hardening (input validation, error collapse, saving-and-stale-state,
   sensitive-field-boundary regression locks, plus the unhashable-`rule_type`
   fix), the Phase 5C keyword rule creation path, and the Phase 5C.1 keyword
   creation hardening. Project enable/disable, Project
@@ -32,7 +40,7 @@ Implemented" sections) lives in
   5A, hardened in 5A.1, existing folder / keyword rule enable/disable in
   Phase 5B, hardened in Phase 5B.1, keyword rule creation foundation in
   Phase 5C, keyword creation hardening in Phase 5C.1, keyword rule deletion
-  foundation in Phase 5D).
+  foundation in Phase 5D, keyword deletion hardening in Phase 5D.1).
 - Unmigrated pages: Settings / Privacy / Encrypted Backup (still legacy
   Tkinter code kept for reference; not a supported runtime path).
 - Detailed phase-by-phase scope, data semantics, and "not implemented" lists
@@ -191,6 +199,8 @@ the high-level order is:
   follow-up to Phase 5C). **Completed.**
 - Phase 5D — Project Rules keyword rule delete foundation (delete one
   existing keyword rule). **Completed.**
+- Phase 5D.1 — Project Rules keyword deletion hardening (regression-only
+  follow-up to Phase 5D). **Completed.**
 - Phase 5D+ — remaining Project Rules write workflows (project
   create/edit/delete/archive, project enable/disable, folder rule
   create/edit/delete, keyword rule edit, conflict preview, backfill,

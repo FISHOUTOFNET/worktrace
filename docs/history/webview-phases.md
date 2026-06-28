@@ -4797,6 +4797,139 @@ Phase 5D does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
+## Phase 5D.1 Implemented Scope
+
+Phase 5D.1 is the **Project Rules keyword deletion hardening** phase. It is
+a hardening-only / regression-only follow-up to Phase 5D. It does not open
+any new Project Rules capability; it locks the Phase 5D keyword rule
+deletion write path so the behavior stays stable. Phase 5D remains the most
+recent behavior-changing phase.
+
+Implemented in Phase 5D.1:
+
+- **API layer hardening** (`worktrace/api/rule_api.delete_project_keyword_rule`):
+  - Regression-locked `rule_id` validation: real `int > 0`, rejecting
+    `bool` / `float` / numeric string / `None` / list / dict / tuple / set
+    / frozenset / zero / negative (the existing `type(rule_id) is not int`
+    check already rejects `bool` because `type(True) is bool`).
+  - Regression-locked keyword-only delete boundary: the API pre-checks
+    `_rule_exists("keyword", rule_id)` and returns the stable `not_found`
+    code for any id that does not resolve to a keyword rule, without
+    touching the folder rule row.
+  - Regression-locked that a folder-rule id is **not** deleted through the
+    keyword delete path and the API returns the stable `not_found` code
+    rather than leaking the folder-table detail.
+  - Regression-locked that a second no-op delete (after the rule is already
+    gone) returns `not_found` and is **not** treated as silent success.
+  - Regression-locked that the delete path does not invoke the keyword
+    `create_rule` or `set_rule_enabled` service paths.
+  - Regression-locked that the delete path does not invoke folder delete,
+    conflict preview, backfill, or any project write path.
+  - Regression-locked service exception collapse to `operation_failed`
+    without surfacing traceback / SQL / raw exception / local path /
+    window_title / clipboard / note.
+  - Regression-locked no-side-effect guarantees: no folder rule / project /
+    activity_log / activity_project_assignment / project_session_note rows
+    touched; existing keyword rule cache invalidation and
+    `clear_exclude_rules_cache` semantics preserved; success and failure
+    payloads JSON-serializable; existing `create_project_keyword_rule` and
+    `set_project_rule_enabled` not regressed.
+
+- **Bridge layer hardening**
+  (`worktrace/webview_ui.bridge.WebViewBridge.delete_project_keyword_rule`):
+  - Regression-locked bridge input validation: rejects bool-as-int
+    `rule_id`, non-positive `rule_id`, non-int `rule_id`, and
+    list / dict / tuple / set / frozenset `rule_id` before any API call.
+  - Regression-locked success payload shape
+    (`ok` / `rule.{kind="keyword", id, deleted=true}`) and stable Chinese
+    failure messages (`操作无效` / `关键词规则不存在` / `删除关键词规则失败`).
+  - Regression-locked that the bridge strips any extra API keys from the
+    success payload so only `kind` / `id` / `deleted` surface to JS, never
+    `project_id` / `keyword` text / `folder_path` / `traceback` / `sql` /
+    `local path` / `window_title` / `clipboard` / `note`.
+  - Regression-locked that the success payload does not return a refreshed
+    project list, does not surface backend error codes / raw exception text,
+    and does not call project create/edit/delete/enable-disable, folder
+    create/edit/delete, keyword edit, or conflict preview/backfill.
+  - Regression-locked bridge import boundary (only `worktrace.api`) and
+    that `get_project_rules` / `set_project_rule_enabled` /
+    `create_project_keyword_rule` are not regressed.
+
+- **Frontend hardening** (`worktrace/webview_ui/js/rules.js`):
+  - Regression-locked that the keyword delete button only appears on
+    keyword rule rows (via `data-rule-kind="keyword"` event-delegation
+    guard) and never on folder rule rows or project cards.
+  - Regression-locked the deleting guard (`App.rulesDeletingRuleKey`),
+    single-in-flight submit prevention, deleting button label
+    (`正在删除…`), and deleting state clearing on success / failure /
+    rejected-promise paths.
+  - Regression-locked rule id parse/validate (`parseInt` + `> 0` guard)
+    before any bridge call; malformed dataset does not call the bridge.
+  - Regression-locked success path (refresh Project Rules list) and
+    failure path (preserve rendered list, show stable Chinese fallback).
+  - Regression-locked catch path never reads `.message`; stable fallback
+    text locked.
+  - Regression-locked delete state isolation from toggle saving state
+    (`rulesDeletingRuleKey` vs `rulesSavingRuleKey`) and from keyword
+    creating state (`rulesDeletingRuleKey` vs `rulesCreatingKeyword`).
+  - Regression-locked stale response guard remains, no duplicate static
+    DOM ids, no localStorage/sessionStorage, no remote resource/CDN/Google
+    Fonts, no `app.js`, script order, and packaging/static-resource
+    contract.
+  - Regression-locked that the Project Rules page has no Excel / PDF /
+    timesheet / open-folder / auto-submit controls, no folder
+    create/delete controls, and no project management controls.
+
+- **CSS hardening** (`worktrace/webview_ui/styles.css`):
+  - Regression-locked that the `.rules-keyword-delete-button` class is
+    defined and is scoped to the Project Rules page; it is not referenced
+    by the Timeline / Statistics / Overview HTML sections.
+
+- **Documentation**: README, `current-state.md`, `ui-webview-migration.md`,
+  and this file are updated to mark the current phase as 5D.1, clarify that
+  Phase 5D is the most recent behavior-changing phase, clarify that Phase
+  5D.1 is hardening-only / regression-only, restate the open capabilities
+  (existing folder / keyword rule enable-disable; keyword rule creation on
+  existing rule-target project; keyword rule deletion), restate all
+  not-yet-open boundaries, preserve Phase 4B / 4B.1 CSV export boundaries,
+  and confirm no DB schema change. No legacy Tkinter runtime support is
+  re-promised.
+
+Phase 5D.1 did not modify `WorkTrace.spec`, resource loading, packaging
+paths, or PyInstaller-related logic. The packaging static test
+(`tests/test_webview_packaging.py`) and the `worktrace.webview_main` import
+check were run and pass; the full PyInstaller build was not re-run because
+no packaging behavior changed.
+
+## Phase 5D.1 Not Implemented
+
+Phase 5D.1 does not implement and does not start:
+
+- Project enable/disable in WebView;
+- Project creation, editing, deletion, or archive in WebView;
+- Folder rule creation, editing, or deletion in WebView;
+- Keyword rule editing in WebView (Phase 5D.1 only hardens the Phase 5D
+  keyword rule deletion path);
+- Folder rule conflict preview;
+- Folder rule backfill;
+- Automatic rules;
+- Batch Project Rules operations (including batch keyword delete);
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

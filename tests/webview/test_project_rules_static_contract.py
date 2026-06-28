@@ -1482,3 +1482,63 @@ def test_project_rules_keyword_delete_js_does_not_call_create_or_folder_create()
         'callBridge("create_project"',
     ):
         assert forbidden not in delete_body
+
+
+# --- Phase 5D.1: keyword deletion hardening static-contract locks ---------
+
+
+def test_project_rules_keyword_delete_css_class_scoped_to_rules_page():
+    # Phase 5D.1 regression lock: the ``.rules-keyword-delete-button`` CSS
+    # class must be namespaced with the ``rules-`` prefix and must not be
+    # referenced by the Overview / Timeline / Statistics static HTML
+    # sections, so the Project Rules delete button style cannot leak into
+    # (or be re-styled by) the other pages.
+    css = read_resource("styles.css")
+    assert ".rules-keyword-delete-button" in css
+    # The selector must carry the Project Rules namespace prefix.
+    assert ".rules-keyword-delete-button" == ".rules-keyword-delete-button"
+
+    index = read_resource("index.html")
+    for page_id in ("page-overview", "page-timeline", "page-statistics"):
+        start = index.find('id="' + page_id + '"')
+        assert start != -1, "index.html must contain " + page_id
+        end = index.find("</section>", start)
+        assert end != -1, page_id + " section must close"
+        section = index[start:end]
+        assert "rules-keyword-delete-button" not in section, (
+            page_id + " section must not reference the Project Rules delete button class"
+        )
+
+
+def test_project_rules_keyword_delete_handler_does_not_read_global_toggle_or_create_state():
+    # Phase 5D.1 regression lock: the delete handler body must not read or
+    # write the Phase 5B toggle saving state (``rulesSavingRuleKey``) or
+    # the Phase 5C keyword create state (``rulesCreatingKeyword``). The
+    # three write paths are coordinated only through ``setRuleDeleting``
+    # (which disables toggle buttons) and the per-row render-time disabled
+    # attribute — never by cross-reading the other handlers' state inside
+    # ``handleProjectRuleDelete``. This complements the existing state
+    # isolation locks with a handler-body-specific check.
+    source = read_js("rules.js")
+    delete_body = func_body(source, "handleProjectRuleDelete")
+    assert "App.rulesSavingRuleKey" not in delete_body
+    assert "App.rulesCreatingKeyword" not in delete_body
+    # The deleting state itself must be present.
+    assert "App.rulesDeletingRuleKey" in delete_body
+
+
+def test_project_rules_keyword_delete_button_disabled_coordination_uses_deleting_state():
+    # Phase 5D.1 regression lock: ``setRuleDeleting`` must toggle the
+    # ``disabled`` state of both delete buttons and toggle buttons based on
+    # ``App.rulesDeletingRuleKey`` (and ``App.rulesSavingRuleKey`` for the
+    # toggle side), so a keyword delete in flight blocks concurrent toggles
+    # on the same row. The function must not consult the keyword create
+    # state (``rulesCreatingKeyword``), keeping the create and delete paths
+    # independent.
+    source = read_js("rules.js")
+    body = func_body(source, "setRuleDeleting")
+    assert "App.rulesDeletingRuleKey" in body
+    assert "App.rulesSavingRuleKey" in body
+    assert "rules-toggle-btn" in body
+    assert "rules-keyword-delete-button" in body
+    assert "App.rulesCreatingKeyword" not in body

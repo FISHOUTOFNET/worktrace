@@ -7,21 +7,29 @@
 
 ## Current Phase
 
-**Phase 5D — Project Rules keyword rule delete foundation.** Phase 5D
-opens one minimal new Project Rules write capability: deleting a single
+**Phase 5D.1 — Project Rules keyword deletion hardening.** Phase 5D.1 is a
+hardening-only / regression-only follow-up to Phase 5D. It locks the
+keyword rule deletion write path (API input validation, keyword-only
+delete boundary, folder-rule-id not-deleted regression lock, bridge error
+collapse and narrow-payload hardening, frontend
+confirm/deleting/stale/refresh/failure behavior, toggle / create / delete
+state isolation, sensitive-field boundaries, CSS page scoping, and
+packaging / static-resource contracts) without opening any new Project
+Rules capability. Phase 5D is the most recent behavior-change phase: it
+opened one minimal new Project Rules write capability — deleting a single
 existing keyword rule from the WebView Project Rules page, then refreshing
 the list on success. It preserves the Phase 5B / 5B.1 existing folder /
-keyword rule enable/disable path and its hardening (input validation, error
-collapse, saving-and-stale-state, sensitive-field-boundary regression
-locks, plus the unhashable-`rule_type` fix), the Phase 5C keyword rule
-creation path, and the Phase 5C.1 keyword creation hardening. It does not
-implement project enable/disable, project create/edit/delete/archive,
-folder rule create/edit/delete, keyword rule edit, conflict preview,
-backfill, automatic rules, batch Project Rules operations, schema changes,
-new frontend dependencies, browser storage, network requests, or new
-export formats. All earlier WebView migration phases (Phase 0A → Phase
-5C.1) are completed. README, this file, and `ui-webview-migration.md` all
-describe the current phase as 5D.
+keyword rule enable/disable path and its hardening (input validation,
+error collapse, saving-and-stale-state, sensitive-field-boundary
+regression locks, plus the unhashable-`rule_type` fix), the Phase 5C
+keyword rule creation path, and the Phase 5C.1 keyword creation hardening.
+Neither Phase 5D nor Phase 5D.1 implements project enable/disable, project
+create/edit/delete/archive, folder rule create/edit/delete, keyword rule
+edit, conflict preview, backfill, automatic rules, batch Project Rules
+operations, schema changes, new frontend dependencies, browser storage,
+network requests, or new export formats. All earlier WebView migration
+phases (Phase 0A → Phase 5D) are completed. README, this file, and
+`ui-webview-migration.md` all describe the current phase as 5D.1.
 
 ## Default UI
 
@@ -45,7 +53,7 @@ describe the current phase as 5D.
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1 / 5C / 5C.1 / 5D):
+- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1 / 5C / 5C.1 / 5D / 5D.1):
   project-grouped rule list showing project name / description, project
   enabled state, special `排除规则` marker, rule counts, folder rules,
   keyword rules, rule enabled state, and folder recursion scope. Phase 5B
@@ -63,7 +71,14 @@ describe the current phase as 5D.
   sensitive-field boundaries, and packaging / static-resource contracts)
   without opening any new Project Rules capability. Phase 5D adds the
   second new Project Rules write capability: deleting a single existing
-  keyword rule, then refreshing the list on success. Project enable/disable,
+  keyword rule, then refreshing the list on success. Phase 5D.1 is a
+  hardening-only / regression-only follow-up that locks the keyword delete
+  write path (API input validation, keyword-only delete boundary,
+  folder-rule-id not-deleted regression lock, bridge error collapse and
+  narrow-payload hardening, frontend confirm/deleting/stale/refresh/failure
+  behavior, toggle/create/delete state isolation, sensitive-field
+  boundaries, CSS page scoping, and packaging / static-resource contracts)
+  without opening any new Project Rules capability. Project enable/disable,
   Project/folder-rule creation, project editing/deletion/archive, keyword
   rule editing, conflict preview, backfill, and automatic rules are still
   not open in WebView.
@@ -110,8 +125,9 @@ describe the current phase as 5D.
   create/edit/delete; keyword rule edit; folder-rule conflict preview;
   folder-rule backfill; automatic rules; batch Project Rules operations.
   (Phase 5C only opens keyword rule creation on an existing rule-target
-  project; Phase 5D only opens keyword rule deletion. All other Project
-  Rules write workflows remain unsupported.)
+  project; Phase 5D only opens keyword rule deletion; Phase 5D.1 only
+  hardens that deletion path. All other Project Rules write workflows
+  remain unsupported.)
 - Settings / Privacy / Encrypted Backup WebView migration.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
 - Batch time / batch split / batch merge; note append / merge; auto-rule
@@ -119,8 +135,8 @@ describe the current phase as 5D.
 - AI, server, payment, license, token, subscription, login, cloud sync, OCR,
   screenshots, screen recording, keyboard logging, automatic startup.
 - Any DB schema change during development; `schema.sql` is the single source
-  of truth. Phase 5B, Phase 5B.1, Phase 5C, Phase 5C.1, and Phase 5D made no
-  schema change.
+  of truth. Phase 5B, Phase 5B.1, Phase 5C, Phase 5C.1, Phase 5D, and Phase
+  5D.1 made no schema change.
 
 ## Architecture Boundary
 

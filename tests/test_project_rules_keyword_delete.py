@@ -565,3 +565,70 @@ def test_delete_then_recreate_same_keyword_works(temp_db):
     assert recreate_result["ok"] is True
     assert recreate_result["rule"]["id"] != rule_id
     assert recreate_result["rule"]["keyword"] == "Spec"
+
+
+# --- Phase 5D.1: keyword deletion hardening regression locks ------------
+
+
+def test_delete_keyword_rule_second_delete_is_not_treated_as_success(temp_db):
+    # Phase 5D.1 regression lock: a no-op delete must never be reported as
+    # success. After a successful first delete, the row is gone, so a second
+    # delete on the same id must resolve to ``not_found`` (not ``ok: True``).
+    # This locks the existence pre-check + hard DELETE contract so a future
+    # change cannot turn a stale-id delete into a silent success.
+    project = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project)
+
+    first = rule_api.delete_project_keyword_rule(rule_id)
+    assert first["ok"] is True
+    assert _keyword_rule_exists(rule_id) is False
+
+    second = rule_api.delete_project_keyword_rule(rule_id)
+    assert second == {"ok": False, "error": "not_found"}
+    assert second["ok"] is False
+
+
+def test_delete_keyword_rule_does_not_call_keyword_create_or_toggle_service_paths(
+    temp_db, monkeypatch
+):
+    # Phase 5D.1 regression lock: the keyword delete path must only call
+    # ``rule_service.delete_rule``. It must not invoke the keyword create
+    # service path (``create_rule``) or the keyword toggle service path
+    # (``set_rule_enabled``), which would mutate the rule set instead of
+    # deleting one row. The existing locks cover folder delete / conflict
+    # preview / backfill; this closes the keyword-side create/toggle gap.
+    project = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project)
+
+    def fail_create(*args, **kwargs):
+        raise AssertionError("keyword create must not run during keyword delete")
+
+    def fail_toggle(*args, **kwargs):
+        raise AssertionError("keyword toggle must not run during keyword delete")
+
+    monkeypatch.setattr(rule_service, "create_rule", fail_create)
+    monkeypatch.setattr(rule_service, "set_rule_enabled", fail_toggle)
+
+    result = rule_api.delete_project_keyword_rule(rule_id)
+
+    assert result["ok"] is True
+    assert _keyword_rule_exists(rule_id) is False
+
+
+def test_delete_keyword_rule_folder_rule_id_returns_stable_not_found_code(temp_db):
+    # Phase 5D.1 regression lock: a folder rule id must collapse to the
+    # stable ``not_found`` code through the keyword delete path, and the
+    # returned code must be exactly ``not_found`` (not a folder-specific
+    # code that would leak which table the id belonged to). The folder rule
+    # row must survive untouched.
+    project = project_service.create_project("Client")
+    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
+        r"D:\Client", project
+    )
+
+    result = rule_api.delete_project_keyword_rule(folder_rule_id)
+
+    assert result == {"ok": False, "error": "not_found"}
+    # The folder rule row must still exist.
+    folder_rules = folder_rule_service.list_folder_rules()
+    assert any(int(r.get("id") or 0) == folder_rule_id for r in folder_rules)

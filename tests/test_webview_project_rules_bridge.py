@@ -1707,3 +1707,123 @@ def test_delete_project_keyword_rule_does_not_regress_create_project_keyword_rul
     assert result["ok"] is True
     assert result["rule"]["id"] == 42
     assert result["rule"]["keyword"] == "Spec"
+
+
+# --- Phase 5D.1: keyword deletion hardening regression locks ------------
+
+
+def test_delete_project_keyword_rule_success_payload_strips_extra_api_keys(monkeypatch):
+    # Phase 5D.1 regression lock: the bridge success payload must surface
+    # only the narrow ``kind`` / ``id`` / ``deleted`` keys. Even if the API
+    # returned extra keys (project_id, keyword, enabled, internal fields,
+    # sensitive tokens), the bridge must not forward them to JS. The
+    # frontend re-fetches the full Project Rules list via
+    # ``get_project_rules`` after success.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "delete_project_keyword_rule",
+        lambda rule_id: {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "deleted": True,
+                # Defensive: the bridge must drop these even if the API
+                # tried to surface them on the delete write path.
+                "project_id": 999,
+                "keyword": "should not leak",
+                "enabled": True,
+                "folder_path": r"D:\Secret",
+                "internal_field": "should not leak",
+                "traceback": "SELECT * FROM project_rule",
+                "details": "C:\\Secret window_title clipboard note",
+            },
+        },
+    )
+
+    result = WebViewBridge().delete_project_keyword_rule(7)
+
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "keyword",
+            "id": 7,
+            "deleted": True,
+        },
+    }
+    rule = result["rule"]
+    assert set(rule.keys()) == {"kind", "id", "deleted"}
+    lowered = repr(result).lower()
+    # ``kind == "keyword"`` is legitimate; the leak to guard against is the
+    # rule's keyword *text* and any extra API key / sensitive token.
+    for forbidden in (
+        "should not leak",
+        "project_id",
+        "folder_path",
+        "internal_field",
+        "traceback",
+        "sqlite",
+        "select",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+        "details",
+    ):
+        assert forbidden not in lowered
+
+
+def test_delete_project_keyword_rule_folder_rule_id_maps_to_stable_not_found(monkeypatch):
+    # Phase 5D.1 regression lock: a folder rule id reaches the bridge as a
+    # normal positive int (the bridge does not know which table it belongs
+    # to). The API returns ``not_found`` for folder rule ids, and the
+    # bridge must map that to the stable ``关键词规则不存在`` message
+    # without revealing that the id was a folder rule or surfacing any
+    # folder-table detail.
+    captured: dict[str, object] = {}
+
+    def fake_delete(rule_id):
+        captured["rule_id"] = rule_id
+        return {
+            "ok": False,
+            "error": "not_found",
+            # Defensive: the bridge must drop any folder-table leak the
+            # API might attach.
+            "table": "folder_project_rule",
+            "details": "C:\\Secret folder path window_title clipboard note",
+        }
+
+    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", fake_delete)
+
+    result = WebViewBridge().delete_project_keyword_rule(55)
+
+    assert captured["rule_id"] == 55
+    assert result == {"ok": False, "error": "关键词规则不存在"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "folder_project_rule",
+        "table",
+        "details",
+        "traceback",
+        "sqlite",
+        "select",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+    ):
+        assert forbidden not in lowered
+
+
+def test_delete_project_keyword_rule_bridge_input_validation_payloads_json_serializable():
+    # Phase 5D.1 regression lock: every invalid-input failure payload
+    # produced at the bridge layer (before any API call) must be JSON
+    # serializable and free of sensitive text.
+    bridge = WebViewBridge()
+    for bad_id in (None, True, False, "1", "abc", 1.0, 2.5, 0, -1, [], {}, (), {1, 2}, (1,), frozenset({1})):
+        result = bridge.delete_project_keyword_rule(bad_id)
+        assert result == {"ok": False, "error": "操作无效"}
+        json.dumps(result, ensure_ascii=False)
+        lowered = repr(result).lower()
+        for forbidden in ("traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret"):
+            assert forbidden not in lowered
