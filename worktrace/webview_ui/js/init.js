@@ -271,6 +271,14 @@
         if (folderCreateBtn) {
             folderCreateBtn.addEventListener("click", App.handleFolderCreateSubmit);
         }
+        // Phase 5G: Project Rules project create submit handler. Same pattern
+        // as the keyword / folder create submit handlers; the project
+        // edit / toggle / archive use event delegation set up inside
+        // rules.js on the #rules-list container.
+        var projectCreateBtn = document.getElementById("rules-project-create-submit");
+        if (projectCreateBtn) {
+            projectCreateBtn.addEventListener("click", App.handleProjectCreateSubmit);
+        }
     }
     App.initButtons = initButtons;
 

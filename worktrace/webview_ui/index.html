@@ -384,8 +384,23 @@
                     </div>
                 </header>
                 <div id="rules-readonly-hint" class="rules-readonly-hint">
-                    当前支持查看项目规则、启用/停用已有文件夹或关键词规则、新增关键词规则、编辑已有关键词规则、删除已有关键词规则，以及新增、编辑、删除文件夹规则。项目管理、冲突预览和回填将在后续阶段开放。
+                    当前支持查看项目规则、启用/停用已有文件夹或关键词规则、新增关键词规则、编辑已有关键词规则、删除已有关键词规则、新增/编辑/删除文件夹规则，以及新增、编辑、启用/停用、归档已有用户项目。冲突预览、回填和项目硬删除将在后续阶段开放。
                 </div>
+                <form id="rules-project-create-form" class="rules-project-create-form" autocomplete="off" onsubmit="return false;">
+                    <div class="rules-project-create-title">新增项目</div>
+                    <div class="rules-project-create-row">
+                        <label for="rules-project-create-input" class="rules-project-create-label">项目名称</label>
+                        <input id="rules-project-create-input" class="rules-project-create-input" type="text" maxlength="100" placeholder="输入项目名称" />
+                    </div>
+                    <div class="rules-project-create-row">
+                        <label for="rules-project-create-description" class="rules-project-create-label">项目描述</label>
+                        <input id="rules-project-create-description" class="rules-project-create-description" type="text" maxlength="500" placeholder="输入项目描述（可选）" />
+                    </div>
+                    <div class="rules-project-create-actions">
+                        <button id="rules-project-create-submit" class="rules-project-create-submit" type="button">新增项目</button>
+                    </div>
+                    <div id="rules-project-create-status" class="rules-project-create-status" hidden></div>
+                </form>
                 <form id="rules-keyword-create-form" class="rules-keyword-create-form" autocomplete="off" onsubmit="return false;">
                     <div class="rules-keyword-create-title">新增关键词规则</div>
                     <div class="rules-keyword-create-row">

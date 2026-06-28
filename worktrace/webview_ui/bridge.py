@@ -193,6 +193,7 @@ from ..api.timeline_api import (
     TimelineTimeEditError,
     TimelineVisibilityError,
 )
+from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from ..formatters import (
     format_duration,
     format_project_label,
@@ -399,6 +400,39 @@ _PROJECT_RULE_FOLDER_DELETE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "文件夹规则不存在",
     "operation_failed": "删除文件夹规则失败",
+}
+
+# Maps Project lifecycle API stable codes to Phase 5G user-facing messages
+# for project create / edit / enable-disable / archive. Unknown codes
+# collapse to the matching operation-specific generic failure so internal
+# details are never surfaced. Each operation has its own fallback message
+# so a create failure never echoes an update-focused message, etc.
+_PROJECT_LIFECYCLE_CREATE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "duplicate_project": "项目名称已存在",
+    "operation_failed": "新增项目失败",
+}
+
+_PROJECT_LIFECYCLE_UPDATE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "项目不存在",
+    "system_project": "系统项目不能修改",
+    "duplicate_project": "项目名称已存在",
+    "operation_failed": "保存项目失败",
+}
+
+_PROJECT_LIFECYCLE_TOGGLE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "项目不存在",
+    "system_project": "系统项目不能修改",
+    "operation_failed": "更新项目状态失败",
+}
+
+_PROJECT_LIFECYCLE_ARCHIVE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "项目不存在",
+    "system_project": "系统项目不能修改",
+    "operation_failed": "归档项目失败",
 }
 
 
@@ -1603,6 +1637,185 @@ class WebViewBridge:
             logger.exception("webview bridge delete_project_folder_rule failed")
             return {"ok": False, "error": "删除文件夹规则失败"}
 
+    # --- Phase 5G: Project lifecycle foundation (create / edit / toggle / archive) ---
+
+    def create_project_for_rules(self, name, description) -> dict[str, Any]:
+        """Create one new user project from the Project Rules page.
+
+        Phase 5G write path only. Strict bridge validation rejects
+        non-string ``name``, whitespace-only ``name``, and non-string
+        ``description`` before calling ``project_api.create_project_for_rules``.
+        The bridge never exposes raw exceptions, tracebacks, SQL, paths,
+        window titles, clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "project": {"id": int, "name": str,
+        "description": str, "enabled": bool, "archived": bool}}`` on
+        success (the narrow created-project summary only — the frontend
+        re-fetches the full Project Rules list via ``get_project_rules``
+        after success) or ``{"ok": False, "error": "<chinese message>"}``
+        on failure.
+        """
+        try:
+            # ``type(...) is not str`` rejects ``bool`` / ``int`` / ``float``
+            # / ``None`` / container types so a non-string name/description
+            # never reaches the API. ``description`` may be empty but must
+            # still be a real ``str``.
+            if type(name) is not str or not name.strip():
+                return {"ok": False, "error": "操作无效"}
+            if type(description) is not str:
+                return {"ok": False, "error": "操作无效"}
+            # Pass the trimmed values to the API so the bridge never
+            # forwards leading/trailing whitespace even if a future API
+            # change drops the trim. Behavior-neutral: the API already trims.
+            trimmed_name = name.strip()
+            trimmed_description = description.strip()
+            result = project_api.create_project_for_rules(
+                trimmed_name, trimmed_description
+            )
+            if result.get("ok") is True:
+                project = result.get("project") or {}
+                return {
+                    "ok": True,
+                    "project": _project_lifecycle_summary(project),
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_LIFECYCLE_CREATE_MESSAGES.get(
+                    code, "新增项目失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge create_project_for_rules failed")
+            return {"ok": False, "error": "新增项目失败"}
+
+    def update_project_for_rules(self, project_id, name, description) -> dict[str, Any]:
+        """Update one existing user project's name and description.
+
+        Phase 5G write path only. Strict bridge validation rejects
+        bool-as-int ``project_id``, non-int ``project_id``, non-positive ids,
+        non-string ``name``, whitespace-only ``name``, and non-string
+        ``description`` before calling ``project_api.update_project_for_rules``.
+        The bridge never exposes raw exceptions, tracebacks, SQL, paths,
+        window titles, clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "project": {"id": int, "name": str,
+        "description": str, "enabled": bool, "archived": bool}}`` on
+        success (the narrow updated-project summary only — the frontend
+        re-fetches the full Project Rules list via ``get_project_rules``
+        after success) or ``{"ok": False, "error": "<chinese message>"}``
+        on failure.
+        """
+        try:
+            # ``type(...) is not int`` rejects ``bool`` (``type(True) is
+            # bool``), ``float``, ``str``, ``None``, and container types in
+            # one check, matching the Phase 5B / 5C / 5D / 5E validation
+            # pattern.
+            if type(project_id) is not int or project_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            if type(name) is not str or not name.strip():
+                return {"ok": False, "error": "操作无效"}
+            if type(description) is not str:
+                return {"ok": False, "error": "操作无效"}
+            trimmed_name = name.strip()
+            trimmed_description = description.strip()
+            result = project_api.update_project_for_rules(
+                project_id, trimmed_name, trimmed_description
+            )
+            if result.get("ok") is True:
+                project = result.get("project") or {}
+                return {
+                    "ok": True,
+                    "project": _project_lifecycle_summary(project),
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_LIFECYCLE_UPDATE_MESSAGES.get(
+                    code, "保存项目失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge update_project_for_rules failed")
+            return {"ok": False, "error": "保存项目失败"}
+
+    def set_project_enabled_for_rules(self, project_id, enabled) -> dict[str, Any]:
+        """Enable or disable one existing user project.
+
+        Phase 5G write path only. Strict bridge validation rejects
+        bool-as-int ``project_id``, non-int ``project_id``, non-positive ids,
+        and non-bool ``enabled`` before calling
+        ``project_api.set_project_enabled_for_rules``. The bridge never
+        exposes raw exceptions, tracebacks, SQL, paths, window titles,
+        clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "project": {"id": int, "name": str,
+        "description": str, "enabled": bool, "archived": bool}}`` on
+        success (the narrow toggled-project summary only — the frontend
+        re-fetches the full Project Rules list via ``get_project_rules``
+        after success) or ``{"ok": False, "error": "<chinese message>"}``
+        on failure.
+        """
+        try:
+            if type(project_id) is not int or project_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            if type(enabled) is not bool:
+                return {"ok": False, "error": "操作无效"}
+            result = project_api.set_project_enabled_for_rules(project_id, enabled)
+            if result.get("ok") is True:
+                project = result.get("project") or {}
+                return {
+                    "ok": True,
+                    "project": _project_lifecycle_summary(project),
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_LIFECYCLE_TOGGLE_MESSAGES.get(
+                    code, "更新项目状态失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge set_project_enabled_for_rules failed")
+            return {"ok": False, "error": "更新项目状态失败"}
+
+    def archive_project_for_rules(self, project_id) -> dict[str, Any]:
+        """Archive one existing user project.
+
+        Phase 5G write path only. Strict bridge validation rejects
+        bool-as-int ``project_id``, non-int ``project_id``, and non-positive
+        ids before calling ``project_api.archive_project_for_rules``. The
+        bridge never exposes raw exceptions, tracebacks, SQL, paths, window
+        titles, clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "project": {"id": int, "name": str,
+        "description": str, "enabled": bool, "archived": bool}}`` on
+        success (the narrow archived-project summary only — the frontend
+        re-fetches the full Project Rules list via ``get_project_rules``
+        after success) or ``{"ok": False, "error": "<chinese message>"}``
+        on failure.
+        """
+        try:
+            if type(project_id) is not int or project_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            result = project_api.archive_project_for_rules(project_id)
+            if result.get("ok") is True:
+                project = result.get("project") or {}
+                return {
+                    "ok": True,
+                    "project": _project_lifecycle_summary(project),
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_LIFECYCLE_ARCHIVE_MESSAGES.get(
+                    code, "归档项目失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge archive_project_for_rules failed")
+            return {"ok": False, "error": "归档项目失败"}
+
     # --- Phase 4A: Statistics / Export read-only summary ----------------
 
     def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:
@@ -1941,6 +2154,19 @@ def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     project_name = _project_rules_text(project.get("name"), "未知项目")
     project_enabled = _project_rules_bool(project.get("enabled"), default=True)
     is_excluded = project_name == "排除规则"
+    # Phase 5G: display-safe project lifecycle flags. ``is_system`` is True
+    # for system/special projects (``created_by == "system"`` or reserved
+    # special project names). The raw ``created_by`` value is NOT surfaced
+    # via these flags; only the boolean is exposed for frontend decision
+    # logic. User projects are editable / can_toggle / can_archive; system
+    # projects are not.
+    is_system = (
+        _project_rules_text(project.get("created_by"), "") == "system"
+        or project_name in {UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT}
+    )
+    editable = not is_system
+    can_toggle = not is_system
+    can_archive = not is_system
     folder_rules = [
         _project_rules_folder_payload(rule, project_name)
         for rule in _project_rules_list(project.get("folder_rules"))
@@ -1965,11 +2191,32 @@ def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         "enabled": project_enabled,
         "created_by": _project_rules_text(project.get("created_by"), ""),
         "is_excluded": is_excluded,
+        "is_system": is_system,
+        "editable": editable,
+        "can_toggle": can_toggle,
+        "can_archive": can_archive,
         "summary": summary,
         "folder_rule_count": folder_count,
         "keyword_rule_count": keyword_count,
         "rule_count": rule_count,
         "rules": [*folder_rules, *keyword_rules],
+    }
+
+
+def _project_lifecycle_summary(project: dict[str, Any]) -> dict[str, Any]:
+    """Build the narrow project summary payload for Phase 5G lifecycle writes.
+
+    Only exposes display-safe fields (``id`` / ``name`` / ``description`` /
+    ``enabled`` / ``archived``). Never surfaces ``created_by`` /
+    ``created_at`` / ``updated_at`` / raw row / traceback / SQL.
+    """
+    project = _project_rules_mapping(project)
+    return {
+        "id": _project_rules_int(project.get("id")),
+        "name": _project_rules_text(project.get("name"), ""),
+        "description": _project_rules_text(project.get("description"), ""),
+        "enabled": _project_rules_bool(project.get("enabled"), default=True),
+        "archived": _project_rules_bool(project.get("archived"), default=False),
     }
 
 

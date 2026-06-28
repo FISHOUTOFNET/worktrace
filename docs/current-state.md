@@ -7,43 +7,55 @@
 
 ## Current Phase
 
-**Phase 5F — Project Rules keyword rule edit foundation + in-phase
-hardening.** Phase 5F opens one new Project Rules write capability:
-editing the keyword text of a single existing keyword rule, then
-refreshing the list on success. The API / bridge / frontend three layers
-are wired through the stable `update_project_keyword_rule` facade with
-input validation (true int excluding bool, true str with trim), stable
-error codes (`invalid_input` / `not_found` / `duplicate_rule` /
-`operation_failed`), Chinese error mapping at the bridge, narrow payloads
-(no traceback / SQL / local path / window_title / clipboard / note),
-independent frontend state keys for keyword edit / save, and explicit
-Project Rules page boundary copy. The duplicate check is scoped to the
-same project and excludes the rule being updated (updating to its own
-current keyword succeeds). Only `pattern` and `updated_at` are updated;
-`rule_id` / `project_id` / `enabled` / `created_by` / `created_at` are
-preserved. Phase 5F also ships the in-phase hardening regression locks
-(API/service update-by-id semantics, duplicate check excluding self,
-cache invalidation hooks `invalidate_keyword_rule_cache` /
-`clear_exclude_rules_cache` with no-hook-on-rejection locks,
-sensitive-field exclusion; bridge bool-as-int rejection, consistent
-Chinese error mapping, narrow payload, no-cross-pollution with
-create/delete/toggle/folder paths; frontend DOM anchors, state
+**Phase 5G — Project lifecycle foundation + in-phase hardening.**
+Phase 5G opens four project-level Project Rules write capabilities on
+existing user projects: creating a user project, editing an existing
+user project's name / description, enabling / disabling an existing user
+project, and archiving an existing user project. The API / bridge /
+frontend three layers are wired through the stable
+`create_project_for_rules` / `update_project_for_rules` /
+`set_project_enabled_for_rules` / `archive_project_for_rules` facades
+with input validation (true int excluding bool, true bool, true str
+with trim), stable error codes (`invalid_input` / `not_found` /
+`system_project` / `duplicate_project` / `operation_failed`), Chinese
+error mapping at the bridge, narrow payloads (no traceback / SQL /
+local path / window_title / clipboard / note / `created_by` /
+`created_at` / `updated_at` / raw row), independent frontend state keys
+per project lifecycle write path, display-safe `editable` /
+`can_toggle` / `can_archive` / `is_system` flags on the Project Rules
+read projection, and explicit Project Rules page boundary copy.
+System / special projects (`created_by == "system"`, `未归类`,
+`排除规则`) are rejected for all four project lifecycle writes;
+enabling `排除规则` is never allowed. Archive only sets `is_archived`
+and triggers the same three cache invalidation hooks
+(`invalidate_folder_rule_cache` /
+`invalidate_keyword_rule_cache` / `clear_exclude_rules_cache`) as
+`set_project_enabled`, mirroring the existing success-only cache
+invalidation contract. Create / update check for duplicate project
+names and collapse SQLite `IntegrityError` to `duplicate_project`.
+Phase 5G also ships the in-phase hardening regression locks
+(API/service system-project rejection, duplicate-name collapse, archive
+cache invalidation mirroring `set_project_enabled`, sensitive-field
+boundaries; bridge bool-as-int rejection, consistent error mapping,
+narrow payload, no cross-API pollution with keyword / folder rule
+writes, `delete_project` never exposed; frontend DOM anchors, state
 isolation, CSS scoping, no-forbidden-features, packaging inclusion) in
-the same phase rather than splitting into a separate 5F.1. It preserves
+the same phase rather than splitting into a separate 5G.1. It preserves
 the Phase 5B / 5B.1 existing folder / keyword rule enable/disable path
 and its hardening (input validation, error collapse,
 saving-and-stale-state, sensitive-field-boundary regression locks, plus
 the unhashable-`rule_type` fix), the Phase 5C keyword rule creation
 path, the Phase 5C.1 keyword creation hardening, the Phase 5D keyword
 rule deletion path, the Phase 5D.1 keyword deletion hardening, the
-Phase 5E folder rule CRUD foundation, and the Phase 5E.1 folder rule
-CRUD hardening. Phase 5F does not implement project enable/disable,
-project create/edit/delete/archive, folder rule conflict preview,
-folder rule backfill, automatic rules, batch Project Rules operations,
-schema changes, new frontend dependencies, browser storage, network
-requests, or new export formats. All earlier WebView migration phases
-(Phase 0A → Phase 5E.1) are completed. README, this file, and
-`ui-webview-migration.md` all describe the current phase as 5F.
+Phase 5E folder rule CRUD foundation, the Phase 5E.1 folder rule CRUD
+hardening, and the Phase 5F keyword rule edit foundation + in-phase
+hardening. Phase 5G does not implement hard delete project, folder
+rule conflict preview, folder rule backfill, automatic rules, batch
+Project Rules operations, schema changes, new frontend dependencies,
+browser storage, network requests, or new export formats. All earlier
+WebView migration phases (Phase 0A → Phase 5F) are completed. README,
+this file, and `ui-webview-migration.md` all describe the current
+phase as 5G.
 
 ## Default UI
 
@@ -67,7 +79,7 @@ requests, or new export formats. All earlier WebView migration phases
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1 / 5C / 5C.1 / 5D / 5D.1 / 5E / 5E.1 / 5F):
+- **Project Rules** (Phase 5A / 5A.1 / 5B / 5B.1 / 5C / 5C.1 / 5D / 5D.1 / 5E / 5E.1 / 5F / 5G):
   project-grouped rule list showing project name / description, project
   enabled state, special `排除规则` marker, rule counts, folder rules,
   keyword rules, rule enabled state, and folder recursion scope. Phase 5B
@@ -103,9 +115,14 @@ requests, or new export formats. All earlier WebView migration phases
   foundation: editing the keyword text of a single existing keyword rule,
   then refreshing the list on success, with the in-phase hardening
   regression locks (API/service/bridge/frontend/static contract) shipped
-  in the same phase rather than a separate 5F.1. Project enable/disable,
-  Project creation/editing/deletion/archive, conflict preview, backfill,
-  and automatic rules are still not open in WebView.
+  in the same phase rather than a separate 5F.1. Phase 5G opens the
+  project lifecycle foundation: creating a user project, editing an
+  existing user project's name / description, enabling / disabling an
+  existing user project, and archiving an existing user project, then
+  refreshing the list on success, with the in-phase hardening regression
+  locks (API/service/bridge/frontend/static contract) shipped in the
+  same phase rather than a separate 5G.1. Hard delete project, conflict
+  preview, backfill, and automatic rules are still not open in WebView.
 
 ## Unmigrated Pages (Legacy Tkinter, Reference-Only)
 
@@ -145,14 +162,15 @@ requests, or new export formats. All earlier WebView migration phases
 
 - Excel / PDF / timesheet-template export; folder opening; auto-open of the
   exported file; auto-submit of a timesheet.
-- Project enable/disable; Project create/edit/delete/archive; folder-rule
-  conflict preview; folder-rule backfill; automatic rules; batch Project
-  Rules operations. (Phase 5C only opens keyword rule creation on an
-  existing rule-target project; Phase 5D only opens keyword rule deletion;
-  Phase 5D.1 only hardens that deletion path; Phase 5E only opens folder
-  rule create / edit / delete; Phase 5E.1 only hardens that folder rule
-  CRUD path; Phase 5F only opens keyword rule edit. All other Project
-  Rules write workflows remain unsupported.)
+- Hard delete project; folder-rule conflict preview; folder-rule backfill;
+  automatic rules; batch Project Rules operations. (Phase 5C only opens
+  keyword rule creation on an existing rule-target project; Phase 5D only
+  opens keyword rule deletion; Phase 5D.1 only hardens that deletion path;
+  Phase 5E only opens folder rule create / edit / delete; Phase 5E.1 only
+  hardens that folder rule CRUD path; Phase 5F only opens keyword rule
+  edit; Phase 5G only opens project create / edit / enable-disable /
+  archive on existing user projects. All other Project Rules write
+  workflows remain unsupported.)
 - Settings / Privacy / Encrypted Backup WebView migration.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
 - Batch time / batch split / batch merge; note append / merge; auto-rule
@@ -161,7 +179,8 @@ requests, or new export formats. All earlier WebView migration phases
   screenshots, screen recording, keyboard logging, automatic startup.
 - Any DB schema change during development; `schema.sql` is the single source
   of truth. Phase 5B, Phase 5B.1, Phase 5C, Phase 5C.1, Phase 5D, Phase
-  5D.1, Phase 5E, Phase 5E.1, and Phase 5F made no schema change.
+  5D.1, Phase 5E, Phase 5E.1, Phase 5F, and Phase 5G made no schema
+  change.
 
 ## Architecture Boundary
 

@@ -5414,6 +5414,210 @@ Phase 5F does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
+## Phase 5G Implemented Scope
+
+Phase 5G is the **Project lifecycle foundation + in-phase hardening**
+phase. It opens four project-level Project Rules write capabilities on
+existing user projects and ships the hardening regression locks in the
+same phase rather than splitting into a separate 5G.1.
+
+Implemented in Phase 5G:
+
+- New user-visible capabilities (all four only operate on existing user
+  projects; system / special projects are always rejected):
+  - Creating a user project via a top-of-page "新增项目" form with a
+    name input (`maxlength="100"`) and a description input
+    (`maxlength="500"`), then refreshing the Project Rules list on
+    success.
+  - Editing an existing user project's name / description via an inline
+    edit form rendered in place of the project action buttons, then
+    refreshing the list on success.
+  - Enabling / disabling an existing user project via a toggle button
+    on the project card, then refreshing the list on success.
+  - Archiving an existing user project via an archive button on the
+    project card (with a `confirm` confirmation), then refreshing the
+    list on success.
+  - System / special projects (`created_by == "system"`, `未归类`,
+    `排除规则`) never render the edit / toggle / archive buttons. The
+    read projection exposes display-safe `editable` / `can_toggle` /
+    `can_archive` / `is_system` flags so the frontend can decide
+    visibility without ever seeing the raw `created_by` value.
+- Service layer (`worktrace/services/project_service.py`):
+  - `archive_project(project_id)` now triggers the same three cache
+    invalidation hooks as `set_project_enabled`:
+    `invalidate_folder_rule_cache()` +
+    `invalidate_keyword_rule_cache()` +
+    `privacy_service.clear_exclude_rules_cache()`. Archive only sets
+    `is_archived = 1` and `updated_at`; it does not physically delete
+    the project, its folder rules, its keyword rules, its activity
+    assignments, or its session notes.
+  - `create_project`, `update_project`, `set_project_enabled` are
+    reused unchanged. No schema change, no new helper.
+- API layer (`worktrace/api/project_api.py`):
+  - Four narrow facades: `create_project_for_rules(name, description="")`,
+    `update_project_for_rules(project_id, name, description="")`,
+    `set_project_enabled_for_rules(project_id, enabled)`,
+    `archive_project_for_rules(project_id)`. The `_for_rules` suffix
+    keeps Project lifecycle separate from Rule lifecycle in
+    `rule_api.py`.
+  - Strict type validation: `type(project_id) is int` excluding bool
+    and `> 0`; `type(enabled) is bool`; `type(name) is str` with trim
+    and non-empty; `type(description) is str` (empty allowed, trimmed
+    on save).
+  - Stable error codes: `invalid_input` / `not_found` / `system_project`
+    / `duplicate_project` / `operation_failed`. System / special
+    projects (`created_by == "system"`, `未归类`, `排除规则`) are
+    rejected for all four writes; enabling `排除规则` is never allowed.
+  - Duplicate-name check on create / update (trim-aware exact match)
+    plus SQLite `IntegrityError` collapse to `duplicate_project` for
+    the race condition. Unexpected exceptions collapse to
+    `operation_failed`.
+  - Narrow success payload:
+    `{"ok": True, "project": {"id": int, "name": str, "description":
+    str, "enabled": bool, "archived": bool}}`. No `created_by` /
+    `created_at` / `updated_at` / raw row / traceback / SQL / path /
+    window_title / clipboard / note leak.
+  - `get_project_rules` read projection now includes display-safe
+    `is_system` / `editable` / `can_toggle` / `can_archive` flags.
+- Bridge layer (`worktrace/webview_ui/bridge.py`):
+  - Four bridge methods: `create_project_for_rules`,
+    `update_project_for_rules`, `set_project_enabled_for_rules`,
+    `archive_project_for_rules`. They only call
+    `worktrace.api.project_api`; they never import services / db /
+    collector / runtime / config.
+  - Strict type validation at the bridge too (bool-as-int rejected,
+    non-int / non-positive project_id rejected, non-bool enabled
+    rejected, non-string / empty / whitespace name rejected,
+    non-string description rejected). Trimmed name / description are
+    forwarded to the API.
+  - Stable Chinese error mapping via four dedicated message maps
+    (`_PROJECT_LIFECYCLE_CREATE_MESSAGES` /
+    `_PROJECT_LIFECYCLE_UPDATE_MESSAGES` /
+    `_PROJECT_LIFECYCLE_TOGGLE_MESSAGES` /
+    `_PROJECT_LIFECYCLE_ARCHIVE_MESSAGES`); unknown codes collapse to
+    a per-write Chinese message (新增项目失败 / 保存项目失败 /
+    更新项目状态失败 / 归档项目失败). No `.message` reads, no
+    traceback / SQL / path / window_title / clipboard / note leak.
+  - Narrow success payload mirrors the API payload. The bridge never
+    exposes `delete_project` and never calls keyword / folder rule
+    write APIs.
+- Frontend (`worktrace/webview_ui/js/core.js`,
+  `worktrace/webview_ui/js/rules.js`,
+  `worktrace/webview_ui/js/init.js`,
+  `worktrace/webview_ui/index.html`):
+  - Five new state variables in `core.js`:
+    `App.rulesCreatingProject`, `App.rulesEditingProjectId`,
+    `App.rulesUpdatingProjectId`, `App.rulesTogglingProjectId`,
+    `App.rulesArchivingProjectId`. Independent of all keyword / folder
+    rule write states.
+  - Top-of-page "新增项目" form (`#rules-project-create-submit`) bound
+    in `init.js` (same pattern as keyword / folder create submit).
+  - Project edit / toggle / archive buttons render only on user
+    projects (`editable && projectId`); system / special projects
+    never get these buttons.
+  - Inline edit form replaces the action buttons while
+    `rulesEditingProjectId === projectId`; save trims, rejects empty
+    client-side, calls `update_project_for_rules`, clears editing +
+    saving state and refreshes on success, preserves input and
+    editing state on failure. Cancel does not call the bridge.
+  - Toggle and archive use `confirm` before calling the bridge; both
+    refresh the list on success and preserve state on failure.
+  - Event delegation on `#rules-list` with a
+    `data-rules-project-lifecycle-bound` idempotency guard, mirroring
+    the keyword edit pattern.
+  - Project lifecycle write in-flight disables all project lifecycle
+    buttons on every card so create / edit / toggle / archive cannot
+    pollute each other.
+  - No `fetch` / `XMLHttpRequest` / `localStorage` / `sessionStorage`
+    / ES module / external URL / new dependency.
+- API / service regression locks in
+  `tests/test_project_rules_project_lifecycle.py`: create success +
+  trim, create rejects bool / non-str / empty / whitespace, create
+  duplicate name, update success preserves id / enabled / is_archived,
+  update rejects bool / non-int / non-positive / non-str / empty,
+  update not_found, update system project rejected, update duplicate
+  name rejected, set enabled success true / false, set enabled rejects
+  bool-as-int project_id / non-bool enabled, set enabled not_found,
+  set enabled system / special project rejected (especially
+  `排除规则`), archive success sets is_archived without deleting
+  project / folder rules / keyword rules / activity / assignment /
+  session_note rows, archive not_found / system project rejected,
+  invalid / not_found / system / duplicate rejection do not trigger
+  cache hooks, success triggers the three cache hooks, operation
+  exception collapse, payload JSON serializable, payload contains no
+  traceback / SQL / window_title / clipboard / note / created_by /
+  created_at / updated_at / raw row, existing keyword / folder rule
+  CRUD still works, `get_project_rules` payload includes display-safe
+  flags.
+- Bridge regression locks in
+  `tests/test_webview_project_rules_bridge.py`: four bridge methods'
+  input validation, Chinese error code mapping, trimmed forwarding,
+  bool-as-int not forwarded to API, no cross-API calls (project
+  create / edit / toggle / archive never call keyword / folder rule
+  APIs), `delete_project` never exposed, narrow payload +
+  JSON-serializable, unknown exception collapse, no sensitive-string
+  leak, `get_project_rules` payload includes display-safe lifecycle
+  flags.
+- Frontend static contract regression locks in
+  `tests/webview/test_project_rules_static_contract.py`: project
+  create form DOM anchors, project edit / toggle / archive buttons
+  only on user projects, inline project edit form, save calls bridge
+  + trim + empty reject, success refresh, failure preserve input /
+  state, cancel does not call bridge, confirm archive, project
+  lifecycle state variables declared and declared once, CSS classes
+  scoped to Project Rules, no `.message` / no `fetch` / no storage /
+  no import / export / no external URL, `init.js` binds only project
+  create submit (lifecycle handlers use event delegation), packaging
+  spec unchanged, no `app.js`, no forbidden handler tokens.
+- Affected runner mapping (`scripts/run_affected_tests.py`):
+  `tests/test_project_rules_project_lifecycle.py` added to the
+  Project Rules API / service / UI rule (section C) and the DB /
+  schema / migrations broad rule (section F) so changes to
+  `project_api.py` / `project_service.py` / `rules.js` / `db.py` /
+  `schema.sql` run the new test file.
+- Documentation: `README.md`, `docs/current-state.md`,
+  `docs/ui-webview-migration.md`, and this file now describe the
+  current phase as 5G and explicitly note that 5G ships the in-phase
+  hardening regression locks rather than splitting into a separate
+  5G.1.
+
+Phase 5G does not modify `WorkTrace.spec` resource list, `worktrace/db.py`,
+`worktrace/schema.sql`, or any collector / privacy / encrypted backup /
+statistics / export / timeline code. No DB schema change. The WebView
+packaging static test (`tests/test_webview_packaging.py`) and the
+`worktrace.webview_main` import check were run and pass; the full
+PyInstaller build was not re-run because no packaging or runtime
+behavior changed.
+
+## Phase 5G Not Implemented
+
+Phase 5G does not implement and does not start:
+
+- Hard delete project (Phase 5G never exposes
+  `project_service.delete_project` to the WebView bridge);
+- Project restore (un-archive) in WebView;
+- Batch project create / edit / toggle / archive;
+- Batch keyword edit / delete;
+- Batch folder edit / delete;
+- Folder rule conflict preview in WebView;
+- Folder rule backfill in WebView;
+- Automatic rules in WebView;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel export;
+- PDF export;
+- Timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

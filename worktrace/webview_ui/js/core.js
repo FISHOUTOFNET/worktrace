@@ -117,6 +117,18 @@
     // round-trip through loadProjectRules (which would lose input focus).
     App.lastProjectRulesData = null;
 
+    // --- Phase 5G: Project lifecycle state -----------------------------
+    // Separate from all rule write states (5B toggle, 5C keyword create,
+    // 5D keyword delete, 5E folder CRUD, 5F keyword edit) so project
+    // lifecycle writes can never pollute rule write button / input
+    // disabled state. Only one project lifecycle write may be in flight
+    // per kind at a time.
+    App.rulesCreatingProject = false;
+    App.rulesEditingProjectId = null;   // project id being edited (int or null)
+    App.rulesUpdatingProjectId = null;  // project id being saved (int or null)
+    App.rulesTogglingProjectId = null;  // project id being toggled (int or null)
+    App.rulesArchivingProjectId = null; // project id being archived (int or null)
+
     // --- Phase 3C: Unified Timeline status semantics -------------------
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",

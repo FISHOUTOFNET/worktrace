@@ -94,33 +94,35 @@ def test_project_rules_required_dom_ids_exist():
 
 def test_project_rules_phase_5b_boundary_copy_present():
     section = _rules_section()
-    # Phase 5E: the boundary copy now mentions folder rule create/edit/delete
-    # as supported capabilities alongside keyword rule create/delete. The
-    # unsupported-ops clause still references the remaining future
-    # capabilities (keyword edit, project management, conflict preview, backfill).
+    # Phase 5G: the boundary copy now mentions project lifecycle
+    # (create/edit/enable-disable/archive) as supported capabilities alongside
+    # the existing folder/keyword rule CRUD. The unsupported-ops clause still
+    # references conflict preview, backfill, and project hard delete.
     assert "启用/停用" in section
     assert "新增关键词规则" in section
     assert "删除已有关键词规则" in section
-    assert "新增、编辑、删除文件夹规则" in section
+    assert "新增/编辑/删除文件夹规则" in section
     for term in ("编辑", "删除", "冲突预览", "回填"):
         assert term in section
 
 
 def test_project_rules_page_has_no_static_action_buttons():
     section = _rules_section()
-    # Phase 5E: the only allowed static buttons in the section are the
-    # keyword create submit button and the folder create submit button.
-    # All other action buttons (project create/edit/delete, rule edit/delete,
-    # etc.) remain forbidden as static DOM.
+    # Phase 5G: the only allowed static buttons in the section are the
+    # project create submit button, the keyword create submit button, and
+    # the folder create submit button. All other action buttons (project
+    # edit/delete, rule edit/delete, etc.) remain forbidden as static DOM.
     import re as _re
 
     buttons = _re.findall(r"<button[^>]*>", section, _re.IGNORECASE)
-    assert len(buttons) == 2, (
-        "Project Rules page must have exactly two static buttons (keyword "
-        "create submit + folder create submit); found: " + repr(buttons)
+    assert len(buttons) == 3, (
+        "Project Rules page must have exactly three static buttons (project "
+        "create submit + keyword create submit + folder create submit); "
+        "found: " + repr(buttons)
     )
     button_ids = [_re.search(r'id="([^"]+)"', b) for b in buttons]
     button_ids = [m.group(1) for m in button_ids if m]
+    assert "rules-project-create-submit" in button_ids
     assert "rules-keyword-create-submit" in button_ids
     assert "rules-folder-create-submit" in button_ids
     forbidden = (
@@ -140,7 +142,6 @@ def test_project_rules_page_has_no_static_action_buttons():
         "rule-delete",
         "rule-enable",
         "rule-disable",
-        "rules-project-create",
         "rules-keyword-edit",
         "rules-keyword-delete",
         "rules-folder-edit",
@@ -384,22 +385,28 @@ def test_project_rules_page_does_not_add_export_or_auto_submit_controls():
 
 
 def test_project_rules_toggle_button_is_inside_rule_row_not_project_card():
-    # Phase 5B.1 regression lock: the toggle button must be rendered inside
-    # ``renderProjectRuleRow`` (i.e. on the rule row), never directly on the
-    # project card. The project card template may not contain a
+    # Phase 5B.1 regression lock: the RULE toggle button must be rendered
+    # inside ``renderProjectRuleRow`` (i.e. on the rule row), never directly
+    # on the project card. The project card template may not contain a
     # ``rules-toggle-btn`` of its own.
+    #
+    # Phase 5G update: the project card now legitimately contains a project
+    # LIFECYCLE toggle button (``rules-project-toggle-button`` class) which
+    # is distinct from the rule-level toggle button. The forbidden tokens
+    # below protect against accidentally adding a RULE toggle to the
+    # project card; they do not forbid the project lifecycle toggle.
     source = read_js("rules.js")
     project_body = func_body(source, "renderProjectRuleProject")
     row_body = func_body(source, "renderProjectRuleRow")
     assert "rules-toggle-btn" in row_body
     assert "rules-toggle-btn" not in project_body
     # The project card only renders rows via the row helper, never a static
-    # project-level toggle button.
+    # project-level RULE toggle button. The bare ``set_project_enabled``
+    # bridge call (without the ``_for_rules`` suffix) must never appear.
     for forbidden in (
-        "rules-project-toggle",
         'data-rule-type="project"',
         "setProjectEnabled",
-        "set_project_enabled",
+        'callBridge("set_project_enabled"',
     ):
         assert forbidden not in project_body
 
@@ -664,21 +671,22 @@ def test_project_rules_keyword_create_submit_button_exists():
 
 
 def test_project_rules_keyword_create_submit_is_only_new_create_action():
-    # Phase 5C regression lock (updated in Phase 5E): the keyword create
-    # submit button and the folder create submit button are the only new
-    # create actions on the Project Rules page. No project create/edit/delete
-    # or rule edit/delete buttons may appear.
+    # Phase 5C regression lock (updated in Phase 5E and 5G): the project
+    # create submit button, the keyword create submit button, and the
+    # folder create submit button are the only new create actions on the
+    # Project Rules page. No project edit/delete or rule edit/delete
+    # buttons may appear as static DOM.
     section = _rules_section()
     import re as _re
 
     buttons = _re.findall(r"<button[^>]*>", section, _re.IGNORECASE)
-    assert len(buttons) == 2
+    assert len(buttons) == 3
     button_ids = [_re.search(r'id="([^"]+)"', b) for b in buttons]
     button_ids = [m.group(1) for m in button_ids if m]
+    assert "rules-project-create-submit" in button_ids
     assert "rules-keyword-create-submit" in button_ids
     assert "rules-folder-create-submit" in button_ids
     for forbidden_id in (
-        "rules-project-create",
         "rules-project-edit",
         "rules-project-delete",
         "rules-keyword-edit",
@@ -3370,3 +3378,414 @@ def test_project_rules_keyword_edit_js_uses_escape_helper_for_dynamic_text():
     assert "App.escapeHtml" in count_body
     row_body = func_body(source, "renderProjectRuleRow")
     assert "count(ruleId)" in row_body
+
+
+# --- Phase 5G: Project lifecycle foundation + in-phase hardening ---------
+#
+# These locks cover the new project lifecycle capability (create / edit /
+# enable-disable / archive existing user projects). They verify the project
+# create form DOM anchors, the lifecycle buttons appear only on user project
+# cards, the inline edit form uses the stable anchors / attributes, the
+# save / cancel / toggle / archive handlers obey the Phase 5G contract
+# (trim, empty reject, success refresh, failure preserve, no bridge on
+# cancel, confirm archive, no .message reads, etc.), the project lifecycle
+# state variables are independent, CSS classes are scoped to the Project
+# Rules page, and init.js binds the project create submit but not the
+# lifecycle handlers.
+
+
+def test_project_rules_project_create_form_anchors_exist():
+    # Phase 5G regression lock: the Project Rules page must contain the
+    # stable project create form DOM anchors.
+    section = _rules_section()
+    for dom_id in (
+        "rules-project-create-form",
+        "rules-project-create-input",
+        "rules-project-create-description",
+        "rules-project-create-submit",
+        "rules-project-create-status",
+    ):
+        assert 'id="' + dom_id + '"' in section, (
+            "Project Rules page must contain project create anchor: " + dom_id
+        )
+
+
+def test_project_rules_project_create_form_has_name_input():
+    section = _rules_section()
+    assert '<input id="rules-project-create-input"' in section
+    assert 'type="text"' in section
+    assert 'maxlength="100"' in section
+
+
+def test_project_rules_project_create_form_has_description_input():
+    section = _rules_section()
+    assert '<input id="rules-project-create-description"' in section
+    assert 'maxlength="500"' in section
+
+
+def test_project_rules_project_create_submit_button_exists():
+    section = _rules_section()
+    assert '<button id="rules-project-create-submit"' in section
+    assert 'type="button"' in section
+
+
+def test_project_rules_project_lifecycle_state_variables_declared():
+    # Phase 5G regression lock: the five project lifecycle state variables
+    # must each be declared in core.js, separate from all rule write states
+    # (toggle saving, keyword create/delete/edit, folder create/edit/delete)
+    # so the project lifecycle write paths can never pollute rule write
+    # paths and vice versa.
+    source = read_js("core.js")
+    assert "App.rulesCreatingProject = false" in source
+    assert "App.rulesEditingProjectId = null" in source
+    assert "App.rulesUpdatingProjectId = null" in source
+    assert "App.rulesTogglingProjectId = null" in source
+    assert "App.rulesArchivingProjectId = null" in source
+
+
+def test_project_rules_project_lifecycle_state_variables_declared_once():
+    # Phase 5G regression lock: each project lifecycle state variable must
+    # be declared exactly once in core.js so there is no accidental
+    # duplicate declaration that could shadow or reset the state.
+    source = read_js("core.js")
+    for var_decl in (
+        "App.rulesCreatingProject = false",
+        "App.rulesEditingProjectId = null",
+        "App.rulesUpdatingProjectId = null",
+        "App.rulesTogglingProjectId = null",
+        "App.rulesArchivingProjectId = null",
+    ):
+        assert source.count(var_decl) == 1, (
+            var_decl + " must be declared exactly once in core.js"
+        )
+
+
+def test_project_rules_project_lifecycle_js_calls_bridge_methods():
+    # Phase 5G regression lock: the JS must call the four ``*_for_rules``
+    # bridge methods.
+    source = read_js("rules.js")
+    assert 'callBridge("create_project_for_rules"' in source
+    assert 'callBridge("update_project_for_rules"' in source
+    assert 'callBridge("set_project_enabled_for_rules"' in source
+    assert 'callBridge("archive_project_for_rules"' in source
+
+
+def test_project_rules_project_lifecycle_js_does_not_call_bare_project_write():
+    # Phase 5G regression lock: the JS must NOT call the bare (non-_for_rules)
+    # project write bridge methods. Hard delete is never exposed.
+    source = read_js("rules.js")
+    for forbidden in (
+        'callBridge("create_project"',
+        'callBridge("update_project"',
+        'callBridge("delete_project"',
+        'callBridge("archive_project"',
+        'callBridge("set_project_enabled"',
+    ):
+        assert forbidden not in source, (
+            "Project Rules frontend must not call bare project write bridge: "
+            + forbidden
+        )
+
+
+def test_project_rules_project_lifecycle_buttons_only_on_user_projects():
+    # Phase 5G regression lock: the lifecycle buttons (edit / toggle /
+    # archive) must only be rendered when ``editable`` is true. System /
+    # special projects (``未归类`` / ``排除规则``) never get these buttons.
+    source = read_js("rules.js")
+    project_body = func_body(source, "renderProjectRuleProject")
+    assert "rules-project-edit-button" in project_body
+    assert "rules-project-toggle-button" in project_body
+    assert "rules-project-archive-button" in project_body
+    # The editable gate must be present before the buttons are rendered.
+    editable_gate_pos = project_body.find("editable && projectId")
+    edit_button_pos = project_body.find("rules-project-edit-button")
+    assert editable_gate_pos != -1 and edit_button_pos != -1
+    assert editable_gate_pos < edit_button_pos
+
+
+def test_project_rules_project_lifecycle_buttons_use_stable_classes_and_attributes():
+    # Phase 5G regression lock: the lifecycle buttons must use the stable
+    # CSS classes and ``data-project-id`` attributes.
+    source = read_js("rules.js")
+    project_body = func_body(source, "renderProjectRuleProject")
+    for cls in (
+        "rules-project-edit-button",
+        "rules-project-toggle-button",
+        "rules-project-archive-button",
+    ):
+        assert 'class="' + cls + '"' in project_body, cls
+    assert 'data-project-id="' in project_body
+
+
+def test_project_rules_project_lifecycle_buttons_disabled_when_any_write_in_flight():
+    # Phase 5G regression lock: the lifecycle buttons must be disabled when
+    # any project lifecycle write is in flight (create / edit / toggle /
+    # archive). This keeps the four project lifecycle write paths from
+    # running concurrently.
+    source = read_js("rules.js")
+    project_body = func_body(source, "renderProjectRuleProject")
+    assert "rulesCreatingProject" in project_body
+    assert "rulesEditingProjectId" in project_body
+    assert "rulesUpdatingProjectId" in project_body
+    assert "rulesTogglingProjectId" in project_body
+    assert "rulesArchivingProjectId" in project_body
+    assert "projectWriteInProgress" in project_body
+
+
+def test_project_rules_project_lifecycle_inline_edit_form_anchors():
+    # Phase 5G regression lock: the inline project edit form must use the
+    # stable CSS classes for the name input, description input, save button,
+    # and cancel button.
+    source = read_js("rules.js")
+    project_body = func_body(source, "renderProjectRuleProject")
+    for cls in (
+        "rules-project-edit-form",
+        "rules-project-edit-name",
+        "rules-project-edit-description",
+        "rules-project-edit-save",
+        "rules-project-edit-cancel",
+    ):
+        assert cls in project_body, cls
+    # The edit form must have maxlength on both inputs.
+    assert 'maxlength="100"' in project_body
+    assert 'maxlength="500"' in project_body
+
+
+def test_project_rules_project_create_js_validates_name_before_bridge():
+    # Phase 5G regression lock: the project create handler must validate
+    # the name is non-empty (after trim) before calling the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectCreateSubmit")
+    trim_pos = body.find(".trim()")
+    empty_check_pos = body.find("请输入项目名称")
+    bridge_pos = body.find('callBridge("create_project_for_rules"')
+    assert trim_pos != -1 and empty_check_pos != -1 and bridge_pos != -1
+    assert trim_pos < empty_check_pos < bridge_pos
+
+
+def test_project_rules_project_create_js_has_creating_guard():
+    # Phase 5G regression lock: only one project create may be in flight at
+    # a time. The handler must early-return when ``rulesCreatingProject`` is
+    # set, before any bridge call.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectCreateSubmit")
+    guard_pos = body.find("App.rulesCreatingProject")
+    bridge_pos = body.find('callBridge("create_project_for_rules"')
+    assert guard_pos != -1 and bridge_pos != -1
+    assert guard_pos < bridge_pos
+
+
+def test_project_rules_project_create_js_success_clears_inputs_and_refreshes():
+    # Phase 5G regression lock: on success the handler must clear both
+    # inputs and refresh the Project Rules list.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectCreateSubmit")
+    assert 'input.value = ""' in body
+    assert "descInput.value" in body
+    assert "App.loadProjectRules()" in body
+
+
+def test_project_rules_project_create_js_failure_preserves_inputs():
+    # Phase 5G regression lock: on failure the handler must NOT clear the
+    # inputs so the user can edit and retry. The success path (which clears
+    # inputs) must be gated on ``result.ok !== false``.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectCreateSubmit")
+    ok_check_pos = body.find("result.ok === false")
+    clear_pos = body.find('input.value = ""')
+    assert ok_check_pos != -1 and clear_pos != -1
+    assert ok_check_pos < clear_pos
+
+
+def test_project_rules_project_create_js_catch_never_reads_raw_exception():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectCreateSubmit")
+    for forbidden in (
+        "err.message",
+        "error.message",
+        ".toString",
+        "reason.message",
+    ):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_project_edit_save_js_validates_name_before_bridge():
+    # Phase 5G regression lock: the project edit save handler must validate
+    # the name is non-empty (after trim) before calling the bridge.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectEditSave")
+    trim_pos = body.find(".trim()")
+    empty_check_pos = body.find("请输入项目名称")
+    bridge_pos = body.find('callBridge("update_project_for_rules"')
+    assert trim_pos != -1 and empty_check_pos != -1 and bridge_pos != -1
+    assert trim_pos < empty_check_pos < bridge_pos
+
+
+def test_project_rules_project_edit_save_js_success_refreshes():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectEditSave")
+    assert "App.loadProjectRules()" in body
+    assert "项目已保存" in body
+
+
+def test_project_rules_project_edit_save_js_catch_never_reads_raw_exception():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectEditSave")
+    for forbidden in (
+        "err.message",
+        "error.message",
+        ".toString",
+        "reason.message",
+    ):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_project_edit_cancel_does_not_call_bridge():
+    # Phase 5G regression lock: the cancel handler must NOT call any bridge
+    # method. It only clears the editing state and re-renders.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectEditCancel")
+    assert "callBridge" not in body
+    assert "App.setProjectEditing(null)" in body
+
+
+def test_project_rules_project_toggle_js_has_confirmation():
+    # Phase 5G regression lock: the toggle handler must show a confirmation
+    # dialog before disabling a project.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectToggle")
+    assert "window.confirm" in body
+    assert "确定停用这个项目吗？" in body
+    assert 'callBridge("set_project_enabled_for_rules"' in body
+
+
+def test_project_rules_project_toggle_js_success_refreshes():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectToggle")
+    assert "App.loadProjectRules()" in body
+    assert "项目状态已更新" in body
+
+
+def test_project_rules_project_toggle_js_catch_never_reads_raw_exception():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectToggle")
+    for forbidden in (
+        "err.message",
+        "error.message",
+        ".toString",
+        "reason.message",
+    ):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_project_archive_js_has_confirmation():
+    # Phase 5G regression lock: the archive handler must show a confirmation
+    # dialog before archiving.
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectArchive")
+    assert "window.confirm" in body
+    assert "确定归档这个项目吗？" in body
+    assert 'callBridge("archive_project_for_rules"' in body
+
+
+def test_project_rules_project_archive_js_success_refreshes():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectArchive")
+    assert "App.loadProjectRules()" in body
+    assert "项目已归档" in body
+
+
+def test_project_rules_project_archive_js_catch_never_reads_raw_exception():
+    source = read_js("rules.js")
+    body = func_body(source, "handleProjectArchive")
+    for forbidden in (
+        "err.message",
+        "error.message",
+        ".toString",
+        "reason.message",
+    ):
+        assert forbidden not in body
+    assert ".catch(function ()" in body
+
+
+def test_project_rules_project_lifecycle_event_delegation_bound_once():
+    # Phase 5G regression lock: the event delegation on #rules-list must
+    # use the ``data-rules-project-lifecycle-bound`` guard so it is only
+    # bound once per page lifecycle.
+    source = read_js("rules.js")
+    body = func_body(source, "bindProjectLifecycleEvents")
+    assert "data-rules-project-lifecycle-bound" in body
+    assert "handleProjectLifecycleEvent" in body
+
+
+def test_project_rules_project_lifecycle_no_storage_or_network():
+    # Phase 5G regression lock: the project lifecycle handlers must not use
+    # browser storage, fetch, XMLHttpRequest, or any network API.
+    source = read_js("rules.js")
+    for forbidden in (
+        "fetch(",
+        "XMLHttpRequest",
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+    ):
+        assert forbidden not in source
+
+
+def test_project_rules_project_lifecycle_no_es_module_syntax():
+    # Phase 5G regression lock: rules.js must not use ES module syntax.
+    source = read_js("rules.js")
+    assert not re.search(r"^\s*import\s+", source, re.MULTILINE)
+    assert not re.search(r"^\s*export\s+", source, re.MULTILINE)
+
+
+def test_project_rules_project_lifecycle_init_binds_create_submit_only():
+    # Phase 5G regression lock: init.js must bind the project create submit
+    # button (following the keyword / folder create submit pattern) but
+    # must NOT bind any project lifecycle handler directly (edit / toggle /
+    # archive use event delegation set up inside rules.js).
+    source = read_js("init.js")
+    assert 'getElementById("rules-project-create-submit")' in source
+    assert "handleProjectCreateSubmit" in source
+    for forbidden in (
+        "handleProjectEditStart",
+        "handleProjectEditSave",
+        "handleProjectEditCancel",
+        "handleProjectToggle",
+        "handleProjectArchive",
+        "bindProjectLifecycleEvents",
+    ):
+        assert forbidden not in source, (
+            "init.js must not bind Project Rules lifecycle handler: " + forbidden
+        )
+
+
+def test_project_rules_project_lifecycle_packaging_spec_unchanged():
+    # Phase 5G regression lock: no new packaging resource paths are needed
+    # because project lifecycle reuses the existing rules.js / core.js /
+    # index.html / styles.css resources. The spec must still include
+    # rules.js and the js directory.
+    source = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
+    assert "'rules.js'" in source or '"rules.js"' in source
+    assert "'worktrace/webview_ui/js'" in source or '"worktrace/webview_ui/js"' in source
+
+
+def test_project_rules_project_lifecycle_no_app_js_reintroduced():
+    # Phase 5G regression lock: app.js must not be reintroduced in
+    # index.html. The project lifecycle code lives in rules.js only.
+    source = read_resource("index.html")
+    assert "app.js" not in source
+
+
+def test_project_rules_project_lifecycle_no_forbidden_handler_tokens():
+    # Phase 5G regression lock: rules.js must not contain any of the
+    # forbidden camelCase handler tokens (these would indicate accidental
+    # exposure of bare project management APIs).
+    source = read_js("rules.js")
+    for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
+        assert token not in source, (
+            "rules.js must not contain forbidden handler token: " + token
+        )

@@ -3451,3 +3451,649 @@ def test_update_project_keyword_rule_failure_payloads_json_serializable(monkeypa
         result = WebViewBridge().update_project_keyword_rule(1, "Spec")
         json.dumps(result, ensure_ascii=False)
         assert "Traceback" not in repr(result)
+
+
+# --- Phase 5G: Project lifecycle foundation bridge regression locks -----
+
+
+_PROJECT_LIFECYCLE_SUMMARY = {
+    "id": 1,
+    "name": "Client",
+    "description": "billable",
+    "enabled": True,
+    "archived": False,
+}
+
+
+def _patch_project_api(monkeypatch, method_name, result):
+    """Patch ``bridge_module.project_api.<method_name>`` to return ``result``.
+
+    Returns a list that the test can inspect to assert the bridge forwarded
+    the expected (trimmed / coerced) arguments.
+    """
+    calls: list = []
+
+    def _spy(*args, **kwargs):
+        calls.append((args, kwargs))
+        return result
+
+    monkeypatch.setattr(bridge_module.project_api, method_name, _spy)
+    return calls
+
+
+def test_create_project_for_rules_success_narrow_payload(monkeypatch):
+    calls = _patch_project_api(
+        monkeypatch,
+        "create_project_for_rules",
+        {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
+    )
+
+    result = WebViewBridge().create_project_for_rules("  Client  ", "  billable  ")
+
+    assert result == {
+        "ok": True,
+        "project": _PROJECT_LIFECYCLE_SUMMARY,
+    }
+    # Bridge forwards trimmed name/description.
+    assert calls == [(("Client", "billable"), {})]
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_create_project_for_rules_rejects_non_str_name():
+    bridge = WebViewBridge()
+    for bad_name in (None, True, False, 1, 1.5, [], {}, b"Client"):
+        assert bridge.create_project_for_rules(bad_name, "desc") == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_create_project_for_rules_rejects_non_str_description():
+    bridge = WebViewBridge()
+    for bad_desc in (None, True, False, 1, 1.5, [], {}, b"desc"):
+        assert bridge.create_project_for_rules("Client", bad_desc) == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_create_project_for_rules_rejects_empty_or_whitespace_name():
+    bridge = WebViewBridge()
+    for bad_name in ("", "   ", "\t\n"):
+        assert bridge.create_project_for_rules(bad_name, "desc") == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_create_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
+    bridge = WebViewBridge()
+    for code, expected in (
+        ("invalid_input", "操作无效"),
+        ("duplicate_project", "项目名称已存在"),
+        ("operation_failed", "新增项目失败"),
+        ("unknown_code", "新增项目失败"),
+    ):
+        monkeypatch.setattr(
+            bridge_module.project_api,
+            "create_project_for_rules",
+            lambda name, description, c=code: {"ok": False, "error": c},
+        )
+        assert bridge.create_project_for_rules("Client", "") == {
+            "ok": False,
+            "error": expected,
+        }
+
+
+def test_create_project_for_rules_unknown_exception_collapses(monkeypatch):
+    def boom(name, description=""):
+        raise RuntimeError(
+            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(bridge_module.project_api, "create_project_for_rules", boom)
+
+    result = WebViewBridge().create_project_for_rules("Client", "desc")
+
+    assert result == {"ok": False, "error": "新增项目失败"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select",
+        "boom",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+    ):
+        assert forbidden not in lowered
+
+
+def test_create_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypatch):
+    forbidden_calls: list = []
+
+    def make_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(name + " must not be called by project create path")
+
+        return _fail
+
+    for name in (
+        "create_project_keyword_rule",
+        "delete_project_keyword_rule",
+        "update_project_keyword_rule",
+        "create_project_folder_rule",
+        "update_project_folder_rule",
+        "delete_project_folder_rule",
+        "set_project_rule_enabled",
+    ):
+        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "create_project_for_rules",
+        lambda name, description="": {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
+    )
+
+    WebViewBridge().create_project_for_rules("Client", "desc")
+
+    assert forbidden_calls == []
+
+
+def test_update_project_for_rules_success_narrow_payload(monkeypatch):
+    calls = _patch_project_api(
+        monkeypatch,
+        "update_project_for_rules",
+        {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
+    )
+
+    result = WebViewBridge().update_project_for_rules(
+        1, "  Client  ", "  billable  "
+    )
+
+    assert result == {"ok": True, "project": _PROJECT_LIFECYCLE_SUMMARY}
+    assert calls == [((1, "Client", "billable"), {})]
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_update_project_for_rules_rejects_bool_as_int_project_id(monkeypatch):
+    # Bool-as-int must be rejected at the bridge layer and never forwarded
+    # to the API.
+    forwarded: list = []
+
+    def _spy(*args, **kwargs):
+        forwarded.append(args)
+        return {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)}
+
+    monkeypatch.setattr(bridge_module.project_api, "update_project_for_rules", _spy)
+
+    bridge = WebViewBridge()
+    for bad_id in (True, False):
+        assert bridge.update_project_for_rules(bad_id, "Renamed", "new") == {
+            "ok": False,
+            "error": "操作无效",
+        }
+    assert forwarded == []
+
+
+def test_update_project_for_rules_rejects_non_int_or_non_positive_project_id():
+    bridge = WebViewBridge()
+    for bad_id in (None, "1", 1.0, 1.5, [], {}, b"1", 0, -1):
+        assert bridge.update_project_for_rules(bad_id, "Renamed", "new") == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_update_project_for_rules_rejects_non_str_name():
+    bridge = WebViewBridge()
+    for bad_name in (None, True, False, 1, 1.5, [], {}):
+        assert bridge.update_project_for_rules(1, bad_name, "new") == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_update_project_for_rules_rejects_non_str_description():
+    bridge = WebViewBridge()
+    for bad_desc in (None, True, False, 1, 1.5, [], {}):
+        assert bridge.update_project_for_rules(1, "Renamed", bad_desc) == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_update_project_for_rules_rejects_empty_name():
+    bridge = WebViewBridge()
+    for bad_name in ("", "   ", "\t\n"):
+        assert bridge.update_project_for_rules(1, bad_name, "new") == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_update_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
+    bridge = WebViewBridge()
+    for code, expected in (
+        ("invalid_input", "操作无效"),
+        ("not_found", "项目不存在"),
+        ("system_project", "系统项目不能修改"),
+        ("duplicate_project", "项目名称已存在"),
+        ("operation_failed", "保存项目失败"),
+        ("unknown_code", "保存项目失败"),
+    ):
+        monkeypatch.setattr(
+            bridge_module.project_api,
+            "update_project_for_rules",
+            lambda project_id, name, description, c=code: {"ok": False, "error": c},
+        )
+        assert bridge.update_project_for_rules(1, "Renamed", "new") == {
+            "ok": False,
+            "error": expected,
+        }
+
+
+def test_update_project_for_rules_unknown_exception_collapses(monkeypatch):
+    def boom(project_id, name, description=""):
+        raise RuntimeError(
+            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(bridge_module.project_api, "update_project_for_rules", boom)
+
+    result = WebViewBridge().update_project_for_rules(1, "Renamed", "new")
+
+    assert result == {"ok": False, "error": "保存项目失败"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select",
+        "boom",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+    ):
+        assert forbidden not in lowered
+
+
+def test_update_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypatch):
+    forbidden_calls: list = []
+
+    def make_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(name + " must not be called by project update path")
+
+        return _fail
+
+    for name in (
+        "create_project_keyword_rule",
+        "delete_project_keyword_rule",
+        "update_project_keyword_rule",
+        "create_project_folder_rule",
+        "update_project_folder_rule",
+        "delete_project_folder_rule",
+        "set_project_rule_enabled",
+    ):
+        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "update_project_for_rules",
+        lambda project_id, name, description="": {
+            "ok": True,
+            "project": dict(_PROJECT_LIFECYCLE_SUMMARY),
+        },
+    )
+
+    WebViewBridge().update_project_for_rules(1, "Renamed", "new")
+
+    assert forbidden_calls == []
+
+
+def test_set_project_enabled_for_rules_success_narrow_payload(monkeypatch):
+    calls = _patch_project_api(
+        monkeypatch,
+        "set_project_enabled_for_rules",
+        {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
+    )
+
+    result = WebViewBridge().set_project_enabled_for_rules(1, False)
+
+    assert result == {"ok": True, "project": _PROJECT_LIFECYCLE_SUMMARY}
+    assert calls == [((1, False), {})]
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_set_project_enabled_for_rules_rejects_bool_as_int_project_id(monkeypatch):
+    forwarded: list = []
+
+    def _spy(*args, **kwargs):
+        forwarded.append(args)
+        return {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)}
+
+    monkeypatch.setattr(bridge_module.project_api, "set_project_enabled_for_rules", _spy)
+
+    bridge = WebViewBridge()
+    for bad_id in (True, False):
+        assert bridge.set_project_enabled_for_rules(bad_id, False) == {
+            "ok": False,
+            "error": "操作无效",
+        }
+    assert forwarded == []
+
+
+def test_set_project_enabled_for_rules_rejects_non_int_or_non_positive_project_id():
+    bridge = WebViewBridge()
+    for bad_id in (None, "1", 1.0, 1.5, [], {}, b"1", 0, -1):
+        assert bridge.set_project_enabled_for_rules(bad_id, False) == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_set_project_enabled_for_rules_rejects_non_bool_enabled():
+    bridge = WebViewBridge()
+    for bad_enabled in (None, 1, 0, "true", "false", [], {}):
+        assert bridge.set_project_enabled_for_rules(1, bad_enabled) == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_set_project_enabled_for_rules_maps_error_codes_to_chinese(monkeypatch):
+    bridge = WebViewBridge()
+    for code, expected in (
+        ("invalid_input", "操作无效"),
+        ("not_found", "项目不存在"),
+        ("system_project", "系统项目不能修改"),
+        ("operation_failed", "更新项目状态失败"),
+        ("unknown_code", "更新项目状态失败"),
+    ):
+        monkeypatch.setattr(
+            bridge_module.project_api,
+            "set_project_enabled_for_rules",
+            lambda project_id, enabled, c=code: {"ok": False, "error": c},
+        )
+        assert bridge.set_project_enabled_for_rules(1, False) == {
+            "ok": False,
+            "error": expected,
+        }
+
+
+def test_set_project_enabled_for_rules_unknown_exception_collapses(monkeypatch):
+    def boom(project_id, enabled):
+        raise RuntimeError(
+            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(bridge_module.project_api, "set_project_enabled_for_rules", boom)
+
+    result = WebViewBridge().set_project_enabled_for_rules(1, False)
+
+    assert result == {"ok": False, "error": "更新项目状态失败"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select",
+        "boom",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+    ):
+        assert forbidden not in lowered
+
+
+def test_set_project_enabled_for_rules_does_not_call_keyword_or_folder_apis(
+    monkeypatch,
+):
+    forbidden_calls: list = []
+
+    def make_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(name + " must not be called by project toggle path")
+
+        return _fail
+
+    for name in (
+        "create_project_keyword_rule",
+        "delete_project_keyword_rule",
+        "update_project_keyword_rule",
+        "create_project_folder_rule",
+        "update_project_folder_rule",
+        "delete_project_folder_rule",
+        "set_project_rule_enabled",
+    ):
+        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "set_project_enabled_for_rules",
+        lambda project_id, enabled: {
+            "ok": True,
+            "project": dict(_PROJECT_LIFECYCLE_SUMMARY),
+        },
+    )
+
+    WebViewBridge().set_project_enabled_for_rules(1, False)
+
+    assert forbidden_calls == []
+
+
+def test_archive_project_for_rules_success_narrow_payload(monkeypatch):
+    calls = _patch_project_api(
+        monkeypatch,
+        "archive_project_for_rules",
+        {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
+    )
+
+    result = WebViewBridge().archive_project_for_rules(1)
+
+    assert result == {"ok": True, "project": _PROJECT_LIFECYCLE_SUMMARY}
+    assert calls == [((1,), {})]
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_archive_project_for_rules_rejects_bool_as_int_project_id(monkeypatch):
+    forwarded: list = []
+
+    def _spy(*args, **kwargs):
+        forwarded.append(args)
+        return {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)}
+
+    monkeypatch.setattr(bridge_module.project_api, "archive_project_for_rules", _spy)
+
+    bridge = WebViewBridge()
+    for bad_id in (True, False):
+        assert bridge.archive_project_for_rules(bad_id) == {
+            "ok": False,
+            "error": "操作无效",
+        }
+    assert forwarded == []
+
+
+def test_archive_project_for_rules_rejects_non_int_or_non_positive_project_id():
+    bridge = WebViewBridge()
+    for bad_id in (None, "1", 1.0, 1.5, [], {}, b"1", 0, -1):
+        assert bridge.archive_project_for_rules(bad_id) == {
+            "ok": False,
+            "error": "操作无效",
+        }
+
+
+def test_archive_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
+    bridge = WebViewBridge()
+    for code, expected in (
+        ("invalid_input", "操作无效"),
+        ("not_found", "项目不存在"),
+        ("system_project", "系统项目不能修改"),
+        ("operation_failed", "归档项目失败"),
+        ("unknown_code", "归档项目失败"),
+    ):
+        monkeypatch.setattr(
+            bridge_module.project_api,
+            "archive_project_for_rules",
+            lambda project_id, c=code: {"ok": False, "error": c},
+        )
+        assert bridge.archive_project_for_rules(1) == {
+            "ok": False,
+            "error": expected,
+        }
+
+
+def test_archive_project_for_rules_unknown_exception_collapses(monkeypatch):
+    def boom(project_id):
+        raise RuntimeError(
+            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(bridge_module.project_api, "archive_project_for_rules", boom)
+
+    result = WebViewBridge().archive_project_for_rules(1)
+
+    assert result == {"ok": False, "error": "归档项目失败"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select",
+        "boom",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+    ):
+        assert forbidden not in lowered
+
+
+def test_archive_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypatch):
+    forbidden_calls: list = []
+
+    def make_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(name + " must not be called by project archive path")
+
+        return _fail
+
+    for name in (
+        "create_project_keyword_rule",
+        "delete_project_keyword_rule",
+        "update_project_keyword_rule",
+        "create_project_folder_rule",
+        "update_project_folder_rule",
+        "delete_project_folder_rule",
+        "set_project_rule_enabled",
+    ):
+        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "archive_project_for_rules",
+        lambda project_id: {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
+    )
+
+    WebViewBridge().archive_project_for_rules(1)
+
+    assert forbidden_calls == []
+
+
+def test_lifecycle_methods_never_call_delete_project(monkeypatch):
+    # Phase 5G regression lock: the bridge lifecycle methods must never
+    # call ``project_api.delete_project`` (hard delete is not exposed to
+    # WebView). This complements the static contract lock that the
+    # ``delete_project`` symbol is not referenced from rules.js.
+    forbidden_calls: list = []
+
+    def _fail(*args, **kwargs):
+        forbidden_calls.append("delete_project")
+        raise AssertionError("delete_project must not be called by lifecycle path")
+
+    monkeypatch.setattr(bridge_module.project_api, "delete_project", _fail)
+
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "create_project_for_rules",
+        lambda name, description="": {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
+    )
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "update_project_for_rules",
+        lambda project_id, name, description="": {
+            "ok": True,
+            "project": dict(_PROJECT_LIFECYCLE_SUMMARY),
+        },
+    )
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "set_project_enabled_for_rules",
+        lambda project_id, enabled: {
+            "ok": True,
+            "project": dict(_PROJECT_LIFECYCLE_SUMMARY),
+        },
+    )
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "archive_project_for_rules",
+        lambda project_id: {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
+    )
+
+    bridge = WebViewBridge()
+    bridge.create_project_for_rules("Client", "desc")
+    bridge.update_project_for_rules(1, "Renamed", "new")
+    bridge.set_project_enabled_for_rules(1, False)
+    bridge.archive_project_for_rules(1)
+
+    assert forbidden_calls == []
+
+
+def test_get_project_rules_payload_includes_display_safe_lifecycle_flags(monkeypatch):
+    # Phase 5G regression lock: the read payload must include display-safe
+    # lifecycle flags so the frontend can decide whether to render edit /
+    # toggle / archive buttons WITHOUT leaking the raw ``created_by`` value.
+    monkeypatch.setattr(
+        bridge_module.project_api,
+        "list_project_bindings",
+        lambda: [
+            {
+                "id": 1,
+                "name": "Client",
+                "description": "billable",
+                "enabled": 1,
+                "created_by": "user",
+                "folder_rules": [],
+                "keyword_rules": [],
+            },
+            {
+                "id": 2,
+                "name": "排除规则",
+                "description": "命中后匿名记录",
+                "enabled": 0,
+                "created_by": "system",
+                "folder_rules": [],
+                "keyword_rules": [],
+            },
+        ],
+    )
+
+    result = WebViewBridge().get_project_rules()
+
+    client = result["projects"][0]
+    assert client["is_system"] is False
+    assert client["editable"] is True
+    assert client["can_toggle"] is True
+    assert client["can_archive"] is True
+
+    excluded = result["projects"][1]
+    assert excluded["is_system"] is True
+    assert excluded["editable"] is False
+    assert excluded["can_toggle"] is False
+    assert excluded["can_archive"] is False
+    json.dumps(result, ensure_ascii=False)
