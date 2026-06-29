@@ -1,16 +1,17 @@
-"""Phase 6A / 6B / 6C — Settings / Privacy WebView static-contract tests.
+"""Phase 6A / 6B / 6C / 6D — Settings / Privacy WebView static-contract tests.
 
 These tests read the bundled frontend resources (``index.html`` /
 ``js/*.js`` / ``styles.css`` / ``WorkTrace.spec``) directly without starting
-the GUI. They lock the Settings / Privacy page contracts for Phase 6C
+the GUI. They lock the Settings / Privacy page contracts for Phase 6D
 (read-only status foundation + clipboard capture toggle write + encrypted
-backup export + encrypted backup manifest preview): the page must be
-migrated (no placeholder), the required DOM ids must exist,
-``settings.js`` must be loaded in the correct order, and the JS must only
-call ``get_settings_privacy_status``, ``set_clipboard_capture_enabled``,
-``export_encrypted_backup``, and ``preview_encrypted_backup_manifest``
-(no import / clear-all / save / set-setting / parse-manifest / file-dialog
-path write paths).
+backup export + encrypted backup manifest preview + encrypted backup import
++ clear-all-local-data): the page must be migrated (no placeholder), the
+required DOM ids must exist, ``settings.js`` must be loaded in the correct
+order, and the JS may only call ``get_settings_privacy_status``,
+``set_clipboard_capture_enabled``, ``export_encrypted_backup``,
+``preview_encrypted_backup_manifest``, ``import_encrypted_backup``, and
+``clear_all_local_data`` (no save / set-setting / parse-manifest /
+arbitrary file-dialog write paths).
 """
 
 from __future__ import annotations
@@ -56,7 +57,8 @@ def test_index_html_settings_page_section_is_migrated_6a() -> None:
 
 
 def test_index_html_settings_required_dom_ids_6a() -> None:
-    """Phase 6A / 6B / 6C: the page-settings section must define the required DOM ids."""
+    """Phase 6A / 6B / 6C / 6D: the page-settings section must define the
+    required DOM ids."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for dom_id in (
         "settings-refresh-btn",
@@ -78,6 +80,14 @@ def test_index_html_settings_required_dom_ids_6a() -> None:
         "settings-backup-manifest-btn",
         "settings-backup-status",
         "settings-backup-manifest",
+        # Phase 6D: encrypted backup import + clear-all controls
+        "settings-backup-import-passphrase",
+        "settings-backup-import-confirm",
+        "settings-backup-import-btn",
+        "settings-backup-import-status",
+        "settings-clear-confirm",
+        "settings-clear-local-data-btn",
+        "settings-clear-status",
     ):
         assert 'id="' + dom_id + '"' in source, (
             "index.html must define DOM id: " + dom_id
@@ -144,29 +154,32 @@ def test_settings_js_defines_load_settings_privacy_status_6a() -> None:
 
 
 def test_settings_js_only_calls_allowed_bridge_methods_6b() -> None:
-    """Phase 6C: settings.js may only call ``get_settings_privacy_status``,
-    ``set_clipboard_capture_enabled``, ``export_encrypted_backup``, and
-    ``preview_encrypted_backup_manifest``. All other write-side bridge
-    methods remain forbidden (import_encrypted_backup /
-    parse_encrypted_backup_manifest / clear_all_local_data /
-    set_setting_value)."""
+    """Phase 6D: settings.js may only call ``get_settings_privacy_status``,
+    ``set_clipboard_capture_enabled``, ``export_encrypted_backup``,
+    ``preview_encrypted_backup_manifest``, ``import_encrypted_backup``,
+    and ``clear_all_local_data``. All other write-side bridge methods
+    remain forbidden (``parse_encrypted_backup_manifest`` is the API
+    facade name, not the bridge method; ``set_setting_value`` is the
+    raw settings write facade and must not be called from JS)."""
     source = read_js("settings.js")
-    # The four allowed Settings bridge method names must be present.
+    # The six allowed Settings bridge method names must be present.
     assert 'App.callBridge("get_settings_privacy_status")' in source
     assert 'App.callBridge("set_clipboard_capture_enabled"' in source
     assert 'App.callBridge("export_encrypted_backup"' in source
     assert 'App.callBridge("preview_encrypted_backup_manifest"' in source
+    assert 'App.callBridge("import_encrypted_backup"' in source
+    assert 'App.callBridge("clear_all_local_data"' in source
     # Every other write-side bridge method is still forbidden. Note:
     # ``parse_encrypted_backup_manifest`` is the API facade name, not the
     # bridge method name; the bridge method is ``preview_encrypted_backup_manifest``
-    # and must not be confused with the parse facade.
+    # and must not be confused with the parse facade. We check for
+    # ``App.callBridge("<forbidden>"`` so forbidden names that appear in
+    # comments / docstrings are not falsely flagged.
     for forbidden in (
-        "import_encrypted_backup",
         "parse_encrypted_backup_manifest",
-        "clear_all_local_data",
         "set_setting_value",
     ):
-        assert forbidden not in source, (
+        assert 'App.callBridge("' + forbidden + '"' not in source, (
             "settings.js must not call bridge method: " + forbidden
         )
 
@@ -211,11 +224,14 @@ def test_settings_js_uses_text_content_not_inner_html_6a() -> None:
 
 
 def test_settings_js_no_clickable_write_buttons_6a() -> None:
-    """Phase 6A / 6C: the Settings / Privacy page must not surface any
-    clickable save / import / clear / clipboard-toggle write button.
-    Phase 6C explicitly allows the encrypted backup export and manifest
-    preview buttons, so export-button patterns are no longer forbidden
-    here; the precise allowed / forbidden DOM ids are locked by
+    """Phase 6A / 6C / 6D: the Settings / Privacy page must not surface any
+    clickable save / clipboard-toggle write button. Phase 6C explicitly
+    allows the encrypted backup export and manifest preview buttons, so
+    export-button patterns are no longer forbidden here; Phase 6D
+    explicitly allows the scoped import button (``settings-backup-import-btn``)
+    and the scoped clear-all button (``settings-clear-local-data-btn``), so
+    the import-btn / clear-btn patterns are no longer forbidden here. The
+    precise allowed / forbidden DOM ids are locked by
     ``test_index_html_no_forbidden_settings_buttons_6c``."""
     source = read_js("settings.js")
     lowered = source.lower()
@@ -223,12 +239,6 @@ def test_settings_js_no_clickable_write_buttons_6a() -> None:
         "savebtn",
         "save_btn",
         "save-button",
-        "importbtn",
-        "import_btn",
-        "import-button",
-        "clearbtn",
-        "clear_btn",
-        "clear-button",
         "toggleclipbtn",
         "toggle_clip_btn",
         "clipboardtogglebtn",
@@ -240,11 +250,15 @@ def test_settings_js_no_clickable_write_buttons_6a() -> None:
 
 
 def test_index_html_no_settings_write_buttons_6a() -> None:
-    """Phase 6A / 6B: index.html page-settings must not include any save /
-    export / import / clear / path / file-dialog / manifest write button
-    id. The clipboard toggle is a checkbox (``settings-clipboard-toggle``),
-    not a button; a ``settings-clipboard-toggle-btn`` id is still forbidden
-    so no separate submit button is introduced alongside the toggle."""
+    """Phase 6A / 6B / 6D: index.html page-settings must not include any
+    save / path / file-dialog write button id, and must not include the
+    ambiguous shortcut ids (without the ``-backup-`` / ``-clear-local-data``
+    segments). Phase 6D allows the scoped ``settings-backup-import-btn``
+    and ``settings-clear-local-data-btn`` ids; the ambiguous shortcut ids
+    ``settings-import-btn`` / ``settings-clear-btn`` /
+    ``settings-clear-all-btn`` remain forbidden. The clipboard toggle is
+    a checkbox (``settings-clipboard-toggle``), not a button; a
+    ``settings-clipboard-toggle-btn`` id is still forbidden."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-settings"')
     assert pos != -1
@@ -641,4 +655,211 @@ def test_settings_js_backup_no_network_storage_clipboard_6c() -> None:
     ):
         assert forbidden not in source, (
             "settings.js must not use: " + forbidden
+        )
+
+
+# --- Phase 6D: encrypted backup import + clear-all-local-data contract ---
+
+
+def test_core_js_declares_settings_import_and_clear_state_6d() -> None:
+    """Phase 6D: core.js must declare ``settingsBackupImportInProgress``
+    and ``settingsClearAllInProgress`` as separate state flags so an
+    import / clear in flight never races the export / manifest / toggle
+    write. These flags are distinct from the Phase 6B
+    ``settingsWriteInProgress`` and the Phase 6C
+    ``settingsBackupExportInProgress`` / ``settingsBackupManifestInProgress``
+    flags."""
+    source = read_js("core.js")
+    assert "settingsBackupImportInProgress" in source, (
+        "core.js must declare settingsBackupImportInProgress for Phase 6D"
+    )
+    assert "settingsClearAllInProgress" in source, (
+        "core.js must declare settingsClearAllInProgress for Phase 6D"
+    )
+
+
+def test_settings_js_defines_import_and_clear_helpers_6d() -> None:
+    """Phase 6D: settings.js must define and expose the import / clear
+    helper functions (setSettingsImportStatus / clearSettingsImportStatus
+    / setSettingsClearStatus / clearSettingsClearStatus /
+    clearBackupManifestPreview / resetFrontendAfterLocalDataReplacement
+    / importEncryptedBackup / clearAllLocalData / setSettingsDangerControlsDisabled)."""
+    source = read_js("settings.js")
+    for name in (
+        "setSettingsImportStatus",
+        "clearSettingsImportStatus",
+        "setSettingsClearStatus",
+        "clearSettingsClearStatus",
+        "clearBackupManifestPreview",
+        "resetFrontendAfterLocalDataReplacement",
+        "importEncryptedBackup",
+        "clearAllLocalData",
+        "setSettingsDangerControlsDisabled",
+    ):
+        assert "function " + name in source, (
+            "settings.js must define function: " + name
+        )
+        assert "App." + name in source, (
+            "settings.js must expose App." + name
+        )
+
+
+def test_settings_js_any_settings_operation_in_progress_includes_6d_flags_6d() -> None:
+    """Phase 6D: ``anySettingsOperationInProgress`` must reference all six
+    Settings operation flags (settingsLoading / settingsWriteInProgress /
+    settingsBackupExportInProgress / settingsBackupManifestInProgress /
+    settingsBackupImportInProgress / settingsClearAllInProgress) so any
+    in-flight import / clear blocks every Settings control together with
+    the read / toggle / export / manifest operations."""
+    source = read_js("settings.js")
+    pos = source.find("function anySettingsOperationInProgress")
+    assert pos != -1
+    body = source[pos:pos + 800]
+    for flag in (
+        "settingsLoading",
+        "settingsWriteInProgress",
+        "settingsBackupExportInProgress",
+        "settingsBackupManifestInProgress",
+        "settingsBackupImportInProgress",
+        "settingsClearAllInProgress",
+    ):
+        assert flag in body, (
+            "anySettingsOperationInProgress must reference flag: " + flag
+        )
+
+
+def test_settings_js_import_does_not_persist_passphrase_6d() -> None:
+    """Phase 6D: the import passphrase must never be saved to ``App``
+    global state. The import function reads the input values into local
+    variables and clears the inputs after the call; it must NOT assign
+    the passphrase to any ``App.`` property."""
+    source = read_js("settings.js")
+    pos = source.find("function importEncryptedBackup")
+    assert pos != -1
+    # Slice to the next top-level function so the body covers the whole
+    # importEncryptedBackup implementation (the clearing code lives near
+    # the end of the function, beyond a fixed 3000-char window). Use
+    # ``\n    function `` to skip nested callback ``function (result)``
+    # expressions inside the body.
+    next_def = source.find("\n    function ", pos + 1)
+    body = source[pos:next_def if next_def != -1 else pos + 6000]
+    # The passphrase must be read into a local variable, not App state.
+    assert "var passphrase" in body
+    # The function must clear the passphrase input after the call.
+    assert 'passInput.value = ""' in body
+    # The function must NOT assign passphrase to any App.* property.
+    assert "App.passphrase" not in body
+    assert "App.importPassphrase" not in body
+    assert "App.backupImportPassphrase" not in body
+
+
+def test_settings_js_import_clear_catch_does_not_read_error_message_6d() -> None:
+    """Phase 6D: the import / clear catch blocks must not read ``.message``
+    on the caught error (never surface raw exception text)."""
+    source = read_js("settings.js")
+    # Whole-module check (Phase 6A already enforced this; Phase 6D
+    # extends it to the new functions).
+    for forbidden in ("err.message", "error.message", "e.message"):
+        assert forbidden not in source, (
+            "settings.js must not read .message in catch: " + forbidden
+        )
+
+
+def test_settings_js_import_clear_uses_text_content_6d() -> None:
+    """Phase 6D: the import / clear status rendering must use
+    ``textContent`` only; ``innerHTML`` is already forbidden module-wide."""
+    source = read_js("settings.js")
+    assert "innerHTML" not in source
+    # The new status helpers must use textContent.
+    for name in ("setSettingsImportStatus", "setSettingsClearStatus"):
+        pos = source.find("function " + name)
+        assert pos != -1
+        body = source[pos:pos + 600]
+        assert "textContent" in body
+
+
+def test_settings_js_reset_frontend_after_local_data_replacement_6d() -> None:
+    """Phase 6D: ``resetFrontendAfterLocalDataReplacement`` must clear the
+    Timeline / Statistics / Project Rules caches and per-session /
+    per-activity selection state so stale ids cannot be operated on after
+    the local DB is replaced by an import or a clear-all."""
+    source = read_js("settings.js")
+    pos = source.find("function resetFrontendAfterLocalDataReplacement")
+    assert pos != -1
+    body = source[pos:pos + 2500]
+    for token in (
+        "App.timelineLoaded = false",
+        "App.statisticsLoaded = false",
+        "App.rulesLoaded = false",
+        "App.projectsCache = null",
+        "App.currentSessions = []",
+        "App.selectedSessionId = null",
+        "App.selectedBatchActivityIds = {}",
+    ):
+        assert token in body, (
+            "resetFrontendAfterLocalDataReplacement must clear: " + token
+        )
+
+
+def test_settings_js_import_clear_confirm_literals_present_6d() -> None:
+    """Phase 6D: the import / clear paths must use the explicit Chinese
+    confirmation literals ``导入并替换`` (import) and ``清空本地数据``
+    (clear) so the user must type the exact phrase to trigger the
+    destructive operation."""
+    source = read_js("settings.js")
+    assert "导入并替换" in source
+    assert "清空本地数据" in source
+
+
+def test_settings_js_import_clear_refresh_status_and_overview_6d() -> None:
+    """Phase 6D: the import / clear success path must trigger a Settings
+    status refresh (``App.loadSettingsPrivacyStatus``) and refresh the
+    global overview / recent / status (``App.refreshAll``) so the main UI
+    does not keep showing pre-import / pre-clear data."""
+    source = read_js("settings.js")
+    for name in ("importEncryptedBackup", "clearAllLocalData"):
+        pos = source.find("function " + name)
+        assert pos != -1
+        body = source[pos:pos + 3500]
+        assert "App.loadSettingsPrivacyStatus()" in body, (
+            name + " success path must call App.loadSettingsPrivacyStatus()"
+        )
+        assert "App.refreshAll" in body, (
+            name + " success path must call App.refreshAll"
+        )
+
+
+def test_init_js_binds_import_and_clear_buttons_6d() -> None:
+    """Phase 6D: initButtons must bind the ``settings-backup-import-btn``
+    click event to ``App.importEncryptedBackup`` and the
+    ``settings-clear-local-data-btn`` click event to
+    ``App.clearAllLocalData``."""
+    source = read_js("init.js")
+    pos = source.find("function initButtons")
+    assert pos != -1
+    body = source[pos:pos + 12000]
+    assert "settings-backup-import-btn" in body
+    assert "importEncryptedBackup" in body
+    assert "settings-clear-local-data-btn" in body
+    assert "clearAllLocalData" in body
+
+
+def test_styles_css_has_import_and_clear_scoped_classes_6d() -> None:
+    """Phase 6D: styles.css must define the ``.settings-backup-import-*``
+    and ``.settings-danger-*`` / ``.settings-clear-*`` scoped classes
+    used by the encrypted backup import and clear-all-local-data
+    controls."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    for cls in (
+        ".settings-backup-import-section",
+        ".settings-backup-import-title",
+        ".settings-backup-import-hint",
+        ".settings-backup-import-btn",
+        ".settings-danger-clear-section",
+        ".settings-danger-clear-title",
+        ".settings-danger-clear-hint",
+        ".settings-clear-local-data-btn",
+    ):
+        assert cls in source, (
+            "styles.css must define Phase 6D class: " + cls
         )

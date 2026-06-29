@@ -448,7 +448,7 @@
                 <header class="page-header settings-header">
                     <div class="settings-header-text">
                         <h1>设置与隐私</h1>
-                        <p class="settings-subtitle">本页面展示本地存储与隐私安全状态，开放剪贴板记录开关与加密备份导出 / 清单预览；其他写操作暂不开放。</p>
+                        <p class="settings-subtitle">本页面展示本地存储与隐私安全状态，开放剪贴板记录开关、加密备份导出 / 清单预览、加密备份导入（替换）以及清空本地数据；其他写操作暂不开放。</p>
                     </div>
                     <button id="settings-refresh-btn" type="button" class="settings-refresh-btn">刷新状态</button>
                 </header>
@@ -488,11 +488,37 @@
                             <p class="settings-backup-manifest-filename"></p>
                             <dl class="settings-backup-manifest-fields"></dl>
                         </div>
-                        <p class="settings-card-line">加密备份导入将在后续阶段以独立确认流程开放，本阶段不提供入口。</p>
+                        <div class="settings-backup-import-section">
+                            <div class="settings-backup-import-title">导入加密备份（替换当前本地数据）</div>
+                            <p class="settings-backup-import-hint">导入将以替换方式覆盖当前本地数据库；导入成功后 WorkTrace 会保持暂停，请在检查数据后手动恢复记录。</p>
+                            <div class="settings-backup-row">
+                                <label class="settings-backup-label" for="settings-backup-import-passphrase">备份口令</label>
+                                <input id="settings-backup-import-passphrase" type="password" class="settings-backup-input" autocomplete="off" disabled>
+                            </div>
+                            <div class="settings-backup-row">
+                                <label class="settings-backup-label" for="settings-backup-import-confirm">确认文字</label>
+                                <input id="settings-backup-import-confirm" type="text" class="settings-backup-input" autocomplete="off" placeholder="导入并替换" disabled>
+                            </div>
+                            <div class="settings-backup-actions">
+                                <button id="settings-backup-import-btn" type="button" class="settings-backup-btn settings-backup-import-btn" disabled>导入加密备份</button>
+                            </div>
+                            <p id="settings-backup-import-status" class="settings-backup-status" hidden></p>
+                        </div>
                     </article>
                     <article id="settings-danger-card" class="settings-card settings-danger-card">
                         <h2 class="settings-card-title">危险操作</h2>
-                        <p class="settings-card-line">清空本地数据等危险操作将在后续阶段以单独确认流程开放，本阶段不提供任何入口。</p>
+                        <div class="settings-danger-clear-section">
+                            <div class="settings-danger-clear-title">清空本地数据</div>
+                            <p class="settings-danger-clear-hint">该操作将清空当前本地数据库中的所有项目、活动记录、规则与设置，并重建默认数据。清空期间会暂停采集器并阻断写入；成功后 WorkTrace 会保持暂停，请在检查后手动恢复记录。</p>
+                            <div class="settings-backup-row">
+                                <label class="settings-backup-label" for="settings-clear-confirm">确认文字</label>
+                                <input id="settings-clear-confirm" type="text" class="settings-backup-input settings-clear-input" autocomplete="off" placeholder="清空本地数据" disabled>
+                            </div>
+                            <div class="settings-backup-actions">
+                                <button id="settings-clear-local-data-btn" type="button" class="settings-backup-btn settings-clear-local-data-btn" disabled>清空本地数据</button>
+                            </div>
+                            <p id="settings-clear-status" class="settings-backup-status" hidden></p>
+                        </div>
                     </article>
                 </div>
             </section>

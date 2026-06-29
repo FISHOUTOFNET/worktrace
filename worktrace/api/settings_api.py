@@ -13,6 +13,13 @@ from typing import Any
 
 from . import backup_api
 from ..services import export_service
+from ..services.secure_backup_service import (
+    BackupCorruptedError,
+    BackupDecryptionError,
+    BackupImportInProgressError,
+    BackupVersionNotSupportedError,
+    SecureBackupError,
+)
 from ..services.settings_service import (
     get_bool_setting,
     get_int_setting,
@@ -143,7 +150,7 @@ def get_settings_privacy_status() -> dict[str, Any]:
             secure_import_in_progress = False
         status: dict[str, Any] = {
             "page": "settings_privacy",
-            "phase": "6C",
+            "phase": "6D",
             "storage_model": "local_only",
             "clipboard_capture_enabled": clipboard_enabled,
             "export_path_configured": export_path_configured,
@@ -151,11 +158,11 @@ def get_settings_privacy_status() -> dict[str, Any]:
             "encrypted_backup": {
                 "supported": True,
                 "export_available_in_webview": True,
-                "import_available_in_webview": False,
+                "import_available_in_webview": True,
                 "manifest_preview_available_in_webview": True,
             },
             "destructive_actions": {
-                "clear_all_local_data_available_in_webview": False,
+                "clear_all_local_data_available_in_webview": True,
             },
         }
         return {"ok": True, "status": status}
@@ -288,6 +295,155 @@ def preview_encrypted_backup_manifest_for_webview(
     return {"ok": True, "filename": filename, "manifest": manifest}
 
 
+# --- Settings / Privacy encrypted backup import (Phase 6D) ------------
+
+
+def import_encrypted_backup_for_webview(
+    input_path: str,
+    passphrase: str,
+    confirm_text: str,
+) -> dict[str, Any]:
+    """Import an encrypted ``.wtbackup`` file from the WebView UI.
+
+    Phase 6D narrow write facade. Replace-only: accepts a non-empty
+    ``input_path`` string that ends with ``.wtbackup`` (case-insensitive),
+    a non-empty ``passphrase`` string, and a ``confirm_text`` string whose
+    stripped value must be exactly ``导入并替换``. The suffix is NOT
+    auto-appended; a wrong suffix is rejected outright.
+
+    On success returns the narrow payload ``{"ok": True, "message":
+    "加密备份已导入，WorkTrace 已暂停，请检查数据后手动恢复记录",
+    "imported_table_count": int, "imported_row_count": int,
+    "folder_index_reset": bool}``. The counts are aggregated from
+    ``ImportResult.imported_tables``; the raw table-name -> row-count
+    dict and table names are never returned to the UI.
+
+    On failure returns ``{"ok": False, "error": "<chinese>"}``:
+    - invalid path: ``请选择有效的加密备份文件``
+    - invalid passphrase: ``请输入备份口令``
+    - invalid confirmation: ``请输入确认文字：导入并替换``
+    - ``BackupImportInProgressError``: ``已有加密备份导入正在进行``
+    - ``BackupDecryptionError`` / ``BackupCorruptedError``:
+      ``备份口令错误或文件已损坏``
+    - ``BackupVersionNotSupportedError``: ``备份文件版本不受支持``
+    - any other ``SecureBackupError`` / ``RuntimeError`` / ``Exception``:
+      ``导入加密备份失败``
+
+    The payload never carries the full path, passphrase, raw exception,
+    SQL, traceback, salt, ciphertext, payload, window title, file path
+    hint, note, or clipboard content. This facade does not call
+    ``export_encrypted_backup``, ``parse_encrypted_backup_manifest``,
+    ``clear_all_local_data``, or ``set_setting_value``.
+    """
+    # Strict type checks: input_path must be a non-empty string that ends
+    # with .wtbackup (case-insensitive). bool / None / int / list / dict /
+    # object / wrong suffix rejected. The suffix is NOT auto-appended.
+    if not isinstance(input_path, str) or isinstance(input_path, bool):
+        return {"ok": False, "error": "请选择有效的加密备份文件"}
+    if not input_path or not input_path.strip():
+        return {"ok": False, "error": "请选择有效的加密备份文件"}
+    if not input_path.lower().endswith(".wtbackup"):
+        return {"ok": False, "error": "请选择有效的加密备份文件"}
+    # passphrase must be a non-empty string; whitespace-only rejected.
+    # passphrase is NOT trimmed / normalized / written to any global state.
+    if not isinstance(passphrase, str) or isinstance(passphrase, bool):
+        return {"ok": False, "error": "请输入备份口令"}
+    if not passphrase or not passphrase.strip():
+        return {"ok": False, "error": "请输入备份口令"}
+    # confirm_text must be a real string whose stripped value is exactly
+    # the literal confirmation phrase.
+    if not isinstance(confirm_text, str) or isinstance(confirm_text, bool):
+        return {"ok": False, "error": "请输入确认文字：导入并替换"}
+    if confirm_text.strip() != "导入并替换":
+        return {"ok": False, "error": "请输入确认文字：导入并替换"}
+    try:
+        result = backup_api.import_encrypted_backup(
+            input_path, passphrase, mode="replace"
+        )
+    except BackupImportInProgressError:
+        return {"ok": False, "error": "已有加密备份导入正在进行"}
+    except (BackupDecryptionError, BackupCorruptedError):
+        return {"ok": False, "error": "备份口令错误或文件已损坏"}
+    except BackupVersionNotSupportedError:
+        return {"ok": False, "error": "备份文件版本不受支持"}
+    except (SecureBackupError, RuntimeError, Exception):
+        # Collapse any other service-layer exception to a generic message.
+        # Never expose raw exception text / traceback / SQL / path /
+        # passphrase / salt / ciphertext / payload.
+        return {"ok": False, "error": "导入加密备份失败"}
+    # Aggregate the imported_tables dict into display-safe counts only.
+    imported_tables = result.imported_tables or {}
+    imported_table_count = int(len(imported_tables))
+    imported_row_count = int(sum(imported_tables.values()))
+    return {
+        "ok": True,
+        "message": "加密备份已导入，WorkTrace 已暂停，请检查数据后手动恢复记录",
+        "imported_table_count": imported_table_count,
+        "imported_row_count": imported_row_count,
+        "folder_index_reset": bool(result.folder_index_reset),
+    }
+
+
+# --- Settings / Privacy clear-all-local-data (Phase 6D) ---------------
+
+
+def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
+    """Clear all local data from the WebView UI.
+
+    Phase 6D narrow write facade. ``confirm_text`` must be a real string
+    whose stripped value is exactly ``清空本地数据``; bool / None / int /
+    list / dict / object / empty / whitespace-only are all rejected.
+    Only when the confirmation matches does this facade call the existing
+    ``clear_all_local_data(confirm=True)``, which runs inside a
+    destructive reset guard that pauses the collector and blocks
+    collector writes for the duration of the DB replacement.
+
+    On success returns ``{"ok": True, "message": "本地数据已清空",
+    "status": <get_settings_privacy_status()["status"]>}`` so the frontend
+    can re-render the Settings / Privacy status without a second
+    round-trip. If the status refresh fails after a successful clear the
+    facade returns ``{"ok": True, "message": "本地数据已清空"}`` so the
+    successful clear is not masked by a status-read failure.
+
+    On failure returns ``{"ok": False, "error": "<chinese>"}``:
+    - invalid confirmation: ``请输入确认文字：清空本地数据``
+    - any exception (including ``operation_in_progress`` from the
+      destructive reset guard): ``清空本地数据失败``
+
+    The payload never carries raw exception, traceback, SQL, path,
+    clipboard content, window title, file path hint, or note. This facade
+    does not call encrypted backup export / import / manifest, and does
+    not call ``set_setting_value``.
+    """
+    # Strict type checks: confirm_text must be a real string whose
+    # stripped value is exactly the literal confirmation phrase.
+    if not isinstance(confirm_text, str) or isinstance(confirm_text, bool):
+        return {"ok": False, "error": "请输入确认文字：清空本地数据"}
+    if confirm_text.strip() != "清空本地数据":
+        return {"ok": False, "error": "请输入确认文字：清空本地数据"}
+    try:
+        export_service.clear_all_local_data(confirm=True)
+    except Exception:
+        # Collapse any exception (including ValueError from the guard
+        # when a destructive operation is already in progress) to the
+        # stable Chinese message. Never expose raw exception text /
+        # traceback / SQL / path / clipboard / window title / note.
+        return {"ok": False, "error": "清空本地数据失败"}
+    # Try to refresh the status so the frontend can re-render; on failure
+    # still report the successful clear so it is not masked by a read error.
+    try:
+        status_result = get_settings_privacy_status()
+        if status_result.get("ok"):
+            return {
+                "ok": True,
+                "message": "本地数据已清空",
+                "status": status_result["status"],
+            }
+    except Exception:
+        pass
+    return {"ok": True, "message": "本地数据已清空"}
+
+
 # --- Settings / Privacy clipboard capture toggle write (Phase 6B) -------
 
 
@@ -328,6 +484,7 @@ def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
 __all__ = [
     "accept_first_run_notice",
     "clear_all_local_data",
+    "clear_all_local_data_for_webview",
     "export_encrypted_backup_for_webview",
     "first_run_notice_accepted",
     "get_bool_setting_value",
@@ -339,6 +496,7 @@ __all__ = [
     "get_setting_value",
     "get_settings_privacy_status",
     "get_ui_refresh_seconds",
+    "import_encrypted_backup_for_webview",
     "is_clipboard_capture_enabled",
     "is_paused",
     "is_user_paused",

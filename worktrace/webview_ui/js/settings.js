@@ -1,8 +1,8 @@
-// WorkTrace WebView frontend — settings module (Phase 6C).
-// Settings / Privacy page: read-only status loading, capture toggle
-// write, encrypted backup export, and encrypted backup manifest preview.
-// Import / clear-all / save / arbitrary file-dialog actions are NOT
-// opened in this phase. Dynamic content is rendered via textContent only.
+// WorkTrace WebView frontend — settings module (Phase 6D).
+// Settings / Privacy: status load, capture toggle, encrypted backup
+// export / manifest preview / import (replace-only), clear-all-local-data.
+// Save-settings / set_setting_value / arbitrary file-dialog NOT opened.
+// Dynamic content uses textContent only; passphrase never persisted.
 
 (function () {
     "use strict";
@@ -33,43 +33,68 @@
 
     function anySettingsOperationInProgress() {
         // True when any Settings read / capture-toggle write / backup export /
-        // manifest preview is in flight. Used to keep all Settings controls
-        // disabled together so no two operations can race.
+        // manifest preview / backup import / clear-all is in flight. Used to
+        // keep all Settings controls disabled together so no two operations
+        // can race. Phase 6D adds the two new flags at the end.
         return !!(
             App.settingsLoading
             || App.settingsWriteInProgress
             || App.settingsBackupExportInProgress
             || App.settingsBackupManifestInProgress
+            || App.settingsBackupImportInProgress
+            || App.settingsClearAllInProgress
         );
     }
     App.anySettingsOperationInProgress = anySettingsOperationInProgress;
 
     function setSettingsBackupControlsDisabled(disabled) {
-        // Backup-specific controls: passphrase inputs, export button, and
-        // manifest preview button. They stay disabled until the first
-        // successful status read and during any in-flight Settings op.
+        // Backup-specific controls: passphrase inputs, export button,
+        // manifest preview button, and the Phase 6D import controls
+        // (import passphrase / import confirm / import button). They stay
+        // disabled until the first successful status read and during any
+        // in-flight Settings op.
         var backupDisabled = disabled || !App.settingsLoaded;
         var exportBtn = document.getElementById("settings-backup-export-btn");
         var manifestBtn = document.getElementById("settings-backup-manifest-btn");
         var passInput = document.getElementById("settings-backup-passphrase");
         var passConfirmInput = document.getElementById("settings-backup-passphrase-confirm");
+        var importPassInput = document.getElementById("settings-backup-import-passphrase");
+        var importConfirmInput = document.getElementById("settings-backup-import-confirm");
+        var importBtn = document.getElementById("settings-backup-import-btn");
         if (exportBtn) exportBtn.disabled = backupDisabled;
         if (manifestBtn) manifestBtn.disabled = backupDisabled;
         if (passInput) passInput.disabled = backupDisabled;
         if (passConfirmInput) passConfirmInput.disabled = backupDisabled;
+        if (importPassInput) importPassInput.disabled = backupDisabled;
+        if (importConfirmInput) importConfirmInput.disabled = backupDisabled;
+        if (importBtn) importBtn.disabled = backupDisabled;
     }
     App.setSettingsBackupControlsDisabled = setSettingsBackupControlsDisabled;
 
+    function setSettingsDangerControlsDisabled(disabled) {
+        // Phase 6D: clear-all controls (confirm input + clear button). They
+        // stay disabled until the first successful status read and during
+        // any in-flight Settings op, mirroring the backup controls.
+        var dangerDisabled = disabled || !App.settingsLoaded;
+        var clearConfirmInput = document.getElementById("settings-clear-confirm");
+        var clearBtn = document.getElementById("settings-clear-local-data-btn");
+        if (clearConfirmInput) clearConfirmInput.disabled = dangerDisabled;
+        if (clearBtn) clearBtn.disabled = dangerDisabled;
+    }
+    App.setSettingsDangerControlsDisabled = setSettingsDangerControlsDisabled;
+
     function setSettingsControlsDisabled(disabled) {
-        // Shared disable for the refresh button, the capture toggle, and
-        // the backup controls. While any read or write is in flight, all
+        // Shared disable for the refresh button, the capture toggle, the
+        // backup controls (export / manifest / import), and the danger
+        // controls (clear-all). While any read or write is in flight, all
         // Settings controls are disabled to prevent races between the
-        // capture toggle and backup operations.
+        // capture toggle, backup operations, and destructive reset.
         var btn = document.getElementById("settings-refresh-btn");
         if (btn) btn.disabled = disabled;
         var toggle = document.getElementById("settings-clipboard-toggle");
         if (toggle) toggle.disabled = disabled || !App.settingsLoaded;
         setSettingsBackupControlsDisabled(disabled);
+        setSettingsDangerControlsDisabled(disabled);
     }
     App.setSettingsControlsDisabled = setSettingsControlsDisabled;
 
@@ -154,11 +179,16 @@
         // Phase 6A hardening: refuse concurrent loads. The refresh button
         // and toggle are already disabled while loading, but this guard
         // also covers programmatic triggers (lazy load on page switch).
-        if (App.settingsLoading) return;
+        // Phase 6D: returns a Promise so import / clear success paths can
+        // chain a status refresh and only then re-enable controls. When a
+        // load is already in flight the call returns a resolved Promise so
+        // the caller's chain still runs (the in-flight load will refresh
+        // the UI when it settles).
+        if (App.settingsLoading) return Promise.resolve();
         setSettingsLoading(true);
         clearSettingsError();
         var token = ++App.settingsRequestToken;
-        App.callBridge("get_settings_privacy_status").then(function (result) {
+        return App.callBridge("get_settings_privacy_status").then(function (result) {
             if (token !== App.settingsRequestToken) return;  // stale response
             var data = App.handleResult(result, function (msg) {
                 // Never surface raw exception text; the bridge already
@@ -370,4 +400,214 @@
         });
     }
     App.previewEncryptedBackupManifest = previewEncryptedBackupManifest;
+
+    // --- Phase 6D: encrypted backup import + clear-all-local-data ------
+
+    var BACKUP_IMPORT_ERROR_MESSAGE = "导入加密备份失败";
+    var CLEAR_ALL_ERROR_MESSAGE = "清空本地数据失败";
+    var IMPORT_CONFIRM_LITERAL = "导入并替换";
+    var CLEAR_CONFIRM_LITERAL = "清空本地数据";
+
+    function setSettingsImportStatus(text) {
+        // Import-specific status line (separate from the page-level
+        // settings-error banner and from the export status line). Renders
+        // via textContent only.
+        var el = document.getElementById("settings-backup-import-status");
+        if (!el) return;
+        if (!text) {
+            el.hidden = true;
+            el.textContent = "";
+            return;
+        }
+        el.hidden = false;
+        el.textContent = text;
+    }
+    App.setSettingsImportStatus = setSettingsImportStatus;
+
+    function clearSettingsImportStatus() {
+        setSettingsImportStatus("");
+    }
+    App.clearSettingsImportStatus = clearSettingsImportStatus;
+
+    function setSettingsClearStatus(text) {
+        // Clear-all-specific status line. Renders via textContent only.
+        var el = document.getElementById("settings-clear-status");
+        if (!el) return;
+        if (!text) {
+            el.hidden = true;
+            el.textContent = "";
+            return;
+        }
+        el.hidden = false;
+        el.textContent = text;
+    }
+    App.setSettingsClearStatus = setSettingsClearStatus;
+
+    function clearSettingsClearStatus() {
+        setSettingsClearStatus("");
+    }
+    App.clearSettingsClearStatus = clearSettingsClearStatus;
+
+    function clearBackupManifestPreview() {
+        // Hide and clear any previously-rendered manifest preview so the
+        // user does not see stale manifest data after an import / clear
+        // replaces the local DB. Reuses renderBackupManifest(null, "").
+        renderBackupManifest(null, "");
+    }
+    App.clearBackupManifestPreview = clearBackupManifestPreview;
+
+    function resetFrontendAfterLocalDataReplacement() {
+        // After an encrypted backup import or a clear-all-local-data the
+        // local DB has been replaced. The frontend caches Timeline /
+        // Statistics / Project Rules data and per-session selection state
+        // that now points at activities / sessions / projects / rules that
+        // no longer exist (or whose ids have changed). This helper clears
+        // those caches and selections so the user does not operate on
+        // stale data when they switch back to Timeline / Statistics /
+        // Project Rules. The Settings page itself is NOT torn down: the
+        // caller chains a Settings status refresh after this so the
+        // Settings cards reflect the post-replacement state.
+        App.timelineLoaded = false;
+        App.statisticsLoaded = false;
+        App.rulesLoaded = false;
+        App.projectsCache = null;
+        App.currentSessions = [];
+        // Clear per-session / per-activity selection state so a stale id
+        // cannot be operated on by the next click on an old button.
+        App.selectedSessionId = null;
+        App.editingSession = null;
+        App.editingActivityId = null;
+        App.editingSplitActivityId = null;
+        App.mergingActivityId = null;
+        App.hidingActivityId = null;
+        App.deletingActivityId = null;
+        App.selectedBatchActivityIds = {};
+        // Clear cached payloads so the next page visit re-fetches.
+        App.lastTimelineData = null;
+        App.lastProjectRulesData = null;
+        App.rulesImpactPreviewKey = null;
+        App.rulesImpactPreviewData = null;
+        App.rulesBatchSelectedKeys = {};
+        App.rulesBatchPanelData = null;
+        // The Settings status refresh is intentionally NOT done here; the
+        // caller chains App.loadSettingsPrivacyStatus() after this so the
+        // Settings cards re-render with the post-replacement status.
+    }
+    App.resetFrontendAfterLocalDataReplacement = resetFrontendAfterLocalDataReplacement;
+
+    function importEncryptedBackup() {
+        // Read passphrase + confirm text from the import inputs. Do NOT
+        // persist the passphrase in App / DOM attribute / browser storage;
+        // it is only used as a call argument and cleared on finally.
+        if (anySettingsOperationInProgress()) return;
+        var passInput = document.getElementById("settings-backup-import-passphrase");
+        var confirmInput = document.getElementById("settings-backup-import-confirm");
+        var passphrase = passInput ? String(passInput.value || "") : "";
+        var confirmText = confirmInput ? String(confirmInput.value || "") : "";
+        if (!passphrase || !passphrase.trim()) {
+            setSettingsImportStatus("请输入备份口令");
+            return;
+        }
+        if (!confirmText || confirmText.trim() !== IMPORT_CONFIRM_LITERAL) {
+            setSettingsImportStatus("请输入确认文字：" + IMPORT_CONFIRM_LITERAL);
+            return;
+        }
+        App.settingsBackupImportInProgress = true;
+        setSettingsControlsDisabled(true);
+        setSettingsImportStatus("正在导入加密备份…");
+        App.callBridge("import_encrypted_backup", passphrase, confirmText).then(function (result) {
+            var data = App.handleResult(result, function (msg) {
+                // Bridge already collapsed to a stable Chinese message.
+                setSettingsImportStatus(msg || BACKUP_IMPORT_ERROR_MESSAGE);
+            });
+            if (!data) return;
+            // Render display-safe counts only: imported table count +
+            // imported row count. Table names / paths / payload never
+            // appear in the bridge payload.
+            var tableCount = Number(data.imported_table_count || 0);
+            var rowCount = Number(data.imported_row_count || 0);
+            var statusText = (data.message || "加密备份已导入");
+            if (tableCount > 0 || rowCount > 0) {
+                statusText += "（已导入：" + tableCount + " 个数据组 / " + rowCount + " 条记录）";
+            }
+            setSettingsImportStatus(statusText);
+            // Reset frontend caches so stale Timeline / Statistics /
+            // Project Rules data is not operated on after the replacement.
+            resetFrontendAfterLocalDataReplacement();
+            // Hide any previously-rendered manifest preview; it referred
+            // to a different file / a pre-import state.
+            clearBackupManifestPreview();
+            // Chain a Settings status refresh so the cards reflect the
+            // post-import paused state, then refresh the global overview
+            // / recent / status so the main UI does not keep showing the
+            // pre-import data.
+            return App.loadSettingsPrivacyStatus().then(function () {
+                if (typeof App.refreshAll === "function") {
+                    App.refreshAll();
+                }
+            });
+        }).catch(function () {
+            // Never read .message; show stable Chinese error.
+            setSettingsImportStatus(BACKUP_IMPORT_ERROR_MESSAGE);
+        }).then(function () {
+            // finally: clear passphrase + confirm inputs, clear the
+            // in-flight flag, and re-enable controls unless another
+            // Settings op is still in flight.
+            if (passInput) passInput.value = "";
+            if (confirmInput) confirmInput.value = "";
+            App.settingsBackupImportInProgress = false;
+            setSettingsControlsDisabled(anySettingsOperationInProgress());
+        });
+    }
+    App.importEncryptedBackup = importEncryptedBackup;
+
+    function clearAllLocalData() {
+        // Read the explicit Chinese confirmation literal. No native dialog
+        // is opened; the API facade rejects anything that is not the
+        // literal phrase after strip.
+        if (anySettingsOperationInProgress()) return;
+        var confirmInput = document.getElementById("settings-clear-confirm");
+        var confirmText = confirmInput ? String(confirmInput.value || "") : "";
+        if (!confirmText || confirmText.trim() !== CLEAR_CONFIRM_LITERAL) {
+            setSettingsClearStatus("请输入确认文字：" + CLEAR_CONFIRM_LITERAL);
+            return;
+        }
+        App.settingsClearAllInProgress = true;
+        setSettingsControlsDisabled(true);
+        setSettingsClearStatus("正在清空本地数据…");
+        App.callBridge("clear_all_local_data", confirmText).then(function (result) {
+            var data = App.handleResult(result, function (msg) {
+                // Bridge already collapsed to a stable Chinese message.
+                setSettingsClearStatus(msg || CLEAR_ALL_ERROR_MESSAGE);
+            });
+            if (!data) return;
+            setSettingsClearStatus(data.message || "本地数据已清空");
+            // Reset frontend caches so stale Timeline / Statistics /
+            // Project Rules data is not operated on after the reset.
+            resetFrontendAfterLocalDataReplacement();
+            // Hide any previously-rendered manifest preview; it referred
+            // to a pre-clear backup file.
+            clearBackupManifestPreview();
+            // Chain a Settings status refresh so the cards reflect the
+            // post-clear paused state, then refresh the global overview
+            // / recent / status so the main UI does not keep showing the
+            // pre-clear data.
+            return App.loadSettingsPrivacyStatus().then(function () {
+                if (typeof App.refreshAll === "function") {
+                    App.refreshAll();
+                }
+            });
+        }).catch(function () {
+            // Never read .message; show stable Chinese error.
+            setSettingsClearStatus(CLEAR_ALL_ERROR_MESSAGE);
+        }).then(function () {
+            // finally: clear the confirm input, clear the in-flight flag,
+            // and re-enable controls unless another Settings op is still
+            // in flight.
+            if (confirmInput) confirmInput.value = "";
+            App.settingsClearAllInProgress = false;
+            setSettingsControlsDisabled(anySettingsOperationInProgress());
+        });
+    }
+    App.clearAllLocalData = clearAllLocalData;
 })();

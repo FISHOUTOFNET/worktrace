@@ -1,13 +1,16 @@
-"""Phase 6A / 6B / 6C — Settings / Privacy status facade + bridge tests.
+"""Phase 6A / 6B / 6C / 6D — Settings / Privacy status facade + bridge tests.
 
 These tests verify the ``settings_api.get_settings_privacy_status`` facade,
 the ``settings_api.set_clipboard_capture_enabled_for_webview`` write facade,
 the ``settings_api.export_encrypted_backup_for_webview`` and
-``settings_api.preview_encrypted_backup_manifest_for_webview`` facades, and
-the corresponding ``WebViewBridge`` methods. They assert the read-only
-status payload and the clipboard capture toggle / backup export / manifest
-preview write payloads never leak paths, clipboard content, passphrases,
-tracebacks, or any unintended write-side action surface.
+``settings_api.preview_encrypted_backup_manifest_for_webview`` facades, the
+Phase 6D ``settings_api.import_encrypted_backup_for_webview`` and
+``settings_api.clear_all_local_data_for_webview`` facades, and the
+corresponding ``WebViewBridge`` methods. They assert the read-only status
+payload and the clipboard capture toggle / backup export / manifest preview
+/ backup import / clear-all write payloads never leak paths, clipboard
+content, passphrases, tracebacks, or any unintended write-side action
+surface.
 """
 
 from __future__ import annotations
@@ -21,14 +24,20 @@ import pytest
 from worktrace.api import settings_api
 from worktrace.api.backup_api import BackupManifestInfo
 from worktrace.api.settings_api import (
+    clear_all_local_data_for_webview,
     export_encrypted_backup_for_webview,
     get_settings_privacy_status,
+    import_encrypted_backup_for_webview,
     preview_encrypted_backup_manifest_for_webview,
     set_clipboard_capture_enabled_for_webview,
 )
 from worktrace.services.secure_backup_service import (
     BackupCorruptedError,
+    BackupDecryptionError,
+    BackupImportInProgressError,
     BackupVersionNotSupportedError,
+    ImportResult,
+    SecureBackupError,
 )
 from worktrace.services.settings_service import set_setting
 from worktrace.webview_ui.bridge import WebViewBridge
@@ -63,7 +72,7 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
     ):
         assert key in status, f"status missing required key: {key}"
     assert status["page"] == "settings_privacy"
-    assert status["phase"] == "6C"
+    assert status["phase"] == "6D"
     assert status["storage_model"] == "local_only"
 
 
@@ -118,23 +127,26 @@ def test_api_secure_import_in_progress_reflects_backup_guard(temp_db) -> None:
     assert status["secure_import_in_progress"] is False
 
 
-def test_api_encrypted_backup_availability_fields_match_phase_6c(temp_db) -> None:
-    # Phase 6C: export + manifest preview are now available in WebView;
-    # import remains unavailable (planned for Phase 6D).
+def test_api_encrypted_backup_availability_fields_match_phase_6d(temp_db) -> None:
+    # Phase 6D: export + manifest preview + import are all available in
+    # WebView. Export / manifest preview were opened in Phase 6C; import
+    # is opened in Phase 6D.
     status = get_settings_privacy_status()["status"]
     enc = status["encrypted_backup"]
     assert isinstance(enc, dict)
     assert enc["supported"] is True
     assert enc["export_available_in_webview"] is True
-    assert enc["import_available_in_webview"] is False
+    assert enc["import_available_in_webview"] is True
     assert enc["manifest_preview_available_in_webview"] is True
 
 
-def test_api_destructive_clear_all_availability_is_false(temp_db) -> None:
+def test_api_destructive_clear_all_availability_is_true(temp_db) -> None:
+    # Phase 6D: clear-all-local-data is now available in WebView behind
+    # the explicit Chinese confirmation literal.
     status = get_settings_privacy_status()["status"]
     destructive = status["destructive_actions"]
     assert isinstance(destructive, dict)
-    assert destructive["clear_all_local_data_available_in_webview"] is False
+    assert destructive["clear_all_local_data_available_in_webview"] is True
 
 
 def test_api_payload_is_json_serializable(temp_db) -> None:
@@ -1164,3 +1176,704 @@ def test_bridge_preview_uses_open_dialog_with_wtbackup_filter(temp_db) -> None:
     assert call["file_types"] == ("WorkTrace Backup (*.wtbackup)",)
     # The open dialog must NOT pass save_filename.
     assert "save_filename" not in call
+
+
+# --- Phase 6D: API import facade --------------------------------------
+
+
+def test_api_import_success_returns_narrow_payload(temp_db) -> None:
+    # Mock the backend import so no real file is read. The facade must
+    # aggregate the imported_tables dict into display-safe counts only;
+    # the raw dict / table names must never appear in the payload.
+    fake_result = ImportResult(
+        mode="replace",
+        imported_tables={"activity_log": 5, "project": 2, "settings": 1},
+        folder_index_reset=True,
+    )
+    with patch(
+        "worktrace.api.backup_api.import_encrypted_backup",
+        return_value=fake_result,
+    ) as mock_import:
+        result = import_encrypted_backup_for_webview(
+            "C:\\backups\\worktrace-backup.wtbackup",
+            SENSITIVE_PASSPHRASE,
+            "导入并替换",
+        )
+    # The backend must have been called in replace mode.
+    args, kwargs = mock_import.call_args
+    assert args[0] == "C:\\backups\\worktrace-backup.wtbackup"
+    assert args[1] == SENSITIVE_PASSPHRASE
+    assert kwargs.get("mode") == "replace" or args[-1] == "replace"
+    # Narrow payload: only ok / message / imported_table_count /
+    # imported_row_count / folder_index_reset.
+    assert result.get("ok") is True
+    assert set(result.keys()) == {
+        "ok",
+        "message",
+        "imported_table_count",
+        "imported_row_count",
+        "folder_index_reset",
+    }
+    assert result["message"] == "加密备份已导入，WorkTrace 已暂停，请检查数据后手动恢复记录"
+    assert result["imported_table_count"] == 3
+    assert result["imported_row_count"] == 8
+    assert result["folder_index_reset"] is True
+    # The raw table-name dict and table names must never leak.
+    serialized = json.dumps(result, ensure_ascii=False)
+    for forbidden in (
+        "activity_log",
+        "project",
+        "settings",
+        "imported_tables",
+        "C:\\\\backups",
+        SENSITIVE_PASSPHRASE,
+        "Traceback",
+        "sqlite3.",
+    ):
+        assert forbidden not in serialized, f"import payload leaks: {forbidden!r}"
+
+
+@pytest.mark.parametrize(
+    "bad_path",
+    [None, "", "   ", "\t\n", True, False, 1, 0, [], {}, (), set(), object(),
+     "C:\\backups\\worktrace-backup.csv",
+     "C:\\backups\\worktrace-backup.zip",
+     "C:\\backups\\worktrace-backup"],
+)
+def test_api_import_rejects_invalid_input_path(temp_db, bad_path) -> None:
+    result = import_encrypted_backup_for_webview(
+        bad_path,  # type: ignore[arg-type]
+        SENSITIVE_PASSPHRASE,
+        "导入并替换",
+    )
+    assert result == {"ok": False, "error": "请选择有效的加密备份文件"}
+
+
+@pytest.mark.parametrize(
+    "bad_passphrase",
+    [None, "", "   ", "\t\n", True, False, 1, 0, [], {}, (), set(), object()],
+)
+def test_api_import_rejects_invalid_passphrase(temp_db, bad_passphrase) -> None:
+    result = import_encrypted_backup_for_webview(
+        "C:\\backups\\worktrace-backup.wtbackup",
+        bad_passphrase,  # type: ignore[arg-type]
+        "导入并替换",
+    )
+    assert result == {"ok": False, "error": "请输入备份口令"}
+
+
+@pytest.mark.parametrize(
+    "bad_confirm",
+    [None, "", "   ", "\t\n", True, False, 1, 0, [], {}, (), set(), object(),
+     "导入", "替换", "确认导入"],
+)
+def test_api_import_rejects_invalid_confirm_text(temp_db, bad_confirm) -> None:
+    result = import_encrypted_backup_for_webview(
+        "C:\\backups\\worktrace-backup.wtbackup",
+        SENSITIVE_PASSPHRASE,
+        bad_confirm,  # type: ignore[arg-type]
+    )
+    assert result == {"ok": False, "error": "请输入确认文字：导入并替换"}
+
+
+@pytest.mark.parametrize(
+    "exc, expected_message",
+    [
+        (BackupImportInProgressError("SECRET " + SENSITIVE_PASSPHRASE),
+         "已有加密备份导入正在进行"),
+        (BackupDecryptionError("SECRET_CIPHERTEXT " + SENSITIVE_PASSPHRASE),
+         "备份口令错误或文件已损坏"),
+        (BackupCorruptedError("SECRET_SALT " + SENSITIVE_PASSPHRASE),
+         "备份口令错误或文件已损坏"),
+        (BackupVersionNotSupportedError("v999 SECRET " + SENSITIVE_PASSPHRASE),
+         "备份文件版本不受支持"),
+        (SecureBackupError("generic SECRET " + SENSITIVE_PASSPHRASE),
+         "导入加密备份失败"),
+        (RuntimeError("SECRET_PATH C:\\leak " + SENSITIVE_PASSPHRASE + " sqlite3."),
+         "导入加密备份失败"),
+        (ValueError("SECRET_VALUE " + SENSITIVE_PASSPHRASE),
+         "导入加密备份失败"),
+    ],
+)
+def test_api_import_failure_collapses_to_stable_message(temp_db, exc, expected_message) -> None:
+    with patch(
+        "worktrace.api.backup_api.import_encrypted_backup",
+        side_effect=exc,
+    ):
+        result = import_encrypted_backup_for_webview(
+            "C:\\backups\\worktrace-backup.wtbackup",
+            SENSITIVE_PASSPHRASE,
+            "导入并替换",
+        )
+    assert result == {"ok": False, "error": expected_message}
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        SENSITIVE_PASSPHRASE,
+        "SECRET_CIPHERTEXT",
+        "SECRET_SALT",
+        "SECRET_PATH",
+        "SECRET_VALUE",
+        "SECRET",
+        "RuntimeError",
+        "ValueError",
+        "BackupImportInProgress",
+        "BackupDecryption",
+        "BackupCorrupted",
+        "BackupVersionNotSupported",
+        "SecureBackup",
+        "Traceback",
+        "sqlite3.",
+        "C:\\\\leak",
+    ):
+        assert token not in serialized, f"import failure leaks: {token!r}"
+
+
+def test_api_import_exception_payload_does_not_leak_raw_exception(temp_db) -> None:
+    secret_msg = (
+        "SECRET_PATH C:\\leak\\path SECRET_PASSPHRASE "
+        + SENSITIVE_PASSPHRASE
+        + " sqlite3.OperationalError"
+    )
+    with patch(
+        "worktrace.api.backup_api.import_encrypted_backup",
+        side_effect=RuntimeError(secret_msg),
+    ):
+        result = import_encrypted_backup_for_webview(
+            "C:\\backups\\worktrace-backup.wtbackup",
+            SENSITIVE_PASSPHRASE,
+            "导入并替换",
+        )
+    assert result == {"ok": False, "error": "导入加密备份失败"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        SENSITIVE_PASSPHRASE,
+        "SECRET_PATH",
+        "SECRET_PASSPHRASE",
+        "RuntimeError",
+        "Traceback",
+        "sqlite3.",
+        "C:\\\\leak",
+        "leak\\\\path",
+        "C:\\\\backups",
+    ):
+        assert token not in serialized, f"import exception leaks: {token!r}"
+
+
+def test_api_import_does_not_call_export_or_manifest_or_clear_or_set(temp_db) -> None:
+    fake_result = ImportResult(
+        mode="replace",
+        imported_tables={"activity_log": 1},
+        folder_index_reset=False,
+    )
+    with patch(
+        "worktrace.api.backup_api.import_encrypted_backup",
+        return_value=fake_result,
+    ), \
+            patch("worktrace.api.backup_api.export_encrypted_backup") as mock_export, \
+            patch("worktrace.api.backup_api.parse_encrypted_backup_manifest") as mock_manifest, \
+            patch.object(settings_api, "clear_all_local_data") as mock_clear, \
+            patch.object(settings_api, "set_setting_value") as mock_set_value:
+        import_encrypted_backup_for_webview(
+            "C:\\backups\\worktrace-backup.wtbackup",
+            SENSITIVE_PASSPHRASE,
+            "导入并替换",
+        )
+        mock_export.assert_not_called()
+        mock_manifest.assert_not_called()
+        mock_clear.assert_not_called()
+        mock_set_value.assert_not_called()
+
+
+def test_api_import_round_trip_smoke(temp_db, tmp_path) -> None:
+    # No-mock round-trip: export a real .wtbackup, mutate the DB, then
+    # import the file back through the WebView facade. Asserts the
+    # success payload is narrow, the post-import state is paused, and
+    # secure_import_in_progress ends at False.
+    from worktrace.services import activity_service, secure_backup_service
+    from worktrace.services.settings_service import (
+        get_bool_setting,
+        get_setting,
+    )
+
+    # Seed data and export an encrypted backup.
+    aid = activity_service.create_activity(
+        "Word", "word.exe", "Doc", start_time="2026-06-18 09:00:00"
+    )
+    activity_service.close_activity(aid, "2026-06-18 09:30:00")
+    backup_path = tmp_path / "round-trip.wtbackup"
+    secure_backup_service.export_encrypted_backup(str(backup_path), SENSITIVE_PASSPHRASE)
+    assert backup_path.is_file()
+
+    # Mutate the DB so we can prove the import replaced it.
+    activity_service.create_activity(
+        "ExtraApp", "extra.exe", "Extra", start_time="2026-06-19 09:00:00"
+    )
+
+    # Reset the post-export running state so we can prove the import
+    # leaves the app paused.
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+    set_setting("secure_import_in_progress", "false")
+
+    result = import_encrypted_backup_for_webview(
+        str(backup_path), SENSITIVE_PASSPHRASE, "导入并替换"
+    )
+    assert result.get("ok") is True
+    assert set(result.keys()) == {
+        "ok",
+        "message",
+        "imported_table_count",
+        "imported_row_count",
+        "folder_index_reset",
+    }
+    assert result["imported_table_count"] >= 1
+    assert result["imported_row_count"] >= 1
+    # The post-import state must be paused with the guard cleared.
+    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status", "") == "paused"
+    # The payload must not leak path / passphrase / table dict.
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        SENSITIVE_PASSPHRASE,
+        str(backup_path),
+        "round-trip.wtbackup",
+        "imported_tables",
+        "activity_log",
+        "project",
+        "Traceback",
+    ):
+        assert token not in serialized, f"import smoke leaks: {token!r}"
+
+
+# --- Phase 6D: Bridge import method -----------------------------------
+
+
+def test_bridge_import_method_exists() -> None:
+    bridge = WebViewBridge()
+    method = getattr(bridge, "import_encrypted_backup", None)
+    assert callable(method), (
+        "WebViewBridge must expose import_encrypted_backup for Phase 6D"
+    )
+
+
+def test_bridge_import_method_signature_has_two_required_params() -> None:
+    bridge = WebViewBridge()
+    sig = inspect.signature(bridge.import_encrypted_backup)
+    params = list(sig.parameters.values())
+    assert len(params) == 2, (
+        "bridge.import_encrypted_backup must take exactly two parameters"
+    )
+    for idx, name in enumerate(("passphrase", "confirm_text")):
+        param = params[idx]
+        assert param.name == name, (
+            f"parameter {idx} must be named {name!r}, got {param.name!r}"
+        )
+        assert param.default is inspect.Parameter.empty, (
+            f"parameter {name!r} must be required (no default)"
+        )
+        assert param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ), f"parameter {name!r} must not be *args or **kwargs"
+
+
+def test_bridge_import_cancel_returns_stable_message(temp_db) -> None:
+    bridge = WebViewBridge()
+    bridge.set_window(_FakeWindow(None))
+    result = bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+    assert result == {"ok": False, "error": "已取消导入"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert SENSITIVE_PASSPHRASE not in serialized
+
+
+def test_bridge_import_cancel_empty_list_returns_stable_message(temp_db) -> None:
+    bridge = WebViewBridge()
+    bridge.set_window(_FakeWindow([]))
+    result = bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+    assert result == {"ok": False, "error": "已取消导入"}
+
+
+def test_bridge_import_success_returns_narrow_payload(temp_db) -> None:
+    bridge = WebViewBridge()
+    bridge.set_window(_FakeWindow(("C:\\backups\\worktrace-backup.wtbackup",)))
+    fake_result = ImportResult(
+        mode="replace",
+        imported_tables={"activity_log": 4, "project": 1},
+        folder_index_reset=True,
+    )
+    with patch(
+        "worktrace.api.backup_api.import_encrypted_backup",
+        return_value=fake_result,
+    ):
+        result = bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+    assert result.get("ok") is True
+    assert set(result.keys()) == {
+        "ok",
+        "message",
+        "imported_table_count",
+        "imported_row_count",
+        "folder_index_reset",
+    }
+    assert result["imported_table_count"] == 2
+    assert result["imported_row_count"] == 5
+    assert result["folder_index_reset"] is True
+    serialized = json.dumps(result, ensure_ascii=False)
+    for forbidden in (
+        "C:\\\\backups",
+        "backups",
+        SENSITIVE_PASSPHRASE,
+        "activity_log",
+        "project",
+        "imported_tables",
+    ):
+        assert forbidden not in serialized, f"bridge import leaks: {forbidden!r}"
+
+
+def test_bridge_import_success_with_string_path(temp_db) -> None:
+    # pywebview may return a bare string instead of a tuple/list.
+    bridge = WebViewBridge()
+    bridge.set_window(_FakeWindow("C:\\backups\\worktrace-backup.wtbackup"))
+    fake_result = ImportResult(
+        mode="replace",
+        imported_tables={"activity_log": 1},
+        folder_index_reset=False,
+    )
+    with patch(
+        "worktrace.api.backup_api.import_encrypted_backup",
+        return_value=fake_result,
+    ):
+        result = bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+    assert result.get("ok") is True
+    assert result["imported_row_count"] == 1
+
+
+def test_bridge_import_dialog_exception_collapses(temp_db) -> None:
+    bridge = WebViewBridge()
+    bridge.set_window(_FakeWindow(RuntimeError("dialog boom " + SENSITIVE_PASSPHRASE)))
+    result = bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+    assert result == {"ok": False, "error": "导入加密备份失败"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert SENSITIVE_PASSPHRASE not in serialized
+    assert "RuntimeError" not in serialized
+    assert "Traceback" not in serialized
+
+
+def test_bridge_import_api_exception_collapses(temp_db) -> None:
+    bridge = WebViewBridge()
+    bridge.set_window(_FakeWindow(("C:\\backups\\worktrace-backup.wtbackup",)))
+    with patch.object(
+        settings_api,
+        "import_encrypted_backup_for_webview",
+        side_effect=RuntimeError(SENSITIVE_PASSPHRASE),
+    ):
+        result = bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+    assert result == {"ok": False, "error": "导入加密备份失败"}
+
+
+def test_bridge_import_api_ok_false_passes_error_through(temp_db) -> None:
+    bridge = WebViewBridge()
+    bridge.set_window(_FakeWindow(("C:\\backups\\worktrace-backup.wtbackup",)))
+    api_result = {"ok": False, "error": "备份口令错误或文件已损坏"}
+    with patch.object(
+        settings_api,
+        "import_encrypted_backup_for_webview",
+        return_value=api_result,
+    ):
+        result = bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+    assert result == api_result
+
+
+def test_bridge_import_does_not_call_export_or_manifest_or_clear(temp_db) -> None:
+    bridge = WebViewBridge()
+    bridge.set_window(_FakeWindow(("C:\\backups\\worktrace-backup.wtbackup",)))
+    fake_result = ImportResult(
+        mode="replace",
+        imported_tables={"activity_log": 1},
+        folder_index_reset=False,
+    )
+    with patch(
+        "worktrace.api.backup_api.import_encrypted_backup",
+        return_value=fake_result,
+    ), \
+            patch("worktrace.api.backup_api.export_encrypted_backup") as mock_export, \
+            patch("worktrace.api.backup_api.parse_encrypted_backup_manifest") as mock_manifest, \
+            patch.object(settings_api, "clear_all_local_data") as mock_clear, \
+            patch.object(settings_api, "set_setting_value") as mock_set_value:
+        bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+        mock_export.assert_not_called()
+        mock_manifest.assert_not_called()
+        mock_clear.assert_not_called()
+        mock_set_value.assert_not_called()
+
+
+def test_bridge_import_uses_open_dialog_with_wtbackup_filter(temp_db) -> None:
+    bridge = WebViewBridge()
+    fake_window = _FakeWindow(("C:\\backups\\worktrace-backup.wtbackup",))
+    bridge.set_window(fake_window)
+    fake_result = ImportResult(
+        mode="replace",
+        imported_tables={"activity_log": 1},
+        folder_index_reset=False,
+    )
+    with patch(
+        "worktrace.api.backup_api.import_encrypted_backup",
+        return_value=fake_result,
+    ):
+        bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+    assert len(fake_window.create_file_dialog_calls) == 1
+    call = fake_window.create_file_dialog_calls[0]
+    assert call["file_types"] == ("WorkTrace Backup (*.wtbackup)",)
+    # The open dialog must NOT pass save_filename.
+    assert "save_filename" not in call
+
+
+def test_bridge_import_payload_never_leaks_full_path_or_passphrase(temp_db) -> None:
+    bridge = WebViewBridge()
+    full_path = "C:\\" + SENSITIVE_EXPORT_PATH + "\\ SECRET " + SENSITIVE_PASSPHRASE + ".wtbackup"
+    bridge.set_window(_FakeWindow((full_path,)))
+    fake_result = ImportResult(
+        mode="replace",
+        imported_tables={"activity_log": 1},
+        folder_index_reset=False,
+    )
+    with patch(
+        "worktrace.api.backup_api.import_encrypted_backup",
+        return_value=fake_result,
+    ):
+        result = bridge.import_encrypted_backup(SENSITIVE_PASSPHRASE, "导入并替换")
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        SENSITIVE_PASSPHRASE,
+        SENSITIVE_EXPORT_PATH,
+        "SECRET",
+        full_path,
+        "Traceback",
+    ):
+        assert token not in serialized, f"bridge import leaks: {token!r}"
+
+
+# --- Phase 6D: API clear-all facade -----------------------------------
+
+
+def test_api_clear_success_returns_narrow_payload(temp_db) -> None:
+    # Mock the underlying export_service.clear_all_local_data so no real
+    # reset runs; assert confirm=True is forwarded and the payload is
+    # narrow (ok / message / status when status refresh succeeds).
+    with patch.object(
+        settings_api.export_service, "clear_all_local_data"
+    ) as mock_clear:
+        result = clear_all_local_data_for_webview("清空本地数据")
+    mock_clear.assert_called_once_with(confirm=True)
+    assert result.get("ok") is True
+    # status is optional but the message must always be present.
+    assert result["message"] == "本地数据已清空"
+    # When status is present it must be JSON-serializable.
+    serialized = json.dumps(result, ensure_ascii=False)
+    parsed = json.loads(serialized)
+    assert parsed["ok"] is True
+    # The payload must never carry raw exception / path / clipboard
+    # content / note. Note: ``clipboard_capture_enabled`` is a legitimate
+    # status boolean field name, not clipboard content; we forbid the
+    # ``clipboard_content`` token instead of the bare ``clipboard``
+    # substring to avoid a false positive on the field name.
+    for forbidden in (
+        "Traceback",
+        "RuntimeError",
+        "ValueError",
+        "operation_in_progress",
+        "C:\\\\",
+        "clipboard_content",
+        "window_title",
+        "file_path_hint",
+        "note",
+    ):
+        assert forbidden not in serialized, f"clear payload leaks: {forbidden!r}"
+
+
+@pytest.mark.parametrize(
+    "bad_confirm",
+    [None, "", "   ", "\t\n", True, False, 1, 0, [], {}, (), set(), object(),
+     "清空", "本地数据", "确认清空"],
+)
+def test_api_clear_rejects_invalid_confirmation(temp_db, bad_confirm) -> None:
+    result = clear_all_local_data_for_webview(bad_confirm)  # type: ignore[arg-type]
+    assert result == {"ok": False, "error": "请输入确认文字：清空本地数据"}
+
+
+def test_api_clear_exception_collapses_to_generic_error(temp_db) -> None:
+    with patch.object(
+        settings_api.export_service,
+        "clear_all_local_data",
+        side_effect=RuntimeError("SECRET " + SENSITIVE_PASSPHRASE + " sqlite3."),
+    ):
+        result = clear_all_local_data_for_webview("清空本地数据")
+    assert result == {"ok": False, "error": "清空本地数据失败"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        SENSITIVE_PASSPHRASE,
+        "SECRET",
+        "RuntimeError",
+        "Traceback",
+        "sqlite3.",
+    ):
+        assert token not in serialized, f"clear exception leaks: {token!r}"
+
+
+def test_api_clear_does_not_call_backup_actions_or_set_setting(temp_db) -> None:
+    with patch.object(settings_api.export_service, "clear_all_local_data"), \
+            patch("worktrace.api.backup_api.export_encrypted_backup") as mock_export, \
+            patch("worktrace.api.backup_api.import_encrypted_backup") as mock_import, \
+            patch("worktrace.api.backup_api.parse_encrypted_backup_manifest") as mock_manifest, \
+            patch.object(settings_api, "set_setting_value") as mock_set_value:
+        clear_all_local_data_for_webview("清空本地数据")
+        mock_export.assert_not_called()
+        mock_import.assert_not_called()
+        mock_manifest.assert_not_called()
+        mock_set_value.assert_not_called()
+
+
+def test_api_clear_round_trip_smoke(temp_db) -> None:
+    # No-mock round-trip: seed business data, run clear-all through the
+    # WebView facade, then assert the system-default project / settings
+    # are re-seeded, business data is dropped, secure_import_in_progress
+    # ends at False, user_paused is True, collector_status is paused, and
+    # the payload does not leak internal info.
+    from worktrace.services import activity_service
+    from worktrace.services.settings_service import (
+        get_bool_setting,
+        get_setting,
+    )
+
+    aid = activity_service.create_activity(
+        "Word", "word.exe", "Doc", start_time="2026-06-18 09:00:00"
+    )
+    activity_service.close_activity(aid, "2026-06-18 09:30:00")
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+
+    result = clear_all_local_data_for_webview("清空本地数据")
+    assert result.get("ok") is True
+    assert result["message"] == "本地数据已清空"
+
+    # Post-clear state.
+    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status", "") == "paused"
+    # Business data dropped.
+    activities = activity_service.get_activities_by_range(
+        "2026-06-18", "2026-06-18"
+    )
+    assert activities == []
+    # System default project re-seeded.
+    from worktrace.db import get_connection
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT name FROM project WHERE created_by = 'system'"
+        ).fetchall()
+    assert rows, "clear-all must re-seed system default projects"
+
+    # Payload must not leak internal info.
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        "Traceback",
+        "RuntimeError",
+        "operation_in_progress",
+        "reset_database",
+        "sqlite3.",
+        SENSITIVE_PASSPHRASE,
+    ):
+        assert token not in serialized, f"clear smoke leaks: {token!r}"
+
+
+# --- Phase 6D: Bridge clear-all method --------------------------------
+
+
+def test_bridge_clear_method_exists() -> None:
+    bridge = WebViewBridge()
+    method = getattr(bridge, "clear_all_local_data", None)
+    assert callable(method), (
+        "WebViewBridge must expose clear_all_local_data for Phase 6D"
+    )
+
+
+def test_bridge_clear_method_signature_has_one_required_param() -> None:
+    bridge = WebViewBridge()
+    sig = inspect.signature(bridge.clear_all_local_data)
+    params = list(sig.parameters.values())
+    assert len(params) == 1, (
+        "bridge.clear_all_local_data must take exactly one parameter"
+    )
+    param = params[0]
+    assert param.name == "confirm_text", (
+        f"parameter must be named 'confirm_text', got {param.name!r}"
+    )
+    assert param.default is inspect.Parameter.empty, (
+        "parameter 'confirm_text' must be required (no default)"
+    )
+    assert param.kind in (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    ), "parameter 'confirm_text' must not be *args or **kwargs"
+
+
+def test_bridge_clear_success_calls_api_and_returns_narrow_payload(temp_db) -> None:
+    bridge = WebViewBridge()
+    api_result = {"ok": True, "message": "本地数据已清空", "status": {"phase": "6D"}}
+    with patch.object(
+        settings_api,
+        "clear_all_local_data_for_webview",
+        return_value=api_result,
+    ) as mock_api:
+        result = bridge.clear_all_local_data("清空本地数据")
+    mock_api.assert_called_once_with("清空本地数据")
+    assert result.get("ok") is True
+    assert result["message"] == "本地数据已清空"
+    # status may be transparently passed through.
+    assert result.get("status") == {"phase": "6D"}
+
+
+def test_bridge_clear_api_ok_false_passes_error_through(temp_db) -> None:
+    bridge = WebViewBridge()
+    api_result = {"ok": False, "error": "请输入确认文字：清空本地数据"}
+    with patch.object(
+        settings_api,
+        "clear_all_local_data_for_webview",
+        return_value=api_result,
+    ):
+        result = bridge.clear_all_local_data("not the literal")
+    assert result == api_result
+
+
+def test_bridge_clear_exception_collapses(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch.object(
+        settings_api,
+        "clear_all_local_data_for_webview",
+        side_effect=RuntimeError(SENSITIVE_PASSPHRASE),
+    ):
+        result = bridge.clear_all_local_data("清空本地数据")
+    assert result == {"ok": False, "error": "清空本地数据失败"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        SENSITIVE_PASSPHRASE,
+        "RuntimeError",
+        "Traceback",
+    ):
+        assert token not in serialized, f"bridge clear leaks: {token!r}"
+
+
+def test_bridge_clear_does_not_call_backup_actions_directly(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch.object(
+        settings_api,
+        "clear_all_local_data_for_webview",
+        return_value={"ok": True, "message": "本地数据已清空"},
+    ), \
+            patch("worktrace.api.backup_api.export_encrypted_backup") as mock_export, \
+            patch("worktrace.api.backup_api.import_encrypted_backup") as mock_import, \
+            patch("worktrace.api.backup_api.parse_encrypted_backup_manifest") as mock_manifest:
+        bridge.clear_all_local_data("清空本地数据")
+        mock_export.assert_not_called()
+        mock_import.assert_not_called()
+        mock_manifest.assert_not_called()

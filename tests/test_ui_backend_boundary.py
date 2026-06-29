@@ -531,7 +531,12 @@ def test_webview_bridge_manifest_preview_error_payload_has_no_sensitive_tokens()
     assert pos != -1, (
         "bridge.py must define preview_encrypted_backup_manifest for Phase 6C"
     )
-    body = bridge_source[pos:pos + 3000]
+    # Slice to the next ``def`` at the same indent so the body covers only
+    # this method (a fixed 3000-char window would bleed into the next
+    # method ``import_encrypted_backup`` whose signature references
+    # ``passphrase``, falsely failing the forbidden-token check below).
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 4000]
     # Stable Chinese error messages that must appear in the payload.
     assert "已取消读取备份清单" in body
     assert "读取备份清单失败" in body
@@ -606,4 +611,257 @@ def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
     ):
         assert forbidden not in manifest_body, (
             "preview_encrypted_backup_manifest must not call: " + forbidden
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6D: Settings / Privacy encrypted backup import + clear-all-local-data
+# bridge methods. The two new methods are defined directly on ``WebViewBridge``
+# (no mixin). ``import_encrypted_backup`` takes exactly two required
+# parameters (``passphrase`` / ``confirm_text``); ``clear_all_local_data``
+# takes exactly one required parameter (``confirm_text``). The error payloads
+# must collapse to stable Chinese messages and must not leak traceback /
+# str(exc) / repr / format_exc / exc_info / .message / raw_exception /
+# clipboard_content. ``passphrase`` IS allowed as a parameter name, local
+# variable, and pass-through argument to the API facade; it is only
+# forbidden in the returned payload / error payload / logging (enforced by
+# the runtime tests in test_settings_privacy_status). The method body is
+# sliced at the next ``\n    def `` so the next method's passphrase
+# reference does not trigger false positives.
+# ---------------------------------------------------------------------------
+
+
+def test_webview_bridge_exposes_phase_6d_import_method() -> None:
+    """``WebViewBridge`` must expose the Phase 6D ``import_encrypted_backup``
+    method with exactly two required parameters (``passphrase`` and
+    ``confirm_text``); no optional args, no ``*args``, no ``**kwargs``."""
+    import inspect
+
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    bridge = WebViewBridge()
+    method = getattr(bridge, "import_encrypted_backup", None)
+    assert callable(method), (
+        "WebViewBridge must expose Phase 6D bridge method "
+        "'import_encrypted_backup'"
+    )
+    sig = inspect.signature(method)
+    params = list(sig.parameters.values())
+    assert len(params) == 2, (
+        "import_encrypted_backup must accept exactly two parameters, "
+        f"got {len(params)}"
+    )
+    expected_names = ("passphrase", "confirm_text")
+    for idx, name in enumerate(expected_names):
+        assert params[idx].name == name, (
+            f"import_encrypted_backup parameter {idx} must be {name!r}, "
+            f"got {params[idx].name!r}"
+        )
+        assert params[idx].default is inspect.Parameter.empty, (
+            f"import_encrypted_backup {name!r} must be required "
+            "(no default value)"
+        )
+        assert params[idx].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD, (
+            f"import_encrypted_backup {name!r} must be positional-or-keyword, "
+            "not *args or **kwargs"
+        )
+
+
+def test_webview_bridge_exposes_phase_6d_clear_method() -> None:
+    """``WebViewBridge`` must expose the Phase 6D ``clear_all_local_data``
+    method with exactly one required parameter (``confirm_text``); no
+    optional args, no ``*args``, no ``**kwargs``."""
+    import inspect
+
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    bridge = WebViewBridge()
+    method = getattr(bridge, "clear_all_local_data", None)
+    assert callable(method), (
+        "WebViewBridge must expose Phase 6D bridge method "
+        "'clear_all_local_data'"
+    )
+    sig = inspect.signature(method)
+    params = list(sig.parameters.values())
+    assert len(params) == 1, (
+        "clear_all_local_data must accept exactly one parameter, "
+        f"got {len(params)}"
+    )
+    assert params[0].name == "confirm_text", (
+        f"clear_all_local_data parameter must be 'confirm_text', "
+        f"got {params[0].name!r}"
+    )
+    assert params[0].default is inspect.Parameter.empty, (
+        "clear_all_local_data 'confirm_text' must be required "
+        "(no default value)"
+    )
+    assert params[0].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD, (
+        "clear_all_local_data 'confirm_text' must be positional-or-keyword, "
+        "not *args or **kwargs"
+    )
+
+
+def test_webview_bridge_import_error_payload_has_no_sensitive_tokens() -> None:
+    """Phase 6D: the bridge ``import_encrypted_backup`` error payload must
+    collapse to stable Chinese messages and must not leak traceback /
+    str(exc) / repr / format_exc / exc_info / .message / raw_exception /
+    clipboard_content.
+
+    ``passphrase`` IS allowed as a parameter name, local variable, and
+    pass-through argument to ``settings_api.import_encrypted_backup_for_webview``;
+    it is NOT in the forbidden list here. The runtime tests in
+    ``test_settings_privacy_status`` verify the returned payload never
+    carries the passphrase value. The method body is sliced at the next
+    ``\\n    def `` so the following method's passphrase reference does
+    not trigger false positives.
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def import_encrypted_backup")
+    assert pos != -1, (
+        "bridge.py must define import_encrypted_backup for Phase 6D"
+    )
+    # Slice at the next method definition so the clear_all_local_data
+    # method body (which legitimately references ``confirm_text``) is not
+    # accidentally included in this check.
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Stable Chinese error messages that must appear in the payload.
+    assert "已取消导入" in body
+    assert "导入加密备份失败" in body
+    # Skip the docstring when checking for forbidden runtime tokens, since
+    # the docstring legitimately mentions "traceback" / "passphrase" /
+    # "raw exception" to document what the method does NOT leak.
+    doc_start = body.find('"""')
+    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
+    code_only = body[doc_end:] if doc_end > 3 else body
+    for forbidden in (
+        "traceback",
+        "str(exc)",
+        "str(e)",
+        "repr(",
+        "format_exc",
+        "exc_info",
+        ".message",
+        "raw_exception",
+        "clipboard_content",
+    ):
+        assert forbidden not in code_only, (
+            "import_encrypted_backup must not reference forbidden token: "
+            + forbidden
+        )
+
+
+def test_webview_bridge_clear_error_payload_has_no_sensitive_tokens() -> None:
+    """Phase 6D: the bridge ``clear_all_local_data`` error payload must
+    collapse to stable Chinese messages and must not leak traceback /
+    str(exc) / repr / format_exc / exc_info / .message / raw_exception /
+    clipboard_content / passphrase.
+
+    Unlike ``import_encrypted_backup``, ``passphrase`` IS forbidden here
+    because the clear-all method never accepts or references a passphrase.
+    The method body is sliced at the next ``\\n    def `` so the following
+    module-level helper (if any) does not trigger false positives.
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def clear_all_local_data")
+    assert pos != -1, (
+        "bridge.py must define clear_all_local_data for Phase 6D"
+    )
+    # Slice at the next method definition so any following helper is not
+    # accidentally included.
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Stable Chinese error message that must appear in the payload.
+    assert "清空本地数据失败" in body
+    # Skip the docstring when checking for forbidden runtime tokens.
+    doc_start = body.find('"""')
+    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
+    code_only = body[doc_end:] if doc_end > 3 else body
+    for forbidden in (
+        "traceback",
+        "str(exc)",
+        "str(e)",
+        "repr(",
+        "format_exc",
+        "exc_info",
+        ".message",
+        "passphrase",
+        "raw_exception",
+        "clipboard_content",
+    ):
+        assert forbidden not in code_only, (
+            "clear_all_local_data must not reference forbidden token: "
+            + forbidden
+        )
+
+
+def test_webview_bridge_import_passes_passphrase_to_api_facade() -> None:
+    """Phase 6D: ``import_encrypted_backup`` must pass ``passphrase`` and
+    ``confirm_text`` through to
+    ``settings_api.import_encrypted_backup_for_webview``. This is a static
+    source-level check confirming the passphrase is used as a pass-through
+    argument (not logged, not returned, not persisted)."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def import_encrypted_backup")
+    assert pos != -1
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # The method must call the API facade with both arguments.
+    assert "settings_api.import_encrypted_backup_for_webview" in body
+    assert "passphrase" in body
+    assert "confirm_text" in body
+
+
+def test_webview_bridge_clear_calls_api_facade() -> None:
+    """Phase 6D: ``clear_all_local_data`` must call
+    ``settings_api.clear_all_local_data_for_webview`` with
+    ``confirm_text``. This is a static source-level check confirming the
+    bridge does not touch the DB / service directly."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def clear_all_local_data")
+    assert pos != -1
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    assert "settings_api.clear_all_local_data_for_webview" in body
+    assert "confirm_text" in body
+
+
+def test_webview_bridge_import_does_not_call_export_or_manifest_or_set() -> None:
+    """Phase 6D: ``import_encrypted_backup`` must not call
+    ``export_encrypted_backup``, ``preview_encrypted_backup_manifest``,
+    ``clear_all_local_data``, or ``set_setting_value``. This is a static
+    source-level check on the bridge module."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def import_encrypted_backup")
+    assert pos != -1
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    for forbidden in (
+        "export_encrypted_backup",
+        "preview_encrypted_backup_manifest",
+        "set_setting_value",
+    ):
+        assert forbidden not in body, (
+            "import_encrypted_backup must not call: " + forbidden
+        )
+
+
+def test_webview_bridge_clear_does_not_call_backup_actions_or_set() -> None:
+    """Phase 6D: ``clear_all_local_data`` must not call
+    ``export_encrypted_backup``, ``preview_encrypted_backup_manifest``,
+    ``import_encrypted_backup``, or ``set_setting_value``. This is a
+    static source-level check on the bridge module."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def clear_all_local_data")
+    assert pos != -1
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    for forbidden in (
+        "export_encrypted_backup",
+        "preview_encrypted_backup_manifest",
+        "import_encrypted_backup",
+        "set_setting_value",
+    ):
+        assert forbidden not in body, (
+            "clear_all_local_data must not call: " + forbidden
         )

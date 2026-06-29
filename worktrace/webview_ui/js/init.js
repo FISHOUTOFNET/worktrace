@@ -282,7 +282,13 @@
         // The export button opens a native save dialog and writes an
         // encrypted .wtbackup file; the manifest preview button opens a
         // native open file dialog and reads the non-sensitive manifest.
-        // No import, clear-all, or save-settings action is wired here.
+        // Phase 6D: the import button opens a native open file dialog
+        // (reusing the existing .wtbackup open dialog helper) and imports
+        // the chosen file in replace mode; the clear-all button does not
+        // open a dialog and only triggers the destructive reset when the
+        // user has typed the explicit Chinese confirmation literal.
+        // No save-settings, set-path, or arbitrary file/folder dialog
+        // action is wired here.
         var backupExportBtn = document.getElementById("settings-backup-export-btn");
         if (backupExportBtn) {
             backupExportBtn.addEventListener("click", App.exportEncryptedBackup);
@@ -290,6 +296,14 @@
         var backupManifestBtn = document.getElementById("settings-backup-manifest-btn");
         if (backupManifestBtn) {
             backupManifestBtn.addEventListener("click", App.previewEncryptedBackupManifest);
+        }
+        var backupImportBtn = document.getElementById("settings-backup-import-btn");
+        if (backupImportBtn) {
+            backupImportBtn.addEventListener("click", App.importEncryptedBackup);
+        }
+        var clearAllBtn = document.getElementById("settings-clear-local-data-btn");
+        if (clearAllBtn) {
+            clearAllBtn.addEventListener("click", App.clearAllLocalData);
         }
         // Phase 5C: Project Rules keyword create submit handler. This is
         // the only Project Rules create event bound in init; the existing

@@ -5,8 +5,8 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 6C is the latest shipped phase (Settings
-> / Privacy encrypted backup export + manifest preview foundation). Project
+> **Current state**: WebView Phase 6D is the latest shipped phase (Settings
+> / Privacy encrypted backup import + clear-all-local-data foundation). Project
 > Rules now supports project-grouped folder / keyword rules, existing-rule
 > enable / disable, keyword create / edit / delete, folder rule create /
 > edit / delete, user project create / edit / enable-disable / archive,
@@ -16,17 +16,24 @@ records.
 > / enable / disable. The Settings / Privacy page surfaces a read-only
 > safety-status snapshot (storage model, clipboard capture on/off, export
 > directory configured yes/no, encrypted-backup import-in-progress flag),
-> opens the clipboard capture toggle write, and opens encrypted backup
-> export + manifest preview through native file dialogs. The toggle writes
-> `clipboard_capture_enabled` through a narrow bridge facade; the backup
-> export writes an encrypted `.wtbackup` file via a native save dialog;
-> the manifest preview reads only the non-sensitive manifest fields via a
-> native open file dialog. Both API and bridge layers collapse failures to
-> stable Chinese messages and never return full paths, passphrases, salt,
-> ciphertext, payload, SQL, or tracebacks. Phase 6C does not read or
-> display clipboard content. Encrypted backup import, save settings,
-> clear-all-local-data, and arbitrary file/folder dialogs remain
-> unsupported in WebView and arrive in later phases. Hard delete project,
+> opens the clipboard capture toggle write, opens encrypted backup
+> export + manifest preview through native file dialogs, and opens
+> encrypted backup import (replace-only via native `.wtbackup` open dialog)
+> + clear-all-local-data (explicit Chinese confirmation literal). The
+> toggle writes `clipboard_capture_enabled` through a narrow bridge facade;
+> the backup export writes an encrypted `.wtbackup` file via a native save
+> dialog; the manifest preview reads only the non-sensitive manifest fields
+> via a native open file dialog; the backup import replaces local data via
+> a native open dialog and leaves WorkTrace paused for the user to verify;
+> clear-all-local-data runs inside a destructive reset guard that pauses
+> the collector and blocks collector writes for the duration of the DB
+> replacement, then leaves WorkTrace paused. Both API and bridge layers
+> collapse failures to stable Chinese messages and never return full paths,
+> passphrases, salt, ciphertext, payload, SQL, or tracebacks. Phase 6D
+> does not read or display clipboard content. Save settings,
+> `set_setting_value`, arbitrary file/folder dialogs, first-run notice,
+> and export path setting remain unsupported in WebView and arrive in
+> later phases. Hard delete project,
 > raw folder-rule conflict preview, raw / unbounded batch backfill, and
 > the automatic-rule on/off UI toggle also remain unsupported. The
 > canonical one-screen snapshot of what ships today is
@@ -227,14 +234,21 @@ database file or use the Settings page to clear and rebuild all data.
   recording, or automatic startup.
 - Settings / Privacy page migrated to WebView in Phase 6A as a read-only
   status foundation, extended in Phase 6B with the clipboard capture
-  toggle write, and extended in Phase 6C with encrypted backup export +
-  manifest preview (storage model, clipboard capture on/off, export
-  directory configured yes/no, encrypted-backup import-in-progress flag,
-  plus the toggle, plus the backup export + manifest preview). Phase 6C
+  toggle write, extended in Phase 6C with encrypted backup export +
+  manifest preview, and extended in Phase 6D with encrypted backup import
+  (replace-only) + clear-all-local-data (storage model, clipboard capture
+  on/off, export directory configured yes/no, encrypted-backup
+  import-in-progress flag, plus the toggle, plus the backup export +
+  manifest preview + backup import + clear-all-local-data). Phase 6D
   does not read or display clipboard content; the toggle only controls
-  whether local clipboard recording is enabled. Encrypted backup import,
-  save settings, clear-all-local-data, and arbitrary file/folder dialogs
-  remain unsupported in WebView and arrive in later phases.
+  whether local clipboard recording is enabled. Encrypted backup import
+  and clear-all-local-data both leave WorkTrace paused so the user can
+  verify the post-replacement state before manually resuming recording;
+  clear-all-local-data runs inside a destructive reset guard that blocks
+  collector writes during the DB replacement. Save settings,
+  `set_setting_value`, arbitrary file/folder dialogs, first-run notice,
+  and export path setting remain unsupported in WebView and arrive in
+  later phases.
 - Hard delete project; raw folder-rule conflict preview; raw / unbounded
   batch backfill; automatic-rule enable / disable toggle in the UI; Excel /
   PDF / timesheet export; folder opening; and auto-submit are not

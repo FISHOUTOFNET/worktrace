@@ -92,6 +92,13 @@
     // While either is true, the backup controls are disabled.
     App.settingsBackupExportInProgress = false;
     App.settingsBackupManifestInProgress = false;
+    // --- Phase 6D: Settings / Privacy backup import + clear-all state --
+    // Separate from settingsBackupExportInProgress (6C export) and
+    // settingsBackupManifestInProgress (6C manifest) so an import / clear
+    // in flight never races the export / manifest / capture toggle. While
+    // either is true, every Settings control is disabled.
+    App.settingsBackupImportInProgress = false;
+    App.settingsClearAllInProgress = false;
 
     // --- Phase 5B: Project Rules state ---------------------------------
     App.rulesLoaded = false;

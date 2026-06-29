@@ -18,11 +18,12 @@ Implemented" sections) lives in
 - Migrated pages: Overview, Timeline / Time Details, Statistics / Export,
   Project Rules, Settings / Privacy (Phase 6A read-only status foundation +
   Phase 6B clipboard capture toggle write + Phase 6C encrypted backup export
-  + manifest preview). Per-phase scope is archived in the history file.
+  + manifest preview + Phase 6D encrypted backup import + clear-all-local-data).
+  Per-phase scope is archived in the history file.
 - Unmigrated page capability scope: Settings / Privacy write actions not yet
-  opened (encrypted-backup import, save settings, clear-all-local-data,
-  first-run notice view/accept, arbitrary file / folder dialog, export path
-  setting) remain legacy Tkinter reference code; not a supported runtime path.
+  opened (save settings, `set_setting_value`, first-run notice view/accept,
+  arbitrary file / folder dialog, export path setting) remain legacy Tkinter
+  reference code; not a supported runtime path.
 
 ## 1. Phase 1 Is A Destructive Migration
 
@@ -233,8 +234,32 @@ order:
 - Phase 5J+ — remaining Project Rules write workflows (hard delete project,
   raw folder-rule conflict preview, raw / unbounded batch backfill,
   automatic-rule enable / disable toggle in the UI). Not started.
-- Phase 6D — remaining Settings / Privacy write actions: encrypted-backup
-  import, clear-all-local-data foundation, and Phase 6 收口. Not started.
+- Phase 6D — Settings / Privacy encrypted backup import + clear-all-local-data
+  foundation. Opens two narrow WebView entries on the Settings / Privacy
+  page: encrypted backup import (replace-only via native `.wtbackup` open
+  dialog; passphrase + Chinese confirmation literal `导入并替换` required;
+  leaves WorkTrace paused for the user to verify) and clear-all-local-data
+  (explicit Chinese confirmation literal `清空本地数据` required; runs inside
+  a destructive reset guard that pauses the collector and blocks collector
+  writes for the duration of the DB replacement, then leaves WorkTrace
+  paused). Adds `settings_api.import_encrypted_backup_for_webview(input_path,
+  passphrase, confirm_text)` and
+  `settings_api.clear_all_local_data_for_webview(confirm_text)`, plus
+  `WebViewBridge.import_encrypted_backup(passphrase, confirm_text)` (two
+  required params) and `WebViewBridge.clear_all_local_data(confirm_text)`
+  (one required param), both defined directly on `WebViewBridge` (no new
+  mixin). Frontend adds `App.settingsBackupImportInProgress` /
+  `App.settingsClearAllInProgress` state flags, `importEncryptedBackup` /
+  `clearAllLocalData` functions, `resetFrontendAfterLocalDataReplacement`
+  cache clearing, and scoped `.settings-backup-import-*` / `.settings-clear-*`
+  / `.settings-danger-*` CSS. `export_service.clear_all_local_data` hardened
+  with a local `_destructive_reset_guard` that mirrors the secure-import
+  guard semantics (snapshot → pause + secure_import_in_progress → reset →
+  restore on failure / leave paused on success) and
+  `_invalidate_clear_all_caches` that matches the
+  `secure_backup_service._invalidate_caches` set. K1 affected-test mapping
+  extended to cover `worktrace/webview_ui/js/core.js`. No schema change, no
+  new dependencies, no network / storage / browser clipboard API. **Completed.**
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.
 

@@ -1595,6 +1595,98 @@ class WebViewBridge(ProjectRulesBridgeMixin):
             logger.exception("webview bridge preview_encrypted_backup_manifest failed")
             return {"ok": False, "error": "读取备份清单失败"}
 
+    # --- Phase 6D: Settings / Privacy encrypted backup import -----------
+
+    def import_encrypted_backup(self, passphrase, confirm_text) -> dict[str, Any]:
+        """Import an encrypted ``.wtbackup`` file from the WebView UI.
+
+        Phase 6D controlled write path. ``passphrase`` and ``confirm_text``
+        are the two required parameters (no optional args, no ``*args`` /
+        ``**kwargs``). The open path is chosen by the user through the
+        native pywebview open file dialog (reuses the existing
+        ``_choose_backup_open_path`` helper); the bridge never reads a
+        hard-coded location. Replace-only.
+
+        Returns one of:
+
+        - ``{"ok": True, "message": "<chinese>", "imported_table_count":
+          int, "imported_row_count": int, "folder_index_reset": bool}``
+          on success. Only display-safe counts are surfaced; the raw
+          table-name -> row-count dict and table names never leave the
+          API facade.
+        - ``{"ok": False, "error": "已取消导入"}`` when the user cancels
+          the open dialog. No API write is called.
+        - ``{"ok": False, "error": "<chinese message>"}`` on any failure.
+
+        Tracebacks, SQL, full local paths, passphrase, salt, ciphertext,
+        payload, raw exception text, window titles, file paths, and notes
+        are never surfaced to JS.
+        """
+        try:
+            input_path = self._choose_backup_open_path()
+            if input_path is None:
+                # User cancelled the native open dialog. This is a clean
+                # cancel result, not a Python exception or "操作失败".
+                return {"ok": False, "error": "已取消导入"}
+            result = settings_api.import_encrypted_backup_for_webview(
+                input_path, passphrase, confirm_text
+            )
+            if result.get("ok"):
+                return {
+                    "ok": True,
+                    "message": str(result.get("message") or ""),
+                    "imported_table_count": int(result.get("imported_table_count") or 0),
+                    "imported_row_count": int(result.get("imported_row_count") or 0),
+                    "folder_index_reset": bool(result.get("folder_index_reset")),
+                }
+            # API returned a stable Chinese error; pass it through unchanged.
+            return {"ok": False, "error": result.get("error") or "导入加密备份失败"}
+        except Exception:
+            logger.exception("webview bridge import_encrypted_backup failed")
+            return {"ok": False, "error": "导入加密备份失败"}
+
+    # --- Phase 6D: Settings / Privacy clear-all-local-data --------------
+
+    def clear_all_local_data(self, confirm_text) -> dict[str, Any]:
+        """Clear all local data from the WebView UI.
+
+        Phase 6D controlled write path. ``confirm_text`` is the single
+        required parameter (no optional args, no ``*args`` / ``**kwargs``).
+        No native dialog is opened; the API facade requires the literal
+        confirmation phrase ``清空本地数据`` (after strip). The underlying
+        ``clear_all_local_data(confirm=True)`` runs inside a destructive
+        reset guard that pauses the collector and blocks collector writes
+        for the duration of the DB replacement.
+
+        Returns one of:
+
+        - ``{"ok": True, "message": "本地数据已清空", "status": {...}}`` on
+          success. ``status`` is only present when the API facade was able
+          to refresh the Settings / Privacy status snapshot; otherwise the
+          payload is ``{"ok": True, "message": "本地数据已清空"}``.
+        - ``{"ok": False, "error": "<chinese message>"}`` on any failure.
+
+        Tracebacks, SQL, full local paths, raw exception text, window
+        titles, file paths, clipboard content, and notes are never
+        surfaced to JS. This method does not call encrypted backup
+        export / import / manifest directly.
+        """
+        try:
+            result = settings_api.clear_all_local_data_for_webview(confirm_text)
+            if result.get("ok"):
+                payload: dict[str, Any] = {
+                    "ok": True,
+                    "message": str(result.get("message") or "本地数据已清空"),
+                }
+                if "status" in result:
+                    payload["status"] = result["status"]
+                return payload
+            # API returned a stable Chinese error; pass it through unchanged.
+            return {"ok": False, "error": result.get("error") or "清空本地数据失败"}
+        except Exception:
+            logger.exception("webview bridge clear_all_local_data failed")
+            return {"ok": False, "error": "清空本地数据失败"}
+
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
     """Validate and normalize the ``activity_ids`` argument from JS.

@@ -429,6 +429,7 @@ RULES: list[dict] = [
             "worktrace/api/backup_api.py",
             "worktrace/webview_ui/bridge.py",
             "worktrace/webview_ui/index.html",
+            "worktrace/webview_ui/js/core.js",
             "worktrace/webview_ui/js/settings.js",
             "worktrace/webview_ui/js/init.js",
             "worktrace/webview_ui/styles.css",

@@ -6610,6 +6610,183 @@ Phase 6C does not implement and does not open UI / bridge entry for:
   encrypted backup runtime semantics;
 - Any change to `bridge.py` import boundary (still only `worktrace.api`).
 
+## Phase 6D Implemented Scope
+
+Phase 6D opens two narrow WebView entries on the Settings / Privacy page:
+
+- Encrypted backup import (`import_encrypted_backup`): replace-only via the
+  existing native `.wtbackup` open dialog helper (`_choose_backup_open_path`);
+  requires a non-empty passphrase and the Chinese confirmation literal
+  `导入并替换` (stripped). The suffix is NOT auto-appended; a wrong suffix is
+  rejected outright. On success the API returns a narrow payload
+  (`ok` / `message` / `imported_table_count` / `imported_row_count` /
+  `folder_index_reset`); the raw table-name → row-count dict and table names
+  are never returned. WorkTrace is left paused after a successful import so
+  the user can verify the data before manually resuming recording.
+- Clear-all-local-data (`clear_all_local_data`): triggered by the explicit
+  Chinese confirmation literal `清空本地数据` (stripped). Runs inside a
+  destructive reset guard that pauses the collector and blocks collector
+  writes for the duration of the DB replacement, then leaves WorkTrace
+  paused.
+
+Backend API layer (`worktrace/api/settings_api.py`):
+
+- `import_encrypted_backup_for_webview(input_path, passphrase, confirm_text)`
+  — strict type checks (bool / None / int / list / dict / object / empty /
+  whitespace / wrong suffix all rejected); maps
+  `BackupImportInProgressError` / `BackupDecryptionError` /
+  `BackupCorruptedError` / `BackupVersionNotSupportedError` / generic
+  exceptions to stable Chinese messages; never returns path / passphrase /
+  raw exception / traceback / SQL / salt / ciphertext / payload.
+- `clear_all_local_data_for_webview(confirm_text)` — strict type checks;
+  collapses all exceptions (including `ValueError("operation_in_progress")`
+  from the guard) to `清空本地数据失败`; never returns raw exception /
+  traceback / SQL / path / clipboard content / window title / note.
+- `get_settings_privacy_status()` updated: `phase` = `"6D"`;
+  `encrypted_backup.import_available_in_webview` = `True`;
+  `destructive_actions.clear_all_local_data_available_in_webview` = `True`.
+
+Destructive reset guard (`worktrace/services/export_service.py`):
+
+- `clear_all_local_data(confirm=True)` now runs inside a local
+  `_destructive_reset_guard()` context manager that mirrors the
+  secure-backup import guard semantics without reusing the private
+  `secure_backup_service._secure_import_guard` (no cross-service private
+  dependency). On enter: rejects if `secure_import_in_progress` is already
+  true; snapshots `user_paused` / `collector_status` /
+  `current_activity_snapshot`; forces them to a safe paused state and sets
+  `secure_import_in_progress=true` so the collector loop skips writes. On
+  success: leaves the app paused and clears `secure_import_in_progress`. On
+  failure: best-effort restores the prior pause / status / snapshot state,
+  clears `secure_import_in_progress`, and re-raises so the API facade can
+  collapse it.
+- `_invalidate_clear_all_caches()` added: invalidates settings cache,
+  privacy exclude rules cache, uncategorized project cache, folder rule
+  cache, keyword rule cache, and context recompute cache — matching the
+  `secure_backup_service._invalidate_caches` set. The context recompute
+  cache was previously missing from this path.
+
+Bridge layer (`worktrace/webview_ui/bridge.py`):
+
+- `WebViewBridge.import_encrypted_backup(passphrase, confirm_text)` —
+  exactly two required params; reuses `_choose_backup_open_path()` (no new
+  file picker); cancel returns `{"ok": False, "error": "已取消导入"}`;
+  success returns only `ok` / `message` / `imported_table_count` /
+  `imported_row_count` / `folder_index_reset`; bridge-level exceptions
+  collapse to `导入加密备份失败`.
+- `WebViewBridge.clear_all_local_data(confirm_text)` — exactly one
+  required param; no native dialog; success returns `ok` / `message` /
+  optional `status`; bridge-level exceptions collapse to `清空本地数据失败`.
+
+Frontend (`worktrace/webview_ui/`):
+
+- `index.html`: added `settings-backup-import-passphrase` (password input),
+  `settings-backup-import-confirm` (text input), `settings-backup-import-btn`,
+  `settings-backup-import-status` in the backup card; added
+  `settings-clear-confirm`, `settings-clear-local-data-btn`,
+  `settings-clear-status` in a new danger card.
+- `js/core.js`: added `App.settingsBackupImportInProgress` and
+  `App.settingsClearAllInProgress` state flags (separate from 6B
+  `settingsWriteInProgress` and 6C `settingsBackupExportInProgress` /
+  `settingsBackupManifestInProgress`).
+- `js/settings.js`: header updated to Phase 6D;
+  `anySettingsOperationInProgress()` now aggregates all six flags; added
+  `setSettingsImportStatus` / `clearSettingsImportStatus` /
+  `setSettingsClearStatus` / `clearSettingsClearStatus` /
+  `clearBackupManifestPreview` / `resetFrontendAfterLocalDataReplacement`
+  helpers; added `App.importEncryptedBackup` (reads passphrase + confirm,
+  validates, calls bridge, on success resets frontend caches + clears
+  inputs + hides manifest preview + reloads status + refreshAll, catch
+  never reads `.message`) and `App.clearAllLocalData` (reads confirm,
+  validates, calls bridge, on success resets frontend caches + clears
+  input + hides manifest preview + reloads status + refreshAll, catch
+  never reads `.message`); passphrase never persisted to App / DOM /
+  storage; all dynamic content uses `textContent` (no `innerHTML`);
+  `loadSettingsPrivacyStatus()` returns a Promise so import / clear can
+  chain a status refresh.
+- `js/init.js`: bound `settings-backup-import-btn` →
+  `App.importEncryptedBackup` and `settings-clear-local-data-btn` →
+  `App.clearAllLocalData`.
+- `styles.css`: added scoped `.settings-backup-import-*` /
+  `.settings-danger-*` / `.settings-clear-*` classes.
+
+Tests:
+
+- `tests/test_settings_privacy_status.py`: extended with Phase 6D API +
+  bridge tests (status phase = 6D; import success narrow payload; import
+  rejects invalid path / passphrase / confirm; import maps exceptions to
+  stable messages; import no-mock round-trip smoke; clear success narrow
+  payload; clear rejects invalid confirmation; clear exception collapses;
+  clear no-mock round-trip smoke; bridge import / clear method exists +
+  signature + cancel + success + exception collapse + no leak).
+- `tests/test_export_service.py`: extended with clear-all destructive
+  reset guard tests (confirm=False rejects; success sets pause guard and
+  clears after; success re-seeds default settings; rejects when
+  secure_import_in_progress; failure restores prior state and clears
+  guard; success invalidates context recompute cache; guard enter / exit
+  set_setting sequence).
+- `tests/webview/test_settings_static_contract.py`: updated 6C contract
+  to 6D; allowed settings bridge methods extended to include
+  `import_encrypted_backup` + `clear_all_local_data`; DOM id required
+  list extended; added Phase 6D static contract tests (core.js state
+  flags, settings.js helpers, anySettingsOperationInProgress includes
+  6D flags, passphrase not persisted, catch does not read `.message`,
+  textContent only, resetFrontendAfterLocalDataReplacement clears stale
+  state, confirm literals present, success refreshes status + overview,
+  init.js binds buttons, styles.css has scoped classes).
+- `tests/test_ui_backend_boundary.py`: extended with Phase 6D boundary
+  tests (import / clear method signatures; error payload has no
+  sensitive tokens; import passes passphrase to API facade; clear calls
+  API facade; neither calls other write methods). Fixed the 6C manifest
+  preview test to slice at `\n    def ` instead of a fixed 3000-char
+  window so the next method's `passphrase` parameter does not trigger a
+  false positive.
+- `scripts/run_affected_tests.py`: K1 Settings / Privacy WebView mapping
+  extended to include `worktrace/webview_ui/js/core.js` as a trigger.
+- `tests/test_run_affected_tests.py`: K1 tests updated to Phase 6A / 6B /
+  6C / 6D; added `test_core_js_selects_settings_tests_and_smoke`.
+
+Documentation: `README.md`, `docs/current-state.md`,
+`docs/ui-webview-migration.md`, and this file now describe the current
+phase as 6D and explicitly note that 6D ships encrypted backup import +
+clear-all-local-data foundation, not save settings, `set_setting_value`,
+arbitrary file / folder dialog, first-run notice, or export path setting.
+
+Phase 6D does not modify `WorkTrace.spec` resource list. No DB schema
+change. No new dependency. No new JS file. The WebView packaging static
+test (`tests/test_webview_packaging.py`) and the `worktrace.webview_main`
+import check were run and pass; the full PyInstaller build was not re-run
+because no packaging or runtime behavior changed.
+
+## Phase 6D Not Implemented
+
+Phase 6D does not implement and does not open UI / bridge entry for:
+
+- Save settings (general setting write); deferred;
+- `set_setting_value` WebView write entry; deferred;
+- Export path setting; deferred;
+- Arbitrary file / folder picker (only the existing `.wtbackup` open dialog
+  is reused for import; no general file / folder browser);
+- First-run notice view / accept in WebView; deferred;
+- Clipboard content reading, display, or return (Phase 6D backup import
+  + clear-all do not touch clipboard content; the Phase 6B clipboard
+  toggle only controls whether local clipboard recording is enabled);
+- Backup import modes other than `replace` (merge / append not opened);
+- Clear-all-local-data without the explicit Chinese confirmation literal;
+- Any database delete / rebuild / import / export write beyond the
+  `reset_database()` call inside the destructive reset guard (clear-all
+  only rebuilds the schema + re-seeds defaults; it does not export data);
+- Schema.sql modification (no new table / column / migration);
+- New dependencies (no React / Vue / Vite / Node / local HTTP server /
+  CDN / external font);
+- `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource`;
+- `localStorage` / `sessionStorage` / `document.cookie`;
+- Browser Clipboard API (`navigator.clipboard`);
+- Legacy Tkinter fallback;
+- Any change to collector / Timeline / Statistics / Export / privacy /
+  encrypted backup runtime semantics;
+- Any change to `bridge.py` import boundary (still only `worktrace.api`).
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most
