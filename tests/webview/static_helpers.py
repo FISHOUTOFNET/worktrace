@@ -45,6 +45,7 @@ ALL_JS_FILES = [
     "timeline.js",
     "timeline_correction.js",
     "statistics.js",
+    "settings.js",
     "rules.js",
     "rules_render.js",
     "rules_rule_actions.js",

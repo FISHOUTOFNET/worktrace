@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5I "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 6A "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -16,9 +16,12 @@ Implemented" sections) lives in
 - WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the default and
   only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview, Timeline / Time Details, Statistics / Export,
-  Project Rules. Per-phase scope is archived in the history file.
-- Unmigrated pages: Settings / Privacy / Encrypted Backup (still legacy
-  Tkinter code kept for reference; not a supported runtime path).
+  Project Rules, Settings / Privacy (Phase 6A read-only status foundation).
+  Per-phase scope is archived in the history file.
+- Unmigrated page capability scope: Settings / Privacy write actions
+  (save settings, clipboard toggle write, encrypted-backup export / import /
+  manifest preview, clear-all-local-data) remain legacy Tkinter reference
+  code; not a supported runtime path.
 
 ## 1. Phase 1 Is A Destructive Migration
 
@@ -176,10 +179,25 @@ order:
   for the automatic-rules path and selected-rule batch operations, plus a
   boundary-test fix for a 5I-era `rules_render.js` comment that referenced
   forbidden tokens. No new user-visible capability. **Completed.**
+- Phase 6A — Settings / Privacy WebView read-only status foundation. Migrates
+  the `page-settings` placeholder to a real read-only status page surfacing
+  the local storage model, clipboard-capture on/off, export directory
+  configured yes/no, encrypted-backup import-in-progress flag, and not-yet-open
+  notices. Adds a new `settings_api.get_settings_privacy_status()` read-only
+  facade, a `WebViewBridge.get_settings_privacy_status()` bridge method
+  (no new mixin file), a new classic IIFE `js/settings.js` module, scoped
+  `.settings-*` CSS, `WorkTrace.spec` + `ALL_JS_FILES` packaging updates, a new
+  affected-runner K1 section, and dedicated tests
+  (`tests/test_settings_privacy_status.py` +
+  `tests/webview/test_settings_static_contract.py`). No write actions, no
+  schema change, no new dependencies, no network/storage API. **Completed.**
 - Phase 5J+ — remaining Project Rules write workflows (hard delete project,
   raw folder-rule conflict preview, raw / unbounded batch backfill,
   automatic-rule enable / disable toggle in the UI). Not started.
-- Phase 6 — Settings / Privacy / Encrypted Backup. Not started.
+- Phase 6B+ — Settings / Privacy write actions: save settings, clipboard
+  capture toggle write, encrypted-backup export / import / manifest preview,
+  clear-all-local-data, first-run notice view/accept, native file / folder
+  dialog. Not started.
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.
 

@@ -445,17 +445,6 @@ def test_index_html_project_rules_page_migrated_after_5b():
 
 
 
-def test_index_html_no_settings_privacy_page_4a():
-    """Phase 4A: the Settings / Privacy page must remain a placeholder, not
-    a migrated WebView page."""
-    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-settings"')
-    assert pos != -1
-    section = source[pos:pos + 400]
-    assert "WebView 迁移中" in section
-
-
-
 def test_frontend_js_no_save_dialog_or_folder_open_4a():
     """Phase 4A: frontend JS must not call any save dialog or folder open helper."""
     source = read_all_js()
@@ -554,14 +543,21 @@ def test_frontend_js_correction_shell_no_external_links_3c():
 
 def test_frontend_js_correction_shell_no_raw_sensitive_fields_3c():
     """Phase 3C: frontend JS must not render raw window_title / file_path_hint /
-    full_path / clipboard fields (regression lock)."""
+    full_path / clipboard fields (regression lock).
+
+    Phase 6A exception: ``clipboard_capture_enabled`` is the JSON status
+    flag returned by the Settings / Privacy read-only facade; it is the
+    only allowed ``clipboard`` reference. All other uses remain forbidden.
+    """
     source = read_all_js()
     # The literal field names must not appear as rendered display values.
     # (They may appear in comments explaining what is NOT rendered, but
     # the test asserts the literals are absent from the rendering paths.)
+    # Phase 6A: only the legitimate JSON status flag name is whitelisted.
+    source_without_capture_flag = source.replace("clipboard_capture_enabled", "")
     for forbidden in ("window_title", "file_path_hint",
                       "full_path", "clipboard"):
-        assert forbidden not in source, (
+        assert forbidden not in source_without_capture_flag, (
             "frontend JS must not reference raw sensitive field: " + forbidden
         )
 
@@ -1003,16 +999,6 @@ def test_legacy_ui_files_not_deleted_4a1():
     # At least one legacy UI module must remain.
     py_files = list(ui_dir.glob("*.py"))
     assert len(py_files) > 0, "legacy UI .py files must not be deleted"
-
-
-
-def test_index_html_no_settings_privacy_page_4a1():
-    """Phase 4A.1/5A: Settings/Privacy remains a placeholder."""
-    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-settings"')
-    assert pos != -1, "page-settings section must still exist as placeholder"
-    section = source[pos:pos + 500]
-    assert "WebView 迁移中" in section
 
 
 

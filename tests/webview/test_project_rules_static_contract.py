@@ -185,7 +185,11 @@ def test_project_rules_js_loaded_before_init():
 def test_project_rules_js_in_static_helper_order():
     assert "rules.js" in ALL_JS_FILES
     assert "rules_project_actions.js" in ALL_JS_FILES
-    assert ALL_JS_FILES.index("rules.js") == ALL_JS_FILES.index("statistics.js") + 1
+    # Phase 6A: settings.js is loaded between statistics.js and rules.js, so
+    # rules.js is no longer immediately after statistics.js.
+    assert "settings.js" in ALL_JS_FILES
+    assert ALL_JS_FILES.index("settings.js") == ALL_JS_FILES.index("statistics.js") + 1
+    assert ALL_JS_FILES.index("rules.js") == ALL_JS_FILES.index("settings.js") + 1
     # Phase MC2: rules.js now splits into render / rule actions / keyword
     # actions / folder actions modules before rules_project_actions.js.
     assert ALL_JS_FILES.index("rules_render.js") == ALL_JS_FILES.index("rules.js") + 1

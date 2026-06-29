@@ -5992,6 +5992,141 @@ Phase 5I.1 does not implement and does not start:
 - Any change to collector / Timeline / Statistics / Export / privacy /
   encrypted backup runtime semantics.
 
+## Phase 6A Implemented Scope
+
+Phase 6A migrates the `page-settings` placeholder to a real read-only
+**Settings / Privacy** status page. It only surfaces safety-status
+information; it opens no write action.
+
+Backend:
+
+- New read-only facade `worktrace.api.settings_api.get_settings_privacy_status()`
+  returning a fixed-shape payload:
+  - `page = "settings_privacy"`, `phase = "6A"`,
+    `storage_model = "local_only"`;
+  - `clipboard_capture_enabled` (bool, sourced from existing
+    `is_clipboard_capture_enabled()`);
+  - `export_path_configured` (bool, sourced from existing `get_export_path()`
+    truthiness — never the path text);
+  - `secure_import_in_progress` (bool, sourced from
+    `backup_api.is_secure_import_in_progress()`);
+  - `encrypted_backup = {supported: true, export_available_in_webview: false,
+    import_available_in_webview: false, manifest_preview_available_in_webview:
+    false}`;
+  - `destructive_actions = {clear_all_local_data_available_in_webview: false}`;
+  - All fields JSON-serializable; exceptions collapse to
+    `{"ok": false, "error": "加载设置状态失败"}` with no traceback / path /
+    SQL / raw exception text.
+- New bridge method `WebViewBridge.get_settings_privacy_status()` delegates
+  to the facade with the standard error-collapse pattern. No new
+  `bridge_settings.py` mixin is introduced; the single read-only method
+  lives on the composed `WebViewBridge` class in `bridge.py`.
+- `bridge.py` continues to import only `worktrace.api`; no
+  `services / db / collector / security / runtime / config` imports.
+
+Frontend:
+
+- `index.html` replaces the `page-settings` placeholder with a real page
+  shell. Stable DOM ids required for tests / future phases:
+  `settings-refresh-btn`, `settings-error`, `settings-loading`,
+  `settings-status`, `settings-storage-card`, `settings-privacy-card`,
+  `settings-backup-card`, `settings-danger-card`.
+- New classic IIFE module `worktrace/webview_ui/js/settings.js` defines
+  `App.loadSettingsPrivacyStatus` (+ render / error / loading helpers).
+  Only calls `App.callBridge("get_settings_privacy_status")`; catch blocks
+  never read `.message`; dynamic rendering uses `textContent` only (no
+  `innerHTML`); no write-side bridge methods are wired.
+- `core.js` adds Phase 6A state vars (`settingsLoaded`, `settingsLoading`,
+  `settingsRequestToken`).
+- `init.js` lazy-loads settings status on first switch to the settings page
+  and wires the refresh button; repeated page entries do not re-bind.
+- `styles.css` adds `.settings-*` scoped classes (header, refresh button,
+  loading / error / status grid, four cards including a red-bordered
+  danger card).
+
+Packaging:
+
+- `WorkTrace.spec` bundles `worktrace/webview_ui/js/settings.js` in the
+  `datas` list, between `statistics.js` and `rules.js`.
+- `tests/webview/static_helpers.py` `ALL_JS_FILES` adds `settings.js` in
+  the same position so the single source of truth for JS load order
+  matches `index.html` and `WorkTrace.spec`.
+
+Affected-test runner:
+
+- New `scripts/run_affected_tests.py` section **K1. Settings / Privacy
+  WebView** maps source-file triggers
+  (`worktrace/api/settings_api.py`, `worktrace/api/backup_api.py`,
+  `worktrace/webview_ui/bridge.py`, `worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/js/settings.js`, `worktrace/webview_ui/js/init.js`,
+  `worktrace/webview_ui/styles.css`, `WorkTrace.spec`,
+  `tests/webview/static_helpers.py`) to a finite test target set
+  (`tests/test_settings_privacy_status.py`,
+  `tests/webview/test_settings_static_contract.py`,
+  `tests/test_ui_backend_boundary.py`,
+  `tests/webview/test_frontend_global_boundaries.py`,
+  `tests/test_webview_packaging.py`,
+  `tests/test_run_affected_tests.py`) plus the import smoke command. K1
+  is independent of the Project Rules C series and must not trigger the
+  Project Rules suite.
+
+Tests:
+
+- New `tests/test_settings_privacy_status.py` (API + bridge): success
+  payload, `clipboard_capture_enabled` true/false, `export_path_configured`
+  is bool and never leaks path text, `secure_import_in_progress` bool +
+  backup-guard reflection, all three WebView availability flags false,
+  `clear_all_local_data_available_in_webview` false, JSON-serializable,
+  no sensitive-token leak, bridge narrow success payload, bridge exception
+  collapse to `"加载设置状态失败"`, bridge method on the composed
+  `WebViewBridge`, no write actions called during the status read, no
+  schema change.
+- New `tests/webview/test_settings_static_contract.py` (frontend
+  contract): `page-settings` no longer contains the placeholder string,
+  sidebar settings nav entry retained, required DOM ids present,
+  `settings.js` loaded by `index.html`, `ALL_JS_FILES` includes
+  `settings.js` with the same order as `index.html`, `WorkTrace.spec`
+  bundles `settings.js`, JS only calls `get_settings_privacy_status`,
+  no `export_encrypted_backup / import_encrypted_backup /
+  parse_encrypted_backup_manifest / clear_all_local_data /
+  set_setting_value / set_clipboard_capture_enabled` bridge calls, no
+  fetch / XMLHttpRequest / WebSocket / EventSource / localStorage /
+  sessionStorage / `document.cookie`, catch blocks do not read `.message`,
+  dynamic rendering uses `textContent`, no clickable export / import /
+  clear / save / clipboard-toggle write buttons.
+- Updated placeholder-lock tests:
+  `tests/webview/test_statistics_static_contract.py`,
+  `tests/webview/test_timeline_static_contract.py`,
+  `tests/webview/test_frontend_global_boundaries.py` — the
+  `"WebView 迁移中"` placeholder lock is inverted because all sidebar
+  pages are now migrated.
+- Updated `tests/test_run_affected_tests.py` with K1 coverage (5 new
+  tests).
+
+## Phase 6A Not Implemented
+
+Phase 6A does not implement and does not start:
+
+- Save settings (no setting write API / bridge / UI);
+- Clipboard capture toggle write (no `set_clipboard_capture_enabled`
+  bridge / UI wiring);
+- First-run notice view / accept in WebView;
+- Native file / folder dialog;
+- Encrypted backup export (`export_encrypted_backup`);
+- Encrypted backup import (`import_encrypted_backup`);
+- Encrypted backup manifest preview (`parse_encrypted_backup_manifest`);
+- Clear-all-local-data (`clear_all_local_data`);
+- Any database delete / rebuild / import / export write;
+- Schema.sql modification (no new table / column / migration);
+- New dependencies (no React / Vue / Vite / Node / local HTTP server /
+  CDN / external font);
+- `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource`;
+- `localStorage` / `sessionStorage` / `document.cookie`;
+- Legacy Tkinter fallback;
+- Any change to collector / Timeline / Statistics / Export / privacy /
+  encrypted backup runtime semantics;
+- Any change to `bridge.py` import boundary (still only `worktrace.api`).
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

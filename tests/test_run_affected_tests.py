@@ -81,8 +81,15 @@ def test_bridge_py_selects_bridge_tests_and_boundary(runner):
     assert "tests/test_webview_bridge_batch_note.py" in sel.pytest_targets
     assert "tests/test_webview_bridge_restore.py" in sel.pytest_targets
     assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets
-    # bridge.py is not a frontend resource, so no import smoke.
-    assert sel.smoke_commands == []
+    # Phase 6A: bridge.py is also a K1 trigger (Settings / Privacy WebView),
+    # so K1 contributes the import smoke command and the Settings tests /
+    # boundary. bridge.py itself is not a frontend resource, so the smoke
+    # is added only because K1 matches the path.
+    assert "tests/test_settings_privacy_status.py" in sel.pytest_targets
+    assert "tests/webview/test_settings_static_contract.py" in sel.pytest_targets
+    assert any(
+        "import worktrace.webview_main" in " ".join(s) for s in sel.smoke_commands
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -650,3 +657,94 @@ def test_split_passthrough_without_separator(runner):
     own, extra = runner._split_passthrough(["--list"])
     assert own == ["--list"]
     assert extra == []
+
+
+# ---------------------------------------------------------------------------
+# K1 (Phase 6A). Settings / Privacy WebView -> settings + boundary + packaging
+# ---------------------------------------------------------------------------
+
+
+def test_settings_api_py_selects_settings_tests(runner):
+    sel = runner.select_targets(["worktrace/api/settings_api.py"])
+    for expected in (
+        "tests/test_settings_privacy_status.py",
+        "tests/webview/test_settings_static_contract.py",
+        "tests/test_ui_backend_boundary.py",
+        "tests/webview/test_frontend_global_boundaries.py",
+        "tests/test_webview_packaging.py",
+        "tests/test_run_affected_tests.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"settings_api.py must select: {expected}"
+        )
+
+
+def test_backup_api_py_selects_settings_tests(runner):
+    sel = runner.select_targets(["worktrace/api/backup_api.py"])
+    for expected in (
+        "tests/test_settings_privacy_status.py",
+        "tests/webview/test_settings_static_contract.py",
+        "tests/test_ui_backend_boundary.py",
+        "tests/test_run_affected_tests.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"backup_api.py must select: {expected}"
+        )
+
+
+def test_settings_js_selects_settings_tests_and_smoke(runner):
+    sel = runner.select_targets(["worktrace/webview_ui/js/settings.js"])
+    for expected in (
+        "tests/test_settings_privacy_status.py",
+        "tests/webview/test_settings_static_contract.py",
+        "tests/webview/test_frontend_global_boundaries.py",
+        "tests/test_webview_packaging.py",
+        "tests/test_run_affected_tests.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"settings.js must select: {expected}"
+        )
+    assert any(
+        "import worktrace.webview_main" in " ".join(s) for s in sel.smoke_commands
+    )
+
+
+def test_settings_html_css_init_select_settings_tests(runner):
+    """Phase 6A: index.html / styles.css / init.js triggers all share the
+    K1 settings target set."""
+    for changed in (
+        "worktrace/webview_ui/index.html",
+        "worktrace/webview_ui/styles.css",
+        "worktrace/webview_ui/js/init.js",
+    ):
+        sel = runner.select_targets([changed])
+        assert "tests/webview/test_settings_static_contract.py" in sel.pytest_targets, (
+            f"{changed} must select settings static contract"
+        )
+        assert "tests/test_settings_privacy_status.py" in sel.pytest_targets, (
+            f"{changed} must select settings privacy status tests"
+        )
+
+
+def test_k1_does_not_trigger_project_rules_suite(runner):
+    """Phase 6A: K1 must NOT trigger the Project Rules C-series suite."""
+    sel = runner.select_targets(["worktrace/api/settings_api.py"])
+    for unexpected in (
+        "tests/test_rule_service.py",
+        "tests/test_folder_rule_service.py",
+        "tests/test_project_rules_keyword_create.py",
+        "tests/test_project_rules_keyword_delete.py",
+        "tests/test_project_rules_keyword_edit.py",
+        "tests/test_project_rules_folder_crud.py",
+        "tests/test_project_rules_enable_disable.py",
+        "tests/test_project_rules_project_lifecycle.py",
+        "tests/test_project_rules_view.py",
+        "tests/test_project_rules_rule_impact.py",
+        "tests/test_project_rules_automatic_rules.py",
+        "tests/test_project_rules_batch_operations.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_api_write_contract.py",
+    ):
+        assert unexpected not in sel.pytest_targets, (
+            f"settings_api.py must not trigger Project Rules suite: {unexpected}"
+        )

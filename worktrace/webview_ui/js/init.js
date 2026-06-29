@@ -146,6 +146,13 @@
         if (pageId === "rules" && !App.rulesLoaded && !App.rulesLoading) {
             App.loadProjectRules();
         }
+        // Phase 6A: lazy-load Settings / Privacy read-only status when
+        // navigating to the page for the first time. Only a single read is
+        // in flight at a time; subsequent visits reuse the cached status
+        // until the user clicks the refresh button.
+        if (pageId === "settings" && !App.settingsLoaded && !App.settingsLoading) {
+            App.loadSettingsPrivacyStatus();
+        }
     }
     App.switchPage = switchPage;
 
@@ -255,6 +262,14 @@
         var statsExportBtn = document.getElementById("stats-export-action-btn");
         if (statsExportBtn) {
             statsExportBtn.addEventListener("click", App.exportStatisticsCsv);
+        }
+        // Phase 6A: Settings / Privacy read-only status refresh handler.
+        // The button only re-reads the read-only status; it does not save
+        // settings, toggle the capture flag, export / import backups,
+        // parse the backup manifest, or clear local data.
+        var settingsRefreshBtn = document.getElementById("settings-refresh-btn");
+        if (settingsRefreshBtn) {
+            settingsRefreshBtn.addEventListener("click", App.loadSettingsPrivacyStatus);
         }
         // Phase 5C: Project Rules keyword create submit handler. This is
         // the only Project Rules create event bound in init; the existing

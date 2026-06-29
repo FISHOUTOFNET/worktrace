@@ -4153,11 +4153,18 @@ def test_app_js_safe_text_still_used_in_correction_shell_3b9_1():
 
 def test_app_js_correction_shell_no_raw_sensitive_fields_3b9_1():
     """Phase 3B.9.1: app.js must not reference raw sensitive backend column
-    names anywhere (window_title, file_path_hint, full_path, clipboard)."""
+    names anywhere (window_title, file_path_hint, full_path, clipboard).
+
+    Phase 6A exception: ``clipboard_capture_enabled`` is the JSON status
+    flag returned by the Settings / Privacy read-only facade; it is the
+    only allowed ``clipboard`` reference. All other uses remain forbidden.
+    """
     source = read_all_js().lower()
+    # Phase 6A: only the legitimate JSON status flag name is whitelisted.
+    source_without_capture_flag = source.replace("clipboard_capture_enabled", "")
     for forbidden in ("window_title", "file_path_hint", "full_path",
                       "clipboard"):
-        assert forbidden not in source, (
+        assert forbidden not in source_without_capture_flag, (
             "app.js must not reference raw sensitive field: " + forbidden
         )
 

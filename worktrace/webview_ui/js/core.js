@@ -73,6 +73,14 @@
     App.statisticsRequestToken = 0;
     App.statisticsExportSaving = false;
 
+    // --- Phase 6A: Settings / Privacy read-only state -----------------
+    // Only a single read-only load is in flight at a time. The request
+    // token guards against stale responses when the user re-enters the
+    // page rapidly; it is monotonically incremented per load attempt.
+    App.settingsLoaded = false;
+    App.settingsLoading = false;
+    App.settingsRequestToken = 0;
+
     // --- Phase 5B: Project Rules state ---------------------------------
     App.rulesLoaded = false;
     App.rulesLoading = false;

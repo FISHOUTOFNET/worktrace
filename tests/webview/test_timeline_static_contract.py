@@ -87,9 +87,11 @@ def test_index_html_timeline_page_has_total_and_current():
 
 
 def test_index_html_unmigrated_pages_still_have_placeholders():
-    """Phase 5B/5C/5D: Settings remains a placeholder; Rules is migrated WebView
-    and its boundary copy lists the supported ops (enable/disable, keyword
-    create, keyword delete) and the not-yet-open ops."""
+    """Phase 5B/5C/5D/6A: every sidebar page is a migrated WebView page.
+    Rules is migrated and lists the supported ops (enable/disable, keyword
+    create, keyword delete) and the not-yet-open ops; Settings is migrated
+    as a Phase 6A read-only status page and must not contain the old
+    placeholder copy."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     rules_start = source.find('id="page-rules"')
     assert rules_start != -1, "rules section must exist"
@@ -109,11 +111,13 @@ def test_index_html_unmigrated_pages_still_have_placeholders():
     assert "批量" in rules_section
     assert "项目硬删除" in rules_section
 
+    # Phase 6A: Settings / Privacy is now migrated as a read-only WebView
+    # status page. The old placeholder copy must not appear in its section.
     settings_start = source.find('id="page-settings"')
     assert settings_start != -1, "settings section must exist"
     settings_end = source.find("</section>", settings_start)
     settings_section = source[settings_start:settings_end]
-    assert "WebView 迁移中" in settings_section
+    assert "WebView 迁移中" not in settings_section
 
 
 
@@ -1890,15 +1894,22 @@ def test_app_js_has_no_batch_restore_permanent_auto_rule_handlers():
 
 def test_app_js_hide_delete_has_no_raw_field_exposure():
     """Phase 3B.4: the hide / delete code must not reference raw
-    window_title, file_path_hint, full_path, or clipboard fields."""
+    window_title, file_path_hint, full_path, or clipboard fields.
+
+    Phase 6A exception: ``clipboard_capture_enabled`` is the JSON status
+    flag returned by the Settings / Privacy read-only facade; it is the
+    only allowed ``clipboard`` reference. All other uses remain forbidden.
+    """
     source = read_all_js().lower()
     # The frontend must never reference these raw backend fields. (The
     # detail rows may show a resource_name, but never the raw column
     # names.)
-    assert "window_title" not in source
-    assert "file_path_hint" not in source
-    assert "full_path" not in source
-    assert "clipboard" not in source
+    # Phase 6A: only the legitimate JSON status flag name is whitelisted.
+    source_without_capture_flag = source.replace("clipboard_capture_enabled", "")
+    assert "window_title" not in source_without_capture_flag
+    assert "file_path_hint" not in source_without_capture_flag
+    assert "full_path" not in source_without_capture_flag
+    assert "clipboard" not in source_without_capture_flag
 
 
 
@@ -2389,10 +2400,11 @@ def test_index_html_not_implemented_card_lists_unavailable_3c():
 
 
 def test_index_html_no_new_top_level_pages_3c():
-    """Phase 5A: the sidebar nav still lists the five known items.
+    """Phase 5A/6A: the sidebar nav still lists the five known items.
 
-    Statistics / Export and Project Rules are migrated WebView pages;
-    Settings / Privacy remains a placeholder.
+    Statistics / Export, Project Rules, and Settings / Privacy are all
+    migrated WebView pages; Settings / Privacy migrated in Phase 6A as a
+    read-only status foundation.
     """
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     # The sidebar nav must still list exactly the five known items.
@@ -2408,10 +2420,12 @@ def test_index_html_no_new_top_level_pages_3c():
     assert "WebView 迁移中" not in rules_section
     assert "rules-list" in rules_section
 
+    # Phase 6A: Settings / Privacy migrated as a read-only WebView status
+    # page; the old placeholder copy must not appear in its section.
     settings_pos = source.find('id="page-settings"')
     assert settings_pos != -1
     settings_section = source[settings_pos:settings_pos + 400]
-    assert "WebView 迁移中" in settings_section
+    assert "WebView 迁移中" not in settings_section
 
 
 
@@ -2707,11 +2721,19 @@ def test_app_js_display_safe_helpers_present_3c1():
 
 def test_app_js_no_raw_sensitive_fields_anywhere_3c1():
     """Phase 3C.1: app.js must not reference raw window_title /
-    file_path_hint / full_path / clipboard anywhere (regression lock)."""
+    file_path_hint / full_path / clipboard anywhere (regression lock).
+
+    Phase 6A exception: the Settings / Privacy read-only facade returns a
+    boolean status flag named ``clipboard_capture_enabled``. That literal
+    JSON field name is the only allowed ``clipboard`` reference. All other
+    uses of the raw field token remain forbidden.
+    """
     source = read_all_js()
+    # Phase 6A: only the legitimate JSON status flag name is whitelisted.
+    source_without_capture_flag = source.replace("clipboard_capture_enabled", "")
     for forbidden in ("window_title", "file_path_hint",
                       "full_path", "clipboard"):
-        assert forbidden not in source, (
+        assert forbidden not in source_without_capture_flag, (
             "app.js must not reference raw sensitive field: " + forbidden
         )
 

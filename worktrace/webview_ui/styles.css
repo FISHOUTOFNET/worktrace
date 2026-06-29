@@ -3161,3 +3161,115 @@ body {
         max-width: 100%;
     }
 }
+
+/* --- Settings / Privacy page (Phase 6A) ------------------------------ */
+
+.settings-header {
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.settings-header-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.settings-subtitle {
+    font-size: 12px;
+    color: #64748b;
+    margin: 0;
+}
+
+.settings-refresh-btn {
+    align-self: center;
+    padding: 6px 14px;
+    font-size: 13px;
+    color: #0f172a;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.settings-refresh-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+}
+
+.settings-refresh-btn:disabled {
+    color: #94a3b8;
+    background: #f8fafc;
+    cursor: not-allowed;
+}
+
+.settings-loading {
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 13px;
+    color: #475569;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+}
+
+.settings-error {
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 13px;
+    color: #b91c1c;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+}
+
+.settings-status {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.settings-card {
+    padding: 14px 16px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-card-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.settings-card-line {
+    margin: 0;
+    font-size: 13px;
+    color: #334155;
+    line-height: 1.5;
+}
+
+/* Card type modifiers exist as stable CSS hooks so future phases can
+   specialize each card without re-shaping the grid. They intentionally
+   inherit from .settings-card; Phase 6A keeps all four cards visually
+   consistent except the danger card. */
+.settings-storage-card,
+.settings-privacy-card,
+.settings-backup-card {
+    /* no overrides in Phase 6A */
+}
+
+.settings-danger-card {
+    border-color: #fecaca;
+    background: #fffafa;
+}
+
+.settings-danger-card .settings-card-title {
+    color: #b91c1c;
+}

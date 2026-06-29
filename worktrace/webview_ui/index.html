@@ -445,7 +445,35 @@
                 <div id="rules-empty" class="rules-empty" hidden>暂无项目规则。</div>
             </section>
             <section id="page-settings" class="page">
-                <div class="placeholder">WebView 迁移中，当前页面仍由旧 UI 支持。</div>
+                <header class="page-header settings-header">
+                    <div class="settings-header-text">
+                        <h1>设置与隐私</h1>
+                        <p class="settings-subtitle">本页面以只读方式展示本地存储与隐私安全状态，暂不开放任何写操作。</p>
+                    </div>
+                    <button id="settings-refresh-btn" type="button" class="settings-refresh-btn">刷新状态</button>
+                </header>
+                <div id="settings-loading" class="settings-loading" hidden>正在加载设置状态…</div>
+                <div id="settings-error" class="settings-error" hidden>加载设置状态失败</div>
+                <div id="settings-status" class="settings-status" hidden>
+                    <article id="settings-storage-card" class="settings-card settings-storage-card">
+                        <h2 class="settings-card-title">本地存储</h2>
+                        <p class="settings-card-line" data-settings-key="storage_model">本地优先：所有数据仅存储在本机，不上传任何远端服务器。</p>
+                    </article>
+                    <article id="settings-privacy-card" class="settings-card settings-privacy-card">
+                        <h2 class="settings-card-title">隐私采集</h2>
+                        <p class="settings-card-line" data-settings-key="clipboard_capture_enabled">剪贴板记录：未加载</p>
+                        <p class="settings-card-line" data-settings-key="export_path_configured">导出目录：未加载</p>
+                        <p class="settings-card-line" data-settings-key="secure_import_in_progress">加密备份导入进行中：未加载</p>
+                    </article>
+                    <article id="settings-backup-card" class="settings-card settings-backup-card">
+                        <h2 class="settings-card-title">加密备份</h2>
+                        <p class="settings-card-line">加密备份能力已就绪，但 WebView 内的导出 / 导入 / 清单预览将在后续阶段开放。</p>
+                    </article>
+                    <article id="settings-danger-card" class="settings-card settings-danger-card">
+                        <h2 class="settings-card-title">危险操作</h2>
+                        <p class="settings-card-line">清空本地数据等危险操作将在后续阶段以单独确认流程开放，本阶段不提供任何入口。</p>
+                    </article>
+                </div>
             </section>
         </main>
     </div>
@@ -454,6 +482,7 @@
     <script src="js/timeline.js"></script>
     <script src="js/timeline_correction.js"></script>
     <script src="js/statistics.js"></script>
+    <script src="js/settings.js"></script>
     <script src="js/rules.js"></script>
     <script src="js/rules_render.js"></script>
     <script src="js/rules_rule_actions.js"></script>

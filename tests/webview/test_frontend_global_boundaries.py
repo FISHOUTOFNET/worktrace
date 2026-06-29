@@ -149,9 +149,16 @@ def test_index_html_has_sidebar_nav():
         assert label in source
 
 
-def test_index_html_has_placeholder_for_unmigrated_pages():
+def test_index_html_has_no_unmigrated_placeholder():
+    """Phase 6A: every sidebar page is now a migrated WebView page.
+
+    The old "WebView 迁移中" placeholder copy must not appear anywhere in
+    index.html. Settings / Privacy was the last page migrated (Phase 6A,
+    read-only status foundation); Timeline / Statistics / Rules migrated
+    earlier.
+    """
     source = read_resource("index.html")
-    assert "WebView 迁移中" in source
+    assert "WebView 迁移中" not in source
 
 
 # --- Overview page production contract -----------------------------------

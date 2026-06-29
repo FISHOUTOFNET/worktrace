@@ -422,6 +422,30 @@ RULES: list[dict] = [
             "steps and are not run by the affected runner.",
         ],
     },
+    {
+        "id": "K1. Settings / Privacy WebView",
+        "triggers": [
+            "worktrace/api/settings_api.py",
+            "worktrace/api/backup_api.py",
+            "worktrace/webview_ui/bridge.py",
+            "worktrace/webview_ui/index.html",
+            "worktrace/webview_ui/js/settings.js",
+            "worktrace/webview_ui/js/init.js",
+            "worktrace/webview_ui/styles.css",
+            "WorkTrace.spec",
+            "tests/webview/static_helpers.py",
+        ],
+        "tests": [
+            "tests/test_settings_privacy_status.py",
+            "tests/webview/test_settings_static_contract.py",
+            "tests/test_ui_backend_boundary.py",
+            "tests/webview/test_frontend_global_boundaries.py",
+            "tests/test_webview_packaging.py",
+            "tests/test_run_affected_tests.py",
+        ],
+        "smoke": [IMPORT_SMOKE_ARGV],
+        "warnings": [],
+    },
 ]
 
 

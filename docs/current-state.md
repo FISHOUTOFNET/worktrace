@@ -8,17 +8,16 @@
 
 ## Current Phase
 
-**Phase 5I — Automatic rules + selected-rule batch operations foundation.** (5I.1 hardening follow-up: regression tests + boundary locks; no new user-visible capability.)
-Project Rules now applies enabled folder / keyword rules automatically to newly
-produced / just-closed eligible activities (folder before keyword, first match
-wins; manual / hidden / deleted / in-progress / non-normal / already-target /
-disabled-rule / archived-project activities skipped), and supports selected-rule
-batch preview / apply / enable / disable (≤ 20 rules; batch apply ≤ 100 total
-updates, all-or-nothing), in addition to the earlier single-rule impact preview,
-safe single-rule backfill, folder / keyword rule enable-disable, keyword create
-/ edit / delete, folder rule create / edit / delete, and user project create / edit / enable-disable / archive
-capabilities. Hard delete project, raw folder-rule conflict preview, raw / unbounded batch backfill, and the
-automatic-rule on/off UI toggle remain unsupported. Chronology (5B / 5B.1 / ... / 5I) in [`history/webview-phases.md`](history/webview-phases.md).
+**Phase 6A — Settings / Privacy WebView read-only status foundation.**
+The Settings / Privacy page is no longer a placeholder; it surfaces a
+read-only safety-status snapshot (storage model, clipboard capture on/off,
+export directory configured yes/no, encrypted-backup import-in-progress flag,
+and "export / import / manifest preview / clear-all come in later phases"
+notices). No write actions are open: no save settings, no clipboard toggle
+write, no encrypted-backup export / import / manifest, no clear-all-local-data.
+Builds on Phase 5I (automatic rules + selected-rule batch operations
+foundation, on top of user project create / edit / enable-disable / archive).
+Chronology (5B / 5B.1 / ... / 5I / 6A) in [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Default UI
 
@@ -48,10 +47,10 @@ automatic-rule on/off UI toggle remain unsupported. Chronology (5B / 5B.1 / ... 
   folder recursion scope. Current write capabilities are listed in the
   Project Rules matrix below. Per-phase scope details are archived in
   [`history/webview-phases.md`](history/webview-phases.md).
-
-## Unmigrated Pages (Legacy Tkinter, Reference-Only)
-
-- **Settings / Privacy / Encrypted Backup** — Phase 6, not started.
+- **Settings / Privacy** (Phase 6A): read-only safety-status foundation.
+  Shows storage model, clipboard-capture on/off, export directory configured
+  yes/no, encrypted-backup import-in-progress flag, and not-yet-open
+  notices. No write actions.
 
 ## Supported Timeline Write Operations
 
@@ -106,7 +105,9 @@ automatic-rule on/off UI toggle remain unsupported. Chronology (5B / 5B.1 / ... 
   `preview_folder_rule_conflicts` NOT exposed to WebView; 5I reuses
   display-safe `rule_impact_service` helpers); raw / unbounded batch
   backfill; automatic-rule on/off UI toggle.
-- Settings / Privacy / Encrypted Backup WebView migration.
+- Settings write actions (Phase 6A is read-only): save settings, clipboard
+  capture toggle write, encrypted-backup export / import / manifest preview,
+  clear-all-local-data, first-run notice view/accept, native file / folder dialog.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
 - Batch time / batch split / batch merge; note append / merge; auto-rule
   creation; global overlap detection.
@@ -129,7 +130,8 @@ WebView (index.html / js/*.js / styles.css)
 Frontend JS layout (Phase R2, no behavior change): the former single
 `app.js` is split by feature into local classic scripts under
 `worktrace/webview_ui/js/` — `core.js`, `overview.js`, `timeline.js`,
-`timeline_correction.js`, `statistics.js`, `rules.js`, `init.js` —
+`timeline_correction.js`, `statistics.js`, `settings.js`, `rules.js`,
+`init.js` —
 loaded in that order via plain `<script src="js/...">` tags. No ES
 modules, no bundler, no Node/build step, no browser storage, and no network
 requests.

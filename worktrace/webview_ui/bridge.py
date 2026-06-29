@@ -1367,6 +1367,30 @@ class WebViewBridge(ProjectRulesBridgeMixin):
             return str(result[0])
         return str(result)
 
+    # --- Phase 6A: Settings / Privacy read-only status ------------------
+
+    def get_settings_privacy_status(self) -> dict[str, Any]:
+        """Return the read-only Settings / Privacy status snapshot.
+
+        Phase 6A only surfaces safety-status booleans. It does not save
+        settings, toggle clipboard capture, export / import encrypted
+        backups, parse the backup manifest, or clear local data. The
+        payload never carries paths, database locations, backup file paths,
+        tracebacks, SQL, raw exception text, window titles, file path
+        hints, clipboard content, notes, or passphrases.
+
+        Returns ``{"ok": True, "status": {...}}`` on success or
+        ``{"ok": False, "error": "加载设置状态失败"}`` on failure. The
+        ``settings_api`` facade already collapses its own exceptions; the
+        bridge wraps the call so a transport-level error never leaks
+        tracebacks either.
+        """
+        try:
+            return settings_api.get_settings_privacy_status()
+        except Exception:
+            logger.exception("webview bridge get_settings_privacy_status failed")
+            return {"ok": False, "error": "加载设置状态失败"}
+
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
     """Validate and normalize the ``activity_ids`` argument from JS.

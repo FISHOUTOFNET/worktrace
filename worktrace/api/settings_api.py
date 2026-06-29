@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from . import backup_api
 from ..services import export_service
 from ..services.settings_service import (
     get_bool_setting,
@@ -122,6 +123,47 @@ def clear_all_local_data(confirm: bool) -> None:
     export_service.clear_all_local_data(confirm=confirm)
 
 
+# --- settings / privacy read-only status (Phase 6A) ---------------------
+
+def get_settings_privacy_status() -> dict[str, Any]:
+    """Return a read-only status snapshot for the Settings / Privacy WebView page.
+
+    Phase 6A exposes only safety-status booleans. No path, no clipboard
+    content, no passphrase, no DB write, no backup export/import action is
+    surfaced here. All return values must be JSON-serializable.
+    """
+    try:
+        export_path_configured = bool(get_export_path())
+        clipboard_enabled = bool(is_clipboard_capture_enabled())
+        try:
+            secure_import_in_progress = bool(backup_api.is_secure_import_in_progress())
+        except Exception:
+            # Defensive: never let the backup facade leak tracebacks to the UI.
+            secure_import_in_progress = False
+        status: dict[str, Any] = {
+            "page": "settings_privacy",
+            "phase": "6A",
+            "storage_model": "local_only",
+            "clipboard_capture_enabled": clipboard_enabled,
+            "export_path_configured": export_path_configured,
+            "secure_import_in_progress": secure_import_in_progress,
+            "encrypted_backup": {
+                "supported": True,
+                "export_available_in_webview": False,
+                "import_available_in_webview": False,
+                "manifest_preview_available_in_webview": False,
+            },
+            "destructive_actions": {
+                "clear_all_local_data_available_in_webview": False,
+            },
+        }
+        return {"ok": True, "status": status}
+    except Exception:
+        # Collapse any unexpected error to a generic UI-facing message.
+        # Never expose raw exception text / traceback / SQL / paths.
+        return {"ok": False, "error": "加载设置状态失败"}
+
+
 __all__ = [
     "accept_first_run_notice",
     "clear_all_local_data",
@@ -133,6 +175,7 @@ __all__ = [
     "get_int_setting_value",
     "get_list_setting_value",
     "get_setting_value",
+    "get_settings_privacy_status",
     "get_ui_refresh_seconds",
     "is_clipboard_capture_enabled",
     "is_paused",
