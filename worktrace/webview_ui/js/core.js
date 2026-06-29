@@ -100,6 +100,26 @@
     App.settingsBackupImportInProgress = false;
     App.settingsClearAllInProgress = false;
 
+    // --- Phase 6E: First-run privacy notice state -----------------------
+    // ``firstRunNoticeLoaded`` is true after the first ``get_first_run_notice``
+    // round-trip completes (success or failure). ``firstRunNoticeLoading``
+    // is true while the load is in flight so a rapid re-entry cannot
+    // re-trigger a second load. ``firstRunNoticeRequired`` is true when
+    // the backend reports ``accepted === false``; the blocking overlay
+    // stays open and the sidebar pause/resume control must not start
+    // the collector. ``firstRunNoticeAcceptInProgress`` is true while
+    // the accept round-trip is in flight so the accept button can be
+    // disabled. ``firstRunNoticeViewingFromSettings`` is true when the
+    // overlay was opened from the Settings / Privacy "查看隐私说明"
+    // button; in that mode the close button is shown and no accept
+    // action is taken on close. All variables live in JS memory only;
+    // no browser storage APIs are used.
+    App.firstRunNoticeLoaded = false;
+    App.firstRunNoticeLoading = false;
+    App.firstRunNoticeRequired = false;
+    App.firstRunNoticeAcceptInProgress = false;
+    App.firstRunNoticeViewingFromSettings = false;
+
     // --- Phase 5B: Project Rules state ---------------------------------
     App.rulesLoaded = false;
     App.rulesLoading = false;

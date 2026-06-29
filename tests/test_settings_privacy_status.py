@@ -1,16 +1,18 @@
-"""Phase 6A / 6B / 6C / 6D — Settings / Privacy status facade + bridge tests.
+"""Phase 6A / 6B / 6C / 6D / 6E — Settings / Privacy status facade + bridge tests.
 
 These tests verify the ``settings_api.get_settings_privacy_status`` facade,
 the ``settings_api.set_clipboard_capture_enabled_for_webview`` write facade,
 the ``settings_api.export_encrypted_backup_for_webview`` and
 ``settings_api.preview_encrypted_backup_manifest_for_webview`` facades, the
 Phase 6D ``settings_api.import_encrypted_backup_for_webview`` and
-``settings_api.clear_all_local_data_for_webview`` facades, and the
+``settings_api.clear_all_local_data_for_webview`` facades, the Phase 6E
+``settings_api.get_first_run_notice_for_webview`` and
+``settings_api.accept_first_run_notice_for_webview`` facades, and the
 corresponding ``WebViewBridge`` methods. They assert the read-only status
 payload and the clipboard capture toggle / backup export / manifest preview
-/ backup import / clear-all write payloads never leak paths, clipboard
-content, passphrases, tracebacks, or any unintended write-side action
-surface.
+/ backup import / clear-all / first-run notice write payloads never leak
+paths, clipboard content, passphrases, tracebacks, or any unintended
+write-side action surface.
 """
 
 from __future__ import annotations
@@ -24,8 +26,10 @@ import pytest
 from worktrace.api import settings_api
 from worktrace.api.backup_api import BackupManifestInfo
 from worktrace.api.settings_api import (
+    accept_first_run_notice_for_webview,
     clear_all_local_data_for_webview,
     export_encrypted_backup_for_webview,
+    get_first_run_notice_for_webview,
     get_settings_privacy_status,
     import_encrypted_backup_for_webview,
     preview_encrypted_backup_manifest_for_webview,
@@ -69,10 +73,11 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
         "secure_import_in_progress",
         "encrypted_backup",
         "destructive_actions",
+        "first_run_notice",
     ):
         assert key in status, f"status missing required key: {key}"
     assert status["page"] == "settings_privacy"
-    assert status["phase"] == "6D"
+    assert status["phase"] == "6E"
     assert status["storage_model"] == "local_only"
 
 
@@ -255,6 +260,7 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "secure_import_in_progress",
         "encrypted_backup",
         "destructive_actions",
+        "first_run_notice",
     }
 
 
@@ -1877,3 +1883,355 @@ def test_bridge_clear_does_not_call_backup_actions_directly(temp_db) -> None:
         mock_export.assert_not_called()
         mock_import.assert_not_called()
         mock_manifest.assert_not_called()
+
+
+# --- Phase 6E: First-run notice API facade ----------------------------
+
+
+def test_api_first_run_notice_default_is_false_for_new_db(temp_db) -> None:
+    # A brand-new database seeds first_run_notice_accepted="false"; the
+    # facade must report accepted=False.
+    result = get_first_run_notice_for_webview()
+    assert result.get("ok") is True
+    assert result["accepted"] is False
+
+
+def test_api_first_run_notice_returns_narrow_payload(temp_db) -> None:
+    result = get_first_run_notice_for_webview()
+    assert isinstance(result, dict)
+    assert set(result.keys()) == {"ok", "accepted", "title", "highlights", "notice_text"}
+    assert isinstance(result["accepted"], bool)
+    assert isinstance(result["title"], str) and result["title"]
+    assert isinstance(result["highlights"], list)
+    for item in result["highlights"]:
+        assert isinstance(item, str)
+
+
+def test_api_first_run_notice_text_matches_privacy_notice_constant(temp_db) -> None:
+    from worktrace.constants import PRIVACY_NOTICE_TEXT
+
+    result = get_first_run_notice_for_webview()
+    assert result["notice_text"] == PRIVACY_NOTICE_TEXT
+
+
+def test_api_first_run_notice_highlights_match_legacy_dialog(temp_db) -> None:
+    result = get_first_run_notice_for_webview()
+    assert result["highlights"] == [
+        "本地保存",
+        "不截屏录屏",
+        "不主动读正文",
+        "用户可清空",
+    ]
+
+
+def test_api_first_run_notice_reflects_accepted_state(temp_db) -> None:
+    set_setting("first_run_notice_accepted", "false")
+    assert get_first_run_notice_for_webview()["accepted"] is False
+
+    set_setting("first_run_notice_accepted", "true")
+    assert get_first_run_notice_for_webview()["accepted"] is True
+
+
+def test_api_first_run_notice_payload_is_json_serializable(temp_db) -> None:
+    set_setting("first_run_notice_accepted", "true")
+    result = get_first_run_notice_for_webview()
+    serialized = json.dumps(result, ensure_ascii=False)
+    parsed = json.loads(serialized)
+    assert parsed["ok"] is True
+
+
+def test_api_first_run_notice_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
+    set_setting("export_path", SENSITIVE_EXPORT_PATH)
+    set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
+    serialized = json.dumps(get_first_run_notice_for_webview(), ensure_ascii=False)
+    for token in (
+        SENSITIVE_EXPORT_PATH,
+        SENSITIVE_CLIPBOARD_TOKEN,
+        SENSITIVE_PASSPHRASE,
+        "current_activity_snapshot",
+        "window_title",
+        "file_path_hint",
+        "first_run_notice_accepted",  # raw DB key must not leak
+        "Traceback",
+        "sqlite3.",
+    ):
+        assert token not in serialized, f"notice payload leaks: {token!r}"
+
+
+def test_api_first_run_notice_exception_collapses_to_generic_error(temp_db) -> None:
+    with patch.object(
+        settings_api,
+        "first_run_notice_accepted",
+        side_effect=RuntimeError("SECRET " + SENSITIVE_PASSPHRASE + " sqlite3."),
+    ):
+        result = get_first_run_notice_for_webview()
+    assert result == {"ok": False, "error": "加载隐私说明失败"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (SENSITIVE_PASSPHRASE, "SECRET", "RuntimeError", "Traceback", "sqlite3."):
+        assert token not in serialized, f"notice exception leaks: {token!r}"
+
+
+def test_api_first_run_notice_does_not_call_write_actions(temp_db) -> None:
+    with patch.object(settings_api, "accept_first_run_notice") as mock_accept, \
+            patch.object(settings_api, "set_setting_value") as mock_set_value, \
+            patch.object(settings_api, "clear_all_local_data") as mock_clear, \
+            patch("worktrace.api.backup_api.export_encrypted_backup") as mock_export, \
+            patch("worktrace.api.backup_api.import_encrypted_backup") as mock_import, \
+            patch("worktrace.api.backup_api.parse_encrypted_backup_manifest") as mock_manifest:
+        get_first_run_notice_for_webview()
+        mock_accept.assert_not_called()
+        mock_set_value.assert_not_called()
+        mock_clear.assert_not_called()
+        mock_export.assert_not_called()
+        mock_import.assert_not_called()
+        mock_manifest.assert_not_called()
+
+
+def test_api_accept_first_run_notice_writes_accepted_true(temp_db) -> None:
+    set_setting("first_run_notice_accepted", "false")
+    assert get_first_run_notice_for_webview()["accepted"] is False
+    result = accept_first_run_notice_for_webview()
+    assert result == {"ok": True, "accepted": True, "message": "已确认隐私说明"}
+    # The accept must persist; a subsequent read must see accepted=True
+    # even with settings cache in play.
+    assert get_first_run_notice_for_webview()["accepted"] is True
+
+
+def test_api_accept_first_run_notice_consistent_with_status_read(temp_db) -> None:
+    set_setting("first_run_notice_accepted", "false")
+    accept_first_run_notice_for_webview()
+    # Both the notice facade and the status facade must see accepted=True
+    # in the same process after accept (cache invalidation).
+    assert get_first_run_notice_for_webview()["accepted"] is True
+    status = get_settings_privacy_status()["status"]
+    assert status["first_run_notice"]["accepted"] is True
+
+
+def test_api_accept_first_run_notice_is_idempotent(temp_db) -> None:
+    set_setting("first_run_notice_accepted", "true")
+    result = accept_first_run_notice_for_webview()
+    assert result == {"ok": True, "accepted": True, "message": "已确认隐私说明"}
+    # A second call still succeeds.
+    result2 = accept_first_run_notice_for_webview()
+    assert result2 == {"ok": True, "accepted": True, "message": "已确认隐私说明"}
+
+
+def test_api_accept_first_run_notice_exception_collapses(temp_db) -> None:
+    with patch.object(
+        settings_api,
+        "accept_first_run_notice",
+        side_effect=RuntimeError("SECRET " + SENSITIVE_PASSPHRASE + " sqlite3."),
+    ):
+        result = accept_first_run_notice_for_webview()
+    assert result == {"ok": False, "error": "确认隐私说明失败"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (SENSITIVE_PASSPHRASE, "SECRET", "RuntimeError", "Traceback", "sqlite3."):
+        assert token not in serialized, f"accept exception leaks: {token!r}"
+
+
+def test_api_accept_first_run_notice_does_not_call_collector(temp_db) -> None:
+    with patch("worktrace.api.app_api.start_collector") as mock_start:
+        accept_first_run_notice_for_webview()
+        mock_start.assert_not_called()
+
+
+def test_api_accept_first_run_notice_does_not_call_set_setting_value(temp_db) -> None:
+    with patch.object(settings_api, "set_setting_value") as mock_set_value, \
+            patch("worktrace.api.backup_api.export_encrypted_backup") as mock_export, \
+            patch("worktrace.api.backup_api.import_encrypted_backup") as mock_import, \
+            patch("worktrace.api.backup_api.parse_encrypted_backup_manifest") as mock_manifest, \
+            patch.object(settings_api, "clear_all_local_data") as mock_clear:
+        accept_first_run_notice_for_webview()
+        mock_set_value.assert_not_called()
+        mock_export.assert_not_called()
+        mock_import.assert_not_called()
+        mock_manifest.assert_not_called()
+        mock_clear.assert_not_called()
+
+
+def test_api_status_first_run_notice_subdict_is_display_safe(temp_db) -> None:
+    set_setting("first_run_notice_accepted", "false")
+    status = get_settings_privacy_status()["status"]
+    sub = status["first_run_notice"]
+    assert isinstance(sub, dict)
+    assert set(sub.keys()) == {"accepted", "view_available_in_webview", "accept_required"}
+    assert sub["accepted"] is False
+    assert sub["view_available_in_webview"] is True
+    assert sub["accept_required"] is True
+
+    set_setting("first_run_notice_accepted", "true")
+    status = get_settings_privacy_status()["status"]
+    sub = status["first_run_notice"]
+    assert sub["accepted"] is True
+    assert sub["view_available_in_webview"] is True
+    assert sub["accept_required"] is False
+
+
+def test_api_status_does_not_expose_raw_first_run_setting_key(temp_db) -> None:
+    serialized = json.dumps(get_settings_privacy_status(), ensure_ascii=False)
+    assert "first_run_notice_accepted" not in serialized
+
+
+# --- Phase 6E: Bridge first-run notice methods ------------------------
+
+
+def test_bridge_get_first_run_notice_method_exists() -> None:
+    bridge = WebViewBridge()
+    method = getattr(bridge, "get_first_run_notice", None)
+    assert callable(method), "WebViewBridge must expose get_first_run_notice for Phase 6E"
+
+
+def test_bridge_accept_first_run_notice_method_exists() -> None:
+    bridge = WebViewBridge()
+    method = getattr(bridge, "accept_first_run_notice", None)
+    assert callable(method), "WebViewBridge must expose accept_first_run_notice for Phase 6E"
+
+
+def test_bridge_first_run_notice_methods_have_no_required_args() -> None:
+    bridge = WebViewBridge()
+    for method_name in ("get_first_run_notice", "accept_first_run_notice"):
+        sig = inspect.signature(getattr(bridge, method_name))
+        for name, param in sig.parameters.items():
+            assert param.default is not inspect.Parameter.empty, (
+                f"bridge.{method_name} parameter {name!r} must have a default"
+            )
+
+
+def test_bridge_get_first_run_notice_returns_narrow_payload(temp_db) -> None:
+    bridge = WebViewBridge()
+    result = bridge.get_first_run_notice()
+    assert isinstance(result, dict)
+    assert result.get("ok") is True
+    assert set(result.keys()) == {"ok", "accepted", "title", "highlights", "notice_text"}
+
+
+def test_bridge_get_first_run_notice_exception_collapses(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch.object(
+        settings_api,
+        "get_first_run_notice_for_webview",
+        side_effect=RuntimeError(SENSITIVE_PASSPHRASE),
+    ):
+        result = bridge.get_first_run_notice()
+    assert result == {"ok": False, "error": "加载隐私说明失败"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (SENSITIVE_PASSPHRASE, "RuntimeError", "Traceback"):
+        assert token not in serialized
+
+
+def test_bridge_accept_first_run_notice_calls_collector_on_success(temp_db) -> None:
+    bridge = WebViewBridge()
+    set_setting("first_run_notice_accepted", "false")
+    with patch("worktrace.api.app_api.start_collector") as mock_start:
+        result = bridge.accept_first_run_notice()
+    mock_start.assert_called_once()
+    assert result.get("ok") is True
+    assert result["accepted"] is True
+    assert result["message"] == "已确认隐私说明"
+
+
+def test_bridge_accept_first_run_notice_does_not_call_collector_on_api_failure(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch.object(
+        settings_api,
+        "accept_first_run_notice_for_webview",
+        return_value={"ok": False, "error": "确认隐私说明失败"},
+    ), patch("worktrace.api.app_api.start_collector") as mock_start:
+        result = bridge.accept_first_run_notice()
+    mock_start.assert_not_called()
+    assert result == {"ok": False, "error": "确认隐私说明失败"}
+
+
+def test_bridge_accept_first_run_notice_exception_collapses(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch.object(
+        settings_api,
+        "accept_first_run_notice_for_webview",
+        side_effect=RuntimeError(SENSITIVE_PASSPHRASE),
+    ):
+        result = bridge.accept_first_run_notice()
+    assert result == {"ok": False, "error": "确认隐私说明失败"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (SENSITIVE_PASSPHRASE, "RuntimeError", "Traceback"):
+        assert token not in serialized
+
+
+def test_bridge_accept_first_run_notice_payload_does_not_leak(temp_db) -> None:
+    bridge = WebViewBridge()
+    set_setting("export_path", SENSITIVE_EXPORT_PATH)
+    set_setting("first_run_notice_accepted", "false")
+    result = bridge.accept_first_run_notice()
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        SENSITIVE_EXPORT_PATH,
+        SENSITIVE_PASSPHRASE,
+        "first_run_notice_accepted",
+        "Traceback",
+    ):
+        assert token not in serialized, f"accept payload leaks: {token!r}"
+
+
+def test_bridge_accept_first_run_notice_does_not_call_backup_or_set_setting(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch("worktrace.api.app_api.start_collector"), \
+            patch.object(settings_api, "set_setting_value") as mock_set_value, \
+            patch("worktrace.api.backup_api.export_encrypted_backup") as mock_export, \
+            patch("worktrace.api.backup_api.import_encrypted_backup") as mock_import, \
+            patch("worktrace.api.backup_api.parse_encrypted_backup_manifest") as mock_manifest, \
+            patch.object(settings_api, "clear_all_local_data") as mock_clear:
+        bridge.accept_first_run_notice()
+        mock_set_value.assert_not_called()
+        mock_export.assert_not_called()
+        mock_import.assert_not_called()
+        mock_manifest.assert_not_called()
+        mock_clear.assert_not_called()
+
+
+# --- Phase 6E: toggle_pause first-run guard ---------------------------
+
+
+def test_bridge_toggle_pause_does_not_start_collector_when_notice_unaccepted(temp_db) -> None:
+    bridge = WebViewBridge()
+    set_setting("first_run_notice_accepted", "false")
+    with patch("worktrace.api.app_api.start_collector") as mock_start:
+        result = bridge.toggle_pause()
+    mock_start.assert_not_called()
+    assert result == {"ok": False, "error": "请先确认隐私说明"}
+
+
+def test_bridge_toggle_pause_does_not_mutate_pause_state_when_notice_unaccepted(temp_db) -> None:
+    bridge = WebViewBridge()
+    set_setting("first_run_notice_accepted", "false")
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "stopped")
+    bridge.toggle_pause()
+    # None of the pause/status settings should have changed.
+    from worktrace.services.settings_service import get_setting
+    assert get_setting("user_paused", "") == "false"
+    assert get_setting("collector_status", "") == "stopped"
+
+
+def test_bridge_toggle_pause_fail_closed_on_notice_read_exception(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch.object(
+        settings_api,
+        "first_run_notice_accepted",
+        side_effect=RuntimeError(SENSITIVE_PASSPHRASE),
+    ), patch("worktrace.api.app_api.start_collector") as mock_start:
+        result = bridge.toggle_pause()
+    mock_start.assert_not_called()
+    assert result == {"ok": False, "error": "请先确认隐私说明"}
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (SENSITIVE_PASSPHRASE, "RuntimeError", "Traceback"):
+        assert token not in serialized
+
+
+def test_bridge_toggle_pause_works_after_notice_accepted(temp_db) -> None:
+    bridge = WebViewBridge()
+    set_setting("first_run_notice_accepted", "true")
+    set_setting("user_paused", "true")
+    set_setting("collector_status", "paused")
+    with patch("worktrace.api.app_api.start_collector") as mock_start:
+        result = bridge.toggle_pause()
+    mock_start.assert_called_once()
+    assert result.get("ok") is True

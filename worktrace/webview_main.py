@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config
-from .api import app_api
+from .api import app_api, settings_api
 from .runtime.app_runtime import AppRuntime
 from .webview_ui.bridge import WebViewBridge
 from .webview_ui.runtime_check import (
@@ -104,6 +104,32 @@ def main() -> int:
     runtime = AppRuntime(paths)
     runtime.initialize()
     app_api.set_runtime(runtime)
+
+    # Phase 6E first-run startup gate: mirror the legacy Tkinter
+    # ``_startup_privacy_gate`` semantics. Only auto-start the collector
+    # when the user has already accepted the first-run privacy notice.
+    # If the notice has not been accepted, leave the collector stopped;
+    # the frontend first-run overlay will display the notice and, on
+    # accept, call ``accept_first_run_notice`` through the bridge which
+    # starts the collector. Fail closed on read error: do not start the
+    # collector, log, but do not block WebView startup (the frontend
+    # will call ``get_first_run_notice`` and surface the error).
+    try:
+        notice_accepted = settings_api.first_run_notice_accepted()
+    except Exception:
+        logging.exception(
+            "webview startup: first_run_notice_accepted read failed; "
+            "not starting collector (fail closed)"
+        )
+        notice_accepted = False
+    if notice_accepted:
+        try:
+            app_api.start_collector()
+        except Exception:
+            logging.exception(
+                "webview startup: collector start failed after first-run "
+                "notice already accepted; user can retry via sidebar toggle"
+            )
 
     bridge = WebViewBridge()
     index_path = resource_path("index.html")

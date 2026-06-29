@@ -5,38 +5,35 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 6D is the latest shipped phase (Settings
-> / Privacy encrypted backup import + clear-all-local-data foundation). Project
-> Rules now supports project-grouped folder / keyword rules, existing-rule
-> enable / disable, keyword create / edit / delete, folder rule create /
-> edit / delete, user project create / edit / enable-disable / archive,
-> single-rule impact preview + safe single-rule backfill for folder /
-> keyword rules, automatic application of enabled rules to newly produced /
-> just-closed eligible activities, and selected-rule batch preview / apply
-> / enable / disable. The Settings / Privacy page surfaces a read-only
-> safety-status snapshot (storage model, clipboard capture on/off, export
-> directory configured yes/no, encrypted-backup import-in-progress flag),
-> opens the clipboard capture toggle write, opens encrypted backup
-> export + manifest preview through native file dialogs, and opens
-> encrypted backup import (replace-only via native `.wtbackup` open dialog)
-> + clear-all-local-data (explicit Chinese confirmation literal). The
-> toggle writes `clipboard_capture_enabled` through a narrow bridge facade;
-> the backup export writes an encrypted `.wtbackup` file via a native save
-> dialog; the manifest preview reads only the non-sensitive manifest fields
-> via a native open file dialog; the backup import replaces local data via
-> a native open dialog and leaves WorkTrace paused for the user to verify;
-> clear-all-local-data runs inside a destructive reset guard that pauses
-> the collector and blocks collector writes for the duration of the DB
-> replacement, then leaves WorkTrace paused. Both API and bridge layers
-> collapse failures to stable Chinese messages and never return full paths,
-> passphrases, salt, ciphertext, payload, SQL, or tracebacks. Phase 6D
-> does not read or display clipboard content. Save settings,
-> `set_setting_value`, arbitrary file/folder dialogs, first-run notice,
-> and export path setting remain unsupported in WebView and arrive in
-> later phases. Hard delete project,
-> raw folder-rule conflict preview, raw / unbounded batch backfill, and
-> the automatic-rule on/off UI toggle also remain unsupported. The
-> canonical one-screen snapshot of what ships today is
+> **Current state**: WebView Phase 6E is the latest shipped phase (WebView
+> migration closure: first-run privacy notice + intentional unsupported
+> cleanup). Project Rules now supports project-grouped folder / keyword
+> rules, existing-rule enable / disable, keyword create / edit / delete,
+> folder rule create / edit / delete, user project create / edit /
+> enable-disable / archive, single-rule impact preview + safe single-rule
+> backfill for folder / keyword rules, automatic application of enabled
+> rules to newly produced / just-closed eligible activities, and
+> selected-rule batch preview / apply / enable / disable. The Settings /
+> Privacy page surfaces a read-only safety-status snapshot (storage model,
+> clipboard capture on/off, export directory configured yes/no,
+> encrypted-backup import-in-progress flag, first-run notice accepted
+> state), opens the clipboard capture toggle write, opens encrypted backup
+> export + manifest preview through native file dialogs, opens encrypted
+> backup import (replace-only via native `.wtbackup` open dialog) +
+> clear-all-local-data (explicit Chinese confirmation literal), and now
+> also provides the WebView first-run privacy notice gate (blocking
+> overlay; user must accept before the collector starts) plus a read-only
+> "view privacy notice" entry on the Settings page. The first-run gate
+> is fail-closed: `webview_main` and `toggle_pause` never start the
+> collector while the notice is unaccepted, and exceptions collapse to a
+> stable Chinese error. Both API and bridge layers collapse failures to
+> stable Chinese messages and never return full paths, passphrases, salt,
+> ciphertext, payload, SQL, or tracebacks. Save settings,
+> `set_setting_value`, arbitrary file/folder dialogs, and export path
+> setting are intentionally unsupported for v0.2 (not deferred). Hard
+> delete project, raw folder-rule conflict preview, raw / unbounded batch
+> backfill, and the automatic-rule on/off UI toggle remain future backlog.
+> The canonical one-screen snapshot of what ships today is
 > [`docs/current-state.md`](docs/current-state.md). The full per-phase
 > history is [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
 > AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)
@@ -235,20 +232,21 @@ database file or use the Settings page to clear and rebuild all data.
 - Settings / Privacy page migrated to WebView in Phase 6A as a read-only
   status foundation, extended in Phase 6B with the clipboard capture
   toggle write, extended in Phase 6C with encrypted backup export +
-  manifest preview, and extended in Phase 6D with encrypted backup import
-  (replace-only) + clear-all-local-data (storage model, clipboard capture
-  on/off, export directory configured yes/no, encrypted-backup
-  import-in-progress flag, plus the toggle, plus the backup export +
-  manifest preview + backup import + clear-all-local-data). Phase 6D
-  does not read or display clipboard content; the toggle only controls
-  whether local clipboard recording is enabled. Encrypted backup import
-  and clear-all-local-data both leave WorkTrace paused so the user can
-  verify the post-replacement state before manually resuming recording;
-  clear-all-local-data runs inside a destructive reset guard that blocks
-  collector writes during the DB replacement. Save settings,
-  `set_setting_value`, arbitrary file/folder dialogs, first-run notice,
-  and export path setting remain unsupported in WebView and arrive in
-  later phases.
+  manifest preview, extended in Phase 6D with encrypted backup import
+  (replace-only) + clear-all-local-data, and closed in Phase 6E with the
+  WebView first-run privacy notice gate (blocking overlay; user must
+  accept before the collector starts) plus a read-only "view privacy
+  notice" entry on the Settings page. The first-run gate is fail-closed:
+  `webview_main` and `toggle_pause` never start the collector while the
+  notice is unaccepted. The toggle only controls whether local clipboard
+  recording is enabled; no phase reads or displays clipboard content.
+  Encrypted backup import and clear-all-local-data both leave WorkTrace
+  paused so the user can verify the post-replacement state before
+  manually resuming recording; clear-all-local-data runs inside a
+  destructive reset guard that blocks collector writes during the DB
+  replacement. Save settings, `set_setting_value`, arbitrary file/folder
+  dialogs, and export path setting are intentionally unsupported for v0.2
+  (not deferred to a later phase).
 - Hard delete project; raw folder-rule conflict preview; raw / unbounded
   batch backfill; automatic-rule enable / disable toggle in the UI; Excel /
   PDF / timesheet export; folder opening; and auto-submit are not

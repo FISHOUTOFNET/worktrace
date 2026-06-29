@@ -18,12 +18,16 @@ Implemented" sections) lives in
 - Migrated pages: Overview, Timeline / Time Details, Statistics / Export,
   Project Rules, Settings / Privacy (Phase 6A read-only status foundation +
   Phase 6B clipboard capture toggle write + Phase 6C encrypted backup export
-  + manifest preview + Phase 6D encrypted backup import + clear-all-local-data).
-  Per-phase scope is archived in the history file.
-- Unmigrated page capability scope: Settings / Privacy write actions not yet
-  opened (save settings, `set_setting_value`, first-run notice view/accept,
-  arbitrary file / folder dialog, export path setting) remain legacy Tkinter
-  reference code; not a supported runtime path.
+  + manifest preview + Phase 6D encrypted backup import + clear-all-local-data
+  + Phase 6E first-run privacy notice gate + read-only "view privacy notice"
+  entry). Per-phase scope is archived in the history file.
+- WebView migration is closed (Phase 6E). The Settings / Privacy write
+  actions save settings, `set_setting_value`, arbitrary file / folder
+  dialog, and export path setting are intentionally unsupported for v0.2
+  (not deferred). Only the controlled native dialogs CSV save and
+  `.wtbackup` save / open remain. The legacy `worktrace/ui` package stays
+  in the tree as reference-only code pending the cleanup phase; it is not a
+  supported runtime path.
 
 ## 1. Phase 1 Is A Destructive Migration
 
@@ -260,8 +264,46 @@ order:
   `secure_backup_service._invalidate_caches` set. K1 affected-test mapping
   extended to cover `worktrace/webview_ui/js/core.js`. No schema change, no
   new dependencies, no network / storage / browser clipboard API. **Completed.**
+- Phase 6E — WebView migration closure: first-run notice + intentional
+  unsupported cleanup. Closes the WebView migration by shipping the
+  first-run privacy notice gate in WebView (blocking overlay; user must
+  accept before the collector starts) and a read-only "view privacy notice"
+  entry on the Settings page. The gate is fail-closed: `webview_main` does
+  not auto-start the collector while the notice is unaccepted, and
+  `WebViewBridge.toggle_pause()` refuses to call `app_api.start_collector()`
+  until the user accepts. Adds `settings_api.get_first_run_notice_for_webview()`
+  (zero params; returns `ok` / `accepted` / `title` / `highlights` /
+  `notice_text`; `notice_text` comes from `PRIVACY_NOTICE_TEXT`) and
+  `settings_api.accept_first_run_notice_for_webview()` (zero params;
+  idempotent; writes `first_run_notice_accepted = true` via the existing
+  `set_setting` path with cache invalidation; does not call the collector),
+  plus `WebViewBridge.get_first_run_notice()` and
+  `WebViewBridge.accept_first_run_notice()` (both zero params; accept calls
+  `app_api.start_collector()` only after the API returns `ok=True`).
+  `get_settings_privacy_status()` updated: `phase` = `"6E"`; adds a
+  display-safe `first_run_notice` sub-dict (`accepted` /
+  `view_available_in_webview` / `accept_required`). Frontend adds the
+  first-run notice overlay DOM, five `App.firstRunNotice*` state flags,
+  `App.loadFirstRunNotice` / `App.showFirstRunNotice` /
+  `App.hideFirstRunNotice` / `App.acceptFirstRunNotice` /
+  `App.openPrivacyNoticeFromSettings` / `App.renderFirstRunNotice`
+  helpers, init-time `loadFirstRunNotice()` call, and scoped
+  `.first-run-notice-*` / `.settings-privacy-notice-*` CSS. All dynamic
+  content uses `textContent` (no `innerHTML`); no network / storage /
+  browser clipboard API. Tests extended: API + bridge tests, entry
+  startup-gate tests, static contract tests, boundary tests, and a new K2
+  affected-test runner section for `worktrace/webview_main.py` /
+  `worktrace/main.py` / `worktrace/api/app_api.py`. Phase 6E explicitly
+  does NOT implement save settings, `set_setting_value`, export path
+  setting, or arbitrary file / folder dialog (intentionally unsupported
+  for v0.2); Phase 5J+ items (hard delete project, raw folder-rule
+  conflict preview, raw / unbounded batch backfill, automatic-rule
+  on/off UI toggle) remain future backlog. The legacy Tkinter UI is NOT
+  deleted; cleanup is the next phase. No schema change, no new
+  dependencies, no new JS file. **Completed.**
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
-  pages are at parity in the WebView UI.
+  pages are at parity in the WebView UI. Not started; Phase 6E is the
+  parity closure, so cleanup is the next phase after 6E.
 
 ## 8. Stop-Loss Conditions
 

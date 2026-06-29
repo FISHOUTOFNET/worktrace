@@ -423,8 +423,31 @@ class WebViewBridge(ProjectRulesBridgeMixin):
         Mirrors the Tkinter sidebar toggle: if currently paused or not running,
         clear user_paused and start the collector; otherwise set user_paused,
         mark collector_status paused, and clear the current activity snapshot.
+
+        Phase 6E: before any path that could start the collector, verify
+        the first-run privacy notice has been accepted. If not accepted
+        (or the read itself fails), fail closed: do not start the
+        collector, do not mutate ``user_paused`` / ``collector_status``,
+        and return the stable Chinese error ``请先确认隐私说明``.
         """
         try:
+            # Phase 6E first-run gate: the collector must not start until
+            # the user has accepted the privacy notice. ``toggle_pause``
+            # is the only sidebar action that can start the collector
+            # besides ``accept_first_run_notice``; both must respect the
+            # gate. Fail-closed on any read error so a settings hiccup
+            # cannot accidentally bypass the gate.
+            try:
+                notice_accepted = settings_api.first_run_notice_accepted()
+            except Exception:
+                logger.exception(
+                    "webview bridge toggle_pause first-run notice read failed; "
+                    "failing closed"
+                )
+                return {"ok": False, "error": "请先确认隐私说明"}
+            if not notice_accepted:
+                return {"ok": False, "error": "请先确认隐私说明"}
+
             raw_status = settings_api.get_collector_status()
             paused = settings_api.is_user_paused() or raw_status == "paused"
             if paused or raw_status != "running":
@@ -438,6 +461,96 @@ class WebViewBridge(ProjectRulesBridgeMixin):
         except Exception:
             logger.exception("webview bridge toggle_pause failed")
             return dict(_GENERIC_ERROR)
+
+    def get_first_run_notice(self) -> dict[str, Any]:
+        """Return the display-safe first-run privacy notice payload.
+
+        Phase 6E narrow bridge method. Zero parameters. Calls
+        ``settings_api.get_first_run_notice_for_webview()`` and
+        transparently forwards its display-safe payload.
+
+        On any exception returns ``{"ok": False, "error":
+        "加载隐私说明失败"}`` so the frontend can surface a stable
+        Chinese error.
+
+        This method does not open a file dialog, does not call the
+        collector, does not call a generalized settings write entry,
+        and does not return a traceback / raw exception / SQL / path /
+        clipboard content.
+        """
+        try:
+            return settings_api.get_first_run_notice_for_webview()
+        except Exception:
+            logger.exception("webview bridge get_first_run_notice failed")
+            return {"ok": False, "error": "加载隐私说明失败"}
+
+    def accept_first_run_notice(self) -> dict[str, Any]:
+        """Accept the first-run privacy notice and start the collector.
+
+        Phase 6E narrow bridge method. Zero parameters. Calls
+        ``settings_api.accept_first_run_notice_for_webview()``; only when
+        that API returns ``ok=True`` does this method call
+        ``app_api.start_collector()`` so the collector follows the
+        legacy Tkinter ``_accept_notice`` semantics (accept then start).
+
+        On success returns a narrow payload that includes the refreshed
+        status snapshot. If the status refresh fails after a successful
+        accept, the success is still returned (without ``status``) so
+        the accept is not masked by a status-read failure.
+
+        On API failure (``ok=False``) the collector is NOT started and
+        the stable Chinese error from the API is forwarded.
+
+        On any unexpected exception returns ``{"ok": False, "error":
+        "确认隐私说明失败"}``.
+
+        This method does not call ``set_setting_value``, ``save_settings``,
+        a generic file/folder dialog, or backup export / import /
+        manifest / clear-all. It does not return a traceback / raw
+        exception / SQL / path / clipboard content.
+        """
+        try:
+            result = settings_api.accept_first_run_notice_for_webview()
+            if not result.get("ok"):
+                # API reported failure (or a stable Chinese error). Do
+                # not start the collector; forward the error payload.
+                return result
+            # API succeeded: start the collector so the user sees
+            # recording begin immediately after accepting the notice,
+            # mirroring the legacy Tkinter flow.
+            try:
+                app_api.start_collector()
+            except Exception:
+                # The accept itself succeeded (setting is persisted). A
+                # collector start failure is logged but does NOT mask
+                # the successful accept: the user can press the sidebar
+                # toggle to retry start now that the gate is open.
+                logger.exception(
+                    "webview bridge accept_first_run_notice: collector "
+                    "start failed after successful accept"
+                )
+            # Build the success payload. Try to refresh the status so
+            # the frontend sidebar / overview can re-render; on failure
+            # still return success without ``status``.
+            payload: dict[str, Any] = {
+                "ok": True,
+                "accepted": True,
+                "message": "已确认隐私说明",
+            }
+            try:
+                status_result = self.get_status()
+                if status_result.get("ok"):
+                    payload["status"] = status_result
+            except Exception:
+                # Do not mask the successful accept with a status error.
+                logger.exception(
+                    "webview bridge accept_first_run_notice: status "
+                    "refresh failed; returning success without status"
+                )
+            return payload
+        except Exception:
+            logger.exception("webview bridge accept_first_run_notice failed")
+            return {"ok": False, "error": "确认隐私说明失败"}
 
     def get_overview(self) -> dict[str, Any]:
         """Return today's overview KPIs and current activity summary."""

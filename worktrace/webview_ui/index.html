@@ -8,6 +8,18 @@
 </head>
 <body>
     <div class="app">
+        <div id="first-run-notice-overlay" class="first-run-notice-overlay" hidden>
+            <div id="first-run-notice-dialog" class="first-run-notice-dialog" role="dialog" aria-modal="true">
+                <div id="first-run-notice-title" class="first-run-notice-title"></div>
+                <ul id="first-run-notice-highlights" class="first-run-notice-highlights"></ul>
+                <pre id="first-run-notice-text" class="first-run-notice-text"></pre>
+                <p id="first-run-notice-error" class="first-run-notice-error" hidden></p>
+                <div class="first-run-notice-actions">
+                    <button id="first-run-notice-accept-btn" type="button" class="first-run-notice-accept-btn">我已阅读并同意</button>
+                    <button id="first-run-notice-close-btn" type="button" class="first-run-notice-close-btn" hidden>关闭</button>
+                </div>
+            </div>
+        </div>
         <aside class="sidebar">
             <div class="sidebar-brand">WorkTrace</div>
             <nav class="sidebar-nav">
@@ -468,6 +480,10 @@
                         </div>
                         <p class="settings-card-line" data-settings-key="export_path_configured">导出目录：未加载</p>
                         <p class="settings-card-line" data-settings-key="secure_import_in_progress">加密备份导入进行中：未加载</p>
+                        <div class="settings-privacy-notice-row">
+                            <span id="settings-privacy-notice-status" class="settings-privacy-notice-status">隐私说明：未加载</span>
+                            <button id="settings-privacy-notice-btn" type="button" class="settings-privacy-notice-btn">查看隐私说明</button>
+                        </div>
                     </article>
                     <article id="settings-backup-card" class="settings-card settings-backup-card">
                         <h2 class="settings-card-title">加密备份</h2>

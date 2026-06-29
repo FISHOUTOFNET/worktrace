@@ -6787,6 +6787,237 @@ Phase 6D does not implement and does not open UI / bridge entry for:
   encrypted backup runtime semantics;
 - Any change to `bridge.py` import boundary (still only `worktrace.api`).
 
+## Phase 6E Implemented Scope
+
+Phase 6E closes the WebView migration by shipping the first-run privacy
+notice gate in WebView and explicitly reclassifying the remaining deferred
+Settings / Privacy write actions as intentionally unsupported for v0.2.
+
+First-run privacy notice gate (WebView):
+
+- New databases still default to `first_run_notice_accepted = "false"` in
+  `seed_defaults()`; the seed-default test now locks this.
+- On startup, `worktrace.webview_main.main()` reads
+  `settings_api.first_run_notice_accepted()` after `runtime.initialize()` +
+  `app_api.set_runtime(runtime)` and before creating the window. If
+  accepted, the collector starts as in legacy Tkinter; if not accepted, the
+  collector is NOT started and the frontend overlay is responsible for
+  showing the notice. If the read raises, the gate fails closed (no
+  collector start) but the WebView still launches so the frontend can show
+  a stable Chinese error. `runtime.shutdown()` is still called in `finally`.
+- The frontend overlay (`first-run-notice-overlay`) is a blocking modal
+  with a single accept button; there is no skip / later / cancel / close
+  button in gate mode. The close button is only used for the Settings
+  read-only "view privacy notice" mode and is hidden by default.
+- `App.loadFirstRunNotice()` is called during `init()` before `refreshAll()`.
+  When `accepted === false` it sets `App.firstRunNoticeRequired = true`,
+  shows the blocking overlay, hides the close button, and blocks sidebar
+  pause / resume interaction. When `accepted === true` it does not show
+  the overlay.
+- `App.acceptFirstRunNotice()` calls
+  `App.callBridge("accept_first_run_notice")`; on success it hides the
+  overlay, clears `firstRunNoticeRequired`, updates sidebar / global
+  status, and calls `App.refreshAll()`. Catch branches never read
+  `.message`.
+- The Settings / Privacy page adds a read-only "view privacy notice" entry
+  (`settings-privacy-notice-btn` + `settings-privacy-notice-status`). The
+  entry reuses the same overlay in view mode (close button visible; no
+  accept; no settings write; no collector start).
+
+Backend API layer (`worktrace/api/settings_api.py`):
+
+- `get_first_run_notice_for_webview()` — zero params; returns a narrow
+  payload `{"ok": True, "accepted": bool, "title": str, "highlights":
+  list[str], "notice_text": str}`. `accepted` comes from
+  `first_run_notice_accepted()`; `notice_text` comes from
+  `PRIVACY_NOTICE_TEXT`; `highlights` aligns with the legacy first-run
+  dialog (`["本地保存", "不截屏录屏", "不主动读正文", "用户可清空"]`).
+  On exception returns `{"ok": False, "error": "加载隐私说明失败"}`. Never
+  returns path / DB path / export path / clipboard content / window title
+  / file path hint / note / SQL / traceback / raw exception.
+- `accept_first_run_notice_for_webview()` — zero params; calls the existing
+  `accept_first_run_notice()` (which writes through the existing `set_setting`
+  path and clears the settings cache so the same process re-reads
+  `accepted=true`). Idempotent: re-accepting an already-accepted notice
+  still returns success. Returns `{"ok": True, "accepted": True,
+  "message": "已确认隐私说明"}`. On exception returns `{"ok": False,
+  "error": "确认隐私说明失败"}`. Does NOT call the collector, does NOT call
+  `set_setting_value`, does NOT call backup export / import / manifest /
+  clear-all.
+- `get_settings_privacy_status()` updated: `phase` = `"6E"`; adds a
+  display-safe `first_run_notice` sub-dict (`accepted` /
+  `view_available_in_webview` / `accept_required`). Does not expose the
+  raw setting key `first_run_notice_accepted`.
+- `__all__` exports the two new facades.
+
+Bridge layer (`worktrace/webview_ui/bridge.py`):
+
+- `WebViewBridge.get_first_run_notice()` — zero params; calls
+  `settings_api.get_first_run_notice_for_webview()`; transparently passes
+  the display-safe payload; on exception returns `{"ok": False, "error":
+  "加载隐私说明失败"}`. Does not open a file dialog, call the collector,
+  or call a generic settings write.
+- `WebViewBridge.accept_first_run_notice()` — zero params; calls
+  `settings_api.accept_first_run_notice_for_webview()`; only after the API
+  returns `ok=True` does it call `app_api.start_collector()`. Success
+  returns `{"ok": True, "accepted": True, "message": "已确认隐私说明",
+  "status": self.get_status()}` (status refresh failure does not mask the
+  accept success). On API `ok=False` or exception returns the stable
+  Chinese error and does NOT start the collector.
+- `WebViewBridge.toggle_pause()` hardened: before any path that could call
+  `app_api.start_collector()`, it checks
+  `settings_api.first_run_notice_accepted()`. If unaccepted (or if the
+  read raises), it returns `{"ok": False, "error": "请先确认隐私说明"}`,
+  does NOT call `app_api.start_collector()`, and does NOT mutate
+  `user_paused` / `collector_status` / `current_activity_snapshot`.
+  Already-accepted users keep the existing pause / resume semantics.
+
+Frontend (`worktrace/webview_ui/`):
+
+- `index.html`: added `first-run-notice-overlay` /
+  `first-run-notice-dialog` / `first-run-notice-title` /
+  `first-run-notice-highlights` / `first-run-notice-text` /
+  `first-run-notice-accept-btn` / `first-run-notice-error` /
+  `first-run-notice-close-btn` DOM ids (overlay hidden by default; close
+  button only for Settings read-only view mode). Added
+  `settings-privacy-notice-btn` + `settings-privacy-notice-status` in the
+  privacy card.
+- `js/core.js`: added `App.firstRunNoticeLoaded` /
+  `App.firstRunNoticeLoading` / `App.firstRunNoticeRequired` /
+  `App.firstRunNoticeAcceptInProgress` /
+  `App.firstRunNoticeViewingFromSettings` state variables.
+- `js/settings.js`: added `App.loadFirstRunNotice` /
+  `App.showFirstRunNotice` / `App.hideFirstRunNotice` /
+  `App.acceptFirstRunNotice` / `App.openPrivacyNoticeFromSettings` /
+  `App.renderFirstRunNotice` helpers. All dynamic content uses
+  `textContent` / text nodes (no markup APIs). Notice text / passphrase /
+  path / clipboard content is never persisted to App state or browser
+  storage; the in-memory cached payload is a page-local variable only.
+  Catch branches never read `.message`. No `set_setting_value` /
+  `save_settings` / generic file dialog calls.
+- `js/init.js`: `initButtons()` binds `first-run-notice-accept-btn` →
+  `App.acceptFirstRunNotice`, `first-run-notice-close-btn` →
+  `App.hideFirstRunNotice` (guarded so gate mode cannot close),
+  `settings-privacy-notice-btn` → `App.openPrivacyNoticeFromSettings`.
+  `init()` calls `App.loadFirstRunNotice()` before `refreshAll()`.
+- `styles.css`: added scoped `.first-run-notice-*` and
+  `.settings-privacy-notice-*` classes. Local CSS only; no fonts, no CDN,
+  no network resources, no frameworks.
+
+Tests:
+
+- `tests/test_settings_privacy_status.py`: docstring updated to Phase 6E;
+  required keys test now includes `first_run_notice`; phase assertion
+  updated to `"6E"`; new tests cover the new-library default
+  (`accepted=False`), the narrow `get_first_run_notice_for_webview()`
+  payload (accepted=false / accepted=true, `notice_text` from
+  `PRIVACY_NOTICE_TEXT`, `highlights` JSON-serializable list[str], no
+  sensitive-token leak), `accept_first_run_notice_for_webview()` write +
+  idempotency + same-process re-read consistency (settings cache cleared
+  via the existing `set_setting` path), failure collapse to stable
+  Chinese, display-safe `first_run_notice` sub-dict in
+  `get_settings_privacy_status()`, and that the first-run notice API does
+  NOT call backup export / import / manifest / clear-all or
+  `set_setting_value`. Bridge tests cover `get_first_run_notice` /
+  `accept_first_run_notice` existence + signature + success payload +
+  `accept` calls `app_api.start_collector()` only on `ok=True` +
+  `toggle_pause` first-run guard (no collector start, no state mutation,
+  fail-closed on read exception) + no sensitive-token leak + no file
+  dialog + no generic settings write.
+- `tests/test_webview_phase1_entry.py`: extended with a
+  `_stub_webview_main_environment()` helper and five new startup-gate
+  tests (accepted → collector starts; unaccepted → collector does not
+  start; read exception → fail closed, WebView still launches;
+  `runtime.shutdown()` still in finally; WebView2 / pywebview missing
+  behavior unchanged).
+- `tests/webview/test_settings_static_contract.py`: docstring updated to
+  Phase 6E; allowed Settings / notice bridge methods extended to include
+  `get_first_run_notice` + `accept_first_run_notice`; forbidden list
+  extended to include `save_settings` + `settings-save-btn` +
+  `settings-path-btn` + `settings-file-dialog-btn`; added 17 Phase 6E
+  static contract tests (overlay DOM ids, read-only view button, no
+  skip / later / cancel, close button hidden by default, core.js state
+  variables, settings.js helpers, `textContent`-only rendering, catch
+  does not read `.message`, no network / storage / clipboard APIs, no
+  persistent notice payload, gate shows when unaccepted, accept clears
+  required + hides gate, view mode only, hide does not write setting or
+  start collector, render hides close in gate mode, close-button handler
+  guards on viewing-from-settings, init.js binds buttons, init.js calls
+  `loadFirstRunNotice`, styles.css scoped classes, no external fonts /
+  CDN).
+- `tests/test_ui_backend_boundary.py`: extended with 9 Phase 6E boundary
+  tests (both bridge methods exist with zero required params;
+  `get_first_run_notice` calls the API facade and does NOT call DB /
+  collector / backup / clear / `set_setting`; `accept_first_run_notice`
+  calls the API facade + `app_api.start_collector` and does NOT call
+  backup / clear / `set_setting`; both error payloads carry the stable
+  Chinese message and no sensitive tokens; `toggle_pause` gate check
+  happens BEFORE `app_api.start_collector()`; `toggle_pause` fail-closed
+  block does not mutate pause / status / snapshot / call
+  `start_collector`; first-run bridge methods do not open a file dialog;
+  `webview_main.py` imports `settings_api` via `worktrace.api` and does
+  NOT import services / collector / security).
+- `scripts/run_affected_tests.py`: added a new K2 rule for
+  `worktrace/webview_main.py` / `worktrace/main.py` /
+  `worktrace/api/app_api.py` that selects
+  `tests/test_webview_phase1_entry.py` + `tests/test_startup_imports.py`
+  + `tests/test_ui_backend_boundary.py` +
+  `tests/test_settings_privacy_status.py` +
+  `tests/test_run_affected_tests.py` and the import smoke command.
+- `tests/test_run_affected_tests.py`: added K2 coverage tests
+  (`webview_main.py` / `main.py` / `app_api.py` triggers select the K2
+  target set + import smoke; K2 does NOT trigger the Project Rules
+  C-series suite or the Timeline / Project Rules static contracts).
+
+Documentation: `README.md`, `docs/current-state.md`,
+`docs/ui-webview-migration.md`, and this file now describe the current
+phase as 6E and explicitly note that 6E ships the WebView first-run
+privacy notice gate + read-only "view privacy notice" entry, that the
+gate is fail-closed, and that save settings / `set_setting_value` /
+arbitrary file / folder dialog / export path setting are intentionally
+unsupported for v0.2 (not deferred).
+
+Phase 6E does not modify `WorkTrace.spec` resource list. No DB schema
+change. No new dependency. No new JS file. The WebView packaging static
+test and the `worktrace.webview_main` import check were run and pass; the
+full PyInstaller build was not re-run because no packaging or runtime
+behavior changed.
+
+## Phase 6E Not Implemented
+
+Phase 6E does not implement and does not open UI / bridge entry for:
+
+- Save settings (general setting write); intentionally unsupported for v0.2;
+- `set_setting_value` WebView write entry; intentionally unsupported for v0.2;
+- Export path setting; intentionally unsupported for v0.2;
+- Arbitrary file / folder picker (only the existing CSV save and
+  `.wtbackup` save / open dialogs remain; no general file / folder browser);
+- Hard delete project; future backlog;
+- Raw folder-rule conflict preview (`preview_folder_rule_conflicts` NOT
+  exposed to WebView; 5I reuses display-safe `rule_impact_service`
+  helpers); future backlog;
+- Raw / unbounded batch backfill; future backlog;
+- Automatic-rule on/off UI toggle; future backlog;
+- Clipboard content reading, display, or return (the Phase 6B toggle only
+  controls whether local clipboard recording is enabled);
+- First-run notice bypass (no skip / later / cancel / close button in gate
+  mode; `toggle_pause` and `webview_main` startup both fail closed while
+  unaccepted);
+- Any database delete / rebuild / import / export write beyond what 6D
+  already opened;
+- Schema.sql modification (no new table / column / migration);
+- New dependencies (no React / Vue / Vite / Node / local HTTP server /
+  CDN / external font);
+- `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource`;
+- `localStorage` / `sessionStorage` / `document.cookie`;
+- Browser Clipboard API (`navigator.clipboard`);
+- Legacy Tkinter UI deletion (cleanup is the next phase; the
+  `worktrace/ui` package stays in the tree as reference-only code);
+- Legacy Tkinter fallback;
+- Any change to collector / Timeline / Statistics / Export / privacy /
+  encrypted backup runtime semantics;
+- Any change to `bridge.py` import boundary (still only `worktrace.api`).
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

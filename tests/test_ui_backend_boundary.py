@@ -865,3 +865,325 @@ def test_webview_bridge_clear_does_not_call_backup_actions_or_set() -> None:
         assert forbidden not in body, (
             "clear_all_local_data must not call: " + forbidden
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6E: First-run privacy notice bridge methods. The two new methods are
+# defined directly on ``WebViewBridge`` (no mixin).
+# ``get_first_run_notice`` takes zero parameters and only calls
+# ``settings_api.get_first_run_notice_for_webview()``.
+# ``accept_first_run_notice`` takes zero parameters and calls
+# ``settings_api.accept_first_run_notice_for_webview()``; only on ``ok=True``
+# does it call ``app_api.start_collector()``.
+# ``toggle_pause`` was updated to gate on ``settings_api.first_run_notice_accepted()``
+# before any path that could start the collector: if not accepted (or the
+# read raises), fail closed, do not mutate ``user_paused`` /
+# ``collector_status``, return ``{"ok": False, "error": "请先确认隐私说明"}``.
+# All error payloads collapse to stable Chinese messages and must not leak
+# traceback / str(exc) / repr / format_exc / exc_info / .message /
+# raw_exception / clipboard_content / passphrase / path.
+# ---------------------------------------------------------------------------
+
+
+def test_webview_bridge_exposes_phase_6e_first_run_notice_methods() -> None:
+    """``WebViewBridge`` must expose the Phase 6E ``get_first_run_notice``
+    and ``accept_first_run_notice`` methods, both with zero parameters."""
+    import inspect
+
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    bridge = WebViewBridge()
+    for method_name in ("get_first_run_notice", "accept_first_run_notice"):
+        method = getattr(bridge, method_name, None)
+        assert callable(method), (
+            f"WebViewBridge must expose Phase 6E bridge method {method_name!r}"
+        )
+        sig = inspect.signature(method)
+        params = list(sig.parameters.values())
+        # Zero required parameters; the JS side calls these with no args.
+        required = [
+            p for p in params
+            if p.default is inspect.Parameter.empty
+            and p.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.POSITIONAL_ONLY,
+            )
+        ]
+        assert len(required) == 0, (
+            f"{method_name} must accept zero required parameters, "
+            f"got {len(required)}: {[p.name for p in required]}"
+        )
+
+
+def test_webview_bridge_get_first_run_notice_calls_api_facade() -> None:
+    """Phase 6E: ``get_first_run_notice`` must call
+    ``settings_api.get_first_run_notice_for_webview``. This is a static
+    source-level check confirming the bridge delegates to the API facade
+    and does not touch the DB / service directly."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def get_first_run_notice")
+    assert pos != -1, "bridge.py must define get_first_run_notice for Phase 6E"
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 2000]
+    assert "settings_api.get_first_run_notice_for_webview" in body
+    # Must NOT touch DB / collector / security directly.
+    for forbidden in (
+        "settings_service",
+        "secure_backup_service",
+        "db.get_connection",
+        "app_api.start_collector",
+        "import_encrypted_backup",
+        "export_encrypted_backup",
+        "preview_encrypted_backup_manifest",
+        "clear_all_local_data",
+        "set_setting_value",
+    ):
+        assert forbidden not in body, (
+            "get_first_run_notice must not call: " + forbidden
+        )
+
+
+def test_webview_bridge_accept_first_run_notice_calls_api_facade_and_start_collector() -> None:
+    """Phase 6E: ``accept_first_run_notice`` must call
+    ``settings_api.accept_first_run_notice_for_webview`` and, only on
+    ``ok=True``, must call ``app_api.start_collector()``. This is a
+    static source-level check confirming the bridge delegates to the API
+    facade for the accept write and then starts the collector (mirroring
+    the legacy Tkinter ``_accept_notice`` flow)."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def accept_first_run_notice")
+    assert pos != -1, "bridge.py must define accept_first_run_notice for Phase 6E"
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    assert "settings_api.accept_first_run_notice_for_webview" in body
+    # The accept method MUST call app_api.start_collector() on success.
+    assert "app_api.start_collector" in body
+    # Skip the docstring when checking for forbidden tokens, since the
+    # docstring legitimately mentions the forbidden names to document
+    # what the method does NOT call.
+    doc_start = body.find('"""')
+    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
+    code_only = body[doc_end:] if doc_end > 3 else body
+    # The accept method must NOT call backup / clear / set-setting paths.
+    for forbidden in (
+        "import_encrypted_backup",
+        "export_encrypted_backup",
+        "preview_encrypted_backup_manifest",
+        "clear_all_local_data",
+        "set_setting_value",
+    ):
+        assert forbidden not in code_only, (
+            "accept_first_run_notice must not call: " + forbidden
+        )
+
+
+def test_webview_bridge_get_first_run_notice_error_payload_has_no_sensitive_tokens() -> None:
+    """Phase 6E: the bridge ``get_first_run_notice`` error payload must
+    collapse to the stable Chinese message ``加载隐私说明失败`` and must
+    not leak traceback / str(exc) / repr / format_exc / exc_info /
+    .message / raw_exception / clipboard_content / passphrase / path.
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def get_first_run_notice")
+    assert pos != -1
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 2000]
+    # Stable Chinese error message that must appear in the payload.
+    assert "加载隐私说明失败" in body
+    # Skip the docstring when checking for forbidden runtime tokens.
+    doc_start = body.find('"""')
+    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
+    code_only = body[doc_end:] if doc_end > 3 else body
+    for forbidden in (
+        "traceback",
+        "str(exc)",
+        "str(e)",
+        "repr(",
+        "format_exc",
+        "exc_info",
+        ".message",
+        "raw_exception",
+        "clipboard_content",
+        "passphrase",
+    ):
+        assert forbidden not in code_only, (
+            "get_first_run_notice must not reference forbidden token: "
+            + forbidden
+        )
+
+
+def test_webview_bridge_accept_first_run_notice_error_payload_has_no_sensitive_tokens() -> None:
+    """Phase 6E: the bridge ``accept_first_run_notice`` error payload must
+    collapse to the stable Chinese message ``确认隐私说明失败`` and must
+    not leak traceback / str(exc) / repr / format_exc / exc_info /
+    .message / raw_exception / clipboard_content / passphrase / path.
+
+    Note: ``app_api.start_collector`` IS allowed (it is the whole point
+    of the method). ``passphrase`` is NOT allowed because the accept
+    flow never references a passphrase.
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def accept_first_run_notice")
+    assert pos != -1
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Stable Chinese error message that must appear in the payload.
+    assert "确认隐私说明失败" in body
+    # Skip the docstring when checking for forbidden runtime tokens.
+    doc_start = body.find('"""')
+    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
+    code_only = body[doc_end:] if doc_end > 3 else body
+    for forbidden in (
+        "traceback",
+        "str(exc)",
+        "str(e)",
+        "repr(",
+        "format_exc",
+        "exc_info",
+        ".message",
+        "raw_exception",
+        "clipboard_content",
+        "passphrase",
+    ):
+        assert forbidden not in code_only, (
+            "accept_first_run_notice must not reference forbidden token: "
+            + forbidden
+        )
+
+
+def test_webview_bridge_toggle_pause_gates_on_first_run_notice() -> None:
+    """Phase 6E: ``toggle_pause`` must call
+    ``settings_api.first_run_notice_accepted()`` before any path that
+    could call ``app_api.start_collector()``. If the read returns False
+    (or raises), the method must fail closed: return
+    ``{"ok": False, "error": "请先确认隐私说明"}`` and NOT mutate
+    ``user_paused`` / ``collector_status`` / start the collector.
+
+    This is a static source-level check confirming the gate is wired
+    into ``toggle_pause`` and the fail-closed error message is present.
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def toggle_pause")
+    assert pos != -1
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # The gate check must appear BEFORE the first ``app_api.start_collector``
+    # call. Find both positions and assert ordering.
+    gate_pos = body.find("settings_api.first_run_notice_accepted()")
+    start_pos = body.find("app_api.start_collector()")
+    assert gate_pos != -1, (
+        "toggle_pause must call settings_api.first_run_notice_accepted() "
+        "for Phase 6E"
+    )
+    assert start_pos != -1, (
+        "toggle_pause must still call app_api.start_collector() when the "
+        "gate is open (Phase 6E does not remove the start path, only gates it)"
+    )
+    assert gate_pos < start_pos, (
+        "toggle_pause must check first_run_notice_accepted() BEFORE any "
+        "app_api.start_collector() call"
+    )
+    # The fail-closed error message must be present.
+    assert "请先确认隐私说明" in body
+
+
+def test_webview_bridge_toggle_pause_does_not_mutate_state_when_gate_closed() -> None:
+    """Phase 6E: when the first-run notice is not accepted,
+    ``toggle_pause`` must NOT call ``set_user_paused``,
+    ``set_collector_status``, ``set_current_activity_snapshot``, or
+    ``start_collector``. The fail-closed path is a pure return."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def toggle_pause")
+    assert pos != -1
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Find the fail-closed return block: between the gate check and the
+    # ``raw_status = settings_api.get_collector_status()`` line that
+    # follows the gate. Slice that block and assert no state mutations.
+    gate_check = body.find("settings_api.first_run_notice_accepted()")
+    assert gate_check != -1
+    # The fail-closed block ends at the next ``raw_status =`` assignment
+    # (which only runs after the gate passes).
+    raw_status_pos = body.find("raw_status = settings_api.get_collector_status()")
+    assert raw_status_pos != -1
+    fail_closed_block = body[gate_check:raw_status_pos]
+    # The fail-closed block must contain the error return.
+    assert "请先确认隐私说明" in fail_closed_block
+    # The fail-closed block must NOT mutate state or start the collector.
+    for forbidden in (
+        "set_user_paused",
+        "set_collector_status",
+        "set_current_activity_snapshot",
+        "app_api.start_collector",
+    ):
+        assert forbidden not in fail_closed_block, (
+            "toggle_pause fail-closed block must not call: " + forbidden
+        )
+
+
+def test_webview_bridge_first_run_notice_methods_do_not_open_file_dialog() -> None:
+    """Phase 6E: neither ``get_first_run_notice`` nor
+    ``accept_first_run_notice`` may open a native file dialog. The
+    first-run notice is a pure accept flow with no file chooser."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    for method_name in ("get_first_run_notice", "accept_first_run_notice"):
+        pos = bridge_source.find("def " + method_name)
+        assert pos != -1
+        next_def = bridge_source.find("\n    def ", pos + 1)
+        body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+        for forbidden in (
+            "open_file_dialog",
+            "save_file_dialog",
+            "file_dialog",
+            "tkinter.filedialog",
+            "tkinter_dialog",
+            "askopenfilename",
+            "asksaveasfilename",
+        ):
+            assert forbidden not in body, (
+                method_name + " must not open file dialog: " + forbidden
+            )
+
+
+def test_webview_main_imports_settings_api() -> None:
+    """Phase 6E: ``webview_main.py`` must import ``settings_api`` from
+    ``worktrace.api`` so the first-run startup gate can read the
+    notice-accepted state. The bridge boundary is unaffected: only
+    ``webview_main`` (the entry point) is allowed to import
+    ``settings_api`` directly; the bridge must still go through
+    ``worktrace.api`` (which it already does)."""
+    webview_main_path = (
+        Path(__file__).resolve().parents[1] / "worktrace" / "webview_main.py"
+    )
+    source = webview_main_path.read_text(encoding="utf-8")
+    # The import must be present.
+    assert "settings_api" in source, (
+        "webview_main.py must import settings_api for Phase 6E startup gate"
+    )
+    # The import must come from worktrace.api (not from services / db).
+    assert (
+        "from .api import" in source or "from worktrace.api import" in source
+    ), "webview_main.py must import settings_api via worktrace.api"
+    # The startup gate must reference first_run_notice_accepted.
+    assert "first_run_notice_accepted" in source, (
+        "webview_main.py must call settings_api.first_run_notice_accepted() "
+        "in the Phase 6E startup gate"
+    )
+    # webview_main.py is the entry point and is allowed to import AppRuntime
+    # / config / logging helpers, but still must NOT import services /
+    # collector / security directly.
+    for forbidden in (
+        "from .services",
+        "from worktrace.services",
+        "from .collector",
+        "from worktrace.collector",
+        "from .security",
+        "from worktrace.security",
+        "import worktrace.services",
+        "import worktrace.collector",
+        "import worktrace.security",
+    ):
+        assert forbidden not in source, (
+            "webview_main.py must not import backend module directly: "
+            + forbidden
+        )

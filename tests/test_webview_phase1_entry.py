@@ -239,3 +239,171 @@ def test_overview_bridge_methods_return_json_serializable_no_traceback(temp_db):
         if result.get("ok") is False:
             assert "error" in result
             assert "traceback" not in str(result).lower()
+
+
+# --- Phase 6E: First-run startup gate --------------------------------
+#
+# These tests verify the first-run privacy notice gate added to
+# ``webview_main.main()``. The gate checks
+# ``settings_api.first_run_notice_accepted()`` after
+# ``runtime.initialize()`` / ``app_api.set_runtime(runtime)`` and before
+# the WebView window is created. If accepted, the collector is
+# auto-started; if not accepted (or the read raises), the collector is
+# NOT started and the frontend overlay is responsible for showing the
+# notice. ``runtime.shutdown()`` must still be called in the finally
+# block regardless of the gate outcome.
+
+
+def _stub_webview_main_environment(monkeypatch, tmp_path):
+    """Stub the webview_main.main() environment so it reaches the first-run
+    gate without touching the filesystem or starting a real GUI.
+
+    Returns a dict of mocks the test can assert against.
+    """
+    import worktrace.webview_main as webview_main
+
+    # Pre-flight checks must pass.
+    monkeypatch.setattr(webview_main, "detect_webview2_runtime", lambda: "installed")
+    monkeypatch.setattr("worktrace.config.resolve_paths", lambda: type("P", (), {"log_path": str(tmp_path / "nul")})())
+    monkeypatch.setattr("worktrace.config.ensure_directories", lambda _paths: None)
+    monkeypatch.setattr(webview_main, "setup_logging", lambda _log_path: None)
+
+    # Fake pywebview module: create_window returns a sentinel; start()
+    # returns immediately so main() can proceed to the finally block.
+    fake_window = object()
+    start_calls = {"count": 0}
+
+    class _FakeWebview:
+        @staticmethod
+        def create_window(*_args, **_kwargs):
+            return fake_window
+
+        @staticmethod
+        def start():
+            start_calls["count"] += 1
+
+    monkeypatch.setattr(webview_main, "_check_pywebview_available", lambda: _FakeWebview)
+
+    # Fake AppRuntime: initialize/shutdown are no-ops.
+    fake_runtime = type("R", (), {"initialize": lambda self: None, "shutdown": lambda self: None})()
+    monkeypatch.setattr(webview_main, "AppRuntime", lambda _paths: fake_runtime)
+
+    # set_runtime must be a no-op; start_collector is the key mock.
+    start_collector_calls = {"count": 0}
+
+    def _fake_start_collector():
+        start_collector_calls["count"] += 1
+
+    monkeypatch.setattr("worktrace.api.app_api.set_runtime", lambda _runtime: None)
+    monkeypatch.setattr("worktrace.api.app_api.start_collector", _fake_start_collector)
+
+    return {
+        "start_collector_calls": start_collector_calls,
+        "start_calls": start_calls,
+        "fake_runtime": fake_runtime,
+    }
+
+
+def test_webview_main_starts_collector_when_notice_accepted(monkeypatch, tmp_path):
+    """When first_run_notice_accepted() returns True, webview_main.main()
+    must call app_api.start_collector() after set_runtime()."""
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "worktrace.api.settings_api.first_run_notice_accepted",
+        lambda: True,
+    )
+
+    import worktrace.webview_main as webview_main
+
+    result = webview_main.main()
+    assert result == 0
+    assert mocks["start_collector_calls"]["count"] == 1
+    # The WebView main loop must still have been entered.
+    assert mocks["start_calls"]["count"] == 1
+
+
+def test_webview_main_does_not_start_collector_when_notice_not_accepted(monkeypatch, tmp_path):
+    """When first_run_notice_accepted() returns False, webview_main.main()
+    must NOT call app_api.start_collector(). The WebView must still start
+    so the frontend overlay can show the notice."""
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "worktrace.api.settings_api.first_run_notice_accepted",
+        lambda: False,
+    )
+
+    import worktrace.webview_main as webview_main
+
+    result = webview_main.main()
+    assert result == 0
+    assert mocks["start_collector_calls"]["count"] == 0
+    # The WebView main loop must still start so the frontend can display
+    # the first-run notice overlay.
+    assert mocks["start_calls"]["count"] == 1
+
+
+def test_webview_main_fail_closed_when_notice_read_raises(monkeypatch, tmp_path):
+    """When first_run_notice_accepted() raises, webview_main.main() must
+    fail closed: NOT call start_collector(), but still start the WebView
+    so the frontend can display the error."""
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+
+    def _raise():
+        raise RuntimeError("settings read failed")
+
+    monkeypatch.setattr("worktrace.api.settings_api.first_run_notice_accepted", _raise)
+
+    import worktrace.webview_main as webview_main
+
+    result = webview_main.main()
+    assert result == 0
+    assert mocks["start_collector_calls"]["count"] == 0
+    assert mocks["start_calls"]["count"] == 1
+
+
+def test_webview_main_runtime_shutdown_called_even_when_gate_fails(monkeypatch, tmp_path):
+    """runtime.shutdown() must still be called in the finally block even
+    when the first-run gate read raises."""
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    shutdown_calls = {"count": 0}
+    fake_runtime = mocks["fake_runtime"]
+    original_shutdown = fake_runtime.shutdown
+
+    def _counting_shutdown():
+        shutdown_calls["count"] += 1
+        original_shutdown()
+
+    fake_runtime.shutdown = _counting_shutdown
+
+    def _raise():
+        raise RuntimeError("settings read failed")
+
+    monkeypatch.setattr("worktrace.api.settings_api.first_run_notice_accepted", _raise)
+
+    import worktrace.webview_main as webview_main
+
+    webview_main.main()
+    assert shutdown_calls["count"] == 1
+
+
+def test_webview_main_collector_start_failure_does_not_block_webview(monkeypatch, tmp_path):
+    """When the notice is accepted but app_api.start_collector() raises,
+    webview_main.main() must log the error but still start the WebView
+    (the user can retry via the sidebar toggle)."""
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "worktrace.api.settings_api.first_run_notice_accepted",
+        lambda: True,
+    )
+
+    def _raise_on_start():
+        raise RuntimeError("collector already running")
+
+    monkeypatch.setattr("worktrace.api.app_api.start_collector", _raise_on_start)
+
+    import worktrace.webview_main as webview_main
+
+    result = webview_main.main()
+    assert result == 0
+    # The WebView must still start.
+    assert mocks["start_calls"]["count"] == 1

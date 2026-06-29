@@ -2993,6 +2993,174 @@ body {
     opacity: 0.5;
 }
 
+/* --- First-run privacy notice overlay (Phase 6E) --------------------- */
+/* The overlay is a fixed-position full-screen modal that blocks all
+   underlying app interaction while the first-run privacy notice gate
+   is active. It is also reused for the read-only "查看隐私说明" view
+   opened from the Settings / Privacy page. Local CSS only; no external
+   fonts, no remote resources, no frameworks. */
+
+.first-run-notice-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(15, 23, 42, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    padding: 24px;
+    overflow: auto;
+}
+
+.first-run-notice-overlay[hidden] {
+    display: none;
+}
+
+.first-run-notice-dialog {
+    background: #ffffff;
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.25);
+    max-width: 640px;
+    width: 100%;
+    max-height: 90vh;
+    overflow: auto;
+    padding: 24px 28px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.first-run-notice-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #0f172a;
+    text-align: center;
+}
+
+.first-run-notice-highlights {
+    list-style: disc;
+    padding-left: 24px;
+    color: #1e293b;
+    font-size: 13px;
+    line-height: 1.7;
+    margin: 0;
+}
+
+.first-run-notice-highlights li {
+    margin: 2px 0;
+}
+
+.first-run-notice-text {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 12px 14px;
+    color: #334155;
+    font-size: 12.5px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    max-height: 360px;
+    overflow: auto;
+    margin: 0;
+}
+
+.first-run-notice-error {
+    color: #b91c1c;
+    font-size: 13px;
+    text-align: center;
+    margin: 0;
+}
+
+.first-run-notice-error[hidden] {
+    display: none;
+}
+
+.first-run-notice-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 4px;
+}
+
+.first-run-notice-accept-btn,
+.first-run-notice-close-btn {
+    padding: 8px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.first-run-notice-accept-btn {
+    background: #2563eb;
+    color: #ffffff;
+}
+
+.first-run-notice-accept-btn:hover:not(:disabled) {
+    background: #1d4ed8;
+}
+
+.first-run-notice-accept-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.first-run-notice-close-btn {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+.first-run-notice-close-btn:hover:not(:disabled) {
+    background: #cbd5e1;
+}
+
+.first-run-notice-accept-btn[hidden],
+.first-run-notice-close-btn[hidden] {
+    display: none;
+}
+
+/* --- Settings / Privacy notice row (Phase 6E) ------------------------ */
+/* Inline row on the Settings / Privacy privacy card: shows the
+   display-safe accept status and a read-only "查看隐私说明" button.
+   The button opens the overlay in view mode; it does NOT re-accept or
+   re-trigger collector start. */
+
+.settings-privacy-notice-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.settings-privacy-notice-status {
+    font-size: 13px;
+    color: #1e293b;
+    font-weight: 500;
+}
+
+.settings-privacy-notice-btn {
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #0f172a;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.settings-privacy-notice-btn:hover {
+    background: #f1f5f9;
+}
+
 .correction-shell-activity-row.batch-saving {
     opacity: 0.6;
     pointer-events: none;

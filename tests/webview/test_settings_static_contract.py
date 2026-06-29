@@ -1,16 +1,18 @@
-"""Phase 6A / 6B / 6C / 6D — Settings / Privacy WebView static-contract tests.
+"""Phase 6A / 6B / 6C / 6D / 6E — Settings / Privacy WebView static-contract tests.
 
 These tests read the bundled frontend resources (``index.html`` /
 ``js/*.js`` / ``styles.css`` / ``WorkTrace.spec``) directly without starting
 the GUI. They lock the Settings / Privacy page contracts for Phase 6D
 (read-only status foundation + clipboard capture toggle write + encrypted
 backup export + encrypted backup manifest preview + encrypted backup import
-+ clear-all-local-data): the page must be migrated (no placeholder), the
-required DOM ids must exist, ``settings.js`` must be loaded in the correct
-order, and the JS may only call ``get_settings_privacy_status``,
++ clear-all-local-data) and Phase 6E (first-run privacy notice gate +
+read-only view from Settings): the page must be migrated (no placeholder),
+the required DOM ids must exist, ``settings.js`` must be loaded in the
+correct order, and the JS may only call ``get_settings_privacy_status``,
 ``set_clipboard_capture_enabled``, ``export_encrypted_backup``,
-``preview_encrypted_backup_manifest``, ``import_encrypted_backup``, and
-``clear_all_local_data`` (no save / set-setting / parse-manifest /
+``preview_encrypted_backup_manifest``, ``import_encrypted_backup``,
+``clear_all_local_data``, ``get_first_run_notice``, and
+``accept_first_run_notice`` (no save / set-setting / parse-manifest /
 arbitrary file-dialog write paths).
 """
 
@@ -154,21 +156,25 @@ def test_settings_js_defines_load_settings_privacy_status_6a() -> None:
 
 
 def test_settings_js_only_calls_allowed_bridge_methods_6b() -> None:
-    """Phase 6D: settings.js may only call ``get_settings_privacy_status``,
+    """Phase 6E: settings.js may only call ``get_settings_privacy_status``,
     ``set_clipboard_capture_enabled``, ``export_encrypted_backup``,
     ``preview_encrypted_backup_manifest``, ``import_encrypted_backup``,
-    and ``clear_all_local_data``. All other write-side bridge methods
+    ``clear_all_local_data``, ``get_first_run_notice``, and
+    ``accept_first_run_notice``. All other write-side bridge methods
     remain forbidden (``parse_encrypted_backup_manifest`` is the API
     facade name, not the bridge method; ``set_setting_value`` is the
     raw settings write facade and must not be called from JS)."""
     source = read_js("settings.js")
-    # The six allowed Settings bridge method names must be present.
+    # The eight allowed Settings bridge method names must be present.
     assert 'App.callBridge("get_settings_privacy_status")' in source
     assert 'App.callBridge("set_clipboard_capture_enabled"' in source
     assert 'App.callBridge("export_encrypted_backup"' in source
     assert 'App.callBridge("preview_encrypted_backup_manifest"' in source
     assert 'App.callBridge("import_encrypted_backup"' in source
     assert 'App.callBridge("clear_all_local_data"' in source
+    # Phase 6E: first-run notice gate + read-only view bridge methods.
+    assert 'App.callBridge("get_first_run_notice")' in source
+    assert 'App.callBridge("accept_first_run_notice")' in source
     # Every other write-side bridge method is still forbidden. Note:
     # ``parse_encrypted_backup_manifest`` is the API facade name, not the
     # bridge method name; the bridge method is ``preview_encrypted_backup_manifest``
@@ -178,6 +184,7 @@ def test_settings_js_only_calls_allowed_bridge_methods_6b() -> None:
     for forbidden in (
         "parse_encrypted_backup_manifest",
         "set_setting_value",
+        "save_settings",
     ):
         assert 'App.callBridge("' + forbidden + '"' not in source, (
             "settings.js must not call bridge method: " + forbidden
@@ -863,3 +870,409 @@ def test_styles_css_has_import_and_clear_scoped_classes_6d() -> None:
         assert cls in source, (
             "styles.css must define Phase 6D class: " + cls
         )
+
+
+# --- Phase 6E: First-run privacy notice contract -----------------------
+
+
+def test_index_html_defines_first_run_notice_overlay_dom_ids_6e() -> None:
+    """Phase 6E: index.html must define the first-run notice overlay DOM
+    ids. The overlay must be hidden by default (``hidden`` attribute) so
+    it does not flash on already-accepted installs."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for dom_id in (
+        "first-run-notice-overlay",
+        "first-run-notice-dialog",
+        "first-run-notice-title",
+        "first-run-notice-highlights",
+        "first-run-notice-text",
+        "first-run-notice-accept-btn",
+        "first-run-notice-close-btn",
+        "first-run-notice-error",
+    ):
+        assert 'id="' + dom_id + '"' in source, (
+            "index.html must define first-run notice DOM id: " + dom_id
+        )
+    # The overlay must be hidden by default.
+    overlay_pos = source.find('id="first-run-notice-overlay"')
+    assert overlay_pos != -1
+    overlay_tag = source[overlay_pos - 200:overlay_pos + 200]
+    assert "hidden" in overlay_tag, (
+        "first-run-notice-overlay must be hidden by default"
+    )
+
+
+def test_index_html_settings_page_has_read_only_view_notice_button_6e() -> None:
+    """Phase 6E: the Settings / Privacy page must include a read-only
+    "查看隐私说明" button + status span so the user can re-open the notice
+    without writing any setting or re-accepting. The button must NOT
+    be a save / set-path / file-dialog write button."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="page-settings"')
+    assert pos != -1
+    end = source.find("</section>", pos)
+    section = source[pos:end]
+    assert 'id="settings-privacy-notice-btn"' in section, (
+        "page-settings must include settings-privacy-notice-btn"
+    )
+    assert 'id="settings-privacy-notice-status"' in section, (
+        "page-settings must include settings-privacy-notice-status"
+    )
+    # The button label should mention "查看隐私说明" so the user knows
+    # it opens a read-only view.
+    btn_pos = section.find('id="settings-privacy-notice-btn"')
+    assert btn_pos != -1
+    btn_tag = section[btn_pos:btn_pos + 300]
+    assert "查看隐私说明" in btn_tag, (
+        "settings-privacy-notice-btn must be labeled 查看隐私说明"
+    )
+
+
+def test_index_html_first_run_gate_has_no_skip_or_later_or_cancel_6e() -> None:
+    """Phase 6E: the first-run notice overlay (gate mode) must NOT
+    include any skip / later / cancel button id that would allow the
+    user to bypass the notice without accepting. Only the accept button
+    is allowed; the close button is allowed only for the read-only view
+    mode (it is hidden in gate mode by ``renderFirstRunNotice``)."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    overlay_pos = source.find('id="first-run-notice-overlay"')
+    assert overlay_pos != -1
+    # The overlay ends at the matching </div> for the overlay container;
+    # slice a generous window that covers the entire dialog markup.
+    overlay_end = source.find("</div>", source.find(
+        "</div>", source.find('id="first-run-notice-close-btn"')
+    ) + 1)
+    overlay = source[overlay_pos:overlay_end + 1]
+    for forbidden in (
+        "first-run-notice-skip-btn",
+        "first-run-notice-later-btn",
+        "first-run-notice-cancel-btn",
+        "first-run-notice-dismiss-btn",
+    ):
+        assert forbidden not in overlay, (
+            "first-run notice overlay must not contain bypass button: "
+            + forbidden
+        )
+
+
+def test_index_html_first_run_close_button_is_hidden_by_default_6e() -> None:
+    """Phase 6E: the close button inside the first-run notice overlay
+    must be hidden by default. It is only shown in read-only view mode
+    (opened from Settings) by ``renderFirstRunNotice`` flipping the
+    ``hidden`` attribute. This ensures the gate mode never offers a
+    close affordance even before JS runs."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    close_pos = source.find('id="first-run-notice-close-btn"')
+    assert close_pos != -1
+    close_tag = source[close_pos - 100:close_pos + 200]
+    assert "hidden" in close_tag, (
+        "first-run-notice-close-btn must be hidden by default; it is "
+        "only revealed in read-only view mode by renderFirstRunNotice"
+    )
+
+
+def test_core_js_declares_first_run_notice_state_variables_6e() -> None:
+    """Phase 6E: core.js must declare the five first-run notice state
+    variables so the gate / accept / view-mode guards have a single
+    in-memory source of truth. None of these may be persisted to
+    browser storage."""
+    source = read_js("core.js")
+    for token in (
+        "App.firstRunNoticeLoaded",
+        "App.firstRunNoticeLoading",
+        "App.firstRunNoticeRequired",
+        "App.firstRunNoticeAcceptInProgress",
+        "App.firstRunNoticeViewingFromSettings",
+    ):
+        assert token in source, (
+            "core.js must declare first-run notice state variable: " + token
+        )
+
+
+def test_settings_js_defines_first_run_notice_helpers_6e() -> None:
+    """Phase 6E: settings.js must define and expose the first-run notice
+    helper functions (loadFirstRunNotice / showFirstRunNotice /
+    hideFirstRunNotice / acceptFirstRunNotice /
+    openPrivacyNoticeFromSettings / renderFirstRunNotice)."""
+    source = read_js("settings.js")
+    for name in (
+        "loadFirstRunNotice",
+        "showFirstRunNotice",
+        "hideFirstRunNotice",
+        "acceptFirstRunNotice",
+        "openPrivacyNoticeFromSettings",
+        "renderFirstRunNotice",
+    ):
+        assert "function " + name in source, (
+            "settings.js must define function: " + name
+        )
+        assert "App." + name in source, (
+            "settings.js must expose App." + name
+        )
+
+
+def test_settings_js_first_run_notice_uses_text_content_not_inner_html_6e() -> None:
+    """Phase 6E: renderFirstRunNotice must render title / highlights /
+    notice text via ``textContent`` and ``createElement`` only.
+    ``innerHTML`` is already forbidden module-wide; this test focuses
+    on the new Phase 6E render function."""
+    source = read_js("settings.js")
+    pos = source.find("function renderFirstRunNotice")
+    assert pos != -1
+    body = source[pos:pos + 2000]
+    assert "textContent" in body
+    assert "createElement" in body
+    assert "innerHTML" not in body
+    # The whole module still forbids innerHTML (reaffirmed for Phase 6E).
+    assert "innerHTML" not in source
+
+
+def test_settings_js_first_run_notice_catch_does_not_read_error_message_6e() -> None:
+    """Phase 6E: the first-run notice catch blocks must not read
+    ``.message`` on the caught error (never surface raw exception text)."""
+    source = read_js("settings.js")
+    # Whole-module check (Phase 6A already enforced this; Phase 6E
+    # extends it to the new functions).
+    for forbidden in ("err.message", "error.message", "e.message"):
+        assert forbidden not in source, (
+            "settings.js must not read .message in catch: " + forbidden
+        )
+
+
+def test_settings_js_first_run_notice_no_network_storage_clipboard_6e() -> None:
+    """Phase 6E: the first-run notice functions must not use any network,
+    storage, or browser clipboard API. (Module-wide check; reaffirmed
+    for the new Phase 6E functions.)"""
+    source = read_js("settings.js")
+    for forbidden in (
+        "fetch(",
+        "XMLHttpRequest",
+        "WebSocket",
+        "EventSource",
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "navigator.clipboard",
+    ):
+        assert forbidden not in source, (
+            "settings.js must not use: " + forbidden
+        )
+
+
+def test_settings_js_first_run_notice_does_not_persist_notice_payload_6e() -> None:
+    """Phase 6E: the notice payload (title / highlights / notice_text)
+    must never be saved to ``App`` global state as a long-lived
+    property. The render function reads from the local ``data``
+    argument only; the load / accept / view functions do not assign
+    the payload to ``App.*`` properties. (State variables like
+    ``App.firstRunNoticeLoaded`` are status flags, not payload
+    persistence.)"""
+    source = read_js("settings.js")
+    for forbidden_prop in (
+        "App.firstRunNoticePayload",
+        "App.firstRunNoticeData",
+        "App.firstRunNoticeText",
+        "App.firstRunNoticeTitle",
+        "App.firstRunNoticeHighlights",
+        "App.privacyNoticeText",
+    ):
+        assert forbidden_prop not in source, (
+            "settings.js must not persist notice payload to App state: "
+            + forbidden_prop
+        )
+
+
+def test_settings_js_load_first_run_notice_shows_gate_when_unaccepted_6e() -> None:
+    """Phase 6E: ``loadFirstRunNotice`` must set
+    ``App.firstRunNoticeRequired = true`` and call ``showFirstRunNotice``
+    with mode ``"gate"`` when the backend reports
+    ``data.accepted === false``. This locks the blocking-gate behavior
+    in source so the user cannot be silently bypassed."""
+    source = read_js("settings.js")
+    pos = source.find("function loadFirstRunNotice")
+    assert pos != -1
+    body = source[pos:pos + 2500]
+    assert "data.accepted === false" in body
+    assert 'App.firstRunNoticeRequired = true' in body
+    assert 'showFirstRunNotice' in body
+    assert '"gate"' in body or "'gate'" in body
+
+
+def test_settings_js_accept_first_run_notice_clears_required_and_hides_gate_6e() -> None:
+    """Phase 6E: ``acceptFirstRunNotice`` must clear
+    ``App.firstRunNoticeRequired`` and call ``hideFirstRunNotice`` on
+    success. It must also call ``App.refreshAll`` so the sidebar
+    reflects the now-running collector."""
+    source = read_js("settings.js")
+    pos = source.find("function acceptFirstRunNotice")
+    assert pos != -1
+    body = source[pos:pos + 2500]
+    assert "App.firstRunNoticeRequired = false" in body
+    assert "hideFirstRunNotice" in body
+    assert "App.refreshAll" in body
+
+
+def test_settings_js_open_privacy_notice_uses_view_mode_only_6e() -> None:
+    """Phase 6E: ``openPrivacyNoticeFromSettings`` must call
+    ``showFirstRunNotice`` with mode ``"view"`` (read-only). It must
+    never call ``acceptFirstRunNotice`` or write any setting."""
+    source = read_js("settings.js")
+    pos = source.find("function openPrivacyNoticeFromSettings")
+    assert pos != -1
+    body = source[pos:pos + 1500]
+    assert "showFirstRunNotice" in body
+    assert '"view"' in body or "'view'" in body
+    # The view-mode function must not call accept or any write bridge.
+    assert "acceptFirstRunNotice" not in body
+    assert 'App.callBridge("accept_first_run_notice")' not in body
+    assert 'App.callBridge("set_setting_value")' not in body
+    assert 'App.callBridge("set_clipboard_capture_enabled")' not in body
+
+
+def test_settings_js_hide_first_run_notice_does_not_write_setting_or_start_collector_6e() -> None:
+    """Phase 6E: ``hideFirstRunNotice`` must only hide the overlay and
+    clear the viewing flag. It must NOT call any bridge method, must
+    NOT call ``set_setting_value``, must NOT call
+    ``accept_first_run_notice``, and must NOT start the collector."""
+    source = read_js("settings.js")
+    pos = source.find("function hideFirstRunNotice")
+    assert pos != -1
+    body = source[pos:pos + 800]
+    # The only operations allowed in hideFirstRunNotice are setting
+    # ``overlay.hidden`` and ``App.firstRunNoticeViewingFromSettings``.
+    # No bridge calls of any kind.
+    assert "App.callBridge" not in body
+    assert "acceptFirstRunNotice" not in body
+    assert "App.firstRunNoticeViewingFromSettings = false" in body
+
+
+def test_settings_js_render_first_run_notice_hides_close_in_gate_mode_6e() -> None:
+    """Phase 6E: ``renderFirstRunNotice`` must hide the close button in
+    gate mode (``mode !== "view"``) so the only way to dismiss the gate
+    is to accept. The accept button is shown in gate mode and hidden in
+    view mode."""
+    source = read_js("settings.js")
+    pos = source.find("function renderFirstRunNotice")
+    assert pos != -1
+    body = source[pos:pos + 2500]
+    # In "view" mode: accept hidden, close shown.
+    assert 'acceptBtn' in body and 'closeBtn' in body
+    assert '"view"' in body or "'view'" in body
+    # The else branch (gate mode): accept shown, close hidden.
+    assert 'acceptBtn.hidden = false' in body or 'acceptBtn.hidden = false;' in body
+    assert 'closeBtn.hidden = true' in body or 'closeBtn.hidden = true;' in body
+    # The view branch: accept hidden, close shown.
+    assert 'acceptBtn.hidden = true' in body or 'acceptBtn.hidden = true;' in body
+    assert 'closeBtn.hidden = false' in body or 'closeBtn.hidden = false;' in body
+
+
+def test_settings_js_close_button_handler_guards_on_viewing_from_settings_6e() -> None:
+    """Phase 6E: the close-button click handler (bound in init.js) must
+    check ``App.firstRunNoticeViewingFromSettings`` before calling
+    ``hideFirstRunNotice``. This is the JS mode guard that prevents the
+    close button from ever dismissing the gate even if a future code
+    path re-enables it."""
+    source = read_js("init.js")
+    pos = source.find("first-run-notice-close-btn")
+    assert pos != -1
+    body = source[pos:pos + 1000]
+    assert "firstRunNoticeViewingFromSettings" in body
+    assert "hideFirstRunNotice" in body
+
+
+def test_init_js_binds_first_run_notice_buttons_6e() -> None:
+    """Phase 6E: initButtons must bind the ``first-run-notice-accept-btn``
+    click event to ``App.acceptFirstRunNotice``, the
+    ``first-run-notice-close-btn`` click event to a guarded
+    ``App.hideFirstRunNotice`` wrapper, and the
+    ``settings-privacy-notice-btn`` click event to
+    ``App.openPrivacyNoticeFromSettings``."""
+    source = read_js("init.js")
+    pos = source.find("function initButtons")
+    assert pos != -1
+    body = source[pos:pos + 14000]
+    assert "first-run-notice-accept-btn" in body
+    assert "acceptFirstRunNotice" in body
+    assert "first-run-notice-close-btn" in body
+    assert "hideFirstRunNotice" in body
+    assert "settings-privacy-notice-btn" in body
+    assert "openPrivacyNoticeFromSettings" in body
+
+
+def test_init_js_calls_load_first_run_notice_in_init_6e() -> None:
+    """Phase 6E: ``init()`` must call ``App.loadFirstRunNotice()`` so the
+    gate is shown on startup when the user has not yet accepted. The
+    load must happen before the ``refreshAll()`` call (not the comment
+    mention) so the gate is visible before any backend status refresh
+    completes."""
+    source = read_js("init.js")
+    # Match ``function init()`` exactly so we do not collide with
+    # ``function initNav`` or ``function initButtons``.
+    pos = source.find("function init()")
+    assert pos != -1, "init.js must define function init()"
+    # Slice to the next sibling function so we capture the whole init()
+    # body.
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 2500]
+    assert "App.loadFirstRunNotice()" in body
+    # The load call must appear before the actual ``refreshAll()``
+    # invocation (with parentheses) so the gate is shown first. We do
+    # NOT match the bare substring ``refreshAll`` because the comment
+    # block above the call also mentions the name.
+    load_pos = body.find("App.loadFirstRunNotice()")
+    # Find the standalone refreshAll() call (not the startAutoRefresh()
+    # call, not comment text). Use the newline-prefixed pattern to
+    # ensure we match the call statement, not a comment mention.
+    refresh_pos = body.find("\n        refreshAll();")
+    assert load_pos != -1 and refresh_pos != -1, (
+        "init() must call both loadFirstRunNotice() and refreshAll()"
+    )
+    assert load_pos < refresh_pos, (
+        "init() must call loadFirstRunNotice before refreshAll"
+    )
+
+
+def test_styles_css_has_first_run_notice_scoped_classes_6e() -> None:
+    """Phase 6E: styles.css must define the ``.first-run-notice-*`` and
+    ``.settings-privacy-notice-*`` scoped classes used by the first-run
+    notice overlay and the Settings read-only view entry."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    for cls in (
+        ".first-run-notice-overlay",
+        ".first-run-notice-dialog",
+        ".first-run-notice-title",
+        ".first-run-notice-highlights",
+        ".first-run-notice-text",
+        ".first-run-notice-error",
+        ".first-run-notice-actions",
+        ".first-run-notice-accept-btn",
+        ".first-run-notice-close-btn",
+        ".settings-privacy-notice-row",
+        ".settings-privacy-notice-status",
+        ".settings-privacy-notice-btn",
+    ):
+        assert cls in source, (
+            "styles.css must define Phase 6E class: " + cls
+        )
+
+
+def test_first_run_notice_resources_no_external_fonts_or_cdn_6e() -> None:
+    """Phase 6E: the first-run notice resources must not introduce any
+    external font, CDN link, or network resource. The existing
+    parametrized global-boundary tests already cover this for every
+    frontend file; this test reaffirms the invariant for the new
+    first-run notice markup / styles specifically."""
+    for filename in ("index.html", "styles.css", "js/settings.js", "js/core.js", "js/init.js"):
+        source = (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
+        lowered = source.lower()
+        for forbidden in (
+            "https://",
+            "http://",
+            "cdn.jsdelivr",
+            "fonts.googleapis",
+            "unpkg.com",
+            "@import",
+        ):
+            assert forbidden not in lowered, (
+                filename + " must not reference external resource: " + forbidden
+            )

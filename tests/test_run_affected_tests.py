@@ -787,3 +787,105 @@ def test_k1_does_not_trigger_project_rules_suite(runner):
         assert unexpected not in sel.pytest_targets, (
             f"settings_api.py must not trigger Project Rules suite: {unexpected}"
         )
+
+
+# ---------------------------------------------------------------------------
+# K2 (Phase 6E). WebView main / startup gate -> entry + startup + boundary
+# ---------------------------------------------------------------------------
+
+
+def test_webview_main_py_selects_phase6e_startup_tests(runner):
+    """Phase 6E: webview_main.py carries the first-run notice startup gate,
+    so it must select the K2 target set (entry + startup imports + boundary
+    + settings privacy status + affected runner self-tests)."""
+    sel = runner.select_targets(["worktrace/webview_main.py"])
+    for expected in (
+        "tests/test_webview_phase1_entry.py",
+        "tests/test_startup_imports.py",
+        "tests/test_ui_backend_boundary.py",
+        "tests/test_settings_privacy_status.py",
+        "tests/test_run_affected_tests.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"webview_main.py must select: {expected}"
+        )
+
+
+def test_webview_main_py_adds_import_smoke(runner):
+    """Phase 6E: webview_main.py changes must run the import smoke alongside
+    pytest targets because the startup gate can break module import."""
+    sel = runner.select_targets(["worktrace/webview_main.py"])
+    assert any(
+        "import worktrace.webview_main" in " ".join(s) for s in sel.smoke_commands
+    )
+
+
+def test_main_py_selects_phase6e_startup_tests(runner):
+    """Phase 6E: worktrace/main.py is a K2 trigger because it can alter the
+    process entry point that decides whether the WebView main loop starts."""
+    sel = runner.select_targets(["worktrace/main.py"])
+    for expected in (
+        "tests/test_webview_phase1_entry.py",
+        "tests/test_startup_imports.py",
+        "tests/test_ui_backend_boundary.py",
+        "tests/test_settings_privacy_status.py",
+        "tests/test_run_affected_tests.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"main.py must select: {expected}"
+        )
+
+
+def test_app_api_py_selects_phase6e_startup_tests(runner):
+    """Phase 6E: app_api.py carries start_collector / stop_collector, which
+    the startup gate and toggle_pause guard depend on; it must select the
+    K2 target set so boundary and entry tests run."""
+    sel = runner.select_targets(["worktrace/api/app_api.py"])
+    for expected in (
+        "tests/test_webview_phase1_entry.py",
+        "tests/test_startup_imports.py",
+        "tests/test_ui_backend_boundary.py",
+        "tests/test_settings_privacy_status.py",
+        "tests/test_run_affected_tests.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"app_api.py must select: {expected}"
+        )
+
+
+def test_k2_does_not_trigger_project_rules_suite(runner):
+    """Phase 6E: K2 must NOT trigger the Project Rules C-series suite; the
+    startup gate is unrelated to Project Rules keyword / folder / lifecycle
+    / automatic / batch operations."""
+    sel = runner.select_targets(["worktrace/webview_main.py"])
+    for unexpected in (
+        "tests/test_rule_service.py",
+        "tests/test_folder_rule_service.py",
+        "tests/test_project_rules_keyword_create.py",
+        "tests/test_project_rules_keyword_delete.py",
+        "tests/test_project_rules_keyword_edit.py",
+        "tests/test_project_rules_folder_crud.py",
+        "tests/test_project_rules_enable_disable.py",
+        "tests/test_project_rules_project_lifecycle.py",
+        "tests/test_project_rules_view.py",
+        "tests/test_project_rules_rule_impact.py",
+        "tests/test_project_rules_automatic_rules.py",
+        "tests/test_project_rules_batch_operations.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_api_write_contract.py",
+    ):
+        assert unexpected not in sel.pytest_targets, (
+            f"webview_main.py must not trigger Project Rules suite: {unexpected}"
+        )
+
+
+def test_k2_does_not_trigger_timeline_static_contract(runner):
+    """Phase 6E: K2 must NOT trigger the Timeline static contract or the
+    Project Rules static contract; the startup gate does not touch those
+    frontend resources."""
+    sel = runner.select_targets(["worktrace/webview_main.py"])
+    assert "tests/webview/test_timeline_static_contract.py" not in sel.pytest_targets
+    assert (
+        "tests/webview/test_project_rules_static_contract.py"
+        not in sel.pytest_targets
+    )

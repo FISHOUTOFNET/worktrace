@@ -447,6 +447,23 @@ RULES: list[dict] = [
         "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
     },
+    {
+        "id": "K2. WebView main / startup gate (Phase 6E)",
+        "triggers": [
+            "worktrace/webview_main.py",
+            "worktrace/main.py",
+            "worktrace/api/app_api.py",
+        ],
+        "tests": [
+            "tests/test_webview_phase1_entry.py",
+            "tests/test_startup_imports.py",
+            "tests/test_ui_backend_boundary.py",
+            "tests/test_settings_privacy_status.py",
+            "tests/test_run_affected_tests.py",
+        ],
+        "smoke": [IMPORT_SMOKE_ARGV],
+        "warnings": [],
+    },
 ]
 
 

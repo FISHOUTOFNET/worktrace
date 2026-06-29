@@ -32,6 +32,12 @@ from worktrace.webview_ui.bridge import (
 @pytest.fixture()
 def bridge(temp_db):
     settings_service.clear_settings_cache()
+    # Phase 6E: toggle_pause now gates on first_run_notice_accepted.
+    # Most bridge tests assume the user has already accepted the notice
+    # (the normal runtime state). Accept it here so the existing
+    # toggle_pause / pause / resume semantics are exercised.
+    settings_service.set_setting("first_run_notice_accepted", "true")
+    settings_service.clear_settings_cache()
     return WebViewBridge()
 
 

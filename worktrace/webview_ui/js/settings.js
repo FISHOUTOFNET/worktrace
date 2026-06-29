@@ -146,7 +146,8 @@
 
     function renderSettingsStatus(status) {
         // Phase 6B renders booleans, the static local-only storage model,
-        // and the capture toggle. No path, no capture content,
+        // and the capture toggle. Phase 6E also renders the display-safe
+        // first-run notice status line. No path, no capture content,
         // no passphrase, no DB write.
         if (!status) return;
         var exportPathConfigured = !!status.export_path_configured;
@@ -169,6 +170,19 @@
                 "storage_model",
                 "本地优先：所有数据仅存储在本机，不上传任何远端服务器。"
             );
+        }
+        // Phase 6E: render the display-safe first-run notice status line.
+        // The raw DB setting key name is never exposed; only the accepted
+        // boolean is shown. The "查看隐私说明" button stays enabled so the
+        // user can re-read the notice read-only; it does NOT re-accept or
+        // re-trigger collector start.
+        var noticeAccepted = false;
+        if (status.first_run_notice && typeof status.first_run_notice === "object") {
+            noticeAccepted = !!status.first_run_notice.accepted;
+        }
+        var noticeStatusEl = document.getElementById("settings-privacy-notice-status");
+        if (noticeStatusEl) {
+            noticeStatusEl.textContent = "隐私说明：" + (noticeAccepted ? "已确认" : "未确认");
         }
         var statusEl = document.getElementById("settings-status");
         if (statusEl) statusEl.hidden = false;
@@ -610,4 +624,224 @@
         });
     }
     App.clearAllLocalData = clearAllLocalData;
+
+    // --- Phase 6E: First-run privacy notice -----------------------------
+    // The first-run notice overlay has two modes:
+    //   - "gate" (blocking): shown on first run when the backend reports
+    //     ``accepted === false``. The close button is hidden; only the
+    //     accept button is visible. Sidebar pause/resume must not start
+    //     the collector while the gate is active.
+    //   - "view" (read-only): opened from the Settings / Privacy
+    //     "查看隐私说明" button. The close button is shown; closing only
+    //     hides the overlay and does NOT write any setting or re-accept.
+    // All dynamic content is rendered with textContent / text nodes only.
+    // The notice text is never persisted to browser storage; it is held
+    // in JS memory only for the duration of the overlay display.
+
+    var FIRST_RUN_NOTICE_LOAD_ERROR = "加载隐私说明失败";
+    var FIRST_RUN_NOTICE_ACCEPT_ERROR = "确认隐私说明失败";
+
+    function setFirstRunNoticeError(message) {
+        var el = document.getElementById("first-run-notice-error");
+        if (!el) return;
+        if (!message) {
+            el.hidden = true;
+            el.textContent = "";
+            return;
+        }
+        el.hidden = false;
+        el.textContent = message;
+    }
+
+    function renderFirstRunNotice(data, mode) {
+        // Render title / highlights / notice text into the overlay DOM.
+        // ``mode`` is "gate" or "view". The accept button is always
+        // rendered; the close button is only visible in "view" mode.
+        // All dynamic content uses textContent / text nodes only.
+        if (!data) return;
+        var titleEl = document.getElementById("first-run-notice-title");
+        if (titleEl) {
+            titleEl.textContent = String(data.title || "WorkTrace 隐私说明");
+        }
+        var highlightsEl = document.getElementById("first-run-notice-highlights");
+        if (highlightsEl) {
+            // Clear existing highlight items via DOM removal (no markup APIs).
+            while (highlightsEl.firstChild) {
+                highlightsEl.removeChild(highlightsEl.firstChild);
+            }
+            var highlights = data.highlights;
+            if (Array.isArray(highlights)) {
+                for (var i = 0; i < highlights.length; i++) {
+                    var li = document.createElement("li");
+                    li.textContent = String(highlights[i] || "");
+                    highlightsEl.appendChild(li);
+                }
+            }
+        }
+        var textEl = document.getElementById("first-run-notice-text");
+        if (textEl) {
+            // Use the DOM text API for the notice body. The <pre> element
+            // preserves whitespace / newlines.
+            textEl.textContent = String(data.notice_text || "");
+        }
+        var acceptBtn = document.getElementById("first-run-notice-accept-btn");
+        var closeBtn = document.getElementById("first-run-notice-close-btn");
+        if (mode === "view") {
+            // Read-only view from Settings: show close, hide accept.
+            // The user has already accepted (or the gate would be active).
+            // Showing close lets them dismiss the overlay without any
+            // setting write or collector start.
+            if (acceptBtn) acceptBtn.hidden = true;
+            if (closeBtn) closeBtn.hidden = false;
+        } else {
+            // Gate mode (blocking): show accept, hide close. The only way
+            // to dismiss the gate is to accept; no skip / later / cancel.
+            if (acceptBtn) acceptBtn.hidden = false;
+            if (closeBtn) closeBtn.hidden = true;
+        }
+        setFirstRunNoticeError("");
+    }
+    App.renderFirstRunNotice = renderFirstRunNotice;
+
+    function showFirstRunNotice(data, mode) {
+        // Show the overlay in the requested mode. ``data`` is the payload
+        // returned by ``get_first_run_notice``. ``mode`` is "gate" or
+        // "view". Sets the in-memory viewing flag so the close button
+        // handler knows whether closing is allowed.
+        App.firstRunNoticeViewingFromSettings = (mode === "view");
+        renderFirstRunNotice(data, mode);
+        var overlay = document.getElementById("first-run-notice-overlay");
+        if (overlay) overlay.hidden = false;
+    }
+    App.showFirstRunNotice = showFirstRunNotice;
+
+    function hideFirstRunNotice() {
+        // Hide the overlay. In "view" mode this is the close button's
+        // handler. In "gate" mode this is only called after a successful
+        // accept (never from the close button, which is hidden in gate
+        // mode). Never writes any setting; never starts the collector.
+        var overlay = document.getElementById("first-run-notice-overlay");
+        if (overlay) overlay.hidden = true;
+        App.firstRunNoticeViewingFromSettings = false;
+        // Do NOT clear firstRunNoticeRequired here in gate mode: it is
+        // only cleared after a successful accept response. The close
+        // button is only ever visible in "view" mode, so reaching this
+        // path via the close button implies view mode.
+    }
+    App.hideFirstRunNotice = hideFirstRunNotice;
+
+    function loadFirstRunNotice() {
+        // Initial first-run notice load. Called once during init. If the
+        // backend reports ``accepted === false``, show the blocking gate
+        // overlay; otherwise leave the overlay hidden. Failures display
+        // the stable Chinese error inside the overlay and keep the gate
+        // visible so the user is never silently bypassed.
+        if (App.firstRunNoticeLoading || App.firstRunNoticeLoaded) return Promise.resolve();
+        App.firstRunNoticeLoading = true;
+        return App.callBridge("get_first_run_notice").then(function (result) {
+            App.firstRunNoticeLoading = false;
+            App.firstRunNoticeLoaded = true;
+            var data = App.handleResult(result, function (msg) {
+                // Bridge already collapsed to a stable Chinese message.
+                // Force the gate open with the error so the user is not
+                // silently bypassed.
+                App.firstRunNoticeRequired = true;
+                showFirstRunNotice({}, "gate");
+                setFirstRunNoticeError(msg || FIRST_RUN_NOTICE_LOAD_ERROR);
+            });
+            if (!data) return;
+            if (data.accepted === false) {
+                // First run: show the blocking gate. The close button is
+                // hidden; only accept can dismiss it.
+                App.firstRunNoticeRequired = true;
+                showFirstRunNotice(data, "gate");
+            } else {
+                // Already accepted: keep the overlay hidden. The user
+                // can still view the notice read-only from Settings.
+                App.firstRunNoticeRequired = false;
+            }
+        }).catch(function () {
+            // Never read .message; show stable Chinese error. Fail open
+            // the gate so the user is not silently bypassed.
+            App.firstRunNoticeLoading = false;
+            App.firstRunNoticeLoaded = true;
+            App.firstRunNoticeRequired = true;
+            showFirstRunNotice({}, "gate");
+            setFirstRunNoticeError(FIRST_RUN_NOTICE_LOAD_ERROR);
+        });
+    }
+    App.loadFirstRunNotice = loadFirstRunNotice;
+
+    function acceptFirstRunNotice() {
+        // Accept handler for the gate-mode accept button. Calls the
+        // bridge ``accept_first_run_notice`` method; on success the
+        // backend persists the accept and starts the collector. The
+        // frontend hides the gate, clears the required flag, and
+        // refreshes the global status / overview / recent data so the
+        // sidebar reflects the now-running collector.
+        if (App.firstRunNoticeAcceptInProgress) return;
+        App.firstRunNoticeAcceptInProgress = true;
+        var acceptBtn = document.getElementById("first-run-notice-accept-btn");
+        if (acceptBtn) acceptBtn.disabled = true;
+        setFirstRunNoticeError("");
+        App.callBridge("accept_first_run_notice").then(function (result) {
+            var data = App.handleResult(result, function (msg) {
+                // Bridge already collapsed to a stable Chinese message.
+                setFirstRunNoticeError(msg || FIRST_RUN_NOTICE_ACCEPT_ERROR);
+            });
+            if (!data) return;
+            // Success: hide the gate, clear the required flag.
+            App.firstRunNoticeRequired = false;
+            hideFirstRunNotice();
+            // Refresh the global status / overview / recent activities
+            // so the sidebar reflects the now-running collector. Also
+            // refresh the Settings / Privacy status so the notice line
+            // shows "已确认".
+            if (typeof App.refreshAll === "function") {
+                App.refreshAll();
+            }
+            // Best-effort Settings refresh; ignore failures so the
+            // successful accept is not masked.
+            try {
+                App.loadSettingsPrivacyStatus();
+            } catch (e) {
+                // Swallow: refreshAll already updated the sidebar.
+            }
+        }).catch(function () {
+            // Never read .message; show stable Chinese error.
+            setFirstRunNoticeError(FIRST_RUN_NOTICE_ACCEPT_ERROR);
+        }).then(function () {
+            // finally: clear the in-flight flag and re-enable the
+            // accept button (the gate stays open until a successful
+            // accept, so the button must remain usable on retry).
+            App.firstRunNoticeAcceptInProgress = false;
+            if (acceptBtn) acceptBtn.disabled = false;
+        });
+    }
+    App.acceptFirstRunNotice = acceptFirstRunNotice;
+
+    function openPrivacyNoticeFromSettings() {
+        // Read-only "查看隐私说明" entry on the Settings / Privacy page.
+        // Loads (or reuses) the notice payload and shows the overlay in
+        // "view" mode: the close button is visible, the accept button is
+        // hidden, and closing does NOT write any setting or start the
+        // collector. The notice text is held in JS memory only for the
+        // duration of the display; no browser storage APIs are used.
+        App.callBridge("get_first_run_notice").then(function (result) {
+            var data = App.handleResult(result, function (msg) {
+                // Bridge already collapsed to a stable Chinese message.
+                // Show the overlay in view mode with the error so the
+                // user can close it.
+                showFirstRunNotice({}, "view");
+                setFirstRunNoticeError(msg || FIRST_RUN_NOTICE_LOAD_ERROR);
+            });
+            if (!data) return;
+            showFirstRunNotice(data, "view");
+        }).catch(function () {
+            // Never read .message; show stable Chinese error.
+            showFirstRunNotice({}, "view");
+            setFirstRunNoticeError(FIRST_RUN_NOTICE_LOAD_ERROR);
+        });
+    }
+    App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;
 })();

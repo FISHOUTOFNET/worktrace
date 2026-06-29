@@ -8,22 +8,21 @@
 
 ## Current Phase
 
-**Phase 6D — Settings / Privacy encrypted backup import + clear-all-local-data
-foundation.** The Settings / Privacy page surfaces a read-only safety-status
-snapshot (storage model, clipboard capture on/off, export directory
-configured yes/no, encrypted-backup import-in-progress flag), opens the
-clipboard capture toggle write (Phase 6B), encrypted backup export +
-manifest preview (Phase 6C), encrypted backup import (replace-only via
-native `.wtbackup` open dialog), and clear-all-local-data (explicit Chinese
-confirmation literal). Import replaces local data and leaves WorkTrace
-paused; clear-all runs inside a destructive reset guard that blocks
-collector writes during the DB replacement, then leaves WorkTrace paused.
-Both API and bridge layers collapse failures to stable Chinese messages and
-never return full paths, passphrases, salt, ciphertext, payload, SQL, or
-tracebacks. No other write actions are open (no save settings, no
-`set_setting_value`, no arbitrary file/folder dialog, no first-run notice,
-no export path setting). Builds on Phase 6A / 6B / 6C and Phase 5I (automatic
-rules + selected-rule batch operations, on top of user project create / edit / enable-disable / archive).
+**Phase 6E — WebView migration closure: first-run notice + intentional
+unsupported cleanup.** The WebView migration is now closed: the first-run
+privacy notice gate ships in WebView (blocking overlay; user must accept
+before the collector starts), the Settings page gains a read-only "view
+privacy notice" entry, and `webview_main` / `toggle_pause` are fail-closed
+while the notice is unaccepted. The Settings / Privacy page also keeps the
+Phase 6A read-only status snapshot, the Phase 6B clipboard capture toggle,
+the Phase 6C encrypted backup export + manifest preview, and the Phase 6D
+encrypted backup import + clear-all-local-data. Both API and bridge layers
+collapse failures to stable Chinese messages and never return full paths,
+passphrases, salt, ciphertext, payload, SQL, or tracebacks. Save settings,
+`set_setting_value`, arbitrary file/folder dialog, and export path setting
+are intentionally unsupported for v0.2 (not deferred). Builds on Phase 6A /
+6B / 6C / 6D and Phase 5I (automatic rules + selected-rule batch operations,
+on top of user project create / edit / enable-disable / archive).
 Chronology in [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Default UI
@@ -53,12 +52,15 @@ Chronology in [`history/webview-phases.md`](history/webview-phases.md).
   marker, rule counts, folder rules, keyword rules, rule enabled state, and
   folder recursion scope. Current write capabilities are listed in the
   Project Rules matrix below.
-- **Settings / Privacy** (Phase 6A / 6B / 6C / 6D): read-only safety-status
+- **Settings / Privacy** (Phase 6A / 6B / 6C / 6D / 6E): read-only safety-status
   plus clipboard capture toggle plus encrypted backup export / manifest
-  preview / import (replace-only) / clear-all-local-data. Shows storage
+  preview / import (replace-only) / clear-all-local-data plus the first-run
+  privacy notice gate + read-only "view privacy notice" entry. Shows storage
   model, clipboard-capture on/off, export directory configured yes/no,
-  encrypted-backup import-in-progress flag. Import + clear-all leave
-  WorkTrace paused; clear-all runs inside a destructive reset guard.
+  encrypted-backup import-in-progress flag, first-run notice accepted state.
+  Import + clear-all leave WorkTrace paused; clear-all runs inside a
+  destructive reset guard. The first-run gate is fail-closed (`webview_main`
+  and `toggle_pause` never start the collector until accepted).
 
 ## Supported Timeline Write Operations
 
@@ -106,12 +108,10 @@ Chronology in [`history/webview-phases.md`](history/webview-phases.md).
 - Hard delete project; raw folder-rule conflict preview (raw
   `preview_folder_rule_conflicts` NOT exposed to WebView; 5I reuses
   display-safe `rule_impact_service` helpers); raw / unbounded batch
-  backfill; automatic-rule on/off UI toggle.
-- Settings write actions still unsupported (Phase 6D opens clipboard capture
-  toggle + encrypted backup export + manifest preview + encrypted backup
-  import + clear-all-local-data; save settings, `set_setting_value`,
-  first-run notice, arbitrary file / folder dialog, export path setting
-  remain deferred).
+  backfill; automatic-rule on/off UI toggle. These remain future backlog.
+- Settings write actions intentionally unsupported for v0.2 (not deferred):
+  save settings, `set_setting_value`, arbitrary file / folder dialog,
+  export path setting. Only CSV save and `.wtbackup` save / open remain.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack;
   batch time / batch split / batch merge; note append / merge; auto-rule
   creation; global overlap detection.

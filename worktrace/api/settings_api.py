@@ -12,6 +12,7 @@ import os
 from typing import Any
 
 from . import backup_api
+from ..constants import PRIVACY_NOTICE_TEXT
 from ..services import export_service
 from ..services.secure_backup_service import (
     BackupCorruptedError,
@@ -21,6 +22,7 @@ from ..services.secure_backup_service import (
     SecureBackupError,
 )
 from ..services.settings_service import (
+    clear_settings_cache,
     get_bool_setting,
     get_int_setting,
     get_list_setting,
@@ -136,9 +138,10 @@ def clear_all_local_data(confirm: bool) -> None:
 def get_settings_privacy_status() -> dict[str, Any]:
     """Return a read-only status snapshot for the Settings / Privacy WebView page.
 
-    Phase 6A exposes only safety-status booleans. No path, no clipboard
-    content, no passphrase, no DB write, no backup export/import action is
-    surfaced here. All return values must be JSON-serializable.
+    Phase 6E. Exposes only safety-status booleans and a display-safe
+    first-run notice sub-dict. No path, no clipboard content, no
+    passphrase, no DB write, no backup export/import action is surfaced
+    here. All return values must be JSON-serializable.
     """
     try:
         export_path_configured = bool(get_export_path())
@@ -148,9 +151,21 @@ def get_settings_privacy_status() -> dict[str, Any]:
         except Exception:
             # Defensive: never let the backup facade leak tracebacks to the UI.
             secure_import_in_progress = False
+        # Phase 6E: display-safe first-run notice state. The raw DB setting
+        # key name (``first_run_notice_accepted``) is NOT exposed; only the
+        # boolean + view/accept availability flags are surfaced. The
+        # ``view_available_in_webview`` flag is always true (the Settings
+        # page offers a read-only notice viewer). ``accept_required`` is
+        # the negation of ``accepted`` so the frontend can decide whether
+        # to show the blocking first-run gate.
+        try:
+            notice_accepted = bool(first_run_notice_accepted())
+        except Exception:
+            # Defensive: never let a settings read failure leak a traceback.
+            notice_accepted = False
         status: dict[str, Any] = {
             "page": "settings_privacy",
-            "phase": "6D",
+            "phase": "6E",
             "storage_model": "local_only",
             "clipboard_capture_enabled": clipboard_enabled,
             "export_path_configured": export_path_configured,
@@ -163,6 +178,11 @@ def get_settings_privacy_status() -> dict[str, Any]:
             },
             "destructive_actions": {
                 "clear_all_local_data_available_in_webview": True,
+            },
+            "first_run_notice": {
+                "accepted": notice_accepted,
+                "view_available_in_webview": True,
+                "accept_required": not notice_accepted,
             },
         }
         return {"ok": True, "status": status}
@@ -481,8 +501,109 @@ def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
         return {"ok": False, "error": "设置剪贴板记录失败"}
 
 
+# --- Settings / Privacy first-run notice (Phase 6E) ---------------------
+
+
+# Highlights aligned with the legacy Tkinter first-run dialog so the
+# WebView notice view stays consistent with the prior UI semantics.
+_FIRST_RUN_NOTICE_HIGHLIGHTS: list[str] = [
+    "本地保存",
+    "不截屏录屏",
+    "不主动读正文",
+    "用户可清空",
+]
+
+_FIRST_RUN_NOTICE_TITLE = "WorkTrace 隐私说明"
+
+
+def get_first_run_notice_for_webview() -> dict[str, Any]:
+    """Return the display-safe first-run privacy notice payload for WebView.
+
+    Phase 6E narrow read facade. Zero parameters. Returns the narrow
+    payload ``{"ok": True, "accepted": bool, "title": str,
+    "highlights": list[str], "notice_text": str}``.
+
+    - ``accepted`` comes from ``first_run_notice_accepted()``; a brand new
+      database seeds ``first_run_notice_accepted="false"`` so the first
+      run returns ``accepted=False``.
+    - ``notice_text`` is sourced from ``PRIVACY_NOTICE_TEXT`` (the same
+      constant the legacy Tkinter dialog uses).
+    - ``highlights`` is the fixed list aligned with the legacy first-run
+      dialog (``["本地保存", "不截屏录屏", "不主动读正文", "用户可清空"]``).
+
+    The payload is JSON-serializable and never carries the full path, DB
+    path, export path, clipboard content, window title, file path hint,
+    note, SQL, traceback, or raw exception.
+
+    On any exception returns ``{"ok": False, "error": "加载隐私说明失败"}``.
+
+    This facade does not call backup export / import / manifest,
+    ``clear_all_local_data``, ``set_setting_value``, or any collector
+    start / stop action.
+    """
+    try:
+        accepted = bool(first_run_notice_accepted())
+        return {
+            "ok": True,
+            "accepted": accepted,
+            "title": _FIRST_RUN_NOTICE_TITLE,
+            "highlights": list(_FIRST_RUN_NOTICE_HIGHLIGHTS),
+            "notice_text": str(PRIVACY_NOTICE_TEXT),
+        }
+    except Exception:
+        # Collapse any unexpected error to a generic UI-facing message.
+        # Never expose raw exception text / traceback / SQL / paths.
+        return {"ok": False, "error": "加载隐私说明失败"}
+
+
+def accept_first_run_notice_for_webview() -> dict[str, Any]:
+    """Accept the first-run privacy notice from the WebView UI.
+
+    Phase 6E narrow write facade. Zero parameters. Calls the existing
+    ``accept_first_run_notice()`` which writes
+    ``first_run_notice_accepted="true"`` through the standard
+    ``set_setting`` path (so the settings cache is refreshed in-process
+    and a subsequent ``get_first_run_notice_for_webview()`` /
+    ``get_settings_privacy_status()`` read sees ``accepted=True``).
+
+    On success returns ``{"ok": True, "accepted": True,
+    "message": "已确认隐私说明"}``. Idempotent: calling again after a
+    previous accept still returns success.
+
+    On any exception returns ``{"ok": False, "error": "确认隐私说明失败"}``.
+
+    This facade does NOT call the collector (collector start is the
+    bridge / ``webview_main`` startup gate's responsibility), does NOT
+    call ``set_setting_value`` (it goes through the existing
+    ``accept_first_run_notice`` path), and does NOT call backup
+    export / import / manifest / ``clear_all_local_data``. To guarantee
+    in-process read consistency the cache for
+    ``first_run_notice_accepted`` is explicitly invalidated before
+    returning, in addition to the cache refresh that ``set_setting``
+    already performs.
+    """
+    try:
+        accept_first_run_notice()
+        # Belt-and-suspenders cache invalidation: ``set_setting`` already
+        # refreshes the cache entry, but explicitly clearing it as well
+        # guarantees a subsequent read re-reads from the DB and cannot
+        # observe a stale TTL window. This is safe because
+        # ``clear_settings_cache`` is a no-op when the key is absent.
+        clear_settings_cache("first_run_notice_accepted")
+        return {
+            "ok": True,
+            "accepted": True,
+            "message": "已确认隐私说明",
+        }
+    except Exception:
+        # Collapse any unexpected error to a generic UI-facing message.
+        # Never expose raw exception text / traceback / SQL / paths.
+        return {"ok": False, "error": "确认隐私说明失败"}
+
+
 __all__ = [
     "accept_first_run_notice",
+    "accept_first_run_notice_for_webview",
     "clear_all_local_data",
     "clear_all_local_data_for_webview",
     "export_encrypted_backup_for_webview",
@@ -491,6 +612,7 @@ __all__ = [
     "get_collector_status",
     "get_current_activity_snapshot",
     "get_export_path",
+    "get_first_run_notice_for_webview",
     "get_int_setting_value",
     "get_list_setting_value",
     "get_setting_value",

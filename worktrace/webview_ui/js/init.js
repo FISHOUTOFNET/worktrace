@@ -328,6 +328,33 @@
         if (projectCreateBtn) {
             projectCreateBtn.addEventListener("click", App.handleProjectCreateSubmit);
         }
+        // Phase 6E: First-run privacy notice handlers. The accept button
+        // is only ever visible in "gate" mode (blocking first-run gate).
+        // The close button is only ever visible in "view" mode (read-only
+        // view from Settings); the JS mode guard inside hideFirstRunNotice
+        // ensures the close button can never dismiss the gate. The
+        // Settings "查看隐私说明" button opens the overlay in view mode
+        // without writing any setting or starting the collector.
+        var firstRunAcceptBtn = document.getElementById("first-run-notice-accept-btn");
+        if (firstRunAcceptBtn) {
+            firstRunAcceptBtn.addEventListener("click", App.acceptFirstRunNotice);
+        }
+        var firstRunCloseBtn = document.getElementById("first-run-notice-close-btn");
+        if (firstRunCloseBtn) {
+            // Wrap hideFirstRunNotice so the close button only fires in
+            // view mode. The button is hidden in gate mode by
+            // renderFirstRunNotice, but this guard also defends against
+            // any future code path that might re-enable it.
+            firstRunCloseBtn.addEventListener("click", function () {
+                if (App.firstRunNoticeViewingFromSettings) {
+                    App.hideFirstRunNotice();
+                }
+            });
+        }
+        var settingsPrivacyNoticeBtn = document.getElementById("settings-privacy-notice-btn");
+        if (settingsPrivacyNoticeBtn) {
+            settingsPrivacyNoticeBtn.addEventListener("click", App.openPrivacyNoticeFromSettings);
+        }
     }
     App.initButtons = initButtons;
 
@@ -340,6 +367,15 @@
     function init() {
         initNav();
         initButtons();
+        // Phase 6E: load the first-run privacy notice before refreshing
+        // the main UI. If the notice has not been accepted the blocking
+        // gate overlay is shown and the collector must NOT start; the
+        // gate's accept handler starts the collector after the user
+        // accepts. loadFirstRunNotice is async but we do not await it
+        // here: refreshAll can run in parallel because the backend
+        // startup gate (webview_main.py) already prevents the collector
+        // from auto-starting when the notice is unaccepted.
+        App.loadFirstRunNotice();
         refreshAll();
         startAutoRefresh();
     }
