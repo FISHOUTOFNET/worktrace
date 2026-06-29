@@ -5966,6 +5966,12 @@ user-visible capability. It only:
   (`window_title` / `file_path_hint` / `path_hint` / clipboard / SQL /
   traceback) that tripped the global frontend boundary tests. The comment
   was reworded to avoid the literal tokens; no runtime behavior changed.
+- Fixes one pre-existing 5I regression: `close_activity` did not re-trigger
+  `process_new_activity` after transitioning an activity from in-progress
+  to closed, so activities created in-progress (the normal collector
+  flow) never received automatic folder / keyword rule application.
+  `close_activity` now calls `process_new_activity` after the end_time
+  update so enabled rules apply to just-closed eligible activities.
 
 ## Phase 5I.1 Not Implemented
 

@@ -66,7 +66,24 @@ def _create_closed_activity(
         file_path_hint=file_path_hint,
         project_id=project_id,
     )
-    activity_service.close_activity(aid, end_time)
+    # Set end_time directly via SQL instead of calling ``close_activity``.
+    # Phase 5I.1 made ``close_activity`` re-trigger ``process_new_activity``
+    # so automatic rules apply to just-closed activities. The rule-impact
+    # tests need a closed-but-unassigned activity so they can verify
+    # preview / backfill behaviour from a clean state. Bypassing
+    # ``close_activity`` keeps the helper's original contract (closed
+    # activity, no automatic rule application).
+    from datetime import datetime
+
+    from worktrace.db import get_connection, now_str
+
+    fmt = "%Y-%m-%d %H:%M:%S"
+    duration = int((datetime.strptime(end_time, fmt) - datetime.strptime(start_time, fmt)).total_seconds())
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
+            (end_time, max(0, duration), now_str(), aid),
+        )
     return aid
 
 

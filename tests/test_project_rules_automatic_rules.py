@@ -348,9 +348,18 @@ def test_is_manual_activity_is_not_overwritten(temp_db):
 def test_hidden_activity_is_not_touched(temp_db):
     project = project_service.create_project("Hidden")
     folder_rule_service.create_or_update_folder_rule("D:\\HiddenFolder", project)
-    aid = _create_closed_activity(file_path_hint="D:\\HiddenFolder\\Doc.docx")
-    _set_hidden(aid)
+    # Create the activity in-progress (not yet closed) so the
+    # ``close_activity`` automatic-rules trigger does not fire before we
+    # mark it hidden. ``finalize_created_activity`` is skipped by the
+    # in-progress guard.
+    aid = activity_service.create_activity(
+        "Word", "winword.exe", "Doc.docx - Word",
+        file_path_hint="D:\\HiddenFolder\\Doc.docx",
+        start_time="2026-06-25 09:00:00",
+    )
     activity_service.finalize_created_activity(aid)
+    _set_hidden(aid)
+    activity_service.close_activity(aid, "2026-06-25 09:10:00")
     activity = _activity_row(aid)
     # Hidden activities are not auto-classified to the rule's project.
     assert int(activity["project_id"]) != project
@@ -359,9 +368,14 @@ def test_hidden_activity_is_not_touched(temp_db):
 def test_deleted_activity_is_not_touched(temp_db):
     project = project_service.create_project("Deleted")
     folder_rule_service.create_or_update_folder_rule("D:\\DeletedFolder", project)
-    aid = _create_closed_activity(file_path_hint="D:\\DeletedFolder\\Doc.docx")
-    _set_deleted(aid)
+    aid = activity_service.create_activity(
+        "Word", "winword.exe", "Doc.docx - Word",
+        file_path_hint="D:\\DeletedFolder\\Doc.docx",
+        start_time="2026-06-25 09:00:00",
+    )
     activity_service.finalize_created_activity(aid)
+    _set_deleted(aid)
+    activity_service.close_activity(aid, "2026-06-25 09:10:00")
     activity = _activity_row(aid)
     assert int(activity["project_id"]) != project
 
@@ -369,9 +383,15 @@ def test_deleted_activity_is_not_touched(temp_db):
 def test_in_progress_activity_is_not_touched(temp_db):
     project = project_service.create_project("InProgress")
     folder_rule_service.create_or_update_folder_rule("D:\\InProgressFolder", project)
-    aid = _create_closed_activity(file_path_hint="D:\\InProgressFolder\\Doc.docx")
-    _set_in_progress(aid)
+    aid = activity_service.create_activity(
+        "Word", "winword.exe", "Doc.docx - Word",
+        file_path_hint="D:\\InProgressFolder\\Doc.docx",
+        start_time="2026-06-25 09:00:00",
+    )
+    # Activity is in-progress; finalize and direct process_new_activity
+    # must both be skipped by the in-progress guard.
     activity_service.finalize_created_activity(aid)
+    project_inference_service.process_new_activity(aid)
     activity = _activity_row(aid)
     assert int(activity["project_id"]) != project
 
@@ -710,6 +730,15 @@ def test_process_new_activity_in_progress_guard_runs_before_assign(
     # (``end_time IS NULL``) skip guard BEFORE delegating to
     # ``assign_project_for_activity``. This locks the guard ordering so an
     # in-progress activity never reaches the matcher.
+    project = project_service.create_project("GuardOrder")
+    folder_rule_service.create_or_update_folder_rule(
+        "D:\\GuardOrderFolder", project
+    )
+    aid = _create_closed_activity(file_path_hint="D:\\GuardOrderFolder\\Doc.docx")
+    _set_in_progress(aid)
+    # Install the spy AFTER ``_create_closed_activity`` so the
+    # ``close_activity`` automatic-rules trigger inside the helper does
+    # not pollute the spy counter.
     called = {"assign": False}
     original_assign = project_inference_service.assign_project_for_activity
 
@@ -720,12 +749,6 @@ def test_process_new_activity_in_progress_guard_runs_before_assign(
     monkeypatch.setattr(
         project_inference_service, "assign_project_for_activity", _spy_assign
     )
-    project = project_service.create_project("GuardOrder")
-    folder_rule_service.create_or_update_folder_rule(
-        "D:\\GuardOrderFolder", project
-    )
-    aid = _create_closed_activity(file_path_hint="D:\\GuardOrderFolder\\Doc.docx")
-    _set_in_progress(aid)
     project_inference_service.process_new_activity(aid)
     assert called["assign"] is False, (
         "process_new_activity must skip in-progress activities before "
@@ -746,3 +769,48 @@ def test_automatic_rules_status_payload_has_no_on_off_toggle_field(temp_db):
             "automatic_rules_status payload must not carry toggle-like field '"
             + field + "'"
         )
+
+
+def test_close_activity_triggers_automatic_rules_for_in_progress_activity(temp_db):
+    # Phase 5I.1 regression fix: when an activity is created in-progress
+    # (``end_time IS NULL``), ``finalize_created_activity`` calls
+    # ``process_new_activity`` but the in-progress guard skips it. When the
+    # activity is later closed via ``close_activity``, the automatic-rules
+    # entry point must be re-triggered so enabled folder / keyword rules
+    # apply to the just-closed activity. Without this, activities created
+    # in-progress and later closed would never receive automatic rule
+    # application.
+    project = project_service.create_project("CloseTrigger")
+    folder_rule_service.create_or_update_folder_rule(
+        "D:\\CloseTriggerFolder", project
+    )
+    aid = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "Doc.docx - Word",
+        file_path_hint="D:\\CloseTriggerFolder\\Doc.docx",
+        start_time="2026-06-25 09:00:00",
+    )
+    # finalize_created_activity runs process_new_activity, but the activity
+    # is in-progress so the guard skips it — no folder rule applied yet.
+    activity_service.finalize_created_activity(aid)
+    activity = activity_service.get_activity(aid)
+    assert activity["project_id"] != project, (
+        "in-progress activity must not receive automatic rule application"
+    )
+    # close_activity transitions the activity from in-progress to closed;
+    # this must re-trigger process_new_activity so the folder rule applies.
+    activity_service.close_activity(aid, "2026-06-25 09:10:00")
+    activity = activity_service.get_activity(aid)
+    assert activity["project_id"] == project, (
+        "close_activity must trigger automatic rules so the folder rule "
+        "applies to the just-closed activity"
+    )
+    assignment = _assignment_row(aid)
+    assert assignment["source"] == "folder_rule"
+    assert int(assignment["confidence"]) == 85
+    assert int(assignment["is_manual"] or 0) == 0
+    # ``auto_classified`` lives on ``activity_log``, not on
+    # ``activity_project_assignment``.
+    activity = _activity_row(aid)
+    assert int(activity["auto_classified"] or 0) == 1

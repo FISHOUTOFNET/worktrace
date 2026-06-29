@@ -172,6 +172,16 @@ def _detect_resource_for_activity(
 def close_activity(activity_id: int, end_time: str, duration_seconds: int | None = None) -> None:
     with get_connection() as conn:
         _close_activity_in_conn(conn, activity_id, end_time, duration_seconds=duration_seconds)
+    # Phase 5I.1 fix: when an activity transitions from in-progress to closed,
+    # re-run the automatic-rules entry point so enabled folder / keyword rules
+    # apply to the just-closed activity. ``finalize_created_activity`` runs
+    # ``process_new_activity`` at creation time, but the in-progress guard in
+    # ``process_new_activity`` skips activities whose ``end_time IS NULL``;
+    # without this re-trigger, activities created in-progress and later closed
+    # would never receive automatic rule application.
+    from .project_inference_service import process_new_activity
+
+    process_new_activity(activity_id)
 
 
 def close_current_open_record(end_time: str | None = None) -> None:
