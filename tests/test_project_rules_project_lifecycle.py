@@ -882,3 +882,49 @@ def test_get_project_rules_payload_includes_display_safe_flags(temp_db):
     assert by_name[EXCLUDED_PROJECT]["created_by"] == "system"
     assert by_name[EXCLUDED_PROJECT]["name"] == EXCLUDED_PROJECT
     assert UNCATEGORIZED_PROJECT not in by_name
+
+
+# --- Phase 6G: excluded-project rule-target eligibility locks ----------
+
+
+def test_list_rule_target_projects_excludes_excluded_project(temp_db):
+    # Phase 6G foundational lock: the special ``排除规则`` project is created
+    # with ``enabled = 0``, so ``list_rule_target_projects()`` must NOT
+    # include it. This is why the normal ``create_project_keyword_rule`` /
+    # ``create_project_folder_rule`` facades reject it as
+    # ``project_not_found`` and the dedicated excluded-rule facades are the
+    # only legitimate way to create exclusion rules.
+    excluded_id = project_service.get_or_create_excluded_project()
+    client_id = project_service.create_project("Client", "")
+
+    targets = project_service.list_rule_target_projects()
+    target_ids = [int(t["id"]) for t in targets]
+    target_names = [str(t["name"]) for t in targets]
+
+    assert client_id in target_ids
+    assert excluded_id not in target_ids
+    assert EXCLUDED_PROJECT not in target_names
+
+
+def test_excluded_project_cannot_be_made_rule_target_via_lifecycle(temp_db):
+    # Phase 6G consolidated lock: the excluded project cannot be enabled or
+    # archived via the lifecycle API, so it can never become a rule target.
+    # After the rejected attempts it stays ``enabled = 0`` /
+    # ``is_archived = 0`` and remains absent from
+    # ``list_rule_target_projects()``. This is the lifecycle-side guarantee
+    # that backs the dedicated excluded-rule creation facade.
+    project_id = project_service.get_or_create_excluded_project()
+
+    enable_result = project_api.set_project_enabled_for_rules(project_id, True)
+    archive_result = project_api.archive_project_for_rules(project_id)
+
+    assert enable_result == {"ok": False, "error": "system_project"}
+    assert archive_result == {"ok": False, "error": "system_project"}
+
+    row = _project_row(project_id)
+    assert row["enabled"] == 0
+    assert row["is_archived"] == 0
+
+    targets = project_service.list_rule_target_projects()
+    target_ids = [int(t["id"]) for t in targets]
+    assert project_id not in target_ids

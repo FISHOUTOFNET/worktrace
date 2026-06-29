@@ -782,3 +782,102 @@ def test_phase_r2_state_variables_only_accessed_via_app_namespace():
         "State variables accessed without App. prefix (would cause "
         "ReferenceError at runtime): " + "; ".join(errors)
     )
+
+
+# --- Phase 6G: init.js does not start refresh before notice loaded -----
+
+
+def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
+    """Phase 6G: in ``init()``, the call to ``App.loadFirstRunNotice()``
+    must appear before ``refreshAll()`` / ``startAutoRefresh()`` in source
+    order, AND the refresh calls must be inside a ``.then(...)``
+    callback (or after an ``await``), not at the top level of ``init``.
+    This eliminates the frontend race where refreshAll could fire before
+    the gate overlay was up."""
+    source = read_js("init.js")
+    # Match ``function init()`` exactly so we do not collide with
+    # ``function initNav`` or ``function initButtons``.
+    pos = source.find("function init()")
+    assert pos != -1, "init.js must define function init()"
+    # Slice to the next sibling function so we capture the whole init()
+    # body.
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 2500]
+    load_pos = body.find("App.loadFirstRunNotice()")
+    refresh_pos = body.find("refreshAll()")
+    auto_pos = body.find("startAutoRefresh()")
+    assert load_pos != -1, "init() must call App.loadFirstRunNotice()"
+    assert refresh_pos != -1, "init() must call refreshAll()"
+    assert auto_pos != -1, "init() must call startAutoRefresh()"
+    # loadFirstRunNotice must appear before refreshAll / startAutoRefresh
+    # in source order within init.
+    assert load_pos < refresh_pos, (
+        "init() must call loadFirstRunNotice before refreshAll"
+    )
+    assert load_pos < auto_pos, (
+        "init() must call loadFirstRunNotice before startAutoRefresh"
+    )
+    # The refresh calls must be inside a .then(...) callback on the
+    # loadFirstRunNotice promise, not at the top level of init.
+    between = body[load_pos:refresh_pos]
+    assert ".then(function () {" in between or ".then(function() {" in between, (
+        "init() must call refreshAll / startAutoRefresh inside a "
+        ".then(...) callback on the loadFirstRunNotice promise, not at "
+        "the top level of init"
+    )
+
+
+# --- Phase 6G: local ticker (1-second DOM-only refresh) ----------------
+
+
+def test_core_js_defines_local_ticker_interval() -> None:
+    """Phase 6G: core.js must define ``LOCAL_TICKER_INTERVAL_MS`` with
+    value ``1000`` (1-second ticker). The 8-second backend refresh is
+    still the source of truth; this ticker only re-renders already-fetched
+    durations with a locally-computed elapsed increment."""
+    source = read_js("core.js")
+    assert "App.LOCAL_TICKER_INTERVAL_MS" in source, (
+        "core.js must declare App.LOCAL_TICKER_INTERVAL_MS for Phase 6G"
+    )
+    assert "App.LOCAL_TICKER_INTERVAL_MS = 1000;" in source, (
+        "core.js must set LOCAL_TICKER_INTERVAL_MS to 1000 (1 second)"
+    )
+
+
+def test_core_js_defines_apply_local_ticker_function() -> None:
+    """Phase 6G: core.js must define the ``applyLocalTicker`` function
+    and expose it on the App namespace so the timer in init.js can
+    invoke it once per second."""
+    source = read_js("core.js")
+    assert "function applyLocalTicker" in source, (
+        "core.js must define function applyLocalTicker for Phase 6G"
+    )
+    assert "App.applyLocalTicker" in source, (
+        "core.js must expose App.applyLocalTicker for Phase 6G"
+    )
+
+
+def test_core_js_ticker_does_not_call_bridge_methods() -> None:
+    """Phase 6G: the ``applyLocalTicker`` function body must NOT contain
+    ``callBridge`` or ``App.callBridge``. The ticker is cosmetic: it only
+    updates DOM text with a locally-computed elapsed increment. It must
+    never trigger a backend round-trip, never write the database, and
+    never start / stop the collector."""
+    source = read_js("core.js")
+    pos = source.find("function applyLocalTicker")
+    assert pos != -1, "core.js must define function applyLocalTicker"
+    # Slice to the next sibling function declaration or the IIFE close,
+    # whichever comes first (matching the func_body pattern).
+    end_func = source.find("\n    function ", pos + 1)
+    end_iife = source.find("\n})();", pos + 1)
+    candidates = [e for e in (end_func, end_iife) if e != -1]
+    end = min(candidates) if candidates else -1
+    body = source[pos:end] if end != -1 else source[pos:]
+    assert "callBridge" not in body, (
+        "applyLocalTicker must not call callBridge; the ticker only "
+        "updates DOM text and must never trigger a backend round-trip"
+    )
+    assert "App.callBridge" not in body, (
+        "applyLocalTicker must not call App.callBridge; the ticker only "
+        "updates DOM text and must never trigger a backend round-trip"
+    )

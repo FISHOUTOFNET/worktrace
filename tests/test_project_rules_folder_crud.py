@@ -1056,3 +1056,107 @@ def test_folder_crud_cache_hooks_not_invoked_on_invalid_input(temp_db, monkeypat
         "request_rebuild_for_rule": 0,
         "delete_index_for_rule": 0,
     }
+
+
+# --- Phase 6G: excluded-folder rule creation facade --------------------
+
+
+def test_create_excluded_folder_rule_for_webview_success(temp_db):
+    # Phase 6G regression lock: the dedicated facade creates a folder rule on
+    # the special ``排除规则`` project, trims the path, passes ``recursive``
+    # through as a real bool, and returns the narrow created-rule summary. It
+    # does NOT accept a project_id from the caller.
+    result = rule_api.create_excluded_folder_rule_for_webview(
+        "  D:\\Work\\Secret  ", False
+    )
+
+    assert result["ok"] is True
+    rule = result["rule"]
+    assert rule["kind"] == "folder"
+    assert isinstance(rule["id"], int)
+    assert rule["id"] > 0
+    excluded_id = project_service.get_or_create_excluded_project()
+    assert rule["project_id"] == excluded_id
+    assert rule["folder_path"] == r"D:\Work\Secret"
+    assert rule["recursive"] is False
+    assert rule["enabled"] is True
+
+    row = _folder_rule_row(rule["id"])
+    assert row["project_id"] == excluded_id
+    assert row["folder_path"] == r"D:\Work\Secret"
+    assert row["recursive"] == 0
+    assert row["enabled"] == 1
+    # The excluded project is a system project: enabled=0, created_by=system.
+    with get_connection() as conn:
+        proj = conn.execute(
+            "SELECT name, enabled, created_by FROM project WHERE id = ?",
+            (excluded_id,),
+        ).fetchone()
+    assert proj["enabled"] == 0
+    assert proj["created_by"] == "system"
+    json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "bad_path,bad_recursive",
+    [
+        (None, True),
+        (True, True),
+        (1, True),
+        (1.5, True),
+        ([], True),
+        ({}, True),
+        (b"D:\\X", True),
+        ("", True),
+        ("   ", True),
+        ("\t\n", True),
+        ("D:\\Work", None),
+        ("D:\\Work", 1),
+        ("D:\\Work", "yes"),
+        ("D:\\Work", []),
+        ("D:\\Work", {}),
+    ],
+)
+def test_create_excluded_folder_rule_for_webview_rejects_invalid_input(
+    temp_db, bad_path, bad_recursive
+):
+    # Phase 6G regression lock: non-str / whitespace-only folder_path or
+    # non-bool recursive collapses to ``invalid_input`` and creates no row.
+    before = _counts()
+    result = rule_api.create_excluded_folder_rule_for_webview(bad_path, bad_recursive)
+    after = _counts()
+
+    assert result == {"ok": False, "error": "invalid_input"}
+    assert after["folder"] == before["folder"]
+
+
+def test_create_excluded_folder_rule_for_webview_exception_collapses(
+    temp_db, monkeypatch
+):
+    # Phase 6G regression lock: an unexpected service failure collapses to
+    # ``operation_failed`` without surfacing the exception text, traceback,
+    # SQL, or sensitive metadata.
+    def _raise(*args, **kwargs):
+        raise RuntimeError(
+            "boom SELECT * FROM folder_project_rule traceback window_title "
+            "clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(folder_rule_service, "create_or_update_folder_rule", _raise)
+
+    result = rule_api.create_excluded_folder_rule_for_webview(r"D:\Work", True)
+
+    assert result == {"ok": False, "error": "operation_failed"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select ",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+        "c:\\",
+    ):
+        assert forbidden not in lowered, forbidden
+    json.dumps(result, ensure_ascii=False)

@@ -535,7 +535,14 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
     path, export path, clipboard content, window title, file path hint,
     note, SQL, traceback, or raw exception.
 
-    On any exception returns ``{"ok": False, "error": "加载隐私说明失败"}``.
+    Phase 6G fail-closed: if reading ``accepted`` raises (e.g. settings
+    hiccup), the method returns ``ok=True`` with ``accepted=False`` AND
+    the full fallback ``title`` / ``highlights`` / ``notice_text`` so
+    the frontend can still render the privacy notice text. The user
+    must see the privacy notice body even when the accepted-state read
+    fails; the gate stays closed (``accepted=False``) so the collector
+    and folder index worker are not started. A ``warning`` field is
+    included so the frontend can optionally surface a soft warning.
 
     This facade does not call backup export / import / manifest,
     ``clear_all_local_data``, ``set_setting_value``, or any collector
@@ -543,17 +550,25 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
     """
     try:
         accepted = bool(first_run_notice_accepted())
+    except Exception:
+        # Fail-closed: accepted stays False (gate stays closed) but the
+        # notice body is still returned so the frontend can render the
+        # privacy text. Never return an empty-notice error payload.
         return {
             "ok": True,
-            "accepted": accepted,
+            "accepted": False,
             "title": _FIRST_RUN_NOTICE_TITLE,
             "highlights": list(_FIRST_RUN_NOTICE_HIGHLIGHTS),
             "notice_text": str(PRIVACY_NOTICE_TEXT),
+            "warning": "隐私说明确认状态读取失败，请重新确认",
         }
-    except Exception:
-        # Collapse any unexpected error to a generic UI-facing message.
-        # Never expose raw exception text / traceback / SQL / paths.
-        return {"ok": False, "error": "加载隐私说明失败"}
+    return {
+        "ok": True,
+        "accepted": accepted,
+        "title": _FIRST_RUN_NOTICE_TITLE,
+        "highlights": list(_FIRST_RUN_NOTICE_HIGHLIGHTS),
+        "notice_text": str(PRIVACY_NOTICE_TEXT),
+    }
 
 
 def accept_first_run_notice_for_webview() -> dict[str, Any]:

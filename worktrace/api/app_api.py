@@ -32,6 +32,22 @@ def start_collector() -> None:
         _runtime.start_collector()
 
 
+def start_background_workers() -> bool:
+    """Start background workers (folder index worker) if not started yet.
+
+    Phase 6G privacy gate facade. Returns ``True`` when this call
+    actually started the worker, ``False`` when already running or this
+    instance does not own the collector. Callers (``webview_main.main``,
+    ``bridge.toggle_pause``, ``bridge.accept_first_run_notice``) must
+    only invoke this after the first-run privacy notice has been
+    accepted: the folder index worker probes local
+    ``os.path.exists(file_path)`` paths for ready indexes.
+    """
+    if _runtime is not None:
+        return _runtime.start_background_workers()
+    return False
+
+
 def request_shutdown() -> None:
     """Signal the collector and index threads to stop.
 
@@ -55,5 +71,6 @@ __all__ = [
     "owns_collector",
     "request_shutdown",
     "set_runtime",
+    "start_background_workers",
     "start_collector",
 ]

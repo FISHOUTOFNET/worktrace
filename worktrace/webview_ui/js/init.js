@@ -364,20 +364,56 @@
     }
     App.startAutoRefresh = startAutoRefresh;
 
+    // Phase 6G: 1-second local ticker. The backend 8-second refresh is
+    // still the source of truth; this ticker only re-renders already-fetched
+    // durations with a locally-computed elapsed increment so the UI does
+    // not freeze for 8 seconds between ticks. The ticker ONLY updates DOM
+    // text; it never calls a bridge method, never writes the database, and
+    // never starts / stops the collector. It is a no-op when the current
+    // activity is paused / stopped, when the viewed date is not today, or
+    // when no snapshot has been fetched yet. The 8-second refresh resets
+    // the snapshot baseline so accumulated drift is bounded to 8s.
+    function startLocalTicker() {
+        if (App.localTickerTimer !== null) clearInterval(App.localTickerTimer);
+        App.localTickerTimer = setInterval(function () {
+            if (typeof App.applyLocalTicker === "function") {
+                try {
+                    App.applyLocalTicker();
+                } catch (e) {
+                    // Swallow ticker errors: the ticker is cosmetic and
+                    // must never break the 8-second refresh loop or the
+                    // rest of the UI.
+                }
+            }
+        }, App.LOCAL_TICKER_INTERVAL_MS);
+    }
+    App.startLocalTicker = startLocalTicker;
+
     function init() {
         initNav();
         initButtons();
-        // Phase 6E: load the first-run privacy notice before refreshing
-        // the main UI. If the notice has not been accepted the blocking
-        // gate overlay is shown and the collector must NOT start; the
-        // gate's accept handler starts the collector after the user
-        // accepts. loadFirstRunNotice is async but we do not await it
-        // here: refreshAll can run in parallel because the backend
-        // startup gate (webview_main.py) already prevents the collector
-        // from auto-starting when the notice is unaccepted.
-        App.loadFirstRunNotice();
-        refreshAll();
-        startAutoRefresh();
+        // Phase 6G: load the first-run privacy notice BEFORE refreshing
+        // the main UI so the privacy gate is shown before any data
+        // refresh begins. The notice load is awaited: refreshAll and
+        // startAutoRefresh only run after the notice state is known. If
+        // the notice has not been accepted the blocking gate overlay is
+        // shown and the collector must NOT start; the gate's accept
+        // handler starts the collector after the user accepts. The
+        // backend startup gate (webview_main.py) is the final safety
+        // boundary; awaiting here eliminates the frontend race where
+        // refreshAll could fire before the gate overlay was up.
+        App.loadFirstRunNotice().then(function () {
+            refreshAll();
+            startAutoRefresh();
+            startLocalTicker();
+        }).catch(function () {
+            // If the notice load itself fails (e.g. bridge error), still
+            // refresh the UI so the user sees something; the gate overlay
+            // will already be shown by loadFirstRunNotice's error path.
+            refreshAll();
+            startAutoRefresh();
+            startLocalTicker();
+        });
     }
     App.init = init;
 

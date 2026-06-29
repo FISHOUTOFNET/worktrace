@@ -210,6 +210,25 @@ _PROJECT_RULE_BATCH_TOGGLE_MESSAGES = {
     "operation_failed": "批量操作失败",
 }
 
+# Maps Phase 6G excluded-rule keyword-create API stable codes to user-facing
+# messages. Unknown codes collapse to the generic create failure so internal
+# details are never surfaced. The excluded project is a system/special
+# project, so ``project_not_found`` cannot occur (the facade resolves it
+# internally).
+_EXCLUDED_KEYWORD_RULE_CREATE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "duplicate_rule": "关键词规则已存在",
+    "operation_failed": "新增排除关键词规则失败",
+}
+
+# Maps Phase 6G excluded-rule folder-create API stable codes to user-facing
+# messages. Unknown codes collapse to the generic create failure so internal
+# details are never surfaced.
+_EXCLUDED_FOLDER_RULE_CREATE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "operation_failed": "新增排除文件夹规则失败",
+}
+
 
 # ---------------------------------------------------------------------------
 # Payload helpers.
@@ -662,6 +681,106 @@ class ProjectRulesBridgeMixin:
         except Exception:
             logger.exception("webview bridge create_project_folder_rule failed")
             return {"ok": False, "error": "新增文件夹规则失败"}
+
+    # --- Phase 6G: Excluded-rule creation (排除规则专用入口) -----------
+
+    def create_excluded_keyword_rule(self, keyword) -> dict[str, Any]:
+        """Create one new keyword rule on the special ``排除规则`` project.
+
+        Phase 6G write path only. This is the dedicated excluded-rule
+        creation entry: it does NOT accept any ``project_id`` from the
+        caller, so the frontend cannot inject an arbitrary project_id.
+        The API facade internally resolves the ``EXCLUDED_PROJECT``
+        project_id via ``get_or_create_excluded_project``. Strict bridge
+        validation rejects non-string ``keyword`` and whitespace-only
+        ``keyword`` before calling
+        ``rule_api.create_excluded_keyword_rule_for_webview``. The bridge
+        never exposes raw exceptions, tracebacks, SQL, paths, window
+        titles, clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "rule": {"kind": "keyword", "id": int,
+        "project_id": int, "keyword": str, "enabled": True}}`` on success
+        or ``{"ok": False, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            if type(keyword) is not str or not keyword.strip():
+                return {"ok": False, "error": "操作无效"}
+            trimmed_keyword = keyword.strip()
+            result = rule_api.create_excluded_keyword_rule_for_webview(trimmed_keyword)
+            if result.get("ok") is True:
+                rule = result.get("rule") or {}
+                return {
+                    "ok": True,
+                    "rule": {
+                        "kind": "keyword",
+                        "id": int(rule.get("id") or 0),
+                        "project_id": int(rule.get("project_id") or 0),
+                        "keyword": str(rule.get("keyword") or ""),
+                        "enabled": bool(rule.get("enabled")),
+                    },
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _EXCLUDED_KEYWORD_RULE_CREATE_MESSAGES.get(
+                    code, "新增排除关键词规则失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge create_excluded_keyword_rule failed")
+            return {"ok": False, "error": "新增排除关键词规则失败"}
+
+    def create_excluded_folder_rule(self, folder_path, recursive) -> dict[str, Any]:
+        """Create one new folder rule on the special ``排除规则`` project.
+
+        Phase 6G write path only. This is the dedicated excluded-rule
+        creation entry: it does NOT accept any ``project_id`` from the
+        caller, so the frontend cannot inject an arbitrary project_id.
+        The API facade internally resolves the ``EXCLUDED_PROJECT``
+        project_id via ``get_or_create_excluded_project``. Strict bridge
+        validation rejects non-string ``folder_path``, whitespace-only
+        ``folder_path``, and non-bool ``recursive`` before calling
+        ``rule_api.create_excluded_folder_rule_for_webview``. The bridge
+        never exposes raw exceptions, tracebacks, SQL, paths, window
+        titles, clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "rule": {"kind": "folder", "id": int,
+        "project_id": int, "folder_path": str, "recursive": bool,
+        "enabled": True}}`` on success or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            if type(folder_path) is not str or not folder_path.strip():
+                return {"ok": False, "error": "操作无效"}
+            if type(recursive) is not bool:
+                return {"ok": False, "error": "操作无效"}
+            trimmed_path = folder_path.strip()
+            result = rule_api.create_excluded_folder_rule_for_webview(
+                trimmed_path, recursive
+            )
+            if result.get("ok") is True:
+                rule = result.get("rule") or {}
+                return {
+                    "ok": True,
+                    "rule": {
+                        "kind": "folder",
+                        "id": int(rule.get("id") or 0),
+                        "project_id": int(rule.get("project_id") or 0),
+                        "folder_path": str(rule.get("folder_path") or ""),
+                        "recursive": bool(rule.get("recursive")),
+                        "enabled": bool(rule.get("enabled")),
+                    },
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _EXCLUDED_FOLDER_RULE_CREATE_MESSAGES.get(
+                    code, "新增排除文件夹规则失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge create_excluded_folder_rule failed")
+            return {"ok": False, "error": "新增排除文件夹规则失败"}
 
     def update_project_folder_rule(self, rule_id, folder_path, recursive) -> dict[str, Any]:
         """Update one existing folder rule's ``folder_path`` and ``recursive``.

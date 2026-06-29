@@ -10,8 +10,24 @@
 
     // --- Module-level state (single source of truth across all js modules) ---
     App.REFRESH_INTERVAL_MS = 8000;
+    // Phase 6G: local 1-second ticker interval. The 8-second refresh is
+    // still the source of truth; this ticker only re-renders already-fetched
+    // durations with a locally-computed elapsed increment.
+    App.LOCAL_TICKER_INTERVAL_MS = 1000;
     App.NOTE_MAX_LENGTH = 2000;
     App.refreshTimer = null;
+    App.localTickerTimer = null;
+
+    // --- Phase 6G: 1-second local ticker state -------------------------
+    // The backend 8-second refresh is the source of truth; the ticker only
+    // re-renders already-fetched durations with a locally-computed elapsed
+    // increment. The ticker ONLY updates DOM text; it never calls a bridge
+    // method, never writes the DB, and never starts / stops the collector.
+    // ``lastOverviewSnapshot`` / ``lastTimelineSnapshot`` are set by
+    // showOverview / showTimeline respectively; the ticker reads them to
+    // compute the live increment. ``lastTimelineData`` already exists for
+    // the timeline page.
+    App.lastOverviewSnapshot = null;
 
     // --- Timeline state -------------------------------------------------
     App.currentPage = "overview";
@@ -449,6 +465,124 @@
         return pad(h) + ":" + pad(m) + ":" + pad(sec);
     }
     App.formatDuration = formatDuration;
+
+    // --- Phase 6G: 1-second local ticker --------------------------------
+    // ``applyLocalTicker`` is invoked once per second by the timer set up
+    // in init.js. It re-renders already-fetched durations with a locally-
+    // computed elapsed increment so the UI does not freeze for 8 seconds
+    // between backend refreshes. The ticker ONLY updates DOM text; it
+    // never calls a bridge method, never writes the DB, and never starts
+    // / stops the collector. It is a no-op when:
+    //   - the current activity is paused / stopped / idle, or
+    //   - the viewed date is not today (timeline page), or
+    //   - no snapshot has been fetched yet.
+    // The 8-second refresh resets the snapshot baseline so accumulated
+    // drift is bounded to 8s. ``today_total_seconds`` already includes
+    // the current activity's live seconds (the backend summary is built
+    // with ``include_live=True``); the ticker adds the delta to BOTH the
+    // total and the current activity elapsed to avoid double-counting.
+    function tickerNowEpochMs() {
+        return Date.now();
+    }
+
+    function tickerDeltaSeconds(snapshot) {
+        if (!snapshot) return 0;
+        var snapshotAt = parseInt(snapshot.snapshot_at_epoch_ms, 10);
+        if (!snapshotAt) return 0;
+        var now = tickerNowEpochMs();
+        var delta = Math.floor((now - snapshotAt) / 1000);
+        return delta > 0 ? delta : 0;
+    }
+
+    function tickerCurrentActivityRunning(snapshot) {
+        var current = snapshot && snapshot.current_activity;
+        if (!current || !current.active) return false;
+        if (current.is_paused) return false;
+        return true;
+    }
+
+    function applyLocalTicker() {
+        // Overview page: update KPI total + current activity display.
+        var ov = App.lastOverviewSnapshot;
+        if (ov && App.currentPage === "overview") {
+            var delta = 0;
+            if (tickerCurrentActivityRunning(ov)) {
+                delta = tickerDeltaSeconds(ov);
+            }
+            var totalEl = document.getElementById("kpi-total");
+            if (totalEl) {
+                var totalSec = parseInt(ov.today_total_seconds, 10) || 0;
+                totalEl.textContent = App.formatDuration(totalSec + delta);
+            }
+            var currentEl = document.getElementById("current-activity");
+            if (currentEl) {
+                var current = ov.current_activity || {};
+                if (current.active) {
+                    var elapsedSec = parseInt(current.elapsed_seconds, 10) || 0;
+                    // Rebuild the display string with the incremented
+                    // elapsed duration. The display format is
+                    // ``name｜project｜elapsed｜state``; only the elapsed
+                    // field is replaced.
+                    var display = current.display || "";
+                    var parts = display.split("｜");
+                    if (parts.length >= 3) {
+                        parts[2] = App.formatDuration(elapsedSec + delta);
+                        currentEl.textContent = "当前活动：" + parts.join("｜");
+                    }
+                } else {
+                    currentEl.textContent = "当前活动：无";
+                }
+            }
+        }
+        // Timeline page: update date total + current activity display +
+        // in-progress session duration. Only when viewing today.
+        var tl = App.lastTimelineData;
+        if (tl && App.currentPage === "timeline") {
+            var todayStr = App.localTodayStr();
+            var isToday = !tl.date || tl.date === todayStr || tl.date === "--";
+            var tlDelta = 0;
+            if (isToday && tickerCurrentActivityRunning(tl)) {
+                tlDelta = tickerDeltaSeconds(tl);
+            }
+            var tlTotalEl = document.getElementById("timeline-total");
+            if (tlTotalEl) {
+                var tlTotalSec = parseInt(tl.today_total_seconds, 10) || 0;
+                tlTotalEl.textContent = App.formatDuration(tlTotalSec + tlDelta);
+            }
+            var tlCurrentEl = document.getElementById("timeline-current");
+            if (tlCurrentEl) {
+                var tlCurrent = tl.current_activity || {};
+                if (tlCurrent.active) {
+                    var tlElapsedSec = parseInt(tlCurrent.elapsed_seconds, 10) || 0;
+                    var tlDisplay = tlCurrent.display || "";
+                    var tlParts = tlDisplay.split("｜");
+                    if (tlParts.length >= 3) {
+                        tlParts[2] = App.formatDuration(tlElapsedSec + tlDelta);
+                        tlCurrentEl.textContent = "当前活动：" + tlParts.join("｜");
+                    }
+                } else {
+                    tlCurrentEl.textContent = "当前活动：无";
+                }
+            }
+            // Update the in-progress session's duration in the session list.
+            if (isToday && tlDelta > 0 && tl.sessions) {
+                for (var i = 0; i < tl.sessions.length; i++) {
+                    var s = tl.sessions[i];
+                    if (s.is_in_progress) {
+                        var items = document.querySelectorAll(".timeline-item");
+                        if (items[i]) {
+                            var durEl = items[i].querySelector(".timeline-item-duration");
+                            if (durEl) {
+                                var sSec = parseInt(s.duration_seconds, 10) || 0;
+                                durEl.textContent = App.formatDuration(sSec + tlDelta);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    App.applyLocalTicker = applyLocalTicker;
 
     // Backend stores time as "YYYY-MM-DD HH:MM:SS". <input type="datetime-local">
     // uses "YYYY-MM-DDTHH:MM:SS" (T separator). These helpers convert between

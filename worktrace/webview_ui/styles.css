@@ -470,7 +470,21 @@ body {
 .detail-item {
     display: grid;
     grid-template-columns: 80px 1fr auto;
-    grid-template-rows: auto auto;
+    /* Phase 6G: use grid-template-areas so .detail-item-actions gets its
+       own row and never overlaps with .detail-item-meta /
+       .detail-item-project. The editor / split / merge / visibility
+       status rows are only occupied when the user opens an inline editor;
+       empty rows collapse to 0 height (the 2px row gap remains). This
+       replaces the fragile fixed grid-row numbering that caused the
+       actions row to share grid-row: 2 with meta / project. */
+    grid-template-areas:
+        "time    name    duration"
+        ".       meta    project"
+        "actions actions actions"
+        "editor  editor  editor"
+        "split   split   split"
+        "merge   merge   merge"
+        "vis     vis     vis";
     gap: 2px 10px;
     padding: 8px 10px;
     border-radius: 6px;
@@ -479,16 +493,14 @@ body {
 }
 
 .detail-item-time {
-    grid-row: 1;
-    grid-column: 1;
+    grid-area: time;
     font-size: 12px;
     color: #64748b;
     font-variant-numeric: tabular-nums;
 }
 
 .detail-item-name {
-    grid-row: 1;
-    grid-column: 2;
+    grid-area: name;
     font-size: 13px;
     color: #1e293b;
     overflow: hidden;
@@ -497,8 +509,7 @@ body {
 }
 
 .detail-item-duration {
-    grid-row: 1;
-    grid-column: 3;
+    grid-area: duration;
     font-size: 13px;
     color: #334155;
     font-variant-numeric: tabular-nums;
@@ -506,8 +517,7 @@ body {
 }
 
 .detail-item-meta {
-    grid-row: 2;
-    grid-column: 2;
+    grid-area: meta;
     display: flex;
     gap: 8px;
     align-items: center;
@@ -527,8 +537,7 @@ body {
 }
 
 .detail-item-project {
-    grid-row: 2;
-    grid-column: 3;
+    grid-area: project;
     font-size: 11px;
     color: #64748b;
     text-align: right;
@@ -579,14 +588,35 @@ body {
 
 @media (max-width: 900px) {
     .detail-item {
+        /* Phase 6G: single-column flow on mobile. Each element gets its
+           own row via grid-template-areas so nothing overlaps. Duration
+           gets its own row instead of sharing row 1 with time. */
         grid-template-columns: 1fr;
-        grid-template-rows: auto auto auto auto;
+        grid-template-areas:
+            "time"
+            "duration"
+            "name"
+            "meta"
+            "project"
+            "actions"
+            "editor"
+            "split"
+            "merge"
+            "vis";
     }
-    .detail-item-time { grid-row: 1; grid-column: 1; }
-    .detail-item-name { grid-row: 2; grid-column: 1; }
-    .detail-item-meta { grid-row: 3; grid-column: 1; }
-    .detail-item-project { grid-row: 4; grid-column: 1; text-align: left; }
-    .detail-item-duration { grid-row: 1; grid-column: 1; text-align: right; }
+    .detail-item-project {
+        text-align: left;
+    }
+    /* Phase 6G: split editor and merge status occupy their own grid areas
+       on mobile (defined in grid-template-areas above). Explicit rules
+       keep them reachable on narrow viewports and lock the responsive
+       layout contract. */
+    .detail-split-editor {
+        grid-area: split;
+    }
+    .detail-merge-status {
+        grid-area: merge;
+    }
 
     .timeline-item {
         flex-direction: column;
@@ -919,8 +949,9 @@ body {
 
 /* Per-activity inline time editor inside the detail list. */
 .detail-item-actions {
-    grid-row: 2;
-    grid-column: 1 / -1;
+    /* Phase 6G: own grid row via grid-area so it never overlaps with
+       .detail-item-meta / .detail-item-project. */
+    grid-area: actions;
     margin-top: 4px;
     display: flex;
     flex-wrap: wrap;
@@ -977,8 +1008,7 @@ body {
 }
 
 .detail-time-editor {
-    grid-row: 3;
-    grid-column: 1 / -1;
+    grid-area: editor;
     margin-top: 8px;
     padding: 8px;
     background: #f1f5f9;
@@ -989,8 +1019,7 @@ body {
    layout but occupies its own grid row so both editors are not visible at
    the same time (the JS layer closes one when the other opens). */
 .detail-split-editor {
-    grid-row: 5;
-    grid-column: 1 / -1;
+    grid-area: split;
     margin-top: 8px;
     padding: 8px;
     background: #f1f5f9;
@@ -1040,8 +1069,7 @@ body {
 }
 
 .detail-merge-status {
-    grid-row: 6;
-    grid-column: 1 / -1;
+    grid-area: merge;
     margin-top: 4px;
     font-size: 11px;
 }
@@ -1090,8 +1118,7 @@ body {
 }
 
 .detail-visibility-status {
-    grid-row: 7;
-    grid-column: 1 / -1;
+    grid-area: vis;
     margin-top: 4px;
     font-size: 11px;
 }
@@ -1194,31 +1221,18 @@ body {
     .edit-time-row {
         flex-wrap: wrap;
     }
-    .detail-item-actions {
-        grid-row: 3;
-        grid-column: 1;
-    }
-    .detail-time-editor {
-        grid-row: 4;
-    }
+    /* Phase 6G: grid rows are now defined via grid-template-areas in the
+       mobile block above; these rules only handle the flex-wrap behavior
+       for the editor rows and action groups. No grid-row overrides are
+       needed here because the grid-area assignments are inherited. */
     .detail-time-row {
         flex-wrap: wrap;
     }
     /* Phase 3B.2: split editor mirrors the time editor's narrow-viewport
-       behavior. The split row wraps so the input remains reachable and
-       the editor stays in its own grid row below the time editor. */
-    .detail-split-editor {
-        grid-row: 5;
-    }
+       behavior. The split row wraps so the input remains reachable. */
     .detail-split-row,
     .detail-time-row {
         flex-wrap: wrap;
-    }
-    /* Phase 3B.3: merge status mirrors the split editor's narrow-viewport
-       grid row so the status text stays below the action buttons without
-       overlapping the split editor. */
-    .detail-merge-status {
-        grid-row: 6;
     }
     /* Phase 3B.3 / 3B.5A: action buttons wrap on narrow viewports so the
        merge button remains reachable alongside the edit/split buttons. The
@@ -1232,13 +1246,6 @@ body {
     .detail-action-merge-group,
     .detail-action-danger-group {
         flex-wrap: wrap;
-    }
-    /* Phase 3B.4: visibility status mirrors the merge status grid row so
-       the hide/delete status text stays below the action buttons without
-       overlapping the merge status on narrow viewports. The session-level
-       visibility actions also wrap so both buttons remain reachable. */
-    .detail-visibility-status {
-        grid-row: 7;
     }
     .edit-visibility-section .edit-time-actions {
         flex-wrap: wrap;
@@ -2312,6 +2319,94 @@ body {
     background: #f0fdf4;
     color: #15803d;
     border: 1px solid #bbf7d0;
+}
+
+/* Phase 6G: excluded-rule creation form. Rendered dynamically inside the
+   ``排除规则`` card (not as a static submit button — the static contract
+   test locks the static submit button count to 3). The form has two
+   sub-sections: keyword rule creation and folder rule creation. Both call
+   the dedicated excluded-rule bridge methods that do NOT accept an
+   arbitrary project_id (the API pins the project_id to EXCLUDED_PROJECT
+   internally). Mirrors the existing keyword/folder create-row visual
+   style so the excluded create form reads consistently with the rest of
+   the page. */
+.rules-excluded-create {
+    margin: 12px 0;
+    padding: 12px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 6px;
+    background: #f8fafc;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.rules-excluded-create-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.rules-excluded-create-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.rules-excluded-keyword-input,
+.rules-excluded-folder-input {
+    flex: 1 1 220px;
+    min-width: 160px;
+    padding: 6px 8px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #1e293b;
+    box-sizing: border-box;
+}
+
+.rules-excluded-folder-recursive-label {
+    font-size: 13px;
+    color: #1e293b;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.rules-excluded-folder-recursive {
+    cursor: pointer;
+}
+
+.rules-excluded-keyword-submit,
+.rules-excluded-folder-submit {
+    padding: 7px 16px;
+    font-size: 13px;
+    border: 1px solid #4338ca;
+    border-radius: 4px;
+    background: #4338ca;
+    color: #ffffff;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.rules-excluded-keyword-submit:hover:not(:disabled),
+.rules-excluded-folder-submit:hover:not(:disabled) {
+    background: #3730a3;
+    border-color: #3730a3;
+}
+
+.rules-excluded-keyword-input:disabled,
+.rules-excluded-folder-input:disabled,
+.rules-excluded-folder-recursive:disabled,
+.rules-excluded-keyword-submit:disabled,
+.rules-excluded-folder-submit:disabled {
+    background: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+    opacity: 0.75;
 }
 
 /* Phase 5E: folder rule row edit / delete buttons. Mirrors the existing

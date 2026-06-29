@@ -9,6 +9,10 @@
 
     function showOverview(overview) {
         if (!overview) return;
+        // Phase 6G: store the overview snapshot so the 1-second local
+        // ticker can increment the displayed durations without a bridge
+        // round-trip. The ticker only updates DOM text.
+        App.lastOverviewSnapshot = overview;
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-total").textContent = overview.total_duration || "00:00:00";
         document.getElementById("kpi-classified").textContent = overview.classified_duration || "00:00:00";

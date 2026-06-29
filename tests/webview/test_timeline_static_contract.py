@@ -2987,3 +2987,161 @@ def test_default_webview_entry_preserved_3c1():
     assert "webview_main()" in main_src, (
         "worktrace.main must still call webview_main()"
     )
+
+
+# --- Phase 6G: detail-item grid overlap regression locks ---------------
+
+
+def _extract_css_rule(source: str, selector: str) -> str:
+    """Extract the body (inside braces) of the first CSS rule whose
+    selector list contains ``selector`` as an actual rule selector
+    (selector text followed by ``{``), skipping any mention of the
+    selector inside comments."""
+    pattern = re.compile(re.escape(selector) + r"\s*\{")
+    match = pattern.search(source)
+    assert match is not None, "selector not found in styles.css: " + selector
+    brace_start = source.find("{", match.start())
+    assert brace_start != -1
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    return source[brace_start + 1:end]
+
+
+def test_detail_item_actions_has_own_grid_area():
+    """Phase 6G: ``.detail-item-actions`` must use ``grid-area: actions``
+    (NOT ``grid-row: 2``) so it never overlaps with
+    ``.detail-item-meta`` / ``.detail-item-project``."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    body = _extract_css_rule(source, ".detail-item-actions")
+    assert "grid-area: actions" in body, (
+        ".detail-item-actions must declare grid-area: actions"
+    )
+    assert "grid-row: 2" not in body, (
+        ".detail-item-actions must not use the fragile grid-row: 2 that "
+        "caused overlap with meta / project"
+    )
+
+
+def test_detail_item_uses_grid_template_areas():
+    """Phase 6G: ``.detail-item`` must define a ``grid-template-areas``
+    block so each child has a named area instead of relying on implicit
+    grid-row numbering."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    body = _extract_css_rule(source, ".detail-item")
+    assert "grid-template-areas" in body, (
+        ".detail-item must use grid-template-areas for layout"
+    )
+
+
+def test_detail_item_actions_not_sharing_row_with_meta_or_project():
+    """Phase 6G: the ``actions`` row in the desktop ``.detail-item``
+    grid-template-areas must occupy its own row line (three ``actions``
+    tokens), separate from the rows that contain ``meta`` and ``project``."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    body = _extract_css_rule(source, ".detail-item")
+    # Find the grid-template-areas block and capture its content up to the
+    # terminating semicolon. Use the colon to skip comment mentions of
+    # "grid-template-areas" (the property is "grid-template-areas:").
+    gta_start = body.find("grid-template-areas:")
+    assert gta_start != -1
+    semi = body.find(";", gta_start)
+    assert semi != -1
+    gta_block = body[gta_start:semi]
+    # The actions row must be a line whose tokens are all "actions" — i.e.
+    # it does not share a row with meta or project.
+    actions_row_pattern = re.compile(
+        r'"actions\s+actions\s+actions"',
+    )
+    assert actions_row_pattern.search(gta_block) is not None, (
+        "grid-template-areas must have a dedicated actions row "
+        '("actions actions actions") separate from meta / project'
+    )
+    # No single quoted row may contain both "actions" and "meta", and no
+    # row may contain both "actions" and "project".
+    for row_match in re.finditer(r'"([^"]*)"', gta_block):
+        row_tokens = row_match.group(1).split()
+        if "actions" in row_tokens:
+            assert "meta" not in row_tokens, (
+                "actions must not share a row with meta: " + row_match.group(0)
+            )
+            assert "project" not in row_tokens, (
+                "actions must not share a row with project: "
+                + row_match.group(0)
+            )
+
+
+def test_detail_item_mobile_layout_actions_on_own_row():
+    """Phase 6G: the mobile ``@media (max-width: 900px)`` ``.detail-item``
+    override must also place ``actions`` on its own row inside its
+    grid-template-areas block."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    # Scan every @media (max-width: 900px) block until one contains a
+    # .detail-item rule with grid-template-areas whose "actions" row is
+    # a single-token row.
+    found = False
+    search_from = 0
+    while True:
+        media_start = source.find("@media (max-width: 900px)", search_from)
+        if media_start == -1:
+            break
+        brace_start = source.find("{", media_start)
+        if brace_start == -1:
+            break
+        depth = 0
+        end = brace_start
+        for i in range(brace_start, len(source)):
+            ch = source[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        media_body = source[media_start:end]
+        # Find the .detail-item rule inside this media block.
+        di_idx = media_body.find(".detail-item")
+        if di_idx == -1:
+            search_from = end
+            continue
+        di_brace = media_body.find("{", di_idx)
+        if di_brace == -1:
+            search_from = end
+            continue
+        depth = 0
+        di_end = di_brace
+        for i in range(di_brace, len(media_body)):
+            ch = media_body[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    di_end = i
+                    break
+        di_body = media_body[di_brace + 1:di_end]
+        if "grid-template-areas:" not in di_body:
+            search_from = end
+            continue
+        gta_start = di_body.find("grid-template-areas:")
+        semi = di_body.find(";", gta_start)
+        assert semi != -1
+        gta_block = di_body[gta_start:semi]
+        # The mobile actions row is a single "actions" token on its own line.
+        if re.search(r'"actions"', gta_block) is not None:
+            found = True
+            break
+        search_from = end
+    assert found, (
+        "mobile @media (max-width: 900px) .detail-item must place actions "
+        'on its own row ("actions") inside grid-template-areas'
+    )

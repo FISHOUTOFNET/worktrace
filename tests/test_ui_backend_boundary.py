@@ -1168,3 +1168,114 @@ def test_webview_main_imports_settings_api() -> None:
             "webview_main.py must not import backend module directly: "
             + forbidden
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6G: Privacy gate for the folder index worker. The bridge
+# ``toggle_pause`` and ``accept_first_run_notice`` methods must call
+# ``app_api.start_background_workers()`` BEFORE ``app_api.start_collector()``
+# so the folder index is warm by the time the collector starts matching
+# activities. ``app_api`` must export a ``start_background_workers`` facade
+# that delegates to ``runtime.start_background_workers()``.
+# ---------------------------------------------------------------------------
+
+
+def test_webview_bridge_toggle_pause_calls_start_background_workers_before_collector() -> None:
+    """Phase 6G: ``toggle_pause`` must call ``app_api.start_background_workers()``
+    BEFORE ``app_api.start_collector()`` on the resume path so the folder index
+    worker is running before the collector starts matching activities.
+
+    This is a static source-level check mirroring
+    ``test_webview_bridge_toggle_pause_gates_on_first_run_notice``: find the
+    ``toggle_pause`` body, slice to the next ``def``, and assert ordering.
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def toggle_pause")
+    assert pos != -1, "bridge.py must define toggle_pause"
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    bg_pos = body.find("app_api.start_background_workers()")
+    start_pos = body.find("app_api.start_collector()")
+    assert bg_pos != -1, (
+        "toggle_pause must call app_api.start_background_workers() before "
+        "start_collector (Phase 6G)"
+    )
+    assert start_pos != -1, (
+        "toggle_pause must still call app_api.start_collector() when the "
+        "gate is open (Phase 6G does not remove the start path)"
+    )
+    assert bg_pos < start_pos, (
+        "toggle_pause must call start_background_workers() BEFORE "
+        "start_collector() so the folder index is warm before the collector"
+    )
+
+
+def test_webview_bridge_accept_first_run_notice_calls_start_background_workers() -> None:
+    """Phase 6G: ``accept_first_run_notice`` must call
+    ``app_api.start_background_workers`` after a successful accept so the
+    folder index worker starts alongside the collector. This is a static
+    source-level check mirroring
+    ``test_webview_bridge_accept_first_run_notice_calls_api_facade_and_start_collector``."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def accept_first_run_notice")
+    assert pos != -1, "bridge.py must define accept_first_run_notice for Phase 6E"
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    assert "app_api.start_background_workers" in body, (
+        "accept_first_run_notice must call app_api.start_background_workers "
+        "after a successful accept (Phase 6G)"
+    )
+
+
+def test_webview_bridge_accept_first_run_notice_starts_background_workers_before_collector() -> None:
+    """Phase 6G: ``accept_first_run_notice`` must call
+    ``app_api.start_background_workers`` BEFORE ``app_api.start_collector``
+    so the folder index is warm by the time the collector starts.
+
+    The docstring mentions ``app_api.start_collector()`` so the docstring is
+    skipped before comparing positions (mirroring the existing forbidden-token
+    pattern used by the Phase 6C/6D/6E error-payload tests).
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def accept_first_run_notice")
+    assert pos != -1, "bridge.py must define accept_first_run_notice for Phase 6E"
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Skip the docstring because it legitimately mentions
+    # ``app_api.start_collector()`` to document the Phase 6E behavior; only
+    # the executable code should be checked for ordering.
+    doc_start = body.find('"""')
+    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
+    code_only = body[doc_end:] if doc_end > 3 else body
+    bg_pos = code_only.find("app_api.start_background_workers")
+    start_pos = code_only.find("app_api.start_collector")
+    assert bg_pos != -1, (
+        "accept_first_run_notice must call app_api.start_background_workers "
+        "after a successful accept (Phase 6G)"
+    )
+    assert start_pos != -1, (
+        "accept_first_run_notice must still call app_api.start_collector "
+        "after a successful accept (Phase 6E)"
+    )
+    assert bg_pos < start_pos, (
+        "accept_first_run_notice must call start_background_workers BEFORE "
+        "start_collector so the folder index is warm before the collector"
+    )
+
+
+def test_app_api_exports_start_background_workers_facade() -> None:
+    """Phase 6G: ``app_api.py`` must define a ``start_background_workers``
+    facade and export it in ``__all__``. This is a static source-level check
+    confirming the facade exists and is publicly exported."""
+    app_api_path = (
+        Path(__file__).resolve().parents[1] / "worktrace" / "api" / "app_api.py"
+    )
+    source = app_api_path.read_text(encoding="utf-8")
+    assert "def start_background_workers" in source, (
+        "app_api.py must define start_background_workers facade (Phase 6G)"
+    )
+    from worktrace.api import app_api
+
+    assert "start_background_workers" in app_api.__all__, (
+        "app_api.__all__ must export start_background_workers (Phase 6G)"
+    )

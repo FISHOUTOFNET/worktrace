@@ -114,15 +114,30 @@ def main() -> int:
     # starts the collector. Fail closed on read error: do not start the
     # collector, log, but do not block WebView startup (the frontend
     # will call ``get_first_run_notice`` and surface the error).
+    #
+    # Phase 6G: the folder index worker is also gated here. The worker
+    # probes local ``os.path.exists(file_path)`` for ready indexes,
+    # which is privacy-relevant local path probing; it must not start
+    # before the user has accepted the privacy notice. Background
+    # workers are started before the collector so the index is warm by
+    # the time the collector starts matching activities.
     try:
         notice_accepted = settings_api.first_run_notice_accepted()
     except Exception:
         logging.exception(
             "webview startup: first_run_notice_accepted read failed; "
-            "not starting collector (fail closed)"
+            "not starting collector or background workers (fail closed)"
         )
         notice_accepted = False
     if notice_accepted:
+        try:
+            app_api.start_background_workers()
+        except Exception:
+            logging.exception(
+                "webview startup: background workers start failed after "
+                "first-run notice already accepted; user can retry via "
+                "sidebar toggle"
+            )
         try:
             app_api.start_collector()
         except Exception:

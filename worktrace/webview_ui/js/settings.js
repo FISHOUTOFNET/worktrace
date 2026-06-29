@@ -50,10 +50,18 @@
     function setSettingsBackupControlsDisabled(disabled) {
         // Backup-specific controls: passphrase inputs, export button,
         // manifest preview button, and the Phase 6D import controls
-        // (import passphrase / import confirm / import button). They stay
-        // disabled until the first successful status read and during any
-        // in-flight Settings op.
-        var backupDisabled = disabled || !App.settingsLoaded;
+        // (import passphrase / import confirm / import button).
+        //
+        // Phase 6G: these inputs do NOT depend on ``App.settingsLoaded``.
+        // The backup passphrase / import passphrase / confirm inputs must
+        // remain editable even when the first ``get_settings_privacy_status``
+        // read failed; otherwise a failed status load would permanently
+        // lock the user out of backup / import / clear-local-data. They
+        // are only disabled while a Settings operation is in flight (so
+        // concurrent ops cannot race) or when explicitly requested by the
+        // caller. The capture toggle continues to depend on
+        // ``settingsLoaded`` because it needs the current state to render.
+        var backupDisabled = !!disabled;
         var exportBtn = document.getElementById("settings-backup-export-btn");
         var manifestBtn = document.getElementById("settings-backup-manifest-btn");
         var passInput = document.getElementById("settings-backup-passphrase");
@@ -72,10 +80,16 @@
     App.setSettingsBackupControlsDisabled = setSettingsBackupControlsDisabled;
 
     function setSettingsDangerControlsDisabled(disabled) {
-        // Phase 6D: clear-all controls (confirm input + clear button). They
-        // stay disabled until the first successful status read and during
-        // any in-flight Settings op, mirroring the backup controls.
-        var dangerDisabled = disabled || !App.settingsLoaded;
+        // Phase 6D: clear-all controls (confirm input + clear button).
+        //
+        // Phase 6G: like the backup controls, these do NOT depend on
+        // ``App.settingsLoaded``. The clear-confirm input must remain
+        // editable even when the first status read failed; otherwise a
+        // failed status load would permanently block the danger-zone
+        // reset. They are only disabled while a Settings operation is in
+        // flight. The backend re-validates the confirmation literal, so
+        // allowing the input to be edited before status loads is safe.
+        var dangerDisabled = !!disabled;
         var clearConfirmInput = document.getElementById("settings-clear-confirm");
         var clearBtn = document.getElementById("settings-clear-local-data-btn");
         if (clearConfirmInput) clearConfirmInput.disabled = dangerDisabled;
@@ -641,6 +655,30 @@
     var FIRST_RUN_NOTICE_LOAD_ERROR = "加载隐私说明失败";
     var FIRST_RUN_NOTICE_ACCEPT_ERROR = "确认隐私说明失败";
 
+    // Phase 6G: JS-side fallback notice body. The backend
+    // ``get_first_run_notice_for_webview`` is fail-closed and returns the
+    // full notice text even when the accepted-state read fails; this JS
+    // fallback only triggers when the bridge call itself rejects (e.g.
+    // pywebview bridge error) so the user still sees the privacy notice
+    // body instead of an empty-notice error overlay. Keep this text in
+    // sync with ``PRIVACY_NOTICE_TEXT`` in ``worktrace/constants.py``.
+    var FIRST_RUN_NOTICE_FALLBACK_TEXT =
+        "WorkTrace 是本地活动追踪工具。\n\n" +
+        "- 数据仅保存在本机，不上传任何服务器。\n" +
+        "- 不截屏、不录屏、不记录窗口标题正文、不读取剪贴板正文。\n" +
+        "- 仅记录应用名、资源显示名、归属项目与时间区间。\n" +
+        "- 用户可随时清空本地数据。\n\n" +
+        "点击「我已了解」开始记录。";
+
+    function buildFirstRunNoticeFallback() {
+        return {
+            accepted: false,
+            title: "WorkTrace 隐私说明",
+            highlights: ["本地保存", "不截屏录屏", "不主动读正文", "用户可清空"],
+            notice_text: FIRST_RUN_NOTICE_FALLBACK_TEXT,
+        };
+    }
+
     function setFirstRunNoticeError(message) {
         var el = document.getElementById("first-run-notice-error");
         if (!el) return;
@@ -736,6 +774,12 @@
         // overlay; otherwise leave the overlay hidden. Failures display
         // the stable Chinese error inside the overlay and keep the gate
         // visible so the user is never silently bypassed.
+        //
+        // Phase 6G: on bridge-level failure the overlay is shown with a
+        // JS-side fallback notice body so the user always sees the
+        // privacy notice text. The backend is fail-closed and returns
+        // the full notice body even when the accepted-state read fails,
+        // so this fallback only triggers on bridge rejection.
         if (App.firstRunNoticeLoading || App.firstRunNoticeLoaded) return Promise.resolve();
         App.firstRunNoticeLoading = true;
         return App.callBridge("get_first_run_notice").then(function (result) {
@@ -743,10 +787,11 @@
             App.firstRunNoticeLoaded = true;
             var data = App.handleResult(result, function (msg) {
                 // Bridge already collapsed to a stable Chinese message.
-                // Force the gate open with the error so the user is not
-                // silently bypassed.
+                // Force the gate open with the fallback notice body so
+                // the user is not silently bypassed and still sees the
+                // privacy text.
                 App.firstRunNoticeRequired = true;
-                showFirstRunNotice({}, "gate");
+                showFirstRunNotice(buildFirstRunNoticeFallback(), "gate");
                 setFirstRunNoticeError(msg || FIRST_RUN_NOTICE_LOAD_ERROR);
             });
             if (!data) return;
@@ -762,11 +807,13 @@
             }
         }).catch(function () {
             // Never read .message; show stable Chinese error. Fail open
-            // the gate so the user is not silently bypassed.
+            // the gate so the user is not silently bypassed. Use the
+            // JS-side fallback notice body so the user still sees the
+            // privacy text instead of an empty overlay.
             App.firstRunNoticeLoading = false;
             App.firstRunNoticeLoaded = true;
             App.firstRunNoticeRequired = true;
-            showFirstRunNotice({}, "gate");
+            showFirstRunNotice(buildFirstRunNoticeFallback(), "gate");
             setFirstRunNoticeError(FIRST_RUN_NOTICE_LOAD_ERROR);
         });
     }
@@ -827,19 +874,26 @@
         // hidden, and closing does NOT write any setting or start the
         // collector. The notice text is held in JS memory only for the
         // duration of the display; no browser storage APIs are used.
+        //
+        // Phase 6G: on bridge-level failure the overlay is shown with a
+        // JS-side fallback notice body so the user always sees the
+        // privacy notice text instead of an empty overlay.
         App.callBridge("get_first_run_notice").then(function (result) {
             var data = App.handleResult(result, function (msg) {
                 // Bridge already collapsed to a stable Chinese message.
-                // Show the overlay in view mode with the error so the
-                // user can close it.
-                showFirstRunNotice({}, "view");
+                // Show the overlay in view mode with the fallback notice
+                // body so the user can still read the privacy text and
+                // close it.
+                showFirstRunNotice(buildFirstRunNoticeFallback(), "view");
                 setFirstRunNoticeError(msg || FIRST_RUN_NOTICE_LOAD_ERROR);
             });
             if (!data) return;
             showFirstRunNotice(data, "view");
         }).catch(function () {
-            // Never read .message; show stable Chinese error.
-            showFirstRunNotice({}, "view");
+            // Never read .message; show stable Chinese error. Use the
+            // JS-side fallback notice body so the user still sees the
+            // privacy text instead of an empty overlay.
+            showFirstRunNotice(buildFirstRunNoticeFallback(), "view");
             setFirstRunNoticeError(FIRST_RUN_NOTICE_LOAD_ERROR);
         });
     }

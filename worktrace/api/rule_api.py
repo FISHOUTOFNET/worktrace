@@ -32,7 +32,7 @@ from ._write_contract import (
     valid_int,
     valid_nonempty_str,
 )
-from ..services import folder_rule_service, rule_service
+from ..services import folder_rule_service, project_service, rule_service
 
 
 class ProjectRuleWriteError(Exception):
@@ -857,11 +857,118 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict[str, Any]:
     return folder_rule_service.backfill_folder_rule(rule_id, mode=mode)
 
 
+# --- Phase 6G: Excluded-rule creation facades ----------------------------
+
+
+def create_excluded_keyword_rule_for_webview(keyword: Any) -> dict[str, Any]:
+    """Create one new keyword rule on the special ``排除规则`` project.
+
+    Phase 6G narrow WebView-facing facade. The normal
+    ``create_project_keyword_rule`` facade rejects the ``排除规则``
+    project because it is created with ``enabled = 0`` and is therefore
+    not a rule target. This dedicated facade provides the only legitimate
+    way to create an exclusion keyword rule: it internally resolves the
+    ``EXCLUDED_PROJECT`` project_id via ``get_or_create_excluded_project``
+    and does NOT accept any ``project_id`` from the caller, so the
+    frontend cannot inject an arbitrary project_id.
+
+    The keyword is trimmed before creation and an exact duplicate (same
+    excluded ``project_id`` + same trimmed keyword) is rejected as
+    ``duplicate_rule``.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``keyword`` is not a real non-empty ``str``
+      after trim.
+    - ``duplicate_rule`` — an existing keyword rule already binds the same
+      keyword to the excluded project.
+    - ``operation_failed`` — any unexpected service failure.
+    """
+    trimmed = valid_nonempty_str(keyword)
+    if trimmed is None:
+        return fail_payload(ERROR_INVALID_INPUT)
+    try:
+        excluded_project_id = int(project_service.get_or_create_excluded_project())
+        for row in rule_service.list_rules(include_system=True):
+            if (
+                int(row.get("project_id") or 0) == excluded_project_id
+                and str(row.get("keyword") or "") == trimmed
+            ):
+                return fail_payload(ERROR_DUPLICATE_RULE)
+        rule_id = rule_service.create_rule(trimmed, excluded_project_id)
+        return ok_payload(
+            rule={
+                "kind": "keyword",
+                "id": int(rule_id),
+                "project_id": excluded_project_id,
+                "keyword": trimmed,
+                "enabled": True,
+            }
+        )
+    except ProjectRuleWriteError as exc:
+        return fail_payload(exc.code)
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
+def create_excluded_folder_rule_for_webview(
+    folder_path: Any, recursive: Any
+) -> dict[str, Any]:
+    """Create one new folder rule on the special ``排除规则`` project.
+
+    Phase 6G narrow WebView-facing facade. The normal
+    ``create_project_folder_rule`` facade rejects the ``排除规则``
+    project because it is created with ``enabled = 0`` and is therefore
+    not a rule target. This dedicated facade provides the only legitimate
+    way to create an exclusion folder rule: it internally resolves the
+    ``EXCLUDED_PROJECT`` project_id via ``get_or_create_excluded_project``
+    and does NOT accept any ``project_id`` from the caller, so the
+    frontend cannot inject an arbitrary project_id.
+
+    The existing ``folder_rule_service.create_or_update_folder_rule``
+    write path uses ``INSERT ... ON CONFLICT(normalized_folder_key) DO
+    UPDATE`` and so has create-or-update semantics: if a folder rule with
+    the same normalized folder key already exists, it is updated in place.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``folder_path`` is not a real non-empty ``str``
+      after trim, or ``recursive`` is not a real ``bool``.
+    - ``operation_failed`` — any unexpected service failure.
+    """
+    trimmed = valid_nonempty_str(folder_path)
+    if trimmed is None:
+        return fail_payload(ERROR_INVALID_INPUT)
+    if not valid_bool(recursive):
+        return fail_payload(ERROR_INVALID_INPUT)
+    try:
+        excluded_project_id = int(project_service.get_or_create_excluded_project())
+        rule_id = folder_rule_service.create_or_update_folder_rule(
+            trimmed, excluded_project_id, recursive=recursive
+        )
+        return ok_payload(
+            rule={
+                "kind": "folder",
+                "id": int(rule_id),
+                "project_id": excluded_project_id,
+                "folder_path": trimmed,
+                "recursive": bool(recursive),
+                "enabled": True,
+            }
+        )
+    except ProjectRuleWriteError as exc:
+        return fail_payload(exc.code)
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
 __all__ = [
     "automatic_rules_status",
     "backfill_folder_rule",
     "backfill_project_rule",
     "backfill_project_rules_batch",
+    "create_excluded_folder_rule_for_webview",
+    "create_excluded_keyword_rule_for_webview",
     "create_keyword_rule",
     "create_or_update_folder_rule",
     "create_project_folder_rule",

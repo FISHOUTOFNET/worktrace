@@ -625,3 +625,105 @@ def test_create_keyword_rule_does_not_toggle_existing_rules(temp_db):
             (existing_rule,),
         ).fetchone()["enabled"]
     assert after == 0
+
+
+# --- Phase 6G: excluded-keyword rule creation facade -------------------
+
+
+def test_create_excluded_keyword_rule_for_webview_success(temp_db):
+    # Phase 6G regression lock: the dedicated facade creates a keyword rule
+    # on the special ``排除规则`` project, trims the keyword, and returns the
+    # narrow created-rule summary. It does NOT accept a project_id from the
+    # caller — the project is resolved internally.
+    result = rule_api.create_excluded_keyword_rule_for_webview("  排除词  ")
+
+    assert result["ok"] is True
+    rule = result["rule"]
+    assert rule["kind"] == "keyword"
+    assert isinstance(rule["id"], int)
+    assert rule["id"] > 0
+    excluded_id = project_service.get_or_create_excluded_project()
+    assert rule["project_id"] == excluded_id
+    assert rule["keyword"] == "排除词"
+    assert rule["enabled"] is True
+
+    row = _keyword_rule_row(rule["id"])
+    assert row["project_id"] == excluded_id
+    assert row["pattern"] == "排除词"
+    assert row["enabled"] == 1
+    # The excluded project is a system project: enabled=0, created_by=system.
+    with get_connection() as conn:
+        proj = conn.execute(
+            "SELECT name, enabled, created_by FROM project WHERE id = ?",
+            (excluded_id,),
+        ).fetchone()
+    assert proj["name"] == EXCLUDED_PROJECT
+    assert proj["enabled"] == 0
+    assert proj["created_by"] == "system"
+    json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "bad_keyword", [None, True, False, 1, 1.5, [], {}, b"kw", "", "   ", "\t\n"]
+)
+def test_create_excluded_keyword_rule_for_webview_rejects_invalid_input(
+    temp_db, bad_keyword
+):
+    # Phase 6G regression lock: non-str / whitespace-only keyword collapses
+    # to ``invalid_input`` and creates no rule row.
+    before = _counts()
+    result = rule_api.create_excluded_keyword_rule_for_webview(bad_keyword)
+    after = _counts()
+
+    assert result == {"ok": False, "error": "invalid_input"}
+    assert after["keyword"] == before["keyword"]
+
+
+def test_create_excluded_keyword_rule_for_webview_rejects_duplicate(temp_db):
+    # Phase 6G regression lock: an exact duplicate (same excluded project +
+    # same trimmed keyword) is rejected as ``duplicate_rule`` and creates no
+    # second row.
+    first = rule_api.create_excluded_keyword_rule_for_webview("敏感词")
+    assert first["ok"] is True
+
+    second = rule_api.create_excluded_keyword_rule_for_webview("  敏感词  ")
+
+    assert second == {"ok": False, "error": "duplicate_rule"}
+    with get_connection() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS c FROM project_rule WHERE pattern = ?",
+            ("敏感词",),
+        ).fetchone()["c"]
+    assert count == 1
+
+
+def test_create_excluded_keyword_rule_for_webview_exception_collapses(
+    temp_db, monkeypatch
+):
+    # Phase 6G regression lock: an unexpected service failure collapses to
+    # ``operation_failed`` without surfacing the exception text, traceback,
+    # SQL, or sensitive metadata.
+    def _raise(*args, **kwargs):
+        raise RuntimeError(
+            "boom SELECT * FROM activity_log traceback window_title "
+            "clipboard note C:\\Secret"
+        )
+
+    monkeypatch.setattr(rule_service, "create_rule", _raise)
+
+    result = rule_api.create_excluded_keyword_rule_for_webview("kw")
+
+    assert result == {"ok": False, "error": "operation_failed"}
+    lowered = repr(result).lower()
+    for forbidden in (
+        "traceback",
+        "sqlite",
+        "select ",
+        "window_title",
+        "clipboard",
+        "note",
+        "secret",
+        "c:\\",
+    ):
+        assert forbidden not in lowered, forbidden
+    json.dumps(result, ensure_ascii=False)

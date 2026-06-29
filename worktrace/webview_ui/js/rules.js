@@ -114,6 +114,11 @@
         App.bindProjectRuleKeywordEditEvents();
         App.bindProjectLifecycleEvents();
         App.bindProjectRuleImpactEvents();
+        // Phase 6G: bind the excluded-rule create event delegation. The
+        // bind helper is idempotent (guarded by data-*-bound attrs) so
+        // calling it on every render is safe.
+        App.bindExcludedKeywordRuleEvents();
+        App.bindExcludedFolderRuleEvents();
         // Phase 5I: bind the batch event delegation (checkbox change on
         // #rules-list, click on #rules-batch-toolbar / #rules-batch-panel).
         // The bind helpers are idempotent (guarded by data-*-bound attrs)
@@ -149,6 +154,11 @@
         App.bindProjectRuleKeywordEditEvents();
         App.bindProjectLifecycleEvents();
         App.bindProjectRuleImpactEvents();
+        // Phase 6G: re-bind excluded-rule create event delegation. The
+        // bind helper is idempotent (guarded by data-*-bound attrs) so
+        // calling it on every re-render is safe.
+        App.bindExcludedKeywordRuleEvents();
+        App.bindExcludedFolderRuleEvents();
         // Phase 5I: re-bind batch event delegation + refresh the toolbar so
         // the per-row checkbox state and selected count stay in sync after
         // an inline re-render (e.g. toggling the inline folder edit form).

@@ -4904,3 +4904,130 @@ def test_project_rules_batch_handlers_have_no_storage_or_network():
         assert token not in source, (
             "Project Rules JS must not use storage / network API: " + token
         )
+
+
+# --- Phase 6G: excluded-rule creation static contract ------------------
+
+
+def test_rules_render_js_defines_excluded_rule_create_form():
+    # Phase 6G regression lock: rules_render.js must define
+    # ``renderExcludedRuleCreateForm``, attach it to App, and render the
+    # two sub-sections (keyword + folder) with the expected input classes.
+    source = read_js("rules_render.js")
+    assert "function renderExcludedRuleCreateForm" in source, (
+        "rules_render.js must define renderExcludedRuleCreateForm"
+    )
+    assert "App.renderExcludedRuleCreateForm = renderExcludedRuleCreateForm" in source, (
+        "rules_render.js must attach renderExcludedRuleCreateForm to App"
+    )
+    for cls in (
+        "rules-excluded-keyword-input",
+        "rules-excluded-keyword-submit",
+        "rules-excluded-folder-input",
+        "rules-excluded-folder-recursive",
+        "rules-excluded-folder-submit",
+    ):
+        assert cls in source, (
+            "renderExcludedRuleCreateForm must render expected class: " + cls
+        )
+
+
+def test_rules_render_js_renders_excluded_form_only_for_excluded_project():
+    # Phase 6G regression lock: the excluded create form must only be
+    # rendered when the project is the ``排除规则`` system project, so it
+    # never appears on a normal user project card.
+    source = read_js("rules_render.js")
+    assert "isExcluded ? renderExcludedRuleCreateForm()" in source, (
+        "renderProjectRuleProject must call renderExcludedRuleCreateForm() "
+        "only when isExcluded is true"
+    )
+
+
+def test_rules_keyword_actions_js_binds_and_handles_excluded_keyword_create():
+    # Phase 6G regression lock: rules_keyword_actions.js must define and
+    # attach the excluded keyword create bind/handle helpers, guard binding
+    # with a data attribute, and call the dedicated bridge method WITHOUT
+    # passing a project_id.
+    source = read_js("rules_keyword_actions.js")
+    for name in (
+        "bindExcludedKeywordRuleEvents",
+        "handleExcludedKeywordCreateSubmit",
+    ):
+        assert ("function " + name) in source, (
+            f"rules_keyword_actions.js must define {name}"
+        )
+        assert ("App." + name + " = " + name) in source, (
+            f"rules_keyword_actions.js must attach {name} to App"
+        )
+    # Event-delegated binding guard.
+    assert 'data-excluded-keyword-bound' in source, (
+        "bindExcludedKeywordRuleEvents must guard re-binding via "
+        "data-excluded-keyword-bound"
+    )
+    body = func_body(source, "handleExcludedKeywordCreateSubmit")
+    # The bridge call must pass only the keyword (no project_id argument).
+    assert 'App.callBridge("create_excluded_keyword_rule", keyword)' in body, (
+        "handleExcludedKeywordCreateSubmit must call "
+        'App.callBridge("create_excluded_keyword_rule", keyword) without '
+        "a project_id argument"
+    )
+
+
+def test_rules_folder_actions_js_binds_and_handles_excluded_folder_create():
+    # Phase 6G regression lock: rules_folder_actions.js must define and
+    # attach the excluded folder create bind/handle helpers, guard binding
+    # with a data attribute, and call the dedicated bridge method WITHOUT
+    # passing a project_id.
+    source = read_js("rules_folder_actions.js")
+    for name in (
+        "bindExcludedFolderRuleEvents",
+        "handleExcludedFolderCreateSubmit",
+    ):
+        assert ("function " + name) in source, (
+            f"rules_folder_actions.js must define {name}"
+        )
+        assert ("App." + name + " = " + name) in source, (
+            f"rules_folder_actions.js must attach {name} to App"
+        )
+    assert 'data-excluded-folder-bound' in source, (
+        "bindExcludedFolderRuleEvents must guard re-binding via "
+        "data-excluded-folder-bound"
+    )
+    body = func_body(source, "handleExcludedFolderCreateSubmit")
+    # The bridge call must pass folderPath + recursive only (no project_id
+    # argument).
+    assert 'App.callBridge("create_excluded_folder_rule", folderPath, recursive)' in body, (
+        "handleExcludedFolderCreateSubmit must call "
+        'App.callBridge("create_excluded_folder_rule", folderPath, recursive) '
+        "without a project_id argument"
+    )
+
+
+def test_excluded_rule_js_no_storage_network_or_external_resources():
+    # Phase 6G regression lock: the excluded-rule creation JS must not use
+    # browser storage, network APIs, or external resources.
+    for name in (
+        "rules_render.js",
+        "rules_keyword_actions.js",
+        "rules_folder_actions.js",
+    ):
+        source = read_js(name)
+        for forbidden in (
+            "localStorage",
+            "sessionStorage",
+            "document.cookie",
+            "fetch(",
+            "XMLHttpRequest",
+            "navigator.sendBeacon",
+            "WebSocket",
+            "EventSource",
+        ):
+            assert forbidden not in source, (
+                f"{name} must not use storage / network API: {forbidden}"
+            )
+        assert not re.search(r"https?://", source, re.IGNORECASE), (
+            f"{name} must not reference external URLs"
+        )
+        assert not re.search(r"cdn", source, re.IGNORECASE), (
+            f"{name} must not reference CDN"
+        )

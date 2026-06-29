@@ -50,8 +50,17 @@ class AppRuntime:
 
         runtime = AppRuntime(paths)
         runtime.initialize()
-        runtime.start_collector()   # may be called later, e.g. after privacy gate
-        runtime.shutdown()          # join threads, close open record, release lock
+        # Privacy gate: only after first-run notice accepted:
+        runtime.start_background_workers()  # folder index worker (local path probing)
+        runtime.start_collector()           # collector thread
+        runtime.shutdown()                  # join threads, close open record, release lock
+
+    Both ``start_background_workers`` and ``start_collector`` are gated by
+    the first-run privacy notice in ``webview_main.main`` /
+    ``bridge.toggle_pause`` / ``bridge.accept_first_run_notice``. The
+    folder index worker probes local ``os.path.exists(file_path)`` for
+    ready indexes, which is privacy-relevant local path probing; it must
+    not start before the user has accepted the privacy notice.
     """
 
     def __init__(self, paths: "_Paths") -> None:
@@ -64,10 +73,16 @@ class AppRuntime:
         self._shutdown = False
 
     def initialize(self) -> None:
-        """Initialize the database, acquire single-instance lock, recover
-        unclosed records, and start the folder-index worker.
+        """Initialize the database, acquire single-instance lock, and recover
+        unclosed records.
 
-        Mirrors the pre-refactor startup order from ``main.py``.
+        Phase 6G privacy gate: ``initialize`` only does non-collection
+        startup work (DB init, single-instance lock, recovery). It must
+        NOT start the folder index worker because the worker probes
+        local ``os.path.exists(file_path)`` paths for ready indexes,
+        which is privacy-relevant local path probing. The worker is
+        started separately via ``start_background_workers`` only after
+        the first-run privacy notice has been accepted.
         """
         db.initialize_database(self.paths.db_path)
 
@@ -78,8 +93,32 @@ class AppRuntime:
             )
 
         recovery_service.recover_unclosed_records()
-        self._index_thread = folder_index_service.start_folder_index_worker(self.stop_event)
         self._initialized = True
+
+    def start_background_workers(self) -> bool:
+        """Start the folder index worker once. Safe to call multiple times.
+
+        Returns ``True`` when this call actually started the worker,
+        ``False`` when the worker was already running or this instance
+        does not own the collector (no-op). Idempotent: repeated calls
+        do not spawn duplicate workers.
+
+        Phase 6G privacy gate: callers (``webview_main.main``,
+        ``bridge.toggle_pause``, ``bridge.accept_first_run_notice``)
+        must only invoke this after the first-run privacy notice has
+        been accepted. The worker's ``validate_ready_indexes`` startup
+        pass probes ``os.path.exists(file_path)`` for ready indexes,
+        which is privacy-relevant local path probing.
+        """
+        if not self.owns_collector:
+            return False
+        if self._index_thread is not None:
+            return False
+        thread = folder_index_service.start_folder_index_worker(self.stop_event)
+        if thread is None:
+            return False
+        self._index_thread = thread
+        return True
 
     def start_collector(self) -> None:
         """Start the collector thread once. Safe to call multiple times."""

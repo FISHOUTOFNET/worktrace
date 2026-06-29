@@ -797,13 +797,15 @@ def test_k1_does_not_trigger_project_rules_suite(runner):
 def test_webview_main_py_selects_phase6e_startup_tests(runner):
     """Phase 6E: webview_main.py carries the first-run notice startup gate,
     so it must select the K2 target set (entry + startup imports + boundary
-    + settings privacy status + affected runner self-tests)."""
+    + settings privacy status + affected runner self-tests). Phase 6H adds
+    the app-runtime privacy gate test to K2 as well."""
     sel = runner.select_targets(["worktrace/webview_main.py"])
     for expected in (
         "tests/test_webview_phase1_entry.py",
         "tests/test_startup_imports.py",
         "tests/test_ui_backend_boundary.py",
         "tests/test_settings_privacy_status.py",
+        "tests/test_app_runtime_privacy_gate.py",
         "tests/test_run_affected_tests.py",
     ):
         assert expected in sel.pytest_targets, (
@@ -822,13 +824,15 @@ def test_webview_main_py_adds_import_smoke(runner):
 
 def test_main_py_selects_phase6e_startup_tests(runner):
     """Phase 6E: worktrace/main.py is a K2 trigger because it can alter the
-    process entry point that decides whether the WebView main loop starts."""
+    process entry point that decides whether the WebView main loop starts.
+    Phase 6H adds the app-runtime privacy gate test to K2."""
     sel = runner.select_targets(["worktrace/main.py"])
     for expected in (
         "tests/test_webview_phase1_entry.py",
         "tests/test_startup_imports.py",
         "tests/test_ui_backend_boundary.py",
         "tests/test_settings_privacy_status.py",
+        "tests/test_app_runtime_privacy_gate.py",
         "tests/test_run_affected_tests.py",
     ):
         assert expected in sel.pytest_targets, (
@@ -839,18 +843,42 @@ def test_main_py_selects_phase6e_startup_tests(runner):
 def test_app_api_py_selects_phase6e_startup_tests(runner):
     """Phase 6E: app_api.py carries start_collector / stop_collector, which
     the startup gate and toggle_pause guard depend on; it must select the
-    K2 target set so boundary and entry tests run."""
+    K2 target set so boundary and entry tests run. Phase 6H adds the
+    app-runtime privacy gate test to K2."""
     sel = runner.select_targets(["worktrace/api/app_api.py"])
     for expected in (
         "tests/test_webview_phase1_entry.py",
         "tests/test_startup_imports.py",
         "tests/test_ui_backend_boundary.py",
         "tests/test_settings_privacy_status.py",
+        "tests/test_app_runtime_privacy_gate.py",
         "tests/test_run_affected_tests.py",
     ):
         assert expected in sel.pytest_targets, (
             f"app_api.py must select: {expected}"
         )
+
+
+def test_app_runtime_py_selects_phase6h_privacy_gate_tests(runner):
+    """Phase 6H: app_runtime.py carries the split start_background_workers()
+    method that the first-run notice privacy gate depends on. It must select
+    the K2 target set so the app-runtime privacy gate test, boundary, and
+    entry tests all run."""
+    sel = runner.select_targets(["worktrace/runtime/app_runtime.py"])
+    for expected in (
+        "tests/test_webview_phase1_entry.py",
+        "tests/test_startup_imports.py",
+        "tests/test_ui_backend_boundary.py",
+        "tests/test_settings_privacy_status.py",
+        "tests/test_app_runtime_privacy_gate.py",
+        "tests/test_run_affected_tests.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"app_runtime.py must select: {expected}"
+        )
+    assert any(
+        "import worktrace.webview_main" in " ".join(s) for s in sel.smoke_commands
+    )
 
 
 def test_k2_does_not_trigger_project_rules_suite(runner):

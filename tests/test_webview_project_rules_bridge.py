@@ -5355,3 +5355,232 @@ def test_bridge_re_exports_5i_batch_message_maps_for_test_compatibility():
     assert _PROJECT_RULE_BATCH_TOGGLE_MESSAGES["not_found"] == "规则不存在"
     assert _PROJECT_RULE_BATCH_TOGGLE_MESSAGES["too_many_rules"] == "选择的规则过多"
     assert _PROJECT_RULE_BATCH_TOGGLE_MESSAGES["operation_failed"] == "批量操作失败"
+
+
+# --- Phase 6G: excluded-rule creation bridge regression locks ----------
+
+
+def test_create_excluded_keyword_rule_success_returns_narrow_payload(monkeypatch):
+    # Phase 6G regression lock: the success payload is the narrow created-rule
+    # summary only (``kind`` / ``id`` / ``project_id`` / ``keyword`` /
+    # ``enabled``). Extra API keys must be stripped. The keyword is trimmed
+    # before being forwarded. The payload must be JSON-serializable and must
+    # not surface a full project list.
+    captured = {}
+
+    def _fake(keyword):
+        captured["keyword"] = keyword
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "keyword",
+                "id": 777,
+                "project_id": 99,
+                "keyword": keyword,
+                "enabled": True,
+                "internal_field": "should not leak",
+            },
+        }
+
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_excluded_keyword_rule_for_webview",
+        _fake,
+    )
+
+    result = WebViewBridge().create_excluded_keyword_rule("  排除词  ")
+
+    assert captured["keyword"] == "排除词"
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "keyword",
+            "id": 777,
+            "project_id": 99,
+            "keyword": "排除词",
+            "enabled": True,
+        },
+    }
+    assert "projects" not in result
+    assert "rules" not in result
+    assert "internal_field" not in result["rule"]
+    json.dumps(result, ensure_ascii=False)
+    _assert_no_sensitive_tokens(result)
+
+
+@pytest.mark.parametrize(
+    "bad_keyword",
+    [None, True, False, 1, 1.0, 2.5, [], {}, b"kw", "", "   ", "\t", "\n", "  \t  "],
+)
+def test_create_excluded_keyword_rule_rejects_invalid_keyword_does_not_call_api(
+    monkeypatch, bad_keyword
+):
+    # Phase 6G regression lock: non-str / whitespace-only keyword collapses
+    # to ``操作无效`` at the bridge layer before any API call.
+    called = {"count": 0}
+
+    def _spy(keyword):
+        called["count"] += 1
+        return {"ok": True, "rule": {}}
+
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_excluded_keyword_rule_for_webview",
+        _spy,
+    )
+
+    result = WebViewBridge().create_excluded_keyword_rule(bad_keyword)
+
+    assert result == {"ok": False, "error": "操作无效"}
+    assert called["count"] == 0
+
+
+def test_create_excluded_keyword_rule_maps_error_codes_to_chinese(monkeypatch):
+    # Phase 6G regression lock: stable API error codes map to user-facing
+    # Chinese messages; unknown codes collapse to the generic create-failure
+    # message so internal details never surface.
+    cases = [
+        ("invalid_input", "操作无效"),
+        ("duplicate_rule", "关键词规则已存在"),
+        ("operation_failed", "新增排除关键词规则失败"),
+        ("some_new_unknown_code", "新增排除关键词规则失败"),
+    ]
+    for code, expected in cases:
+        monkeypatch.setattr(
+            bridge_module.rule_api,
+            "create_excluded_keyword_rule_for_webview",
+            lambda keyword, _code=code: {
+                "ok": False,
+                "error": _code,
+                "internal_field": "should not leak",
+            },
+        )
+        result = WebViewBridge().create_excluded_keyword_rule("kw")
+        assert result == {"ok": False, "error": expected}, code
+        _assert_no_sensitive_tokens(result)
+
+
+def test_create_excluded_keyword_rule_exception_collapses(monkeypatch):
+    # Phase 6G regression lock: an unexpected API exception must collapse to
+    # the generic create-failure message without surfacing the exception text.
+    def _raise(*args, **kwargs):
+        raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
+
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_excluded_keyword_rule_for_webview",
+        _raise,
+    )
+
+    result = WebViewBridge().create_excluded_keyword_rule("kw")
+
+    assert result == {"ok": False, "error": "新增排除关键词规则失败"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_create_excluded_folder_rule_success_returns_narrow_payload(monkeypatch):
+    # Phase 6G regression lock: the success payload is the narrow created-rule
+    # summary only. Extra API keys must be stripped. The folder_path is
+    # trimmed before being forwarded and recursive is passed through as a
+    # real bool.
+    captured = {}
+
+    def _fake(folder_path, recursive):
+        captured["folder_path"] = folder_path
+        captured["recursive"] = recursive
+        return {
+            "ok": True,
+            "rule": {
+                "kind": "folder",
+                "id": 888,
+                "project_id": 99,
+                "folder_path": folder_path,
+                "recursive": recursive,
+                "enabled": True,
+                "internal_field": "should not leak",
+            },
+        }
+
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_excluded_folder_rule_for_webview",
+        _fake,
+    )
+
+    result = WebViewBridge().create_excluded_folder_rule("  D:\\Work\\Excluded  ", False)
+
+    assert captured["folder_path"] == r"D:\Work\Excluded"
+    assert captured["recursive"] is False
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "folder",
+            "id": 888,
+            "project_id": 99,
+            "folder_path": r"D:\Work\Excluded",
+            "recursive": False,
+            "enabled": True,
+        },
+    }
+    assert "internal_field" not in result["rule"]
+    json.dumps(result, ensure_ascii=False)
+    _assert_no_sensitive_tokens(result)
+
+
+@pytest.mark.parametrize(
+    "bad_path,bad_recursive",
+    [
+        (None, True),
+        (True, True),
+        (False, True),
+        (1, True),
+        (1.5, True),
+        ([], True),
+        ({}, True),
+        (b"D:\\X", True),
+        ("", True),
+        ("   ", True),
+        ("\t\n", True),
+        ("D:\\Work", None),
+        ("D:\\Work", 1),
+        ("D:\\Work", "yes"),
+        ("D:\\Work", []),
+        ("D:\\Work", {}),
+    ],
+)
+def test_create_excluded_folder_rule_rejects_invalid_input_does_not_call_api(
+    monkeypatch, bad_path, bad_recursive
+):
+    # Phase 6G regression lock: non-str / whitespace-only folder_path or
+    # non-bool recursive collapses to ``操作无效`` before any API call.
+    called = {"count": 0}
+
+    def _spy(folder_path, recursive):
+        called["count"] += 1
+        return {"ok": True, "rule": {}}
+
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "create_excluded_folder_rule_for_webview",
+        _spy,
+    )
+
+    result = WebViewBridge().create_excluded_folder_rule(bad_path, bad_recursive)
+
+    assert result == {"ok": False, "error": "操作无效"}
+    assert called["count"] == 0
+
+
+def test_excluded_rule_bridge_methods_signature_has_no_project_id():
+    # Phase 6G regression lock: both excluded-rule bridge methods must NOT
+    # accept a ``project_id`` parameter — the API pins it to EXCLUDED_PROJECT
+    # internally so the frontend cannot inject an arbitrary project_id. The
+    # folder method must also collapse an unexpected API exception to the
+    # generic create-failure message.
+    import inspect
+
+    kw_sig = inspect.signature(WebViewBridge.create_excluded_keyword_rule)
+    assert list(kw_sig.parameters.keys()) == ["self", "keyword"]
+
+    folder_sig = inspect.signature(WebViewBridge.create_excluded_folder_rule)
+    assert list(folder_sig.parameters.keys()) == ["self", "folder_path", "recursive"]

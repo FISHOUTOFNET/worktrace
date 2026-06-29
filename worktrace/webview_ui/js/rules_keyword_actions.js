@@ -368,4 +368,58 @@
     }
     App.clearKeywordCreateStatus = clearKeywordCreateStatus;
 
+    // --- Phase 6G: excluded keyword rule creation ----------------------
+
+    function bindExcludedKeywordRuleEvents() {
+        // Phase 6G: event-delegated binding for the excluded keyword
+        // create submit button. Bound once per page lifecycle via the
+        // data attribute guard, re-using the same #rules-list container
+        // as the other rule event delegations.
+        var list = document.getElementById("rules-list");
+        if (!list || list.getAttribute("data-excluded-keyword-bound") === "1") return;
+        list.setAttribute("data-excluded-keyword-bound", "1");
+        list.addEventListener("click", function (event) {
+            var button = event.target && event.target.closest
+                ? event.target.closest("button.rules-excluded-keyword-submit")
+                : null;
+            if (!button) return;
+            handleExcludedKeywordCreateSubmit();
+        });
+    }
+    App.bindExcludedKeywordRuleEvents = bindExcludedKeywordRuleEvents;
+
+    function handleExcludedKeywordCreateSubmit() {
+        // Phase 6G: validate the excluded keyword locally, then call the
+        // dedicated ``create_excluded_keyword_rule`` bridge method. This
+        // method does NOT pass a project_id — the API pins it to
+        // EXCLUDED_PROJECT internally. On success the keyword input is
+        // cleared and the Project Rules list is refreshed; on failure the
+        // keyword input is preserved so the user can edit and retry.
+        if (App.rulesCreatingKeyword) return;
+        var input = document.querySelector(".rules-excluded-keyword-input");
+        if (!input) return;
+        var keyword = (input.value || "").trim();
+        if (!keyword) {
+            App.showRulesError("请输入关键词");
+            return;
+        }
+        App.setKeywordCreateCreating(true);
+        App.callBridge("create_excluded_keyword_rule", keyword).then(function (result) {
+            if (result && result.ok === false) {
+                App.showRulesError(result.error || "新增排除关键词规则失败");
+                return;
+            }
+            input.value = "";
+            App.clearRulesError();
+            return App.loadProjectRules().then(function () {
+                App.showRulesError("排除关键词规则已新增");
+            });
+        }).catch(function () {
+            App.showRulesError("新增排除关键词规则失败");
+        }).then(function () {
+            App.setKeywordCreateCreating(false);
+        });
+    }
+    App.handleExcludedKeywordCreateSubmit = handleExcludedKeywordCreateSubmit;
+
 })();

@@ -1221,9 +1221,11 @@ def test_init_js_calls_load_first_run_notice_in_init_6e() -> None:
     # block above the call also mentions the name.
     load_pos = body.find("App.loadFirstRunNotice()")
     # Find the standalone refreshAll() call (not the startAutoRefresh()
-    # call, not comment text). Use the newline-prefixed pattern to
-    # ensure we match the call statement, not a comment mention.
-    refresh_pos = body.find("\n        refreshAll();")
+    # call, not comment text). Phase 6G moved refreshAll() inside a
+    # .then(...) callback, so the indentation changed from 8 spaces to
+    # 12 spaces. Match ``refreshAll();`` (with parens + semicolon) which
+    # only appears in actual call statements, never in comment text.
+    refresh_pos = body.find("refreshAll();")
     assert load_pos != -1 and refresh_pos != -1, (
         "init() must call both loadFirstRunNotice() and refreshAll()"
     )
@@ -1276,3 +1278,155 @@ def test_first_run_notice_resources_no_external_fonts_or_cdn_6e() -> None:
             assert forbidden not in lowered, (
                 filename + " must not reference external resource: " + forbidden
             )
+
+
+# --- Phase 6G: Settings controls not dependent on settingsLoaded --------
+
+
+def test_settings_js_backup_controls_not_dependent_on_settingsLoaded() -> None:
+    """Phase 6G: ``setSettingsBackupControlsDisabled`` must compute the
+    disabled state based ONLY on the ``disabled`` parameter, NOT on
+    ``App.settingsLoaded``. This ensures a failed first status load does
+    not permanently lock the user out of backup / import / clear controls.
+    The backup passphrase / export / manifest / import inputs must remain
+    editable even when the first ``get_settings_privacy_status`` read
+    failed so the user can still perform backup operations."""
+    source = read_js("settings.js")
+    pos = source.find("function setSettingsBackupControlsDisabled")
+    assert pos != -1
+    # Slice to the next sibling function so the body covers the whole
+    # function implementation.
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 1500]
+    # Strip // line comments to avoid false positives from comments that
+    # explain WHY settingsLoaded is not used.
+    cleaned_lines = []
+    for line in body.split("\n"):
+        idx = line.find("//")
+        if idx != -1:
+            line = line[:idx]
+        cleaned_lines.append(line)
+    cleaned = "\n".join(cleaned_lines)
+    # The backup-disabled computation must NOT reference settingsLoaded.
+    assert "settingsLoaded" not in cleaned, (
+        "setSettingsBackupControlsDisabled must not reference "
+        "App.settingsLoaded; backup controls depend only on the disabled "
+        "parameter (operation in progress)"
+    )
+    # The function should compute backupDisabled from the disabled param.
+    assert "var backupDisabled = !!disabled;" in body
+
+
+def test_settings_js_danger_controls_not_dependent_on_settingsLoaded() -> None:
+    """Phase 6G: ``setSettingsDangerControlsDisabled`` must compute the
+    disabled state based ONLY on the ``disabled`` parameter, NOT on
+    ``App.settingsLoaded``. The clear-confirm input must remain editable
+    even when the first status read failed; the backend re-validates the
+    confirmation literal, so allowing input before status loads is safe."""
+    source = read_js("settings.js")
+    pos = source.find("function setSettingsDangerControlsDisabled")
+    assert pos != -1
+    # Slice to the next sibling function.
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 1200]
+    # Strip // line comments to avoid false positives from comments that
+    # explain WHY settingsLoaded is not used.
+    cleaned_lines = []
+    for line in body.split("\n"):
+        idx = line.find("//")
+        if idx != -1:
+            line = line[:idx]
+        cleaned_lines.append(line)
+    cleaned = "\n".join(cleaned_lines)
+    # The danger-disabled computation must NOT reference settingsLoaded.
+    assert "settingsLoaded" not in cleaned, (
+        "setSettingsDangerControlsDisabled must not reference "
+        "App.settingsLoaded; danger controls depend only on the disabled "
+        "parameter (operation in progress)"
+    )
+    # The function should compute dangerDisabled from the disabled param.
+    assert "var dangerDisabled = !!disabled;" in body
+
+
+def test_settings_js_clipboard_toggle_still_uses_settingsLoaded() -> None:
+    """Phase 6G: the clipboard toggle control logic must STILL reference
+    ``settingsLoaded`` (this was intentionally kept). The clipboard toggle
+    needs the current state to render, so it stays disabled until the
+    first successful status load. This is the ONLY Settings control that
+    still depends on settingsLoaded after the Phase 6G fix."""
+    source = read_js("settings.js")
+    pos = source.find("function setSettingsControlsDisabled")
+    assert pos != -1
+    # Slice to the next sibling function.
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 1000]
+    # The clipboard toggle line must reference settingsLoaded.
+    assert "!App.settingsLoaded" in body, (
+        "setSettingsControlsDisabled must reference App.settingsLoaded "
+        "for the clipboard toggle (intentionally kept in Phase 6G)"
+    )
+
+
+# --- Phase 6G: First-run notice JS fallback ----------------------------
+
+
+def test_settings_js_has_first_run_notice_fallback_text() -> None:
+    """Phase 6G: settings.js must define ``FIRST_RUN_NOTICE_FALLBACK_TEXT``
+    and ``buildFirstRunNoticeFallback`` so the frontend can render the
+    privacy notice body even when the bridge call itself rejects (e.g.
+    pywebview bridge error). The backend is fail-closed and returns the
+    full notice body even when the accepted-state read fails; this JS
+    fallback only triggers on bridge-level rejection."""
+    source = read_js("settings.js")
+    assert "FIRST_RUN_NOTICE_FALLBACK_TEXT" in source, (
+        "settings.js must define FIRST_RUN_NOTICE_FALLBACK_TEXT for the "
+        "JS-side fallback notice body"
+    )
+    assert "function buildFirstRunNoticeFallback" in source, (
+        "settings.js must define function buildFirstRunNoticeFallback"
+    )
+
+
+# --- Phase 6G: init.js awaits loadFirstRunNotice before refresh ---------
+
+
+def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
+    """Phase 6G: ``init()`` must await ``App.loadFirstRunNotice()`` before
+    calling ``refreshAll`` / ``startAutoRefresh`` / ``startLocalTicker``.
+    The refresh calls must be inside a ``.then(...)`` callback (or after
+    an ``await``) on the loadFirstRunNotice promise, NOT called
+    synchronously before it. This eliminates the frontend race where
+    refreshAll could fire before the gate overlay was up."""
+    source = read_js("init.js")
+    # Match ``function init()`` exactly so we do not collide with
+    # ``function initNav`` or ``function initButtons``.
+    pos = source.find("function init()")
+    assert pos != -1, "init.js must define function init()"
+    # Slice to the next sibling function so we capture the whole init()
+    # body.
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 2500]
+    # loadFirstRunNotice must be called.
+    assert "App.loadFirstRunNotice()" in body, (
+        "init() must call App.loadFirstRunNotice()"
+    )
+    load_pos = body.find("App.loadFirstRunNotice()")
+    # The three refresh calls must all appear after loadFirstRunNotice in
+    # source order (not synchronously before it).
+    for call in ("refreshAll()", "startAutoRefresh()", "startLocalTicker()"):
+        call_pos = body.find(call)
+        assert call_pos != -1, "init() must call " + call
+        assert load_pos < call_pos, (
+            "init() must call loadFirstRunNotice before " + call
+        )
+    # The refresh calls must be inside a .then(...) callback on the
+    # loadFirstRunNotice promise, not at the top level of init. Verify
+    # the .then( appears between loadFirstRunNotice and the first
+    # refreshAll() call.
+    refresh_pos = body.find("refreshAll()")
+    between = body[load_pos:refresh_pos]
+    assert ".then(function () {" in between or ".then(function() {" in between, (
+        "init() must call refreshAll/startAutoRefresh/startLocalTicker "
+        "inside a .then(...) callback on the loadFirstRunNotice promise, "
+        "not at the top level of init"
+    )

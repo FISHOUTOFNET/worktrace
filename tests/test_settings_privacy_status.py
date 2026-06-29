@@ -1958,17 +1958,57 @@ def test_api_first_run_notice_payload_does_not_leak_sensitive_tokens(temp_db) ->
         assert token not in serialized, f"notice payload leaks: {token!r}"
 
 
-def test_api_first_run_notice_exception_collapses_to_generic_error(temp_db) -> None:
+def test_api_first_run_notice_fail_closed_on_accepted_read_exception(temp_db) -> None:
+    # Phase 6G fail-closed: when reading the accepted state raises, the
+    # facade must NOT return ``{"ok": False, "error": ...}`` with an
+    # empty notice body. Instead it returns ``ok=True`` with
+    # ``accepted=False`` (gate stays closed) AND the full fallback
+    # notice text so the frontend can still render the privacy notice.
     with patch.object(
         settings_api,
         "first_run_notice_accepted",
         side_effect=RuntimeError("SECRET " + SENSITIVE_PASSPHRASE + " sqlite3."),
     ):
         result = get_first_run_notice_for_webview()
-    assert result == {"ok": False, "error": "加载隐私说明失败"}
+    # Must NOT return the old empty-body error payload.
+    assert result != {"ok": False, "error": "加载隐私说明失败"}
+    assert result.get("ok") is True
+    assert result["accepted"] is False
+    # Fallback notice body fields must be present and non-empty.
+    assert isinstance(result["title"], str) and result["title"]
+    assert isinstance(result["highlights"], list) and result["highlights"]
+    for item in result["highlights"]:
+        assert isinstance(item, str) and item
+    assert isinstance(result["notice_text"], str) and result["notice_text"]
+    # A warning field must be present so the frontend can surface a
+    # soft warning to the user.
+    assert "warning" in result
+    assert isinstance(result["warning"], str) and result["warning"]
+    # The payload must not leak the raw exception / passphrase / SQL.
     serialized = json.dumps(result, ensure_ascii=False)
     for token in (SENSITIVE_PASSPHRASE, "SECRET", "RuntimeError", "Traceback", "sqlite3."):
-        assert token not in serialized, f"notice exception leaks: {token!r}"
+        assert token not in serialized, f"notice fail-closed leaks: {token!r}"
+
+
+# --- Phase 6G: First-run notice fail-closed + success path -----------
+
+
+def test_api_first_run_notice_success_path_returns_full_notice_text(temp_db) -> None:
+    # Normal success path: both accepted=True and accepted=False must
+    # return the full notice body (title / highlights / notice_text)
+    # so the frontend can always render the privacy notice text.
+    for accepted_value in ("false", "true"):
+        set_setting("first_run_notice_accepted", accepted_value)
+        result = get_first_run_notice_for_webview()
+        assert result.get("ok") is True
+        assert result["accepted"] is (accepted_value == "true")
+        assert isinstance(result["title"], str) and result["title"]
+        assert isinstance(result["highlights"], list) and result["highlights"]
+        for item in result["highlights"]:
+            assert isinstance(item, str) and item
+        assert isinstance(result["notice_text"], str) and result["notice_text"]
+        # No warning field on the success path.
+        assert "warning" not in result
 
 
 def test_api_first_run_notice_does_not_call_write_actions(temp_db) -> None:

@@ -372,4 +372,64 @@
     }
     App.setFolderDeleting = setFolderDeleting;
 
+    // --- Phase 6G: excluded folder rule creation -----------------------
+
+    function bindExcludedFolderRuleEvents() {
+        // Phase 6G: event-delegated binding for the excluded folder create
+        // submit button. Bound once per page lifecycle via the data
+        // attribute guard, re-using the same #rules-list container as the
+        // other rule event delegations.
+        var list = document.getElementById("rules-list");
+        if (!list || list.getAttribute("data-excluded-folder-bound") === "1") return;
+        list.setAttribute("data-excluded-folder-bound", "1");
+        list.addEventListener("click", function (event) {
+            var button = event.target && event.target.closest
+                ? event.target.closest("button.rules-excluded-folder-submit")
+                : null;
+            if (!button) return;
+            handleExcludedFolderCreateSubmit();
+        });
+    }
+    App.bindExcludedFolderRuleEvents = bindExcludedFolderRuleEvents;
+
+    function handleExcludedFolderCreateSubmit() {
+        // Phase 6G: validate the excluded folder_path + recursive locally,
+        // then call the dedicated ``create_excluded_folder_rule`` bridge
+        // method. This method does NOT pass a project_id — the API pins it
+        // to EXCLUDED_PROJECT internally. Reuses ``rulesCreatingFolder`` as
+        // the in-flight guard so it stays mutually exclusive with the
+        // normal folder create path. On success the folder_path input is
+        // cleared and the Project Rules list is refreshed; on failure the
+        // folder_path input is preserved so the user can edit and retry.
+        if (App.rulesCreatingFolder) return;
+        var input = document.querySelector(".rules-excluded-folder-input");
+        var recursiveEl = document.querySelector(".rules-excluded-folder-recursive");
+        if (!input) return;
+        var folderPath = (input.value || "").trim();
+        if (!folderPath) {
+            App.showRulesError("请输入文件夹路径");
+            return;
+        }
+        var recursive = recursiveEl ? !!recursiveEl.checked : true;
+        App.setFolderCreateCreating(true);
+        App.clearRulesError();
+        App.callBridge("create_excluded_folder_rule", folderPath, recursive).then(function (result) {
+            if (result && result.ok === false) {
+                App.showRulesError(result.error || "新增排除文件夹规则失败");
+                return;
+            }
+            input.value = "";
+            if (recursiveEl) recursiveEl.checked = true;
+            App.clearRulesError();
+            return App.loadProjectRules().then(function () {
+                App.showRulesError("排除文件夹规则已新增");
+            });
+        }).catch(function () {
+            App.showRulesError("新增排除文件夹规则失败");
+        }).then(function () {
+            App.setFolderCreateCreating(false);
+        });
+    }
+    App.handleExcludedFolderCreateSubmit = handleExcludedFolderCreateSubmit;
+
 })();

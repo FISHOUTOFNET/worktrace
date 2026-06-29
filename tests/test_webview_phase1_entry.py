@@ -279,17 +279,27 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     fake_runtime = type("R", (), {"initialize": lambda self: None, "shutdown": lambda self: None})()
     monkeypatch.setattr(webview_main, "AppRuntime", lambda _paths: fake_runtime)
 
-    # set_runtime must be a no-op; start_collector is the key mock.
+    # set_runtime must be a no-op; start_collector and
+    # start_background_workers are the key mocks.
     start_collector_calls = {"count": 0}
+    start_background_workers_calls = {"count": 0}
 
     def _fake_start_collector():
         start_collector_calls["count"] += 1
 
+    def _fake_start_background_workers():
+        start_background_workers_calls["count"] += 1
+
     monkeypatch.setattr("worktrace.api.app_api.set_runtime", lambda _runtime: None)
     monkeypatch.setattr("worktrace.api.app_api.start_collector", _fake_start_collector)
+    monkeypatch.setattr(
+        "worktrace.api.app_api.start_background_workers",
+        _fake_start_background_workers,
+    )
 
     return {
         "start_collector_calls": start_collector_calls,
+        "start_background_workers_calls": start_background_workers_calls,
         "start_calls": start_calls,
         "fake_runtime": fake_runtime,
     }
@@ -297,7 +307,8 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
 
 def test_webview_main_starts_collector_when_notice_accepted(monkeypatch, tmp_path):
     """When first_run_notice_accepted() returns True, webview_main.main()
-    must call app_api.start_collector() after set_runtime()."""
+    must call app_api.start_background_workers() and
+    app_api.start_collector() after set_runtime()."""
     mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(
         "worktrace.api.settings_api.first_run_notice_accepted",
@@ -309,13 +320,15 @@ def test_webview_main_starts_collector_when_notice_accepted(monkeypatch, tmp_pat
     result = webview_main.main()
     assert result == 0
     assert mocks["start_collector_calls"]["count"] == 1
+    assert mocks["start_background_workers_calls"]["count"] == 1
     # The WebView main loop must still have been entered.
     assert mocks["start_calls"]["count"] == 1
 
 
 def test_webview_main_does_not_start_collector_when_notice_not_accepted(monkeypatch, tmp_path):
     """When first_run_notice_accepted() returns False, webview_main.main()
-    must NOT call app_api.start_collector(). The WebView must still start
+    must NOT call app_api.start_collector() or
+    app_api.start_background_workers(). The WebView must still start
     so the frontend overlay can show the notice."""
     mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(
@@ -328,6 +341,7 @@ def test_webview_main_does_not_start_collector_when_notice_not_accepted(monkeypa
     result = webview_main.main()
     assert result == 0
     assert mocks["start_collector_calls"]["count"] == 0
+    assert mocks["start_background_workers_calls"]["count"] == 0
     # The WebView main loop must still start so the frontend can display
     # the first-run notice overlay.
     assert mocks["start_calls"]["count"] == 1
@@ -335,8 +349,8 @@ def test_webview_main_does_not_start_collector_when_notice_not_accepted(monkeypa
 
 def test_webview_main_fail_closed_when_notice_read_raises(monkeypatch, tmp_path):
     """When first_run_notice_accepted() raises, webview_main.main() must
-    fail closed: NOT call start_collector(), but still start the WebView
-    so the frontend can display the error."""
+    fail closed: NOT call start_collector() or start_background_workers(),
+    but still start the WebView so the frontend can display the error."""
     mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
 
     def _raise():
@@ -349,6 +363,7 @@ def test_webview_main_fail_closed_when_notice_read_raises(monkeypatch, tmp_path)
     result = webview_main.main()
     assert result == 0
     assert mocks["start_collector_calls"]["count"] == 0
+    assert mocks["start_background_workers_calls"]["count"] == 0
     assert mocks["start_calls"]["count"] == 1
 
 
@@ -398,3 +413,31 @@ def test_webview_main_collector_start_failure_does_not_block_webview(monkeypatch
     assert result == 0
     # The WebView must still start.
     assert mocks["start_calls"]["count"] == 1
+
+
+def test_webview_main_starts_background_workers_before_collector_when_notice_accepted(monkeypatch, tmp_path):
+    """When the notice is accepted, webview_main.main() must call
+    ``app_api.start_background_workers()`` BEFORE ``app_api.start_collector()``
+    so the folder index is warm by the time the collector starts matching
+    activities (Phase 6G)."""
+    _stub_webview_main_environment(monkeypatch, tmp_path)
+    call_order: list[str] = []
+
+    def _track_bg():
+        call_order.append("background_workers")
+
+    def _track_collector():
+        call_order.append("collector")
+
+    monkeypatch.setattr("worktrace.api.app_api.start_background_workers", _track_bg)
+    monkeypatch.setattr("worktrace.api.app_api.start_collector", _track_collector)
+    monkeypatch.setattr(
+        "worktrace.api.settings_api.first_run_notice_accepted",
+        lambda: True,
+    )
+
+    import worktrace.webview_main as webview_main
+
+    result = webview_main.main()
+    assert result == 0
+    assert call_order == ["background_workers", "collector"]

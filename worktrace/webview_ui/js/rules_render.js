@@ -98,11 +98,44 @@
             '  </div>',
             projectActions,
             projectEditForm,
+            isExcluded ? renderExcludedRuleCreateForm() : "",
             '  <div class="rules-row-list">' + rows + '</div>',
             '</article>'
         ].join("");
     }
     App.renderProjectRuleProject = renderProjectRuleProject;
+
+    // Phase 6G: Excluded-rule creation form. Rendered dynamically inside
+    // the ``排除规则`` card so it does NOT count as a static submit button
+    // (the static contract test locks the static submit button count to 3).
+    // The form has two sub-sections: keyword rule creation and folder rule
+    // creation. Both call the dedicated excluded-rule bridge methods that
+    // do NOT accept an arbitrary project_id (the API pins the project_id
+    // to EXCLUDED_PROJECT internally). Project lifecycle buttons are NOT
+    // rendered for the excluded card (``editable`` / ``can_toggle`` /
+    // ``can_archive`` are all false for system projects), but rule-level
+    // CRUD (edit / delete / toggle) remains available in the rules row
+    // list below.
+    function renderExcludedRuleCreateForm() {
+        var writeInProgress = !!(App.rulesCreatingKeyword || App.rulesCreatingFolder);
+        var kwDisabled = writeInProgress ? " disabled" : "";
+        var folderDisabled = writeInProgress ? " disabled" : "";
+        return [
+            '<div class="rules-excluded-create">',
+            '  <div class="rules-excluded-create-title">新增排除规则</div>',
+            '  <div class="rules-excluded-create-row">',
+            '    <input class="rules-excluded-keyword-input" type="text" maxlength="200" placeholder="排除关键词"' + kwDisabled + ' />',
+            '    <button class="rules-excluded-keyword-submit" type="button"' + kwDisabled + '>新增排除关键词</button>',
+            '  </div>',
+            '  <div class="rules-excluded-create-row">',
+            '    <input class="rules-excluded-folder-input" type="text" maxlength="512" placeholder="排除文件夹路径"' + folderDisabled + ' />',
+            '    <label class="rules-excluded-folder-recursive-label"><input class="rules-excluded-folder-recursive" type="checkbox" checked' + folderDisabled + ' /> 包含子文件夹</label>',
+            '    <button class="rules-excluded-folder-submit" type="button"' + folderDisabled + '>新增排除文件夹</button>',
+            '  </div>',
+            '</div>'
+        ].join("");
+    }
+    App.renderExcludedRuleCreateForm = renderExcludedRuleCreateForm;
 
     function renderProjectRuleRow(rule) {
         var label = text(rule && rule.kind_label, "规则");

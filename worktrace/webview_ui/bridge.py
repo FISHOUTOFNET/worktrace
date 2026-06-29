@@ -179,6 +179,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 from ..api import app_api, settings_api, statistics_api, timeline_api, project_api, export_api, rule_api
@@ -452,6 +453,13 @@ class WebViewBridge(ProjectRulesBridgeMixin):
             paused = settings_api.is_user_paused() or raw_status == "paused"
             if paused or raw_status != "running":
                 settings_api.set_user_paused(False)
+                # Phase 6G: ensure the folder index worker is running
+                # before the collector starts matching activities. The
+                # worker is gated by the same privacy notice as the
+                # collector (checked above). ``start_background_workers``
+                # is idempotent and a no-op when this instance does not
+                # own the collector.
+                app_api.start_background_workers()
                 app_api.start_collector()
             else:
                 settings_api.set_user_paused(True)
@@ -515,9 +523,24 @@ class WebViewBridge(ProjectRulesBridgeMixin):
                 # API reported failure (or a stable Chinese error). Do
                 # not start the collector; forward the error payload.
                 return result
-            # API succeeded: start the collector so the user sees
-            # recording begin immediately after accepting the notice,
-            # mirroring the legacy Tkinter flow.
+            # API succeeded: start background workers (folder index)
+            # and the collector so the user sees recording begin
+            # immediately after accepting the notice, mirroring the
+            # legacy Tkinter flow. Phase 6G: background workers are
+            # started before the collector so the index is warm by the
+            # time the collector starts matching activities. The worker
+            # is gated by the same privacy notice as the collector
+            # (now accepted).
+            try:
+                app_api.start_background_workers()
+            except Exception:
+                # The accept itself succeeded (setting is persisted). A
+                # background workers start failure is logged but does
+                # NOT mask the successful accept.
+                logger.exception(
+                    "webview bridge accept_first_run_notice: background "
+                    "workers start failed after successful accept"
+                )
             try:
                 app_api.start_collector()
             except Exception:
@@ -553,21 +576,39 @@ class WebViewBridge(ProjectRulesBridgeMixin):
             return {"ok": False, "error": "确认隐私说明失败"}
 
     def get_overview(self) -> dict[str, Any]:
-        """Return today's overview KPIs and current activity summary."""
+        """Return today's overview KPIs and current activity summary.
+
+        Phase 6G: also returns raw seconds + snapshot fields so the
+        frontend 1-second ticker can increment the display without a
+        bridge round-trip. ``today_total_seconds`` already includes the
+        current activity's live seconds (the summary is built with
+        ``include_live=True``); the ticker must NOT add
+        ``current_activity_elapsed_seconds`` on top of it. Instead the
+        ticker adds ``(now - snapshot_at_epoch_ms)`` to both
+        ``today_total_seconds`` and ``current_activity_elapsed_seconds``
+        only when the activity is running (not paused / not idle).
+        """
         try:
             today = timeline_api.get_default_report_date()
             summary = statistics_api.get_summary(today, today, include_live=True)
             snapshot = settings_api.get_current_activity_snapshot()
             project_count = len(project_api.list_active_projects())
             current = _snapshot_summary(snapshot)
+            total_seconds = int(summary.get("total_duration") or 0)
             return {
                 "ok": True,
                 "date": today,
-                "total_duration": format_duration(summary.get("total_duration") or 0),
+                "total_duration": format_duration(total_seconds),
                 "classified_duration": format_duration(summary.get("classified_duration") or 0),
                 "uncategorized_duration": format_duration(summary.get("uncategorized_duration") or 0),
                 "project_count": project_count,
                 "current_activity": current,
+                # Phase 6G raw seconds + snapshot fields for the 1-second
+                # local ticker. The ticker only updates DOM text; it
+                # never calls a bridge method or writes the DB.
+                "snapshot_at_epoch_ms": int(time.time() * 1000),
+                "today_total_seconds": total_seconds,
+                "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
             }
         except Exception:
             logger.exception("webview bridge get_overview failed")
@@ -609,6 +650,15 @@ class WebViewBridge(ProjectRulesBridgeMixin):
         list of project sessions. Each session includes the ``activity_ids``
         list needed to load detail rows via ``get_timeline_session_details``.
         No editing, correction, or write operations are exposed.
+
+        Phase 6G: also returns raw seconds + snapshot fields so the
+        frontend 1-second ticker can increment the displayed total and
+        in-progress session duration without a bridge round-trip. Each
+        session includes ``duration_seconds``; the in-progress session's
+        ``duration_seconds`` already includes the live projection.
+        ``today_total_seconds`` only reflects this date's sessions; the
+        ticker only increments it when the viewed date is today AND the
+        current activity is running.
         """
         try:
             report_date = date or timeline_api.get_default_report_date()
@@ -624,6 +674,7 @@ class WebViewBridge(ProjectRulesBridgeMixin):
             for session in sessions_raw:
                 start_time = str(session.get("start_time") or "")
                 end_time = str(session.get("end_time") or "")
+                session_seconds = int(session.get("duration_seconds") or 0)
                 sessions.append(
                     {
                         "session_id": str(session.get("session_id") or ""),
@@ -632,7 +683,8 @@ class WebViewBridge(ProjectRulesBridgeMixin):
                         "project_id": int(session.get("project_id") or 0),
                         "start_time": start_time,
                         "end_time": end_time,
-                        "duration": format_duration(session.get("duration_seconds") or 0),
+                        "duration": format_duration(session_seconds),
+                        "duration_seconds": session_seconds,
                         "status": str(session.get("status_summary") or session.get("status") or ""),
                         "event_count": int(session.get("event_count") or 0),
                         "is_uncategorized": bool(session.get("is_uncategorized")),
@@ -646,8 +698,15 @@ class WebViewBridge(ProjectRulesBridgeMixin):
                 "ok": True,
                 "date": report_date,
                 "total_duration": format_duration(total_seconds),
+                "total_seconds": total_seconds,
                 "current_activity": current,
                 "sessions": sessions,
+                # Phase 6G raw seconds + snapshot fields for the 1-second
+                # local ticker. The ticker only updates DOM text; it
+                # never calls a bridge method or writes the DB.
+                "snapshot_at_epoch_ms": int(time.time() * 1000),
+                "today_total_seconds": total_seconds,
+                "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
             }
         except Exception:
             logger.exception("webview bridge get_timeline failed")
@@ -1886,9 +1945,16 @@ def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
 
     Only display-name, project, elapsed, and state are returned. Window titles,
     paths, and notes are never included.
+
+    Phase 6G: also returns ``elapsed_seconds`` (raw integer seconds) and
+    ``is_paused`` so the frontend 1-second ticker can increment the
+    display without a bridge round-trip. ``elapsed_seconds`` is the
+    snapshot's total live seconds (elapsed + extra) at the moment the
+    backend built the snapshot; the ticker adds ``(now - snapshot_at)``
+    only when the activity is running (not paused / not idle).
     """
     if not snapshot:
-        return {"active": False, "display": "无"}
+        return {"active": False, "display": "无", "elapsed_seconds": 0, "is_paused": False}
     name = (
         snapshot.get("resource_display_name")
         or snapshot.get("activity_display_name")
@@ -1897,16 +1963,20 @@ def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         or "未知"
     )
     project = snapshot.get("inferred_project_name") or "未归类"
-    elapsed = format_duration(
+    elapsed_seconds = (
         (timeline_api.get_snapshot_elapsed_seconds(snapshot) or 0)
         + (timeline_api.get_snapshot_extra_seconds(snapshot) or 0)
     )
+    elapsed = format_duration(elapsed_seconds)
     state = "已进入历史" if snapshot.get("is_persisted") else "暂不入历史"
+    is_paused = snapshot.get("status") == "paused"
     if snapshot.get("status") == "idle":
         name = "空闲中"
     return {
         "active": True,
         "display": f"{name}｜{project}｜{elapsed}｜{state}",
+        "elapsed_seconds": int(elapsed_seconds),
+        "is_paused": bool(is_paused),
     }
 
 
