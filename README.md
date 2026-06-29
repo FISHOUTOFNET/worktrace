@@ -5,7 +5,7 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5I is the latest shipped phase. Project
+> **Current state**: WebView Phase 5I is the latest shipped phase (5I.1 hardening follow-up: regression tests + boundary locks; no new user-visible capability). Project
 > Rules now supports project-grouped folder / keyword rules, existing-rule
 > enable / disable, keyword create / edit / delete, folder rule create /
 > edit / delete, user project create / edit / enable-disable / archive,

@@ -440,9 +440,8 @@
         // summaries). The panel is rendered into ``#rules-batch-panel`` by
         // the batch action handlers. ``data`` is
         // ``{mode: "preview"|"apply"|"toggle", payload: {...}}``. No raw
-        // ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard /
-        // note / SQL / traceback is ever surfaced — the bridge already
-        // filtered the payload to display-safe fields.
+        // sensitive activity detail is ever surfaced here — the bridge
+        // already filtered the payload to display-safe aggregate fields.
         if (!data) return "";
         var mode = data.mode || "preview";
         var payload = data.payload || {};

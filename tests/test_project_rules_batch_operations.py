@@ -850,3 +850,208 @@ def test_no_schema_change_batch_service(temp_db):
         assert "DROP TABLE" not in source.upper()
     assert _SCHEMA_PATH.exists()
     assert _SCHEMA_PATH.read_text(encoding="utf-8").strip() != ""
+
+
+# ---------------------------------------------------------------------------
+# Phase 5I.1 hardening: validation variants + preview/apply/toggle guarantees
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [1.5, None, [], {}, (1,), {1, 2}, frozenset({1})],
+)
+def test_batch_preview_rejects_non_int_rule_id_variants(temp_db, bad_id):
+    # Phase 5I.1: ``rule_id`` must be a real positive ``int``. Float,
+    # ``None``, list, dict, tuple, set, frozenset all collapse to
+    # ``invalid_input``. Existing tests cover bool / 0 / negative / numeric
+    # string; this locks the remaining container / float / None variants.
+    result = rule_api.preview_project_rules_batch_impact(
+        [{"rule_type": "folder", "rule_id": bad_id}]
+    )
+    assert result["ok"] is False
+    assert result["error"] == "invalid_input"
+
+
+@pytest.mark.parametrize(
+    "bad_item",
+    [
+        {"rule_id": 1},  # missing rule_type
+        {"rule_type": "folder"},  # missing rule_id
+        {"rule_type": None, "rule_id": 1},
+        {"rule_type": 1, "rule_id": 1},
+        {"rule_type": ["folder"], "rule_id": 1},
+        {"rule_type": {"x": 1}, "rule_id": 1},
+    ],
+)
+def test_batch_preview_rejects_malformed_items(temp_db, bad_item):
+    # Phase 5I.1: each item must be a dict with ``rule_type`` in
+    # ``{"folder","keyword"}`` and a real positive int ``rule_id``. Missing
+    # keys and non-string rule_type collapse to ``invalid_input``.
+    result = rule_api.preview_project_rules_batch_impact([bad_item])
+    assert result["ok"] is False
+    assert result["error"] == "invalid_input"
+
+
+def test_batch_preview_archived_project_returns_zero_counts_not_error(temp_db):
+    # Phase 5I.1: batch preview is informational. An archived target
+    # project must contribute zero counts for that rule (availability
+    # surfaced in the per-rule summary), NOT raise ``project_not_available``.
+    project = project_service.create_project("ArchivedPreview")
+    folder_rid = folder_rule_service.create_or_update_folder_rule(
+        "D:\\ArchivedPreviewFolder", project
+    )
+    project_service.archive_project(project)
+    _create_closed_activity(file_path_hint="D:\\ArchivedPreviewFolder\\Doc.docx")
+    result = rule_api.preview_project_rules_batch_impact(
+        [_folder_rule_entry(folder_rid)]
+    )
+    assert result["ok"] is True
+    rule_summary = result["impact"]["rules"][0]
+    assert rule_summary["counts"]["matched_count"] == 0
+    assert rule_summary["counts"]["would_update_count"] == 0
+    assert rule_summary["counts"]["eligible_count"] == 0
+
+
+def test_batch_apply_never_sets_manual_override_on_all_updated_rows(temp_db):
+    # Phase 5I.1: batch apply must never set ``manual_override = 1`` on ANY
+    # updated row. Existing test checks one row; this locks the guarantee
+    # across multiple updated rows (folder + keyword paths).
+    project_a = project_service.create_project("NoOverrideA")
+    project_b = project_service.create_project("NoOverrideB")
+    folder_rid = folder_rule_service.create_or_update_folder_rule(
+        "D:\\NoOverrideA", project_a
+    )
+    keyword_rid = rule_service.create_rule("nooverrideb", project_b)
+    aids = []
+    for i in range(3):
+        aids.append(
+            _create_closed_activity(
+                file_path_hint="D:\\NoOverrideA\\Doc" + str(i) + ".docx",
+                start_time="2026-06-18 0" + str(i) + ":00:00",
+                end_time="2026-06-18 0" + str(i) + ":10:00",
+            )
+        )
+    aids.append(
+        _create_closed_activity(
+            app_name="Excel",
+            process_name="excel.exe",
+            window_title="nooverrideb.xlsx - Excel",
+            start_time="2026-06-18 04:00:00",
+            end_time="2026-06-18 04:10:00",
+        )
+    )
+    result = rule_api.backfill_project_rules_batch(
+        [_folder_rule_entry(folder_rid), _keyword_rule_entry(keyword_rid)]
+    )
+    assert result["ok"] is True
+    for aid in aids:
+        activity = _activity_row(aid)
+        assert int(activity["manual_override"]) == 0, (
+            "batch apply must not set manual_override=1 on activity " + str(aid)
+        )
+        assert int(activity["auto_classified"]) == 1
+
+
+def test_batch_toggle_does_not_change_project_enabled_state(temp_db):
+    # Phase 5I.1: batch enable/disable only flips rule.enabled; it must NOT
+    # change the target project's enabled flag. Lock that project.enabled is
+    # unchanged after a batch disable.
+    project = project_service.create_project("ProjStateLocked")
+    folder_rid = folder_rule_service.create_or_update_folder_rule(
+        "D:\\ProjStateLockedFolder", project
+    )
+    keyword_rid = rule_service.create_rule("projstatelockedkw", project)
+    project_before = project_service.get_project(project)
+    result = rule_api.set_project_rules_batch_enabled(
+        [_folder_rule_entry(folder_rid), _keyword_rule_entry(keyword_rid)], False
+    )
+    assert result["ok"] is True
+    project_after = project_service.get_project(project)
+    assert int(project_before["enabled"]) == int(project_after["enabled"])
+    assert int(project_after["enabled"]) == 1  # project still enabled
+
+
+def test_batch_apply_too_many_rules_writes_nothing(temp_db):
+    # Phase 5I.1: the 20-rule cap is enforced in ``_normalize_rules``
+    # BEFORE any DB write. Lock that the ``too_many_rules`` path writes
+    # nothing (the existing apply test only checks the error code).
+    project = project_service.create_project("TooManyApplyNoWrite")
+    folder_rid = folder_rule_service.create_or_update_folder_rule(
+        "D:\\TooManyApplyNoWrite", project
+    )
+    aid = _create_closed_activity(
+        file_path_hint="D:\\TooManyApplyNoWrite\\Doc.docx"
+    )
+    entries = []
+    for i in range(rule_batch_service.MAX_BATCH_PROJECT_RULES + 1):
+        rid = folder_rule_service.create_or_update_folder_rule(
+            "D:\\TooManyApplyNoWrite\\Sub" + str(i), project
+        )
+        entries.append(_folder_rule_entry(rid))
+    activity_before = _activity_row(aid)
+    result = rule_api.backfill_project_rules_batch(entries)
+    assert result["ok"] is False
+    assert result["error"] == "too_many_rules"
+    activity_after = _activity_row(aid)
+    assert activity_after["project_id"] == activity_before["project_id"]
+    assert int(activity_after["auto_classified"]) == int(
+        activity_before["auto_classified"]
+    )
+
+
+def test_batch_toggle_too_many_rules_writes_nothing(temp_db):
+    # Phase 5I.1: the 20-rule cap on toggle is enforced before any write.
+    # Lock that the first rule's enabled state is unchanged.
+    project = project_service.create_project("TooManyToggleNoWrite")
+    folder_rid = folder_rule_service.create_or_update_folder_rule(
+        "D:\\TooManyToggleNoWrite", project
+    )
+    entries = []
+    for i in range(rule_batch_service.MAX_BATCH_PROJECT_RULES + 1):
+        rid = folder_rule_service.create_or_update_folder_rule(
+            "D:\\TooManyToggleNoWrite\\Sub" + str(i), project
+        )
+        entries.append(_folder_rule_entry(rid))
+    with get_connection() as conn:
+        enabled_before = int(
+            conn.execute(
+                "SELECT enabled FROM folder_project_rule WHERE id = ?",
+                (folder_rid,),
+            ).fetchone()["enabled"]
+        )
+    result = rule_api.set_project_rules_batch_enabled(entries, False)
+    assert result["ok"] is False
+    assert result["error"] == "too_many_rules"
+    with get_connection() as conn:
+        enabled_after = int(
+            conn.execute(
+                "SELECT enabled FROM folder_project_rule WHERE id = ?",
+                (folder_rid,),
+            ).fetchone()["enabled"]
+        )
+    assert enabled_after == enabled_before
+
+
+def test_batch_apply_folder_id_on_keyword_path_writes_nothing(temp_db):
+    # Phase 5I.1: a folder id sent on the keyword path must return
+    # ``not_found`` and write nothing. Locks rule-table isolation on the
+    # apply path (existing test only covers preview cross-path).
+    project = project_service.create_project("CrossPathApplyNoWrite")
+    folder_rid = folder_rule_service.create_or_update_folder_rule(
+        "D:\\CrossPathApplyNoWrite", project
+    )
+    aid = _create_closed_activity(
+        file_path_hint="D:\\CrossPathApplyNoWrite\\Doc.docx"
+    )
+    activity_before = _activity_row(aid)
+    result = rule_api.backfill_project_rules_batch(
+        [_keyword_rule_entry(folder_rid)]
+    )
+    assert result["ok"] is False
+    assert result["error"] == "not_found"
+    activity_after = _activity_row(aid)
+    assert activity_after["project_id"] == activity_before["project_id"]
+    assert int(activity_after["auto_classified"]) == int(
+        activity_before["auto_classified"]
+    )

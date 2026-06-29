@@ -8,7 +8,7 @@
 
 ## Current Phase
 
-**Phase 5I — Automatic rules + selected-rule batch operations foundation.**
+**Phase 5I — Automatic rules + selected-rule batch operations foundation.** (5I.1 hardening follow-up: regression tests + boundary locks; no new user-visible capability.)
 Project Rules now applies enabled folder / keyword rules automatically to newly
 produced / just-closed eligible activities (folder before keyword, first match
 wins; manual / hidden / deleted / in-progress / non-normal / already-target /

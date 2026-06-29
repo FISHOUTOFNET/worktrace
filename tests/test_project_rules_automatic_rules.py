@@ -632,3 +632,117 @@ def test_automatic_rules_status_payload_json_serializable(temp_db):
     result = bridge.automatic_rules_status()
     # Must be JSON-serializable (no datetime / set / custom object).
     json.dumps(result, ensure_ascii=False, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5I.1 hardening: thin facade + hook-chain guard order + no toggle
+# ---------------------------------------------------------------------------
+
+
+def test_apply_automatic_rules_facade_source_has_no_separate_matcher(temp_db):
+    # Phase 5I.1: ``rule_automation_service`` must remain a thin documented
+    # facade over the existing inference path. It must NOT re-implement
+    # matching (no regex, no keyword/folder matcher, no inference helper).
+    # This locks the "single matcher" invariant so the automatic path can
+    # never diverge from the manual / batch paths.
+    import ast
+    import inspect
+
+    source = inspect.getsource(rule_automation_service)
+    tree = ast.parse(source)
+    # Walk the AST and inspect every function's CALL expressions (not its
+    # docstring). The facade module's docstrings intentionally mention the
+    # matcher names (to document that they are reused from the inference
+    # service), so scanning the raw source would false-positive. By
+    # checking only ``Call`` nodes we lock that the facade never invokes
+    # a matcher / inference helper itself.
+    forbidden_call_names = {
+        "keyword_pattern_matches",
+        "find_matching_folder_rule",
+        "_enabled_keyword_rules",
+        "_infer_project_resource_first",
+        "_classify_activities",
+        "_safe_classification_text",
+        "re.match",
+        "re.search",
+        "re.compile",
+        "re.findall",
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            callee = node.func
+            if isinstance(callee, ast.Name):
+                name = callee.id
+            elif isinstance(callee, ast.Attribute):
+                # ``re.match(...)`` -> Attribute(value=Name('re'), attr='match')
+                parts = []
+                cur = callee
+                while isinstance(cur, ast.Attribute):
+                    parts.append(cur.attr)
+                    cur = cur.value
+                if isinstance(cur, ast.Name):
+                    parts.append(cur.id)
+                parts.reverse()
+                name = ".".join(parts)
+            else:
+                continue
+            assert name not in forbidden_call_names, (
+                "rule_automation_service facade must not invoke a matcher / "
+                "inference helper; found call to '" + name + "'"
+            )
+    # The facade module must not ``import re`` (no regex implementation).
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name != "re", (
+                    "rule_automation_service facade must not import re"
+                )
+        if isinstance(node, ast.ImportFrom):
+            assert node.module != "re", (
+                "rule_automation_service facade must not import from re"
+            )
+
+
+def test_process_new_activity_in_progress_guard_runs_before_assign(
+    temp_db, monkeypatch
+):
+    # Phase 5I.1: ``process_new_activity`` must apply the in-progress
+    # (``end_time IS NULL``) skip guard BEFORE delegating to
+    # ``assign_project_for_activity``. This locks the guard ordering so an
+    # in-progress activity never reaches the matcher.
+    called = {"assign": False}
+    original_assign = project_inference_service.assign_project_for_activity
+
+    def _spy_assign(activity_id):
+        called["assign"] = True
+        return original_assign(activity_id)
+
+    monkeypatch.setattr(
+        project_inference_service, "assign_project_for_activity", _spy_assign
+    )
+    project = project_service.create_project("GuardOrder")
+    folder_rule_service.create_or_update_folder_rule(
+        "D:\\GuardOrderFolder", project
+    )
+    aid = _create_closed_activity(file_path_hint="D:\\GuardOrderFolder\\Doc.docx")
+    _set_in_progress(aid)
+    project_inference_service.process_new_activity(aid)
+    assert called["assign"] is False, (
+        "process_new_activity must skip in-progress activities before "
+        "calling assign_project_for_activity"
+    )
+
+
+def test_automatic_rules_status_payload_has_no_on_off_toggle_field(temp_db):
+    # Phase 5I.1: the automatic-rules foundation is always-on for enabled
+    # rules. The status payload must be display-only and must NOT carry a
+    # toggle-like field (``enabled`` / ``toggle`` / ``on`` / ``off`` /
+    # ``active`` / ``is_enabled``) that could be mistaken for a toggle.
+    bridge = ProjectRulesBridgeMixin()
+    result = bridge.automatic_rules_status()
+    status = result["status"]
+    for field in ("enabled", "toggle", "on", "off", "active", "is_enabled"):
+        assert field not in status, (
+            "automatic_rules_status payload must not carry toggle-like field '"
+            + field + "'"
+        )

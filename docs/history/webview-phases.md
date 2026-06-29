@@ -5939,6 +5939,53 @@ Phase 5I does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
+## Phase 5I.1 Implemented Scope
+
+Phase 5I.1 is a **hardening-only follow-up** to Phase 5I. It adds no new
+user-visible capability. It only:
+
+- Adds regression / boundary tests locking the Phase 5I automatic-rules path
+  (thin facade over `project_inference_service.process_new_activity`; guard
+  ordering: in-progress skip before assign; `automatic_rules_status` payload
+  carries no on/off toggle field);
+- Adds regression / boundary tests locking the Phase 5I selected-rule batch
+  operations (non-int rule-id variants; malformed items; archived project
+  preview returns zero counts not error; batch apply never sets
+  `manual_override`; batch toggle does not change project enabled state;
+  `too_many_rules` writes nothing; cross-path apply writes nothing);
+- Adds a boundary test locking the four Phase 5I bridge methods
+  (`preview_project_rules_batch_impact` / `backfill_project_rules_batch` /
+  `set_project_rules_batch_enabled` / `automatic_rules_status`) on the
+  composed `WebViewBridge` class;
+- Adds static-contract tests locking the batch checkbox rule-key grouping,
+  the absence of an automatic-rules on/off toggle in the frontend, the
+  batch toolbar in-flight disabled guard, and the absence of storage /
+  network APIs in the Project Rules JS modules;
+- Fixes one pre-existing 5I-era boundary bug: a comment in
+  `worktrace/webview_ui/js/rules_render.js` referenced forbidden tokens
+  (`window_title` / `file_path_hint` / `path_hint` / clipboard / SQL /
+  traceback) that tripped the global frontend boundary tests. The comment
+  was reworded to avoid the literal tokens; no runtime behavior changed.
+
+## Phase 5I.1 Not Implemented
+
+Phase 5I.1 does not implement and does not start:
+
+- Raw folder-rule conflict preview in WebView;
+- Raw / unbounded batch folder-rule backfill;
+- Automatic-rule enable / disable toggle in the UI;
+- Hard delete project;
+- Project restore (un-archive) in WebView;
+- Settings / Privacy / Encrypted Backup WebView migration;
+- DB schema changes (no new table / column / migration);
+- New dependencies (no React / Vue / Vite / Node / local HTTP server);
+- New JS file (the Project Rules surface still uses the existing classic
+  split modules: `rules.js`, `rules_render.js`, `rules_rule_actions.js`,
+  `rules_keyword_actions.js`, `rules_folder_actions.js`,
+  `rules_project_actions.js`);
+- Any change to collector / Timeline / Statistics / Export / privacy /
+  encrypted backup runtime semantics.
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

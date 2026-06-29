@@ -267,3 +267,37 @@ def test_webview_frontend_resources_have_no_external_links() -> None:
         "CDN, or Google Fonts references. Found:\n"
         + "\n".join(violations)
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5I.1 hardening: lock the four Project Rules batch / automatic-rules
+# bridge methods on the composed ``WebViewBridge`` class. The methods are
+# defined on ``ProjectRulesBridgeMixin`` (in ``bridge_rules.py``) and inherited
+# by ``WebViewBridge``. Without this lock, a future refactor that drops the
+# mixin from ``WebViewBridge``'s bases would silently remove the 5I surface
+# from the only shipping bridge class without any test failing.
+# ---------------------------------------------------------------------------
+
+
+def test_webview_bridge_exposes_phase_5i_batch_and_automatic_methods() -> None:
+    """``WebViewBridge`` must expose the four Phase 5I methods.
+
+    The methods are defined on ``ProjectRulesBridgeMixin`` and inherited by
+    ``WebViewBridge``. Phase 5I.1 hardens this composition so a refactor
+    that drops the mixin (or renames a method) fails here instead of
+    silently removing the 5I API surface from the only shipping bridge.
+    """
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    expected_methods = (
+        "preview_project_rules_batch_impact",
+        "backfill_project_rules_batch",
+        "set_project_rules_batch_enabled",
+        "automatic_rules_status",
+    )
+    bridge = WebViewBridge()
+    for name in expected_methods:
+        assert callable(getattr(bridge, name, None)), (
+            f"WebViewBridge must expose Phase 5I bridge method {name!r} "
+            "(inherited from ProjectRulesBridgeMixin)"
+        )

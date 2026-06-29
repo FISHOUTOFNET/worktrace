@@ -4753,3 +4753,150 @@ def test_project_rules_script_order_preserved_with_batch():
     # No dedicated batch JS module was introduced.
     assert "rules_batch_actions.js" not in source
     assert "rules_batch_actions.js" not in ALL_JS_FILES
+
+
+# ---------------------------------------------------------------------------
+# Phase 5I.1 hardening: additional static-contract locks for the batch
+# surface and the automatic-rules status contract. These complement the
+# existing 5I static tests by locking:
+#   - batch checkbox groups selection by (rule_kind, rule_id) via the
+#     ``data-rule-kind`` + ``data-rule-id`` attribute pair (so a folder
+#     rule id and a keyword rule id never collide in selection state);
+#   - no automatic-rules on/off toggle UI exists in the static HTML/JS
+#     (Phase 5I only exposes a read-only status payload);
+#   - the batch toolbar buttons carry a ``disabled`` attribute when
+#     ``rulesBatchInFlight`` is true (duplicate-submit guard);
+#   - the batch handlers do not use ``localStorage`` / ``sessionStorage``
+#     or issue network requests (``fetch`` / ``XMLHttpRequest``).
+# ---------------------------------------------------------------------------
+
+
+def test_project_rules_batch_checkbox_groups_by_rule_kind_and_id():
+    # Phase 5I.1 hardening: the per-rule batch-selection checkbox must
+    # carry BOTH ``data-rule-kind`` and ``data-rule-id`` so selection state
+    # is keyed by the composite rule key (``kind:id``), not by rule id
+    # alone. Without ``data-rule-kind``, a folder rule with id 5 and a
+    # keyword rule with id 5 would alias to the same selection entry.
+    source = read_js("rules_render.js")
+    func = func_body(source, "renderProjectRuleRow")
+    # The checkbox input must carry both attributes.
+    assert 'class="rules-batch-checkbox"' in func, (
+        "batch checkbox must use the rules-batch-checkbox class"
+    )
+    assert 'data-rule-kind="' in func, (
+        "batch checkbox must carry data-rule-kind attribute"
+    )
+    assert 'data-rule-id="' in func, (
+        "batch checkbox must carry data-rule-id attribute"
+    )
+    # The selection lookup must use the composite rule key, not bare id.
+    assert "rulesBatchSelectedKeys[ruleKey]" in func, (
+        "batch selection state must be keyed by composite ruleKey"
+    )
+
+
+def test_project_rules_no_automatic_rules_on_off_toggle_in_frontend():
+    # Phase 5I.1 hardening: the frontend must NOT render any on/off
+    # toggle for the automatic-rules engine. Phase 5I only exposes a
+    # read-only status payload via ``automatic_rules_status``; the on/off
+    # UI toggle is explicitly out of scope. This lock prevents a future
+    # change from silently introducing a toggle button / checkbox /
+    # switch bound to an automatic-rules enable/disable bridge call.
+    html = read_resource("index.html")
+    rules_section = _rules_section()
+    # No element whose id or class suggests an automatic-rules toggle.
+    forbidden_id_patterns = (
+        'id="rules-automatic-toggle"',
+        'id="rules-automatic-enable"',
+        'id="rules-automatic-disable"',
+        'id="rules-automatic-switch"',
+        'id="rules-automatic-on"',
+        'id="rules-automatic-off"',
+    )
+    for pat in forbidden_id_patterns:
+        assert pat not in rules_section, (
+            "Project Rules page must not contain an automatic-rules toggle "
+            "anchor: " + pat
+        )
+    forbidden_class_patterns = (
+        "rules-automatic-toggle",
+        "rules-automatic-switch",
+        "rules-automatic-onoff",
+    )
+    for pat in forbidden_class_patterns:
+        assert pat not in rules_section, (
+            "Project Rules page must not contain an automatic-rules toggle "
+            "class: " + pat
+        )
+    # The full rules JS module set must not bind a toggle handler that
+    # would enable/disable the automatic-rules engine. The bridge has
+    # no ``set_automatic_rules_enabled`` method, and the JS must not
+    # reference one either.
+    rules_js = read_rules_module_js()
+    forbidden_js_tokens = (
+        "set_automatic_rules_enabled",
+        "setAutomaticRulesEnabled",
+        "toggleAutomaticRules",
+        "automaticRulesToggle",
+    )
+    for token in forbidden_js_tokens:
+        assert token not in rules_js, (
+            "Project Rules JS must not reference an automatic-rules toggle "
+            "entry: " + token
+        )
+    # ``automaticRules`` is already in FORBIDDEN_RULES_JS_HANDLER_TOKENS,
+    # which the existing ``test_project_rules_js_calls_allowed_bridge_methods_only``
+    # and ``test_project_rules_batch_handlers_no_forbidden_tokens`` enforce.
+
+
+def test_project_rules_batch_toolbar_buttons_disabled_when_in_flight():
+    # Phase 5I.1 hardening: the batch toolbar action buttons (preview /
+    # apply / enable / disable) must carry a ``disabled`` attribute when
+    # ``App.rulesBatchInFlight`` is true, so a second click during an
+    # in-flight batch operation cannot trigger a duplicate submit. The
+    # clear button is exempt — it is allowed to remain enabled so the
+    # user can dismiss the selection (the in-flight guard in the handler
+    # still refuses to act).
+    source = read_js("rules_render.js")
+    func = func_body(source, "renderProjectRulesBatchToolbar")
+    # The in-flight flag must be read.
+    assert "App.rulesBatchInFlight" in func, (
+        "batch toolbar must reference App.rulesBatchInFlight"
+    )
+    # The action buttons must be bound to the disabled attribute when
+    # in-flight (the ``actionDisabled`` variable carries the disabled
+    # attribute and is applied to all four action buttons).
+    assert "actionDisabled" in func, (
+        "batch toolbar must compute an actionDisabled guard"
+    )
+    # All four action button classes must appear in the toolbar render.
+    for cls in (
+        "rules-batch-preview-button",
+        "rules-batch-apply-button",
+        "rules-batch-enable-button",
+        "rules-batch-disable-button",
+    ):
+        assert cls in func, "batch toolbar must render button: " + cls
+
+
+def test_project_rules_batch_handlers_have_no_storage_or_network():
+    # Phase 5I.1 hardening: the batch handler functions must not use
+    # ``localStorage`` / ``sessionStorage`` (selection lives in JS memory
+    # only) and must not issue network requests (``fetch`` /
+    # ``XMLHttpRequest`` / ``navigator.sendBeacon``). The frontend is
+    # strictly local and talks to the bridge via ``callBridge``.
+    source = read_rules_module_js()
+    forbidden_tokens = (
+        "localStorage",
+        "sessionStorage",
+        "window.fetch",
+        "fetch(",
+        "XMLHttpRequest",
+        "navigator.sendBeacon",
+        "WebSocket",
+        "EventSource",
+    )
+    for token in forbidden_tokens:
+        assert token not in source, (
+            "Project Rules JS must not use storage / network API: " + token
+        )

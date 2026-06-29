@@ -172,6 +172,10 @@ order:
   `tests/test_project_rules_batch_operations.py` + extended bridge /
   static contract tests), and new affected-runner C8 / C9 sections.
   No schema change, no new dependencies, no new JS file. **Completed.**
+- Phase 5I.1 — Hardening-only follow-up to 5I: regression / boundary tests
+  for the automatic-rules path and selected-rule batch operations, plus a
+  boundary-test fix for a 5I-era `rules_render.js` comment that referenced
+  forbidden tokens. No new user-visible capability. **Completed.**
 - Phase 5J+ — remaining Project Rules write workflows (hard delete project,
   raw folder-rule conflict preview, raw / unbounded batch backfill,
   automatic-rule enable / disable toggle in the UI). Not started.
