@@ -367,8 +367,11 @@ def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens()
     assert pos != -1, (
         "bridge.py must define set_clipboard_capture_enabled for Phase 6B"
     )
-    # Extract a generous slice of the method body for inspection.
-    body = bridge_source[pos:pos + 2500]
+    # Extract the method body for inspection. Bound the slice at the next
+    # method definition so Phase 6C methods that follow (which legitimately
+    # use ``passphrase`` as a parameter name) don't trigger false positives.
+    next_def = bridge_source.find("\n    def ", pos + 1)
+    body = bridge_source[pos:next_def if next_def != -1 else pos + 2500]
     # Stable Chinese error messages that must appear in the payload.
     assert "请选择有效的剪贴板记录状态" in body
     assert "设置剪贴板记录失败" in body
@@ -394,4 +397,213 @@ def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens()
         assert forbidden not in code_only, (
             "set_clipboard_capture_enabled must not reference forbidden token: "
             + forbidden
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6C: Settings / Privacy encrypted backup export + manifest preview
+# bridge methods. The two new methods are defined directly on
+# ``WebViewBridge`` (no mixin). ``export_encrypted_backup`` takes exactly
+# two required parameters (``passphrase`` / ``confirm_passphrase``);
+# ``preview_encrypted_backup_manifest`` takes zero parameters. The error
+# payloads must collapse to stable Chinese messages and must not leak
+# traceback / str(exc) / repr / format_exc / exc_info / .message /
+# raw_exception / clipboard_content. ``passphrase`` IS allowed as a
+# parameter name, local variable, and pass-through argument to the API
+# facade; it is only forbidden in the returned payload / error payload /
+# logging (enforced by the runtime tests in test_settings_privacy_status).
+# ---------------------------------------------------------------------------
+
+
+def test_webview_bridge_exposes_phase_6c_export_method() -> None:
+    """``WebViewBridge`` must expose the Phase 6C ``export_encrypted_backup``
+    method with exactly two required parameters (``passphrase`` and
+    ``confirm_passphrase``); no optional args, no ``*args``, no ``**kwargs``."""
+    import inspect
+
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    bridge = WebViewBridge()
+    method = getattr(bridge, "export_encrypted_backup", None)
+    assert callable(method), (
+        "WebViewBridge must expose Phase 6C bridge method "
+        "'export_encrypted_backup'"
+    )
+    sig = inspect.signature(method)
+    params = list(sig.parameters.values())
+    assert len(params) == 2, (
+        "export_encrypted_backup must accept exactly two parameters, "
+        f"got {len(params)}"
+    )
+    expected_names = ("passphrase", "confirm_passphrase")
+    for idx, name in enumerate(expected_names):
+        assert params[idx].name == name, (
+            f"export_encrypted_backup parameter {idx} must be {name!r}, "
+            f"got {params[idx].name!r}"
+        )
+        assert params[idx].default is inspect.Parameter.empty, (
+            f"export_encrypted_backup {name!r} must be required "
+            "(no default value)"
+        )
+        assert params[idx].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD, (
+            f"export_encrypted_backup {name!r} must be positional-or-keyword, "
+            "not *args or **kwargs"
+        )
+
+
+def test_webview_bridge_exposes_phase_6c_manifest_preview_method() -> None:
+    """``WebViewBridge`` must expose the Phase 6C
+    ``preview_encrypted_backup_manifest`` method with zero parameters."""
+    import inspect
+
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    bridge = WebViewBridge()
+    method = getattr(bridge, "preview_encrypted_backup_manifest", None)
+    assert callable(method), (
+        "WebViewBridge must expose Phase 6C bridge method "
+        "'preview_encrypted_backup_manifest'"
+    )
+    sig = inspect.signature(method)
+    params = list(sig.parameters.values())
+    assert len(params) == 0, (
+        "preview_encrypted_backup_manifest must accept zero parameters, "
+        f"got {len(params)}"
+    )
+
+
+def test_webview_bridge_export_error_payload_has_no_sensitive_tokens() -> None:
+    """Phase 6C: the bridge ``export_encrypted_backup`` error payload must
+    collapse to stable Chinese messages and must not leak traceback /
+    str(exc) / repr / format_exc / exc_info / .message / raw_exception /
+    clipboard_content.
+
+    ``passphrase`` IS allowed as a parameter name, local variable, and
+    pass-through argument to ``settings_api.export_encrypted_backup_for_webview``;
+    it is NOT in the forbidden list here. The runtime tests in
+    ``test_settings_privacy_status`` verify the returned payload never
+    carries the passphrase value.
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def export_encrypted_backup")
+    assert pos != -1, (
+        "bridge.py must define export_encrypted_backup for Phase 6C"
+    )
+    body = bridge_source[pos:pos + 3000]
+    # Stable Chinese error messages that must appear in the payload.
+    assert "已取消导出" in body
+    assert "导出加密备份失败" in body
+    # Skip the docstring when checking for forbidden runtime tokens, since
+    # the docstring legitimately mentions "traceback" / "passphrase" to
+    # document what the method does NOT leak.
+    doc_start = body.find('"""')
+    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
+    code_only = body[doc_end:] if doc_end > 3 else body
+    for forbidden in (
+        "traceback",
+        "str(exc)",
+        "str(e)",
+        "repr(",
+        "format_exc",
+        "exc_info",
+        ".message",
+        "raw_exception",
+        "clipboard_content",
+    ):
+        assert forbidden not in code_only, (
+            "export_encrypted_backup must not reference forbidden token: "
+            + forbidden
+        )
+
+
+def test_webview_bridge_manifest_preview_error_payload_has_no_sensitive_tokens() -> None:
+    """Phase 6C: the bridge ``preview_encrypted_backup_manifest`` error
+    payload must collapse to stable Chinese messages and must not leak
+    traceback / str(exc) / repr / format_exc / exc_info / .message /
+    raw_exception / clipboard_content / passphrase.
+
+    Unlike ``export_encrypted_backup``, ``passphrase`` IS forbidden here
+    because the manifest preview method never accepts or references a
+    passphrase.
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def preview_encrypted_backup_manifest")
+    assert pos != -1, (
+        "bridge.py must define preview_encrypted_backup_manifest for Phase 6C"
+    )
+    body = bridge_source[pos:pos + 3000]
+    # Stable Chinese error messages that must appear in the payload.
+    assert "已取消读取备份清单" in body
+    assert "读取备份清单失败" in body
+    # Skip the docstring when checking for forbidden runtime tokens.
+    doc_start = body.find('"""')
+    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
+    code_only = body[doc_end:] if doc_end > 3 else body
+    for forbidden in (
+        "traceback",
+        "str(exc)",
+        "str(e)",
+        "repr(",
+        "format_exc",
+        "exc_info",
+        ".message",
+        "passphrase",
+        "raw_exception",
+        "clipboard_content",
+    ):
+        assert forbidden not in code_only, (
+            "preview_encrypted_backup_manifest must not reference forbidden token: "
+            + forbidden
+        )
+
+
+def test_webview_bridge_export_passes_passphrase_to_api_facade() -> None:
+    """Phase 6C: ``export_encrypted_backup`` must pass ``passphrase`` and
+    ``confirm_passphrase`` through to
+    ``settings_api.export_encrypted_backup_for_webview``. This is a static
+    source-level check confirming the passphrase is used as a pass-through
+    argument (not logged, not returned, not persisted)."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def export_encrypted_backup")
+    assert pos != -1
+    body = bridge_source[pos:pos + 3000]
+    # The method must call the API facade with both passphrase arguments.
+    assert "settings_api.export_encrypted_backup_for_webview" in body
+    assert "passphrase" in body
+    assert "confirm_passphrase" in body
+
+
+def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
+    """Phase 6C: neither ``export_encrypted_backup`` nor
+    ``preview_encrypted_backup_manifest`` may call
+    ``import_encrypted_backup``, ``clear_all_local_data``, or
+    ``set_setting_value``. This is a static source-level check on the
+    bridge module."""
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Check the export method body.
+    export_pos = bridge_source.find("def export_encrypted_backup")
+    assert export_pos != -1
+    # Find the next method definition to bound the export body.
+    next_pos = bridge_source.find("\n    def ", export_pos + 1)
+    export_body = bridge_source[export_pos:next_pos if next_pos != -1 else export_pos + 3000]
+    for forbidden in (
+        "import_encrypted_backup",
+        "clear_all_local_data",
+        "set_setting_value",
+    ):
+        assert forbidden not in export_body, (
+            "export_encrypted_backup must not call: " + forbidden
+        )
+    # Check the manifest preview method body.
+    manifest_pos = bridge_source.find("def preview_encrypted_backup_manifest")
+    assert manifest_pos != -1
+    next_pos = bridge_source.find("\n    def ", manifest_pos + 1)
+    manifest_body = bridge_source[manifest_pos:next_pos if next_pos != -1 else manifest_pos + 3000]
+    for forbidden in (
+        "import_encrypted_backup",
+        "clear_all_local_data",
+        "set_setting_value",
+    ):
+        assert forbidden not in manifest_body, (
+            "preview_encrypted_backup_manifest must not call: " + forbidden
         )

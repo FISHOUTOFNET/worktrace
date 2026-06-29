@@ -8,18 +8,22 @@
 
 ## Current Phase
 
-**Phase 6B — Settings / Privacy clipboard capture toggle foundation.**
-The Settings / Privacy page surfaces a read-only safety-status snapshot
-(storage model, clipboard capture on/off, export directory configured yes/no,
-encrypted-backup import-in-progress flag) and opens its first minimal write
-capability: the clipboard capture toggle. Toggling writes
-`clipboard_capture_enabled` through a narrow bridge facade; both API and
-bridge layers accept only a real `bool` and collapse failures to stable
-Chinese messages. Phase 6B does not read or display clipboard content. No
-other write actions are open (no save settings, no encrypted-backup export /
-import / manifest, no clear-all-local-data). Builds on Phase 6A (read-only
-status foundation) and Phase 5I (automatic rules + selected-rule batch
-operations foundation, on top of user project create / edit / enable-disable / archive).
+**Phase 6C — Settings / Privacy encrypted backup export + manifest preview
+foundation.** The Settings / Privacy page surfaces a read-only safety-status
+snapshot (storage model, clipboard capture on/off, export directory
+configured yes/no, encrypted-backup import-in-progress flag), opens the
+clipboard capture toggle write (Phase 6B), and opens encrypted backup
+export + manifest preview through native file dialogs. Export writes a
+`.wtbackup` via a native save dialog; preview reads only the display-safe
+manifest fields (version / app_version / created_at / kdf_algorithm /
+payload_format / payload_alg) via a native open dialog, without passphrase
+and without decrypting the payload. Both API and bridge layers collapse
+failures to stable Chinese messages and never return full paths,
+passphrases, salt, ciphertext, payload, SQL, or tracebacks. No other write
+actions are open (no encrypted-backup import, no save settings, no
+clear-all-local-data, no arbitrary file/folder dialog). Builds on Phase 6A
+/ 6B and Phase 5I (automatic rules + selected-rule batch operations, on top
+of user project create / edit / enable-disable / archive).
 Chronology in [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Default UI
@@ -48,38 +52,36 @@ Chronology in [`history/webview-phases.md`](history/webview-phases.md).
   project name / description, project enabled state, special `排除规则`
   marker, rule counts, folder rules, keyword rules, rule enabled state, and
   folder recursion scope. Current write capabilities are listed in the
-  Project Rules matrix below. Per-phase scope details are archived in
-  [`history/webview-phases.md`](history/webview-phases.md).
-- **Settings / Privacy** (Phase 6A / 6B): read-only safety-status foundation
-  plus clipboard capture toggle write. Shows storage model, clipboard-capture
-  on/off, export directory configured yes/no, encrypted-backup import-in-
-  progress flag. The clipboard capture toggle is the only write action.
+  Project Rules matrix below.
+- **Settings / Privacy** (Phase 6A / 6B / 6C): read-only safety-status
+  foundation plus clipboard capture toggle write plus encrypted backup export
+  + manifest preview. Shows storage model, clipboard-capture on/off, export
+  directory configured yes/no, encrypted-backup import-in-progress flag.
+  Write actions: clipboard capture toggle; backup export (native save dialog
+  → `.wtbackup`); manifest preview (native open dialog → display-safe
+  fields only, no passphrase, no decryption).
 
 ## Supported Timeline Write Operations
 
-- Project reclassification of a session.
-- Session-note editing.
-- Single-activity `start_time` / `end_time` correction, incl. session-level.
-- Single-activity split into two closed activities.
-- Two-activity merge of adjacent, same-project / same-resource / same-status /
-  same-source activities.
-- Single-activity hide and soft delete.
-- Batch project reassignment of multiple closed activities.
-- Batch note overwrite on multiple closed activities.
-- Single-activity restore (un-hide + un-soft-delete).
+- Project reclassification of a session; session-note editing.
+- Single-activity `start_time` / `end_time` correction (incl. session-level);
+  single-activity split into two closed activities; two-activity merge of
+  adjacent same-project / same-resource / same-status / same-source activities.
+- Single-activity hide / soft delete; single-activity restore (un-hide +
+  un-soft-delete).
+- Batch project reassignment of multiple closed activities; batch note
+  overwrite on multiple closed activities.
 - Correction shell: a read-only context + navigation workspace reusing the
-  above single/batch capabilities.
-- Unified, stabilized Timeline status / error semantics.
+  above single/batch capabilities; unified, stabilized Timeline status /
+  error semantics.
 
 ## Project Rules Capability Matrix
 
-- Read project-grouped folder / keyword rule list.
-- Enable / disable existing folder / keyword rules.
-- Keyword rule create / edit / delete.
-- Folder rule create / edit / delete.
+- Read project-grouped folder / keyword rule list; enable / disable existing
+  folder / keyword rules; keyword + folder rule create / edit / delete.
 - User project create / edit / enable-disable / archive.
-- Single-rule impact preview for folder / keyword rules (display-safe
-  counts + up to 20 sample rows; no raw window title / file path / note).
+- Single-rule impact preview for folder / keyword rules (display-safe counts +
+  up to 20 sample rows; no raw window title / file path / note).
 - Safe single-rule backfill for folder / keyword rules (≤ 100 updates per
   call; skips manual / hidden / deleted / in-progress / non-normal;
   `too_many_matches` writes nothing).
@@ -97,8 +99,6 @@ Chronology in [`history/webview-phases.md`](history/webview-phases.md).
 - **CSV export write**: native save dialog, display-safe CSV (UTF-8 BOM,
   Chinese headers, formula-injection escaping). Returns basename only; never
   the full path, window title, file path, note, or clipboard.
-- Excel / PDF / timesheet-template export, folder opening, auto-open, and
-  auto-submit are explicitly unsupported.
 
 ## Explicitly Unsupported Capabilities
 
@@ -108,12 +108,12 @@ Chronology in [`history/webview-phases.md`](history/webview-phases.md).
   `preview_folder_rule_conflicts` NOT exposed to WebView; 5I reuses
   display-safe `rule_impact_service` helpers); raw / unbounded batch
   backfill; automatic-rule on/off UI toggle.
-- Settings write actions still unsupported (Phase 6B only opens the clipboard
-  capture toggle): save settings, encrypted-backup export / import / manifest,
-  clear-all-local-data, first-run notice, native file / folder dialog, export
-  path setting.
-- Batch hide / batch delete / batch restore; permanent delete; undo stack.
-- Batch time / batch split / batch merge; note append / merge; auto-rule
+- Settings write actions still unsupported (Phase 6C opens clipboard capture
+  toggle + encrypted backup export + manifest preview; encrypted backup
+  import, save settings, clear-all-local-data, first-run notice, arbitrary
+  file / folder dialog, and export path setting remain deferred).
+- Batch hide / batch delete / batch restore; permanent delete; undo stack;
+  batch time / batch split / batch merge; note append / merge; auto-rule
   creation; global overlap detection.
 - AI, server, payment, license, token, subscription, login, cloud sync, OCR,
   screenshots, screen recording, keyboard logging, automatic startup.
@@ -131,9 +131,8 @@ WebView (index.html / js/*.js / styles.css)
    (collector thread ──> worktrace.collector)
 ```
 
-Frontend JS layout (Phase R2): the former single `app.js` is split by
-feature into local classic scripts under `worktrace/webview_ui/js/`
-(`core.js`, `overview.js`, `timeline.js`, `timeline_correction.js`,
+Frontend JS layout (Phase R2): feature-split local classic scripts under
+`worktrace/webview_ui/js/` (`core.js`, `overview.js`, `timeline*.js`,
 `statistics.js`, `settings.js`, `rules*.js`, `init.js`) loaded via plain
 `<script src="js/...">` tags. No ES modules, no bundler, no Node/build
 step, no browser storage, no network requests.
@@ -150,7 +149,8 @@ step, no browser storage, no network requests.
   title, local file path hint, start/end time, duration, status, project,
   notes). No reading of document / email / webpage / browser-history bodies.
 - Clipboard text recording is off by default; when enabled it stores copied
-  text locally only and auto-clears entries older than 30 days.
+  text locally only and auto-clears entries older than 30 days. The Phase 6B
+  toggle only controls this flag; the page never displays clipboard content.
 - `.wtbackup` is a local encrypted file; WorkTrace never uploads it; the
   passphrase is not recoverable.
 

@@ -86,6 +86,12 @@
     // and the capture toggle are disabled so no concurrent write or
     // read can race the in-flight toggle write.
     App.settingsWriteInProgress = false;
+    // --- Phase 6C: Settings / Privacy encrypted backup state -----------
+    // Separate from settingsWriteInProgress (capture toggle) so a backup
+    // operation in flight never races the capture toggle and vice versa.
+    // While either is true, the backup controls are disabled.
+    App.settingsBackupExportInProgress = false;
+    App.settingsBackupManifestInProgress = false;
 
     // --- Phase 5B: Project Rules state ---------------------------------
     App.rulesLoaded = false;

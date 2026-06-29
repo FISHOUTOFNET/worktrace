@@ -1,13 +1,16 @@
-"""Phase 6A / 6B — Settings / Privacy WebView static-contract tests.
+"""Phase 6A / 6B / 6C — Settings / Privacy WebView static-contract tests.
 
 These tests read the bundled frontend resources (``index.html`` /
 ``js/*.js`` / ``styles.css`` / ``WorkTrace.spec``) directly without starting
-the GUI. They lock the Settings / Privacy page contracts for Phase 6B
-(read-only status foundation + clipboard capture toggle write): the page
-must be migrated (no placeholder), the required DOM ids must exist,
+the GUI. They lock the Settings / Privacy page contracts for Phase 6C
+(read-only status foundation + clipboard capture toggle write + encrypted
+backup export + encrypted backup manifest preview): the page must be
+migrated (no placeholder), the required DOM ids must exist,
 ``settings.js`` must be loaded in the correct order, and the JS must only
-call ``get_settings_privacy_status`` and ``set_clipboard_capture_enabled``
-(no save / export / import / clear-all / file-dialog / path write paths).
+call ``get_settings_privacy_status``, ``set_clipboard_capture_enabled``,
+``export_encrypted_backup``, and ``preview_encrypted_backup_manifest``
+(no import / clear-all / save / set-setting / parse-manifest / file-dialog
+path write paths).
 """
 
 from __future__ import annotations
@@ -53,7 +56,7 @@ def test_index_html_settings_page_section_is_migrated_6a() -> None:
 
 
 def test_index_html_settings_required_dom_ids_6a() -> None:
-    """Phase 6A / 6B: the page-settings section must define the required DOM ids."""
+    """Phase 6A / 6B / 6C: the page-settings section must define the required DOM ids."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for dom_id in (
         "settings-refresh-btn",
@@ -68,6 +71,13 @@ def test_index_html_settings_required_dom_ids_6a() -> None:
         "settings-clipboard-toggle",
         "settings-clipboard-toggle-label",
         "settings-clipboard-toggle-status",
+        # Phase 6C: encrypted backup export + manifest preview controls
+        "settings-backup-passphrase",
+        "settings-backup-passphrase-confirm",
+        "settings-backup-export-btn",
+        "settings-backup-manifest-btn",
+        "settings-backup-status",
+        "settings-backup-manifest",
     ):
         assert 'id="' + dom_id + '"' in source, (
             "index.html must define DOM id: " + dom_id
@@ -134,18 +144,23 @@ def test_settings_js_defines_load_settings_privacy_status_6a() -> None:
 
 
 def test_settings_js_only_calls_allowed_bridge_methods_6b() -> None:
-    """Phase 6B: settings.js must only call ``get_settings_privacy_status``
-    and ``set_clipboard_capture_enabled``. All other write-side bridge
-    methods remain forbidden (export_encrypted_backup /
-    import_encrypted_backup / parse_encrypted_backup_manifest /
-    clear_all_local_data / set_setting_value)."""
+    """Phase 6C: settings.js may only call ``get_settings_privacy_status``,
+    ``set_clipboard_capture_enabled``, ``export_encrypted_backup``, and
+    ``preview_encrypted_backup_manifest``. All other write-side bridge
+    methods remain forbidden (import_encrypted_backup /
+    parse_encrypted_backup_manifest / clear_all_local_data /
+    set_setting_value)."""
     source = read_js("settings.js")
-    # The two allowed Settings bridge method names must be present.
+    # The four allowed Settings bridge method names must be present.
     assert 'App.callBridge("get_settings_privacy_status")' in source
     assert 'App.callBridge("set_clipboard_capture_enabled"' in source
-    # Every other write-side bridge method is still forbidden.
+    assert 'App.callBridge("export_encrypted_backup"' in source
+    assert 'App.callBridge("preview_encrypted_backup_manifest"' in source
+    # Every other write-side bridge method is still forbidden. Note:
+    # ``parse_encrypted_backup_manifest`` is the API facade name, not the
+    # bridge method name; the bridge method is ``preview_encrypted_backup_manifest``
+    # and must not be confused with the parse facade.
     for forbidden in (
-        "export_encrypted_backup",
         "import_encrypted_backup",
         "parse_encrypted_backup_manifest",
         "clear_all_local_data",
@@ -196,18 +211,18 @@ def test_settings_js_uses_text_content_not_inner_html_6a() -> None:
 
 
 def test_settings_js_no_clickable_write_buttons_6a() -> None:
-    """Phase 6A: the Settings / Privacy page must not surface any
-    clickable save / export / import / clear / clipboard-toggle write
-    button. The only allowed button is the read-only refresh button."""
+    """Phase 6A / 6C: the Settings / Privacy page must not surface any
+    clickable save / import / clear / clipboard-toggle write button.
+    Phase 6C explicitly allows the encrypted backup export and manifest
+    preview buttons, so export-button patterns are no longer forbidden
+    here; the precise allowed / forbidden DOM ids are locked by
+    ``test_index_html_no_forbidden_settings_buttons_6c``."""
     source = read_js("settings.js")
     lowered = source.lower()
     for forbidden in (
         "savebtn",
         "save_btn",
         "save-button",
-        "exportbtn",
-        "export_btn",
-        "export-button",
         "importbtn",
         "import_btn",
         "import-button",
@@ -363,25 +378,41 @@ def test_settings_js_toggle_change_handler_bound_in_init_6b() -> None:
 
 
 def test_settings_js_disables_controls_during_load_and_write_6b() -> None:
-    """Phase 6B: settings.js must disable both the refresh button and the
-    capture toggle while ``settingsLoading`` or ``settingsWriteInProgress``
-    is true. The shared helper must reference both flags so a read or write
-    in flight blocks both controls."""
+    """Phase 6B / 6C: settings.js must disable the refresh button, the
+    capture toggle, and the backup controls while any Settings operation
+    is in flight. Phase 6C introduced ``anySettingsOperationInProgress``
+    which combines ``settingsLoading``, ``settingsWriteInProgress``,
+    ``settingsBackupExportInProgress``, and ``settingsBackupManifestInProgress``;
+    ``setSettingsLoading`` and ``renderCaptureToggle`` delegate to it so
+    all four flags block every Settings control."""
     source = read_js("settings.js")
-    # The shared disable helper must exist and reference both flags.
+    # The shared disable helper must exist.
     pos = source.find("function setSettingsControlsDisabled")
     assert pos != -1
-    # The setSettingsLoading function must combine both flags.
+    # anySettingsOperationInProgress must exist and reference all four flags.
+    any_pos = source.find("function anySettingsOperationInProgress")
+    assert any_pos != -1
+    any_body = source[any_pos:any_pos + 600]
+    for flag in (
+        "settingsLoading",
+        "settingsWriteInProgress",
+        "settingsBackupExportInProgress",
+        "settingsBackupManifestInProgress",
+    ):
+        assert flag in any_body, (
+            "anySettingsOperationInProgress must reference flag: " + flag
+        )
+    # setSettingsLoading must delegate to anySettingsOperationInProgress.
     loading_pos = source.find("function setSettingsLoading")
     assert loading_pos != -1
     loading_body = source[loading_pos:loading_pos + 600]
-    assert "settingsWriteInProgress" in loading_body
-    # renderCaptureToggle must also disable on both flags + not-yet-loaded.
+    assert "anySettingsOperationInProgress" in loading_body
+    # renderCaptureToggle must also disable on the combined flag + not-yet-loaded.
     render_pos = source.find("function renderCaptureToggle")
     assert render_pos != -1
     render_body = source[render_pos:render_pos + 800]
-    assert "settingsLoading" in render_body
-    assert "settingsWriteInProgress" in render_body
+    assert "anySettingsOperationInProgress" in render_body
+    assert "settingsLoaded" in render_body
 
 
 def test_settings_js_toggle_write_failure_recovers_state_6b() -> None:
@@ -430,4 +461,184 @@ def test_styles_css_has_toggle_classes_6b() -> None:
     ):
         assert cls in source, (
             "styles.css must define toggle class: " + cls
+        )
+
+
+# --- Phase 6C: encrypted backup export + manifest preview contract ------
+
+
+def test_core_js_declares_settings_backup_state_6c() -> None:
+    """Phase 6C: core.js must declare ``settingsBackupExportInProgress``
+    and ``settingsBackupManifestInProgress`` as separate state flags so
+    backup operations never race the clipboard toggle write."""
+    source = read_js("core.js")
+    assert "settingsBackupExportInProgress" in source, (
+        "core.js must declare settingsBackupExportInProgress for Phase 6C"
+    )
+    assert "settingsBackupManifestInProgress" in source, (
+        "core.js must declare settingsBackupManifestInProgress for Phase 6C"
+    )
+
+
+def test_settings_js_defines_backup_helpers_6c() -> None:
+    """Phase 6C: settings.js must define and expose the backup helper
+    functions (setSettingsBackupControlsDisabled / setSettingsBackupStatus
+    / clearSettingsBackupStatus / renderBackupManifest /
+    exportEncryptedBackup / previewEncryptedBackupManifest)."""
+    source = read_js("settings.js")
+    for name in (
+        "setSettingsBackupControlsDisabled",
+        "setSettingsBackupStatus",
+        "clearSettingsBackupStatus",
+        "renderBackupManifest",
+        "exportEncryptedBackup",
+        "previewEncryptedBackupManifest",
+    ):
+        assert "function " + name in source, (
+            "settings.js must define function: " + name
+        )
+        assert "App." + name in source, (
+            "settings.js must expose App." + name
+        )
+
+
+def test_settings_js_backup_catch_does_not_read_error_message_6c() -> None:
+    """Phase 6C: the backup export / manifest preview catch blocks must
+    not read ``.message`` on the caught error (never surface raw
+    exception text)."""
+    source = read_js("settings.js")
+    # The whole module must not read .message in any catch (Phase 6A
+    # already enforced this; Phase 6C extends it to the new functions).
+    for forbidden in ("err.message", "error.message", "e.message"):
+        assert forbidden not in source, (
+            "settings.js must not read .message in catch: " + forbidden
+        )
+
+
+def test_settings_js_backup_render_uses_text_content_6c() -> None:
+    """Phase 6C: renderBackupManifest must render manifest fields via
+    ``textContent`` only; ``innerHTML`` is already forbidden module-wide."""
+    source = read_js("settings.js")
+    pos = source.find("function renderBackupManifest")
+    assert pos != -1
+    body = source[pos:pos + 1500]
+    assert "textContent" in body
+    assert "innerHTML" not in body
+    assert "createElement" in body
+
+
+def test_settings_js_backup_does_not_persist_passphrase_6c() -> None:
+    """Phase 6C: the passphrase must never be saved to ``App`` global
+    state. The export function reads the input values into local
+    variables and clears the inputs after the call; it must NOT assign
+    the passphrase to any ``App.`` property."""
+    source = read_js("settings.js")
+    pos = source.find("function exportEncryptedBackup")
+    assert pos != -1
+    body = source[pos:pos + 2500]
+    # The passphrase must be read into a local variable, not App state.
+    assert "var passphrase" in body
+    assert "var confirmPassphrase" in body
+    # The function must clear the password inputs after the call.
+    assert "passInput.value = \"\"" in body or 'passInput.value = ""' in body
+    assert "passConfirmInput.value = \"\"" in body or 'passConfirmInput.value = ""' in body
+    # The function must NOT assign passphrase to any App.* property.
+    # Look for "App.passphrase" or "App." followed by a passphrase-like
+    # assignment pattern anywhere in the export function body.
+    assert "App.passphrase" not in body
+    assert "App.confirmPassphrase" not in body
+    assert "App.backupPassphrase" not in body
+
+
+def test_settings_js_backup_no_inner_html_in_manifest_render_6c() -> None:
+    """Phase 6C: the manifest preview rendering must never use
+    ``innerHTML``; only ``textContent`` and ``createElement`` are
+    allowed for dynamic content."""
+    source = read_js("settings.js")
+    assert "innerHTML" not in source
+
+
+def test_init_js_binds_backup_buttons_6c() -> None:
+    """Phase 6C: initButtons must bind the ``settings-backup-export-btn``
+    click event to ``App.exportEncryptedBackup`` and the
+    ``settings-backup-manifest-btn`` click event to
+    ``App.previewEncryptedBackupManifest``."""
+    source = read_js("init.js")
+    pos = source.find("function initButtons")
+    assert pos != -1
+    body = source[pos:pos + 10000]
+    assert "settings-backup-export-btn" in body
+    assert "exportEncryptedBackup" in body
+    assert "settings-backup-manifest-btn" in body
+    assert "previewEncryptedBackupManifest" in body
+
+
+def test_styles_css_has_backup_scoped_classes_6c() -> None:
+    """Phase 6C: styles.css must define the ``.settings-backup-*``
+    scoped classes used by the encrypted backup export + manifest
+    preview controls."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    for cls in (
+        ".settings-backup-row",
+        ".settings-backup-label",
+        ".settings-backup-input",
+        ".settings-backup-actions",
+        ".settings-backup-btn",
+        ".settings-backup-status",
+        ".settings-backup-manifest",
+        ".settings-backup-manifest-filename",
+        ".settings-backup-manifest-fields",
+    ):
+        assert cls in source, (
+            "styles.css must define backup class: " + cls
+        )
+
+
+def test_index_html_no_forbidden_settings_buttons_6c() -> None:
+    """Phase 6C: index.html page-settings must not include the forbidden
+    write button ids (import / clear / clear-all / save / set-path).
+    The Phase 6C ``settings-backup-export-btn`` and
+    ``settings-backup-manifest-btn`` are the only allowed backup
+    buttons; ``settings-export-btn`` / ``settings-manifest-btn``
+    (without the ``-backup-`` segment) remain forbidden so no
+    ambiguous shortcut ids are introduced."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="page-settings"')
+    assert pos != -1
+    end = source.find("</section>", pos)
+    section = source[pos:end]
+    for forbidden in (
+        "settings-import-btn",
+        "settings-clear-btn",
+        "settings-clear-all-btn",
+        "settings-save-btn",
+        "settings-set-path-btn",
+        # Ambiguous shortcuts without the -backup- segment remain
+        # forbidden so the only backup entry points are the scoped ones.
+        "settings-export-btn",
+        "settings-manifest-btn",
+    ):
+        assert forbidden not in section, (
+            "index.html page-settings must not contain forbidden id: "
+            + forbidden
+        )
+
+
+def test_settings_js_backup_no_network_storage_clipboard_6c() -> None:
+    """Phase 6C: the backup functions must not use any network, storage,
+    or browser clipboard API. (Module-wide check; reaffirmed for the
+    new Phase 6C functions.)"""
+    source = read_js("settings.js")
+    for forbidden in (
+        "fetch(",
+        "XMLHttpRequest",
+        "WebSocket",
+        "EventSource",
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "navigator.clipboard",
+    ):
+        assert forbidden not in source, (
+            "settings.js must not use: " + forbidden
         )

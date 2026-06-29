@@ -3311,3 +3311,103 @@ body {
     font-size: 12px;
     color: #475569;
 }
+
+/* --- Phase 6C: Settings / Privacy encrypted backup controls ---------- */
+
+.settings-backup-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.settings-backup-label {
+    min-width: 64px;
+    font-size: 13px;
+    color: #334155;
+}
+
+.settings-backup-input {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #0f172a;
+    background: #ffffff;
+}
+
+.settings-backup-input:disabled {
+    background: #f1f5f9;
+    cursor: not-allowed;
+    color: #94a3b8;
+}
+
+.settings-backup-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.settings-backup-btn {
+    padding: 6px 12px;
+    border: 1px solid #2563eb;
+    border-radius: 4px;
+    background: #2563eb;
+    color: #ffffff;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.settings-backup-btn:hover:not(:disabled) {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+}
+
+.settings-backup-btn:disabled {
+    background: #94a3b8;
+    border-color: #94a3b8;
+    cursor: not-allowed;
+}
+
+.settings-backup-status {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #475569;
+}
+
+.settings-backup-manifest {
+    margin-top: 12px;
+    padding: 8px 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    background: #f8fafc;
+}
+
+.settings-backup-manifest-filename {
+    margin: 0 0 6px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #0f172a;
+    word-break: break-all;
+}
+
+.settings-backup-manifest-fields {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 12px;
+    row-gap: 4px;
+    font-size: 12px;
+}
+
+.settings-backup-manifest-fields dt {
+    color: #475569;
+}
+
+.settings-backup-manifest-fields dd {
+    margin: 0;
+    color: #0f172a;
+    word-break: break-all;
+}

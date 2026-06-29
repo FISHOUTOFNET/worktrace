@@ -1,8 +1,8 @@
-// WorkTrace WebView frontend — settings module (Phase 6B).
-// Settings / Privacy page: read-only status loading + capture toggle
-// write foundation. Export / import / manifest / clear-all / save /
-// file-dialog actions are NOT opened in this phase. Dynamic content is
-// rendered via textContent only.
+// WorkTrace WebView frontend — settings module (Phase 6C).
+// Settings / Privacy page: read-only status loading, capture toggle
+// write, encrypted backup export, and encrypted backup manifest preview.
+// Import / clear-all / save / arbitrary file-dialog actions are NOT
+// opened in this phase. Dynamic content is rendered via textContent only.
 
 (function () {
     "use strict";
@@ -31,14 +31,45 @@
     }
     App.clearSettingsError = clearSettingsError;
 
+    function anySettingsOperationInProgress() {
+        // True when any Settings read / capture-toggle write / backup export /
+        // manifest preview is in flight. Used to keep all Settings controls
+        // disabled together so no two operations can race.
+        return !!(
+            App.settingsLoading
+            || App.settingsWriteInProgress
+            || App.settingsBackupExportInProgress
+            || App.settingsBackupManifestInProgress
+        );
+    }
+    App.anySettingsOperationInProgress = anySettingsOperationInProgress;
+
+    function setSettingsBackupControlsDisabled(disabled) {
+        // Backup-specific controls: passphrase inputs, export button, and
+        // manifest preview button. They stay disabled until the first
+        // successful status read and during any in-flight Settings op.
+        var backupDisabled = disabled || !App.settingsLoaded;
+        var exportBtn = document.getElementById("settings-backup-export-btn");
+        var manifestBtn = document.getElementById("settings-backup-manifest-btn");
+        var passInput = document.getElementById("settings-backup-passphrase");
+        var passConfirmInput = document.getElementById("settings-backup-passphrase-confirm");
+        if (exportBtn) exportBtn.disabled = backupDisabled;
+        if (manifestBtn) manifestBtn.disabled = backupDisabled;
+        if (passInput) passInput.disabled = backupDisabled;
+        if (passConfirmInput) passConfirmInput.disabled = backupDisabled;
+    }
+    App.setSettingsBackupControlsDisabled = setSettingsBackupControlsDisabled;
+
     function setSettingsControlsDisabled(disabled) {
-        // Shared disable for the refresh button and the capture toggle.
-        // The toggle carries an additional "not yet loaded" guard so it
-        // stays disabled until the first successful status read.
+        // Shared disable for the refresh button, the capture toggle, and
+        // the backup controls. While any read or write is in flight, all
+        // Settings controls are disabled to prevent races between the
+        // capture toggle and backup operations.
         var btn = document.getElementById("settings-refresh-btn");
         if (btn) btn.disabled = disabled;
         var toggle = document.getElementById("settings-clipboard-toggle");
         if (toggle) toggle.disabled = disabled || !App.settingsLoaded;
+        setSettingsBackupControlsDisabled(disabled);
     }
     App.setSettingsControlsDisabled = setSettingsControlsDisabled;
 
@@ -46,9 +77,9 @@
         App.settingsLoading = loading;
         var el = document.getElementById("settings-loading");
         if (el) el.hidden = !loading;
-        // Both the refresh button and the toggle must be disabled while a
-        // read is in flight or a write is in progress.
-        setSettingsControlsDisabled(loading || App.settingsWriteInProgress);
+        // All Settings controls (refresh / toggle / backup) must be
+        // disabled while a read is in flight or any write is in progress.
+        setSettingsControlsDisabled(anySettingsOperationInProgress());
     }
     App.setSettingsLoading = setSettingsLoading;
 
@@ -77,13 +108,13 @@
 
     function renderCaptureToggle(status) {
         // Sync the toggle's checked / disabled / status text from the
-        // latest status snapshot. The toggle stays disabled while a read
-        // or write is in flight, or before the first successful load.
+        // latest status snapshot. The toggle stays disabled while any
+        // Settings op is in flight, or before the first successful load.
         var toggle = document.getElementById("settings-clipboard-toggle");
         if (!toggle) return;
         var captureEnabled = !!(status && status.clipboard_capture_enabled);
         toggle.checked = captureEnabled;
-        toggle.disabled = App.settingsLoading || App.settingsWriteInProgress || !App.settingsLoaded;
+        toggle.disabled = anySettingsOperationInProgress() || !App.settingsLoaded;
         setCaptureToggleStatus(boolLabel(captureEnabled));
     }
     App.renderCaptureToggle = renderCaptureToggle;
@@ -187,9 +218,9 @@
             setCaptureToggleStatus(boolLabel(!enabled));
         }).then(function () {
             // finally semantics: clear the write flag and re-enable
-            // controls unless a read is still in flight.
+            // controls unless another Settings op is still in flight.
             App.settingsWriteInProgress = false;
-            setSettingsControlsDisabled(App.settingsLoading);
+            setSettingsControlsDisabled(anySettingsOperationInProgress());
         });
     }
     App.setCaptureEnabled = setCaptureEnabled;
@@ -206,4 +237,137 @@
         setCaptureEnabled(enabled);
     }
     App.handleCaptureToggleChange = handleCaptureToggleChange;
+
+    // --- Phase 6C: encrypted backup export + manifest preview -----------
+
+    var BACKUP_EXPORT_ERROR_MESSAGE = "导出加密备份失败";
+    var BACKUP_MANIFEST_ERROR_MESSAGE = "读取备份清单失败";
+
+    function setSettingsBackupStatus(text) {
+        // Backup-specific status line (separate from the page-level
+        // settings-error banner). Renders via textContent only.
+        var el = document.getElementById("settings-backup-status");
+        if (!el) return;
+        if (!text) {
+            el.hidden = true;
+            el.textContent = "";
+            return;
+        }
+        el.hidden = false;
+        el.textContent = text;
+    }
+    App.setSettingsBackupStatus = setSettingsBackupStatus;
+
+    function clearSettingsBackupStatus() {
+        setSettingsBackupStatus("");
+    }
+    App.clearSettingsBackupStatus = clearSettingsBackupStatus;
+
+    function renderBackupManifest(manifest, filename) {
+        // Render display-safe manifest fields via textContent only. The
+        // manifest dict only carries version / app_version / created_at /
+        // kdf_algorithm / payload_format / payload_alg; no salt, ciphertext,
+        // payload, or path is ever rendered.
+        var container = document.getElementById("settings-backup-manifest");
+        if (!container) return;
+        var filenameEl = container.querySelector(".settings-backup-manifest-filename");
+        var fieldsEl = container.querySelector(".settings-backup-manifest-fields");
+        if (!manifest) {
+            container.hidden = true;
+            if (filenameEl) filenameEl.textContent = "";
+            if (fieldsEl) fieldsEl.textContent = "";
+            return;
+        }
+        if (filenameEl) filenameEl.textContent = "文件：" + (filename || "");
+        if (fieldsEl) {
+            fieldsEl.textContent = "";
+            var fields = [
+                ["清单版本", manifest.version],
+                ["应用版本", manifest.app_version],
+                ["创建时间", manifest.created_at],
+                ["KDF 算法", manifest.kdf_algorithm],
+                ["载荷格式", manifest.payload_format],
+                ["载荷算法", manifest.payload_alg]
+            ];
+            for (var i = 0; i < fields.length; i++) {
+                var dt = document.createElement("dt");
+                dt.textContent = fields[i][0];
+                var dd = document.createElement("dd");
+                var value = fields[i][1];
+                dd.textContent = (value === undefined || value === null) ? "" : String(value);
+                fieldsEl.appendChild(dt);
+                fieldsEl.appendChild(dd);
+            }
+        }
+        container.hidden = false;
+    }
+    App.renderBackupManifest = renderBackupManifest;
+
+    function exportEncryptedBackup() {
+        // Read passphrase + confirm passphrase from the two password
+        // inputs. Do NOT persist either value in App global state; the
+        // values are only used as call arguments and cleared on finally.
+        if (anySettingsOperationInProgress()) return;
+        var passInput = document.getElementById("settings-backup-passphrase");
+        var passConfirmInput = document.getElementById("settings-backup-passphrase-confirm");
+        var passphrase = passInput ? String(passInput.value || "") : "";
+        var confirmPassphrase = passConfirmInput ? String(passConfirmInput.value || "") : "";
+        if (!passphrase || !passphrase.trim()) {
+            setSettingsBackupStatus("请输入备份口令");
+            return;
+        }
+        if (confirmPassphrase !== passphrase) {
+            setSettingsBackupStatus("两次输入的备份口令不一致");
+            return;
+        }
+        App.settingsBackupExportInProgress = true;
+        setSettingsControlsDisabled(true);
+        setSettingsBackupStatus("正在导出加密备份…");
+        App.callBridge("export_encrypted_backup", passphrase, confirmPassphrase).then(function (result) {
+            var data = App.handleResult(result, function (msg) {
+                // Bridge already collapsed to a stable Chinese message.
+                setSettingsBackupStatus(msg || BACKUP_EXPORT_ERROR_MESSAGE);
+            });
+            if (!data) return;
+            setSettingsBackupStatus("已导出：" + (data.filename || ""));
+        }).catch(function () {
+            // Never read .message; show stable Chinese error.
+            setSettingsBackupStatus(BACKUP_EXPORT_ERROR_MESSAGE);
+        }).then(function () {
+            // finally: clear passphrase inputs, clear in-flight flag,
+            // and re-enable controls unless another op is still in flight.
+            if (passInput) passInput.value = "";
+            if (passConfirmInput) passConfirmInput.value = "";
+            App.settingsBackupExportInProgress = false;
+            setSettingsControlsDisabled(anySettingsOperationInProgress());
+        });
+    }
+    App.exportEncryptedBackup = exportEncryptedBackup;
+
+    function previewEncryptedBackupManifest() {
+        // No passphrase required; the bridge opens a native open file
+        // dialog and the API only reads the non-sensitive manifest.
+        if (anySettingsOperationInProgress()) return;
+        App.settingsBackupManifestInProgress = true;
+        setSettingsControlsDisabled(true);
+        setSettingsBackupStatus("正在读取备份清单…");
+        App.callBridge("preview_encrypted_backup_manifest").then(function (result) {
+            var data = App.handleResult(result, function (msg) {
+                // Bridge already collapsed to a stable Chinese message.
+                setSettingsBackupStatus(msg || BACKUP_MANIFEST_ERROR_MESSAGE);
+                renderBackupManifest(null, "");
+            });
+            if (!data) return;
+            setSettingsBackupStatus("");
+            renderBackupManifest(data.manifest, data.filename);
+        }).catch(function () {
+            // Never read .message; show stable Chinese error.
+            setSettingsBackupStatus(BACKUP_MANIFEST_ERROR_MESSAGE);
+            renderBackupManifest(null, "");
+        }).then(function () {
+            App.settingsBackupManifestInProgress = false;
+            setSettingsControlsDisabled(anySettingsOperationInProgress());
+        });
+    }
+    App.previewEncryptedBackupManifest = previewEncryptedBackupManifest;
 })();

@@ -17,13 +17,12 @@ Implemented" sections) lives in
   only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview, Timeline / Time Details, Statistics / Export,
   Project Rules, Settings / Privacy (Phase 6A read-only status foundation +
-  Phase 6B clipboard capture toggle write). Per-phase scope is archived in
-  the history file.
+  Phase 6B clipboard capture toggle write + Phase 6C encrypted backup export
+  + manifest preview). Per-phase scope is archived in the history file.
 - Unmigrated page capability scope: Settings / Privacy write actions not yet
-  opened (save settings, encrypted-backup export / import / manifest preview,
-  clear-all-local-data, first-run notice view/accept, native file / folder
-  dialog, export path setting) remain legacy Tkinter reference code; not a
-  supported runtime path.
+  opened (encrypted-backup import, save settings, clear-all-local-data,
+  first-run notice view/accept, arbitrary file / folder dialog, export path
+  setting) remain legacy Tkinter reference code; not a supported runtime path.
 
 ## 1. Phase 1 Is A Destructive Migration
 
@@ -209,13 +208,33 @@ order:
   content; the toggle only controls whether local clipboard recording is
   enabled. No schema change, no new dependencies, no network / storage /
   browser clipboard API. **Completed.**
+- Phase 6C — Settings / Privacy encrypted backup export + manifest preview
+  foundation. Opens two narrow WebView entries on the Settings / Privacy
+  page: encrypted backup export (passphrase + confirm passphrase → native
+  save dialog → `.wtbackup` → only `filename` + stable Chinese message
+  returned) and encrypted backup manifest preview (native open dialog →
+  display-safe fields only: version / app_version / created_at /
+  kdf_algorithm / payload_format / payload_alg; no passphrase, no decryption).
+  Adds `settings_api.export_encrypted_backup_for_webview(output_path,
+  passphrase, confirm_passphrase)` and
+  `settings_api.preview_encrypted_backup_manifest_for_webview(input_path)`,
+  plus `WebViewBridge.export_encrypted_backup(passphrase,
+  confirm_passphrase)` (two required params) and
+  `WebViewBridge.preview_encrypted_backup_manifest()` (zero params), both
+  defined directly on `WebViewBridge` (no new mixin). Frontend adds
+  `settings-backup-passphrase` / `-confirm` / `-export-btn` /
+  `-manifest-btn` / `-status` / `-manifest` DOM ids, two new state flags
+  (`settingsBackupExportInProgress` / `settingsBackupManifestInProgress`)
+  combined into an `anySettingsOperationInProgress()` guard, and
+  `.settings-backup-*` CSS. Both API and bridge layers never return full
+  paths, passphrases, salt, ciphertext, payload, SQL, or tracebacks; both
+  collapse failures to stable Chinese messages. No schema change, no new
+  dependencies, no network / storage / browser clipboard API. **Completed.**
 - Phase 5J+ — remaining Project Rules write workflows (hard delete project,
   raw folder-rule conflict preview, raw / unbounded batch backfill,
   automatic-rule enable / disable toggle in the UI). Not started.
-- Phase 6C+ — remaining Settings / Privacy write actions: save settings,
-  encrypted-backup export / import / manifest preview, clear-all-local-data,
-  first-run notice view/accept, native file / folder dialog, export path
-  setting. Not started.
+- Phase 6D — remaining Settings / Privacy write actions: encrypted-backup
+  import, clear-all-local-data foundation, and Phase 6 收口. Not started.
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.
 

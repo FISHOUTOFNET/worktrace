@@ -278,6 +278,19 @@
         if (captureToggle) {
             captureToggle.addEventListener("change", App.handleCaptureToggleChange);
         }
+        // Phase 6C: encrypted backup export + manifest preview handlers.
+        // The export button opens a native save dialog and writes an
+        // encrypted .wtbackup file; the manifest preview button opens a
+        // native open file dialog and reads the non-sensitive manifest.
+        // No import, clear-all, or save-settings action is wired here.
+        var backupExportBtn = document.getElementById("settings-backup-export-btn");
+        if (backupExportBtn) {
+            backupExportBtn.addEventListener("click", App.exportEncryptedBackup);
+        }
+        var backupManifestBtn = document.getElementById("settings-backup-manifest-btn");
+        if (backupManifestBtn) {
+            backupManifestBtn.addEventListener("click", App.previewEncryptedBackupManifest);
+        }
         // Phase 5C: Project Rules keyword create submit handler. This is
         // the only Project Rules create event bound in init; the existing
         // rule toggle uses event delegation set up inside rules.js.

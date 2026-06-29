@@ -448,7 +448,7 @@
                 <header class="page-header settings-header">
                     <div class="settings-header-text">
                         <h1>设置与隐私</h1>
-                        <p class="settings-subtitle">本页面展示本地存储与隐私安全状态，并开放剪贴板记录开关；其他写操作暂不开放。</p>
+                        <p class="settings-subtitle">本页面展示本地存储与隐私安全状态，开放剪贴板记录开关与加密备份导出 / 清单预览；其他写操作暂不开放。</p>
                     </div>
                     <button id="settings-refresh-btn" type="button" class="settings-refresh-btn">刷新状态</button>
                 </header>
@@ -471,7 +471,24 @@
                     </article>
                     <article id="settings-backup-card" class="settings-card settings-backup-card">
                         <h2 class="settings-card-title">加密备份</h2>
-                        <p class="settings-card-line">加密备份能力已就绪，但 WebView 内的导出 / 导入 / 清单预览将在后续阶段开放。</p>
+                        <div class="settings-backup-row">
+                            <label class="settings-backup-label" for="settings-backup-passphrase">备份口令</label>
+                            <input id="settings-backup-passphrase" type="password" class="settings-backup-input" autocomplete="off" disabled>
+                        </div>
+                        <div class="settings-backup-row">
+                            <label class="settings-backup-label" for="settings-backup-passphrase-confirm">确认口令</label>
+                            <input id="settings-backup-passphrase-confirm" type="password" class="settings-backup-input" autocomplete="off" disabled>
+                        </div>
+                        <div class="settings-backup-actions">
+                            <button id="settings-backup-export-btn" type="button" class="settings-backup-btn" disabled>导出加密备份</button>
+                            <button id="settings-backup-manifest-btn" type="button" class="settings-backup-btn" disabled>预览备份清单</button>
+                        </div>
+                        <p id="settings-backup-status" class="settings-backup-status" hidden></p>
+                        <div id="settings-backup-manifest" class="settings-backup-manifest" hidden>
+                            <p class="settings-backup-manifest-filename"></p>
+                            <dl class="settings-backup-manifest-fields"></dl>
+                        </div>
+                        <p class="settings-card-line">加密备份导入将在后续阶段以独立确认流程开放，本阶段不提供入口。</p>
                     </article>
                     <article id="settings-danger-card" class="settings-card settings-danger-card">
                         <h2 class="settings-card-title">危险操作</h2>

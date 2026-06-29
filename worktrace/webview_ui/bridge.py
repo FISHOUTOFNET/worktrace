@@ -1367,6 +1367,83 @@ class WebViewBridge(ProjectRulesBridgeMixin):
             return str(result[0])
         return str(result)
 
+    def _choose_backup_save_path(self) -> str | None:
+        """Open the native save dialog for an encrypted ``.wtbackup`` file.
+
+        Phase 6C helper. Returns ``None`` when the user cancels. Raises a
+        generic ``Exception`` when no window has been injected or the
+        pywebview save dialog API is unavailable / raises; the calling
+        bridge method catches it and collapses to ``"导出加密备份失败"``.
+
+        The returned path is the user-chosen string verbatim; suffix
+        normalization (``.wtbackup``) is handled by the API facade. The
+        full path never leaves the bridge except as the argument to the
+        API write call.
+        """
+        return self._open_backup_dialog(save=True)
+
+    def _choose_backup_open_path(self) -> str | None:
+        """Open the native open file dialog for an encrypted ``.wtbackup`` file.
+
+        Phase 6C helper. Returns ``None`` when the user cancels. Raises a
+        generic ``Exception`` when no window has been injected or the
+        pywebview open dialog API is unavailable / raises; the calling
+        bridge method catches it and collapses to ``"读取备份清单失败"``.
+
+        The returned path is the user-chosen string verbatim; suffix
+        validation (``.wtbackup``) is handled by the API facade. The full
+        path never leaves the bridge except as the argument to the API
+        read call.
+        """
+        return self._open_backup_dialog(save=False)
+
+    def _open_backup_dialog(self, save: bool) -> str | None:
+        """Shared pywebview dialog helper for ``.wtbackup`` save / open.
+
+        ``save=True`` resolves the SAVE dialog (with a default
+        ``worktrace-backup.wtbackup`` filename); ``save=False`` resolves
+        the OPEN dialog. Lazy-imports pywebview so the bridge module does
+        not pull the WebView backend into unit tests at import time.
+        """
+        window = self._window
+        if window is None:
+            raise RuntimeError("webview window not injected")
+        dialog_type = None
+        try:
+            import webview  # noqa: WPS433 (lazy import, UI-only dependency)
+
+            file_dialog = getattr(webview, "FileDialog", None)
+            if file_dialog is not None:
+                dialog_type = getattr(
+                    file_dialog, "SAVE" if save else "OPEN", None
+                )
+            if dialog_type is None:
+                dialog_type = getattr(
+                    webview, "SAVE_DIALOG" if save else "OPEN_DIALOG", None
+                )
+        except Exception:
+            dialog_type = None
+        if dialog_type is None:
+            raise RuntimeError("pywebview FileDialog unavailable")
+        try:
+            kwargs: dict[str, Any] = {
+                "file_types": ("WorkTrace Backup (*.wtbackup)",),
+            }
+            if save:
+                kwargs["save_filename"] = "worktrace-backup.wtbackup"
+            result = window.create_file_dialog(dialog_type, **kwargs)
+        except Exception:
+            raise RuntimeError("webview file dialog failed")
+        if not result:
+            return None
+        # pywebview returns a sequence of strings (or None on cancel). Take
+        # the first entry as the chosen path.
+        if isinstance(result, (tuple, list)):
+            if not result:
+                return None
+            return str(result[0])
+        return str(result)
+
     # --- Phase 6A: Settings / Privacy read-only status ------------------
 
     def get_settings_privacy_status(self) -> dict[str, Any]:
@@ -1425,6 +1502,98 @@ class WebViewBridge(ProjectRulesBridgeMixin):
         except Exception:
             logger.exception("webview bridge set_clipboard_capture_enabled failed")
             return {"ok": False, "error": "设置剪贴板记录失败"}
+
+    # --- Phase 6C: Settings / Privacy encrypted backup export ------------
+
+    def export_encrypted_backup(self, passphrase, confirm_passphrase) -> dict[str, Any]:
+        """Export an encrypted ``.wtbackup`` file from the WebView UI.
+
+        Phase 6C controlled write path. ``passphrase`` and
+        ``confirm_passphrase`` are the two required parameters (no optional
+        args, no ``*args`` / ``**kwargs``). The save path is chosen by the
+        user through the native pywebview save dialog (the window is
+        injected via ``set_window``); the bridge never writes to a
+        hard-coded location.
+
+        Returns one of:
+
+        - ``{"ok": True, "filename": "<basename.wtbackup>", "message":
+          "加密备份已导出"}`` on success. Only the basename is surfaced;
+          the full local path never leaves the bridge.
+        - ``{"ok": False, "error": "已取消导出"}`` when the user cancels
+          the save dialog. No API write is called.
+        - ``{"ok": False, "error": "<chinese message>"}`` on any failure.
+
+        Tracebacks, SQL, full local paths, passphrase, raw exception text,
+        window titles, file paths, and notes are never surfaced to JS.
+        """
+        try:
+            output_path = self._choose_backup_save_path()
+            if output_path is None:
+                # User cancelled the native save dialog. This is a clean
+                # cancel result, not a Python exception or "操作失败".
+                return {"ok": False, "error": "已取消导出"}
+            result = settings_api.export_encrypted_backup_for_webview(
+                output_path, passphrase, confirm_passphrase
+            )
+            if result.get("ok"):
+                return {
+                    "ok": True,
+                    "filename": str(result.get("filename") or ""),
+                    "message": str(result.get("message") or "加密备份已导出"),
+                }
+            # API returned a stable Chinese error; pass it through unchanged.
+            return {"ok": False, "error": result.get("error") or "导出加密备份失败"}
+        except Exception:
+            logger.exception("webview bridge export_encrypted_backup failed")
+            return {"ok": False, "error": "导出加密备份失败"}
+
+    # --- Phase 6C: Settings / Privacy encrypted backup manifest preview --
+
+    def preview_encrypted_backup_manifest(self) -> dict[str, Any]:
+        """Preview the non-sensitive manifest of a ``.wtbackup`` file.
+
+        Phase 6C controlled read path. Takes no required parameters. The
+        open path is chosen by the user through the native pywebview open
+        file dialog (the window is injected via ``set_window``); the bridge
+        never reads a hard-coded location. Does not require a passphrase
+        and does not decrypt the payload.
+
+        Returns one of:
+
+        - ``{"ok": True, "filename": "<basename.wtbackup>", "manifest":
+          {...}}`` on success. Only the basename and display-safe manifest
+          fields (version / app_version / created_at / kdf_algorithm /
+          payload_format / payload_alg) are surfaced; the full local path
+          never leaves the bridge.
+        - ``{"ok": False, "error": "已取消读取备份清单"}`` when the user
+          cancels the open dialog. No API read is called.
+        - ``{"ok": False, "error": "<chinese message>"}`` on any failure.
+
+        Tracebacks, SQL, full local paths, passphrase, salt, ciphertext,
+        payload, raw exception text, window titles, file paths, and notes
+        are never surfaced to JS.
+        """
+        try:
+            input_path = self._choose_backup_open_path()
+            if input_path is None:
+                # User cancelled the native open dialog. This is a clean
+                # cancel result, not a Python exception or "操作失败".
+                return {"ok": False, "error": "已取消读取备份清单"}
+            result = settings_api.preview_encrypted_backup_manifest_for_webview(
+                input_path
+            )
+            if result.get("ok"):
+                return {
+                    "ok": True,
+                    "filename": str(result.get("filename") or ""),
+                    "manifest": result.get("manifest") or {},
+                }
+            # API returned a stable Chinese error; pass it through unchanged.
+            return {"ok": False, "error": result.get("error") or "读取备份清单失败"}
+        except Exception:
+            logger.exception("webview bridge preview_encrypted_backup_manifest failed")
+            return {"ok": False, "error": "读取备份清单失败"}
 
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:

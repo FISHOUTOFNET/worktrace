@@ -6300,6 +6300,316 @@ Phase 6B does not implement and does not open UI / bridge entry for:
   encrypted backup runtime semantics;
 - Any change to `bridge.py` import boundary (still only `worktrace.api`).
 
+## Phase 6C Implemented Scope
+
+Phase 6C opens two narrow WebView entries on the Settings / Privacy page:
+**encrypted backup export** and **encrypted backup manifest preview**. Both
+are foundation-grade: they reuse the existing `secure_backup_service`
+export + manifest-parse code paths, enforce strict validation at API and
+bridge layers, never return sensitive payload material, and ship
+hardening regression locks in the same phase.
+
+Backend:
+
+- New narrow export facade
+  `worktrace.api.settings_api.export_encrypted_backup_for_webview(output_path: str, passphrase: str, confirm_passphrase: str) -> dict[str, Any]`:
+  - Strict type validation: `output_path` / `passphrase` /
+    `confirm_passphrase` must each be non-empty `str` (`bool` / `None` /
+    `int` / `list` / `dict` / `object()` rejected); pure-whitespace
+    `passphrase` rejected (no trim-then-compare);
+  - `confirm_passphrase` must equal `passphrase` exactly (no trim);
+  - If `output_path` lacks a `.wtbackup` suffix (case-insensitive) the
+    facade appends `.wtbackup` before delegating;
+  - On success calls existing
+    `backup_api.export_encrypted_backup(normalized_path, passphrase)` and
+    returns `{"ok": True, "filename": <basename>, "message": "加密备份已导出"}`;
+  - Parameter errors return stable Chinese messages
+    (`"请输入备份口令"` / `"两次输入的备份口令不一致"` /
+    `"请选择有效的备份保存位置"`); service-layer exceptions collapse to
+    `"导出加密备份失败"`;
+  - Payload never carries full path, passphrase, raw exception, SQL, or
+    traceback;
+  - Does not call `import_encrypted_backup`,
+    `parse_encrypted_backup_manifest`, `clear_all_local_data`, or
+    `set_setting_value`;
+  - Added to `settings_api.__all__`.
+- New narrow manifest-preview facade
+  `worktrace.api.settings_api.preview_encrypted_backup_manifest_for_webview(input_path: str) -> dict[str, Any]`:
+  - Strict type validation: `input_path` must be a non-empty `str` whose
+    suffix is `.wtbackup` (case-insensitive); `bool` / `None` / `int` /
+    `list` / `dict` / `object()` and wrong-suffix strings rejected;
+  - Does NOT require passphrase and does NOT decrypt the payload;
+  - On success calls existing
+    `backup_api.parse_encrypted_backup_manifest(input_path)` and projects
+    the returned `BackupManifestInfo` to a display-safe dict carrying
+    only `version` / `app_version` / `created_at` / `kdf_algorithm` /
+    `payload_format` / `payload_alg`;
+  - Returns `{"ok": True, "filename": <basename>, "manifest": <display-safe dict>}`;
+  - Parameter errors return `"请选择有效的加密备份文件"`;
+    `BackupCorruptedError` / `BackupVersionNotSupportedError` /
+    `RuntimeError` / any other exception collapses to `"读取备份清单失败"`;
+  - Payload never carries full path, salt, ciphertext, payload, raw
+    exception, SQL, or traceback;
+  - Does not call `import_encrypted_backup`, `export_encrypted_backup`,
+    `clear_all_local_data`, or `set_setting_value`;
+  - Added to `settings_api.__all__`.
+- `settings_api.get_settings_privacy_status()` now reports `phase = "6C"`
+  and flips `encrypted_backup.export_available_in_webview` and
+  `encrypted_backup.manifest_preview_available_in_webview` to `True`
+  (import remains `False`).
+- New bridge methods on the composed `WebViewBridge` (defined directly in
+  `bridge.py`, no new mixin):
+  - `export_encrypted_backup(self, passphrase, confirm_passphrase)`:
+    exactly two required parameters (no optional / `*args` / `**kwargs`);
+    opens a native save dialog via lazy-imported `pywebview` `FileDialog.SAVE`
+    (falls back to `SAVE_DIALOG`) with
+    `file_types=("WorkTrace Backup (*.wtbackup)",)` and
+    `save_filename="worktrace-backup.wtbackup"`; user cancel returns
+    `{"ok": False, "error": "已取消导出"}`; delegates to
+    `settings_api.export_encrypted_backup_for_webview(path, passphrase,
+    confirm_passphrase)`; on `ok=True` returns only `ok` / `filename` /
+    `message`; on `ok=False` passes the stable Chinese error through; any
+    exception logs via `logger.exception(...)` (operation name only, no
+    path / passphrase interpolation) and returns
+    `{"ok": False, "error": "导出加密备份失败"}`.
+  - `preview_encrypted_backup_manifest(self)`: zero parameters; opens a
+    native open file dialog via lazy-imported `pywebview` `FileDialog.OPEN`
+    (falls back to `OPEN_DIALOG`) with the same `.wtbackup` filter; user
+    cancel returns `{"ok": False, "error": "已取消读取备份清单"}`;
+    delegates to `settings_api.preview_encrypted_backup_manifest_for_webview(path)`;
+    on `ok=True` returns only `ok` / `filename` / `manifest`; on `ok=False`
+    passes the stable Chinese error through; any exception logs via
+    `logger.exception(...)` and returns
+    `{"ok": False, "error": "读取备份清单失败"}`.
+  - Both methods reuse a shared `_open_backup_dialog(save: bool)` helper
+    that lazy-imports `pywebview` inside the function (never at module
+    load), resolves `FileDialog.SAVE` / `FileDialog.OPEN` with the legacy
+    `SAVE_DIALOG` / `OPEN_DIALOG` fallbacks, and raises `RuntimeError` on
+    window-missing or dialog-failure so the bridge can collapse to the
+    stable message. `bridge.py` continues to import only `worktrace.api`.
+- Field naming convention: both success payloads use `"filename"` (the
+  basename only), matching the existing CSV export bridge convention; no
+  `"file_name"` / `"backup_name"` variants are introduced.
+
+Frontend:
+
+- `index.html` adds the encrypted-backup card controls inside the existing
+  `settings-backup-card`: `settings-backup-passphrase` and
+  `settings-backup-passphrase-confirm` (both `<input type="password">`),
+  `settings-backup-export-btn` and `settings-backup-manifest-btn`
+  (`<button>`), `settings-backup-status` (status `<p>`), and
+  `settings-backup-manifest` (manifest display container with nested
+  `.settings-backup-manifest-filename` + `.settings-backup-manifest-fields`
+  `<dl>`).
+- `core.js` adds two new state flags after `settingsWriteInProgress`:
+  `App.settingsBackupExportInProgress = false` and
+  `App.settingsBackupManifestInProgress = false`. They are intentionally
+  not folded into `settingsWriteInProgress` so a backup operation cannot
+  race with a clipboard toggle write; the shared
+  `anySettingsOperationInProgress()` helper in `settings.js` combines all
+  four flags (`settingsLoading` + `settingsWriteInProgress` +
+  `settingsBackupExportInProgress` + `settingsBackupManifestInProgress`).
+- `settings.js` header comment updated from Phase 6B to Phase 6C; new
+  helpers: `anySettingsOperationInProgress()`,
+  `setSettingsBackupControlsDisabled(disabled)`,
+  `setSettingsBackupStatus(text)`, `clearSettingsBackupStatus()`,
+  `renderBackupManifest(manifest, filename)` (uses `textContent` /
+  `createElement` only — no `innerHTML`), `exportEncryptedBackup()` and
+  `previewEncryptedBackupManifest()`. `setSettingsControlsDisabled` now
+  also delegates to `setSettingsBackupControlsDisabled`;
+  `setSettingsLoading` and `renderCaptureToggle` now use
+  `anySettingsOperationInProgress()`.
+- `exportEncryptedBackup()`: reads the two password inputs into local
+  variables; rejects empty / whitespace passphrase with
+  `"请输入备份口令"` and mismatched confirm with
+  `"两次输入的备份口令不一致"` before calling the bridge; sets
+  `settingsBackupExportInProgress = true`, calls
+  `App.callBridge("export_encrypted_backup", passphrase, confirmPassphrase)`;
+  on success shows the returned `filename` + stable Chinese message;
+  catch block does NOT read `.message` (always shows
+  `"导出加密备份失败"`); `finally` clears both password inputs and
+  resets the export flag. The passphrase is never persisted onto the
+  `App` global state.
+- `previewEncryptedBackupManifest()`: sets
+  `settingsBackupManifestInProgress = true`, calls
+  `App.callBridge("preview_encrypted_backup_manifest")`; on success
+  renders the display-safe manifest + filename via `textContent`;
+  catch block does NOT read `.message` (always shows
+  `"读取备份清单失败"`).
+- `init.js` binds `settings-backup-export-btn` `click` →
+  `App.exportEncryptedBackup` and `settings-backup-manifest-btn` `click`
+  → `App.previewEncryptedBackupManifest` inside `initButtons()`.
+- `styles.css` adds scoped `.settings-backup-row`,
+  `.settings-backup-label`, `.settings-backup-input`,
+  `.settings-backup-actions`, `.settings-backup-btn`,
+  `.settings-backup-status`, `.settings-backup-manifest`,
+  `.settings-backup-manifest-filename`, `.settings-backup-manifest-fields`
+  (with `dt` / `dd` children). No external font; no CDN; no CSS framework;
+  no effect on other pages.
+
+Tests:
+
+- `tests/test_settings_privacy_status.py` extended with ~25 Phase 6C API +
+  bridge tests:
+  - API export: success (mock `backup_api.export_encrypted_backup`),
+    `.wtbackup` suffix preserved when present, `.wtbackup` appended when
+    missing, invalid `output_path` (None / "" / whitespace / True / 1 /
+    [] / {} / object()) rejected, invalid `passphrase` variants rejected,
+    mismatched `confirm_passphrase` rejected, service-layer exception
+    (`RuntimeError("SECRET_PATH / SECRET_PASSPHRASE / sqlite3")`)
+    collapses without leaking path / passphrase / sqlite3 / traceback /
+    raw exception, no call to `import_encrypted_backup` /
+    `parse_encrypted_backup_manifest` / `clear_all_local_data` /
+    `set_setting_value`, payload only `ok` / `filename` / `message`.
+  - API manifest preview: success (mock
+    `backup_api.parse_encrypted_backup_manifest` returning a
+    `BackupManifestInfo`), display-safe dict carries only the six
+    allowed fields (no salt / ciphertext / payload), invalid `input_path`
+    variants + wrong suffix rejected, `BackupCorruptedError` /
+    `BackupVersionNotSupportedError` / `RuntimeError` collapse to
+    `"读取备份清单失败"` without leaking raw exception, no call to
+    `import_encrypted_backup` / `export_encrypted_backup` /
+    `clear_all_local_data` / `set_setting_value`, payload only `ok` /
+    `filename` / `manifest`.
+  - Bridge export: method exists on composed `WebViewBridge`, signature
+    has exactly two required parameters (`passphrase`,
+    `confirm_passphrase`; no optional / `*args` / `**kwargs`), user
+    cancel returns `"已取消导出"`, empty-list cancel returns
+    `"已取消导出"`, success returns narrow payload only (no full path /
+    passphrase / traceback), direct string path supported, dialog
+    exception collapses to `"导出加密备份失败"`, API exception collapses
+    to the API error message, no call to `import_encrypted_backup` /
+    `clear_all_local_data`, save dialog filter is `.wtbackup`.
+  - Bridge manifest preview: method exists on composed `WebViewBridge`,
+    signature has zero required parameters, user cancel returns
+    `"已取消读取备份清单"`, empty-list cancel returns
+    `"已取消读取备份清单"`, success returns narrow payload only, direct
+    string path supported, dialog exception collapses to
+    `"读取备份清单失败"`, API exception collapses to the API error
+    message, no call to `import_encrypted_backup` /
+    `clear_all_local_data`, open dialog filter is `.wtbackup`.
+- `tests/webview/test_settings_static_contract.py` updated:
+  - Phase 6B wording extended to Phase 6A / 6B / 6C; allowed bridge
+    methods list expanded to `get_settings_privacy_status` +
+    `set_clipboard_capture_enabled` + `export_encrypted_backup` +
+    `preview_encrypted_backup_manifest`; `import_encrypted_backup` /
+    `parse_encrypted_backup_manifest` / `clear_all_local_data` /
+    `set_setting_value` remain forbidden;
+  - required DOM ids list extended with `settings-backup-passphrase` /
+    `-confirm` / `-export-btn` / `-manifest-btn` / `-status` /
+    `-manifest`;
+  - `test_settings_js_no_clickable_write_buttons_6a` no longer forbids
+    `exportbtn` / `export_btn` / `export-button` (Phase 6C legitimately
+    introduces an export button local variable); precise allowed /
+    forbidden DOM ids are now locked by
+    `test_index_html_no_forbidden_settings_buttons_6c`;
+  - `test_settings_js_disables_controls_during_load_and_write_6b`
+    extended to verify `anySettingsOperationInProgress` references all
+    four flags and that `setSettingsLoading` / `renderCaptureToggle`
+    delegate to it;
+  - New 6C contract tests: `core.js` declares
+    `settingsBackupExportInProgress` + `settingsBackupManifestInProgress`;
+    `settings.js` defines `App.exportEncryptedBackup` +
+    `App.previewEncryptedBackupManifest` + calls
+    `App.callBridge("export_encrypted_backup"` + calls
+    `App.callBridge("preview_encrypted_backup_manifest"`; backup catch
+    blocks do not read `.message`; backup rendering uses `textContent`
+    (no `innerHTML`); passphrase is not persisted to `App` global state;
+    `init.js` binds both backup buttons; `styles.css` has
+    `.settings-backup-*` scoped classes; `index.html` page-settings has
+    no forbidden ids (`settings-import-btn` / `settings-clear-btn` /
+    `settings-clear-all-btn` / `settings-save-btn` /
+    `settings-set-path-btn`); backup JS does not use
+    `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource` /
+    `localStorage` / `sessionStorage` / `document.cookie` /
+    `navigator.clipboard`.
+- `tests/test_ui_backend_boundary.py` extended with six Phase 6C tests:
+  - bridge exposes `export_encrypted_backup(passphrase, confirm_passphrase)`
+    with exactly two required parameters (no optional / `*args` / `**kwargs`);
+  - bridge exposes `preview_encrypted_backup_manifest()` with zero
+    parameters;
+  - export error payload + manifest preview error payload carry no
+    forbidden runtime tokens (`traceback` / `str(exc)` / `repr(` /
+    `format_exc` / `exc_info` / `.message` / `raw_exception` /
+    `clipboard_content`); the body slice is bounded at the next method
+    definition so `passphrase` (a legitimate parameter name + local
+    variable + pass-through to the API facade) is not falsely flagged;
+  - bridge methods do not call `import_encrypted_backup` or
+    `clear_all_local_data`.
+- One pre-existing 6B boundary test
+  (`test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens`)
+  was tightened: the previous fixed-character-count body slice spilled
+    into the new `export_encrypted_backup` method and falsely flagged the
+    legitimate `passphrase` parameter; the slice is now bounded at the
+    next `\n    def ` occurrence so the boundary check stays scoped to
+    `set_clipboard_capture_enabled`.
+
+Affected-test runner:
+
+- K1. Settings / Privacy WebView continues to cover
+  `worktrace/api/settings_api.py`, `worktrace/api/backup_api.py`,
+  `worktrace/webview_ui/bridge.py`, `worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/js/settings.js`, `worktrace/webview_ui/js/init.js`,
+  `worktrace/webview_ui/styles.css`, `WorkTrace.spec`,
+  `tests/webview/static_helpers.py` →
+  `tests/test_settings_privacy_status.py`,
+  `tests/webview/test_settings_static_contract.py`,
+  `tests/test_ui_backend_boundary.py`,
+  `tests/webview/test_frontend_global_boundaries.py`,
+  `tests/test_webview_packaging.py`,
+  `tests/test_run_affected_tests.py` + import smoke. The K1 mapping
+  already covered every Phase 6C-modified source file; no new K2 section
+  was added because `secure_backup_service.py` and `worktrace/security/*`
+  were not modified. K1 docstrings updated to mention Phase 6A / 6B / 6C.
+
+Documentation: `README.md`, `docs/current-state.md`,
+`docs/ui-webview-migration.md`, and this file now describe the current
+phase as 6C and explicitly note that 6C ships encrypted backup export +
+manifest preview foundation, not encrypted backup import,
+clear-all-local-data, save settings, or arbitrary file / folder dialog.
+
+Phase 6C does not modify `WorkTrace.spec` resource list (the bundled JS
+list already includes `settings.js`), `worktrace/db.py`,
+`worktrace/schema.sql`, `worktrace/services/secure_backup_service.py`,
+`worktrace/security/*`, or any collector / Timeline / Statistics /
+export runtime code. No DB schema change. No new dependency. No new JS
+file. The WebView packaging static test (`tests/test_webview_packaging.py`)
+and the `worktrace.webview_main` import check were run and pass; the
+full PyInstaller build was not re-run because no packaging or runtime
+behavior changed.
+
+## Phase 6C Not Implemented
+
+Phase 6C does not implement and does not open UI / bridge entry for:
+
+- Encrypted backup import (`import_encrypted_backup`); deferred to 6D;
+- Clear-all-local-data (`clear_all_local_data`); deferred to 6D;
+- Save settings (general setting write); deferred;
+- `set_setting_value` WebView write entry; deferred;
+- Export path setting; deferred;
+- Arbitrary file / folder picker (only the two narrow native dialogs for
+  `.wtbackup` save and `.wtbackup` open are opened; no general file /
+  folder browser);
+- First-run notice view / accept in WebView; deferred;
+- Clipboard content reading, display, or return (Phase 6C backup export
+  + manifest preview do not touch clipboard content; the Phase 6B
+  clipboard toggle only controls whether local clipboard recording is
+  enabled);
+- Manifest preview does NOT decrypt the payload, does NOT require a
+  passphrase, and does NOT display salt / ciphertext / payload;
+- Any database delete / rebuild / import / export write (the export
+  path only writes a new `.wtbackup` file; it never touches the DB);
+- Schema.sql modification (no new table / column / migration);
+- New dependencies (no React / Vue / Vite / Node / local HTTP server /
+  CDN / external font);
+- `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource`;
+- `localStorage` / `sessionStorage` / `document.cookie`;
+- Browser Clipboard API (`navigator.clipboard`);
+- Legacy Tkinter fallback;
+- Any change to collector / Timeline / Statistics / Export / privacy /
+  encrypted backup runtime semantics;
+- Any change to `bridge.py` import boundary (still only `worktrace.api`).
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most
