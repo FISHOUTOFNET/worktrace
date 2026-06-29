@@ -301,3 +301,97 @@ def test_webview_bridge_exposes_phase_5i_batch_and_automatic_methods() -> None:
             f"WebViewBridge must expose Phase 5I bridge method {name!r} "
             "(inherited from ProjectRulesBridgeMixin)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6B: Settings / Privacy clipboard capture toggle bridge method.
+# The new ``set_clipboard_capture_enabled`` method is defined directly on
+# ``WebViewBridge`` (no mixin), so a rename or removal would silently drop
+# the Phase 6B write surface from the only shipping bridge. This lock also
+# confirms the error payload carries no sensitive tokens (no path / no
+# clipboard content / no passphrase / no SQL / no traceback / no raw
+# exception) so the bridge boundary stays leak-free.
+# ---------------------------------------------------------------------------
+
+
+def test_webview_bridge_exposes_phase_6b_clipboard_toggle_method() -> None:
+    """``WebViewBridge`` must expose the Phase 6B ``set_clipboard_capture_enabled``
+    method with a single required ``enabled`` parameter (no optional args,
+    no loose ``*args``)."""
+    import inspect
+
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    bridge = WebViewBridge()
+    method = getattr(bridge, "set_clipboard_capture_enabled", None)
+    assert callable(method), (
+        "WebViewBridge must expose Phase 6B bridge method "
+        "'set_clipboard_capture_enabled'"
+    )
+    sig = inspect.signature(method)
+    params = list(sig.parameters.values())
+    # Exactly one required parameter named ``enabled``; no optional params,
+    # no *args, no **kwargs.
+    assert len(params) == 1, (
+        "set_clipboard_capture_enabled must accept exactly one parameter, "
+        f"got {len(params)}"
+    )
+    assert params[0].name == "enabled", (
+        f"set_clipboard_capture_enabled parameter must be 'enabled', "
+        f"got {params[0].name!r}"
+    )
+    assert params[0].default is inspect.Parameter.empty, (
+        "set_clipboard_capture_enabled 'enabled' must be required "
+        "(no default value)"
+    )
+    assert params[0].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD, (
+        "set_clipboard_capture_enabled 'enabled' must be positional-or-keyword, "
+        "not *args or **kwargs"
+    )
+
+
+def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens() -> None:
+    """Phase 6B: the bridge ``set_clipboard_capture_enabled`` error payload
+    must collapse to a stable Chinese message and must not leak path /
+    clipboard content / passphrase / SQL / traceback / raw exception text.
+
+    This is a static source-level check so it runs without a live database
+    or collector: it reads ``bridge.py`` and confirms the error string is
+    the only payload on failure and no ``traceback`` / ``str(exc)`` /
+    ``repr`` expression appears in the executable code (the docstring is
+    skipped because it legitimately mentions these words to document what
+    the method does NOT leak).
+    """
+    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    pos = bridge_source.find("def set_clipboard_capture_enabled")
+    assert pos != -1, (
+        "bridge.py must define set_clipboard_capture_enabled for Phase 6B"
+    )
+    # Extract a generous slice of the method body for inspection.
+    body = bridge_source[pos:pos + 2500]
+    # Stable Chinese error messages that must appear in the payload.
+    assert "请选择有效的剪贴板记录状态" in body
+    assert "设置剪贴板记录失败" in body
+    # Skip the docstring when checking for forbidden runtime tokens, since
+    # the docstring legitimately mentions "traceback" / "passphrase" /
+    # "clipboard content" to document what the method does NOT leak.
+    doc_start = body.find('"""')
+    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
+    code_only = body[doc_end:] if doc_end > 3 else body
+    # Forbidden runtime expressions that would leak sensitive data.
+    for forbidden in (
+        "traceback",
+        "str(exc)",
+        "str(e)",
+        "repr(",
+        "format_exc",
+        "exc_info",
+        ".message",
+        "passphrase",
+        "clipboard_content",
+        "raw_exception",
+    ):
+        assert forbidden not in code_only, (
+            "set_clipboard_capture_enabled must not reference forbidden token: "
+            + forbidden
+        )

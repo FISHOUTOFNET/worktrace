@@ -448,7 +448,7 @@
                 <header class="page-header settings-header">
                     <div class="settings-header-text">
                         <h1>设置与隐私</h1>
-                        <p class="settings-subtitle">本页面以只读方式展示本地存储与隐私安全状态，暂不开放任何写操作。</p>
+                        <p class="settings-subtitle">本页面展示本地存储与隐私安全状态，并开放剪贴板记录开关；其他写操作暂不开放。</p>
                     </div>
                     <button id="settings-refresh-btn" type="button" class="settings-refresh-btn">刷新状态</button>
                 </header>
@@ -461,7 +461,11 @@
                     </article>
                     <article id="settings-privacy-card" class="settings-card settings-privacy-card">
                         <h2 class="settings-card-title">隐私采集</h2>
-                        <p class="settings-card-line" data-settings-key="clipboard_capture_enabled">剪贴板记录：未加载</p>
+                        <div class="settings-toggle-row">
+                            <label id="settings-clipboard-toggle-label" class="settings-toggle-label" for="settings-clipboard-toggle">剪贴板记录</label>
+                            <input id="settings-clipboard-toggle" type="checkbox" class="settings-toggle-control" disabled>
+                            <span id="settings-clipboard-toggle-status" class="settings-toggle-status">未加载</span>
+                        </div>
                         <p class="settings-card-line" data-settings-key="export_path_configured">导出目录：未加载</p>
                         <p class="settings-card-line" data-settings-key="secure_import_in_progress">加密备份导入进行中：未加载</p>
                     </article>

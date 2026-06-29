@@ -1391,6 +1391,41 @@ class WebViewBridge(ProjectRulesBridgeMixin):
             logger.exception("webview bridge get_settings_privacy_status failed")
             return {"ok": False, "error": "加载设置状态失败"}
 
+    # --- Phase 6B: Settings / Privacy clipboard capture toggle write -----
+
+    def set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]:
+        """Write the ``clipboard_capture_enabled`` flag from the WebView UI.
+
+        Phase 6B narrow write path. ``enabled`` must be a real ``bool``;
+        any other type (``None``, ``"true"`` / ``"false"`` strings,
+        ``0`` / ``1`` ints, lists, dicts, objects) is rejected with a
+        stable Chinese message and does NOT mutate the underlying setting.
+
+        On success the bridge returns ``{"ok": True, "status": {...}}``
+        where ``status`` is the updated Settings / Privacy status snapshot
+        (the same shape returned by ``get_settings_privacy_status``). On
+        failure it returns ``{"ok": False, "error": "<chinese>"}``.
+
+        The payload never carries traceback, SQL, raw exception text,
+        paths, clipboard content, or passphrases. This method does not
+        open backup export / import / manifest, ``clear_all_local_data``,
+        native file dialogs, or any schema mutation.
+        """
+        try:
+            # Bridge-level strict bool guard mirrors the API facade so a
+            # non-bool never reaches the backend. ``is`` (not
+            # ``isinstance``) is the clearest "real bool only" check.
+            if enabled is not True and enabled is not False:
+                return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
+            result = settings_api.set_clipboard_capture_enabled_for_webview(enabled)
+            if result.get("ok"):
+                return {"ok": True, "status": result["status"]}
+            # API returned a stable Chinese error; pass it through unchanged.
+            return {"ok": False, "error": result.get("error") or "设置剪贴板记录失败"}
+        except Exception:
+            logger.exception("webview bridge set_clipboard_capture_enabled failed")
+            return {"ok": False, "error": "设置剪贴板记录失败"}
+
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
     """Validate and normalize the ``activity_ids`` argument from JS.

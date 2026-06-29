@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 6A "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 6B "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -16,12 +16,14 @@ Implemented" sections) lives in
 - WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the default and
   only shipping UI; there is no Tkinter fallback.
 - Migrated pages: Overview, Timeline / Time Details, Statistics / Export,
-  Project Rules, Settings / Privacy (Phase 6A read-only status foundation).
-  Per-phase scope is archived in the history file.
-- Unmigrated page capability scope: Settings / Privacy write actions
-  (save settings, clipboard toggle write, encrypted-backup export / import /
-  manifest preview, clear-all-local-data) remain legacy Tkinter reference
-  code; not a supported runtime path.
+  Project Rules, Settings / Privacy (Phase 6A read-only status foundation +
+  Phase 6B clipboard capture toggle write). Per-phase scope is archived in
+  the history file.
+- Unmigrated page capability scope: Settings / Privacy write actions not yet
+  opened (save settings, encrypted-backup export / import / manifest preview,
+  clear-all-local-data, first-run notice view/accept, native file / folder
+  dialog, export path setting) remain legacy Tkinter reference code; not a
+  supported runtime path.
 
 ## 1. Phase 1 Is A Destructive Migration
 
@@ -191,13 +193,29 @@ order:
   (`tests/test_settings_privacy_status.py` +
   `tests/webview/test_settings_static_contract.py`). No write actions, no
   schema change, no new dependencies, no network/storage API. **Completed.**
+- Phase 6B — Settings / Privacy clipboard capture toggle foundation. Opens
+  the first minimal write capability on the Settings / Privacy page: a
+  clipboard capture toggle that writes `clipboard_capture_enabled` through a
+  narrow WebView bridge facade. Adds
+  `settings_api.set_clipboard_capture_enabled_for_webview(enabled: bool)`
+  (strict `bool` guard; non-bool rejected with a stable Chinese message;
+  returns updated status on success) and
+  `WebViewBridge.set_clipboard_capture_enabled(enabled)` (same strict bool
+  guard; collapses any exception to `"设置剪贴板记录失败"`). Frontend adds
+  `settings-clipboard-toggle` / `-label` / `-status` DOM ids, a
+  `settingsWriteInProgress` state guard, toggle change handler with
+  failure-state recovery (restores previous checked state), and
+  `.settings-toggle-*` CSS. Phase 6B does not read or display clipboard
+  content; the toggle only controls whether local clipboard recording is
+  enabled. No schema change, no new dependencies, no network / storage /
+  browser clipboard API. **Completed.**
 - Phase 5J+ — remaining Project Rules write workflows (hard delete project,
   raw folder-rule conflict preview, raw / unbounded batch backfill,
   automatic-rule enable / disable toggle in the UI). Not started.
-- Phase 6B+ — Settings / Privacy write actions: save settings, clipboard
-  capture toggle write, encrypted-backup export / import / manifest preview,
-  clear-all-local-data, first-run notice view/accept, native file / folder
-  dialog. Not started.
+- Phase 6C+ — remaining Settings / Privacy write actions: save settings,
+  encrypted-backup export / import / manifest preview, clear-all-local-data,
+  first-run notice view/accept, native file / folder dialog, export path
+  setting. Not started.
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.
 

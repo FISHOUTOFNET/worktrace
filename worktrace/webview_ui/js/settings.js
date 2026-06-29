@@ -1,8 +1,8 @@
-// WorkTrace WebView frontend — settings module (Phase 6A).
-// Settings / Privacy page: read-only status loading only. No save / toggle /
-// export / import / manifest / clear-all / capture-toggle / file-dialog
-// action is wired in this phase. Dynamic content is rendered via
-// textContent only.
+// WorkTrace WebView frontend — settings module (Phase 6B).
+// Settings / Privacy page: read-only status loading + capture toggle
+// write foundation. Export / import / manifest / clear-all / save /
+// file-dialog actions are NOT opened in this phase. Dynamic content is
+// rendered via textContent only.
 
 (function () {
     "use strict";
@@ -11,6 +11,7 @@
     // --- Phase 6A: Settings / Privacy read-only status ------------------
 
     var ERROR_MESSAGE = "加载设置状态失败";
+    var WRITE_ERROR_MESSAGE = "设置剪贴板记录失败";
 
     function showSettingsError(message) {
         var banner = document.getElementById("settings-error");
@@ -30,14 +31,24 @@
     }
     App.clearSettingsError = clearSettingsError;
 
+    function setSettingsControlsDisabled(disabled) {
+        // Shared disable for the refresh button and the capture toggle.
+        // The toggle carries an additional "not yet loaded" guard so it
+        // stays disabled until the first successful status read.
+        var btn = document.getElementById("settings-refresh-btn");
+        if (btn) btn.disabled = disabled;
+        var toggle = document.getElementById("settings-clipboard-toggle");
+        if (toggle) toggle.disabled = disabled || !App.settingsLoaded;
+    }
+    App.setSettingsControlsDisabled = setSettingsControlsDisabled;
+
     function setSettingsLoading(loading) {
         App.settingsLoading = loading;
         var el = document.getElementById("settings-loading");
         if (el) el.hidden = !loading;
-        // The refresh button is the only control on this page. Disabling it
-        // while loading prevents duplicate concurrent read requests.
-        var btn = document.getElementById("settings-refresh-btn");
-        if (btn) btn.disabled = loading;
+        // Both the refresh button and the toggle must be disabled while a
+        // read is in flight or a write is in progress.
+        setSettingsControlsDisabled(loading || App.settingsWriteInProgress);
     }
     App.setSettingsLoading = setSettingsLoading;
 
@@ -58,19 +69,35 @@
         if (el) el.textContent = text;
     }
 
+    function setCaptureToggleStatus(text) {
+        var el = document.getElementById("settings-clipboard-toggle-status");
+        if (el) el.textContent = text;
+    }
+    App.setCaptureToggleStatus = setCaptureToggleStatus;
+
+    function renderCaptureToggle(status) {
+        // Sync the toggle's checked / disabled / status text from the
+        // latest status snapshot. The toggle stays disabled while a read
+        // or write is in flight, or before the first successful load.
+        var toggle = document.getElementById("settings-clipboard-toggle");
+        if (!toggle) return;
+        var captureEnabled = !!(status && status.clipboard_capture_enabled);
+        toggle.checked = captureEnabled;
+        toggle.disabled = App.settingsLoading || App.settingsWriteInProgress || !App.settingsLoaded;
+        setCaptureToggleStatus(boolLabel(captureEnabled));
+    }
+    App.renderCaptureToggle = renderCaptureToggle;
+
     function renderSettingsStatus(status) {
-        // Phase 6A only renders booleans and the static local-only storage
-        // model. No path, no capture content, no passphrase, no DB write.
+        // Phase 6B renders booleans, the static local-only storage model,
+        // and the capture toggle. No path, no capture content,
+        // no passphrase, no DB write.
         if (!status) return;
-        var captureEnabled = !!status.clipboard_capture_enabled;
         var exportPathConfigured = !!status.export_path_configured;
         var secureImportInProgress = !!status.secure_import_in_progress;
+        renderCaptureToggle(status);
         // Privacy card lines. The export path is intentionally only shown
         // as 已配置 / 未配置, never the raw path string.
-        setLineText(
-            "clipboard_capture_enabled",
-            "剪贴板记录：" + boolLabel(captureEnabled)
-        );
         setLineText(
             "export_path_configured",
             exportPathConfigured ? "导出目录：已配置" : "导出目录：未配置"
@@ -94,8 +121,8 @@
 
     function loadSettingsPrivacyStatus() {
         // Phase 6A hardening: refuse concurrent loads. The refresh button
-        // is already disabled while loading, but this guard also covers
-        // programmatic triggers (lazy load on page switch).
+        // and toggle are already disabled while loading, but this guard
+        // also covers programmatic triggers (lazy load on page switch).
         if (App.settingsLoading) return;
         setSettingsLoading(true);
         clearSettingsError();
@@ -124,4 +151,59 @@
         });
     }
     App.loadSettingsPrivacyStatus = loadSettingsPrivacyStatus;
+
+    // --- Phase 6B: capture toggle write --------------------------------
+
+    function setCaptureEnabled(enabled) {
+        // Write the clipboard_capture_enabled flag through the bridge.
+        // The toggle is already flipped by the browser before the change
+        // event fires, so `enabled` is the new desired value. On failure
+        // the previous checked state (the opposite of `enabled`) is
+        // restored so the UI never shows a stale toggle state.
+        App.settingsWriteInProgress = true;
+        setSettingsControlsDisabled(true);
+        var toggle = document.getElementById("settings-clipboard-toggle");
+        return App.callBridge("set_clipboard_capture_enabled", enabled).then(function (result) {
+            var data = App.handleResult(result, function (msg) {
+                // Never surface raw exception text; the bridge already
+                // collapsed to a stable Chinese message.
+                showSettingsError(msg || WRITE_ERROR_MESSAGE);
+            });
+            if (!data) {
+                // Failure: restore the previous checked state and status
+                // text so the toggle reflects the actual setting.
+                if (toggle) toggle.checked = !enabled;
+                setCaptureToggleStatus(boolLabel(!enabled));
+                return;
+            }
+            // Success: render the updated status (re-syncs the toggle
+            // from the server-side truth) and clear any prior error.
+            renderSettingsStatus(data.status);
+            clearSettingsError();
+        }).catch(function () {
+            // Never read .message; show stable Chinese error.
+            showSettingsError(WRITE_ERROR_MESSAGE);
+            if (toggle) toggle.checked = !enabled;
+            setCaptureToggleStatus(boolLabel(!enabled));
+        }).then(function () {
+            // finally semantics: clear the write flag and re-enable
+            // controls unless a read is still in flight.
+            App.settingsWriteInProgress = false;
+            setSettingsControlsDisabled(App.settingsLoading);
+        });
+    }
+    App.setCaptureEnabled = setCaptureEnabled;
+
+    function handleCaptureToggleChange(event) {
+        var toggle = event ? event.target : document.getElementById("settings-clipboard-toggle");
+        if (!toggle) return;
+        // Guard: ignore change events while disabled (should not happen,
+        // but defensive). Also ignore if a write is already in flight.
+        if (toggle.disabled || App.settingsWriteInProgress) {
+            return;
+        }
+        var enabled = !!toggle.checked;
+        setCaptureEnabled(enabled);
+    }
+    App.handleCaptureToggleChange = handleCaptureToggleChange;
 })();

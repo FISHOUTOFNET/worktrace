@@ -1899,6 +1899,11 @@ def test_app_js_hide_delete_has_no_raw_field_exposure():
     Phase 6A exception: ``clipboard_capture_enabled`` is the JSON status
     flag returned by the Settings / Privacy read-only facade; it is the
     only allowed ``clipboard`` reference. All other uses remain forbidden.
+
+    Phase 6B exception: the Settings / Privacy clipboard capture toggle
+    introduces ``settings-clipboard-toggle`` DOM ids and ``clipboardtoggle``
+    function names (e.g. ``setClipboardToggleStatus``). These are UI
+    identifiers, not raw backend field names, so they are also whitelisted.
     """
     source = read_all_js().lower()
     # The frontend must never reference these raw backend fields. (The
@@ -1906,6 +1911,11 @@ def test_app_js_hide_delete_has_no_raw_field_exposure():
     # names.)
     # Phase 6A: only the legitimate JSON status flag name is whitelisted.
     source_without_capture_flag = source.replace("clipboard_capture_enabled", "")
+    # Phase 6B: whitelist the toggle DOM id prefix and camelCase function
+    # names (lowercased) so they are not confused with the raw "clipboard"
+    # content field.
+    source_without_capture_flag = source_without_capture_flag.replace("clipboard-toggle", "")
+    source_without_capture_flag = source_without_capture_flag.replace("clipboardtoggle", "")
     assert "window_title" not in source_without_capture_flag
     assert "file_path_hint" not in source_without_capture_flag
     assert "full_path" not in source_without_capture_flag
@@ -2727,10 +2737,17 @@ def test_app_js_no_raw_sensitive_fields_anywhere_3c1():
     boolean status flag named ``clipboard_capture_enabled``. That literal
     JSON field name is the only allowed ``clipboard`` reference. All other
     uses of the raw field token remain forbidden.
+
+    Phase 6B exception: the Settings / Privacy clipboard capture toggle
+    introduces ``settings-clipboard-toggle`` DOM ids. These are UI element
+    identifiers, not raw backend field names, so they are also whitelisted.
     """
     source = read_all_js()
     # Phase 6A: only the legitimate JSON status flag name is whitelisted.
     source_without_capture_flag = source.replace("clipboard_capture_enabled", "")
+    # Phase 6B: whitelist the toggle DOM id prefix so it is not confused
+    # with the raw "clipboard" content field.
+    source_without_capture_flag = source_without_capture_flag.replace("clipboard-toggle", "")
     for forbidden in ("window_title", "file_path_hint",
                       "full_path", "clipboard"):
         assert forbidden not in source_without_capture_flag, (

@@ -264,12 +264,19 @@
             statsExportBtn.addEventListener("click", App.exportStatisticsCsv);
         }
         // Phase 6A: Settings / Privacy read-only status refresh handler.
-        // The button only re-reads the read-only status; it does not save
-        // settings, toggle the capture flag, export / import backups,
-        // parse the backup manifest, or clear local data.
+        // The button re-reads the read-only status; it does not save
+        // settings, export / import backups, parse the backup manifest,
+        // or clear local data.
         var settingsRefreshBtn = document.getElementById("settings-refresh-btn");
         if (settingsRefreshBtn) {
             settingsRefreshBtn.addEventListener("click", App.loadSettingsPrivacyStatus);
+        }
+        // Phase 6B: capture toggle write handler. The toggle
+        // writes the clipboard_capture_enabled flag through the bridge;
+        // no other write action is wired here.
+        var captureToggle = document.getElementById("settings-clipboard-toggle");
+        if (captureToggle) {
+            captureToggle.addEventListener("change", App.handleCaptureToggleChange);
         }
         // Phase 5C: Project Rules keyword create submit handler. This is
         // the only Project Rules create event bound in init; the existing

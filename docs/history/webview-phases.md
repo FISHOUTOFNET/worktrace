@@ -6127,6 +6127,179 @@ Phase 6A does not implement and does not start:
   encrypted backup runtime semantics;
 - Any change to `bridge.py` import boundary (still only `worktrace.api`).
 
+## Phase 6B Implemented Scope
+
+Phase 6B opens the first minimal write capability on the Settings / Privacy
+page: the **clipboard capture toggle**. The toggle writes
+`clipboard_capture_enabled` through a narrow WebView bridge facade. Phase 6B
+does not read or display clipboard content; the toggle only controls whether
+local clipboard recording is enabled.
+
+This phase also merges the originally planned 6A.1 hardening pass; no
+separate 6A.1 phase is shipped.
+
+Backend:
+
+- New narrow write facade
+  `worktrace.api.settings_api.set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]`:
+  - Only accepts `enabled is True` or `enabled is False`; any other
+    type (`None`, `"true"` / `"false"` strings, `"1"` / `"0"`, `1` / `0`
+    ints, `[]`, `{}`, `()`, `set()`, `object()`) is rejected with
+    `{"ok": False, "error": "请选择有效的剪贴板记录状态"}` and does NOT
+    mutate the underlying setting;
+  - On success calls the existing `set_clipboard_capture_enabled(enabled)`
+    and returns `{"ok": True, "status": <get_settings_privacy_status()["status"]>}`;
+  - On any exception returns `{"ok": False, "error": "设置剪贴板记录失败"}`
+    with no traceback / SQL / raw exception text;
+  - Does not return the setting key raw value, clipboard content, export
+    path, passphrase, or any sensitive metadata;
+  - Does not call backup export / import / manifest, `clear_all_local_data`,
+    or any schema mutation;
+  - Added to `settings_api.__all__`.
+- New bridge method `WebViewBridge.set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]`:
+  - Bridge-level strict `bool` guard mirrors the API facade (non-bool
+    rejected with the same stable Chinese message before reaching the
+    backend);
+  - Delegates to `settings_api.set_clipboard_capture_enabled_for_webview(enabled)`;
+  - On API `ok=True` returns `{"ok": True, "status": <status>}`;
+  - On API `ok=False` passes the stable Chinese error through unchanged;
+  - On any exception logs via `logger.exception(...)` and returns
+    `{"ok": False, "error": "设置剪贴板记录失败"}`;
+  - Payload never carries traceback, SQL, raw exception, path, clipboard
+    content, or passphrase;
+  - Defined directly on `WebViewBridge` in `bridge.py` (no new
+    `bridge_settings.py` mixin); `bridge.py` continues to import only
+    `worktrace.api`.
+
+Frontend:
+
+- `index.html` adds a clipboard toggle row inside the privacy card with
+  stable DOM ids: `settings-clipboard-toggle`,
+  `settings-clipboard-toggle-label`, `settings-clipboard-toggle-status`.
+  The toggle is a checkbox (`<input type="checkbox">`), not a button.
+  Page copy states clipboard recording is off by default, stored locally
+  only, and the page does not display clipboard content.
+- `core.js` adds `App.settingsWriteInProgress = false` (separate from
+  `settingsLoading` so a write in flight does not pollute the read-state
+  guard).
+- `settings.js` header comment updated from Phase 6A read-only to Phase 6B
+  clipboard toggle foundation; continues to note export / import / manifest
+  / clear-all / save / file-dialog are not opened. New helper functions:
+  - `setSettingsControlsDisabled(disabled)` — shared disable for the
+    refresh button and the toggle (toggle also disabled until first
+    successful load);
+  - `setClipboardToggleStatus(text)` — updates the toggle status span via
+    `textContent`;
+  - `renderClipboardToggle(status)` — syncs `checked` / `disabled` / status
+    text from the latest status snapshot;
+  - `setClipboardCaptureEnabled(enabled)` — sets `settingsWriteInProgress`,
+    disables controls, calls
+    `App.callBridge("set_clipboard_capture_enabled", enabled)`, on success
+    renders the returned status, on failure restores the previous checked
+    state (`!enabled`) and shows a stable Chinese error, finally clears
+    `settingsWriteInProgress` and re-enables controls based on `settingsLoading`;
+  - `handleClipboardToggleChange(event)` — bound to the toggle `change`
+    event; ignores events while disabled or while a write is in flight;
+  - `renderSettingsStatus(status)` now calls `renderClipboardToggle(status)`;
+  - `setSettingsLoading(loading)` now combines `loading || settingsWriteInProgress`
+    when disabling controls;
+  - catch blocks never read `.message`; dynamic rendering uses `textContent`
+    only (no `innerHTML`); no network / storage / browser clipboard API.
+- `init.js` binds the `settings-clipboard-toggle` `change` event to
+  `App.handleClipboardToggleChange` inside `initButtons()`; no separate
+  submit button is introduced.
+- `styles.css` adds `.settings-toggle-row`, `.settings-toggle-label`,
+  `.settings-toggle-control`, `.settings-toggle-status` scoped classes
+  (plus `:disabled` variants). No effect on Project Rules / Timeline /
+  Statistics pages; no external font; no CDN; no CSS framework.
+
+Tests:
+
+- `tests/test_settings_privacy_status.py` extended with Phase 6B API and
+  bridge write tests: success true/false, payload only `ok` + `status`,
+  JSON-serializable, no sensitive-token leak (path / clipboard content /
+  passphrase / traceback / sqlite3 / raw exception), non-bool rejection
+  (12 parametrized bad values), non-bool does not change the setting,
+  setter exception returns generic error without leaking raw exception,
+  no backup actions called, no `clear_all_local_data` called, no schema
+  change; bridge method exists on composed `WebViewBridge`, signature has
+  exactly one required `enabled` parameter (no optional / `*args`),
+  bridge success true/false, bridge non-bool rejection + no setting change,
+  bridge API exception collapse, bridge payload no sensitive-token leak,
+  bridge no backup / no clear-all, bridge passes `ok=False` error through.
+- `tests/webview/test_settings_static_contract.py` updated:
+  - `test_settings_js_only_calls_allowed_bridge_method_6a` renamed to
+    `test_settings_js_only_calls_allowed_bridge_methods_6b` with the new
+    allowed list (`get_settings_privacy_status` +
+    `set_clipboard_capture_enabled`); the old 6A forbidden assertion for
+    `set_clipboard_capture_enabled` is removed so the new feature is not
+    killed by the old test;
+  - `test_index_html_settings_required_dom_ids_6a` extended with the three
+    new toggle DOM ids;
+  - `test_settings_js_does_not_use_network_or_storage_apis_6a` extended
+    with `navigator.clipboard`;
+  - `test_index_html_no_settings_write_buttons_6a` extended with
+    `settings-path-btn`, `settings-file-dialog-btn`,
+    `settings-manifest-btn`;
+  - New 6B contract tests: `settingsWriteInProgress` declared in `core.js`,
+    toggle write helper functions defined + exposed on `App`, toggle
+    change handler bound in `initButtons`, controls disabled during load
+    and write, toggle write failure restores previous checked state,
+    `renderSettingsStatus` calls `renderClipboardToggle`, `.settings-toggle-*`
+    CSS classes present.
+- `tests/test_ui_backend_boundary.py` extended with two Phase 6B tests:
+  bridge exposes `set_clipboard_capture_enabled` with exactly one required
+  `enabled` parameter (no optional / `*args`), and the method body's
+  executable code (docstring skipped) carries no forbidden runtime tokens
+  (`traceback` / `str(exc)` / `repr(` / `format_exc` / `exc_info` /
+  `.message` / `passphrase` / `clipboard_content` / `raw_exception`).
+- `tests/test_run_affected_tests.py` K1 section docstrings updated to
+  mention Phase 6A / 6B; K1 mapping itself is unchanged (it already covers
+  all 6B-modified source files and test files); no new K2 section.
+
+Affected-test runner:
+
+- K1. Settings / Privacy WebView continues to cover
+  `worktrace/api/settings_api.py`, `worktrace/api/backup_api.py`,
+  `worktrace/webview_ui/bridge.py`, `worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/js/settings.js`, `worktrace/webview_ui/js/init.js`,
+  `worktrace/webview_ui/styles.css`, `WorkTrace.spec`,
+  `tests/webview/static_helpers.py` →
+  `tests/test_settings_privacy_status.py`,
+  `tests/webview/test_settings_static_contract.py`,
+  `tests/test_ui_backend_boundary.py`,
+  `tests/webview/test_frontend_global_boundaries.py`,
+  `tests/test_webview_packaging.py`,
+  `tests/test_run_affected_tests.py` + import smoke. No K2 added.
+
+## Phase 6B Not Implemented
+
+Phase 6B does not implement and does not open UI / bridge entry for:
+
+- Save settings (general setting write);
+- `set_setting_value` WebView write entry;
+- Export path setting;
+- Native file / folder dialog;
+- Encrypted backup export (`export_encrypted_backup`);
+- Encrypted backup import (`import_encrypted_backup`);
+- Encrypted backup manifest preview (`parse_encrypted_backup_manifest`);
+- Clear-all-local-data (`clear_all_local_data`);
+- First-run notice view / accept in WebView;
+- Clipboard content reading, display, or return (the toggle only controls
+  whether local clipboard recording is enabled; it never reads or shows
+  copied text);
+- Any database delete / rebuild / import / export write;
+- Schema.sql modification (no new table / column / migration);
+- New dependencies (no React / Vue / Vite / Node / local HTTP server /
+  CDN / external font);
+- `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource`;
+- `localStorage` / `sessionStorage` / `document.cookie`;
+- Browser Clipboard API (`navigator.clipboard`);
+- Legacy Tkinter fallback;
+- Any change to collector / Timeline / Statistics / Export / privacy /
+  encrypted backup runtime semantics;
+- Any change to `bridge.py` import boundary (still only `worktrace.api`).
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

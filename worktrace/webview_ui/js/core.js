@@ -80,6 +80,12 @@
     App.settingsLoaded = false;
     App.settingsLoading = false;
     App.settingsRequestToken = 0;
+    // --- Phase 6B: Settings / Privacy capture toggle write -------------
+    // Separate from settingsLoading (read) so a write in flight never
+    // pollutes the read-state guard. While true, both the refresh button
+    // and the capture toggle are disabled so no concurrent write or
+    // read can race the in-flight toggle write.
+    App.settingsWriteInProgress = false;
 
     // --- Phase 5B: Project Rules state ---------------------------------
     App.rulesLoaded = false;

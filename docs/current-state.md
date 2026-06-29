@@ -8,16 +8,19 @@
 
 ## Current Phase
 
-**Phase 6A — Settings / Privacy WebView read-only status foundation.**
-The Settings / Privacy page is no longer a placeholder; it surfaces a
-read-only safety-status snapshot (storage model, clipboard capture on/off,
-export directory configured yes/no, encrypted-backup import-in-progress flag,
-and "export / import / manifest preview / clear-all come in later phases"
-notices). No write actions are open: no save settings, no clipboard toggle
-write, no encrypted-backup export / import / manifest, no clear-all-local-data.
-Builds on Phase 5I (automatic rules + selected-rule batch operations
-foundation, on top of user project create / edit / enable-disable / archive).
-Chronology (5B / 5B.1 / ... / 5I / 6A) in [`history/webview-phases.md`](history/webview-phases.md).
+**Phase 6B — Settings / Privacy clipboard capture toggle foundation.**
+The Settings / Privacy page surfaces a read-only safety-status snapshot
+(storage model, clipboard capture on/off, export directory configured yes/no,
+encrypted-backup import-in-progress flag) and opens its first minimal write
+capability: the clipboard capture toggle. Toggling writes
+`clipboard_capture_enabled` through a narrow bridge facade; both API and
+bridge layers accept only a real `bool` and collapse failures to stable
+Chinese messages. Phase 6B does not read or display clipboard content. No
+other write actions are open (no save settings, no encrypted-backup export /
+import / manifest, no clear-all-local-data). Builds on Phase 6A (read-only
+status foundation) and Phase 5I (automatic rules + selected-rule batch
+operations foundation, on top of user project create / edit / enable-disable / archive).
+Chronology in [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Default UI
 
@@ -47,10 +50,10 @@ Chronology (5B / 5B.1 / ... / 5I / 6A) in [`history/webview-phases.md`](history/
   folder recursion scope. Current write capabilities are listed in the
   Project Rules matrix below. Per-phase scope details are archived in
   [`history/webview-phases.md`](history/webview-phases.md).
-- **Settings / Privacy** (Phase 6A): read-only safety-status foundation.
-  Shows storage model, clipboard-capture on/off, export directory configured
-  yes/no, encrypted-backup import-in-progress flag, and not-yet-open
-  notices. No write actions.
+- **Settings / Privacy** (Phase 6A / 6B): read-only safety-status foundation
+  plus clipboard capture toggle write. Shows storage model, clipboard-capture
+  on/off, export directory configured yes/no, encrypted-backup import-in-
+  progress flag. The clipboard capture toggle is the only write action.
 
 ## Supported Timeline Write Operations
 
@@ -105,9 +108,10 @@ Chronology (5B / 5B.1 / ... / 5I / 6A) in [`history/webview-phases.md`](history/
   `preview_folder_rule_conflicts` NOT exposed to WebView; 5I reuses
   display-safe `rule_impact_service` helpers); raw / unbounded batch
   backfill; automatic-rule on/off UI toggle.
-- Settings write actions (Phase 6A is read-only): save settings, clipboard
-  capture toggle write, encrypted-backup export / import / manifest preview,
-  clear-all-local-data, first-run notice view/accept, native file / folder dialog.
+- Settings write actions still unsupported (Phase 6B only opens the clipboard
+  capture toggle): save settings, encrypted-backup export / import / manifest,
+  clear-all-local-data, first-run notice, native file / folder dialog, export
+  path setting.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
 - Batch time / batch split / batch merge; note append / merge; auto-rule
   creation; global overlap detection.
@@ -127,14 +131,12 @@ WebView (index.html / js/*.js / styles.css)
    (collector thread ──> worktrace.collector)
 ```
 
-Frontend JS layout (Phase R2, no behavior change): the former single
-`app.js` is split by feature into local classic scripts under
-`worktrace/webview_ui/js/` — `core.js`, `overview.js`, `timeline.js`,
-`timeline_correction.js`, `statistics.js`, `settings.js`, `rules.js`,
-`init.js` —
-loaded in that order via plain `<script src="js/...">` tags. No ES
-modules, no bundler, no Node/build step, no browser storage, and no network
-requests.
+Frontend JS layout (Phase R2): the former single `app.js` is split by
+feature into local classic scripts under `worktrace/webview_ui/js/`
+(`core.js`, `overview.js`, `timeline.js`, `timeline_correction.js`,
+`statistics.js`, `settings.js`, `rules*.js`, `init.js`) loaded via plain
+`<script src="js/...">` tags. No ES modules, no bundler, no Node/build
+step, no browser storage, no network requests.
 
 - The bridge may import `worktrace.api` and nothing else from the backend.
 - The bridge returns `{"ok": false, "error": "<chinese>"}` on failure; it
@@ -155,13 +157,11 @@ requests.
 ## Common Test Commands
 
 ```powershell
-# Affected tests (default for day-to-day iteration). Pure stdlib; maps
-# changed source / docs / packaging paths to a finite pytest target set
-# and never silently runs the full suite.
+# Affected tests (default). Pure stdlib; maps changed paths to a finite
+# pytest target set and never silently runs the full suite.
 python scripts/run_affected_tests.py
 
-# Full suite — reserve for core cross-cutting changes, pre-push, or
-# release validation. Also runs in GitHub Actions CI.
+# Full suite — cross-cutting changes, pre-push, or release validation.
 pytest
 ```
 

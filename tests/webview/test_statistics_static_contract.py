@@ -548,6 +548,10 @@ def test_frontend_js_correction_shell_no_raw_sensitive_fields_3c():
     Phase 6A exception: ``clipboard_capture_enabled`` is the JSON status
     flag returned by the Settings / Privacy read-only facade; it is the
     only allowed ``clipboard`` reference. All other uses remain forbidden.
+
+    Phase 6B exception: the Settings / Privacy clipboard capture toggle
+    introduces ``settings-clipboard-toggle`` DOM ids. These are UI element
+    identifiers, not raw backend field names, so they are also whitelisted.
     """
     source = read_all_js()
     # The literal field names must not appear as rendered display values.
@@ -555,6 +559,9 @@ def test_frontend_js_correction_shell_no_raw_sensitive_fields_3c():
     # the test asserts the literals are absent from the rendering paths.)
     # Phase 6A: only the legitimate JSON status flag name is whitelisted.
     source_without_capture_flag = source.replace("clipboard_capture_enabled", "")
+    # Phase 6B: whitelist the toggle DOM id prefix so it is not confused
+    # with the raw "clipboard" content field.
+    source_without_capture_flag = source_without_capture_flag.replace("clipboard-toggle", "")
     for forbidden in ("window_title", "file_path_hint",
                       "full_path", "clipboard"):
         assert forbidden not in source_without_capture_flag, (

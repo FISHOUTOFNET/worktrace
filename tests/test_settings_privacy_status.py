@@ -1,9 +1,10 @@
-"""Phase 6A — Settings / Privacy read-only status facade + bridge tests.
+"""Phase 6A / 6B — Settings / Privacy status facade + bridge tests.
 
-These tests verify the ``settings_api.get_settings_privacy_status`` facade and
-the ``WebViewBridge.get_settings_privacy_status`` method return the
-read-only status payload required by the Settings / Privacy WebView page
-without leaking paths, clipboard content, passphrases, tracebacks, or any
+These tests verify the ``settings_api.get_settings_privacy_status`` facade,
+the ``settings_api.set_clipboard_capture_enabled_for_webview`` write facade,
+and the corresponding ``WebViewBridge`` methods. They assert the read-only
+status payload and the clipboard capture toggle write payload never leak
+paths, clipboard content, passphrases, tracebacks, or any unintended
 write-side action surface.
 """
 
@@ -16,7 +17,10 @@ from unittest.mock import patch
 import pytest
 
 from worktrace.api import settings_api
-from worktrace.api.settings_api import get_settings_privacy_status
+from worktrace.api.settings_api import (
+    get_settings_privacy_status,
+    set_clipboard_capture_enabled_for_webview,
+)
 from worktrace.services.settings_service import set_setting
 from worktrace.webview_ui.bridge import WebViewBridge
 
@@ -277,3 +281,346 @@ def test_bridge_method_signature_has_no_required_args() -> None:
             f"bridge.get_settings_privacy_status parameter {name!r} must "
             "have a default; the JS side calls it with no arguments"
         )
+
+
+# --- Phase 6B: API write facade -----------------------------------------
+
+
+def test_api_write_true_success_status_reflects_setting(temp_db) -> None:
+    set_setting("clipboard_capture_enabled", "false")
+    result = set_clipboard_capture_enabled_for_webview(True)
+    assert result["ok"] is True
+    assert result["status"]["clipboard_capture_enabled"] is True
+
+
+def test_api_write_false_success_status_reflects_setting(temp_db) -> None:
+    set_setting("clipboard_capture_enabled", "true")
+    result = set_clipboard_capture_enabled_for_webview(False)
+    assert result["ok"] is True
+    assert result["status"]["clipboard_capture_enabled"] is False
+
+
+def test_api_write_success_payload_has_only_ok_and_status(temp_db) -> None:
+    result = set_clipboard_capture_enabled_for_webview(True)
+    assert set(result.keys()) == {"ok", "status"}
+
+
+def test_api_write_success_payload_is_json_serializable(temp_db) -> None:
+    set_setting("export_path", SENSITIVE_EXPORT_PATH)
+    result = set_clipboard_capture_enabled_for_webview(True)
+    serialized = json.dumps(result, ensure_ascii=False)
+    parsed = json.loads(serialized)
+    assert parsed["ok"] is True
+
+
+def test_api_write_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
+    set_setting("export_path", SENSITIVE_EXPORT_PATH)
+    set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
+    result = set_clipboard_capture_enabled_for_webview(True)
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        SENSITIVE_EXPORT_PATH,
+        SENSITIVE_CLIPBOARD_TOKEN,
+        SENSITIVE_PASSPHRASE,
+        "current_activity_snapshot",
+        "window_title",
+        "file_path_hint",
+        "path_hint",
+        "passphrase",
+        ".wtbackup",
+        "Traceback",
+        "sqlite3.",
+    ):
+        assert token not in serialized, f"write payload leaks sensitive token: {token!r}"
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        None,
+        "true",
+        "false",
+        "1",
+        "0",
+        1,
+        0,
+        [],
+        {},
+        (),
+        set(),
+        object(),
+    ],
+)
+def test_api_write_rejects_non_bool(temp_db, bad_value) -> None:
+    set_setting("clipboard_capture_enabled", "true")
+    result = set_clipboard_capture_enabled_for_webview(bad_value)  # type: ignore[arg-type]
+    assert result == {"ok": False, "error": "请选择有效的剪贴板记录状态"}
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        None,
+        "true",
+        "false",
+        "1",
+        "0",
+        1,
+        0,
+        [],
+        {},
+        (),
+        set(),
+        object(),
+    ],
+)
+def test_api_write_non_bool_does_not_change_setting(temp_db, bad_value) -> None:
+    set_setting("clipboard_capture_enabled", "true")
+    set_clipboard_capture_enabled_for_webview(bad_value)  # type: ignore[arg-type]
+    assert settings_api.is_clipboard_capture_enabled() is True
+
+    set_setting("clipboard_capture_enabled", "false")
+    set_clipboard_capture_enabled_for_webview(bad_value)  # type: ignore[arg-type]
+    assert settings_api.is_clipboard_capture_enabled() is False
+
+
+def test_api_write_setter_exception_returns_generic_error(temp_db) -> None:
+    with patch.object(
+        settings_api,
+        "set_clipboard_capture_enabled",
+        side_effect=RuntimeError(SENSITIVE_PASSPHRASE),
+    ):
+        result = set_clipboard_capture_enabled_for_webview(True)
+    assert result == {"ok": False, "error": "设置剪贴板记录失败"}
+
+
+def test_api_write_exception_payload_does_not_leak_raw_exception(temp_db) -> None:
+    with patch.object(
+        settings_api,
+        "set_clipboard_capture_enabled",
+        side_effect=RuntimeError(SENSITIVE_PASSPHRASE),
+    ):
+        result = set_clipboard_capture_enabled_for_webview(True)
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert SENSITIVE_PASSPHRASE not in serialized
+    assert "RuntimeError" not in serialized
+    assert "Traceback" not in serialized
+
+
+def test_api_write_does_not_call_backup_actions(temp_db) -> None:
+    with patch("worktrace.api.backup_api.export_encrypted_backup") as mock_export, \
+            patch("worktrace.api.backup_api.import_encrypted_backup") as mock_import, \
+            patch("worktrace.api.backup_api.parse_encrypted_backup_manifest") as mock_manifest:
+        set_clipboard_capture_enabled_for_webview(True)
+        mock_export.assert_not_called()
+        mock_import.assert_not_called()
+        mock_manifest.assert_not_called()
+
+
+def test_api_write_does_not_call_clear_all_local_data(temp_db) -> None:
+    with patch.object(settings_api, "clear_all_local_data") as mock_clear:
+        set_clipboard_capture_enabled_for_webview(True)
+        mock_clear.assert_not_called()
+
+
+def test_api_write_does_not_change_schema(temp_db) -> None:
+    from worktrace.db import get_connection
+
+    expected_tables = {
+        row[0]
+        for row in get_connection()
+        .execute("SELECT name FROM sqlite_master WHERE type='table'")
+        .fetchall()
+    }
+    set_clipboard_capture_enabled_for_webview(True)
+    actual_tables = {
+        row[0]
+        for row in get_connection()
+        .execute("SELECT name FROM sqlite_master WHERE type='table'")
+        .fetchall()
+    }
+    assert expected_tables == actual_tables
+
+
+# --- Phase 6B: Bridge write method --------------------------------------
+
+
+def test_bridge_write_method_exists_on_composed_webview_bridge() -> None:
+    bridge = WebViewBridge()
+    method = getattr(bridge, "set_clipboard_capture_enabled", None)
+    assert callable(method), (
+        "WebViewBridge must expose set_clipboard_capture_enabled for Phase 6B"
+    )
+
+
+def test_bridge_write_method_signature_has_one_required_param() -> None:
+    bridge = WebViewBridge()
+    sig = inspect.signature(bridge.set_clipboard_capture_enabled)
+    params = list(sig.parameters.values())
+    assert len(params) == 1, (
+        "bridge.set_clipboard_capture_enabled must take exactly one parameter"
+    )
+    param = params[0]
+    assert param.name == "enabled", (
+        f"parameter must be named 'enabled', got {param.name!r}"
+    )
+    assert param.default is inspect.Parameter.empty, (
+        "the 'enabled' parameter must be required (no default)"
+    )
+    assert param.kind in (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    ), "the 'enabled' parameter must not be *args or **kwargs"
+
+
+def test_bridge_write_true_success(temp_db) -> None:
+    set_setting("clipboard_capture_enabled", "false")
+    bridge = WebViewBridge()
+    result = bridge.set_clipboard_capture_enabled(True)
+    assert result["ok"] is True
+    assert result["status"]["clipboard_capture_enabled"] is True
+
+
+def test_bridge_write_false_success(temp_db) -> None:
+    set_setting("clipboard_capture_enabled", "true")
+    bridge = WebViewBridge()
+    result = bridge.set_clipboard_capture_enabled(False)
+    assert result["ok"] is True
+    assert result["status"]["clipboard_capture_enabled"] is False
+
+
+def test_bridge_write_success_payload_has_only_ok_and_status(temp_db) -> None:
+    bridge = WebViewBridge()
+    result = bridge.set_clipboard_capture_enabled(True)
+    assert set(result.keys()) == {"ok", "status"}
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        None,
+        "true",
+        "false",
+        "1",
+        "0",
+        1,
+        0,
+        [],
+        {},
+        (),
+        set(),
+        object(),
+    ],
+)
+def test_bridge_write_rejects_non_bool(temp_db, bad_value) -> None:
+    set_setting("clipboard_capture_enabled", "true")
+    bridge = WebViewBridge()
+    result = bridge.set_clipboard_capture_enabled(bad_value)
+    assert result == {"ok": False, "error": "请选择有效的剪贴板记录状态"}
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        None,
+        "true",
+        "false",
+        "1",
+        "0",
+        1,
+        0,
+        [],
+        {},
+        (),
+        set(),
+        object(),
+    ],
+)
+def test_bridge_write_non_bool_does_not_change_setting(temp_db, bad_value) -> None:
+    set_setting("clipboard_capture_enabled", "true")
+    bridge = WebViewBridge()
+    bridge.set_clipboard_capture_enabled(bad_value)
+    assert settings_api.is_clipboard_capture_enabled() is True
+
+    set_setting("clipboard_capture_enabled", "false")
+    bridge.set_clipboard_capture_enabled(bad_value)
+    assert settings_api.is_clipboard_capture_enabled() is False
+
+
+def test_bridge_write_api_exception_returns_generic_error(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch.object(
+        settings_api,
+        "set_clipboard_capture_enabled_for_webview",
+        side_effect=RuntimeError(SENSITIVE_PASSPHRASE),
+    ):
+        result = bridge.set_clipboard_capture_enabled(True)
+    assert result == {"ok": False, "error": "设置剪贴板记录失败"}
+
+
+def test_bridge_write_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
+    set_setting("export_path", SENSITIVE_EXPORT_PATH)
+    set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
+    bridge = WebViewBridge()
+    result = bridge.set_clipboard_capture_enabled(True)
+    serialized = json.dumps(result, ensure_ascii=False)
+    for token in (
+        SENSITIVE_EXPORT_PATH,
+        SENSITIVE_CLIPBOARD_TOKEN,
+        SENSITIVE_PASSPHRASE,
+        "current_activity_snapshot",
+        "window_title",
+        "file_path_hint",
+        "path_hint",
+        "passphrase",
+        ".wtbackup",
+        "Traceback",
+        "sqlite3.",
+    ):
+        assert token not in serialized, f"bridge write payload leaks: {token!r}"
+
+
+def test_bridge_write_api_exception_payload_does_not_leak(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch.object(
+        settings_api,
+        "set_clipboard_capture_enabled_for_webview",
+        side_effect=RuntimeError(SENSITIVE_PASSPHRASE),
+    ):
+        result = bridge.set_clipboard_capture_enabled(True)
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert SENSITIVE_PASSPHRASE not in serialized
+    assert "RuntimeError" not in serialized
+    assert "Traceback" not in serialized
+
+
+def test_bridge_write_does_not_call_backup_actions(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch("worktrace.api.backup_api.export_encrypted_backup") as mock_export, \
+            patch("worktrace.api.backup_api.import_encrypted_backup") as mock_import, \
+            patch("worktrace.api.backup_api.parse_encrypted_backup_manifest") as mock_manifest:
+        bridge.set_clipboard_capture_enabled(True)
+        mock_export.assert_not_called()
+        mock_import.assert_not_called()
+        mock_manifest.assert_not_called()
+
+
+def test_bridge_write_does_not_call_clear_all_local_data(temp_db) -> None:
+    bridge = WebViewBridge()
+    with patch.object(settings_api, "clear_all_local_data") as mock_clear:
+        bridge.set_clipboard_capture_enabled(True)
+        mock_clear.assert_not_called()
+
+
+def test_bridge_write_api_ok_false_passes_error_through(temp_db) -> None:
+    # When the API facade returns ok=false with a stable Chinese error,
+    # the bridge must pass that error through unchanged.
+    bridge = WebViewBridge()
+    api_result = {"ok": False, "error": "请选择有效的剪贴板记录状态"}
+    with patch.object(
+        settings_api,
+        "set_clipboard_capture_enabled_for_webview",
+        return_value=api_result,
+    ):
+        result = bridge.set_clipboard_capture_enabled(True)
+    assert result == api_result

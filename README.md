@@ -5,24 +5,27 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 6A is the latest shipped phase (Settings
-> / Privacy read-only status foundation). Project Rules now supports
+> **Current state**: WebView Phase 6B is the latest shipped phase (Settings
+> / Privacy clipboard capture toggle foundation). Project Rules now supports
 > project-grouped folder / keyword rules, existing-rule enable / disable,
 > keyword create / edit / delete, folder rule create / edit / delete, user
 > project create / edit / enable-disable / archive, single-rule impact
 > preview + safe single-rule backfill for folder / keyword rules, automatic
 > application of enabled rules to newly produced / just-closed eligible
 > activities, and selected-rule batch preview / apply / enable / disable.
-> The Settings / Privacy page is no longer a placeholder; it surfaces a
-> read-only safety-status snapshot (storage model, clipboard capture on/off,
-> export directory configured yes/no, encrypted-backup import-in-progress
-> flag, not-yet-open notices). Save settings, clipboard toggle write,
-> encrypted backup export / import / manifest preview, and clear-all-local-data
-> remain unsupported in WebView and arrive in later phases. Hard delete project,
-> raw folder-rule conflict preview, raw / unbounded batch backfill, and the
-> automatic-rule on/off UI toggle also remain unsupported. The canonical
-> one-screen snapshot of what ships today is
-> [`docs/current-state.md`](docs/current-state.md). The full per-phase
+> The Settings / Privacy page surfaces a read-only safety-status snapshot
+> (storage model, clipboard capture on/off, export directory configured yes/no,
+> encrypted-backup import-in-progress flag) and opens its first minimal write
+> capability: the clipboard capture toggle. The toggle writes
+> `clipboard_capture_enabled` through a narrow bridge facade; both API and
+> bridge layers accept only a real `bool` and collapse failures to stable
+> Chinese messages. Phase 6B does not read or display clipboard content.
+> Save settings, encrypted backup export / import / manifest preview, and
+> clear-all-local-data remain unsupported in WebView and arrive in later
+> phases. Hard delete project, raw folder-rule conflict preview, raw /
+> unbounded batch backfill, and the automatic-rule on/off UI toggle also
+> remain unsupported. The canonical one-screen snapshot of what ships today
+> is [`docs/current-state.md`](docs/current-state.md). The full per-phase
 > history is [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
 > AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)
 > before touching the repo.
@@ -218,10 +221,12 @@ database file or use the Settings page to clear and rebuild all data.
 - No service, driver, cloud sync, login, AI, OCR, screenshots, screen
   recording, or automatic startup.
 - Settings / Privacy page migrated to WebView in Phase 6A as a read-only
-  status foundation (storage model, clipboard capture on/off, export
-  directory configured yes/no, encrypted-backup import-in-progress flag,
-  not-yet-open notices). Save settings, clipboard toggle write, encrypted
-  backup export / import / manifest preview, and clear-all-local-data
+  status foundation and extended in Phase 6B with the clipboard capture
+  toggle write (storage model, clipboard capture on/off, export directory
+  configured yes/no, encrypted-backup import-in-progress flag, plus the
+  toggle). Phase 6B does not read or display clipboard content; the toggle
+  only controls whether local clipboard recording is enabled. Save settings,
+  encrypted backup export / import / manifest preview, and clear-all-local-data
   remain unsupported in WebView and arrive in later phases.
 - Hard delete project; raw folder-rule conflict preview; raw / unbounded
   batch backfill; automatic-rule enable / disable toggle in the UI; Excel /

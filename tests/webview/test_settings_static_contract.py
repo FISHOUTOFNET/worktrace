@@ -1,13 +1,13 @@
-"""Phase 6A — Settings / Privacy WebView static-contract tests.
+"""Phase 6A / 6B — Settings / Privacy WebView static-contract tests.
 
 These tests read the bundled frontend resources (``index.html`` /
 ``js/*.js`` / ``styles.css`` / ``WorkTrace.spec``) directly without starting
-the GUI. They lock the Settings / Privacy page contracts for Phase 6A
-(read-only status foundation): the page must be migrated (no placeholder),
-the required DOM ids must exist, ``settings.js`` must be loaded in the
-correct order, and the JS must only call the read-only bridge method
-``get_settings_privacy_status`` (no save / export / import / clear-all /
-clipboard-toggle write paths).
+the GUI. They lock the Settings / Privacy page contracts for Phase 6B
+(read-only status foundation + clipboard capture toggle write): the page
+must be migrated (no placeholder), the required DOM ids must exist,
+``settings.js`` must be loaded in the correct order, and the JS must only
+call ``get_settings_privacy_status`` and ``set_clipboard_capture_enabled``
+(no save / export / import / clear-all / file-dialog / path write paths).
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def test_index_html_settings_page_section_is_migrated_6a() -> None:
 
 
 def test_index_html_settings_required_dom_ids_6a() -> None:
-    """Phase 6A: the page-settings section must define the required DOM ids."""
+    """Phase 6A / 6B: the page-settings section must define the required DOM ids."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for dom_id in (
         "settings-refresh-btn",
@@ -64,6 +64,10 @@ def test_index_html_settings_required_dom_ids_6a() -> None:
         "settings-privacy-card",
         "settings-backup-card",
         "settings-danger-card",
+        # Phase 6B: clipboard capture toggle control
+        "settings-clipboard-toggle",
+        "settings-clipboard-toggle-label",
+        "settings-clipboard-toggle-status",
     ):
         assert 'id="' + dom_id + '"' in source, (
             "index.html must define DOM id: " + dom_id
@@ -129,19 +133,23 @@ def test_settings_js_defines_load_settings_privacy_status_6a() -> None:
     assert 'App.callBridge("get_settings_privacy_status")' in source
 
 
-def test_settings_js_only_calls_allowed_bridge_method_6a() -> None:
-    """Phase 6A: settings.js must not call any write-side bridge method
-    (export_encrypted_backup / import_encrypted_backup /
-    parse_encrypted_backup_manifest / clear_all_local_data /
-    set_setting_value / set_clipboard_capture_enabled)."""
+def test_settings_js_only_calls_allowed_bridge_methods_6b() -> None:
+    """Phase 6B: settings.js must only call ``get_settings_privacy_status``
+    and ``set_clipboard_capture_enabled``. All other write-side bridge
+    methods remain forbidden (export_encrypted_backup /
+    import_encrypted_backup / parse_encrypted_backup_manifest /
+    clear_all_local_data / set_setting_value)."""
     source = read_js("settings.js")
+    # The two allowed Settings bridge method names must be present.
+    assert 'App.callBridge("get_settings_privacy_status")' in source
+    assert 'App.callBridge("set_clipboard_capture_enabled"' in source
+    # Every other write-side bridge method is still forbidden.
     for forbidden in (
         "export_encrypted_backup",
         "import_encrypted_backup",
         "parse_encrypted_backup_manifest",
         "clear_all_local_data",
         "set_setting_value",
-        "set_clipboard_capture_enabled",
     ):
         assert forbidden not in source, (
             "settings.js must not call bridge method: " + forbidden
@@ -149,7 +157,8 @@ def test_settings_js_only_calls_allowed_bridge_method_6a() -> None:
 
 
 def test_settings_js_does_not_use_network_or_storage_apis_6a() -> None:
-    """Phase 6A: settings.js must not use any network or storage API."""
+    """Phase 6A / 6B: settings.js must not use any network, storage, or
+    browser clipboard API."""
     source = read_js("settings.js")
     for forbidden in (
         "fetch(",
@@ -159,6 +168,7 @@ def test_settings_js_does_not_use_network_or_storage_apis_6a() -> None:
         "localStorage",
         "sessionStorage",
         "document.cookie",
+        "navigator.clipboard",
     ):
         assert forbidden not in source, (
             "settings.js must not use: " + forbidden
@@ -215,8 +225,11 @@ def test_settings_js_no_clickable_write_buttons_6a() -> None:
 
 
 def test_index_html_no_settings_write_buttons_6a() -> None:
-    """Phase 6A: index.html page-settings must not include any save /
-    export / import / clear / clipboard-toggle write button id."""
+    """Phase 6A / 6B: index.html page-settings must not include any save /
+    export / import / clear / path / file-dialog / manifest write button
+    id. The clipboard toggle is a checkbox (``settings-clipboard-toggle``),
+    not a button; a ``settings-clipboard-toggle-btn`` id is still forbidden
+    so no separate submit button is introduced alongside the toggle."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-settings"')
     assert pos != -1
@@ -231,6 +244,10 @@ def test_index_html_no_settings_write_buttons_6a() -> None:
         "settings-clipboard-toggle-btn",
         "settings-save-path-btn",
         "settings-set-path-btn",
+        # Phase 6B: explicit forbidden ids from the spec.
+        "settings-path-btn",
+        "settings-file-dialog-btn",
+        "settings-manifest-btn",
     ):
         assert forbidden not in section, (
             "index.html page-settings must not contain write button id: "
@@ -296,3 +313,121 @@ def test_styles_css_has_settings_scoped_classes_6a() -> None:
         ".settings-danger-card",
     ):
         assert cls in source, "styles.css must define class: " + cls
+
+
+# --- Phase 6B: clipboard capture toggle write contract ------------------
+
+
+def test_core_js_declares_settings_write_in_progress_6b() -> None:
+    """Phase 6B: core.js must declare ``settingsWriteInProgress`` so the
+    toggle write guard is separate from the read-state ``settingsLoading``
+    flag (a write in flight must not pollute the read-state guard)."""
+    source = read_js("core.js")
+    assert "settingsWriteInProgress" in source, (
+        "core.js must declare settingsWriteInProgress for Phase 6B"
+    )
+
+
+def test_settings_js_defines_toggle_write_helpers_6b() -> None:
+    """Phase 6B: settings.js must define the toggle write helper functions
+    (setSettingsControlsDisabled / setCaptureToggleStatus /
+    renderCaptureToggle / setCaptureEnabled /
+    handleCaptureToggleChange)."""
+    source = read_js("settings.js")
+    for name in (
+        "setSettingsControlsDisabled",
+        "setCaptureToggleStatus",
+        "renderCaptureToggle",
+        "setCaptureEnabled",
+        "handleCaptureToggleChange",
+    ):
+        assert "function " + name in source, (
+            "settings.js must define function: " + name
+        )
+        assert "App." + name in source, (
+            "settings.js must expose App." + name
+        )
+
+
+def test_settings_js_toggle_change_handler_bound_in_init_6b() -> None:
+    """Phase 6B: initButtons must bind the ``settings-clipboard-toggle``
+    change event to ``App.handleCaptureToggleChange`` so the toggle
+    write path is wired without a separate submit button."""
+    source = read_js("init.js")
+    pos = source.find("function initButtons")
+    assert pos != -1
+    body = source[pos:pos + 8000]
+    assert "settings-clipboard-toggle" in body
+    assert "handleCaptureToggleChange" in body
+    assert '"change"' in body or "'change'" in body
+
+
+def test_settings_js_disables_controls_during_load_and_write_6b() -> None:
+    """Phase 6B: settings.js must disable both the refresh button and the
+    capture toggle while ``settingsLoading`` or ``settingsWriteInProgress``
+    is true. The shared helper must reference both flags so a read or write
+    in flight blocks both controls."""
+    source = read_js("settings.js")
+    # The shared disable helper must exist and reference both flags.
+    pos = source.find("function setSettingsControlsDisabled")
+    assert pos != -1
+    # The setSettingsLoading function must combine both flags.
+    loading_pos = source.find("function setSettingsLoading")
+    assert loading_pos != -1
+    loading_body = source[loading_pos:loading_pos + 600]
+    assert "settingsWriteInProgress" in loading_body
+    # renderCaptureToggle must also disable on both flags + not-yet-loaded.
+    render_pos = source.find("function renderCaptureToggle")
+    assert render_pos != -1
+    render_body = source[render_pos:render_pos + 800]
+    assert "settingsLoading" in render_body
+    assert "settingsWriteInProgress" in render_body
+
+
+def test_settings_js_toggle_write_failure_recovers_state_6b() -> None:
+    """Phase 6B: the toggle write path must restore the previous checked
+    state (``!enabled``) on failure so the UI never shows a stale toggle.
+    Both the data-failure branch (``!data``) and the catch block must
+    contain the restore logic."""
+    source = read_js("settings.js")
+    pos = source.find("function setCaptureEnabled")
+    assert pos != -1
+    body = source[pos:pos + 2500]
+    # The catch block must restore the toggle and show a stable error.
+    assert "WRITE_ERROR_MESSAGE" in body
+    assert "toggle.checked = !enabled" in body
+    # The catch block must not read .message.
+    for forbidden in ("err.message", "error.message", "e.message"):
+        assert forbidden not in body, (
+            "setCaptureEnabled must not read .message: " + forbidden
+        )
+    # The finally-style trailing .then must clear the write flag and
+    # re-enable controls based on the read-state flag.
+    assert "settingsWriteInProgress = false" in body
+
+
+def test_settings_js_render_status_syncs_toggle_6b() -> None:
+    """Phase 6B: renderSettingsStatus must call renderCaptureToggle so
+    the toggle's checked / disabled / status text is re-synced from the
+    latest status snapshot after both a successful read and a successful
+    write."""
+    source = read_js("settings.js")
+    pos = source.find("function renderSettingsStatus")
+    assert pos != -1
+    body = source[pos:pos + 1200]
+    assert "renderCaptureToggle" in body
+
+
+def test_styles_css_has_toggle_classes_6b() -> None:
+    """Phase 6B: styles.css must define the ``.settings-*`` toggle classes
+    used by the clipboard capture toggle row."""
+    source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    for cls in (
+        ".settings-toggle-row",
+        ".settings-toggle-label",
+        ".settings-toggle-control",
+        ".settings-toggle-status",
+    ):
+        assert cls in source, (
+            "styles.css must define toggle class: " + cls
+        )

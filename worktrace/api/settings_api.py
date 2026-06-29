@@ -164,6 +164,43 @@ def get_settings_privacy_status() -> dict[str, Any]:
         return {"ok": False, "error": "加载设置状态失败"}
 
 
+# --- Settings / Privacy clipboard capture toggle write (Phase 6B) -------
+
+
+def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
+    """Write the ``clipboard_capture_enabled`` flag from the WebView UI.
+
+    Phase 6B narrow write facade. Accepts only a real ``bool``; any other
+    type (``None``, ``"true"`` / ``"false"`` strings, ``0`` / ``1`` ints,
+    lists, dicts, objects, etc.) is rejected with a stable Chinese message
+    and does NOT mutate the underlying setting. On success the updated
+    Settings / Privacy status snapshot is returned so the frontend can
+    re-render without a second round-trip.
+
+    The payload never carries the setting key name, clipboard content,
+    export path, passphrase, traceback, SQL, or raw exception text. This
+    facade does not call backup export / import / manifest,
+    ``clear_all_local_data``, or any schema mutation.
+    """
+    # Strict bool check: ``enabled is True`` / ``enabled is False`` only.
+    # ``isinstance(enabled, bool)`` would also accept ``True``/``False``
+    # but ``is`` is the clearest expression of "real bool only".
+    if enabled is not True and enabled is not False:
+        return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
+    try:
+        set_clipboard_capture_enabled(enabled)
+        status_result = get_settings_privacy_status()
+        if not status_result.get("ok"):
+            # The status read failed after a successful write. Surface a
+            # generic failure so the frontend can re-load the status.
+            return {"ok": False, "error": "设置剪贴板记录失败"}
+        return {"ok": True, "status": status_result["status"]}
+    except Exception:
+        # Collapse any unexpected error to a generic UI-facing message.
+        # Never expose raw exception text / traceback / SQL / paths.
+        return {"ok": False, "error": "设置剪贴板记录失败"}
+
+
 __all__ = [
     "accept_first_run_notice",
     "clear_all_local_data",
@@ -181,6 +218,7 @@ __all__ = [
     "is_paused",
     "is_user_paused",
     "set_clipboard_capture_enabled",
+    "set_clipboard_capture_enabled_for_webview",
     "set_collector_status",
     "set_current_activity_snapshot",
     "set_list_setting_value",
