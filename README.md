@@ -5,9 +5,11 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 6E is the latest shipped phase (WebView
-> migration closure: first-run privacy notice + intentional unsupported
-> cleanup). Project Rules now supports project-grouped folder / keyword
+> **Current state**: WebView Phase 6F is the latest shipped phase (legacy
+> Tkinter UI removal / WebView migration closure hardening; WebView is the
+> only UI, no Tkinter fallback). Phase 6E closed the WebView migration with
+> the first-run privacy notice + intentional unsupported cleanup. Project
+> Rules now supports project-grouped folder / keyword
 > rules, existing-rule enable / disable, keyword create / edit / delete,
 > folder rule create / edit / delete, user project create / edit /
 > enable-disable / archive, single-rule impact preview + safe single-rule

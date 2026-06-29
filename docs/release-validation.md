@@ -385,17 +385,17 @@ This section validates the Phase 1B.1 hardening of the encrypted backup import p
 
 ## WebView Phase 1 Validation
 
-This section is the validation framework for the WebView UI migration documented in [`docs/ui-webview-migration.md`](ui-webview-migration.md). Phase 1 is a destructive migration: the WebView UI is the default and only shipping UI. The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only as legacy code pending per-page migration and removal; it is not a supported runtime path and is not started by the default entry point.
+This section is the validation framework for the WebView UI migration documented in [`docs/ui-webview-migration.md`](ui-webview-migration.md). Phase 1 is a destructive migration: the WebView UI is the default and only shipping UI. The legacy Tkinter / CustomTkinter UI under `worktrace/ui` was deleted in Phase 6F; it is not a supported runtime path and is not started by the default entry point.
 
 Phase 1 makes `python -m worktrace.main` (and the packaged `WorkTrace.exe`) start the WebView UI directly. The legacy `--webview` flag is accepted as a no-op compatibility flag. When the WebView2 Runtime is missing on Windows, WorkTrace prints a clear install prompt and exits with a non-zero code; it does not auto-download the runtime and does not fall back to Tkinter.
 
-This section is scoped to the default WebView entry point, the Overview page, the bridge, the runtime, and the packaging. It does not validate Timeline, Statistics/Export, Rules, or Settings pages (those remain on the legacy Tkinter code pending later phases). It does not introduce field-level encryption, SQLCipher, AI, server, payment, license, token, or subscription features.
+This section is scoped to the default WebView entry point, the Overview page, the bridge, the runtime, and the packaging. It does not validate Timeline, Statistics/Export, Rules, or Settings pages (those were migrated in later phases; the legacy Tkinter code was deleted in Phase 6F). It does not introduce field-level encryption, SQLCipher, AI, server, payment, license, token, or subscription features.
 
 ### Automated Checklist
 
 - [ ] `pytest` passes, including the `test_ui_backend_boundary.py` WebView boundary tests, `test_webview_bridge.py`, `test_webview_resources.py`, `test_webview_packaging.py`, and `test_webview_phase1_entry.py`.
 - [ ] `pywebview>=5.0` is declared in `requirements.txt`.
-- [ ] `worktrace/main.py` delegates to `worktrace.webview_main.main()` by default and does not import or instantiate `worktrace.ui.app.WorkTraceApp`.
+- [ ] `worktrace/main.py` delegates to `worktrace.webview_main.main()` by default and does not import or instantiate the legacy Tkinter UI (`worktrace/ui` was deleted in Phase 6F).
 - [ ] `worktrace/webview_ui/runtime_check.py` `missing_runtime_message()` does not contain the words `Tkinter`, `fallback`, or `继续使用默认`.
 - [ ] No new network dependency.
 - [ ] No new administrator-permission requirement.
@@ -490,7 +490,7 @@ This section is scoped to the default WebView entry point, the Overview page, th
 ### Phase 1 Release Blockers
 
 - `python -m worktrace.main` does not start the WebView UI by default.
-- `python -m worktrace.main` imports or instantiates `worktrace.ui.app.WorkTraceApp` on the default path.
+- `python -m worktrace.main` imports or instantiates the legacy Tkinter UI (deleted in Phase 6F) on the default path.
 - `--webview` changes behavior (e.g. only `--webview` starts the WebView UI).
 - WorkTrace falls back to the Tkinter UI when the WebView2 Runtime is missing or when `pywebview` is missing.
 - The missing-runtime message contains the words `Tkinter`, `fallback`, or `继续使用默认`.

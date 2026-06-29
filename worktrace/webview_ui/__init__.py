@@ -3,9 +3,9 @@
 As of Phase 1, the WebView shell started by ``worktrace.webview_main`` is the
 default and only shipping UI for WorkTrace. The default entry point
 ``python -m worktrace.main`` starts the WebView UI; the packaged
-``WorkTrace.exe`` defaults to the WebView UI as well. The legacy
-``worktrace.ui`` (Tkinter / CustomTkinter) package is retained only as legacy
-code pending removal, not as a supported runtime path.
+``WorkTrace.exe`` defaults to the WebView UI as well. Phase 6F deleted the
+legacy ``worktrace.ui`` (Tkinter / CustomTkinter) package; there is no
+Tkinter fallback.
 
 Boundary rules (enforced by tests/test_ui_backend_boundary.py):
 

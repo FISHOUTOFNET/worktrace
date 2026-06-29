@@ -7159,3 +7159,74 @@ Not Implemented (unchanged boundaries):
 - No PyInstaller or installer build was run; this is docs/tests-only.
 - No new product capability was added or removed; only documentation /
   comment / test contradictions were fixed.
+
+## Phase 6F Implemented Scope
+
+Phase 6F is the cleanup / hardening phase that removes the legacy Tkinter UI
+package and closes the WebView migration surface. It is a cleanup phase: no
+new user features, no schema change, no collector / backup / statistics /
+timeline / project-rules behavior change, and no Phase 6E first-run notice
+behavior change. WebView is the only shipping UI; there is no Tkinter
+fallback.
+
+Legacy Tkinter UI package deletion:
+
+- Deleted the entire `worktrace/ui/` package (13 files: `__init__.py`,
+  `app.py`, `overview_view.py`, `timeline_view.py`, `statistics_view.py`,
+  `settings_view.py`, `project_rules_view.py`, `project_rule_dialog.py`,
+  `first_run_dialog.py`, `design.py`, `date_range.py`, `copy_support.py`,
+  `tray.py`).
+- Migrated `date_range.py` (pure non-UI logic) from
+  `worktrace/ui/date_range.py` to `worktrace/date_range.py`.
+
+Legacy UI test deletion / rewrite:
+
+- Deleted 6 legacy UI test files: `tests/test_ui_design.py`,
+  `tests/test_settings_view.py`, `tests/test_overview_view.py`,
+  `tests/test_statistics_view.py`, `tests/test_timeline_view.py`,
+  `tests/test_app_shell.py`.
+- Rewrote 5 test files:
+  - `tests/test_date_range.py` — import repoint to `worktrace.date_range`.
+  - `tests/test_project_rules_view.py` — removed 6 UI tests, kept 5
+    service tests.
+  - `tests/test_webview_packaging.py` — flipped the `customtkinter`
+    assertion from presence to absence.
+  - `tests/test_webview_phase1_entry.py` — removed the `WorkTraceApp`
+    monkeypatch.
+  - `tests/test_ui_backend_boundary.py` — removed 3 legacy UI boundary
+    tests, added 2 legacy-UI-absence tests.
+
+Dependency / packaging surface:
+
+- Removed `customtkinter>=5.2.2` from `requirements.txt`.
+- Removed the `collect_all('customtkinter')` block from `WorkTrace.spec`.
+- Updated docstrings in `worktrace/api/__init__.py` and
+  `worktrace/webview_ui/__init__.py`.
+
+Phase 6F does not modify the DB schema, the collector, the backup /
+statistics / timeline / project-rules runtime semantics, or the Phase 6E
+first-run notice behavior. WebView runtime behavior is unchanged; only the
+legacy Tkinter code / import surface was removed. No new dependencies. The
+WebView packaging static test and the `worktrace.webview_main` import check
+were run and pass; the full PyInstaller build was not re-run because no
+packaging or runtime behavior changed.
+
+**Completed.**
+
+## Phase 6F Not Implemented
+
+Phase 6F does not implement and does not open:
+
+- Any new user-visible feature (cleanup / hardening only);
+- Any DB schema change (no new table / column / migration);
+- Any change to collector / backup / statistics / timeline / project-rules
+  runtime semantics;
+- Any change to the Phase 6E first-run notice behavior;
+- Any new dependency (no React / Vue / Vite / Node / local HTTP server /
+  CDN / external font);
+- `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource`;
+- `localStorage` / `sessionStorage` / `document.cookie`;
+- Browser Clipboard API (`navigator.clipboard`);
+- Any Tkinter fallback (the legacy `worktrace/ui` package is deleted; no
+  fallback path exists);
+- Any change to `bridge.py` import boundary (still only `worktrace.api`).

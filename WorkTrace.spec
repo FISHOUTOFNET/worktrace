@@ -26,11 +26,6 @@ datas = [
 ]
 binaries = []
 hiddenimports = ['win32timezone']
-# customtkinter is bundled because the legacy worktrace.ui package still
-# ships in the source tree as legacy code pending removal. The default
-# runtime path (WebView) does not import it.
-tmp_ret = collect_all('customtkinter')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # pywebview is the WebView backend used by the default UI entry point as of
 # Phase 1. collect_all('webview') is a no-op if pywebview is not installed;
 # pywebview>=5.0 is declared in requirements.txt and is required for WorkTrace

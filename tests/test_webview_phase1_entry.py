@@ -84,11 +84,6 @@ def test_webview_main_returns_nonzero_when_runtime_missing(monkeypatch, capsys):
     # directly via ``from .webview_ui.runtime_check import detect_webview2_runtime``),
     # otherwise patching the source module has no effect on the call site.
     monkeypatch.setattr(webview_main, "detect_webview2_runtime", lambda: "missing")
-    # Guard: if any code path tries to import WorkTraceApp, fail loudly.
-    monkeypatch.setattr(
-        "worktrace.ui.app.WorkTraceApp",
-        lambda *_, **__: pytest.fail("Tkinter WorkTraceApp must not be instantiated when WebView2 is missing"),
-    )
 
     # Stub config/setup_logging so main() can reach the pre-flight check
     # without touching the filesystem.
@@ -110,8 +105,9 @@ def test_webview_main_returns_nonzero_when_runtime_missing(monkeypatch, capsys):
 
 def test_webview_main_returns_nonzero_when_pywebview_missing(monkeypatch, capsys):
     """When pywebview is not installed, ``webview_main.main`` must return a
-    non-zero exit code with a clear install prompt and must not start any
-    Tkinter UI."""
+    non-zero exit code with a clear install prompt and must not fall back to
+    any Tkinter UI (Phase 6F: the legacy ``worktrace.ui`` package is deleted,
+    so there is nothing to fall back to)."""
     import worktrace.webview_main as webview_main
 
     # Patch the reference bound in webview_main so the pre-flight check passes
@@ -122,11 +118,6 @@ def test_webview_main_returns_nonzero_when_pywebview_missing(monkeypatch, capsys
     monkeypatch.setattr(webview_main, "setup_logging", lambda _log_path: None)
     # Simulate pywebview not being installed.
     monkeypatch.setitem(sys.modules, "webview", None)
-    # Guard: Tkinter UI must not start.
-    monkeypatch.setattr(
-        "worktrace.ui.app.WorkTraceApp",
-        lambda *_, **__: pytest.fail("Tkinter WorkTraceApp must not be instantiated when pywebview is missing"),
-    )
 
     result = webview_main.main()
 

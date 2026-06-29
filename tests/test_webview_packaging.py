@@ -110,12 +110,11 @@ def test_spec_retains_open_files_helper():
     assert "open_files_helper.py" in spec
 
 
-def test_spec_retains_customtkinter():
-    """customtkinter is still bundled because the legacy worktrace.ui package
-    remains in the source tree pending removal. The default WebView runtime
-    path does not import it."""
+def test_spec_does_not_bundle_customtkinter():
+    """customtkinter must NOT be bundled: the legacy worktrace.ui package was
+    removed in Phase 6F and no production code imports customtkinter."""
     spec = _read(SPEC_PATH)
-    assert "collect_all('customtkinter')" in spec or 'collect_all("customtkinter")' in spec
+    assert "customtkinter" not in spec
 
 
 def test_spec_retains_win32timezone():
@@ -139,9 +138,9 @@ def test_entry_script_forwards_to_worktrace_main():
 def test_main_module_does_not_import_worktrace_app():
     """main.py must not import or instantiate the legacy Tkinter WorkTraceApp.
 
-    As of Phase 1 the default path is the WebView UI. The legacy
-    ``worktrace.ui.app`` module may still exist in the tree, but the default
-    entry point must not depend on it.
+    As of Phase 1 the default path is the WebView UI. Phase 6F deleted the
+    legacy ``worktrace.ui`` package entirely, so the default entry point
+    must not depend on it (and no such module exists to import).
     """
     source = _read(MAIN_PATH)
     assert "WorkTraceApp" not in source, (

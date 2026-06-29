@@ -1,8 +1,9 @@
 """Process-internal UI-facing backend API boundary.
 
-The ``worktrace.api`` package is the only layer the UI (``worktrace.ui``) is
-allowed to import. It exposes thin facades over ``worktrace.services`` so the UI
-never touches services, db, or collector modules directly.
+The ``worktrace.api`` package is the only layer the WebView UI
+(``worktrace.webview_ui``) is allowed to import. It exposes thin facades over
+``worktrace.services`` so the UI never touches services, db, or collector
+modules directly.
 
 Architecture (single process, multi thread)::
 

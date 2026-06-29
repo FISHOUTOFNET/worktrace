@@ -8,30 +8,28 @@
 
 ## Current Phase
 
-**Phase 6E — WebView migration closure: first-run notice + intentional
-unsupported cleanup.** The WebView migration is now closed: the first-run
-privacy notice gate ships in WebView (blocking overlay; user must accept
-before the collector starts), the Settings page gains a read-only "view
-privacy notice" entry, and `webview_main` / `toggle_pause` are fail-closed
-while the notice is unaccepted. The Settings / Privacy page also keeps the
-Phase 6A read-only status snapshot, the Phase 6B clipboard capture toggle,
-the Phase 6C encrypted backup export + manifest preview, and the Phase 6D
-encrypted backup import + clear-all-local-data. Both API and bridge layers
-collapse failures to stable Chinese messages and never return full paths,
-passphrases, salt, ciphertext, payload, SQL, or tracebacks. Save settings,
-`set_setting_value`, arbitrary file/folder dialog, and export path setting
-are intentionally unsupported for v0.2 (not deferred). Builds on Phase 6A /
-6B / 6C / 6D and Phase 5I (automatic rules + selected-rule batch operations,
-on top of user project create / edit / enable-disable / archive).
-Chronology in [`history/webview-phases.md`](history/webview-phases.md).
+**Phase 6F — Legacy Tkinter UI removal / WebView migration closure
+hardening.** Cleanup / hardening phase (no new user features): deletes the
+legacy Tkinter UI package (`worktrace/ui/`), its tests, and the
+`customtkinter` dependency; migrates `date_range.py` to
+`worktrace/date_range.py`. WebView is the only shipping UI; no Tkinter
+fallback. No schema change; no collector / backup / statistics / timeline /
+project-rules behavior change; Phase 6E first-run notice behavior
+unchanged. Builds on Phase 6E, which closed the WebView migration with the
+first-run privacy notice gate + read-only "view privacy notice" entry; the
+Settings / Privacy page keeps the Phase 6A status snapshot, 6B clipboard
+toggle, 6C backup export + manifest preview, and 6D backup import +
+clear-all-local-data. Both API and bridge layers collapse failures to
+stable Chinese messages and never return full paths, passphrases, salt,
+ciphertext, payload, SQL, or tracebacks. Chronology in
+[`history/webview-phases.md`](history/webview-phases.md).
 
 ## Default UI
 
 - WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the default and
   only shipping UI. Start with `python -m worktrace.main`.
-- No Tkinter fallback. The legacy `worktrace/ui` package is kept in the tree
-  as reference-only code pending per-page migration; it is not a supported
-  runtime path.
+- No Tkinter fallback. The legacy Tkinter UI package (`worktrace/ui`) was
+  deleted in Phase 6F; WebView is the only shipping UI.
 - Missing WebView2 Runtime is a blocking error with a clear Chinese install
   prompt; WorkTrace never auto-downloads it.
 
@@ -47,7 +45,7 @@ Chronology in [`history/webview-phases.md`](history/webview-phases.md).
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A – 5I): project-grouped rule list showing
+- **Project Rules** (Phase 5A through Phase 5I): project-grouped rule list showing
   project name / description, project enabled state, special `排除规则`
   marker, rule counts, folder rules, keyword rules, rule enabled state, and
   folder recursion scope. Current write capabilities are listed in the
@@ -80,7 +78,7 @@ Chronology in [`history/webview-phases.md`](history/webview-phases.md).
 
 - Read project-grouped folder / keyword rule list; enable / disable existing
   folder / keyword rules; keyword + folder rule create / edit / delete.
-- User project create / edit / enable-disable / archive.
+- user project create / edit / enable-disable / archive.
 - Single-rule impact preview for folder / keyword rules (display-safe counts +
   up to 20 sample rows; no raw window title / file path / note).
 - Safe single-rule backfill for folder / keyword rules (≤ 100 updates per

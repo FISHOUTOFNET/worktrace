@@ -25,9 +25,8 @@ Implemented" sections) lives in
   actions save settings, `set_setting_value`, arbitrary file / folder
   dialog, and export path setting are intentionally unsupported for v0.2
   (not deferred). Only the controlled native dialogs CSV save and
-  `.wtbackup` save / open remain. The legacy `worktrace/ui` package stays
-  in the tree as reference-only code pending the cleanup phase; it is not a
-  supported runtime path.
+  `.wtbackup` save / open remain. The legacy `worktrace/ui` package was
+  deleted in Phase 6F; WebView is the only shipping UI.
 
 ## 1. Phase 1 Is A Destructive Migration
 
@@ -36,19 +35,19 @@ is a breaking change:
 
 - **No fallback to Tkinter.** The default entry point
   (`worktrace.main.main`) delegates to `worktrace.webview_main.main` and does
-  not import or instantiate the legacy `worktrace.ui.app.WorkTraceApp`. If
-  the WebView backend fails to start, WorkTrace exits with a non-zero code;
+  not import or instantiate the legacy Tkinter UI (the `worktrace/ui`
+  package was deleted in Phase 6F). If the WebView backend fails to start,
+  WorkTrace exits with a non-zero code;
   it does not attempt to start the Tkinter UI.
 - **Missing WebView2 Runtime is a blocking runtime prerequisite.** On Windows,
   WorkTrace detects the WebView2 Runtime through the EdgeUpdate registry keys.
   If the runtime is missing, WorkTrace prints a clear Chinese install prompt
   and exits with a non-zero code. It never auto-downloads the runtime and it
   never falls back to Tkinter.
-- **Legacy Tkinter code may remain only temporarily for reference/removal.**
-  The `worktrace/ui` package is kept in the source tree so the remaining
-  feature pages (Rules, Settings) can be reference-migrated one page at a
-  time. It is not a supported runtime path: tests must not assert that
-  Tkinter is the default UI, and no code path may start it automatically.
+- **Legacy Tkinter code was removed in Phase 6F.** The `worktrace/ui`
+  package was deleted once all feature pages reached WebView parity; it is
+  no longer in the source tree. There is no Tkinter fallback: tests must not
+  assert that Tkinter is the default UI, and no code path may start it.
 
 ## 2. Why pywebview
 
@@ -302,8 +301,7 @@ order:
   deleted; cleanup is the next phase. No schema change, no new
   dependencies, no new JS file. **Completed.**
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
-  pages are at parity in the WebView UI. Not started; Phase 6E is the
-  parity closure, so cleanup is the next phase after 6E.
+  pages are at parity in the WebView UI. **Completed (Phase 6F).**
 
 ## 8. Stop-Loss Conditions
 
@@ -371,19 +369,16 @@ backend used by the default UI entry point.
 
 ## Legacy Tkinter UI Handling
 
-The `worktrace/ui` package is retained in the source tree as legacy code
-pending removal:
+The `worktrace/ui` package was deleted in Phase 6F once all feature pages
+reached WebView parity:
 
 - The default runtime path (`worktrace.main.main`) does not import or
-  instantiate `WorkTraceApp`.
+  instantiate the legacy `WorkTraceApp`; the package no longer exists.
 - Documentation does not promise a Tkinter fallback.
-- Tests do not assert that Tkinter is the default UI.
-- Tests that previously verified the Tkinter default entry now verify the
-  WebView default entry.
-- The legacy code is not a supported runtime path. It exists only so the
-  remaining feature pages can be reference-migrated one page at a time.
-- No dual entry, automatic fallback, configuration switch, or UI selector is
-  added for backwards compatibility.
+- Tests do not assert that Tkinter is the default UI; tests that previously
+  verified the Tkinter default entry now verify the WebView default entry.
+- No dual entry, automatic fallback, configuration switch, or UI selector
+  exists for backwards compatibility.
 
 ## WebView2 Runtime Handling Strategy
 

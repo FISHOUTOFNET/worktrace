@@ -1,3 +1,10 @@
+"""Pure date-range calculation utilities.
+
+Migrated from ``worktrace/ui/date_range.py`` in Phase 6F (legacy Tkinter UI
+removal) because this module is 100% pure non-UI logic (no tkinter /
+customtkinter imports) and is reusable across UI backends.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

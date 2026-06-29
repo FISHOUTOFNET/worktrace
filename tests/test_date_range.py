@@ -1,4 +1,4 @@
-from worktrace.ui import date_range
+from worktrace import date_range
 
 
 def test_quick_ranges_use_iso_weeks():

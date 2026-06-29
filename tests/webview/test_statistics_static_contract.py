@@ -492,13 +492,16 @@ def test_schema_sql_unchanged_4a():
 
 
 
-def test_legacy_ui_files_not_deleted_4a():
-    """Phase 4A: legacy Tkinter / CustomTkinter UI files must still exist
-    (regression lock)."""
+def test_legacy_ui_files_deleted_6f():
+    """Phase 6F: the legacy Tkinter / CustomTkinter UI package must be
+    deleted (regression lock). Phase 4A/4A.1 previously kept it as
+    reference-only; Phase 6F removed it entirely. WebView is the only
+    shipping UI."""
     legacy_dir = REPO_ROOT / "worktrace" / "ui"
-    assert legacy_dir.is_dir()
-    assert (legacy_dir / "statistics_view.py").is_file()
-    assert (legacy_dir / "app.py").is_file()
+    assert not legacy_dir.is_dir(), (
+        "worktrace/ui must not exist (Phase 6F legacy UI removal); "
+        "WebView is the only shipping UI"
+    )
 
 
 
@@ -999,13 +1002,13 @@ def test_schema_sql_unchanged_4a1():
 
 
 
-def test_legacy_ui_files_not_deleted_4a1():
-    """Phase 4A.1: legacy Tkinter UI files must not be deleted."""
+def test_legacy_ui_files_deleted_6f1():
+    """Phase 6F.1: the legacy Tkinter UI directory must not exist. Phase 4A.1
+    previously locked it against deletion; Phase 6F removed it entirely."""
     ui_dir = REPO_ROOT / "worktrace" / "ui"
-    assert ui_dir.exists(), "worktrace/ui must still exist (legacy pending removal)"
-    # At least one legacy UI module must remain.
-    py_files = list(ui_dir.glob("*.py"))
-    assert len(py_files) > 0, "legacy UI .py files must not be deleted"
+    assert not ui_dir.exists(), (
+        "worktrace/ui must not exist (Phase 6F legacy UI removal)"
+    )
 
 
 

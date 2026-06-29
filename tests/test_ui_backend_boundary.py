@@ -1,12 +1,10 @@
 """Boundary tests enforcing the UI <-> backend API contract.
 
-The UI layer must talk to the backend exclusively through ``worktrace.api``.
-Direct imports of ``worktrace.services``, ``worktrace.db``,
-``worktrace.collector``, or ``worktrace.security`` from any module under
-``worktrace/ui`` are forbidden.
+The WebView UI layer must talk to the backend exclusively through
+``worktrace.api``. Direct imports of ``worktrace.services``,
+``worktrace.db``, ``worktrace.collector``, or ``worktrace.security`` from
+any module under ``worktrace/webview_ui`` are forbidden.
 
-The same boundary applies to the WebView UI package
-``worktrace/webview_ui`` (the default and only shipping UI as of Phase 1).
 In addition, the WebView bridge (``bridge.py``) must not import
 ``worktrace.runtime`` or ``worktrace.config`` either: it may only reach the
 backend through ``worktrace.api``. The WebView entry point
@@ -14,15 +12,14 @@ backend through ``worktrace.api``. The WebView entry point
 ``config``, and ``db`` initialization helpers, mirroring ``worktrace/main.py``,
 but still must not import ``services``, ``collector``, or ``security``.
 
-The legacy ``worktrace/ui`` (Tkinter / CustomTkinter) package is retained in
-the source tree as legacy code pending removal, not as a supported runtime
-path. Its boundary rules are still enforced so it cannot become a backdoor
-into the backend while it remains in the tree.
+Phase 6F: the legacy ``worktrace/ui`` (Tkinter / CustomTkinter) package has
+been deleted. A dedicated test asserts the package is gone so it cannot be
+accidentally reintroduced.
 
-Allowed UI / WebView dependencies:
+Allowed WebView dependencies:
 - ``worktrace.api`` (the facade layer)
 - ``worktrace.formatters`` / ``worktrace.constants`` (pure helpers)
-- other modules inside ``worktrace.ui`` / ``worktrace.webview_ui`` itself
+- other modules inside ``worktrace.webview_ui`` itself
 - third-party and stdlib modules
 """
 
@@ -32,8 +29,6 @@ import re
 from pathlib import Path
 
 import pytest
-
-UI_DIR = Path(__file__).resolve().parents[1] / "worktrace" / "ui"
 
 # Forbidden import statements. We match the module reference at the start of
 # an import line so that ``from ..api import ...`` is not accidentally flagged
@@ -70,49 +65,35 @@ FORBIDDEN_LABELS = [
 ]
 
 
-def _collect_ui_files() -> list[Path]:
-    return sorted(UI_DIR.glob("*.py"))
+# ---------------------------------------------------------------------------
+# Legacy UI package removal (Phase 6F)
+# ---------------------------------------------------------------------------
+
+_LEGACY_UI_DIR = Path(__file__).resolve().parents[1] / "worktrace" / "ui"
 
 
-@pytest.fixture(scope="module")
-def ui_files() -> list[Path]:
-    files = _collect_ui_files()
-    assert files, "expected to find UI source files under worktrace/ui"
-    return files
+def test_legacy_ui_package_removed() -> None:
+    """Phase 6F: the legacy ``worktrace/ui`` package must not exist.
 
-
-def test_ui_directory_exists(ui_files: list[Path]) -> None:
-    assert ui_files, "worktrace/ui should contain python source files"
-
-
-@pytest.mark.parametrize("ui_file", _collect_ui_files(), ids=lambda p: p.name)
-def test_ui_file_has_no_forbidden_backend_imports(ui_file: Path) -> None:
-    source = ui_file.read_text(encoding="utf-8")
-    violations: list[str] = []
-    for pattern, label in zip(FORBIDDEN_PATTERNS, FORBIDDEN_LABELS):
-        for match in pattern.finditer(source):
-            line_no = source.count("\n", 0, match.start()) + 1
-            violations.append(f"{ui_file.name}:{line_no}: {label}")
-    assert not violations, (
-        "UI layer must not import backend modules directly. Found forbidden imports:\n"
-        + "\n".join(violations)
-        + "\nUse worktrace.api.* facades instead."
+    The entire Tkinter / CustomTkinter UI was deleted in Phase 6F. WebView is
+    the only shipping UI. This test guards against accidental reintroduction.
+    """
+    assert not _LEGACY_UI_DIR.is_dir(), (
+        f"worktrace/ui directory must not exist (Phase 6F legacy UI removal); "
+        f"found {_LEGACY_UI_DIR}"
     )
 
 
-def test_ui_files_use_api_layer_for_backend_access(ui_files: list[Path]) -> None:
-    """At least one UI file should reference the api package, otherwise the
-    boundary is vacuous. This guards against the api package being silently
-    removed while UI files still compile."""
-    api_references = 0
-    for path in ui_files:
-        source = path.read_text(encoding="utf-8")
-        if "worktrace.api" in source or "from ..api" in source or "from .api" in source:
-            api_references += 1
-    # app.py plus at least one view should talk to the api layer.
-    assert api_references >= 2, (
-        f"expected multiple UI files to import worktrace.api, found {api_references}"
-    )
+def test_legacy_ui_app_import_raises_module_not_found() -> None:
+    """Importing ``worktrace.ui.app`` must fail with ``ModuleNotFoundError``.
+
+    Phase 6F: the legacy ``WorkTraceApp`` class is gone. No code path may
+    import it.
+    """
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("worktrace.ui.app")
 
 
 # ---------------------------------------------------------------------------
