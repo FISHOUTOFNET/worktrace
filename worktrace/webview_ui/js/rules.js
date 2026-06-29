@@ -32,6 +32,47 @@
     }
     App.loadProjectRules = loadProjectRules;
 
+    function _collectExistingRuleKeys(projects) {
+        // Phase 5I: build a set of "<kind>:<id>" keys for every folder /
+        // keyword rule currently present in the loaded data. Used to prune
+        // stale batch-selection keys (e.g. a rule was deleted via the
+        // single-rule delete path) so the toolbar count never references a
+        // rule that no longer exists.
+        var keys = {};
+        if (!projects || !projects.length) return keys;
+        for (var i = 0; i < projects.length; i++) {
+            var rules = (projects[i] && projects[i].rules) || [];
+            for (var j = 0; j < rules.length; j++) {
+                var rule = rules[j] || {};
+                var kind = rule.kind;
+                var id = parseInt(rule.id, 10);
+                if ((kind === "folder" || kind === "keyword") && id > 0) {
+                    keys[kind + ":" + id] = true;
+                }
+            }
+        }
+        return keys;
+    }
+
+    function _pruneBatchSelection(projects) {
+        // Phase 5I: best-effort preserve selection by rule key. Walks the
+        // loaded data, builds the set of still-existing rule keys, and
+        // drops any selection entry that no longer corresponds to a real
+        // rule. This is the only place selection is pruned on a regular
+        // refresh; the batch write handlers clear selection explicitly on
+        // success and preserve it on failure.
+        if (!App.rulesBatchSelectedKeys) return;
+        var existing = _collectExistingRuleKeys(projects);
+        var pruned = {};
+        var keys = Object.keys(App.rulesBatchSelectedKeys);
+        for (var i = 0; i < keys.length; i++) {
+            if (existing[keys[i]]) {
+                pruned[keys[i]] = true;
+            }
+        }
+        App.rulesBatchSelectedKeys = pruned;
+    }
+
     function showProjectRules(data) {
         App.rulesLoaded = true;
         // Phase 5E: cache the last-loaded data so the inline folder edit
@@ -49,9 +90,18 @@
         App.populateFolderCreateProjectSelector((data && data.projects) || []);
         if (!list || !empty) return;
         var projects = (data && data.projects) || [];
+        // Phase 5I: prune stale batch selection keys before rendering so
+        // the per-row checkbox state + toolbar count match the loaded data.
+        _pruneBatchSelection(projects);
         if (!projects.length) {
             list.innerHTML = "";
             empty.hidden = false;
+            // Phase 5I: when there are no projects at all, hide the batch
+            // toolbar so the page does not show an empty toolbar with
+            // disabled buttons.
+            var emptyToolbar = document.getElementById("rules-batch-toolbar");
+            if (emptyToolbar) emptyToolbar.hidden = true;
+            App.refreshProjectRulesBatchToolbar();
             return;
         }
         empty.hidden = true;
@@ -64,6 +114,14 @@
         App.bindProjectRuleKeywordEditEvents();
         App.bindProjectLifecycleEvents();
         App.bindProjectRuleImpactEvents();
+        // Phase 5I: bind the batch event delegation (checkbox change on
+        // #rules-list, click on #rules-batch-toolbar / #rules-batch-panel).
+        // The bind helpers are idempotent (guarded by data-*-bound attrs)
+        // so calling them on every render is safe.
+        App.bindProjectRuleBatchEvents();
+        // Phase 5I: refresh the batch toolbar so the selected count and
+        // button disabled state reflect the freshly rendered list.
+        App.refreshProjectRulesBatchToolbar();
     }
     App.showProjectRules = showProjectRules;
 
@@ -91,6 +149,11 @@
         App.bindProjectRuleKeywordEditEvents();
         App.bindProjectLifecycleEvents();
         App.bindProjectRuleImpactEvents();
+        // Phase 5I: re-bind batch event delegation + refresh the toolbar so
+        // the per-row checkbox state and selected count stay in sync after
+        // an inline re-render (e.g. toggling the inline folder edit form).
+        App.bindProjectRuleBatchEvents();
+        App.refreshProjectRulesBatchToolbar();
     }
     App.rerenderProjectRulesList = rerenderProjectRulesList;
 

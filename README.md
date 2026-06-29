@@ -5,14 +5,16 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 5H is the latest shipped phase. Project
+> **Current state**: WebView Phase 5I is the latest shipped phase. Project
 > Rules now supports project-grouped folder / keyword rules, existing-rule
 > enable / disable, keyword create / edit / delete, folder rule create /
 > edit / delete, user project create / edit / enable-disable / archive,
-> and single-rule impact preview + safe single-rule backfill for folder /
-> keyword rules. Hard delete project, raw folder-rule conflict preview,
-> raw / batch backfill, automatic rules, and batch Project Rules
-> operations remain unsupported. The canonical
+> single-rule impact preview + safe single-rule backfill for folder /
+> keyword rules, automatic application of enabled rules to newly produced /
+> just-closed eligible activities, and selected-rule batch preview / apply
+> / enable / disable. Hard delete project, raw folder-rule conflict
+> preview, raw / unbounded batch backfill, and the automatic-rule on/off
+> UI toggle remain unsupported. The canonical
 > one-screen snapshot of what ships today is
 > [`docs/current-state.md`](docs/current-state.md). The full per-phase
 > history is [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
@@ -44,10 +46,13 @@ records.
   project create / edit / enable-disable / archive; single-rule impact
   preview (folder + keyword, display-safe counts + ≤ 20 sample rows);
   safe single-rule backfill (folder + keyword, capped at 100 updates per
-  call, manual records preserved). The special `排除规则` boundary is
+  call, manual records preserved); automatic application of enabled rules
+  to newly produced / just-closed eligible activities; selected-rule batch
+  preview / apply / enable / disable (≤ 20 rules, batch apply capped at
+  100 total updates, all-or-nothing). The special `排除规则` boundary is
   enforced. Unsupported: hard delete project, raw folder-rule conflict
-  preview, raw / batch backfill, automatic rules, and batch Project Rules
-  operations. Phase-by-phase chronology is archived in
+  preview, raw / unbounded batch backfill, and the automatic-rule on/off
+  UI toggle. Phase-by-phase chronology is archived in
   [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
 - Collector heartbeat and startup recovery for unclosed records; single-
   instance collector protection.
@@ -208,8 +213,9 @@ database file or use the Settings page to clear and rebuild all data.
   recording, or automatic startup.
 - Settings / Privacy / Encrypted Backup pages are not yet migrated to
   WebView (legacy Tkinter reference code remains only as reference).
-- Hard delete project; raw folder-rule conflict preview; raw / batch
-  backfill; automatic rules; and batch Project Rules operations; Excel /
+- Hard delete project; raw folder-rule conflict preview; raw / unbounded
+  batch backfill; automatic-rule enable / disable toggle in the UI; Excel /
   PDF / timesheet export; folder opening; and auto-submit are not
-  supported. (Phase 5H ships single-rule impact preview + safe
-  single-rule backfill for folder / keyword rules.)
+  supported. (Phase 5I ships automatic rules application + selected-rule
+  batch preview / apply / enable / disable foundation, on top of the
+  Phase 5H single-rule impact preview + safe single-rule backfill.)

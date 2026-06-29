@@ -168,6 +168,48 @@ _PROJECT_RULE_BACKFILL_MESSAGES = {
     "operation_failed": "应用规则失败",
 }
 
+# Maps Phase 5I selected-rule batch preview API stable codes to user-facing
+# messages. Unknown codes collapse to the generic batch-preview failure so
+# internal details are never surfaced. Preview is read-only and treats
+# disabled rules / unavailable projects as informational zero-count
+# contributions, so ``rule_disabled`` / ``project_not_available`` /
+# ``too_many_matches`` are NOT in this map (they cannot occur on the preview
+# path); they only appear in the batch-apply map below.
+_PROJECT_RULE_BATCH_PREVIEW_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "规则不存在",
+    "too_many_rules": "选择的规则过多",
+    "operation_failed": "批量预览失败",
+}
+
+# Maps Phase 5I selected-rule batch apply API stable codes to user-facing
+# messages. Unknown codes collapse to the generic batch-apply failure so
+# internal details are never surfaced. ``rule_disabled`` and
+# ``project_not_available`` use "存在...规则" wording because the batch is
+# all-or-nothing: a single disabled rule or unavailable target project
+# blocks the whole batch.
+_PROJECT_RULE_BATCH_APPLY_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "规则不存在",
+    "too_many_rules": "选择的规则过多",
+    "rule_disabled": "存在未启用规则，无法应用",
+    "project_not_available": "存在目标项目不可用的规则",
+    "too_many_matches": "命中记录过多，请先缩小范围",
+    "operation_failed": "批量应用失败",
+}
+
+# Maps Phase 5I selected-rule batch enable / disable API stable codes to
+# user-facing messages. Unknown codes collapse to the generic batch
+# operation failure so internal details are never surfaced. Toggle does not
+# touch activities, so ``rule_disabled`` / ``project_not_available`` /
+# ``too_many_matches`` cannot occur on this path.
+_PROJECT_RULE_BATCH_TOGGLE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "规则不存在",
+    "too_many_rules": "选择的规则过多",
+    "operation_failed": "批量操作失败",
+}
+
 
 # ---------------------------------------------------------------------------
 # Payload helpers.
@@ -977,6 +1019,184 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge backfill_project_rule failed")
             return {"ok": False, "error": "应用规则失败"}
 
+    # --- Phase 5I: selected-rule batch operations + automatic rules -----
+
+    def _validate_batch_rules(self, rules) -> str | None:
+        """Strict bridge-layer validation for the ``rules`` batch input.
+
+        Returns ``None`` when the input is a non-empty list of valid
+        ``{"rule_type": "folder" | "keyword", "rule_id": positive int}``
+        dicts, otherwise returns the stable code ``"invalid_input"``.
+
+        Mirrors the API / service validation so a malformed payload never
+        reaches ``rule_api``: bool-as-int ids, non-int ids, non-positive
+        ids, unknown rule types, non-dict items, and non-list inputs all
+        collapse to ``invalid_input`` here. De-duplication and the
+        ``too_many_rules`` cap are enforced by the service layer (the
+        bridge does not need to re-count).
+        """
+
+        if not isinstance(rules, list) or not rules:
+            return "invalid_input"
+        for item in rules:
+            if not isinstance(item, dict):
+                return "invalid_input"
+            rule_type = item.get("rule_type")
+            rule_id = item.get("rule_id")
+            if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
+                return "invalid_input"
+            if type(rule_id) is not int or rule_id <= 0:
+                return "invalid_input"
+        return None
+
+    def preview_project_rules_batch_impact(self, rules) -> dict[str, Any]:
+        """Read-only aggregate impact preview across the selected rules.
+
+        Phase 5I read path only. Strict bridge validation rejects non-list
+        ``rules``, empty lists, non-dict items, unknown rule types, and
+        bool-as-int / non-int / non-positive ``rule_id`` values before
+        calling ``rule_api.preview_project_rules_batch_impact``. The bridge
+        never exposes raw exceptions, tracebacks, SQL, paths, window titles,
+        clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "impact": {...}}`` on success (the narrow
+        impact payload: ``rules`` per-rule summaries, aggregate ``counts``,
+        and up to 20 display-safe ``samples``) or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure. Preview
+        never refreshes the Project Rules list and never writes anything.
+        """
+
+        try:
+            invalid = self._validate_batch_rules(rules)
+            if invalid is not None:
+                return {"ok": False, "error": "操作无效"}
+            result = rule_api.preview_project_rules_batch_impact(rules)
+            if result.get("ok") is True:
+                return {"ok": True, "impact": result.get("impact") or {}}
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_BATCH_PREVIEW_MESSAGES.get(
+                    code, "批量预览失败"
+                ),
+            }
+        except Exception:
+            logger.exception(
+                "webview bridge preview_project_rules_batch_impact failed"
+            )
+            return {"ok": False, "error": "批量预览失败"}
+
+    def backfill_project_rules_batch(self, rules) -> dict[str, Any]:
+        """Apply the selected enabled rules to eligible history in one batch.
+
+        Phase 5I write path only. Strict bridge validation rejects non-list
+        ``rules``, empty lists, non-dict items, unknown rule types, and
+        bool-as-int / non-int / non-positive ``rule_id`` values before
+        calling ``rule_api.backfill_project_rules_batch``. The bridge never
+        exposes raw exceptions, tracebacks, SQL, paths, window titles,
+        clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "result": {...}}`` on success (the narrow
+        result payload: aggregate counts + per-rule summaries; no raw
+        activity rows) or ``{"ok": False, "error": "<chinese message>"}``
+        on failure. The whole batch is all-or-nothing: any preflight
+        failure (``not_found`` / ``rule_disabled`` / ``project_not_available``)
+        or cap exceedance (``too_many_matches``) writes nothing. On success
+        the frontend re-fetches the full Project Rules list via
+        ``get_project_rules``; on failure the list is not refreshed.
+        """
+
+        try:
+            invalid = self._validate_batch_rules(rules)
+            if invalid is not None:
+                return {"ok": False, "error": "操作无效"}
+            result = rule_api.backfill_project_rules_batch(rules)
+            if result.get("ok") is True:
+                return {"ok": True, "result": result.get("result") or {}}
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_BATCH_APPLY_MESSAGES.get(
+                    code, "批量应用失败"
+                ),
+            }
+        except Exception:
+            logger.exception(
+                "webview bridge backfill_project_rules_batch failed"
+            )
+            return {"ok": False, "error": "批量应用失败"}
+
+    def set_project_rules_batch_enabled(self, rules, enabled) -> dict[str, Any]:
+        """Enable or disable every selected rule in one all-or-nothing batch.
+
+        Phase 5I write path only. Strict bridge validation rejects non-list
+        ``rules``, empty lists, non-dict items, unknown rule types,
+        bool-as-int / non-int / non-positive ``rule_id`` values, and
+        non-bool ``enabled`` before calling
+        ``rule_api.set_project_rules_batch_enabled``. The bridge never
+        exposes raw exceptions, tracebacks, SQL, paths, window titles,
+        clipboard, or notes in the payload.
+
+        Returns ``{"ok": True, "result": {...}}`` on success (the narrow
+        result payload: per-rule summaries + ``enabled`` bool + ``count``)
+        or ``{"ok": False, "error": "<chinese message>"}`` on failure. The
+        whole batch is all-or-nothing: any missing rule (``not_found``)
+        writes nothing. On success the frontend re-fetches the full Project
+        Rules list via ``get_project_rules``; on failure the list is not
+        refreshed.
+        """
+
+        try:
+            invalid = self._validate_batch_rules(rules)
+            if invalid is not None:
+                return {"ok": False, "error": "操作无效"}
+            if type(enabled) is not bool:
+                return {"ok": False, "error": "操作无效"}
+            result = rule_api.set_project_rules_batch_enabled(rules, enabled)
+            if result.get("ok") is True:
+                return {"ok": True, "result": result.get("result") or {}}
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_RULE_BATCH_TOGGLE_MESSAGES.get(
+                    code, "批量操作失败"
+                ),
+            }
+        except Exception:
+            logger.exception(
+                "webview bridge set_project_rules_batch_enabled failed"
+            )
+            return {"ok": False, "error": "批量操作失败"}
+
+    def automatic_rules_status(self) -> dict[str, Any]:
+        """Return a display-safe status payload for the automatic-rules engine.
+
+        Phase 5I read path only. The Project Rules page uses this to render
+        a status note explaining that enabled folder / keyword rules are
+        automatically applied to future eligible closed activities. The
+        payload is intentionally narrow: it only carries boolean / string
+        fields the frontend needs. It never exposes raw rule rows, project
+        rows, window titles, file paths, notes, clipboard text, SQL, or
+        tracebacks.
+
+        Returns ``{"ok": True, "status": {...}}`` on success or
+        ``{"ok": False, "error": "加载自动规则状态失败"}`` on unexpected
+        failure. Always succeeds under normal operation — the underlying
+        ``rule_automation_service`` is a thin documented facade over the
+        existing inference path and performs no DB access.
+        """
+
+        try:
+            result = rule_api.automatic_rules_status()
+            if result.get("ok") is True:
+                return {"ok": True, "status": result.get("status") or {}}
+            # ``automatic_rules_status`` always returns ok unless something
+            # very unexpected happened; collapse to the generic load failure.
+            return {"ok": False, "error": "加载自动规则状态失败"}
+        except Exception:
+            logger.exception("webview bridge automatic_rules_status failed")
+            return {"ok": False, "error": "加载自动规则状态失败"}
+
 
 __all__ = [
     "ProjectRulesBridgeMixin",
@@ -985,6 +1205,9 @@ __all__ = [
     "_PROJECT_LIFECYCLE_TOGGLE_MESSAGES",
     "_PROJECT_LIFECYCLE_UPDATE_MESSAGES",
     "_PROJECT_RULE_BACKFILL_MESSAGES",
+    "_PROJECT_RULE_BATCH_APPLY_MESSAGES",
+    "_PROJECT_RULE_BATCH_PREVIEW_MESSAGES",
+    "_PROJECT_RULE_BATCH_TOGGLE_MESSAGES",
     "_PROJECT_RULE_CREATE_MESSAGES",
     "_PROJECT_RULE_DELETE_MESSAGES",
     "_PROJECT_RULE_FOLDER_CREATE_MESSAGES",

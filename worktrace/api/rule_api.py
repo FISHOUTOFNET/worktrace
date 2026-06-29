@@ -25,6 +25,7 @@ from ._write_contract import (
     ERROR_PROJECT_NOT_FOUND,
     ERROR_RULE_DISABLED,
     ERROR_TOO_MANY_MATCHES,
+    ERROR_TOO_MANY_RULES,
     fail_payload,
     ok_payload,
     valid_bool,
@@ -632,6 +633,194 @@ def backfill_project_rule(rule_type: Any, rule_id: Any) -> dict[str, Any]:
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
+# --- Phase 5I: selected-rule batch operations + automatic rules ---------
+#
+# These facades wrap ``rule_batch_service`` (batch preview / batch apply /
+# batch enable-disable) and ``rule_automation_service`` (automatic rules
+# status). They follow the same stable-code contract as the Phase 5H
+# single-rule facades: ``invalid_input`` / ``not_found`` / ``rule_disabled``
+# / ``project_not_available`` / ``too_many_matches`` /
+# ``too_many_rules`` / ``operation_failed`` are the only error codes; any
+# unexpected exception collapses to ``operation_failed``. The success
+# payload is always a narrow, display-safe projection — no raw
+# ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard / note
+# / SQL / traceback / raw activity row is ever returned.
+#
+# ``rules`` must be a non-empty ``list[dict]`` of
+# ``{"rule_type": "folder" | "keyword", "rule_id": positive int}`` items.
+# bool-as-int ids, non-int ids, non-positive ids, unknown rule types, and
+# non-dict items are ``invalid_input``. After de-duplication (first
+# occurrence wins) the rule count must not exceed ``MAX_BATCH_PROJECT_RULES``
+# (20) -> ``too_many_rules``. A folder id resolved on the keyword path (or
+# vice versa) is ``not_found`` — the two resolver paths can never touch
+# each other's rule tables.
+
+
+def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
+    """Read-only aggregate impact preview across the selected rules.
+
+    Phase 5I narrow WebView-facing facade. ``rules`` must be a non-empty
+    list of ``{"rule_type": "folder" | "keyword", "rule_id": positive int}``
+    dicts. Returns aggregate counts + per-rule summaries + up to
+    ``MAX_BATCH_SAMPLE_ROWS`` (20) display-safe sample rows across the
+    whole batch. Does NOT write anything. Disabled rules and unavailable
+    target projects return zero counts for that rule (availability is
+    surfaced in the per-rule summary).
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — ``rules`` is not a non-empty list, an item is not
+      a dict, an item is missing required keys, ``rule_type`` is not
+      ``"folder"`` / ``"keyword"``, or ``rule_id`` is not a real positive
+      ``int``.
+    - ``too_many_rules`` — after de-duplication the rule count exceeds 20.
+    - ``not_found`` — any rule id does not exist (or a folder id is sent
+      on the keyword path / vice versa).
+    - ``operation_failed`` — any unexpected service failure.
+    """
+
+    if not isinstance(rules, list):
+        return fail_payload(ERROR_INVALID_INPUT)
+    try:
+        from ..services import rule_batch_service
+
+        impact = rule_batch_service.preview_project_rules_batch_impact(rules)
+        return ok_payload(impact=impact)
+    except rule_batch_service.RuleBatchError as exc:
+        return fail_payload(exc.code)
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
+def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
+    """Apply the selected enabled rules to eligible history in one batch.
+
+    Phase 5I narrow WebView-facing facade. ``rules`` must be a non-empty
+    list of ``{"rule_type": "folder" | "keyword", "rule_id": positive int}``
+    dicts. The facade delegates to
+    ``rule_batch_service.backfill_project_rules_batch``, which:
+
+    - runs a full preflight (existence / enabled / project available) on
+      every rule before opening the write transaction;
+    - rejects disabled rules (``rule_disabled``) and unavailable target
+      projects (``project_not_available`` — disabled / archived / excluded)
+      as a preflight failure, writing nothing;
+    - enforces a total cap of ``MAX_BATCH_BACKFILL_ACTIVITIES`` (100)
+      updates across the whole batch; exceeding the cap returns
+      ``too_many_matches`` and writes nothing;
+    - processes rules in selection order with first-rule-wins: an activity
+      updated by an earlier rule is skipped (counted as
+      ``collision_skipped``) by later rules;
+    - runs in a single transaction with a per-row rowcount guard
+      (``manual_override = 0``) so any partial write is rolled back;
+    - never sets ``manual_override = 1`` and never touches
+      ``assignment.is_manual = 1`` activities, hidden / deleted /
+      in-progress / non-normal activities, or activities already on the
+      rule's target project;
+    - writes ``auto_classified = 1`` and upserts the assignment with
+      ``is_manual = 0``, ``source = "folder_rule" | "keyword_rule"``, and
+      the inference confidence (85 folder / 80 keyword).
+
+    The success payload only carries aggregate counts + per-rule summaries;
+    no raw activity rows are returned.
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` / ``too_many_rules`` / ``not_found`` — same as
+      ``preview_project_rules_batch_impact``.
+    - ``rule_disabled`` — at least one selected rule is disabled.
+    - ``project_not_available`` — at least one rule's target project is
+      disabled / archived / excluded.
+    - ``too_many_matches`` — total eligible activities exceed the batch
+      cap; nothing is written.
+    - ``operation_failed`` — any unexpected service failure (including a
+      rowcount-guard rollback).
+    """
+
+    if not isinstance(rules, list):
+        return fail_payload(ERROR_INVALID_INPUT)
+    try:
+        from ..services import rule_batch_service
+
+        result = rule_batch_service.backfill_project_rules_batch(rules)
+        return ok_payload(result=result)
+    except rule_batch_service.RuleBatchError as exc:
+        return fail_payload(exc.code)
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
+def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:
+    """Enable or disable every selected rule in one all-or-nothing batch.
+
+    Phase 5I narrow WebView-facing facade. ``rules`` must be a non-empty
+    list of ``{"rule_type": "folder" | "keyword", "rule_id": positive int}``
+    dicts. ``enabled`` must be a real ``bool`` (``0`` / ``1`` / numeric
+    string / ``None`` rejected as ``invalid_input``). The facade delegates
+    to ``rule_batch_service.set_project_rules_batch_enabled``, which:
+
+    - preflights every rule's existence (any missing -> ``not_found``,
+      no writes);
+    - runs the UPDATEs in one transaction with a per-rule rowcount guard
+      so a partial write is rolled back;
+    - does NOT call delete / create / edit / backfill;
+    - does NOT change any project's enabled state;
+    - after commit, fires the existing keyword rule cache / privacy
+      exclude cache / folder rule cache invalidation hooks (folder index
+      rebuild is intentionally NOT triggered, matching the single-rule
+      toggle behavior — enable/disable does not change the folder path /
+      key).
+
+    Returned errors are stable codes for the bridge to map to Chinese text:
+
+    - ``invalid_input`` — same as the other batch facades, or ``enabled``
+      is not a real ``bool``.
+    - ``too_many_rules`` — after de-duplication the rule count exceeds 20.
+    - ``not_found`` — any rule id does not exist (or a folder id is sent
+      on the keyword path / vice versa).
+    - ``operation_failed`` — any unexpected service failure (including a
+      rowcount-guard rollback).
+    """
+
+    if not isinstance(rules, list):
+        return fail_payload(ERROR_INVALID_INPUT)
+    if not valid_bool(enabled):
+        return fail_payload(ERROR_INVALID_INPUT)
+    try:
+        from ..services import rule_batch_service
+
+        result = rule_batch_service.set_project_rules_batch_enabled(rules, enabled)
+        return ok_payload(result=result)
+    except rule_batch_service.RuleBatchError as exc:
+        return fail_payload(exc.code)
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
+def automatic_rules_status() -> dict[str, Any]:
+    """Return a display-safe status payload for the automatic-rules engine.
+
+    Phase 5I narrow WebView-facing facade. The Project Rules page uses this
+    to render a status note explaining that enabled folder / keyword rules
+    are automatically applied to future eligible closed activities. The
+    payload is intentionally narrow: it only carries boolean / string fields
+    the frontend needs. It never exposes raw rule rows, project rows,
+    window titles, file paths, notes, clipboard text, SQL, or tracebacks.
+
+    Always succeeds — the underlying ``rule_automation_service`` is a thin
+    documented facade over the existing inference path and performs no DB
+    access. Any unexpected exception collapses to ``operation_failed``.
+    """
+
+    try:
+        from ..services import rule_automation_service
+
+        status = rule_automation_service.automatic_rules_status()
+        return ok_payload(status=status)
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
 # --- keyword rules -------------------------------------------------------
 
 def create_keyword_rule(keyword: str, project_id: int) -> int:
@@ -669,8 +858,10 @@ def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict[str, Any]:
 
 
 __all__ = [
+    "automatic_rules_status",
     "backfill_folder_rule",
     "backfill_project_rule",
+    "backfill_project_rules_batch",
     "create_keyword_rule",
     "create_or_update_folder_rule",
     "create_project_folder_rule",
@@ -682,7 +873,9 @@ __all__ = [
     "ProjectRuleWriteError",
     "preview_folder_rule_conflicts",
     "preview_project_rule_impact",
+    "preview_project_rules_batch_impact",
     "set_project_rule_enabled",
+    "set_project_rules_batch_enabled",
     "set_folder_rule_enabled",
     "set_keyword_rule_enabled",
     "update_project_folder_rule",

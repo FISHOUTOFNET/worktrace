@@ -5739,6 +5739,206 @@ Phase 5H does not implement and does not start:
 - Any change to the existing Timeline, Statistics / CSV export, Overview,
   collector, privacy, encrypted backup, or database semantics.
 
+## Phase 5I Implemented Scope
+
+Phase 5I is the **Automatic rules + selected-rule batch operations
+foundation** phase. It makes enabled folder / keyword Project Rules apply
+automatically to newly produced / just-closed eligible activities, and it
+opens selected-rule batch preview / apply / enable / disable on the Project
+Rules page. Both features are foundation-grade: they reuse the existing
+folder / keyword matching semantics (no second divergent matcher), enforce
+strict validation and transactional safety, and ship hardening regression
+locks in the same phase.
+
+Implemented in Phase 5I:
+
+- Automatic rules foundation:
+  - Enabled folder / keyword rules now apply automatically to activities
+    through the existing `finalize_created_activity` →
+    `project_inference_service.process_new_activity` →
+    `assign_project_for_activity` path. No new matcher, no new table, no
+    new column.
+  - Deterministic priority: folder rules before keyword rules; within the
+    same kind, by rule id ascending; first match wins.
+  - Writes `auto_classified=1`, `source=folder_rule` / `keyword_rule`,
+    `confidence` 85 (folder) / 80 (keyword), `is_manual=0`. Automatic
+    application never sets `manual_override=1`.
+  - Skip guards (automatic-only, in `process_new_activity`):
+    `manual_override=1`, `is_manual=1`, hidden, deleted, in-progress
+    (`end_time IS NULL`), non-normal activities, already-target activities,
+    disabled rules, disabled / archived / excluded target projects.
+  - Archived-project filtering: `is_archived = 0` added to both
+    `_enabled_keyword_rules` and `_enabled_folder_rules` SQL so archived
+    projects (which keep `enabled = 1` after archiving) no longer match
+    rules.
+  - Skip-guard placement: hidden / deleted / in-progress guards live in
+    `process_new_activity` (the automatic-only entry point), NOT in
+    `assign_project_for_activity` (the general-purpose function used by
+    manual reclassification, single-rule backfill, and batch apply). This
+    keeps existing manual-path tests intact while meeting the automatic
+    contract.
+  - `worktrace/services/rule_automation_service.py` is a thin documented
+    facade that delegates to `process_new_activity` so the automatic path
+    can be guarded without affecting manual reclassification.
+- Selected-rule batch operations foundation:
+  - Four operations: batch preview impact, batch apply to history, batch
+    enable, batch disable.
+  - `rules` input: a list of `{"rule_type": "folder"|"keyword",
+    "rule_id": positive int}`. Validation rejects non-list / empty /
+    bool-as-int / negative / zero ids, dedupes (first occurrence wins),
+    caps at 20 rules (`too_many_rules`), and returns `not_found` for any
+    missing rule.
+  - Batch apply: capped at 100 total updates (`too_many_matches` writes
+    nothing), first-rule-wins on collisions, all-or-nothing transaction
+    with rowcount guard rollback. Skips manual / hidden / deleted /
+    in-progress / non-normal / already-target activities.
+  - Batch enable / disable: all-or-nothing, does NOT affect project
+    `enabled` state, preserves cache invalidation.
+  - Preview is read-only and treats disabled rules / unavailable projects
+    as informational zero-count contributions (no `rule_disabled` /
+    `project_not_available` / `too_many_matches` on the preview path).
+- Service layer:
+  - `worktrace/services/rule_batch_service.py` (new file): reuses
+    `rule_impact_service` helpers (`_resolve_folder_rule`,
+    `_resolve_keyword_rule`, `_project_available`, `_classify_activities`,
+    `_sample_rows`) for a single matcher code path. Strict input
+    normalization, transactional apply, all-or-nothing toggle.
+  - `worktrace/services/project_inference_service.py` (modified):
+    automatic-only skip guards + `is_archived = 0` filter on keyword rules.
+  - `worktrace/services/folder_rule_service.py` (modified):
+    `is_archived = 0` filter on folder rules.
+  - `worktrace/services/rule_automation_service.py` (modified): facade
+    delegates to `process_new_activity`.
+- API layer (`worktrace/api/rule_api.py`, `worktrace/api/_write_contract.py`):
+  - Four new facades: `preview_project_rules_batch_impact`,
+    `backfill_project_rules_batch`, `set_project_rules_batch_enabled`,
+    `automatic_rules_status`. Strict type validation on `rules` and
+    `enabled`.
+  - New stable error code `ERROR_TOO_MANY_RULES = "too_many_rules"` in
+    `_write_contract.py`. Stable codes: `invalid_input` / `not_found` /
+    `too_many_rules` / `rule_disabled` / `project_not_available` /
+    `too_many_matches` / `operation_failed`.
+  - Narrow display-safe payloads: counts + ≤ 20 sample rows for preview;
+    update counts for apply; affected rule ids for toggle. No raw window
+    title / file path / note / traceback / SQL leak.
+- Bridge layer (`worktrace/webview_ui/bridge_rules.py`,
+  `worktrace/webview_ui/bridge.py`):
+  - Four new bridge methods: `preview_project_rules_batch_impact`,
+    `backfill_project_rules_batch`, `set_project_rules_batch_enabled`,
+    `automatic_rules_status`. They only call `worktrace.api.rule_api`;
+    they never import services / db / collector / runtime / config.
+  - Three new Chinese error-message maps
+    (`_PROJECT_RULE_BATCH_PREVIEW_MESSAGES`,
+    `_PROJECT_RULE_BATCH_APPLY_MESSAGES`,
+    `_PROJECT_RULE_BATCH_TOGGLE_MESSAGES`); unknown codes collapse to a
+    per-action Chinese message. `_validate_batch_rules` enforces the same
+    shape at the bridge. `bridge.py` re-exports the three maps for
+    backward compatibility.
+  - No `.message` reads, no traceback / SQL / path / window_title /
+    clipboard / note leak. All payloads JSON-serializable.
+- Frontend (`worktrace/webview_ui/js/rules.js`,
+  `worktrace/webview_ui/js/rules_rule_actions.js`,
+  `worktrace/webview_ui/js/rules_render.js`,
+  `worktrace/webview_ui/js/core.js`,
+  `worktrace/webview_ui/index.html`,
+  `worktrace/webview_ui/styles.css`):
+  - Per-rule selection checkboxes + a batch action bar (preview / apply /
+    enable / disable) rendered in `rules_render.js`; handlers in
+    `rules_rule_actions.js`; batch containers in `index.html`; CSS in
+    `styles.css`.
+  - `_collectExistingRuleKeys` / `_pruneBatchSelection` in `rules.js`
+    keep the selection stable across re-renders and drop keys for rules
+    that no longer exist.
+  - Batch apply uses `confirm` before calling the bridge; preview / apply
+    / toggle refresh / reset the panel on success and preserve state on
+    failure. New batch state variables in `rules_rule_actions.js` are
+    isolated from existing keyword / folder / project / single-rule
+    impact write states.
+  - Comment wording in `core.js` / `rules_render.js` / `styles.css`
+    avoids the literal `localStorage` / `sessionStorage` tokens so static
+    contract scans stay green.
+  - No `fetch` / `XMLHttpRequest` / `localStorage` / `sessionStorage`
+    / ES module / external URL / new dependency / new JS file.
+- Tests:
+  - New `tests/test_project_rules_automatic_rules.py` (27 tests):
+    priority ordering, folder-before-keyword, first-match-wins, skip
+    guards (manual / hidden / deleted / in-progress / non-normal /
+    already-target / disabled rule / archived project / excluded
+    project), confidence + source + is_manual writes, no manual_override
+    writes, archived-project no-match.
+  - New `tests/test_project_rules_batch_operations.py` (46 tests): input
+    validation, cross-path resolution, preview (success / read-only /
+    display-safe / JSON-serializable / dedupe / disabled-rule zero
+    counts), apply (success / display-safe / JSON-serializable / total
+    cap 100 / `too_many_matches` writes nothing / collision
+    first-rule-wins / dedupe stable order), skips, preflight rejections
+    (disabled rule / unavailable project / not_found / invalid_input /
+    too_many_rules), toggle (success / all-or-nothing / non-bool /
+    too_many_rules / display-safe / JSON-serializable / cross-path), no
+    schema change.
+  - Extended bridge tests in `tests/test_webview_project_rules_bridge.py`
+    (+29 tests, 416 total): all 4 new bridge methods covered for narrow
+    payload, invalid-input short-circuit, stable error map, unknown-code
+    collapse, exception collapse, no-sensitive-token leak,
+    JSON-serializable; plus cross-call verification and 5I message-map
+    re-export.
+  - Extended static contract tests in
+    `tests/webview/test_project_rules_static_contract.py` (+11 tests,
+    364 total): batch DOM ids exist + hidden by default, static button
+    count unchanged, `core.js` batch state variables, batch bridge calls
+    exist, batch handlers no forbidden tokens, batch apply confirm text,
+    state isolation, CSS classes + hidden rules, script order preserved.
+- Affected runner mapping (`scripts/run_affected_tests.py`):
+  - New C8 section for `rule_automation_service.py` → automatic rules
+    tests + bridge + boundary.
+  - New C9 section for `rule_batch_service.py` → batch operations tests
+    + bridge + boundary.
+  - `tests/test_run_affected_tests.py` extended with C8 / C9 coverage
+    (triggers select the right targets, do not leak into CRUD / lifecycle
+    / impact / static tests).
+- Documentation: `README.md`, `docs/current-state.md`,
+  `docs/ui-webview-migration.md`, and this file now describe the current
+  phase as 5I and explicitly note that 5I ships automatic rules +
+  selected-rule batch preview / apply / enable / disable foundation, not
+  raw conflict preview or raw batch folder-rule backfill.
+
+Phase 5I does not modify `WorkTrace.spec` resource list,
+`worktrace/db.py`, `worktrace/schema.sql`, or any collector / privacy /
+encrypted backup / statistics / export / timeline code. No DB schema
+change. No new dependency. No new JS file. The WebView packaging static
+test (`tests/test_webview_packaging.py`) and the `worktrace.webview_main`
+import check were run and pass; the full PyInstaller build was not re-run
+because no packaging or runtime behavior changed.
+
+## Phase 5I Not Implemented
+
+Phase 5I does not implement and does not start:
+
+- Raw folder-rule conflict preview in WebView (the raw
+  `folder_rule_service.preview_folder_rule_conflicts` is still NOT
+  exposed to WebView; 5I batch preview reuses the display-safe
+  `rule_impact_service` helpers, not the raw conflict path);
+- Raw / unbounded batch folder-rule backfill (5I batch apply is capped at
+  100 total updates per call and is all-or-nothing);
+- Automatic-rule enable / disable toggle in the UI (5I ships the
+  automatic application path + an `automatic_rules_status` read; the
+  on/off switch for automatic application is deferred);
+- Hard delete project (deferred);
+- Project restore (un-archive) in WebView (deferred);
+- Settings / Privacy / Encrypted Backup WebView migration;
+- Excel / PDF / timesheet export or auto-submit;
+- Folder opening or auto-open of exported files;
+- DB schema changes;
+- Legacy Tkinter UI removal;
+- Tkinter fallback path;
+- React / Vue / Vite / Node dependency;
+- Local HTTP / FastAPI server;
+- CDN / external JS / CSS / font / Google Fonts usage;
+- `localStorage` / `sessionStorage` usage;
+- Network requests;
+- Any change to the existing Timeline, Statistics / CSV export, Overview,
+  collector, privacy, encrypted backup, or database semantics.
+
 ## WebView2 Runtime Handling Strategy
 
 - Windows 11 ships with the Evergreen WebView2 Runtime preinstalled; most

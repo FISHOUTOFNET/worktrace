@@ -33,6 +33,7 @@ def _enabled_folder_rules() -> list[dict]:
                 LEFT JOIN project p ON p.id = fpr.project_id
                 WHERE fpr.enabled = 1
                   AND COALESCE(p.enabled, 1) = 1
+                  AND COALESCE(p.is_archived, 0) = 0
                   AND COALESCE(p.name, '') <> ?
             """,
             (EXCLUDED_PROJECT,),

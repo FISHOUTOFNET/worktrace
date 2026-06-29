@@ -200,6 +200,33 @@
             impactButtons = '  <button class="rules-preview-impact-button" type="button" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + previewBtnDisabled + '>' + previewLabel + '</button>';
             impactButtons += '  <button class="rules-backfill-button" type="button" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + backfillDisabled + '>' + backfillLabel + '</button>';
         }
+        // Phase 5I: every folder / keyword rule with a valid id gets a
+        // batch-selection checkbox as the first element of the row. The
+        // checkbox is disabled while any batch operation is in flight OR
+        // while any per-rule write is in flight on this row, so the batch
+        // selection state can never pollute an in-flight per-rule write
+        // (and vice versa). Selection lives in ``App.rulesBatchSelectedKeys``
+        // (JS memory only — no browser storage APIs).
+        var batchCheckbox = "";
+        var batchSelected = false;
+        if (ruleId) {
+            batchSelected = !!App.rulesBatchSelectedKeys[ruleKey];
+            var batchCheckboxDisabled = !!(
+                App.rulesBatchInFlight ||
+                App.rulesSavingRuleKey ||
+                App.rulesDeletingRuleKey ||
+                App.rulesEditingKeywordKey ||
+                App.rulesUpdatingKeywordKey ||
+                App.rulesEditingFolderKey ||
+                App.rulesCreatingFolder ||
+                App.rulesDeletingFolderKey ||
+                App.rulesBackfillingRuleKey ||
+                App.rulesPreviewingImpactKey
+            );
+            var batchCheckboxDisabledAttr = batchCheckboxDisabled ? " disabled" : "";
+            var batchCheckedAttr = batchSelected ? " checked" : "";
+            batchCheckbox = '  <input class="rules-batch-checkbox" type="checkbox" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + batchCheckedAttr + batchCheckboxDisabledAttr + ' />';
+        }
         // When this folder row is being edited, render the inline edit form
         // in place of the normal body. The edit form holds its own folder
         // path input + recursive checkbox + save / cancel buttons.
@@ -239,7 +266,8 @@
             ].join("");
         }
         return [
-            '<div class="rules-row ' + (enabled ? "" : "is-disabled") + '">',
+            '<div class="rules-row ' + (enabled ? "" : "is-disabled") + (batchSelected ? " is-batch-selected" : "") + '">',
+            batchCheckbox,
             '  <span class="rules-kind-badge rules-kind-' + kind + '">' + label + '</span>',
             '  <div class="rules-row-main">',
             '    <div class="rules-target">' + target + '</div>',
@@ -370,6 +398,142 @@
         ].join("");
     }
     App.renderProjectRuleBackfillResult = renderProjectRuleBackfillResult;
+
+    // --- Phase 5I: selected-rule batch operations toolbar + panel -------
+
+    function renderProjectRulesBatchToolbar() {
+        // Phase 5I: render the batch toolbar (selected count + 5 buttons).
+        // The toolbar is rendered into ``#rules-batch-toolbar`` by
+        // ``rules.js`` on every list render. Buttons are disabled when
+        // there is no selection OR any batch operation is in flight. The
+        // clear button is only enabled when there is a selection (it stays
+        // enabled during in-flight so the user can cancel a pending
+        // selection — but the batch in-flight guard in the handler still
+        // refuses to act while a batch op is running, so this is purely
+        // visual).
+        var selectedCount = Object.keys(App.rulesBatchSelectedKeys || {}).length;
+        var hasSelection = selectedCount > 0;
+        var inFlight = !!App.rulesBatchInFlight;
+        var actionDisabled = (!hasSelection || inFlight) ? " disabled" : "";
+        var countLabel = "已选择 " + count(selectedCount) + " 条规则";
+        var previewLabel = inFlight ? "正在处理…" : "预览选中规则影响";
+        var applyLabel = inFlight ? "正在处理…" : "应用选中规则到历史记录";
+        var enableLabel = inFlight ? "正在处理…" : "启用选中规则";
+        var disableLabel = inFlight ? "正在处理…" : "停用选中规则";
+        var clearLabel = "清空选择";
+        var clearDisabled = (!hasSelection || inFlight) ? " disabled" : "";
+        return [
+            '<div class="rules-batch-toolbar-inner">',
+            '  <span class="rules-batch-selected-count">' + countLabel + '</span>',
+            '  <button class="rules-batch-preview-button" type="button"' + actionDisabled + '>' + previewLabel + '</button>',
+            '  <button class="rules-batch-apply-button" type="button"' + actionDisabled + '>' + applyLabel + '</button>',
+            '  <button class="rules-batch-enable-button" type="button"' + actionDisabled + '>' + enableLabel + '</button>',
+            '  <button class="rules-batch-disable-button" type="button"' + actionDisabled + '>' + disableLabel + '</button>',
+            '  <button class="rules-batch-clear-button" type="button"' + clearDisabled + '>' + clearLabel + '</button>',
+            '</div>'
+        ].join("");
+    }
+    App.renderProjectRulesBatchToolbar = renderProjectRulesBatchToolbar;
+
+    function renderProjectRulesBatchPanel(data) {
+        // Phase 5I: render the batch panel (aggregate counts + per-rule
+        // summaries). The panel is rendered into ``#rules-batch-panel`` by
+        // the batch action handlers. ``data`` is
+        // ``{mode: "preview"|"apply"|"toggle", payload: {...}}``. No raw
+        // ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard /
+        // note / SQL / traceback is ever surfaced — the bridge already
+        // filtered the payload to display-safe fields.
+        if (!data) return "";
+        var mode = data.mode || "preview";
+        var payload = data.payload || {};
+        var title = mode === "preview" ? "批量预览结果"
+            : (mode === "apply" ? "批量应用结果" : "批量启用/停用结果");
+        var rules = payload.rules || [];
+        var aggregate = payload.counts || {};
+        var sections = [];
+        // Aggregate counts grid (preview / apply modes). Toggle mode has
+        // no activity counts, only an enabled bool + count.
+        if (mode === "preview" || mode === "apply") {
+            var aggRows = [
+                '<div><span>命中数量</span><strong>' + count(aggregate.matched_count) + '</strong></div>',
+                '<div><span>符合条件</span><strong>' + count(aggregate.eligible_count) + '</strong></div>',
+                '<div><span>将被更新</span><strong>' + count(aggregate.would_update_count) + '</strong></div>',
+                '<div><span>已是目标</span><strong>' + count(aggregate.already_target_count) + '</strong></div>',
+                '<div><span>手动跳过</span><strong>' + count(aggregate.manual_skipped_count) + '</strong></div>',
+                '<div><span>隐藏跳过</span><strong>' + count(aggregate.hidden_skipped_count) + '</strong></div>',
+                '<div><span>删除跳过</span><strong>' + count(aggregate.deleted_skipped_count) + '</strong></div>',
+                '<div><span>进行中跳过</span><strong>' + count(aggregate.in_progress_skipped_count) + '</strong></div>',
+                '<div><span>非正常跳过</span><strong>' + count(aggregate.non_normal_skipped_count) + '</strong></div>'
+            ];
+            if (mode === "apply") {
+                aggRows.unshift(
+                    '<div><span>已更新</span><strong>' + count(aggregate.updated_count) + '</strong></div>',
+                    '<div><span>冲突跳过</span><strong>' + count(aggregate.collision_skipped_count) + '</strong></div>'
+                );
+            }
+            sections.push(
+                '<div class="rules-impact-counts">' + aggRows.join("") + '</div>'
+            );
+        } else {
+            // toggle mode: show the resulting enabled state + count
+            sections.push(
+                '<div class="rules-impact-counts">' +
+                '<div><span>已更新规则数</span><strong>' + count(payload.count) + '</strong></div>' +
+                '<div><span>目标状态</span><strong>' + (payload.enabled ? "已启用" : "已停用") + '</strong></div>' +
+                '</div>'
+            );
+        }
+        // Per-rule summaries. Normalize the entry shape: preview / toggle
+        // entries are flat ({kind, id, enabled, project_name, target,
+        // project_available, ...}); apply entries are nested
+        // ({rule: {...}, counts: {...}}).
+        if (rules.length) {
+            var ruleRows = rules.map(function (entry) {
+                var rule = entry.rule || entry;
+                var ruleCounts = entry.counts || null;
+                var kindLabel = rule.kind === "folder" ? "文件夹" : "关键词";
+                var target = text(rule.target, "未设置");
+                var projectName = text(rule.project_name, "未知项目");
+                var enabledLabel = rule.enabled ? "已启用" : "已禁用";
+                var availLabel = rule.project_available === false ? "目标项目不可用" : "";
+                var headParts = [kindLabel + "：" + target, "归属项目：" + projectName, enabledLabel];
+                if (availLabel) headParts.push(availLabel);
+                var head = headParts.join(" | ");
+                var countsLine = "";
+                if (ruleCounts) {
+                    var parts = [];
+                    if (typeof ruleCounts.updated_count === "number") {
+                        parts.push("已更新 " + count(ruleCounts.updated_count));
+                    }
+                    if (typeof ruleCounts.collision_skipped_count === "number") {
+                        parts.push("冲突跳过 " + count(ruleCounts.collision_skipped_count));
+                    }
+                    parts.push("命中 " + count(ruleCounts.matched_count));
+                    parts.push("符合条件 " + count(ruleCounts.eligible_count));
+                    parts.push("将被更新 " + count(ruleCounts.would_update_count));
+                    parts.push("已是目标 " + count(ruleCounts.already_target_count));
+                    parts.push("手动跳过 " + count(ruleCounts.manual_skipped_count));
+                    countsLine = '<div class="rules-batch-rule-counts">' + App.escapeHtml(parts.join(" | ")) + '</div>';
+                }
+                return '<div class="rules-batch-rule-summary"><div class="rules-batch-rule-head">' + head + '</div>' + countsLine + '</div>';
+            }).join("");
+            sections.push(
+                '<div class="rules-batch-rules-list">' + ruleRows + '</div>'
+            );
+        }
+        return [
+            '<div class="rules-impact-panel-inner" data-batch-mode="' + App.escapeHtml(mode) + '">',
+            '  <div class="rules-impact-header">',
+            '    <div class="rules-impact-title">' + title + '</div>',
+            '  </div>',
+            sections.join(""),
+            '  <div class="rules-impact-actions">',
+            '    <button class="rules-batch-panel-close-button" type="button">关闭</button>',
+            '  </div>',
+            '</div>'
+        ].join("");
+    }
+    App.renderProjectRulesBatchPanel = renderProjectRulesBatchPanel;
 
     // --- Private render helpers (used only by render functions above) ---
 

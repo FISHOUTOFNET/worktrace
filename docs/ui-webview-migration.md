@@ -2,7 +2,7 @@
 
 This document holds the **architecture decisions and migration principles** for
 the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 5H "Implemented Scope" / "Not
+full per-phase history (Phase 0A → Phase 5I "Implemented Scope" / "Not
 Implemented" sections) lives in
 [`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
 "what is shipped today" snapshot, read
@@ -154,9 +154,27 @@ order:
   contract tests), and a new affected-runner C7 section for
   `rule_impact_service.py`. No schema change, no new dependencies, no new
   JS file. **Completed.**
-- Phase 5I+ — remaining Project Rules write workflows (hard delete project,
-  raw folder-rule conflict preview, raw / batch backfill, automatic rules,
-  batch operations). Not started.
+- Phase 5I — Automatic rules + selected-rule batch operations foundation.
+  Makes enabled folder / keyword rules apply automatically to newly
+  produced / just-closed eligible activities through the existing
+  `finalize_created_activity` → `process_new_activity` →
+  `assign_project_for_activity` path (deterministic priority: folder
+  before keyword, by id ascending, first match wins; manual / hidden /
+  deleted / in-progress / non-normal / already-target / disabled-rule /
+  archived-project activities skipped; `is_archived = 0` added to the
+  enabled-rule SQL). Adds selected-rule batch preview / apply / enable /
+  disable (≤ 20 rules, batch apply capped at 100 total updates,
+  all-or-nothing transactions, first-rule-wins on collisions), new
+  `worktrace/services/rule_batch_service.py`, four new API facades in
+  `rule_api.py`, four new bridge methods in `bridge_rules.py`, per-rule
+  selection + batch action bar in the frontend, in-phase hardening tests
+  (`tests/test_project_rules_automatic_rules.py` +
+  `tests/test_project_rules_batch_operations.py` + extended bridge /
+  static contract tests), and new affected-runner C8 / C9 sections.
+  No schema change, no new dependencies, no new JS file. **Completed.**
+- Phase 5J+ — remaining Project Rules write workflows (hard delete project,
+  raw folder-rule conflict preview, raw / unbounded batch backfill,
+  automatic-rule enable / disable toggle in the UI). Not started.
 - Phase 6 — Settings / Privacy / Encrypted Backup. Not started.
 - Cleanup — remove the legacy Tkinter UI, reached only after all feature
   pages are at parity in the WebView UI.

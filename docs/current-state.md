@@ -8,17 +8,17 @@
 
 ## Current Phase
 
-**Phase 5H — Rule impact preview + safe rule backfill foundation + in-phase
-hardening.** Project Rules now supports single-rule impact preview
-(folder / keyword, display-safe counts + up to 20 sample rows) and explicit
-safe single-rule backfill (folder / keyword, capped at 100 updates per call,
-manual records preserved), in addition to the earlier folder / keyword rule
-enable-disable, keyword create / edit / delete, folder rule create / edit /
-delete, and user project create / edit / enable-disable / archive
-capabilities. Hard delete project, raw folder-rule conflict preview, raw /
-batch backfill, automatic rules, and batch Project Rules operations remain
-unsupported. The phase-by-phase chronology (5B / 5B.1 / ... / 5H) is
-archived in [`history/webview-phases.md`](history/webview-phases.md).
+**Phase 5I — Automatic rules + selected-rule batch operations foundation.**
+Project Rules now applies enabled folder / keyword rules automatically to newly
+produced / just-closed eligible activities (folder before keyword, first match
+wins; manual / hidden / deleted / in-progress / non-normal / already-target /
+disabled-rule / archived-project activities skipped), and supports selected-rule
+batch preview / apply / enable / disable (≤ 20 rules; batch apply ≤ 100 total
+updates, all-or-nothing), in addition to the earlier single-rule impact preview,
+safe single-rule backfill, folder / keyword rule enable-disable, keyword create
+/ edit / delete, folder rule create / edit / delete, and user project create / edit / enable-disable / archive
+capabilities. Hard delete project, raw folder-rule conflict preview, raw / unbounded batch backfill, and the
+automatic-rule on/off UI toggle remain unsupported. Chronology (5B / 5B.1 / ... / 5I) in [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Default UI
 
@@ -42,7 +42,7 @@ archived in [`history/webview-phases.md`](history/webview-phases.md).
 - **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
   cards, grouped tables (by project / by app / by status), export preview,
   CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A – 5H): project-grouped rule list showing
+- **Project Rules** (Phase 5A – 5I): project-grouped rule list showing
   project name / description, project enabled state, special `排除规则`
   marker, rule counts, folder rules, keyword rules, rule enabled state, and
   folder recursion scope. Current write capabilities are listed in the
@@ -78,11 +78,13 @@ archived in [`history/webview-phases.md`](history/webview-phases.md).
 - User project create / edit / enable-disable / archive.
 - Single-rule impact preview for folder / keyword rules (display-safe
   counts + up to 20 sample rows; no raw window title / file path / note).
-- Safe single-rule backfill for folder / keyword rules (capped at 100
-  updates per call; manual records (`manual_override=1` / `is_manual=1`)
-  are skipped; hidden / deleted / in-progress / non-normal activities are
-  skipped; `too_many_matches` returns a stable error code and writes
-  nothing).
+- Safe single-rule backfill for folder / keyword rules (≤ 100 updates per
+  call; skips manual / hidden / deleted / in-progress / non-normal;
+  `too_many_matches` writes nothing).
+- Automatic application of enabled rules to eligible activities (skips manual
+  / hidden / deleted / in-progress / disabled rules / archived projects).
+- Selected-rule batch preview / apply / enable / disable (≤ 20 rules; batch
+  apply ≤ 100 updates, all-or-nothing).
 - Special `排除规则` boundary enforced (system / special projects rejected
   for lifecycle writes; enabling `排除规则` is never allowed).
 
@@ -100,12 +102,10 @@ archived in [`history/webview-phases.md`](history/webview-phases.md).
 
 - Excel / PDF / timesheet-template export; folder opening; auto-open of the
   exported file; auto-submit of a timesheet.
-- Hard delete project; raw folder-rule conflict preview (the raw
-  `folder_rule_service.preview_folder_rule_conflicts` is NOT exposed to
-  WebView; 5H ships a separate display-safe rule impact preview facade);
-  raw / batch folder-rule backfill (5H ships only safe single-rule
-  backfill, capped at 100 updates per call); automatic rules; batch
-  Project Rules operations.
+- Hard delete project; raw folder-rule conflict preview (raw
+  `preview_folder_rule_conflicts` NOT exposed to WebView; 5I reuses
+  display-safe `rule_impact_service` helpers); raw / unbounded batch
+  backfill; automatic-rule on/off UI toggle.
 - Settings / Privacy / Encrypted Backup WebView migration.
 - Batch hide / batch delete / batch restore; permanent delete; undo stack.
 - Batch time / batch split / batch merge; note append / merge; auto-rule

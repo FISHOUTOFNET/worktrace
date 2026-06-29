@@ -280,9 +280,9 @@ def test_current_state_line_count_under_hard_max():
     )
 
 
-def test_current_state_contains_phase_5h():
+def test_current_state_contains_phase_5i():
     text = _read_text(CURRENT_STATE_PATH)
-    assert "Phase 5H" in text, "current-state.md must mention Phase 5H"
+    assert "Phase 5I" in text, "current-state.md must mention Phase 5I"
 
 
 def test_current_state_contains_csv_export():
@@ -478,7 +478,7 @@ def test_current_state_remains_under_one_screen_hard_max_after_dg1_1():
 
 
 def test_current_state_phase_description_is_unambiguous_after_dg1_1():
-    """The Phase 5H description must use unambiguous wording that lists
+    """The Phase 5I description must use unambiguous wording that lists
     user project create / edit / enable-disable / archive as distinct
     capabilities — not the old "on existing user projects" form that could
     be misread as "create only on existing user projects"."""

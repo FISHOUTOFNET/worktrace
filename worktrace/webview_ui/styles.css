@@ -2676,6 +2676,185 @@ body {
     background: #f8fafc;
 }
 
+/* Phase 5I: selected-rule batch operations toolbar + panel + per-row checkbox.
+   The toolbar is rendered into #rules-batch-toolbar by rules_render.js on
+   every list render. The panel is rendered into #rules-batch-panel by the
+   batch action handlers. The per-row checkbox is the first element of every
+   folder / keyword rule row. Selection lives in JS memory only
+   (App.rulesBatchSelectedKeys) — no browser storage APIs. */
+.rules-batch-toolbar {
+    margin: 12px 0 8px;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+}
+
+.rules-batch-toolbar[hidden] {
+    display: none;
+}
+
+.rules-batch-toolbar-inner {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.rules-batch-selected-count {
+    font-size: 13px;
+    font-weight: 600;
+    color: #0f172a;
+    margin-right: 4px;
+}
+
+.rules-batch-preview-button,
+.rules-batch-apply-button,
+.rules-batch-enable-button,
+.rules-batch-disable-button,
+.rules-batch-clear-button {
+    min-height: 30px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.rules-batch-preview-button {
+    border: 1px solid #0e7490;
+    background: #ffffff;
+    color: #0e7490;
+}
+
+.rules-batch-preview-button:hover:not(:disabled) {
+    background: #ecfeff;
+    border-color: #0891b2;
+}
+
+.rules-batch-apply-button {
+    border: 1px solid #4338ca;
+    background: #4338ca;
+    color: #ffffff;
+}
+
+.rules-batch-apply-button:hover:not(:disabled) {
+    background: #3730a3;
+    border-color: #3730a3;
+}
+
+.rules-batch-enable-button {
+    border: 1px solid #166534;
+    background: #166534;
+    color: #ffffff;
+}
+
+.rules-batch-enable-button:hover:not(:disabled) {
+    background: #14532d;
+    border-color: #14532d;
+}
+
+.rules-batch-disable-button {
+    border: 1px solid #b45309;
+    background: #b45309;
+    color: #ffffff;
+}
+
+.rules-batch-disable-button:hover:not(:disabled) {
+    background: #92400e;
+    border-color: #92400e;
+}
+
+.rules-batch-clear-button {
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #0f172a;
+}
+
+.rules-batch-clear-button:hover:not(:disabled) {
+    border-color: #94a3b8;
+    background: #f1f5f9;
+}
+
+.rules-batch-preview-button:disabled,
+.rules-batch-apply-button:disabled,
+.rules-batch-enable-button:disabled,
+.rules-batch-disable-button:disabled,
+.rules-batch-clear-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.rules-batch-panel {
+    margin: 12px 0 16px;
+}
+
+.rules-batch-panel[hidden] {
+    display: none;
+}
+
+.rules-batch-rule-summary {
+    padding: 8px 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #ffffff;
+    margin-bottom: 6px;
+}
+
+.rules-batch-rule-head {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1e293b;
+    margin-bottom: 4px;
+}
+
+.rules-batch-rule-counts {
+    font-size: 12px;
+    color: #475569;
+}
+
+.rules-batch-rules-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.rules-batch-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    margin: 0;
+    align-self: center;
+}
+
+.rules-batch-checkbox:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.rules-row.is-batch-selected {
+    background: #eff6ff;
+    border-color: #93c5fd;
+}
+
+.rules-batch-panel-close-button {
+    min-width: 64px;
+    min-height: 30px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.rules-batch-panel-close-button:hover:not(:disabled) {
+    border-color: #94a3b8;
+    background: #f8fafc;
+}
+
 /* Phase 5F: inline keyword rule edit form. Rendered in place of the normal
    row body when the user enters edit mode for a keyword rule. The form
    collapses the row into a single column so the input has room. */

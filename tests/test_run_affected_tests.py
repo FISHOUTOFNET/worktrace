@@ -359,6 +359,71 @@ def test_rule_impact_service_py_selects_impact_tests(runner):
 
 
 # ---------------------------------------------------------------------------
+# C8. rule_automation_service.py -> automatic rules tests + bridge + boundary
+# (Phase 5I)
+# ---------------------------------------------------------------------------
+
+
+def test_rule_automation_service_py_selects_automatic_rules_tests(runner):
+    # Phase 5I: the new rule_automation_service.py (thin facade delegating to
+    # project_inference_service.process_new_activity) triggers the automatic
+    # rules test file plus the bridge and boundary tests. It must not trigger
+    # keyword/folder CRUD/lifecycle/impact/static tests since the facade is
+    # scoped to the automatic application path only.
+    sel = runner.select_targets(["worktrace/services/rule_automation_service.py"])
+    for expected in [
+        "tests/test_project_rules_automatic_rules.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+    # rule_automation_service.py must NOT trigger CRUD/lifecycle/impact/static
+    # tests; those run only when their own API/service sources change.
+    assert "tests/test_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_folder_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_keyword_create.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_folder_crud.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_project_lifecycle.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_rule_impact.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_batch_operations.py" not in sel.pytest_targets
+    assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
+    # rule_automation_service.py is not a frontend resource, so no import smoke.
+    assert sel.smoke_commands == []
+
+
+# ---------------------------------------------------------------------------
+# C9. rule_batch_service.py -> batch operations tests + bridge + boundary
+# (Phase 5I)
+# ---------------------------------------------------------------------------
+
+
+def test_rule_batch_service_py_selects_batch_operations_tests(runner):
+    # Phase 5I: the new rule_batch_service.py triggers the batch operations
+    # test file plus the bridge and boundary tests. It must not trigger
+    # keyword/folder CRUD/lifecycle/automatic/static tests since the service
+    # is scoped to selected-rule batch preview/apply/toggle only.
+    sel = runner.select_targets(["worktrace/services/rule_batch_service.py"])
+    for expected in [
+        "tests/test_project_rules_batch_operations.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+    # rule_batch_service.py must NOT trigger CRUD/lifecycle/automatic/impact/
+    # static tests; those run only when their own API/service sources change.
+    assert "tests/test_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_folder_rule_service.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_keyword_create.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_folder_crud.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_project_lifecycle.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_automatic_rules.py" not in sel.pytest_targets
+    assert "tests/test_project_rules_rule_impact.py" not in sel.pytest_targets
+    assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
+    # rule_batch_service.py is not a frontend resource, so no import smoke.
+    assert sel.smoke_commands == []
+
+
+# ---------------------------------------------------------------------------
 # I. docs-only -> not full pytest
 # ---------------------------------------------------------------------------
 

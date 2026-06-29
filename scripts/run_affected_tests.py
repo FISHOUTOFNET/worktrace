@@ -76,7 +76,7 @@ CONFTEST_BROAD_SUITE: list[str] = [
 
 
 # ---------------------------------------------------------------------------
-# Path -> tests mapping (sections A..L; C refined into C1..C7 in Phase TG2/5H).
+# Path -> tests mapping (sections A..L; C refined into C1..C9 in Phase TG2/5H/5I).
 #
 # Each rule is a dict with:
 #   id        : human label
@@ -249,6 +249,32 @@ RULES: list[dict] = [
         ],
         "tests": [
             "tests/test_project_rules_rule_impact.py",
+            "tests/test_webview_project_rules_bridge.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [],
+        "warnings": [],
+    },
+    {
+        "id": "C8. Automatic rules service (Phase 5I)",
+        "triggers": [
+            "worktrace/services/rule_automation_service.py",
+        ],
+        "tests": [
+            "tests/test_project_rules_automatic_rules.py",
+            "tests/test_webview_project_rules_bridge.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [],
+        "warnings": [],
+    },
+    {
+        "id": "C9. Batch operations service (Phase 5I)",
+        "triggers": [
+            "worktrace/services/rule_batch_service.py",
+        ],
+        "tests": [
+            "tests/test_project_rules_batch_operations.py",
             "tests/test_webview_project_rules_bridge.py",
             "tests/test_ui_backend_boundary.py",
         ],
@@ -444,7 +470,7 @@ def _matches_trigger(changed: str, trigger: str) -> bool:
 def select_targets(changed_files: Iterable[str]) -> Selection:
     """Map changed files to a conservative, ordered, de-duplicated test set.
 
-    Sections A..L (C refined into C1..C7 in Phase TG2/5H) are matched against
+    Sections A..L (C refined into C1..C9 in Phase TG2/5H/5I) are matched against
     every non-test changed file. Test-file
     changes (section L) are matched first so the most directly-affected test
     runs first. Unknown ``worktrace/`` source changes (section K) fall back

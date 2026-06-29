@@ -4725,3 +4725,633 @@ def test_bridge_re_exports_5h_message_maps_for_test_compatibility():
     assert _PROJECT_RULE_BACKFILL_MESSAGES["project_not_available"] == "目标项目不可用"
     assert _PROJECT_RULE_BACKFILL_MESSAGES["too_many_matches"] == "命中记录过多，请先缩小范围"
     assert _PROJECT_RULE_BACKFILL_MESSAGES["operation_failed"] == "应用规则失败"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5I: selected-rule batch operations bridge tests
+# ---------------------------------------------------------------------------
+
+
+def test_preview_project_rules_batch_impact_success_returns_narrow_payload(monkeypatch):
+    # Phase 5I regression lock: the batch preview success payload is
+    # ``{"ok": True, "impact": {...}}``. The bridge must project the API
+    # result to a narrow ``impact`` key and never echo extra API fields.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rules_batch_impact",
+        lambda rules: {
+            "ok": True,
+            "impact": {
+                "rules": [
+                    {
+                        "kind": "folder",
+                        "id": 10,
+                        "enabled": True,
+                        "project_id": 5,
+                        "project_name": "Client",
+                        "target": r"D:\Client",
+                        "project_available": True,
+                        "counts": {"matched_count": 3, "would_update_count": 2},
+                    }
+                ],
+                "counts": {"matched_count": 3, "would_update_count": 2},
+                "samples": [
+                    {
+                        "activity_id": 100,
+                        "start_time": "2026-06-28 09:00:00",
+                        "end_time": "2026-06-28 10:00:00",
+                        "duration_seconds": 3600,
+                        "resource_name": "report.docx",
+                        "current_project_name": "未归类",
+                        "target_project_name": "Client",
+                        "match_source": "folder_rule",
+                    }
+                ],
+            },
+            # Defensive: extra API fields must NOT leak to the bridge payload.
+            "projects": [{"id": 1, "name": "should not leak"}],
+            "traceback": "SELECT * FROM activity_log",
+        },
+    )
+
+    result = WebViewBridge().preview_project_rules_batch_impact(
+        [{"rule_type": "folder", "rule_id": 10}]
+    )
+
+    assert result["ok"] is True
+    assert "impact" in result
+    assert "projects" not in result
+    assert "traceback" not in result
+    impact = result["impact"]
+    assert len(impact["rules"]) == 1
+    assert impact["counts"]["would_update_count"] == 2
+    assert len(impact["samples"]) == 1
+    _assert_no_sensitive_tokens(result)
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_preview_project_rules_batch_impact_invalid_input_does_not_call_api(monkeypatch):
+    calls: list[tuple] = []
+
+    def _fail(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("batch preview API must not be called for invalid input")
+
+    monkeypatch.setattr(
+        bridge_module.rule_api, "preview_project_rules_batch_impact", _fail
+    )
+
+    bad_inputs = [
+        "not a list",
+        [],
+        ["not a dict"],
+        [{"rule_type": "unknown", "rule_id": 1}],
+        [{"rule_type": "folder", "rule_id": True}],
+        [{"rule_type": "folder", "rule_id": 0}],
+        [{"rule_type": "folder", "rule_id": -1}],
+        [{"rule_type": "folder", "rule_id": "1"}],
+        [{"rule_type": "folder"}],
+        [{"rule_id": 1}],
+        [None],
+    ]
+    for bad in bad_inputs:
+        result = WebViewBridge().preview_project_rules_batch_impact(bad)
+        assert result == {"ok": False, "error": "操作无效"}, (
+            f"expected invalid_input for {bad!r}, got {result!r}"
+        )
+    assert calls == []
+
+
+def test_preview_project_rules_batch_impact_not_found_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rules_batch_impact",
+        lambda rules: {
+            "ok": False,
+            "error": "not_found",
+            "traceback": "SELECT * FROM folder_project_rule",
+            "details": "C:\\Secret window_title clipboard note",
+        },
+    )
+
+    result = WebViewBridge().preview_project_rules_batch_impact(
+        [{"rule_type": "folder", "rule_id": 999}]
+    )
+
+    assert result == {"ok": False, "error": "规则不存在"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_preview_project_rules_batch_impact_too_many_rules_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rules_batch_impact",
+        lambda rules: {"ok": False, "error": "too_many_rules"},
+    )
+
+    result = WebViewBridge().preview_project_rules_batch_impact(
+        [{"rule_type": "folder", "rule_id": i} for i in range(1, 22)]
+    )
+
+    assert result == {"ok": False, "error": "选择的规则过多"}
+
+
+def test_preview_project_rules_batch_impact_operation_failed_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rules_batch_impact",
+        lambda rules: {"ok": False, "error": "operation_failed"},
+    )
+
+    result = WebViewBridge().preview_project_rules_batch_impact(
+        [{"rule_type": "folder", "rule_id": 1}]
+    )
+
+    assert result == {"ok": False, "error": "批量预览失败"}
+
+
+def test_preview_project_rules_batch_impact_unknown_error_code_collapses(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rules_batch_impact",
+        lambda rules: {"ok": False, "error": "some_new_unknown_code"},
+    )
+
+    result = WebViewBridge().preview_project_rules_batch_impact(
+        [{"rule_type": "folder", "rule_id": 1}]
+    )
+
+    assert result == {"ok": False, "error": "批量预览失败"}
+
+
+def test_preview_project_rules_batch_impact_exception_collapses(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
+
+    monkeypatch.setattr(
+        bridge_module.rule_api, "preview_project_rules_batch_impact", _raise
+    )
+
+    result = WebViewBridge().preview_project_rules_batch_impact(
+        [{"rule_type": "folder", "rule_id": 1}]
+    )
+
+    assert result == {"ok": False, "error": "批量预览失败"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_backfill_project_rules_batch_success_returns_narrow_payload(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {
+            "ok": True,
+            "result": {
+                "rules": [
+                    {
+                        "rule": {"kind": "folder", "id": 10, "enabled": True, "project_id": 5, "project_name": "Client", "target": r"D:\Client"},
+                        "counts": {"updated_count": 2, "collision_skipped_count": 0},
+                    }
+                ],
+                "counts": {"updated_count": 2, "collision_skipped_count": 0},
+                "too_many_matches": False,
+            },
+            # Extra fields must NOT leak.
+            "projects": [{"id": 1, "name": "should not leak"}],
+            "traceback": "SELECT * FROM activity_log",
+        },
+    )
+
+    result = WebViewBridge().backfill_project_rules_batch(
+        [{"rule_type": "folder", "rule_id": 10}]
+    )
+
+    assert result["ok"] is True
+    assert "result" in result
+    assert "projects" not in result
+    assert "traceback" not in result
+    assert result["result"]["counts"]["updated_count"] == 2
+    _assert_no_sensitive_tokens(result)
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_backfill_project_rules_batch_invalid_input_does_not_call_api(monkeypatch):
+    calls: list[tuple] = []
+
+    def _fail(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("batch apply API must not be called for invalid input")
+
+    monkeypatch.setattr(
+        bridge_module.rule_api, "backfill_project_rules_batch", _fail
+    )
+
+    for bad in ("not a list", [], [None], [{"rule_type": "folder", "rule_id": True}]):
+        result = WebViewBridge().backfill_project_rules_batch(bad)
+        assert result == {"ok": False, "error": "操作无效"}
+    assert calls == []
+
+
+def test_backfill_project_rules_batch_not_found_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {"ok": False, "error": "not_found"},
+    )
+
+    result = WebViewBridge().backfill_project_rules_batch(
+        [{"rule_type": "folder", "rule_id": 999}]
+    )
+
+    assert result == {"ok": False, "error": "规则不存在"}
+
+
+def test_backfill_project_rules_batch_too_many_rules_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {"ok": False, "error": "too_many_rules"},
+    )
+
+    result = WebViewBridge().backfill_project_rules_batch(
+        [{"rule_type": "folder", "rule_id": i} for i in range(1, 22)]
+    )
+
+    assert result == {"ok": False, "error": "选择的规则过多"}
+
+
+def test_backfill_project_rules_batch_rule_disabled_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {"ok": False, "error": "rule_disabled"},
+    )
+
+    result = WebViewBridge().backfill_project_rules_batch(
+        [{"rule_type": "folder", "rule_id": 1}]
+    )
+
+    assert result == {"ok": False, "error": "存在未启用规则，无法应用"}
+
+
+def test_backfill_project_rules_batch_project_not_available_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {"ok": False, "error": "project_not_available"},
+    )
+
+    result = WebViewBridge().backfill_project_rules_batch(
+        [{"rule_type": "folder", "rule_id": 1}]
+    )
+
+    assert result == {"ok": False, "error": "存在目标项目不可用的规则"}
+
+
+def test_backfill_project_rules_batch_too_many_matches_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {"ok": False, "error": "too_many_matches"},
+    )
+
+    result = WebViewBridge().backfill_project_rules_batch(
+        [{"rule_type": "folder", "rule_id": 1}]
+    )
+
+    assert result == {"ok": False, "error": "命中记录过多，请先缩小范围"}
+
+
+def test_backfill_project_rules_batch_operation_failed_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {"ok": False, "error": "operation_failed"},
+    )
+
+    result = WebViewBridge().backfill_project_rules_batch(
+        [{"rule_type": "folder", "rule_id": 1}]
+    )
+
+    assert result == {"ok": False, "error": "批量应用失败"}
+
+
+def test_backfill_project_rules_batch_unknown_error_code_collapses(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {"ok": False, "error": "some_new_unknown_code"},
+    )
+
+    result = WebViewBridge().backfill_project_rules_batch(
+        [{"rule_type": "folder", "rule_id": 1}]
+    )
+
+    assert result == {"ok": False, "error": "批量应用失败"}
+
+
+def test_backfill_project_rules_batch_exception_collapses(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
+
+    monkeypatch.setattr(
+        bridge_module.rule_api, "backfill_project_rules_batch", _raise
+    )
+
+    result = WebViewBridge().backfill_project_rules_batch(
+        [{"rule_type": "folder", "rule_id": 1}]
+    )
+
+    assert result == {"ok": False, "error": "批量应用失败"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_set_project_rules_batch_enabled_success_returns_narrow_payload(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rules_batch_enabled",
+        lambda rules, enabled: {
+            "ok": True,
+            "result": {
+                "rules": [
+                    {"kind": "folder", "id": 10, "enabled": True, "project_id": 5, "project_name": "Client", "target": r"D:\Client"}
+                ],
+                "enabled": True,
+                "count": 1,
+            },
+            # Extra fields must NOT leak.
+            "projects": [{"id": 1, "name": "should not leak"}],
+            "traceback": "SELECT * FROM folder_project_rule",
+        },
+    )
+
+    result = WebViewBridge().set_project_rules_batch_enabled(
+        [{"rule_type": "folder", "rule_id": 10}], True
+    )
+
+    assert result["ok"] is True
+    assert "result" in result
+    assert "projects" not in result
+    assert "traceback" not in result
+    assert result["result"]["enabled"] is True
+    assert result["result"]["count"] == 1
+    _assert_no_sensitive_tokens(result)
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_set_project_rules_batch_enabled_invalid_input_does_not_call_api(monkeypatch):
+    calls: list[tuple] = []
+
+    def _fail(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("batch toggle API must not be called for invalid input")
+
+    monkeypatch.setattr(
+        bridge_module.rule_api, "set_project_rules_batch_enabled", _fail
+    )
+
+    # Invalid rules
+    for bad in ("not a list", [], [None], [{"rule_type": "folder", "rule_id": True}]):
+        result = WebViewBridge().set_project_rules_batch_enabled(bad, True)
+        assert result == {"ok": False, "error": "操作无效"}
+    # Valid rules but invalid enabled (non-bool)
+    valid_rules = [{"rule_type": "folder", "rule_id": 1}]
+    for bad_enabled in (1, 0, "true", None, []):
+        result = WebViewBridge().set_project_rules_batch_enabled(valid_rules, bad_enabled)
+        assert result == {"ok": False, "error": "操作无效"}
+    assert calls == []
+
+
+def test_set_project_rules_batch_enabled_not_found_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rules_batch_enabled",
+        lambda rules, enabled: {"ok": False, "error": "not_found"},
+    )
+
+    result = WebViewBridge().set_project_rules_batch_enabled(
+        [{"rule_type": "folder", "rule_id": 999}], True
+    )
+
+    assert result == {"ok": False, "error": "规则不存在"}
+
+
+def test_set_project_rules_batch_enabled_too_many_rules_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rules_batch_enabled",
+        lambda rules, enabled: {"ok": False, "error": "too_many_rules"},
+    )
+
+    result = WebViewBridge().set_project_rules_batch_enabled(
+        [{"rule_type": "folder", "rule_id": i} for i in range(1, 22)], True
+    )
+
+    assert result == {"ok": False, "error": "选择的规则过多"}
+
+
+def test_set_project_rules_batch_enabled_operation_failed_maps_to_chinese(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rules_batch_enabled",
+        lambda rules, enabled: {"ok": False, "error": "operation_failed"},
+    )
+
+    result = WebViewBridge().set_project_rules_batch_enabled(
+        [{"rule_type": "folder", "rule_id": 1}], True
+    )
+
+    assert result == {"ok": False, "error": "批量操作失败"}
+
+
+def test_set_project_rules_batch_enabled_unknown_error_code_collapses(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rules_batch_enabled",
+        lambda rules, enabled: {"ok": False, "error": "some_new_unknown_code"},
+    )
+
+    result = WebViewBridge().set_project_rules_batch_enabled(
+        [{"rule_type": "folder", "rule_id": 1}], True
+    )
+
+    assert result == {"ok": False, "error": "批量操作失败"}
+
+
+def test_set_project_rules_batch_enabled_exception_collapses(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
+
+    monkeypatch.setattr(
+        bridge_module.rule_api, "set_project_rules_batch_enabled", _raise
+    )
+
+    result = WebViewBridge().set_project_rules_batch_enabled(
+        [{"rule_type": "folder", "rule_id": 1}], True
+    )
+
+    assert result == {"ok": False, "error": "批量操作失败"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_automatic_rules_status_success_returns_narrow_payload(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "automatic_rules_status",
+        lambda: {
+            "ok": True,
+            "status": {
+                "supported": True,
+                "scope": "enabled_folder_keyword_rules",
+                "priority": "folder_before_keyword",
+                "confidence": {"folder_rule": 85, "keyword_rule": 80},
+            },
+            # Extra fields must NOT leak.
+            "projects": [{"id": 1, "name": "should not leak"}],
+            "traceback": "SELECT * FROM project",
+        },
+    )
+
+    result = WebViewBridge().automatic_rules_status()
+
+    assert result["ok"] is True
+    assert "status" in result
+    assert "projects" not in result
+    assert "traceback" not in result
+    assert result["status"]["supported"] is True
+    _assert_no_sensitive_tokens(result)
+    json.dumps(result, ensure_ascii=False)
+
+
+def test_automatic_rules_status_exception_collapses(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
+
+    monkeypatch.setattr(bridge_module.rule_api, "automatic_rules_status", _raise)
+
+    result = WebViewBridge().automatic_rules_status()
+
+    assert result == {"ok": False, "error": "加载自动规则状态失败"}
+    _assert_no_sensitive_tokens(result)
+
+
+def test_batch_bridge_methods_do_not_cross_call_other_apis(monkeypatch):
+    # Phase 5I regression lock: each batch bridge method must only call its
+    # own API facade. They must not invoke other Project Rules APIs.
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rules_batch_impact",
+        lambda rules: {"ok": True, "impact": {"rules": [], "counts": {}, "samples": []}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {"ok": True, "result": {"rules": [], "counts": {"updated_count": 0}}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rules_batch_enabled",
+        lambda rules, enabled: {"ok": True, "result": {"rules": [], "enabled": True, "count": 0}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "automatic_rules_status",
+        lambda: {"ok": True, "status": {"supported": True}},
+    )
+
+    forbidden_calls: list[str] = []
+
+    def make_forbidden(name: str):
+        def _fail(*args, **kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(name + " must not be called by 5I batch paths")
+
+        return _fail
+
+    for name in (
+        "set_project_rule_enabled",
+        "create_keyword_rule",
+        "create_or_update_folder_rule",
+        "set_keyword_rule_enabled",
+        "set_folder_rule_enabled",
+        "delete_keyword_rule",
+        "delete_folder_rule",
+        "preview_folder_rule_conflicts",
+        "backfill_folder_rule",
+        "preview_project_rule_impact",
+        "backfill_project_rule",
+    ):
+        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+
+    valid_rules = [{"rule_type": "folder", "rule_id": 1}]
+    assert WebViewBridge().preview_project_rules_batch_impact(valid_rules)["ok"] is True
+    assert WebViewBridge().backfill_project_rules_batch(valid_rules)["ok"] is True
+    assert WebViewBridge().set_project_rules_batch_enabled(valid_rules, True)["ok"] is True
+    assert WebViewBridge().automatic_rules_status()["ok"] is True
+    assert forbidden_calls == []
+
+
+def test_batch_bridge_payloads_are_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "preview_project_rules_batch_impact",
+        lambda rules: {"ok": True, "impact": {"rules": [], "counts": {}, "samples": []}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "backfill_project_rules_batch",
+        lambda rules: {"ok": True, "result": {"rules": [], "counts": {"updated_count": 0}}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "set_project_rules_batch_enabled",
+        lambda rules, enabled: {"ok": True, "result": {"rules": [], "enabled": True, "count": 0}},
+    )
+    monkeypatch.setattr(
+        bridge_module.rule_api,
+        "automatic_rules_status",
+        lambda: {"ok": True, "status": {"supported": True}},
+    )
+
+    valid_rules = [{"rule_type": "folder", "rule_id": 1}]
+    preview = WebViewBridge().preview_project_rules_batch_impact(valid_rules)
+    apply = WebViewBridge().backfill_project_rules_batch(valid_rules)
+    toggle = WebViewBridge().set_project_rules_batch_enabled(valid_rules, True)
+    status = WebViewBridge().automatic_rules_status()
+
+    json.dumps(preview, ensure_ascii=False)
+    json.dumps(apply, ensure_ascii=False)
+    json.dumps(toggle, ensure_ascii=False)
+    json.dumps(status, ensure_ascii=False)
+    assert preview["ok"] is True
+    assert apply["ok"] is True
+    assert toggle["ok"] is True
+    assert status["ok"] is True
+
+
+def test_bridge_re_exports_5i_batch_message_maps_for_test_compatibility():
+    # Phase 5I regression lock: ``bridge.py`` must re-export the 3 batch
+    # message maps so tests importing from ``bridge`` continue to work.
+    from worktrace.webview_ui.bridge import (
+        _PROJECT_RULE_BATCH_PREVIEW_MESSAGES,
+        _PROJECT_RULE_BATCH_APPLY_MESSAGES,
+        _PROJECT_RULE_BATCH_TOGGLE_MESSAGES,
+    )
+
+    assert _PROJECT_RULE_BATCH_PREVIEW_MESSAGES["invalid_input"] == "操作无效"
+    assert _PROJECT_RULE_BATCH_PREVIEW_MESSAGES["not_found"] == "规则不存在"
+    assert _PROJECT_RULE_BATCH_PREVIEW_MESSAGES["too_many_rules"] == "选择的规则过多"
+    assert _PROJECT_RULE_BATCH_PREVIEW_MESSAGES["operation_failed"] == "批量预览失败"
+
+    assert _PROJECT_RULE_BATCH_APPLY_MESSAGES["invalid_input"] == "操作无效"
+    assert _PROJECT_RULE_BATCH_APPLY_MESSAGES["not_found"] == "规则不存在"
+    assert _PROJECT_RULE_BATCH_APPLY_MESSAGES["too_many_rules"] == "选择的规则过多"
+    assert _PROJECT_RULE_BATCH_APPLY_MESSAGES["rule_disabled"] == "存在未启用规则，无法应用"
+    assert _PROJECT_RULE_BATCH_APPLY_MESSAGES["project_not_available"] == "存在目标项目不可用的规则"
+    assert _PROJECT_RULE_BATCH_APPLY_MESSAGES["too_many_matches"] == "命中记录过多，请先缩小范围"
+    assert _PROJECT_RULE_BATCH_APPLY_MESSAGES["operation_failed"] == "批量应用失败"
+
+    assert _PROJECT_RULE_BATCH_TOGGLE_MESSAGES["invalid_input"] == "操作无效"
+    assert _PROJECT_RULE_BATCH_TOGGLE_MESSAGES["not_found"] == "规则不存在"
+    assert _PROJECT_RULE_BATCH_TOGGLE_MESSAGES["too_many_rules"] == "选择的规则过多"
+    assert _PROJECT_RULE_BATCH_TOGGLE_MESSAGES["operation_failed"] == "批量操作失败"

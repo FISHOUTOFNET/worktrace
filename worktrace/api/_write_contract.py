@@ -49,6 +49,8 @@ ERROR_OPERATION_FAILED = "operation_failed"
 ERROR_RULE_DISABLED = "rule_disabled"
 ERROR_PROJECT_NOT_AVAILABLE = "project_not_available"
 ERROR_TOO_MANY_MATCHES = "too_many_matches"
+# Phase 5I: selected-rule batch operations stable code.
+ERROR_TOO_MANY_RULES = "too_many_rules"
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +143,7 @@ __all__ = [
     "ERROR_RULE_DISABLED",
     "ERROR_SYSTEM_PROJECT",
     "ERROR_TOO_MANY_MATCHES",
+    "ERROR_TOO_MANY_RULES",
     "fail_payload",
     "ok_payload",
     "valid_bool",

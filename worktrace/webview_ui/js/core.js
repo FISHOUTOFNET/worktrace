@@ -145,6 +145,23 @@
     App.rulesImpactPreviewKey = null;
     App.rulesImpactPreviewData = null;
 
+    // --- Phase 5I: selected-rule batch operations state ----------------
+    // Separate from all rule write states (5B toggle, 5C keyword create,
+    // 5D keyword delete, 5E folder CRUD, 5F keyword edit, 5G project
+    // lifecycle, 5H single-rule preview / backfill) so batch operations
+    // can never pollute any other write button / input disabled state.
+    // ``rulesBatchSelectedKeys`` is an object map of selected rule keys
+    // ("<kind>:<id>" -> true) kept in JS memory only (no browser storage
+    // APIs). ``rulesBatchInFlight`` is true while any batch
+    // operation (preview / apply / enable / disable) is running; while
+    // true, every batch button AND every per-rule write button is disabled.
+    // ``rulesBatchPanelData`` caches the last batch panel payload
+    // ({mode: "preview"|"apply"|"toggle", payload: {...}} | null) so the
+    // panel can be re-rendered from cache without a round-trip.
+    App.rulesBatchSelectedKeys = {};
+    App.rulesBatchInFlight = false;
+    App.rulesBatchPanelData = null;
+
     // --- Phase 3C: Unified Timeline status semantics -------------------
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",

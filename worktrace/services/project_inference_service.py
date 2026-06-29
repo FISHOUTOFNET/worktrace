@@ -45,6 +45,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
                 WHERE pr.enabled = 1
                   AND pr.rule_type = 'keyword'
                   AND p.enabled = 1
+                  AND p.is_archived = 0
                   AND p.name <> ?
                 ORDER BY pr.created_at, pr.id
                 """,
@@ -59,6 +60,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
             WHERE pr.enabled = 1
               AND pr.rule_type = 'keyword'
               AND p.enabled = 1
+              AND p.is_archived = 0
               AND p.name <> ?
             ORDER BY pr.created_at, pr.id
             """,
@@ -131,6 +133,27 @@ def backfill_missing_assignments() -> None:
 
 
 def process_new_activity(activity_id: int) -> dict:
+    """Automatic-rules entry point called by ``finalize_created_activity``.
+
+    Phase 5I: this is the automatic-specific hook. It applies narrow skip
+    guards for hidden / deleted / in-progress activities BEFORE delegating
+    to ``assign_project_for_activity``, so the automatic-rules contract
+    only touches closed, visible, non-deleted activities. The general
+    ``assign_project_for_activity`` function is unchanged — manual
+    reclassification, rule application, and backfill can still touch these
+    activities when explicitly requested by the caller.
+    """
+    with get_connection() as conn:
+        activity = conn.execute(
+            "SELECT is_hidden, is_deleted, end_time FROM activity_log WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        if not activity:
+            raise ValueError(f"activity not found: {activity_id}")
+        if int(activity["is_hidden"] or 0) or int(activity["is_deleted"] or 0):
+            return _assignment_dict(conn, activity_id)
+        if activity["end_time"] is None:
+            return _assignment_dict(conn, activity_id)
     return assign_project_for_activity(activity_id)
 
 

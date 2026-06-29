@@ -4536,3 +4536,220 @@ def test_project_rules_impact_buttons_disabled_during_other_writes():
         assert key in row_body, (
             "renderProjectRuleRow impact section must reference " + key
         )
+
+
+# --- Phase 5I: selected-rule batch operations static contract ------------
+
+
+def test_project_rules_batch_dom_ids_exist():
+    # Phase 5I: the rules section must contain the batch toolbar and
+    # batch panel container divs. The toolbar holds the selected count +
+    # action buttons; the panel holds aggregate counts + per-rule
+    # summaries. Both are populated dynamically by JS.
+    section = _rules_section()
+    for dom_id in ("rules-batch-toolbar", "rules-batch-panel"):
+        assert 'id="' + dom_id + '"' in section, (
+            "Project Rules page must contain batch anchor: " + dom_id
+        )
+
+
+def test_project_rules_batch_toolbar_and_panel_are_hidden_by_default():
+    # Phase 5I: both batch containers must be hidden by default in the
+    # static HTML. The toolbar / panel content is rendered dynamically by
+    # rules_render.js / rules_rule_actions.js, so the static divs ship
+    # empty with the ``hidden`` attribute.
+    section = _rules_section()
+    for dom_id in ("rules-batch-toolbar", "rules-batch-panel"):
+        needle = 'id="' + dom_id + '"'
+        pos = section.find(needle)
+        assert pos != -1, "batch container missing: " + dom_id
+        tag_end = section.find(">", pos)
+        assert tag_end != -1, "batch container tag unclosed: " + dom_id
+        assert " hidden" in section[pos:tag_end], (
+            "batch container must be hidden by default: " + dom_id
+        )
+
+
+def test_project_rules_batch_static_button_count_unchanged():
+    # Phase 5I regression lock: the batch toolbar buttons are rendered
+    # dynamically by ``renderProjectRulesBatchToolbar`` (JS), so the static
+    # button count in the rules section must remain exactly three (project
+    # create submit + keyword create submit + folder create submit). No
+    # batch button may leak into the static HTML.
+    import re as _re
+
+    section = _rules_section()
+    buttons = _re.findall(r"<button[^>]*>", section, _re.IGNORECASE)
+    assert len(buttons) == 3, (
+        "Project Rules page must still have exactly three static buttons "
+        "after Phase 5I; found: " + repr(buttons)
+    )
+    button_ids = [_re.search(r'id="([^"]+)"', b) for b in buttons]
+    button_ids = [m.group(1) for m in button_ids if m]
+    assert "rules-project-create-submit" in button_ids
+    assert "rules-keyword-create-submit" in button_ids
+    assert "rules-folder-create-submit" in button_ids
+
+def test_project_rules_core_js_declares_batch_state_variables():
+    # Phase 5I: core.js must declare the three batch state variables so
+    # the batch surface has its own JS-memory state distinct from the
+    # single-rule write states.
+    source = read_js("core.js")
+    assert "App.rulesBatchSelectedKeys = {}" in source
+    assert "App.rulesBatchInFlight = false" in source
+    assert "App.rulesBatchPanelData = null" in source
+
+
+def test_project_rules_js_calls_batch_bridge_methods():
+    # Phase 5I: the batch handlers must call the new batch bridge methods.
+    # These are ALLOWED batch bridges and are NOT in
+    # PROJECT_RULE_WRITE_METHODS (preview / backfill / set-enabled are the
+    # batch equivalents of the single-rule impact / backfill / toggle
+    # bridges).
+    source = read_rules_module_js()
+    assert 'callBridge("preview_project_rules_batch_impact"' in source
+    assert 'callBridge("backfill_project_rules_batch"' in source
+    assert 'callBridge("set_project_rules_batch_enabled"' in source
+    # The new batch bridges must NOT be classified as forbidden write
+    # methods -- they are explicitly allowed.
+    for method in (
+        "preview_project_rules_batch_impact",
+        "backfill_project_rules_batch",
+        "set_project_rules_batch_enabled",
+    ):
+        assert method not in PROJECT_RULE_WRITE_METHODS, (
+            "batch bridge method must be allowed (not in "
+            "PROJECT_RULE_WRITE_METHODS): " + method
+        )
+
+
+def test_project_rules_batch_handlers_no_forbidden_tokens():
+    # Phase 5I regression lock: the batch handler functions in
+    # rules_rule_actions.js must not reintroduce any forbidden camelCase
+    # handler tokens (including ``automaticRules``).
+    source = read_js("rules_rule_actions.js")
+    batch_functions = (
+        "bindProjectRuleBatchEvents",
+        "handleProjectRuleBatchCheckboxChange",
+        "handleProjectRuleBatchToolbarClick",
+        "handleProjectRuleBatchPanelClick",
+        "getProjectRulesBatchSelectedRules",
+        "clearProjectRulesBatchSelection",
+        "handleProjectRulesBatchClear",
+        "setProjectRulesBatchInFlight",
+        "refreshProjectRulesBatchToolbar",
+        "showProjectRulesBatchPanel",
+        "clearProjectRulesBatchPanel",
+        "handleProjectRulesBatchPreview",
+        "handleProjectRulesBatchApply",
+        "handleProjectRulesBatchToggle",
+    )
+    for name in batch_functions:
+        body = func_body(source, name)
+        for token in FORBIDDEN_RULES_JS_HANDLER_TOKENS:
+            assert token not in body, (
+                "batch handler " + name
+                + " must not contain forbidden handler token: " + token
+            )
+
+
+def test_project_rules_batch_apply_confirm_text():
+    # Phase 5I regression lock: the batch apply confirm dialog must warn
+    # the user that manually edited records are preserved and that
+    # excessively large hit sets are not written.
+    source = read_rules_module_js()
+    body = func_body(source, "handleProjectRulesBatchApply")
+    assert "window.confirm" in body
+    assert "手动修改过的记录不会被覆盖" in body
+    assert "命中记录过多时不会写入" in body
+
+def test_project_rules_batch_state_isolated_from_other_write_states():
+    # Phase 5I regression lock: ``rulesBatchInFlight`` must be a separate
+    # state variable from every other rule write-state variable so batch
+    # operations cannot pollute single-rule write paths (and vice versa).
+    source = read_js("core.js")
+    assert "App.rulesBatchInFlight = false" in source
+    other_write_states = (
+        "App.rulesSavingRuleKey",
+        "App.rulesCreatingKeyword",
+        "App.rulesDeletingRuleKey",
+        "App.rulesEditingKeywordKey",
+        "App.rulesUpdatingKeywordKey",
+        "App.rulesCreatingFolder",
+        "App.rulesEditingFolderKey",
+        "App.rulesDeletingFolderKey",
+        "App.rulesCreatingProject",
+        "App.rulesEditingProjectId",
+        "App.rulesUpdatingProjectId",
+        "App.rulesPreviewingImpactKey",
+        "App.rulesBackfillingRuleKey",
+    )
+    for var in other_write_states:
+        assert var in source, (
+            "core.js must declare write-state variable: " + var
+        )
+        # Each write-state variable must be a distinct identifier from the
+        # batch in-flight flag (no aliasing / name reuse).
+        assert var != "App.rulesBatchInFlight"
+    # The batch in-flight flag must not be aliased to any other App state.
+    assert "App.rulesBatchInFlight = App." not in source
+
+
+def test_project_rules_batch_css_classes_exist():
+    # Phase 5I: styles.css must define every batch CSS class used by the
+    # render module (toolbar / buttons / panel / per-rule summary / row
+    # selection highlight / checkbox / close button).
+    css = read_resource("styles.css")
+    for cls in (
+        ".rules-batch-toolbar",
+        ".rules-batch-toolbar-inner",
+        ".rules-batch-selected-count",
+        ".rules-batch-preview-button",
+        ".rules-batch-apply-button",
+        ".rules-batch-enable-button",
+        ".rules-batch-disable-button",
+        ".rules-batch-clear-button",
+        ".rules-batch-panel",
+        ".rules-batch-rule-summary",
+        ".rules-batch-rule-head",
+        ".rules-batch-rule-counts",
+        ".rules-batch-rules-list",
+        ".rules-batch-checkbox",
+        ".rules-row.is-batch-selected",
+        ".rules-batch-panel-close-button",
+    ):
+        assert cls in css, "styles.css must define batch class: " + cls
+
+
+def test_project_rules_batch_hidden_css_rules_exist():
+    # Phase 5I: styles.css must define ``[hidden]`` rules for both batch
+    # containers so they are fully suppressed (display: none) when the
+    # ``hidden`` attribute is set on the static divs.
+    css = read_resource("styles.css")
+    assert ".rules-batch-toolbar[hidden]" in css, (
+        "styles.css must define .rules-batch-toolbar[hidden] rule"
+    )
+    assert ".rules-batch-panel[hidden]" in css, (
+        "styles.css must define .rules-batch-panel[hidden] rule"
+    )
+
+
+def test_project_rules_script_order_preserved_with_batch():
+    # Phase 5I regression lock: no new JS file was added for the batch
+    # logic (it lives in the existing split modules). The script load
+    # order in index.html must still match ALL_JS_FILES exactly, in order.
+    source = read_resource("index.html")
+    positions = []
+    for name in ALL_JS_FILES:
+        needle = 'src="js/' + name + '"'
+        pos = source.find(needle)
+        assert pos != -1, "index.html must include script: " + name
+        positions.append(pos)
+    # Positions must be strictly increasing (correct load order).
+    for i in range(1, len(positions)):
+        assert positions[i] > positions[i - 1], (
+            "script load order broken around: " + ALL_JS_FILES[i]
+        )
+    # No dedicated batch JS module was introduced.
+    assert "rules_batch_actions.js" not in source
+    assert "rules_batch_actions.js" not in ALL_JS_FILES
