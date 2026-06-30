@@ -1328,6 +1328,8 @@ EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
     "toggle_pause",
     "get_overview",
     "get_recent_activities",
+    # Phase 6H-followup: lightweight refresh-state for the heartbeat.
+    "get_refresh_state",
     # first-run / settings / privacy
     "get_first_run_notice",
     "accept_first_run_notice",

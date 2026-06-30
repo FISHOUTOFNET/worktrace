@@ -24,6 +24,7 @@ import re
 from typing import Any
 
 from ..api import timeline_api
+from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..formatters import format_duration, format_safe_display_name
 
 # The generic bridge-level error payload. Every mixin method that catches
@@ -138,9 +139,24 @@ def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     (elapsed + extra) at the moment the backend built the snapshot; the ticker
     adds ``(now - snapshot_at)`` only when the activity is running (not
     paused / not idle).
+
+    Phase 6H-followup: also returns the display-safe structural fields
+    ``status``, ``is_persisted``, ``project_name`` and ``persisted_activity_id``
+    so Overview / Recent / Timeline can apply a unified live-projection
+    decision without re-reading the raw snapshot. No raw ``window_title``,
+    ``file_path_hint``, ``note`` or ``clipboard`` field is surfaced.
     """
     if not snapshot:
-        return {"active": False, "display": "无", "elapsed_seconds": 0, "is_paused": False}
+        return {
+            "active": False,
+            "display": "无",
+            "elapsed_seconds": 0,
+            "is_paused": False,
+            "status": "",
+            "is_persisted": False,
+            "project_name": "",
+            "persisted_activity_id": 0,
+        }
     name = (
         snapshot.get("resource_display_name")
         or snapshot.get("activity_display_name")
@@ -158,12 +174,126 @@ def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     is_paused = snapshot.get("status") == "paused"
     if snapshot.get("status") == "idle":
         name = "空闲中"
+    persisted_id = timeline_api.get_snapshot_persisted_id(snapshot) or 0
     return {
         "active": True,
         "display": f"{name}｜{project}｜{elapsed}｜{state}",
         "elapsed_seconds": int(elapsed_seconds),
         "is_paused": bool(is_paused),
+        "status": str(snapshot.get("status") or ""),
+        "is_persisted": bool(snapshot.get("is_persisted")),
+        "project_name": str(snapshot.get("inferred_project_name") or ""),
+        "persisted_activity_id": int(persisted_id or 0),
     }
+
+
+def _can_live_project_snapshot(
+    snapshot: dict[str, Any] | None,
+    report_date: str | None,
+    today: str | None,
+) -> bool:
+    """Return ``True`` iff the current snapshot is eligible for display
+    projection on the given report date.
+
+    The unified projection contract (Phase 6H-followup). Recent, Timeline
+    session list, and Timeline detail projection must all use this helper
+    so they apply the same eligibility rule. Projection is purely a UI
+    overlay; it never writes the DB or changes collector persistence
+    logic. The 30-second short-activity buffer is preserved.
+
+    Eligibility (all must hold):
+    - snapshot exists;
+    - snapshot ``status == "normal"`` (excludes idle / paused / excluded / error);
+    - snapshot is not persisted;
+    - ``persisted_activity_id`` is empty / 0;
+    - elapsed + extra seconds > 0;
+    - the report date equals today (historical dates are not projected).
+
+    The function only reads the snapshot dict and the date strings; it does
+    not import services / db / collector / runtime / config / security.
+    """
+    if not snapshot:
+        return False
+    if str(snapshot.get("status") or "") != STATUS_NORMAL:
+        return False
+    if bool(snapshot.get("is_persisted")):
+        return False
+    if timeline_api.get_snapshot_persisted_id(snapshot):
+        return False
+    elapsed = (
+        (timeline_api.get_snapshot_elapsed_seconds(snapshot) or 0)
+        + (timeline_api.get_snapshot_extra_seconds(snapshot) or 0)
+    )
+    if elapsed <= 0:
+        return False
+    if not report_date or not today:
+        return False
+    return report_date == today
+
+
+def _snapshot_live_projected_seconds(snapshot: dict[str, Any] | None) -> int:
+    """Return the snapshot's live projected seconds at the moment the
+    backend built the payload. The frontend adds ``(now - snapshot_at)``
+    on top of this baseline. Pure helper; does not read services / db.
+    """
+    if not snapshot:
+        return 0
+    return int(
+        (timeline_api.get_snapshot_elapsed_seconds(snapshot) or 0)
+        + (timeline_api.get_snapshot_extra_seconds(snapshot) or 0)
+    )
+
+
+def _find_live_projection_target(
+    sessions: list[dict[str, Any]],
+    snapshot: dict[str, Any] | None,
+    report_date: str | None,
+    today: str | None,
+) -> tuple[int, int] | None:
+    """Find the session index that should receive the live projection and
+    the projection seconds to add.
+
+    Returns ``(index, projected_seconds)`` or ``None`` when projection
+    does not apply.
+
+    Rules:
+    - If the snapshot is not live-projectable (see ``_can_live_project_snapshot``)
+      return ``None``.
+    - If any session already has ``is_in_progress == True`` the real live
+      session already carries the live duration; return ``None`` to avoid
+      double counting.
+    - Otherwise pick the most recent session whose ``status`` is
+      ``STATUS_NORMAL`` (sessions are sorted by start_time DESC, so the
+      first normal session encountered is the most recent). idle / paused /
+      excluded / error / mixed sessions are skipped.
+    - If no normal session exists, return ``None`` (no row to project onto).
+    - The returned ``projected_seconds`` is the backend response-time
+      baseline; the frontend may only add the wall-clock delta on top.
+
+    Pure helper; does not read services / db. Idle / paused / excluded /
+    error sessions never receive projection time.
+    """
+    if not _can_live_project_snapshot(snapshot, report_date, today):
+        return None
+    for s in sessions:
+        if bool(s.get("is_in_progress")):
+            return None
+    projected_seconds = _snapshot_live_projected_seconds(snapshot)
+    if projected_seconds <= 0:
+        return None
+    for i, s in enumerate(sessions):
+        if str(s.get("status") or "") == STATUS_NORMAL:
+            return (i, projected_seconds)
+    return None
+
+
+def _normalize_project_name(name: str | None) -> str:
+    """Normalize a project name for projection-target matching. Empty or
+    whitespace-only names map to ``UNCATEGORIZED_PROJECT`` so an unnamed
+    current activity aligns with the ``未归类`` session row.
+    """
+    s = str(name or "").strip()
+    return s if s else UNCATEGORIZED_PROJECT
 
 
 def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
@@ -239,8 +369,12 @@ __all__ = [
     "_DATE_SHAPE_RE",
     "_GENERIC_ERROR",
     "_RECENT_LIMIT",
+    "_can_live_project_snapshot",
     "_coerce_activity_ids",
+    "_find_live_projection_target",
+    "_normalize_project_name",
     "_safe_resource_display_name",
+    "_snapshot_live_projected_seconds",
     "_snapshot_summary",
     "_statistics_summary_payload",
     "_validate_datetime_inputs",

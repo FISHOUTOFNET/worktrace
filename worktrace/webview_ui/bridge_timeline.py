@@ -37,6 +37,7 @@ from .bridge_common import (
     _DATE_SHAPE_RE,
     _GENERIC_ERROR,
     _coerce_activity_ids,
+    _find_live_projection_target,
     _safe_resource_display_name,
     _snapshot_summary,
     _validate_datetime_inputs,
@@ -157,6 +158,18 @@ class TimelineBridgeMixin:
         ``today_total_seconds`` only reflects this date's sessions; the
         ticker only increments it when the viewed date is today AND the
         current activity is running.
+
+        Phase 6H-followup: each session now carries an explicit
+        ``is_live_projected`` flag. When the viewed date is today AND the
+        current snapshot is live-projectable AND no real ``is_in_progress``
+        session exists, the most recent *normal* session receives the
+        projection baseline in ``duration_seconds`` / ``duration`` and is
+        marked ``is_live_projected = true``. The top-level payload carries
+        ``live_projected_session_id`` and ``live_projected_seconds`` so the
+        frontend heartbeat can append the wall-clock delta without a
+        bridge round-trip. Historical dates are never projected. The DB
+        and collector are untouched; the 30-second persistence threshold
+        is preserved.
         """
         try:
             report_date = date or timeline_api.get_default_report_date()
@@ -168,11 +181,22 @@ class TimelineBridgeMixin:
             total_seconds = sum(s.get("duration_seconds") or 0 for s in sessions_raw)
             snapshot = settings_api.get_current_activity_snapshot()
             current = _snapshot_summary(snapshot)
+            # Phase 6H-followup: live projection for today only.
+            today = timeline_api.get_default_report_date()
+            target = _find_live_projection_target(sessions_raw, snapshot, report_date, today)
+            target_session_id = ""
+            target_projected_seconds = 0
             sessions: list[dict[str, Any]] = []
-            for session in sessions_raw:
+            for idx, session in enumerate(sessions_raw):
                 start_time = str(session.get("start_time") or "")
                 end_time = str(session.get("end_time") or "")
                 session_seconds = int(session.get("duration_seconds") or 0)
+                is_live_projected = False
+                if target is not None and idx == target[0]:
+                    target_projected_seconds = int(target[1])
+                    session_seconds = session_seconds + target_projected_seconds
+                    is_live_projected = True
+                    target_session_id = str(session.get("session_id") or "")
                 sessions.append(
                     {
                         "session_id": str(session.get("session_id") or ""),
@@ -187,24 +211,43 @@ class TimelineBridgeMixin:
                         "event_count": int(session.get("event_count") or 0),
                         "is_uncategorized": bool(session.get("is_uncategorized")),
                         "is_in_progress": bool(session.get("is_in_progress")),
+                        "is_live_projected": is_live_projected,
                         "activity_ids": list(session.get("activity_ids") or []),
                         "first_activity_id": int(session.get("first_activity_id") or 0) or None,
                         "session_note": str(session.get("session_note") or ""),
                     }
                 )
+            # Include the projection baseline in the totals so the
+            # displayed total matches the sum of session durations at
+            # backend response time. The frontend ticker only adds the
+            # wall-clock delta since ``snapshot_at_epoch_ms`` on top, so
+            # there is no double-counting.
+            display_total_seconds = total_seconds + target_projected_seconds
             return {
                 "ok": True,
                 "date": report_date,
-                "total_duration": format_duration(total_seconds),
-                "total_seconds": total_seconds,
+                "total_duration": format_duration(display_total_seconds),
+                "total_seconds": display_total_seconds,
                 "current_activity": current,
                 "sessions": sessions,
                 # Phase 6G raw seconds + snapshot fields for the 1-second
                 # local ticker. The ticker only updates DOM text; it
                 # never calls a bridge method or writes the DB.
                 "snapshot_at_epoch_ms": int(time.time() * 1000),
-                "today_total_seconds": total_seconds,
+                "today_total_seconds": display_total_seconds,
                 "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
+                # Phase 6H-followup: live projection metadata. When the
+                # viewed date is today AND a target session was found,
+                # ``live_projected_session_id`` is that session's id and
+                # ``live_projected_seconds`` is the backend response-time
+                # baseline. The frontend ticker adds
+                # (now - snapshot_at_epoch_ms) to this baseline and updates
+                # only that session's duration text. Historical dates and
+                # sessions without a projection target get empty / zero
+                # values so the frontend falls back to the real
+                # ``duration_seconds``.
+                "live_projected_session_id": target_session_id,
+                "live_projected_seconds": target_projected_seconds,
             }
         except Exception:
             logger.exception("webview bridge get_timeline failed")
@@ -224,6 +267,15 @@ class TimelineBridgeMixin:
         → ``process_name``) and **never** falls back to the raw
         ``window_title`` column, which can contain file paths, URLs, or email
         subjects. Raw window titles, file paths, and notes are not surfaced.
+
+        Phase 6H-followup: each detail row now carries the raw
+        ``duration_seconds`` baseline so the frontend heartbeat can apply
+        the monotonic projection helper without parsing the formatted
+        ``duration`` string. The bridge deliberately does NOT manufacture a
+        fake activity row for the unpersisted <30s current activity; the
+        frontend temporarily updates the latest detail row's duration text
+        in place using ``live_projected_session_id`` /
+        ``live_projected_seconds`` from ``get_timeline``.
         """
         try:
             ids = [int(aid) for aid in (activity_ids or [])]
@@ -239,12 +291,14 @@ class TimelineBridgeMixin:
             for row in rows:
                 start_time = str(row.get("start_time") or "")
                 end_time = str(row.get("end_time") or "")
+                row_seconds = int(row.get("duration_seconds") or 0)
                 activities.append(
                     {
                         "activity_id": int(row.get("id") or 0),
                         "start_time": start_time,
                         "end_time": end_time,
-                        "duration": format_duration(row.get("duration_seconds") or 0),
+                        "duration": format_duration(row_seconds),
+                        "duration_seconds": row_seconds,
                         "app_name": str(row.get("app_name") or ""),
                         "resource_type": format_resource_type(
                             row.get("resource_kind"),

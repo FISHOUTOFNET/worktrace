@@ -9,25 +9,68 @@
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
     // --- Module-level state (single source of truth across all js modules) ---
+    // Phase 6H-followup: the fixed 8-second full refresh and the independent
+    // 1-second ticker are replaced by a single 1-second heartbeat. The
+    // heartbeat first applies the local ticker (re-renders already-fetched
+    // durations with a wall-clock delta) and then runs a lightweight
+    // ``get_refresh_state`` revision check. Heavy interfaces (get_overview /
+    // get_recent_activities / get_timeline) are only called when the
+    // structural revision changes. ``REFRESH_INTERVAL_MS`` is kept for the
+    // manual refresh button fallback but is no longer used by any timer.
     App.REFRESH_INTERVAL_MS = 8000;
-    // Phase 6G: local 1-second ticker interval. The 8-second refresh is
-    // still the source of truth; this ticker only re-renders already-fetched
-    // durations with a locally-computed elapsed increment.
+    App.HEARTBEAT_INTERVAL_MS = 1000;
     App.LOCAL_TICKER_INTERVAL_MS = 1000;
     App.NOTE_MAX_LENGTH = 2000;
     App.refreshTimer = null;
     App.localTickerTimer = null;
+    App.heartbeatTimer = null;
 
-    // --- Phase 6G: 1-second local ticker state -------------------------
-    // The backend 8-second refresh is the source of truth; the ticker only
-    // re-renders already-fetched durations with a locally-computed elapsed
-    // increment. The ticker ONLY updates DOM text; it never calls a bridge
-    // method, never writes the DB, and never starts / stops the collector.
-    // ``lastOverviewSnapshot`` / ``lastTimelineSnapshot`` are set by
-    // showOverview / showTimeline respectively; the ticker reads them to
-    // compute the live increment. ``lastTimelineData`` already exists for
-    // the timeline page.
+    // --- Phase 6G / 6H-followup: live display state -------------------
+    // The heartbeat's local-ticker phase re-renders already-fetched
+    // durations with a locally-computed elapsed increment. The ticker ONLY
+    // updates DOM text; it never calls a bridge method, never writes the DB,
+    // and never starts / stops the collector. The following snapshots are
+    // set by showOverview / showRecent / showTimeline / renderSessionDetails
+    // respectively and read by the ticker to compute the live increment.
     App.lastOverviewSnapshot = null;
+    // Phase 6H-followup: recent-activities snapshot so the ticker can
+    // increment the live-projected recent item's duration without a bridge
+    // round-trip. Set by showRecent.
+    App.lastRecentSnapshot = null;
+    // Phase 6H-followup: session-details snapshot so the ticker can
+    // increment the live-projected detail row's duration without a bridge
+    // round-trip. Set by renderSessionDetails.
+    App.lastSessionDetailsData = null;
+
+    // --- Phase 6H-followup: heartbeat refresh-state ---------------------
+    // ``lastRefreshState`` caches the last ``get_refresh_state`` payload so
+    // the heartbeat can compare ``refresh_revision`` between ticks.
+    // ``refreshCheckInFlight`` guards against overlapping get_refresh_state
+    // round-trips. ``activePageRefreshInFlight`` guards against overlapping
+    // heavy page-data refreshes triggered by a revision change.
+    // ``lastFullRefreshAtEpochMs`` records the last time a heavy refresh
+    // completed so a future safety net can detect a stalled heartbeat.
+    App.lastRefreshState = null;
+    App.refreshCheckInFlight = false;
+    App.activePageRefreshInFlight = false;
+    App.lastFullRefreshAtEpochMs = 0;
+    // Phase 6H-followup section 8/10: low-frequency collection reconciliation.
+    // Every ``RECONCILE_INTERVAL_MS`` the heartbeat triggers a guarded
+    // ``fullReconcileCollectionViews`` that re-pulls collector status +
+    // Overview + current Timeline so a stalled revision signal cannot
+    // freeze the UI forever. Rules / Settings / Statistics are NOT touched.
+    // The reconciliation skips Timeline re-render when an editor / split /
+    // correction shell is open so the user's input focus is preserved.
+    App.RECONCILE_INTERVAL_MS = 180000;  // 3 minutes (within 2-5 min band)
+    App.lastReconcileAtEpochMs = 0;
+    App.reconcileInFlight = false;
+
+    // --- Phase 6H-followup: monotonic duration render state ------------
+    // Maps a continuity key (e.g. ``"current-activity"``,
+    // ``"session-<id>"``, ``"recent-<index>"``) to the last rendered
+    // seconds. Used by ``renderDurationMonotonic`` to avoid visual rollback
+    // when the new projected seconds are 1-2s less than the DOM value.
+    App._monotonicRenderState = {};
 
     // --- Timeline state -------------------------------------------------
     App.currentPage = "overview";
@@ -466,21 +509,89 @@
     }
     App.formatDuration = formatDuration;
 
-    // --- Phase 6G: 1-second local ticker --------------------------------
-    // ``applyLocalTicker`` is invoked once per second by the timer set up
-    // in init.js. It re-renders already-fetched durations with a locally-
-    // computed elapsed increment so the UI does not freeze for 8 seconds
-    // between backend refreshes. The ticker ONLY updates DOM text; it
-    // never calls a bridge method, never writes the DB, and never starts
-    // / stops the collector. It is a no-op when:
-    //   - the current activity is paused / stopped / idle, or
-    //   - the viewed date is not today (timeline page), or
-    //   - no snapshot has been fetched yet.
-    // The 8-second refresh resets the snapshot baseline so accumulated
-    // drift is bounded to 8s. ``today_total_seconds`` already includes
-    // the current activity's live seconds (the backend summary is built
-    // with ``include_live=True``); the ticker adds the delta to BOTH the
-    // total and the current activity elapsed to avoid double-counting.
+    // --- Phase 6H-followup: unified projection / monotonic helpers -------
+    // These helpers are shared by Overview KPI, current activity, recent,
+    // Timeline total, Timeline session, and Timeline details so every live
+    // target uses the same projection + monotonic-render contract.
+    //
+    // ``projectLiveSeconds`` computes the live display seconds from a
+    // backend baseline plus the wall-clock delta since ``baselineEpochMs``.
+    // It never writes the DB and never calls the bridge.
+    //
+    // ``readDurationSecondsFromText`` reads the ``data-duration-seconds``
+    // attribute (preferred) or parses the ``HH:MM:SS`` text as a fallback.
+    //
+    // ``renderDurationMonotonic`` writes the formatted duration to ``el``
+    // while avoiding a 1-2 second visual rollback when the same live target
+    // (same ``continuityKey``) is still running. When ``allowDecrease`` is
+    // false and the new seconds are 1-2 less than the last rendered value,
+    // the DOM is kept unchanged. A larger decrease (real state change) or
+    // ``allowDecrease === true`` always overwrites. The backend refresh
+    // path must reset the monotonic state (or pass ``allowDecrease = true``)
+    // so the real baseline can replace the projected value.
+    function projectLiveSeconds(baseSeconds, baselineEpochMs) {
+        var base = parseInt(baseSeconds, 10) || 0;
+        if (base < 0) base = 0;
+        if (!baselineEpochMs) return base;
+        var baseline = parseInt(baselineEpochMs, 10);
+        if (!baseline || isNaN(baseline)) return base;
+        var delta = Math.floor((Date.now() - baseline) / 1000);
+        if (delta < 0) delta = 0;
+        return base + delta;
+    }
+    App.projectLiveSeconds = projectLiveSeconds;
+
+    function readDurationSecondsFromText(el) {
+        if (!el) return 0;
+        var attr = el.getAttribute("data-duration-seconds");
+        if (attr !== null && attr !== "") {
+            var n = parseInt(attr, 10);
+            if (!isNaN(n) && n >= 0) return n;
+        }
+        var text = (el.textContent || "").trim();
+        var m = /^(\d+):(\d{2}):(\d{2})$/.exec(text);
+        if (m) {
+            return parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseInt(m[3], 10);
+        }
+        return 0;
+    }
+    App.readDurationSecondsFromText = readDurationSecondsFromText;
+
+    function renderDurationMonotonic(el, nextSeconds, continuityKey, allowDecrease) {
+        if (!el) return;
+        var next = Math.max(0, parseInt(nextSeconds, 10) || 0);
+        var state = App._monotonicRenderState;
+        var entry = state[continuityKey];
+        if (allowDecrease === false && entry && typeof entry.lastSeconds === "number") {
+            if (next < entry.lastSeconds && (entry.lastSeconds - next) <= 2) {
+                // Same live target still running; avoid 1-2s visual rollback.
+                return;
+            }
+        }
+        el.textContent = App.formatDuration(next);
+        state[continuityKey] = { lastSeconds: next };
+    }
+    App.renderDurationMonotonic = renderDurationMonotonic;
+
+    function resetMonotonicRenderState(continuityKey) {
+        if (continuityKey) {
+            delete App._monotonicRenderState[continuityKey];
+        } else {
+            App._monotonicRenderState = {};
+        }
+    }
+    App.resetMonotonicRenderState = resetMonotonicRenderState;
+
+    // --- Phase 6H-followup: 1-second heartbeat local ticker ---------------
+    // ``applyLocalTicker`` is the first phase of the unified heartbeat. It
+    // re-renders already-fetched durations with a wall-clock delta so the
+    // UI updates every second without a bridge round-trip. The ticker ONLY
+    // updates DOM text; it never calls a bridge method, never writes the DB,
+    // and never starts / stops the collector. It is a no-op when the current
+    // activity is paused / idle / excluded / error or when no snapshot has
+    // been fetched yet. The heartbeat's second phase (revision check) runs
+    // in init.js and calls heavy interfaces only when the structural
+    // revision changes.
     function tickerNowEpochMs() {
         return Date.now();
     }
@@ -515,24 +626,17 @@
                 delta = tickerDeltaSeconds(ov);
             }
             var current = ov.current_activity || {};
-            // Determine which KPI gets the delta. If the current
-            // activity is classified, increment classified; otherwise
-            // increment uncategorized. Only one gets the delta.
             if (current.is_classified === true) {
                 currentIsUncategorized = false;
             } else if (current.is_uncategorized === true) {
                 currentIsUncategorized = true;
             } else {
-                // Fallback: if the backend did not provide
-                // is_classified / is_uncategorized, do not increment
-                // either KPI (avoid guessing). The next backend refresh
-                // will calibrate.
                 currentIsUncategorized = null;
             }
             var totalEl = document.getElementById("kpi-total");
             if (totalEl) {
                 var totalSec = parseInt(ov.today_total_seconds, 10) || 0;
-                totalEl.textContent = App.formatDuration(totalSec + delta);
+                App.renderDurationMonotonic(totalEl, totalSec + delta, "overview-total", false);
             }
             var classifiedEl = document.getElementById("kpi-classified");
             if (classifiedEl) {
@@ -540,7 +644,7 @@
                 if (currentIsUncategorized === false) {
                     classifiedSec += delta;
                 }
-                classifiedEl.textContent = App.formatDuration(classifiedSec);
+                App.renderDurationMonotonic(classifiedEl, classifiedSec, "overview-classified", false);
             }
             var uncategorizedEl = document.getElementById("kpi-uncategorized");
             if (uncategorizedEl) {
@@ -548,16 +652,12 @@
                 if (currentIsUncategorized === true) {
                     uncategorizedSec += delta;
                 }
-                uncategorizedEl.textContent = App.formatDuration(uncategorizedSec);
+                App.renderDurationMonotonic(uncategorizedEl, uncategorizedSec, "overview-uncategorized", false);
             }
             var currentEl = document.getElementById("current-activity");
             if (currentEl) {
                 if (current.active) {
                     var elapsedSec = parseInt(current.elapsed_seconds, 10) || 0;
-                    // Rebuild the display string with the incremented
-                    // elapsed duration. The display format is
-                    // ``name｜project｜elapsed｜state``; only the elapsed
-                    // field is replaced.
                     var display = current.display || "";
                     var parts = display.split("｜");
                     if (parts.length >= 3) {
@@ -569,8 +669,30 @@
                 }
             }
         }
+        // Recent list: update the live-projected recent item's duration.
+        // Only when the overview page is active and a recent snapshot with a
+        // live projection target is available.
+        var recent = App.lastRecentSnapshot;
+        if (recent && App.currentPage === "overview") {
+            var recentDelta = tickerDeltaSeconds(recent);
+            var projectedIndex = parseInt(recent.live_projected_recent_index, 10);
+            if (projectedIndex >= 0 && recentDelta >= 0) {
+                var recentEl = document.querySelector('.recent-item[data-recent-index="' + projectedIndex + '"] .recent-item-duration');
+                if (recentEl) {
+                    var baseSec = App.readDurationSecondsFromText(recentEl);
+                    // ``live_projected_seconds`` is the backend baseline; add
+                    // the wall-clock delta on top. ``baseSec`` already
+                    // includes the projection baseline (the backend added it
+                    // to the target item's ``duration_seconds``), so we only
+                    // add the delta here.
+                    var projectedSec = baseSec + recentDelta;
+                    App.renderDurationMonotonic(recentEl, projectedSec, "recent-" + projectedIndex, false);
+                }
+            }
+        }
         // Timeline page: update date total + current activity display +
-        // in-progress session duration. Only when viewing today.
+        // in-progress / live-projected session duration + projected detail.
+        // Only when viewing today.
         var tl = App.lastTimelineData;
         if (tl && App.currentPage === "timeline") {
             var todayStr = App.localTodayStr();
@@ -582,7 +704,7 @@
             var tlTotalEl = document.getElementById("timeline-total");
             if (tlTotalEl) {
                 var tlTotalSec = parseInt(tl.today_total_seconds, 10) || 0;
-                tlTotalEl.textContent = App.formatDuration(tlTotalSec + tlDelta);
+                App.renderDurationMonotonic(tlTotalEl, tlTotalSec + tlDelta, "timeline-total", false);
             }
             var tlCurrentEl = document.getElementById("timeline-current");
             if (tlCurrentEl) {
@@ -599,17 +721,81 @@
                     tlCurrentEl.textContent = "当前活动：无";
                 }
             }
-            // Update the in-progress session's duration in the session list.
-            if (isToday && tlDelta > 0 && tl.sessions) {
-                for (var i = 0; i < tl.sessions.length; i++) {
-                    var s = tl.sessions[i];
-                    if (s.is_in_progress) {
-                        var items = document.querySelectorAll(".timeline-item");
-                        if (items[i]) {
-                            var durEl = items[i].querySelector(".timeline-item-duration");
+            // Update in-progress / live-projected session durations.
+            // Phase 6H-followup section 7.3: locate each session's DOM via
+            // ``data-session-id`` instead of array index so a re-rendered
+            // list (e.g. after a revision change) cannot mismatch sessions.
+            if (isToday && tlDelta >= 0 && tl.sessions) {
+                for (var si = 0; si < tl.sessions.length; si++) {
+                    var s = tl.sessions[si];
+                    if (s.is_in_progress || s.is_live_projected) {
+                        var sid = s.session_id;
+                        var itemEl = document.querySelector(
+                            '#timeline-sessions-list .timeline-item[data-session-id="' + sid + '"]'
+                        );
+                        if (itemEl) {
+                            var durEl = itemEl.querySelector(".timeline-item-duration");
                             if (durEl) {
                                 var sSec = parseInt(s.duration_seconds, 10) || 0;
-                                durEl.textContent = App.formatDuration(sSec + tlDelta);
+                                var continuity = "session-" + sid;
+                                App.renderDurationMonotonic(durEl, sSec + tlDelta, continuity, false);
+                            }
+                        }
+                    }
+                }
+            }
+            // Phase 6H-followup section 7.4: detail-row projection. Two
+            // cases are handled:
+            //   (a) selected session is a real ``is_in_progress`` session:
+            //       update that session's ``a.is_in_progress`` detail row.
+            //   (b) selected session equals ``live_projected_session_id`` and
+            //       the current activity is not yet persisted: temporarily
+            //       update the latest detail row.
+            // In both cases, skip when an editor / split editor / correction
+            // shell write is in progress so the user's input focus and
+            // button state are never disturbed.
+            if (isToday && tlDelta >= 0 && App.selectedSessionId
+                && App.lastSessionDetailsData && !App._timelineEditingActive()) {
+                var detailsList = document.getElementById("timeline-details-list");
+                if (detailsList) {
+                    // Case (a): real is_in_progress session. Find the
+                    // detail row whose activity_id matches the in-progress
+                    // activity and update its duration.
+                    var selectedSessionObj = null;
+                    for (var ssi = 0; ssi < tl.sessions.length; ssi++) {
+                        if (tl.sessions[ssi].session_id === App.selectedSessionId) {
+                            selectedSessionObj = tl.sessions[ssi];
+                            break;
+                        }
+                    }
+                    if (selectedSessionObj && selectedSessionObj.is_in_progress) {
+                        var inProgressRows = detailsList.querySelectorAll(
+                            '.detail-item.in-progress .detail-item-duration'
+                        );
+                        if (inProgressRows.length > 0) {
+                            var ipDurEl = inProgressRows[inProgressRows.length - 1];
+                            var ipBaseSec = App.readDurationSecondsFromText(ipDurEl);
+                            var ipAid = ipDurEl.closest(".detail-item").getAttribute("data-activity-id") || "0";
+                            App.renderDurationMonotonic(
+                                ipDurEl, ipBaseSec + tlDelta, "detail-" + ipAid, false
+                            );
+                        }
+                    }
+                    // Case (b): live-projected session. The current activity
+                    // is not yet persisted, so the latest detail row gets
+                    // projection baseline + delta on top of its real duration.
+                    var projectedSessionId = tl.live_projected_session_id || "";
+                    if (projectedSessionId && App.selectedSessionId === projectedSessionId) {
+                        var detailRows = detailsList.querySelectorAll(".detail-item");
+                        if (detailRows.length > 0) {
+                            var latestRow = detailRows[detailRows.length - 1];
+                            var detailDurEl = latestRow.querySelector(".detail-item-duration");
+                            if (detailDurEl) {
+                                var detailBaseSec = App.readDurationSecondsFromText(detailDurEl);
+                                var projectedBaseSec = parseInt(tl.live_projected_seconds, 10) || 0;
+                                var detailProjectedSec = detailBaseSec + projectedBaseSec + tlDelta;
+                                var latestAid = latestRow.getAttribute("data-activity-id") || "0";
+                                App.renderDurationMonotonic(detailDurEl, detailProjectedSec, "detail-" + latestAid, false);
                             }
                         }
                     }
@@ -618,6 +804,30 @@
         }
     }
     App.applyLocalTicker = applyLocalTicker;
+
+    // Phase 6H-followup section 7.4: helper that reports whether any
+    // Timeline editing / split / correction-shell write is in progress.
+    // The ticker uses this to skip detail-row duration updates that could
+    // race with the user's input or with a save / split / restore operation.
+    // The ticker only ever modifies ``.detail-item-duration`` text, so when
+    // an editor is open the row's text is intentionally left untouched.
+    function timelineEditingActive() {
+        return !!(
+            App.editSaving ||
+            App.timeSaving ||
+            App.activityTimeSaving ||
+            App.sessionSplitSaving ||
+            App.activitySplitSaving ||
+            App.mergeSaving ||
+            App.hideSaving ||
+            App.deleteSaving ||
+            App.batchProjectSaving ||
+            App.batchNoteSaving ||
+            App.restoreSaving ||
+            App.correctionShellOpen
+        );
+    }
+    App._timelineEditingActive = timelineEditingActive;
 
     // Backend stores time as "YYYY-MM-DD HH:MM:SS". <input type="datetime-local">
     // uses "YYYY-MM-DDTHH:MM:SS" (T separator). These helpers convert between

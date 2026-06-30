@@ -699,7 +699,7 @@ def test_phase_r2_all_functions_still_defined():
         "initStatisticsDefaults", "exportStatisticsCsv",
         # init.js — refresh + nav + bootstrap
         "refreshAll", "togglePause", "switchPage", "initNav", "initButtons",
-        "startAutoRefresh", "init",
+        "startHeartbeat", "init",
     ]
     missing = []
     for name in required_functions:
@@ -789,11 +789,16 @@ def test_phase_r2_state_variables_only_accessed_via_app_namespace():
 
 def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
     """Phase 6G: in ``init()``, the call to ``App.loadFirstRunNotice()``
-    must appear before ``refreshAll()`` / ``startAutoRefresh()`` in source
-    order, AND the refresh calls must be inside a ``.then(...)``
+    must appear before the main UI refresh / heartbeat-start calls in
+    source order, AND those calls must be inside a ``.then(...)``
     callback (or after an ``await``), not at the top level of ``init``.
-    This eliminates the frontend race where refreshAll could fire before
-    the gate overlay was up."""
+    This eliminates the frontend race where refresh could fire before
+    the gate overlay was up.
+
+    Phase 6H-followup: the legacy ``refreshAll()`` /
+    ``startAutoRefresh()`` / ``startLocalTicker()`` calls were replaced
+    by ``refreshCurrentPageData()`` + ``startHeartbeat()``; this test
+    verifies the new contract."""
     source = read_js("init.js")
     # Match ``function init()`` exactly so we do not collide with
     # ``function initNav`` or ``function initButtons``.
@@ -804,24 +809,24 @@ def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
     end = source.find("\n    function ", pos + 1)
     body = source[pos:end if end != -1 else pos + 2500]
     load_pos = body.find("App.loadFirstRunNotice()")
-    refresh_pos = body.find("refreshAll()")
-    auto_pos = body.find("startAutoRefresh()")
+    refresh_pos = body.find("refreshCurrentPageData()")
+    heartbeat_pos = body.find("startHeartbeat()")
     assert load_pos != -1, "init() must call App.loadFirstRunNotice()"
-    assert refresh_pos != -1, "init() must call refreshAll()"
-    assert auto_pos != -1, "init() must call startAutoRefresh()"
-    # loadFirstRunNotice must appear before refreshAll / startAutoRefresh
-    # in source order within init.
+    assert refresh_pos != -1, "init() must call refreshCurrentPageData()"
+    assert heartbeat_pos != -1, "init() must call startHeartbeat()"
+    # loadFirstRunNotice must appear before refresh / heartbeat in
+    # source order within init.
     assert load_pos < refresh_pos, (
-        "init() must call loadFirstRunNotice before refreshAll"
+        "init() must call loadFirstRunNotice before refreshCurrentPageData"
     )
-    assert load_pos < auto_pos, (
-        "init() must call loadFirstRunNotice before startAutoRefresh"
+    assert load_pos < heartbeat_pos, (
+        "init() must call loadFirstRunNotice before startHeartbeat"
     )
     # The refresh calls must be inside a .then(...) callback on the
     # loadFirstRunNotice promise, not at the top level of init.
     between = body[load_pos:refresh_pos]
     assert ".then(function" in between, (
-        "init() must call refreshAll / startAutoRefresh inside a "
+        "init() must call refreshCurrentPageData / startHeartbeat inside a "
         ".then(...) callback on the loadFirstRunNotice promise, not at "
         "the top level of init"
     )

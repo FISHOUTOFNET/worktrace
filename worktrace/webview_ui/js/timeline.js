@@ -37,6 +37,10 @@
 
         // Build the full HTML string before replacing to avoid flicker.
         var html = "";
+        // Phase 6H-followup: collect continuity keys to reset after the
+        // innerHTML swap so the backend baseline replaces any prior ticker
+        // projection without a false "rollback" guard.
+        var sessionContinuityKeys = [];
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
             var timeRange = App.formatTimeRange(s.start_time, s.end_time, s.is_in_progress);
@@ -44,12 +48,21 @@
             if (s.project_description) {
                 projectLabel += " (" + s.project_description + ")";
             }
+            // Phase 6H-followup: prefer ``duration_seconds`` (raw int from
+            // the backend) over the pre-formatted ``duration`` string so
+            // the ticker / monotonic helper can recompute from a stable
+            // baseline. The ``duration`` string is kept as a fallback.
+            var sDurSec = parseInt(s.duration_seconds, 10);
+            var sDurText = (!isNaN(sDurSec) && sDurSec >= 0)
+                ? App.formatDuration(sDurSec)
+                : (s.duration || "00:00:00");
             var cls = "timeline-item";
             if (s.is_uncategorized) cls += " uncategorized";
             if (s.is_in_progress) cls += " in-progress";
+            if (s.is_live_projected === true) cls += " live-projected";
             if (s.session_id === App.selectedSessionId) cls += " selected";
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
-                + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(timeRange) + '｜' + App.escapeHtml(s.duration) + '"'
+                + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(timeRange) + '｜' + App.escapeHtml(sDurText) + '"'
                 + '>'
                 + '<div class="timeline-item-main">'
                 + '<div class="timeline-item-project">' + App.escapeHtml(projectLabel) + '</div>'
@@ -57,12 +70,24 @@
                 + '<div class="timeline-item-status">' + App.escapeHtml(s.status || "") + '</div>'
                 + '</div>'
                 + '<div class="timeline-item-side">'
-                + '<div class="timeline-item-duration">' + App.escapeHtml(s.duration) + '</div>'
+                + '<div class="timeline-item-duration" data-duration-seconds="' + (isNaN(sDurSec) ? 0 : sDurSec) + '">' + App.escapeHtml(sDurText) + '</div>'
                 + '<div class="timeline-item-count">' + App.escapeHtml(String(s.event_count || 0) + " 条") + '</div>'
                 + '</div>'
                 + '</div>';
+            sessionContinuityKeys.push({ key: "session-" + s.session_id, sec: isNaN(sDurSec) ? 0 : sDurSec });
         }
         listEl.innerHTML = html;
+        // Phase 6H-followup: reset + seed the monotonic render state for
+        // each session so the backend baseline replaces any prior ticker
+        // projection and the ticker's first delta does not appear to roll back.
+        for (var ci = 0; ci < sessionContinuityKeys.length; ci++) {
+            var ck = sessionContinuityKeys[ci];
+            App._monotonicRenderState[ck.key] = { lastSeconds: ck.sec };
+        }
+        // Also reset the timeline-total continuity so the backend total
+        // baseline replaces any prior ticker projection.
+        var tlTotalSec = parseInt(data.today_total_seconds, 10) || 0;
+        App._monotonicRenderState["timeline-total"] = { lastSeconds: tlTotalSec };
 
         // Bind click handlers to session items
         var items = listEl.querySelectorAll(".timeline-item");
@@ -197,6 +222,12 @@
     App.loadSessionDetails = loadSessionDetails;
 
     function renderSessionDetails(data) {
+        // Phase 6H-followup: cache the session-details payload so the
+        // 1-second heartbeat ticker can increment the live-projected
+        // detail row's duration without a bridge round-trip. The ticker
+        // only updates DOM text; it never re-renders the whole list so
+        // inline edit state is preserved across heartbeat refreshes.
+        App.lastSessionDetailsData = data;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         var activities = data.activities || [];
@@ -207,10 +238,20 @@
         }
         detailsHeader.textContent = "活动详情（" + activities.length + " 条）";
         var html = "";
+        // Phase 6H-followup: collect detail continuity keys for seeding.
+        var detailContinuityKeys = [];
         for (var i = 0; i < activities.length; i++) {
             var a = activities[i];
             var timeRange = App.formatTimeRange(a.start_time, a.end_time, a.is_in_progress);
             var displayName = a.resource_name || a.app_name || "未知";
+            // Phase 6H-followup: prefer ``duration_seconds`` (raw int from
+            // the backend) over the pre-formatted ``duration`` string so
+            // the ticker / monotonic helper can recompute from a stable
+            // baseline. The ``duration`` string is kept as a fallback.
+            var aDurSec = parseInt(a.duration_seconds, 10);
+            var aDurText = (!isNaN(aDurSec) && aDurSec >= 0)
+                ? App.formatDuration(aDurSec)
+                : (a.duration || "00:00:00");
             var cls = "detail-item";
             if (a.is_in_progress) cls += " in-progress";
             // Per-activity inline time editor (Phase 3B.1). The button is
@@ -253,7 +294,9 @@
             var visibilityBtnTitle = a.is_in_progress
                 ? "进行中记录无法隐藏或删除"
                 : (aid ? "从 Timeline 隐藏或删除此活动" : "活动 ID 缺失，无法操作");
-            html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '">'
+            html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
+                + ' data-detail-index="' + i + '"'
+                + '>'
                 + '<div class="detail-item-time">' + App.escapeHtml(timeRange) + '</div>'
                 + '<div class="detail-item-name" title="' + App.escapeHtml(displayName) + '">' + App.escapeHtml(displayName) + '</div>'
                 + '<div class="detail-item-meta">'
@@ -261,7 +304,7 @@
                 + '<span class="detail-item-app">' + App.escapeHtml(a.app_name || "") + '</span>'
                 + '</div>'
                 + '<div class="detail-item-project" title="' + App.escapeHtml(a.project_name || "未归类") + '">' + App.escapeHtml(a.project_name || "未归类") + '</div>'
-                + '<div class="detail-item-duration">' + App.escapeHtml(a.duration) + '</div>'
+                + '<div class="detail-item-duration" data-duration-seconds="' + (isNaN(aDurSec) ? 0 : aDurSec) + '">' + App.escapeHtml(aDurText) + '</div>'
                 // Phase 3B.5A: per-activity correction actions are grouped
                 // into three visually distinct groups with a stable order:
                 // edit group (编辑时间 → 拆分) → merge group (与下一条合并)
@@ -335,8 +378,21 @@
                 + '<div class="detail-merge-status edit-status" hidden></div>'
                 + '<div class="detail-visibility-status edit-status" hidden></div>'
                 + '</div>';
+            // Phase 6H-followup: collect this row's continuity key so the
+            // monotonic state can be seeded after the innerHTML swap.
+            detailContinuityKeys.push({ index: i, sec: isNaN(aDurSec) ? 0 : aDurSec });
         }
         detailsList.innerHTML = html;
+        // Phase 6H-followup: seed the monotonic render state for each detail
+        // row so the ticker's first projection does not appear to roll back.
+        // The continuity key is per-activity-id so re-renders of the same
+        // session (same activity ids) stay monotonic across heartbeat refreshes.
+        for (var di = 0; di < detailContinuityKeys.length; di++) {
+            var dk = detailContinuityKeys[di];
+            var activitiesRef = data.activities || [];
+            var aidFor = activitiesRef[dk.index] ? (activitiesRef[dk.index].activity_id || 0) : 0;
+            App._monotonicRenderState["detail-" + aidFor] = { lastSeconds: dk.sec };
+        }
 
         // Bind per-activity "编辑时间" button handlers. Event delegation is
         // used so re-rendering the list does not leak listeners.

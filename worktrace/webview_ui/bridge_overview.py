@@ -26,7 +26,12 @@ from typing import Any
 from ..api import app_api, project_api, settings_api, statistics_api, timeline_api
 from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_duration
-from .bridge_common import _GENERIC_ERROR, _RECENT_LIMIT, _snapshot_summary
+from .bridge_common import (
+    _GENERIC_ERROR,
+    _RECENT_LIMIT,
+    _find_live_projection_target,
+    _snapshot_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +188,22 @@ class OverviewBridgeMixin:
 
         Returns a dict with an ``activities`` list to keep the contract stable
         if the underlying shape changes.
+
+        Phase 6H-followup: each recent item now carries the raw
+        ``duration_seconds`` baseline, the explicit ``is_in_progress`` flag,
+        and the ``is_live_projected`` marker. The top-level payload carries
+        ``snapshot_at_epoch_ms``, ``live_projected_recent_index`` and
+        ``live_projected_seconds`` so the frontend heartbeat can compute the
+        current projected duration without a bridge round-trip.
+
+        Projection rules (see ``_find_live_projection_target``):
+        - Only the most recent visible *normal* session is ever projected.
+        - Real ``is_in_progress`` sessions are never double-counted.
+        - idle / paused / excluded / error sessions are never projected.
+        - Projection is purely a UI overlay; the DB and collector are
+          untouched, and the 30-second persistence threshold is preserved.
+        - ``duration_seconds`` is the backend response-time baseline; the
+          frontend adds the wall-clock delta on top via the heartbeat.
         """
         try:
             today = timeline_api.get_default_report_date()
@@ -191,20 +212,71 @@ class OverviewBridgeMixin:
                 include_hidden=False,
                 ensure_context=True,
             )
+            snapshot = settings_api.get_current_activity_snapshot()
+            limited = sessions[:_RECENT_LIMIT]
+            target = _find_live_projection_target(limited, snapshot, today, today)
+            target_index = target[0] if target is not None else -1
+            projected_seconds = target[1] if target is not None else 0
             items: list[dict[str, Any]] = []
-            for session in sessions[:_RECENT_LIMIT]:
+            for idx, session in enumerate(limited):
+                base_seconds = int(session.get("duration_seconds") or 0)
+                is_in_progress = bool(session.get("is_in_progress"))
+                is_live_projected = False
+                if target is not None and idx == target_index:
+                    base_seconds = base_seconds + projected_seconds
+                    is_live_projected = True
                 items.append(
                     {
                         "project_name": str(session.get("project_name") or "未归类"),
                         "start_time": str(session.get("start_time") or ""),
                         "end_time": str(session.get("end_time") or ""),
-                        "duration": format_duration(session.get("duration_seconds") or 0),
+                        "duration": format_duration(base_seconds),
+                        "duration_seconds": base_seconds,
+                        "is_in_progress": is_in_progress,
+                        "is_live_projected": is_live_projected,
                         "status": str(session.get("status_summary") or session.get("status") or ""),
                     }
                 )
-            return {"ok": True, "activities": items}
+            return {
+                "ok": True,
+                "activities": items,
+                # Backend response-time baseline epoch ms. The frontend
+                # ticker adds (now - snapshot_at_epoch_ms) to the projected
+                # session's duration_seconds without a bridge round-trip.
+                "snapshot_at_epoch_ms": int(time.time() * 1000),
+                "live_projected_recent_index": target_index,
+                "live_projected_seconds": int(projected_seconds),
+            }
         except Exception:
             logger.exception("webview bridge get_recent_activities failed")
+            return dict(_GENERIC_ERROR)
+
+    def get_refresh_state(self) -> dict[str, Any]:
+        """Return a lightweight refresh-state snapshot for the heartbeat.
+
+        Phase 6H-followup. The frontend heartbeat calls this once per second
+        after running the local ticker. It compares the returned
+        ``refresh_revision`` with the previous tick's value: if unchanged,
+        no heavy interface (``get_overview`` / ``get_recent_activities`` /
+        ``get_timeline``) is invoked. If changed, only the data needed by
+        the current page is re-pulled.
+
+        The payload is display-safe: no raw ``window_title``,
+        ``file_path_hint``, ``note``, ``clipboard``, ``traceback`` or SQL
+        is surfaced. ``refresh_revision`` is a structural-only signature
+        (it excludes ``elapsed_seconds`` / ``extra_seconds`` /
+        ``snapshot_updated_at`` / ``snapshot_baseline_epoch_ms`` /
+        ``Date.now()``) so natural time progression within the same
+        activity does not trigger a heavy refresh.
+
+        The bridge method only calls the ``settings_api.get_refresh_state``
+        facade and wraps the result with a stable error payload. It does
+        not import services / db / collector / runtime / config / security.
+        """
+        try:
+            return settings_api.get_refresh_state()
+        except Exception:
+            logger.exception("webview bridge get_refresh_state failed")
             return dict(_GENERIC_ERROR)
 
 

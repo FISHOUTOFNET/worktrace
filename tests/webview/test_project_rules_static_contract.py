@@ -338,12 +338,40 @@ def test_project_rules_js_catch_path_never_reads_raw_exception_message():
 
 
 def test_project_rules_refresh_all_only_when_active_and_loaded():
+    """Phase 6H-followup: ``refreshAll`` is the manual refresh button entry
+    point and now delegates to ``refreshCurrentPageData`` which is
+    page-scoped (status + current page live data). Rules / Settings /
+    Statistics are NOT included in the heartbeat auto-refresh or the
+    low-frequency reconciliation; they keep their own page-level refresh
+    buttons. This test verifies:
+      1. ``refreshAll`` / ``refreshCurrentPageData`` does NOT push
+         ``loadProjectRules()`` into its promises.
+      2. The heartbeat / reconciliation path does NOT call
+         ``loadProjectRules()``.
+      3. Rules are still lazy-loaded on first navigation to the rules page
+         via ``switchPage`` (covered separately by
+         ``test_project_rules_lazy_loads_on_first_navigation_only``)."""
     source = read_js("init.js")
     body = func_body(source, "refreshAll")
-    assert 'App.currentPage === "rules"' in body
-    assert "App.rulesLoaded" in body
-    assert "!App.rulesLoading" in body
-    assert "promises.push(App.loadProjectRules())" in body
+    # refreshAll now delegates to refreshCurrentPageData; it must NOT
+    # directly push loadProjectRules into the heavy refresh path.
+    assert "promises.push(App.loadProjectRules())" not in body, (
+        "refreshAll must not push loadProjectRules; rules are not part of "
+        "the page-scoped heavy refresh"
+    )
+    # Also verify refreshCurrentPageData body does not reference rules.
+    rcp_body = func_body(source, "refreshCurrentPageData")
+    assert "loadProjectRules" not in rcp_body, (
+        "refreshCurrentPageData must not reference loadProjectRules; rules "
+        "are only lazy-loaded on page switch, not on heartbeat refresh"
+    )
+    # fullReconcileCollectionViews (low-freq reconciliation) must also
+    # NOT reference loadProjectRules.
+    rec_body = func_body(source, "fullReconcileCollectionViews")
+    assert "loadProjectRules" not in rec_body, (
+        "fullReconcileCollectionViews must not reference loadProjectRules; "
+        "low-frequency reconciliation never refreshes Rules"
+    )
 
 
 def test_project_rules_lazy_loads_on_first_navigation_only():

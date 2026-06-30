@@ -7,13 +7,15 @@ previously lived inside each UI view.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import time as _time
 from typing import Any
 
 from . import backup_api
 from ..constants import PRIVACY_NOTICE_TEXT
-from ..services import export_service
+from ..services import activity_service, export_service
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -611,6 +613,168 @@ def accept_first_run_notice_for_webview() -> dict[str, Any]:
         return {"ok": False, "error": "确认隐私说明失败"}
 
 
+# --- Lightweight refresh-state (Phase 6H-followup heartbeat) -------------
+
+
+def _build_current_activity_display_key(snapshot: dict[str, Any] | None) -> str:
+    """Build a display-safe structural identity for the current activity.
+
+    The key is constructed ONLY from sanitized display fields
+    (``resource_display_name`` / ``activity_display_name`` / ``app_name`` /
+    ``process_name`` / ``inferred_project_name`` / ``start_time`` /
+    ``status`` / ``is_persisted`` / ``persisted_activity_id``). Raw
+    ``window_title``, ``file_path_hint``, ``note`` and ``clipboard`` are
+    NEVER included.
+
+    The returned value is used to derive ``refresh_revision`` so the
+    frontend heartbeat can decide whether to re-pull Overview / Recent /
+    Timeline data. It MUST NOT change when only time-elapsed fields
+    (``elapsed_seconds``, ``extra_seconds``, ``snapshot_updated_at``,
+    ``snapshot_baseline_epoch_ms``) change.
+    """
+    if not snapshot:
+        return ""
+    parts = [
+        str(snapshot.get("resource_display_name") or ""),
+        str(snapshot.get("activity_display_name") or ""),
+        str(snapshot.get("app_name") or ""),
+        str(snapshot.get("process_name") or ""),
+        str(snapshot.get("inferred_project_name") or ""),
+        str(snapshot.get("start_time") or ""),
+        str(snapshot.get("status") or ""),
+        "1" if bool(snapshot.get("is_persisted")) else "0",
+        str(int(snapshot.get("persisted_activity_id") or 0)),
+    ]
+    return "|".join(parts)
+
+
+def get_refresh_state() -> dict[str, Any]:
+    """Return a lightweight refresh-state payload for the frontend heartbeat.
+
+    Phase 6H-followup. The frontend runs a single 1-second heartbeat that:
+      1. Runs the local ticker (re-renders already-fetched durations with
+         a locally-computed elapsed increment).
+      2. Calls this method to fetch a tiny structural snapshot.
+      3. Compares ``refresh_revision`` with the previous tick's value.
+         If unchanged, no heavy interface (``get_overview`` /
+         ``get_recent_activities`` / ``get_timeline``) is invoked. If
+         changed, only the data needed by the current page is re-pulled.
+
+    ``refresh_revision`` is a structural signature. It MUST change when:
+      - the current activity identity changes;
+      - the current activity status changes;
+      - the current activity persisted state changes;
+      - ``persisted_activity_id`` changes;
+      - ``inferred_project_name`` changes;
+      - collector status / paused state changes;
+      - the report date crosses midnight;
+      - a new persisted/closed activity appears (latest id / updated_at).
+
+    It MUST NOT change when only:
+      - ``elapsed_seconds`` / ``extra_seconds`` increase (natural time
+        progression within the same activity);
+      - ``snapshot_updated_at`` / ``snapshot_baseline_epoch_ms`` advance
+        without any structural change.
+
+    The payload is display-safe: no raw ``window_title``,
+    ``file_path_hint``, ``note``, ``clipboard``, ``traceback`` or
+    ``SQL`` is surfaced. The internal structural signature uses only
+    display-safe fields, so its hash is safe to return to JS.
+
+    On any exception returns ``{"ok": False, "error": "刷新状态加载失败"}``.
+    """
+    try:
+        snapshot = get_current_activity_snapshot()
+        collector_status = get_collector_status()
+        user_paused = is_user_paused()
+        paused = bool(user_paused) or collector_status == "paused"
+        # Default report date (today). The bridge does NOT pass a date
+        # parameter so the facade uses the same default the bridge uses
+        # elsewhere.
+        from . import timeline_api as _timeline_api
+        today = _timeline_api.get_default_report_date()
+        # Latest persisted/closed normal activity. ``id`` and ``updated_at``
+        # are display-safe scalars; surfacing them lets the heartbeat
+        # detect "a new row landed in the DB" without re-reading the full
+        # activity log.
+        try:
+            latest_closed = activity_service.get_latest_closed_auto_normal_activity()
+        except Exception:
+            latest_closed = None
+        latest_activity_id = 0
+        latest_updated_at = ""
+        if latest_closed:
+            try:
+                latest_activity_id = int(latest_closed.get("id") or 0)
+            except (TypeError, ValueError):
+                latest_activity_id = 0
+            latest_updated_at = str(latest_closed.get("updated_at") or "")
+        # Build display-safe structural fields.
+        current_activity_key = _build_current_activity_display_key(snapshot)
+        current_activity_status = ""
+        is_persisted = False
+        persisted_activity_id = 0
+        inferred_project_name = ""
+        if snapshot:
+            current_activity_status = str(snapshot.get("status") or "")
+            is_persisted = bool(snapshot.get("is_persisted"))
+            try:
+                persisted_activity_id = int(snapshot.get("persisted_activity_id") or 0)
+            except (TypeError, ValueError):
+                persisted_activity_id = 0
+            inferred_project_name = str(snapshot.get("inferred_project_name") or "")
+        # Map collector_status + user_paused to a display label.
+        if paused or collector_status == "paused":
+            status_display = "已暂停"
+        elif collector_status == "running":
+            status_display = "记录中"
+        elif collector_status == "error":
+            status_display = "状态异常"
+        else:
+            status_display = "采集器未运行"
+        # Build the refresh_revision. Only structural fields are hashed;
+        # time-elapsed fields (elapsed_seconds, extra_seconds,
+        # snapshot_updated_at, snapshot_baseline_epoch_ms, Date.now()) are
+        # deliberately excluded so natural time progression within the same
+        # activity does not trigger a heavy refresh.
+        revision_input = "|".join(
+            [
+                current_activity_key,
+                current_activity_status,
+                "1" if is_persisted else "0",
+                str(persisted_activity_id),
+                inferred_project_name,
+                collector_status,
+                "1" if user_paused else "0",
+                today,
+                str(latest_activity_id),
+                latest_updated_at,
+            ]
+        )
+        refresh_revision = hashlib.sha1(
+            revision_input.encode("utf-8")
+        ).hexdigest()
+        return {
+            "ok": True,
+            "collector_status": collector_status,
+            "paused": paused,
+            "status_display": status_display,
+            "current_activity_key": current_activity_key,
+            "current_activity_status": current_activity_status,
+            "is_persisted": is_persisted,
+            "persisted_activity_id": persisted_activity_id,
+            "inferred_project_name": inferred_project_name,
+            "refresh_revision": refresh_revision,
+            "today": today,
+            "latest_activity_id": latest_activity_id,
+            # The baseline epoch ms lets the frontend ticker compute the
+            # delta; it MUST NOT contribute to refresh_revision (see above).
+            "snapshot_baseline_epoch_ms": int(_time.time() * 1000),
+        }
+    except Exception:
+        return {"ok": False, "error": "刷新状态加载失败"}
+
+
 __all__ = [
     "accept_first_run_notice",
     "accept_first_run_notice_for_webview",
@@ -625,6 +789,7 @@ __all__ = [
     "get_first_run_notice_for_webview",
     "get_int_setting_value",
     "get_list_setting_value",
+    "get_refresh_state",
     "get_setting_value",
     "get_settings_privacy_status",
     "get_ui_refresh_seconds",

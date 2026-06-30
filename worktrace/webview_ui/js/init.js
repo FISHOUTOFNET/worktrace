@@ -7,84 +7,119 @@
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
     // --- Refresh orchestration ------------------------------------------
+    // Phase 6H-followup: the fixed 8-second full refresh and the independent
+    // 1-second ticker are replaced by a single 1-second heartbeat
+    // (``startHeartbeat``). The heartbeat first applies the local ticker
+    // (re-renders already-fetched durations with a wall-clock delta) and
+    // then runs a lightweight ``get_refresh_state`` revision check. Heavy
+    // interfaces are only called when the structural revision changes, and
+    // only for the data needed by the current page. Rules / Settings /
+    // Statistics are NOT included in background auto-refresh; they keep
+    // their own page-level load / refresh buttons.
+    //
+    // ``refreshCurrentPageData`` is the unified heavy-refresh entry point
+    // used by the manual refresh button, the heartbeat revision-change
+    // branch, and page-switch immediate refresh. It refreshes status (the
+    // sidebar is always visible) plus the current page's live data. It is
+    // guarded by ``activePageRefreshInFlight`` so overlapping heavy
+    // refreshes are skipped.
 
-    function refreshAll() {
-        var statusPromise = App.callBridge("get_status").then(function (result) {
+    function refreshStatus() {
+        return App.callBridge("get_status").then(function (result) {
             var status = App.handleResult(result, function (msg) {
                 throw new Error(msg);
             });
             App.showStatus(status);
-        }).catch(function (err) {
-            // Phase 3C.1: never surface raw exception text; use the stable
-            // fallback so internal details do not leak into the UI.
+        }).catch(function () {
             App.showError("刷新失败");
-            throw err;
         });
+    }
 
-        var overviewPromise = App.callBridge("get_overview").then(function (result) {
+    // Phase 6H-followup section 8: ``refreshStatusFromRefreshState`` updates
+    // the sidebar status display directly from a ``get_refresh_state``
+    // payload without calling ``get_status`` again. This is the preferred
+    // path inside the heartbeat because ``get_refresh_state`` already
+    // returns ``collector_status`` / ``paused`` / ``status_display``.
+    // Falls back to the legacy ``refreshStatus`` path when ``state`` is
+    // null or missing required fields so the sidebar always reflects the
+    // backend truth.
+    function refreshStatusFromRefreshState(state) {
+        if (!state || !state.ok) {
+            return refreshStatus();
+        }
+        var status = {
+            ok: true,
+            status: state.collector_status,
+            paused: !!state.paused,
+            display: state.status_display || ""
+        };
+        App.showStatus(status);
+        return Promise.resolve();
+    }
+    App.refreshStatusFromRefreshState = refreshStatusFromRefreshState;
+
+    function refreshOverview() {
+        return App.callBridge("get_overview").then(function (result) {
             var overview = App.handleResult(result, function (msg) {
                 throw new Error(msg);
             });
             App.showOverview(overview);
-        }).catch(function (err) {
-            // Phase 3C.1: never surface raw exception text; use the stable
-            // fallback so internal details do not leak into the UI.
+        }).catch(function () {
             App.showError("刷新失败");
-            throw err;
         });
+    }
 
-        var recentPromise = App.callBridge("get_recent_activities").then(function (result) {
+    function refreshRecent() {
+        return App.callBridge("get_recent_activities").then(function (result) {
             var recent = App.handleResult(result, function (msg) {
                 throw new Error(msg);
             });
             App.showRecent(recent);
-        }).catch(function (err) {
-            // Phase 3C.1: never surface raw exception text; use the stable
-            // fallback so internal details do not leak into the UI.
+        }).catch(function () {
             App.showError("刷新失败");
-            throw err;
         });
+    }
 
-        var promises = [statusPromise, overviewPromise, recentPromise];
-
-        // If the Timeline page is currently active, also refresh it.
-        if (App.currentPage === "timeline" && App.timelineLoaded) {
-            var timelinePromise = new Promise(function (resolve, reject) {
-                var dateEl = document.getElementById("timeline-date-display");
-                var date = App.timelineDate || (dateEl ? dateEl.textContent : null);
-                if (date === "--") date = null;
-                var token = ++App.timelineRequestToken;
-                App.callBridge("get_timeline", date).then(function (result) {
-                    if (token !== App.timelineRequestToken) { resolve(); return; }  // stale
-                    var data = App.handleResult(result, function (msg) {
-                        App.showTimelineError(msg || "刷新失败");
-                        throw new Error(msg);
-                    });
-                    if (data) {
-                        App.showTimeline(data);
-                        App.clearTimelineError();
-                    }
-                    resolve();
-                }).catch(function (err) {
-                    if (token !== App.timelineRequestToken) { resolve(); return; }  // stale
-                    // Keep lastTimelineData on screen; just surface the error.
-                    // Phase 3C.1: use the stable "刷新失败" fallback.
-                    App.showTimelineError("刷新失败");
-                    reject(err);
+    function refreshTimeline() {
+        return new Promise(function (resolve, reject) {
+            var dateEl = document.getElementById("timeline-date-display");
+            var date = App.timelineDate || (dateEl ? dateEl.textContent : null);
+            if (date === "--") date = null;
+            var token = ++App.timelineRequestToken;
+            App.callBridge("get_timeline", date).then(function (result) {
+                if (token !== App.timelineRequestToken) { resolve(); return; }  // stale
+                var data = App.handleResult(result, function (msg) {
+                    App.showTimelineError(msg || "刷新失败");
+                    throw new Error(msg);
                 });
+                if (data) {
+                    App.showTimeline(data);
+                    App.clearTimelineError();
+                }
+                resolve();
+            }).catch(function () {
+                if (token !== App.timelineRequestToken) { resolve(); return; }  // stale
+                App.showTimelineError("刷新失败");
+                reject(new Error("timeline refresh failed"));
             });
-            promises.push(timelinePromise);
-        }
+        });
+    }
 
-        // If the Project Rules page is active and has been loaded once,
-        // refresh its read-only data. The rules module owns the loading
-        // guard and request token so stale responses cannot overwrite newer
-        // page data.
-        if (App.currentPage === "rules" && App.rulesLoaded && !App.rulesLoading) {
-            promises.push(App.loadProjectRules());
+    function refreshCurrentPageData() {
+        if (App.activePageRefreshInFlight) return Promise.resolve();
+        App.activePageRefreshInFlight = true;
+        var promises = [refreshStatus()];
+        if (App.currentPage === "overview") {
+            promises.push(refreshOverview());
+            promises.push(refreshRecent());
+        } else if (App.currentPage === "timeline" && App.timelineLoaded) {
+            promises.push(refreshTimeline());
         }
-
-        Promise.allSettled(promises).then(function (results) {
+        // Rules / Settings / Statistics are intentionally NOT auto-refreshed
+        // by the heartbeat; they keep their own page-level refresh buttons.
+        return Promise.allSettled(promises).then(function (results) {
+            App.activePageRefreshInFlight = false;
+            App.lastFullRefreshAtEpochMs = Date.now();
             var anyError = false;
             for (var i = 0; i < results.length; i++) {
                 if (results[i].status === "rejected") {
@@ -97,7 +132,49 @@
             }
         });
     }
+
+    // ``refreshAll`` is kept as the manual refresh-button entry point. It
+    // now delegates to ``refreshCurrentPageData`` so the manual button also
+    // obeys the page-scoped contract (status + current page live data) and
+    // does not pull in Rules / Settings / Statistics auto-refresh.
+    function refreshAll() {
+        return refreshCurrentPageData();
+    }
     App.refreshAll = refreshAll;
+    App.refreshCurrentPageData = refreshCurrentPageData;
+
+    // Phase 6H-followup section 8/10: low-frequency collection
+    // reconciliation. Re-pulls collector status + Overview + current
+    // Timeline so a stalled ``refresh_revision`` signal (e.g. a missed
+    // update between heartbeat ticks) cannot freeze the UI forever. Rules
+    // / Settings / Statistics are NEVER touched here. When a Timeline
+    // editor / split editor / correction shell write is in progress, the
+    // Timeline re-render is skipped (only sidebar + overview refresh) so
+    // the user's input focus and button state are preserved. The manual
+    // refresh button can still trigger a heavier refresh; this is the
+    // background safety net only.
+    function fullReconcileCollectionViews(reason) {
+        if (App.reconcileInFlight) return Promise.resolve();
+        App.reconcileInFlight = true;
+        var promises = [refreshStatus()];
+        // Overview is always refreshed: the sidebar / current activity
+        // display depend on it on every page.
+        promises.push(refreshOverview());
+        promises.push(refreshRecent());
+        // Timeline is only re-rendered when no editing / split / correction
+        // shell write is in progress so input focus is never lost. When the
+        // user is editing, the next heartbeat revision check (which also
+        // respects the editing guard) will catch up after the editor closes.
+        if (App.currentPage === "timeline" && App.timelineLoaded
+            && !App._timelineEditingActive()) {
+            promises.push(refreshTimeline());
+        }
+        return Promise.allSettled(promises).then(function () {
+            App.reconcileInFlight = false;
+            App.lastReconcileAtEpochMs = Date.now();
+        });
+    }
+    App.fullReconcileCollectionViews = fullReconcileCollectionViews;
 
     function togglePause() {
         App.callBridge("toggle_pause").then(function (result) {
@@ -152,6 +229,19 @@
         // until the user clicks the refresh button.
         if (pageId === "settings" && !App.settingsLoaded && !App.settingsLoading) {
             App.loadSettingsPrivacyStatus();
+        }
+
+        // Phase 6H-followup: immediately refresh the current page's live
+        // data on page switch so the user sees fresh data without waiting
+        // for the next heartbeat revision check. Only live pages
+        // (overview / timeline) are refreshed here; Rules / Settings /
+        // Statistics keep their lazy-load-once + manual-refresh behavior
+        // and are NOT included in the auto-refresh path. Must run AFTER
+        // lazy-load so timeline's first load is not bypassed.
+        if (pageId === "overview") {
+            refreshCurrentPageData();
+        } else if (pageId === "timeline" && App.timelineLoaded) {
+            refreshCurrentPageData();
         }
     }
     App.switchPage = switchPage;
@@ -350,36 +440,80 @@
     }
     App.initButtons = initButtons;
 
-    function startAutoRefresh() {
-        if (App.refreshTimer !== null) clearInterval(App.refreshTimer);
-        App.refreshTimer = setInterval(refreshAll, App.REFRESH_INTERVAL_MS);
-    }
-    App.startAutoRefresh = startAutoRefresh;
-
-    // Phase 6G: 1-second local ticker. The backend 8-second refresh is
-    // still the source of truth; this ticker only re-renders already-fetched
-    // durations with a locally-computed elapsed increment so the UI does
-    // not freeze for 8 seconds between ticks. The ticker ONLY updates DOM
-    // text; it never calls a bridge method, never writes the database, and
-    // never starts / stops the collector. It is a no-op when the current
-    // activity is paused / stopped, when the viewed date is not today, or
-    // when no snapshot has been fetched yet. The 8-second refresh resets
-    // the snapshot baseline so accumulated drift is bounded to 8s.
-    function startLocalTicker() {
-        if (App.localTickerTimer !== null) clearInterval(App.localTickerTimer);
-        App.localTickerTimer = setInterval(function () {
-            if (typeof App.applyLocalTicker === "function") {
-                try {
-                    App.applyLocalTicker();
-                } catch (e) {
-                    // Swallow ticker errors: the ticker is cosmetic and
-                    // must never break the 8-second refresh loop or the
-                    // rest of the UI.
-                }
+    // Phase 6H-followup: unified 1-second heartbeat. Replaces the fixed
+    // 8-second full refresh (``startAutoRefresh``) and the independent
+    // 1-second ticker (``startLocalTicker``). Each tick:
+    //   1. Apply the local ticker (re-render already-fetched durations
+    //      with a wall-clock delta). The ticker only updates DOM text.
+    //   2. Run a lightweight ``get_refresh_state`` revision check. When the
+    //      structural ``refresh_revision`` changes, refresh only the data
+    //      needed by the current page (``refreshCurrentPageData``). When
+    //      the revision is unchanged, no heavy interface is called.
+    // The heartbeat never writes the DB, never starts / stops the
+    // collector, and never calls Rules / Settings / Statistics bridges.
+    function runRevisionCheck() {
+        if (App.refreshCheckInFlight) return;
+        App.refreshCheckInFlight = true;
+        App.callBridge("get_refresh_state").then(function (result) {
+            var state = App.handleResult(result, function () {
+                return null;
+            });
+            if (!state) return;
+            var prevRevision = App.lastRefreshState && App.lastRefreshState.refresh_revision;
+            var newRevision = state.refresh_revision;
+            var isFirstCheck = prevRevision === null || prevRevision === undefined;
+            App.lastRefreshState = state;
+            // Phase 6H-followup section 10: when revision unchanged, only
+            // update the sidebar status from the refresh_state payload
+            // (no get_status call). When revision changed (or first
+            // check), refresh the current page's heavy data.
+            if (isFirstCheck || prevRevision !== newRevision) {
+                refreshCurrentPageData();
+            } else {
+                refreshStatusFromRefreshState(state);
             }
-        }, App.LOCAL_TICKER_INTERVAL_MS);
+            // Phase 6H-followup section 8/10: low-frequency reconciliation.
+            // Even when revision is unchanged, periodically re-pull status +
+            // Overview + current Timeline so a missed revision signal cannot
+            // freeze the UI. Guarded by ``reconcileInFlight`` and the
+            // editing-active guard inside ``fullReconcileCollectionViews``.
+            var now = Date.now();
+            if (!App.reconcileInFlight
+                && now - App.lastReconcileAtEpochMs >= App.RECONCILE_INTERVAL_MS) {
+                fullReconcileCollectionViews("heartbeat-lowfreq");
+            }
+        }).catch(function () {
+            // Swallow revision-check errors; the ticker phase still runs.
+        }).then(function () {
+            App.refreshCheckInFlight = false;
+        });
     }
-    App.startLocalTicker = startLocalTicker;
+    App.runRevisionCheck = runRevisionCheck;
+
+    function startHeartbeat() {
+        if (App.heartbeatTimer !== null) clearInterval(App.heartbeatTimer);
+        // Clear the legacy timers so a re-init does not stack old intervals.
+        if (App.refreshTimer !== null) { clearInterval(App.refreshTimer); App.refreshTimer = null; }
+        if (App.localTickerTimer !== null) { clearInterval(App.localTickerTimer); App.localTickerTimer = null; }
+        App.heartbeatTimer = setInterval(function () {
+            // Phase 1: local ticker (update DOM text with wall-clock delta).
+            try {
+                if (typeof App.applyLocalTicker === "function") {
+                    App.applyLocalTicker();
+                }
+            } catch (e) {
+                // Swallow ticker errors: the ticker is cosmetic and must
+                // never break the revision check or the rest of the UI.
+            }
+            // Phase 2: lightweight revision check (with in-flight guard).
+            try {
+                runRevisionCheck();
+            } catch (e) {
+                // Swallow revision-check errors; the next tick retries.
+            }
+        }, App.HEARTBEAT_INTERVAL_MS);
+    }
+    App.startHeartbeat = startHeartbeat;
 
     function init() {
         initNav();
@@ -405,9 +539,15 @@
         // catch branch that unconditionally started refresh is removed.
         App.loadFirstRunNotice().then(function (noticeConfirmed) {
             if (!noticeConfirmed) return;
-            refreshAll();
-            startAutoRefresh();
-            startLocalTicker();
+            // Phase 6H-followup: the initial load uses the unified
+            // ``refreshCurrentPageData`` so the first heavy refresh is
+            // page-scoped. The unified heartbeat then takes over: every 1
+            // second it first applies the local ticker (DOM-only duration
+            // updates) and then runs the lightweight ``get_refresh_state``
+            // revision check, calling heavy interfaces only when the
+            // structural revision changes.
+            refreshCurrentPageData();
+            startHeartbeat();
         });
     }
     App.init = init;
