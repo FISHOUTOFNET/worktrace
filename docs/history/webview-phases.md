@@ -7230,3 +7230,14 @@ Phase 6F does not implement and does not open:
 - Any Tkinter fallback (the legacy `worktrace/ui` package is deleted; no
   fallback path exists);
 - Any change to `bridge.py` import boundary (still only `worktrace.api`).
+
+---
+
+## Final Archive Note
+
+The WebView UI migration is closed as of Phase 6F. Subsequent maintenance
+work (documentation cleanup, bridge refactoring, test hardening, etc.) does
+not continue the UI migration phase numbering. Current shipped behavior is
+documented in [`docs/current-state.md`](../current-state.md); architecture
+decisions are documented in [`docs/ui-webview-migration.md`](../ui-webview-migration.md).
+This file remains the canonical archive for the Phase 0A → Phase 6F history.

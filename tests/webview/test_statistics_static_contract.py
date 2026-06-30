@@ -24,6 +24,7 @@ from static_helpers import (
     REPO_ROOT, WEBVIEW_UI_DIR, HISTORY_PATH,
     RELEASE_VALIDATION_PATH, README_PATH,
     read_resource, read_all_js, read_js, func_body,
+    read_bridge_sources_combined, read_bridge_method_body,
     FRONTEND_RESOURCE_FILES, NO_STORAGE_FILES,
 )
 
@@ -451,8 +452,9 @@ def test_frontend_js_no_save_dialog_or_folder_open_4a():
 def test_bridge_no_export_write_method_4a():
     """Phase 4A: the bridge must not expose any export write / file save
     method."""
-    bridge_path = WEBVIEW_UI_DIR / "bridge.py"
-    source = bridge_path.read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies moved out of
+    # bridge.py into the mixins).
+    source = read_bridge_sources_combined()
     forbidden_methods = [
         "def export_csv",
         "def export_excel",
@@ -567,7 +569,9 @@ def test_frontend_js_correction_shell_no_raw_sensitive_fields_3c():
 def test_bridge_no_new_methods_for_phase_3c():
     """Phase 3C: no new bridge methods beyond the known 21-method set
     (regression lock — same set as Phase 3B.9.1)."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies moved out of
+    # bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     known_methods = (
         "get_status", "toggle_pause", "get_overview",
         "get_recent_activities", "get_timeline",
@@ -592,7 +596,9 @@ def test_bridge_no_new_methods_for_phase_3c():
 def test_bridge_imports_only_allowed_modules_3c():
     """Phase 3C: the bridge must still only import worktrace.api and
     worktrace.formatters (regression lock)."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (imports may live in any
+    # of them after the page-level split).
+    bridge_src = read_bridge_sources_combined()
     for forbidden in ("from ..services", "from ..db",
                       "from ..collector", "from ..security",
                       "from ..runtime", "from ..config",
@@ -779,12 +785,9 @@ def test_index_html_statistics_export_hint_csv_enabled_4a1_to_4b():
 
 
 def test_bridge_statistics_explicit_bool_rejection_comment_4a1():
-    """Phase 4A.1: bridge.py must document that bool/None/non-string inputs
+    """Phase 4A.1: the bridge must document that bool/None/non-string inputs
     are rejected by the isinstance str check."""
-    bridge_path = REPO_ROOT / "worktrace" / "webview_ui" / "bridge.py"
-    source = bridge_path.read_text(encoding="utf-8")
-    pos = source.find("def get_statistics_export_summary")
-    body = source[pos:pos + 1500]
+    body = read_bridge_method_body("get_statistics_export_summary")
     assert "bool" in body, (
         "bridge must document bool rejection in get_statistics_export_summary"
     )
@@ -1158,7 +1161,9 @@ def test_frontend_js_no_export_excel_pdf_timesheet_open_folder_methods_4b():
 def test_bridge_export_statistics_csv_method_present_4b():
     """Phase 4B: bridge.py must define ``export_statistics_csv`` (the
     controlled write path for the CSV export)."""
-    source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (the method body lives in
+    # bridge_statistics.py after the page-level split).
+    source = read_bridge_sources_combined()
     assert "def export_statistics_csv" in source, (
         "bridge.py must define export_statistics_csv"
     )
@@ -1180,6 +1185,8 @@ def test_bridge_export_statistics_csv_method_present_4b():
 def test_bridge_set_window_method_present_4b():
     """Phase 4B: bridge.py must define ``set_window`` so webview_main.py
     can inject the pywebview window for the native save dialog."""
+    # Phase M4: ``set_window`` is still defined on the composition
+    # ``WebViewBridge`` class in bridge.py itself.
     source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
     assert "def set_window" in source, (
         "bridge.py must define set_window for pywebview window injection"
@@ -1205,9 +1212,9 @@ def test_bridge_set_window_method_present_4b():
 def test_bridge_export_statistics_csv_returns_basename_only_4b():
     """Phase 4B: the docstring of export_statistics_csv must state that
     only the basename is returned (never the full local path)."""
-    source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = source.find("def export_statistics_csv")
-    body = source[pos:pos + 2500]
+    # Phase M4: method body lives in bridge_statistics.py
+    # (StatisticsBridgeMixin).
+    body = read_bridge_method_body("export_statistics_csv")
     assert "basename" in body.lower() or "filename" in body.lower(), (
         "export_statistics_csv docstring must document basename-only return"
     )

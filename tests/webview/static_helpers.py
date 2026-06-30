@@ -68,6 +68,22 @@ NO_STORAGE_FILES = (
     + ["js/" + name for name in ALL_JS_FILES]
 )
 
+# Bridge mixin files (Phase M4 page-level split). ``bridge.py`` is now a
+# thin composition class that inherits from six mixins; the method bodies
+# live in the mixin files below. The combined-source and per-method helpers
+# let static source-level tests keep working after the split without
+# hard-coding which mixin holds each method.
+BRIDGE_FILES = [
+    "bridge.py",
+    "bridge_common.py",
+    "bridge_dialogs.py",
+    "bridge_overview.py",
+    "bridge_settings.py",
+    "bridge_statistics.py",
+    "bridge_timeline.py",
+    "bridge_rules.py",
+]
+
 
 def read_resource(filename: str) -> str:
     """Return the UTF-8 text of a bundled ``webview_ui`` resource.
@@ -144,3 +160,53 @@ def func_body(source: str, name: str) -> str:
     candidates = [e for e in (end_func, end_iife) if e != -1]
     end = min(candidates) if candidates else -1
     return source[start:end] if end != -1 else source[start:]
+
+
+def read_bridge_sources_combined() -> str:
+    """Return the concatenated UTF-8 source of all 8 bridge mixin files.
+
+    Phase M4 split ``bridge.py`` into multiple mixin files. Tests that
+    previously did ``(WEBVIEW_UI_DIR / "bridge.py").read_text()`` and
+    then ran substring checks (e.g. ``assert "def foo" in src`` or
+    ``assert "from ..services" not in src``) should use this helper so
+    the checks scan every bridge file instead of just the slim
+    composition class.
+    """
+    parts: list[str] = []
+    for name in BRIDGE_FILES:
+        path = WEBVIEW_UI_DIR / name
+        if path.is_file():
+            parts.append(path.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
+def read_bridge_method_body(method_name: str, *, max_chars: int = 4000) -> str:
+    """Return the body slice of ``def <method_name>`` from whichever bridge
+    mixin file defines it.
+
+    Phase M4 split ``bridge.py`` into multiple mixin files. Tests that
+    previously did ``bridge_source.find("def <method_name>")`` then
+    sliced to ``find("\\n    def ", pos + 1)`` should use this helper so
+    the body is extracted from the correct mixin file (not the slim
+    composition ``bridge.py``).
+
+    Returns the slice from ``def <method_name>`` up to the next
+    ``\\n    def `` at indent 4 (or ``max_chars`` characters if no next
+    method is found). Raises ``AssertionError`` if the method is not
+    found in any bridge file.
+    """
+    for name in BRIDGE_FILES:
+        path = WEBVIEW_UI_DIR / name
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        pos = source.find("def " + method_name)
+        if pos == -1:
+            continue
+        next_def = source.find("\n    def ", pos + 1)
+        end = next_def if next_def != -1 else pos + max_chars
+        return source[pos:end]
+    raise AssertionError(
+        "method " + repr(method_name) + " not found in any bridge file: "
+        + ", ".join(BRIDGE_FILES)
+    )

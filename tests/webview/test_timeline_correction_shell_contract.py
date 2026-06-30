@@ -24,6 +24,7 @@ from static_helpers import (
     REPO_ROOT, WEBVIEW_UI_DIR, HISTORY_PATH,
     RELEASE_VALIDATION_PATH, README_PATH,
     read_resource, read_all_js, func_body,
+    read_bridge_sources_combined,
     FRONTEND_RESOURCE_FILES, NO_STORAGE_FILES,
 )
 
@@ -832,7 +833,9 @@ def test_bridge_no_new_write_methods_for_shell():
     """Phase 3B.5B: the bridge must not gain new write methods for the
     shell. The existing project / note / time / split / merge / hide /
     delete methods must still be present."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     for required in (
         "def update_timeline_project",
         "def update_timeline_note",
@@ -862,7 +865,9 @@ def test_bridge_imports_only_allowed_modules():
     """Phase 3B.5B: the bridge must continue to import only
     worktrace.api / worktrace.formatters and must not directly import
     services / db / collector / security / runtime / config."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     for forbidden in (
         "import worktrace.services",
         "import worktrace.db",
@@ -1216,7 +1221,9 @@ def test_styles_css_correction_shell_hidden_still_display_none():
 def test_bridge_no_new_methods_for_phase_3b_5b_1():
     """Phase 3B.5B.1: the hardening must not add any new bridge method,
     and the bridge must continue to import only allowed modules."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     # No new shell-specific write / read method is added in this phase.
     for forbidden in ("def correction_shell", "def batch_edit",
                       "def batch_hide", "def batch_delete",
@@ -1512,7 +1519,9 @@ def test_styles_css_has_batch_section_styles():
 def test_bridge_has_batch_update_method():
     """Phase 3B.6: the bridge must define the
     batch_update_timeline_activities_project method."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     assert "def batch_update_timeline_activities_project" in bridge_src, (
         "bridge must define batch_update_timeline_activities_project"
     )
@@ -1522,7 +1531,9 @@ def test_bridge_has_batch_update_method():
 def test_bridge_batch_error_messages_dict():
     """Phase 3B.6: the bridge must define the _BATCH_PROJECT_ERROR_MESSAGES
     dict with all stable error code → Chinese message mappings."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     assert "_BATCH_PROJECT_ERROR_MESSAGES" in bridge_src, (
         "bridge must define _BATCH_PROJECT_ERROR_MESSAGES"
     )
@@ -2300,7 +2311,9 @@ def test_styles_css_has_batch_note_section_styles():
 def test_bridge_has_batch_note_update_method():
     """Phase 3B.7: the bridge must define the
     batch_update_timeline_activities_note method."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     assert "def batch_update_timeline_activities_note" in bridge_src, (
         "bridge must define batch_update_timeline_activities_note"
     )
@@ -2310,7 +2323,9 @@ def test_bridge_has_batch_note_update_method():
 def test_bridge_batch_note_error_messages_dict():
     """Phase 3B.7: the bridge must define the _BATCH_NOTE_ERROR_MESSAGES
     dict with all stable error code -> Chinese message mappings."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     assert "_BATCH_NOTE_ERROR_MESSAGES" in bridge_src, (
         "bridge must define _BATCH_NOTE_ERROR_MESSAGES"
     )
@@ -2922,7 +2937,9 @@ def test_styles_css_has_restore_section_styles():
 def test_bridge_has_restore_method():
     """Phase 3B.8: the bridge must define the restore_timeline_activity
     and get_timeline_restorable_activities methods."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     assert "def restore_timeline_activity" in bridge_src, (
         "bridge must define restore_timeline_activity"
     )
@@ -2935,7 +2952,9 @@ def test_bridge_has_restore_method():
 def test_bridge_restore_error_messages_dict():
     """Phase 3B.8: the bridge must define the _RESTORE_ERROR_MESSAGES
     dict with all stable error code -> Chinese message mappings."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     assert "_RESTORE_ERROR_MESSAGES" in bridge_src, (
         "bridge must define _RESTORE_ERROR_MESSAGES"
     )
@@ -3851,7 +3870,9 @@ def test_bridge_no_new_methods_for_phase_3b_9():
     """Phase 3B.9: the bridge must not gain new methods. The existing
     project / note / time / split / merge / hide / delete / batch project /
     batch note / restore methods must still be present."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     for required in (
         "def update_timeline_project",
         "def update_timeline_note",
@@ -3881,7 +3902,9 @@ def test_bridge_imports_only_allowed_modules_3b_9():
     """Phase 3B.9: the bridge must still only import worktrace.api and
     worktrace.formatters; no direct service / db / collector / security /
     runtime / config imports."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     for forbidden in ("from ..services", "from ..db",
                       "from ..collector", "from ..security",
                       "from ..runtime", "from ..config",
@@ -4376,7 +4399,9 @@ def test_styles_css_highlight_still_present_3b9_1():
 
 def test_bridge_no_new_methods_for_phase_3b9_1():
     """Phase 3B.9.1: no new bridge methods beyond the known set."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     known_methods = (
         "get_status",
         "toggle_pause",
@@ -4411,7 +4436,9 @@ def test_bridge_no_new_methods_for_phase_3b9_1():
 def test_bridge_imports_only_allowed_modules_3b9_1():
     """Phase 3B.9.1: the bridge must still only import worktrace.api and
     worktrace.formatters."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # moved out of bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     for forbidden in ("from ..services", "from ..db",
                       "from ..collector", "from ..security",
                       "from ..runtime", "from ..config",

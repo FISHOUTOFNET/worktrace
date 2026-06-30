@@ -93,6 +93,62 @@ def test_bridge_py_selects_bridge_tests_and_boundary(runner):
 
 
 # ---------------------------------------------------------------------------
+# B (Phase M4). New split mixin files -> bridge tests + boundary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bridge_file", [
+    "worktrace/webview_ui/bridge_common.py",
+    "worktrace/webview_ui/bridge_dialogs.py",
+    "worktrace/webview_ui/bridge_overview.py",
+    "worktrace/webview_ui/bridge_statistics.py",
+    "worktrace/webview_ui/bridge_timeline.py",
+])
+def test_m4_split_mixin_selects_bridge_tests_and_boundary(runner, bridge_file):
+    # Phase M4: each new split mixin file must trigger section B (WebView
+    # bridge) so the broad bridge test suite + boundary tests run when any
+    # mixin body changes. These mixins are not frontend resources, so no
+    # import smoke is expected from section B.
+    sel = runner.select_targets([bridge_file])
+    for expected in [
+        "tests/test_webview_bridge.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_webview_bridge_merge.py",
+        "tests/test_webview_bridge_batch_project.py",
+        "tests/test_webview_bridge_batch_note.py",
+        "tests/test_webview_bridge_restore.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, (
+            f"{bridge_file} must select: {expected}"
+        )
+
+
+def test_m4_bridge_settings_py_also_selects_k1_settings_suite(runner):
+    """Phase M4: bridge_settings.py carries the first-run notice, settings /
+    privacy status, clipboard toggle, backup export / import / manifest, and
+    clear-all-local-data bridge methods that previously lived in bridge.py.
+    It must trigger K1 (Settings / Privacy WebView) in addition to section B
+    so the settings-specific static contract, privacy status, packaging, and
+    frontend boundary tests run, plus the import smoke command."""
+    sel = runner.select_targets(["worktrace/webview_ui/bridge_settings.py"])
+    for expected in (
+        "tests/test_settings_privacy_status.py",
+        "tests/webview/test_settings_static_contract.py",
+        "tests/test_ui_backend_boundary.py",
+        "tests/webview/test_frontend_global_boundaries.py",
+        "tests/test_webview_packaging.py",
+        "tests/test_run_affected_tests.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"bridge_settings.py must select K1 target: {expected}"
+        )
+    assert any(
+        "import worktrace.webview_main" in " ".join(s) for s in sel.smoke_commands
+    )
+
+
+# ---------------------------------------------------------------------------
 # C. rule_api.py -> Project Rules keyword + folder API/service/bridge tests
 # (Phase TG2: rule_api.py no longer triggers frontend/static contract tests;
 #  it triggers C2 keyword + C3 folder + bridge + boundary only.)

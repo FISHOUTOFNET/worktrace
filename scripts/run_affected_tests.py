@@ -124,6 +124,12 @@ RULES: list[dict] = [
         "id": "B. WebView bridge",
         "triggers": [
             "worktrace/webview_ui/bridge.py",
+            "worktrace/webview_ui/bridge_common.py",
+            "worktrace/webview_ui/bridge_dialogs.py",
+            "worktrace/webview_ui/bridge_overview.py",
+            "worktrace/webview_ui/bridge_settings.py",
+            "worktrace/webview_ui/bridge_statistics.py",
+            "worktrace/webview_ui/bridge_timeline.py",
         ],
         "tests": [
             "tests/test_webview_bridge.py",
@@ -428,6 +434,7 @@ RULES: list[dict] = [
             "worktrace/api/settings_api.py",
             "worktrace/api/backup_api.py",
             "worktrace/webview_ui/bridge.py",
+            "worktrace/webview_ui/bridge_settings.py",
             "worktrace/webview_ui/index.html",
             "worktrace/webview_ui/js/core.js",
             "worktrace/webview_ui/js/settings.js",

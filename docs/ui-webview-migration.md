@@ -1,32 +1,12 @@
 # WorkTrace WebView UI Migration
 
-This document holds the **architecture decisions and migration principles** for
-the WebView UI, plus a one-screen **current migration status summary**. The
-full per-phase history (Phase 0A → Phase 6B "Implemented Scope" / "Not
-Implemented" sections) lives in
-[`docs/history/webview-phases.md`](history/webview-phases.md). For a quick
-"what is shipped today" snapshot, read
-[`docs/current-state.md`](current-state.md).
+This document holds the **architecture decisions and migration principles** for the WebView UI. The WebView migration is closed; current shipped behavior lives in [`docs/current-state.md`](current-state.md); the full per-phase history lives in [`docs/history/webview-phases.md`](history/webview-phases.md).
 
 ## Status
 
-- Current shipped status is tracked in [`docs/current-state.md`](current-state.md).
-- Full phase history (Phase 0A → current) is tracked in
-  [`docs/history/webview-phases.md`](history/webview-phases.md).
-- WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the default and
-  only shipping UI; there is no Tkinter fallback.
-- Migrated pages: Overview, Timeline / Time Details, Statistics / Export,
-  Project Rules, Settings / Privacy (Phase 6A read-only status foundation +
-  Phase 6B clipboard capture toggle write + Phase 6C encrypted backup export
-  + manifest preview + Phase 6D encrypted backup import + clear-all-local-data
-  + Phase 6E first-run privacy notice gate + read-only "view privacy notice"
-  entry). Per-phase scope is archived in the history file.
-- WebView migration is closed (Phase 6E). The Settings / Privacy write
-  actions save settings, `set_setting_value`, arbitrary file / folder
-  dialog, and export path setting are intentionally unsupported for v0.2
-  (not deferred). Only the controlled native dialogs CSV save and
-  `.wtbackup` save / open remain. The legacy `worktrace/ui` package was
-  deleted in Phase 6F; WebView is the only shipping UI.
+- WebView migration is closed. Current shipped behavior lives in [`docs/current-state.md`](current-state.md).
+- Full phase history (Phase 0A → Phase 6F) is archived in [`docs/history/webview-phases.md`](history/webview-phases.md).
+- WebView (pywebview + Microsoft Edge WebView2 Runtime) is the only shipping UI; there is no Tkinter fallback. The legacy worktrace/ui package was deleted.
 
 ## 1. Phase 1 Is A Destructive Migration
 
@@ -131,10 +111,10 @@ This is enforced by `tests/test_ui_backend_boundary.py`.
 
 ## 7. Migration Order (Summary)
 
-The migration is phased so each step is independently shippable. Each phase's
-full scope (Implemented Scope / Not Implemented) is in
-[`docs/history/webview-phases.md`](history/webview-phases.md). The high-level
-order:
+The migration was phased so each step was independently shippable. Each
+phase's full scope (Implemented Scope / Not Implemented) is in
+[`docs/history/webview-phases.md`](history/webview-phases.md). The
+high-level order:
 
 - Phase 0A / 0B / 0C — design boundary, minimal WebView shell, packaging
   verification. **Completed.**
@@ -143,165 +123,28 @@ order:
 - Phase 2 / 2.1 — Timeline read-only migration and hardening. **Completed.**
 - Phase 3A / 3B.x / 3C.x — Timeline editing, correction shell, batch
   operations, restore, and UI stabilization. **Completed.**
-- Phase 4A / 4A.1 / 4B / 4B.1 — Statistics / Export read-only + CSV export.
-  **Completed.**
+- Phase 4A / 4A.1 / 4B / 4B.1 — Statistics / Export read-only + CSV
+  export. **Completed.**
 - Phase 5A – 5G — Project Rules read-only through project lifecycle
   foundation (rule enable/disable, keyword create/edit/delete, folder rule
   CRUD, user project lifecycle). **Completed.**
-- Phase 5H — Rule impact preview + safe single-rule backfill foundation +
-  in-phase hardening. Adds single-rule impact preview (folder / keyword,
-  display-safe counts + ≤ 20 sample rows), safe single-rule backfill
-  (folder / keyword, capped at 100 updates per call, manual records
-  preserved), new `worktrace/services/rule_impact_service.py`, new API
-  facades `preview_project_rule_impact` / `backfill_project_rule` in
-  `rule_api.py`, new bridge methods of the same names in `bridge_rules.py`,
-  impact buttons (`rules_render.js`) + handlers (`rules_rule_actions.js`)
-  + preview/backfill panel (`index.html`) + CSS (`styles.css`) + state
-  vars (`core.js`) in the frontend, in-phase hardening tests
-  (`tests/test_project_rules_rule_impact.py` + extended bridge / static
-  contract tests), and a new affected-runner C7 section for
-  `rule_impact_service.py`. No schema change, no new dependencies, no new
-  JS file. **Completed.**
-- Phase 5I — Automatic rules + selected-rule batch operations foundation.
-  Makes enabled folder / keyword rules apply automatically to newly
-  produced / just-closed eligible activities through the existing
-  `finalize_created_activity` → `process_new_activity` →
-  `assign_project_for_activity` path (deterministic priority: folder
-  before keyword, by id ascending, first match wins; manual / hidden /
-  deleted / in-progress / non-normal / already-target / disabled-rule /
-  archived-project activities skipped; `is_archived = 0` added to the
-  enabled-rule SQL). Adds selected-rule batch preview / apply / enable /
-  disable (≤ 20 rules, batch apply capped at 100 total updates,
-  all-or-nothing transactions, first-rule-wins on collisions), new
-  `worktrace/services/rule_batch_service.py`, four new API facades in
-  `rule_api.py`, four new bridge methods in `bridge_rules.py`, per-rule
-  selection + batch action bar in the frontend, in-phase hardening tests
-  (`tests/test_project_rules_automatic_rules.py` +
-  `tests/test_project_rules_batch_operations.py` + extended bridge /
-  static contract tests), and new affected-runner C8 / C9 sections.
-  No schema change, no new dependencies, no new JS file. **Completed.**
-- Phase 5I.1 — Hardening-only follow-up to 5I: regression / boundary tests
-  for the automatic-rules path and selected-rule batch operations, plus a
-  boundary-test fix for a 5I-era `rules_render.js` comment that referenced
-  forbidden tokens. No new user-visible capability. **Completed.**
-- Phase 6A — Settings / Privacy WebView read-only status foundation. Migrates
-  the `page-settings` placeholder to a real read-only status page surfacing
-  the local storage model, clipboard-capture on/off, export directory
-  configured yes/no, encrypted-backup import-in-progress flag, and not-yet-open
-  notices. Adds a new `settings_api.get_settings_privacy_status()` read-only
-  facade, a `WebViewBridge.get_settings_privacy_status()` bridge method
-  (no new mixin file), a new classic IIFE `js/settings.js` module, scoped
-  `.settings-*` CSS, `WorkTrace.spec` + `ALL_JS_FILES` packaging updates, a new
-  affected-runner K1 section, and dedicated tests
-  (`tests/test_settings_privacy_status.py` +
-  `tests/webview/test_settings_static_contract.py`). No write actions, no
-  schema change, no new dependencies, no network/storage API. **Completed.**
-- Phase 6B — Settings / Privacy clipboard capture toggle foundation. Opens
-  the first minimal write capability on the Settings / Privacy page: a
-  clipboard capture toggle that writes `clipboard_capture_enabled` through a
-  narrow WebView bridge facade. Adds
-  `settings_api.set_clipboard_capture_enabled_for_webview(enabled: bool)`
-  (strict `bool` guard; non-bool rejected with a stable Chinese message;
-  returns updated status on success) and
-  `WebViewBridge.set_clipboard_capture_enabled(enabled)` (same strict bool
-  guard; collapses any exception to `"设置剪贴板记录失败"`). Frontend adds
-  `settings-clipboard-toggle` / `-label` / `-status` DOM ids, a
-  `settingsWriteInProgress` state guard, toggle change handler with
-  failure-state recovery (restores previous checked state), and
-  `.settings-toggle-*` CSS. Phase 6B does not read or display clipboard
-  content; the toggle only controls whether local clipboard recording is
-  enabled. No schema change, no new dependencies, no network / storage /
-  browser clipboard API. **Completed.**
-- Phase 6C — Settings / Privacy encrypted backup export + manifest preview
-  foundation. Opens two narrow WebView entries on the Settings / Privacy
-  page: encrypted backup export (passphrase + confirm passphrase → native
-  save dialog → `.wtbackup` → only `filename` + stable Chinese message
-  returned) and encrypted backup manifest preview (native open dialog →
-  display-safe fields only: version / app_version / created_at /
-  kdf_algorithm / payload_format / payload_alg; no passphrase, no decryption).
-  Adds `settings_api.export_encrypted_backup_for_webview(output_path,
-  passphrase, confirm_passphrase)` and
-  `settings_api.preview_encrypted_backup_manifest_for_webview(input_path)`,
-  plus `WebViewBridge.export_encrypted_backup(passphrase,
-  confirm_passphrase)` (two required params) and
-  `WebViewBridge.preview_encrypted_backup_manifest()` (zero params), both
-  defined directly on `WebViewBridge` (no new mixin). Frontend adds
-  `settings-backup-passphrase` / `-confirm` / `-export-btn` /
-  `-manifest-btn` / `-status` / `-manifest` DOM ids, two new state flags
-  (`settingsBackupExportInProgress` / `settingsBackupManifestInProgress`)
-  combined into an `anySettingsOperationInProgress()` guard, and
-  `.settings-backup-*` CSS. Both API and bridge layers never return full
-  paths, passphrases, salt, ciphertext, payload, SQL, or tracebacks; both
-  collapse failures to stable Chinese messages. No schema change, no new
-  dependencies, no network / storage / browser clipboard API. **Completed.**
+- Phase 5H — single-rule impact preview + safe single-rule backfill
+  foundation. **Completed.**
+- Phase 5I / 5I.1 — automatic rules application + selected-rule batch
+  operations foundation, plus hardening follow-up. **Completed.**
+- Phase 6A — Settings / Privacy read-only status foundation. **Completed.**
+- Phase 6B — Settings / Privacy clipboard capture toggle. **Completed.**
+- Phase 6C — encrypted backup export + manifest preview. **Completed.**
+- Phase 6D — encrypted backup import (replace-only) + clear-all-local-data.
+  **Completed.**
+- Phase 6E — first-run privacy notice gate + read-only "view privacy notice"
+  entry; closes the WebView migration. **Completed.**
 - Phase 5J+ — remaining Project Rules write workflows (hard delete project,
   raw folder-rule conflict preview, raw / unbounded batch backfill,
   automatic-rule enable / disable toggle in the UI). Not started.
-- Phase 6D — Settings / Privacy encrypted backup import + clear-all-local-data
-  foundation. Opens two narrow WebView entries on the Settings / Privacy
-  page: encrypted backup import (replace-only via native `.wtbackup` open
-  dialog; passphrase + Chinese confirmation literal `导入并替换` required;
-  leaves WorkTrace paused for the user to verify) and clear-all-local-data
-  (explicit Chinese confirmation literal `清空本地数据` required; runs inside
-  a destructive reset guard that pauses the collector and blocks collector
-  writes for the duration of the DB replacement, then leaves WorkTrace
-  paused). Adds `settings_api.import_encrypted_backup_for_webview(input_path,
-  passphrase, confirm_text)` and
-  `settings_api.clear_all_local_data_for_webview(confirm_text)`, plus
-  `WebViewBridge.import_encrypted_backup(passphrase, confirm_text)` (two
-  required params) and `WebViewBridge.clear_all_local_data(confirm_text)`
-  (one required param), both defined directly on `WebViewBridge` (no new
-  mixin). Frontend adds `App.settingsBackupImportInProgress` /
-  `App.settingsClearAllInProgress` state flags, `importEncryptedBackup` /
-  `clearAllLocalData` functions, `resetFrontendAfterLocalDataReplacement`
-  cache clearing, and scoped `.settings-backup-import-*` / `.settings-clear-*`
-  / `.settings-danger-*` CSS. `export_service.clear_all_local_data` hardened
-  with a local `_destructive_reset_guard` that mirrors the secure-import
-  guard semantics (snapshot → pause + secure_import_in_progress → reset →
-  restore on failure / leave paused on success) and
-  `_invalidate_clear_all_caches` that matches the
-  `secure_backup_service._invalidate_caches` set. K1 affected-test mapping
-  extended to cover `worktrace/webview_ui/js/core.js`. No schema change, no
-  new dependencies, no network / storage / browser clipboard API. **Completed.**
-- Phase 6E — WebView migration closure: first-run notice + intentional
-  unsupported cleanup. Closes the WebView migration by shipping the
-  first-run privacy notice gate in WebView (blocking overlay; user must
-  accept before the collector starts) and a read-only "view privacy notice"
-  entry on the Settings page. The gate is fail-closed: `webview_main` does
-  not auto-start the collector while the notice is unaccepted, and
-  `WebViewBridge.toggle_pause()` refuses to call `app_api.start_collector()`
-  until the user accepts. Adds `settings_api.get_first_run_notice_for_webview()`
-  (zero params; returns `ok` / `accepted` / `title` / `highlights` /
-  `notice_text`; `notice_text` comes from `PRIVACY_NOTICE_TEXT`) and
-  `settings_api.accept_first_run_notice_for_webview()` (zero params;
-  idempotent; writes `first_run_notice_accepted = true` via the existing
-  `set_setting` path with cache invalidation; does not call the collector),
-  plus `WebViewBridge.get_first_run_notice()` and
-  `WebViewBridge.accept_first_run_notice()` (both zero params; accept calls
-  `app_api.start_collector()` only after the API returns `ok=True`).
-  `get_settings_privacy_status()` updated: `phase` = `"6E"`; adds a
-  display-safe `first_run_notice` sub-dict (`accepted` /
-  `view_available_in_webview` / `accept_required`). Frontend adds the
-  first-run notice overlay DOM, five `App.firstRunNotice*` state flags,
-  `App.loadFirstRunNotice` / `App.showFirstRunNotice` /
-  `App.hideFirstRunNotice` / `App.acceptFirstRunNotice` /
-  `App.openPrivacyNoticeFromSettings` / `App.renderFirstRunNotice`
-  helpers, init-time `loadFirstRunNotice()` call, and scoped
-  `.first-run-notice-*` / `.settings-privacy-notice-*` CSS. All dynamic
-  content uses `textContent` (no `innerHTML`); no network / storage /
-  browser clipboard API. Tests extended: API + bridge tests, entry
-  startup-gate tests, static contract tests, boundary tests, and a new K2
-  affected-test runner section for `worktrace/webview_main.py` /
-  `worktrace/main.py` / `worktrace/api/app_api.py`. Phase 6E explicitly
-  does NOT implement save settings, `set_setting_value`, export path
-  setting, or arbitrary file / folder dialog (intentionally unsupported
-  for v0.2); Phase 5J+ items (hard delete project, raw folder-rule
-  conflict preview, raw / unbounded batch backfill, automatic-rule
-  on/off UI toggle) remain future backlog. The legacy Tkinter UI is NOT
-  deleted; cleanup is the next phase. No schema change, no new
-  dependencies, no new JS file. **Completed.**
-- Cleanup — remove the legacy Tkinter UI, reached only after all feature
-  pages are at parity in the WebView UI. **Completed (Phase 6F).**
+- Cleanup — remove the legacy Tkinter UI. **Completed (Phase 6F).**
+
+**The WebView migration is now closed.** Subsequent maintenance does not continue the phase numbering. Current shipped behavior is documented in [`docs/current-state.md`](current-state.md).
 
 ## 8. Stop-Loss Conditions
 

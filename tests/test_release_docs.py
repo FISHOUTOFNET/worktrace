@@ -280,9 +280,20 @@ def test_current_state_line_count_under_hard_max():
     )
 
 
-def test_current_state_contains_phase_5i():
+def test_current_state_documents_project_rules_lifecycle():
+    """Post-WebView-migration: current-state.md no longer carries UI
+    migration phase labels (e.g. "Phase 5I"). Instead it must document the
+    shipped capability — user project create / edit / enable-disable /
+    archive — which is what the old phase label was a proxy for."""
     text = _read_text(CURRENT_STATE_PATH)
-    assert "Phase 5I" in text, "current-state.md must mention Phase 5I"
+    assert "Phase 5I" not in text, (
+        "current-state.md must not carry UI migration phase labels "
+        "(post-migration governance)"
+    )
+    assert "user project create / edit / enable-disable / archive" in text, (
+        "current-state.md must document user project create / edit / "
+        "enable-disable / archive as shipped capabilities"
+    )
 
 
 def test_current_state_contains_csv_export():

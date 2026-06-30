@@ -24,6 +24,7 @@ from static_helpers import (
     REPO_ROOT, WEBVIEW_UI_DIR, HISTORY_PATH,
     RELEASE_VALIDATION_PATH, README_PATH,
     read_resource, read_all_js, func_body,
+    read_bridge_sources_combined,
     FRONTEND_RESOURCE_FILES, NO_STORAGE_FILES,
 )
 
@@ -2881,7 +2882,9 @@ def test_bridge_no_new_methods_for_phase_3c1():
     """Phase 3C.1 / 4A: no new bridge methods beyond the known 22-method set
     (regression lock — Phase 4A adds get_statistics_export_summary as a
     read-only method; no other methods may be added)."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (method bodies moved out of
+    # bridge.py into the mixins).
+    bridge_src = read_bridge_sources_combined()
     known_methods = (
         "get_status", "toggle_pause", "get_overview",
         "get_recent_activities", "get_timeline",
@@ -2907,7 +2910,9 @@ def test_bridge_no_new_methods_for_phase_3c1():
 def test_bridge_imports_only_allowed_modules_3c1():
     """Phase 3C.1: the bridge must still only import worktrace.api and
     worktrace.formatters (regression lock)."""
-    bridge_src = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: scan all 8 bridge mixin files (imports may live in any
+    # of them after the page-level split).
+    bridge_src = read_bridge_sources_combined()
     for forbidden in ("from ..services", "from ..db",
                       "from ..collector", "from ..security",
                       "from ..runtime", "from ..config",

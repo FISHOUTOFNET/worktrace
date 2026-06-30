@@ -888,37 +888,54 @@ def test_bridge_export_payload_never_contains_full_path(temp_db, tmp_path, bridg
 
 
 def test_bridge_export_does_not_import_backend_internals():
-    """bridge.py must import only ``worktrace.api`` (plus formatters and the
-    lazily-resolved pywebview UI dependency). It must NOT import services /
-    db / collector / runtime / config / security."""
-    source = Path(WebViewBridge.__module__.replace(".", "/") + ".py")
-    # Resolve through the package path.
+    """The WebView bridge modules must import only ``worktrace.api`` (plus
+    formatters and the lazily-resolved pywebview UI dependency). They must
+    NOT import services / db / collector / runtime / config / security.
+
+    Phase M4: ``bridge.py`` is now a thin composition class; the method
+    bodies live in the mixin files (``bridge_common.py``,
+    ``bridge_dialogs.py``, ``bridge_overview.py``, ``bridge_settings.py``,
+    ``bridge_statistics.py``, ``bridge_timeline.py``, ``bridge_rules.py``).
+    All 8 bridge files must satisfy the boundary."""
     import worktrace
-    bridge_path = Path(worktrace.__file__).parent / "webview_ui" / "bridge.py"
-    source = bridge_path.read_text(encoding="utf-8")
-    for forbidden in (
-        "from ..services",
-        "from worktrace.services",
-        "from ..db",
-        "from worktrace.db",
-        "from ..collector",
-        "from worktrace.collector",
-        "from ..security",
-        "from worktrace.security",
-        "from ..runtime",
-        "from worktrace.runtime",
-        "from ..config",
-        "from worktrace.config",
-        "import worktrace.services",
-        "import worktrace.db",
-        "import worktrace.collector",
-        "import worktrace.security",
-        "import worktrace.runtime",
-        "import worktrace.config",
-    ):
-        assert forbidden not in source, (
-            f"bridge.py must not import backend internals: {forbidden}"
-        )
+    bridge_dir = Path(worktrace.__file__).parent / "webview_ui"
+    bridge_files = [
+        "bridge.py",
+        "bridge_common.py",
+        "bridge_dialogs.py",
+        "bridge_overview.py",
+        "bridge_settings.py",
+        "bridge_statistics.py",
+        "bridge_timeline.py",
+        "bridge_rules.py",
+    ]
+    for name in bridge_files:
+        bridge_path = bridge_dir / name
+        assert bridge_path.is_file(), f"missing bridge file: {name}"
+        source = bridge_path.read_text(encoding="utf-8")
+        for forbidden in (
+            "from ..services",
+            "from worktrace.services",
+            "from ..db",
+            "from worktrace.db",
+            "from ..collector",
+            "from worktrace.collector",
+            "from ..security",
+            "from worktrace.security",
+            "from ..runtime",
+            "from worktrace.runtime",
+            "from ..config",
+            "from worktrace.config",
+            "import worktrace.services",
+            "import worktrace.db",
+            "import worktrace.collector",
+            "import worktrace.security",
+            "import worktrace.runtime",
+            "import worktrace.config",
+        ):
+            assert forbidden not in source, (
+                f"{name} must not import backend internals: {forbidden}"
+            )
 
 
 def test_bridge_get_statistics_export_summary_remains_read_only(temp_db, tmp_path, bridge):

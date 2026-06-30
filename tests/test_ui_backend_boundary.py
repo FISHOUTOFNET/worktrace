@@ -133,6 +133,51 @@ def webview_ui_files() -> list[Path]:
     return _collect_webview_ui_files()
 
 
+# Phase M4 page-level split: ``bridge.py`` is now a thin composition class
+# that inherits from six mixins (``BridgeDialogMixin``, ``OverviewBridgeMixin``,
+# ``SettingsBridgeMixin``, ``StatisticsBridgeMixin``, ``TimelineBridgeMixin``,
+# ``ProjectRulesBridgeMixin``). Method bodies live in the mixin files below.
+# Static source-level tests that previously read ``bridge.py`` directly must
+# now scan all 8 bridge files so the method bodies are found regardless of
+# which mixin holds them.
+BRIDGE_FILES = [
+    "bridge.py",
+    "bridge_common.py",
+    "bridge_dialogs.py",
+    "bridge_overview.py",
+    "bridge_settings.py",
+    "bridge_statistics.py",
+    "bridge_timeline.py",
+    "bridge_rules.py",
+]
+
+
+def _read_bridge_method_body(method_name: str, *, max_chars: int = 4000) -> str:
+    """Return the body slice of ``def <method_name>`` from whichever bridge
+    mixin file defines it.
+
+    Searches the 8 ``BRIDGE_FILES`` in order for ``def <method_name>`` and
+    returns the slice from that position up to the next ``\\n    def `` at
+    indent 4 (or ``max_chars`` characters if no next method is found).
+    Raises ``AssertionError`` if the method is not found in any bridge file.
+    """
+    for name in BRIDGE_FILES:
+        path = WEBVIEW_UI_DIR / name
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        pos = source.find("def " + method_name)
+        if pos == -1:
+            continue
+        next_def = source.find("\n    def ", pos + 1)
+        end = next_def if next_def != -1 else pos + max_chars
+        return source[pos:end]
+    raise AssertionError(
+        "method " + repr(method_name) + " not found in any bridge file: "
+        + ", ".join(BRIDGE_FILES)
+    )
+
+
 def test_webview_ui_directory_exists() -> None:
     assert WEBVIEW_UI_DIR.is_dir(), (
         "worktrace/webview_ui directory must exist (Phase 1 default UI package)"
@@ -171,15 +216,19 @@ def test_webview_bridge_has_no_runtime_or_config_imports() -> None:
 
     As of the Phase M3 split, the Project Rules bridge methods live in
     ``bridge_rules.py`` (mixed into ``WebViewBridge`` via
-    ``ProjectRulesBridgeMixin``). Both ``bridge.py`` and ``bridge_rules.py``
-    must obey the same strict boundary: no ``runtime``, ``config``,
-    ``services``, ``db``, ``collector``, or ``security`` imports.
+    ``ProjectRulesBridgeMixin``). As of the Phase M4 page-level split,
+    the Overview / Settings / Statistics / Timeline bridge methods live
+    in ``bridge_overview.py`` / ``bridge_settings.py`` /
+    ``bridge_statistics.py`` / ``bridge_timeline.py`` respectively, and
+    shared helpers live in ``bridge_common.py`` / ``bridge_dialogs.py``.
+    All 8 bridge files must obey the same strict boundary: no
+    ``runtime``, ``config``, ``services``, ``db``, ``collector``, or
+    ``security`` imports.
     """
-    bridge_modules = ["bridge.py", "bridge_rules.py"]
     # bridge.py is the primary bridge module and must always exist.
     assert (WEBVIEW_UI_DIR / "bridge.py").is_file(), "bridge.py must exist (Phase 1)"
     violations: list[str] = []
-    for name in bridge_modules:
+    for name in BRIDGE_FILES:
         path = WEBVIEW_UI_DIR / name
         if not path.is_file():
             continue
@@ -337,22 +386,14 @@ def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens()
     clipboard content / passphrase / SQL / traceback / raw exception text.
 
     This is a static source-level check so it runs without a live database
-    or collector: it reads ``bridge.py`` and confirms the error string is
-    the only payload on failure and no ``traceback`` / ``str(exc)`` /
-    ``repr`` expression appears in the executable code (the docstring is
-    skipped because it legitimately mentions these words to document what
-    the method does NOT leak).
+    or collector: it reads the bridge mixin that defines the method and
+    confirms the error string is the only payload on failure and no
+    ``traceback`` / ``str(exc)`` / ``repr`` expression appears in the
+    executable code (the docstring is skipped because it legitimately
+    mentions these words to document what the method does NOT leak).
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def set_clipboard_capture_enabled")
-    assert pos != -1, (
-        "bridge.py must define set_clipboard_capture_enabled for Phase 6B"
-    )
-    # Extract the method body for inspection. Bound the slice at the next
-    # method definition so Phase 6C methods that follow (which legitimately
-    # use ``passphrase`` as a parameter name) don't trigger false positives.
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 2500]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("set_clipboard_capture_enabled")
     # Stable Chinese error messages that must appear in the payload.
     assert "请选择有效的剪贴板记录状态" in body
     assert "设置剪贴板记录失败" in body
@@ -465,12 +506,8 @@ def test_webview_bridge_export_error_payload_has_no_sensitive_tokens() -> None:
     ``test_settings_privacy_status`` verify the returned payload never
     carries the passphrase value.
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def export_encrypted_backup")
-    assert pos != -1, (
-        "bridge.py must define export_encrypted_backup for Phase 6C"
-    )
-    body = bridge_source[pos:pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("export_encrypted_backup")
     # Stable Chinese error messages that must appear in the payload.
     assert "已取消导出" in body
     assert "导出加密备份失败" in body
@@ -507,17 +544,12 @@ def test_webview_bridge_manifest_preview_error_payload_has_no_sensitive_tokens()
     because the manifest preview method never accepts or references a
     passphrase.
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def preview_encrypted_backup_manifest")
-    assert pos != -1, (
-        "bridge.py must define preview_encrypted_backup_manifest for Phase 6C"
-    )
-    # Slice to the next ``def`` at the same indent so the body covers only
-    # this method (a fixed 3000-char window would bleed into the next
-    # method ``import_encrypted_backup`` whose signature references
-    # ``passphrase``, falsely failing the forbidden-token check below).
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 4000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # The helper slices at the next ``def`` so the body covers only this
+    # method (a fixed window would bleed into ``import_encrypted_backup``
+    # whose signature references ``passphrase``, falsely failing the
+    # forbidden-token check below).
+    body = _read_bridge_method_body("preview_encrypted_backup_manifest")
     # Stable Chinese error messages that must appear in the payload.
     assert "已取消读取备份清单" in body
     assert "读取备份清单失败" in body
@@ -549,10 +581,8 @@ def test_webview_bridge_export_passes_passphrase_to_api_facade() -> None:
     ``settings_api.export_encrypted_backup_for_webview``. This is a static
     source-level check confirming the passphrase is used as a pass-through
     argument (not logged, not returned, not persisted)."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def export_encrypted_backup")
-    assert pos != -1
-    body = bridge_source[pos:pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("export_encrypted_backup")
     # The method must call the API facade with both passphrase arguments.
     assert "settings_api.export_encrypted_backup_for_webview" in body
     assert "passphrase" in body
@@ -565,13 +595,8 @@ def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
     ``import_encrypted_backup``, ``clear_all_local_data``, or
     ``set_setting_value``. This is a static source-level check on the
     bridge module."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    # Check the export method body.
-    export_pos = bridge_source.find("def export_encrypted_backup")
-    assert export_pos != -1
-    # Find the next method definition to bound the export body.
-    next_pos = bridge_source.find("\n    def ", export_pos + 1)
-    export_body = bridge_source[export_pos:next_pos if next_pos != -1 else export_pos + 3000]
+    # Phase M4: method bodies live in bridge_settings.py (SettingsBridgeMixin).
+    export_body = _read_bridge_method_body("export_encrypted_backup")
     for forbidden in (
         "import_encrypted_backup",
         "clear_all_local_data",
@@ -580,11 +605,7 @@ def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
         assert forbidden not in export_body, (
             "export_encrypted_backup must not call: " + forbidden
         )
-    # Check the manifest preview method body.
-    manifest_pos = bridge_source.find("def preview_encrypted_backup_manifest")
-    assert manifest_pos != -1
-    next_pos = bridge_source.find("\n    def ", manifest_pos + 1)
-    manifest_body = bridge_source[manifest_pos:next_pos if next_pos != -1 else manifest_pos + 3000]
+    manifest_body = _read_bridge_method_body("preview_encrypted_backup_manifest")
     for forbidden in (
         "import_encrypted_backup",
         "clear_all_local_data",
@@ -696,16 +717,11 @@ def test_webview_bridge_import_error_payload_has_no_sensitive_tokens() -> None:
     ``\\n    def `` so the following method's passphrase reference does
     not trigger false positives.
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def import_encrypted_backup")
-    assert pos != -1, (
-        "bridge.py must define import_encrypted_backup for Phase 6D"
-    )
-    # Slice at the next method definition so the clear_all_local_data
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # The helper slices at the next ``def`` so the clear_all_local_data
     # method body (which legitimately references ``confirm_text``) is not
     # accidentally included in this check.
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    body = _read_bridge_method_body("import_encrypted_backup")
     # Stable Chinese error messages that must appear in the payload.
     assert "已取消导入" in body
     assert "导入加密备份失败" in body
@@ -743,15 +759,8 @@ def test_webview_bridge_clear_error_payload_has_no_sensitive_tokens() -> None:
     The method body is sliced at the next ``\\n    def `` so the following
     module-level helper (if any) does not trigger false positives.
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def clear_all_local_data")
-    assert pos != -1, (
-        "bridge.py must define clear_all_local_data for Phase 6D"
-    )
-    # Slice at the next method definition so any following helper is not
-    # accidentally included.
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("clear_all_local_data")
     # Stable Chinese error message that must appear in the payload.
     assert "清空本地数据失败" in body
     # Skip the docstring when checking for forbidden runtime tokens.
@@ -782,11 +791,8 @@ def test_webview_bridge_import_passes_passphrase_to_api_facade() -> None:
     ``settings_api.import_encrypted_backup_for_webview``. This is a static
     source-level check confirming the passphrase is used as a pass-through
     argument (not logged, not returned, not persisted)."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def import_encrypted_backup")
-    assert pos != -1
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("import_encrypted_backup")
     # The method must call the API facade with both arguments.
     assert "settings_api.import_encrypted_backup_for_webview" in body
     assert "passphrase" in body
@@ -798,11 +804,8 @@ def test_webview_bridge_clear_calls_api_facade() -> None:
     ``settings_api.clear_all_local_data_for_webview`` with
     ``confirm_text``. This is a static source-level check confirming the
     bridge does not touch the DB / service directly."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def clear_all_local_data")
-    assert pos != -1
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("clear_all_local_data")
     assert "settings_api.clear_all_local_data_for_webview" in body
     assert "confirm_text" in body
 
@@ -812,11 +815,8 @@ def test_webview_bridge_import_does_not_call_export_or_manifest_or_set() -> None
     ``export_encrypted_backup``, ``preview_encrypted_backup_manifest``,
     ``clear_all_local_data``, or ``set_setting_value``. This is a static
     source-level check on the bridge module."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def import_encrypted_backup")
-    assert pos != -1
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("import_encrypted_backup")
     for forbidden in (
         "export_encrypted_backup",
         "preview_encrypted_backup_manifest",
@@ -832,11 +832,8 @@ def test_webview_bridge_clear_does_not_call_backup_actions_or_set() -> None:
     ``export_encrypted_backup``, ``preview_encrypted_backup_manifest``,
     ``import_encrypted_backup``, or ``set_setting_value``. This is a
     static source-level check on the bridge module."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def clear_all_local_data")
-    assert pos != -1
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("clear_all_local_data")
     for forbidden in (
         "export_encrypted_backup",
         "preview_encrypted_backup_manifest",
@@ -901,11 +898,8 @@ def test_webview_bridge_get_first_run_notice_calls_api_facade() -> None:
     ``settings_api.get_first_run_notice_for_webview``. This is a static
     source-level check confirming the bridge delegates to the API facade
     and does not touch the DB / service directly."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def get_first_run_notice")
-    assert pos != -1, "bridge.py must define get_first_run_notice for Phase 6E"
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 2000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("get_first_run_notice")
     assert "settings_api.get_first_run_notice_for_webview" in body
     # Must NOT touch DB / collector / security directly.
     for forbidden in (
@@ -931,11 +925,8 @@ def test_webview_bridge_accept_first_run_notice_calls_api_facade_and_start_colle
     static source-level check confirming the bridge delegates to the API
     facade for the accept write and then starts the collector (mirroring
     the legacy Tkinter ``_accept_notice`` flow)."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def accept_first_run_notice")
-    assert pos != -1, "bridge.py must define accept_first_run_notice for Phase 6E"
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("accept_first_run_notice")
     assert "settings_api.accept_first_run_notice_for_webview" in body
     # The accept method MUST call app_api.start_collector() on success.
     assert "app_api.start_collector" in body
@@ -964,11 +955,8 @@ def test_webview_bridge_get_first_run_notice_error_payload_has_no_sensitive_toke
     not leak traceback / str(exc) / repr / format_exc / exc_info /
     .message / raw_exception / clipboard_content / passphrase / path.
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def get_first_run_notice")
-    assert pos != -1
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 2000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("get_first_run_notice")
     # Stable Chinese error message that must appear in the payload.
     assert "加载隐私说明失败" in body
     # Skip the docstring when checking for forbidden runtime tokens.
@@ -1003,11 +991,8 @@ def test_webview_bridge_accept_first_run_notice_error_payload_has_no_sensitive_t
     of the method). ``passphrase`` is NOT allowed because the accept
     flow never references a passphrase.
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def accept_first_run_notice")
-    assert pos != -1
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("accept_first_run_notice")
     # Stable Chinese error message that must appear in the payload.
     assert "确认隐私说明失败" in body
     # Skip the docstring when checking for forbidden runtime tokens.
@@ -1043,11 +1028,8 @@ def test_webview_bridge_toggle_pause_gates_on_first_run_notice() -> None:
     This is a static source-level check confirming the gate is wired
     into ``toggle_pause`` and the fail-closed error message is present.
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def toggle_pause")
-    assert pos != -1
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_overview.py (OverviewBridgeMixin).
+    body = _read_bridge_method_body("toggle_pause")
     # The gate check must appear BEFORE the first ``app_api.start_collector``
     # call. Find both positions and assert ordering.
     gate_pos = body.find("settings_api.first_run_notice_accepted()")
@@ -1073,11 +1055,8 @@ def test_webview_bridge_toggle_pause_does_not_mutate_state_when_gate_closed() ->
     ``toggle_pause`` must NOT call ``set_user_paused``,
     ``set_collector_status``, ``set_current_activity_snapshot``, or
     ``start_collector``. The fail-closed path is a pure return."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def toggle_pause")
-    assert pos != -1
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_overview.py (OverviewBridgeMixin).
+    body = _read_bridge_method_body("toggle_pause")
     # Find the fail-closed return block: between the gate check and the
     # ``raw_status = settings_api.get_collector_status()`` line that
     # follows the gate. Slice that block and assert no state mutations.
@@ -1106,12 +1085,9 @@ def test_webview_bridge_first_run_notice_methods_do_not_open_file_dialog() -> No
     """Phase 6E: neither ``get_first_run_notice`` nor
     ``accept_first_run_notice`` may open a native file dialog. The
     first-run notice is a pure accept flow with no file chooser."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
+    # Phase M4: method bodies live in bridge_settings.py (SettingsBridgeMixin).
     for method_name in ("get_first_run_notice", "accept_first_run_notice"):
-        pos = bridge_source.find("def " + method_name)
-        assert pos != -1
-        next_def = bridge_source.find("\n    def ", pos + 1)
-        body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+        body = _read_bridge_method_body(method_name)
         for forbidden in (
             "open_file_dialog",
             "save_file_dialog",
@@ -1189,11 +1165,8 @@ def test_webview_bridge_toggle_pause_calls_start_background_workers_before_colle
     ``test_webview_bridge_toggle_pause_gates_on_first_run_notice``: find the
     ``toggle_pause`` body, slice to the next ``def``, and assert ordering.
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def toggle_pause")
-    assert pos != -1, "bridge.py must define toggle_pause"
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_overview.py (OverviewBridgeMixin).
+    body = _read_bridge_method_body("toggle_pause")
     bg_pos = body.find("app_api.start_background_workers()")
     start_pos = body.find("app_api.start_collector()")
     assert bg_pos != -1, (
@@ -1216,11 +1189,8 @@ def test_webview_bridge_accept_first_run_notice_calls_start_background_workers()
     folder index worker starts alongside the collector. This is a static
     source-level check mirroring
     ``test_webview_bridge_accept_first_run_notice_calls_api_facade_and_start_collector``."""
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def accept_first_run_notice")
-    assert pos != -1, "bridge.py must define accept_first_run_notice for Phase 6E"
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("accept_first_run_notice")
     assert "app_api.start_background_workers" in body, (
         "accept_first_run_notice must call app_api.start_background_workers "
         "after a successful accept (Phase 6G)"
@@ -1236,11 +1206,8 @@ def test_webview_bridge_accept_first_run_notice_starts_background_workers_before
     skipped before comparing positions (mirroring the existing forbidden-token
     pattern used by the Phase 6C/6D/6E error-payload tests).
     """
-    bridge_source = (WEBVIEW_UI_DIR / "bridge.py").read_text(encoding="utf-8")
-    pos = bridge_source.find("def accept_first_run_notice")
-    assert pos != -1, "bridge.py must define accept_first_run_notice for Phase 6E"
-    next_def = bridge_source.find("\n    def ", pos + 1)
-    body = bridge_source[pos:next_def if next_def != -1 else pos + 3000]
+    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    body = _read_bridge_method_body("accept_first_run_notice")
     # Skip the docstring because it legitimately mentions
     # ``app_api.start_collector()`` to document the Phase 6E behavior; only
     # the executable code should be checked for ordering.
@@ -1278,4 +1245,63 @@ def test_app_api_exports_start_background_workers_facade() -> None:
 
     assert "start_background_workers" in app_api.__all__, (
         "app_api.__all__ must export start_background_workers (Phase 6G)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase M4: page-level bridge split. ``WebViewBridge`` is now a thin
+# composition class that inherits from six mixins. This test asserts the
+# runtime public method set on ``WebViewBridge()`` equals the union of all
+# public methods defined across the 8 bridge mixin files, so a future
+# refactor that drops a mixin (or adds a method to a mixin without wiring
+# it into ``WebViewBridge``) fails here instead of silently removing the
+# method from the only shipping bridge class.
+# ---------------------------------------------------------------------------
+
+
+def test_webview_bridge_exposes_union_of_all_mixin_public_methods() -> None:
+    """``WebViewBridge()`` must expose every public method defined on any of
+    the 8 bridge mixin files, and no extras beyond the union.
+
+    Phase M4 split ``bridge.py`` into ``bridge_common.py``,
+    ``bridge_dialogs.py``, ``bridge_overview.py``, ``bridge_settings.py``,
+    ``bridge_statistics.py``, ``bridge_timeline.py``, and ``bridge_rules.py``
+    (plus the slim composition ``bridge.py``). ``WebViewBridge`` inherits
+    from six of these mixins (all except ``bridge_common.py`` which holds
+    only module-level helpers). This test enumerates the public methods
+    declared on each mixin via AST and asserts the runtime ``dir()`` set
+    on ``WebViewBridge()`` matches the union.
+    """
+    import ast
+
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    # Collect public method names declared on any class in any bridge file.
+    union_declared: set[str] = set()
+    for name in BRIDGE_FILES:
+        path = WEBVIEW_UI_DIR / name
+        if not path.is_file():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
+                        union_declared.add(item.name)
+
+    # ``set_window`` is defined directly on ``WebViewBridge`` in bridge.py
+    # (not on a mixin), so it must be in the union already via bridge.py's
+    # ``WebViewBridge`` class. The runtime dir() set covers inherited mixin
+    # methods plus ``set_window``.
+    runtime_methods = {
+        m for m in dir(WebViewBridge())
+        if not m.startswith("_") and callable(getattr(WebViewBridge(), m))
+    }
+
+    # Every public method declared on any bridge mixin class must be
+    # exposed on the runtime WebViewBridge instance.
+    missing = union_declared - runtime_methods
+    assert not missing, (
+        "WebViewBridge() is missing public methods declared on bridge mixins: "
+        + ", ".join(sorted(missing))
     )

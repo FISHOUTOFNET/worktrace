@@ -5,38 +5,17 @@ runs as a portable desktop app, records active-window metadata locally,
 helps classify time into projects, and exports display-safe CSV activity
 records.
 
-> **Current state**: WebView Phase 6F is the latest shipped phase (legacy
-> Tkinter UI removal / WebView migration closure hardening; WebView is the
-> only UI, no Tkinter fallback). Phase 6E closed the WebView migration with
-> the first-run privacy notice + intentional unsupported cleanup. Project
-> Rules now supports project-grouped folder / keyword
-> rules, existing-rule enable / disable, keyword create / edit / delete,
-> folder rule create / edit / delete, user project create / edit /
-> enable-disable / archive, single-rule impact preview + safe single-rule
-> backfill for folder / keyword rules, automatic application of enabled
-> rules to newly produced / just-closed eligible activities, and
-> selected-rule batch preview / apply / enable / disable. The Settings /
-> Privacy page surfaces a read-only safety-status snapshot (storage model,
-> clipboard capture on/off, export directory configured yes/no,
-> encrypted-backup import-in-progress flag, first-run notice accepted
-> state), opens the clipboard capture toggle write, opens encrypted backup
-> export + manifest preview through native file dialogs, opens encrypted
-> backup import (replace-only via native `.wtbackup` open dialog) +
-> clear-all-local-data (explicit Chinese confirmation literal), and now
-> also provides the WebView first-run privacy notice gate (blocking
-> overlay; user must accept before the collector starts) plus a read-only
-> "view privacy notice" entry on the Settings page. The first-run gate
-> is fail-closed: `webview_main` and `toggle_pause` never start the
-> collector while the notice is unaccepted, and exceptions collapse to a
-> stable Chinese error. Both API and bridge layers collapse failures to
-> stable Chinese messages and never return full paths, passphrases, salt,
-> ciphertext, payload, SQL, or tracebacks. Save settings,
-> `set_setting_value`, arbitrary file/folder dialogs, and export path
-> setting are intentionally unsupported for v0.2 (not deferred). Hard
-> delete project, raw folder-rule conflict preview, raw / unbounded batch
-> backfill, and the automatic-rule on/off UI toggle remain future backlog.
-> The canonical one-screen snapshot of what ships today is
-> [`docs/current-state.md`](docs/current-state.md). The full per-phase
+> **Current state**: WebView (`pywebview` + Microsoft Edge WebView2 Runtime)
+> is the only shipping UI — no Tkinter fallback, and the legacy
+> `worktrace/ui` package has been deleted. Shipped behavior includes the
+> fail-closed first-run privacy notice gate (collector and folder-index
+> worker never start before acceptance), project rules with automatic
+> application of enabled rules to eligible activities, encrypted `.wtbackup`
+> backup export / manifest preview / import (replace-only), CSV export,
+> and Timeline editing (project reclassification, time correction / split /
+> merge, hide / soft delete / restore, batch project + note edits). The
+> canonical one-screen snapshot of what ships today is
+> [`docs/current-state.md`](docs/current-state.md); the full per-phase
 > history is [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
 > AI assistants: read [`docs/ai-context-guide.md`](docs/ai-context-guide.md)
 > before touching the repo.
@@ -231,27 +210,29 @@ database file or use the Settings page to clear and rebuild all data.
   adapter.
 - No service, driver, cloud sync, login, AI, OCR, screenshots, screen
   recording, or automatic startup.
-- Settings / Privacy page migrated to WebView in Phase 6A as a read-only
-  status foundation, extended in Phase 6B with the clipboard capture
-  toggle write, extended in Phase 6C with encrypted backup export +
-  manifest preview, extended in Phase 6D with encrypted backup import
-  (replace-only) + clear-all-local-data, and closed in Phase 6E with the
-  WebView first-run privacy notice gate (blocking overlay; user must
-  accept before the collector starts) plus a read-only "view privacy
-  notice" entry on the Settings page. The first-run gate is fail-closed:
-  `webview_main` and `toggle_pause` never start the collector while the
-  notice is unaccepted. The toggle only controls whether local clipboard
-  recording is enabled; no phase reads or displays clipboard content.
-  Encrypted backup import and clear-all-local-data both leave WorkTrace
-  paused so the user can verify the post-replacement state before
-  manually resuming recording; clear-all-local-data runs inside a
-  destructive reset guard that blocks collector writes during the DB
-  replacement. Save settings, `set_setting_value`, arbitrary file/folder
-  dialogs, and export path setting are intentionally unsupported for v0.2
-  (not deferred to a later phase).
+- Settings / Privacy page exposes a read-only safety-status snapshot
+  (storage model, clipboard capture on/off, export directory configured
+  yes/no, encrypted-backup import-in-progress flag, first-run notice
+  accepted state), a clipboard capture toggle write, encrypted backup
+  export + manifest preview through native file dialogs, encrypted backup
+  import (replace-only via native `.wtbackup` open dialog) +
+  clear-all-local-data (explicit Chinese confirmation literal), and the
+  first-run privacy notice gate (blocking overlay; user must accept before
+  the collector starts) plus a read-only "view privacy notice" entry.
+  The first-run gate is fail-closed: `webview_main` and `toggle_pause`
+  never start the collector while the notice is unaccepted. The clipboard
+  toggle only controls whether local clipboard recording is enabled; the
+  page never reads or displays clipboard content. Encrypted backup import
+  and clear-all-local-data both leave WorkTrace paused so the user can
+  verify the post-replacement state before manually resuming recording;
+  clear-all-local-data runs inside a destructive reset guard that blocks
+  collector writes during the DB replacement. Save settings,
+  `set_setting_value`, arbitrary file/folder dialogs, and export path
+  setting are intentionally unsupported for v0.2 (not deferred).
 - Hard delete project; raw folder-rule conflict preview; raw / unbounded
   batch backfill; automatic-rule enable / disable toggle in the UI; Excel /
   PDF / timesheet export; folder opening; and auto-submit are not
-  supported. (Phase 5I ships automatic rules application + selected-rule
-  batch preview / apply / enable / disable foundation, on top of the
-  Phase 5H single-rule impact preview + safe single-rule backfill.)
+  supported. (Automatic rules application + selected-rule batch preview /
+  apply / enable / disable and the single-rule impact preview + safe
+  single-rule backfill foundation already ship; the items above remain
+  backlog.)

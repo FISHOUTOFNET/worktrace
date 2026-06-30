@@ -6,55 +6,56 @@
 > full per-phase history see
 > [`history/webview-phases.md`](history/webview-phases.md).
 
-## Current Phase
+## Current Shipped State
 
-**Phase 6F — Legacy Tkinter UI removal / WebView migration closure
-hardening.** Cleanup / hardening phase (no new user features): deletes the
-legacy Tkinter UI package (`worktrace/ui/`), its tests, and the
-`customtkinter` dependency; migrates `date_range.py` to
-`worktrace/date_range.py`. WebView is the only shipping UI; no Tkinter
-fallback. No schema change; no collector / backup / statistics / timeline /
-project-rules behavior change; Phase 6E first-run notice behavior
-unchanged. Builds on Phase 6E, which closed the WebView migration with the
-first-run privacy notice gate + read-only "view privacy notice" entry; the
-Settings / Privacy page keeps the Phase 6A status snapshot, 6B clipboard
-toggle, 6C backup export + manifest preview, and 6D backup import +
-clear-all-local-data. Both API and bridge layers collapse failures to
-stable Chinese messages and never return full paths, passphrases, salt,
-ciphertext, payload, SQL, or tracebacks. Chronology in
-[`history/webview-phases.md`](history/webview-phases.md).
+- WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the only
+  shipping UI. The legacy `worktrace/ui` package has been deleted; there is
+  no Tkinter fallback. Start with `python -m worktrace.main`.
+- The first-run privacy notice gate is **fail-closed**: the collector and
+  folder-index worker must NOT start before the notice is accepted.
+- `AppRuntime.initialize()` only performs DB init, single-instance lock,
+  and recovery — it does NOT start the folder-index worker.
+- The folder-index worker only starts via `start_background_workers()`,
+  and only after the first-run notice is accepted.
+- `toggle_pause` must NOT start the collector / background workers when
+  the notice has not been accepted or when the notice-status read fails.
+- `accept_first_run_notice` on success starts background workers first,
+  then starts the collector.
+- Both API and bridge layers collapse failures to stable Chinese messages
+  and never return full paths, passphrases, salt, ciphertext, payload, SQL,
+  or tracebacks. Full per-phase chronology lives in
+  [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Default UI
 
 - WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the default and
   only shipping UI. Start with `python -m worktrace.main`.
-- No Tkinter fallback. The legacy Tkinter UI package (`worktrace/ui`) was
-  deleted in Phase 6F; WebView is the only shipping UI.
+- No Tkinter fallback. The legacy Tkinter UI package (`worktrace/ui`) has
+  been deleted; WebView is the only shipping UI.
 - Missing WebView2 Runtime is a blocking error with a clear Chinese install
   prompt; WorkTrace never auto-downloads it.
 
 ## Migrated Pages
 
-- **Overview** (Phase 1): KPIs (date / total / projects / classified /
+- **Overview**: KPIs (date / total / projects / classified /
   uncategorized), current activity, recent activities, error banner,
   pause/resume, auto-refresh.
-- **Timeline / Time Details** (Phase 2 / 2.1 + 3A–3C.1): date navigation,
-  daily total, session list, per-session activity details, read-only
-  rendering hardened for real-run reliability, plus the editing /
-  correction capabilities listed below.
-- **Statistics / Export** (Phase 4A / 4A.1 / 4B / 4B.1): read-only summary
-  cards, grouped tables (by project / by app / by status), export preview,
-  CSV export write, and hardened save dialog / packaging / static contract.
-- **Project Rules** (Phase 5A through Phase 5I): project-grouped rule list showing
-  project name / description, project enabled state, special `排除规则`
-  marker, rule counts, folder rules, keyword rules, rule enabled state, and
-  folder recursion scope. Current write capabilities are listed in the
-  Project Rules matrix below.
-- **Settings / Privacy** (Phase 6A / 6B / 6C / 6D / 6E): read-only safety-status
-  plus clipboard capture toggle plus encrypted backup export / manifest
-  preview / import (replace-only) / clear-all-local-data plus the first-run
-  privacy notice gate + read-only "view privacy notice" entry. Shows storage
-  model, clipboard-capture on/off, export directory configured yes/no,
+- **Timeline / Time Details**: date navigation, daily total, session list,
+  per-session activity details, read-only rendering hardened for real-run
+  reliability, plus the editing / correction capabilities listed below.
+- **Statistics / Export**: read-only summary cards, grouped tables (by
+  project / by app / by status), export preview, CSV export write, and
+  hardened save dialog / packaging / static contract.
+- **Project Rules**: project-grouped rule list showing project name /
+  description, project enabled state, special `排除规则` marker, rule
+  counts, folder rules, keyword rules, rule enabled state, and folder
+  recursion scope. Current write capabilities are listed in the Project
+  Rules matrix below.
+- **Settings / Privacy**: read-only safety-status plus clipboard capture
+  toggle plus encrypted backup export / manifest preview / import
+  (replace-only) / clear-all-local-data plus the first-run privacy notice
+  gate + read-only "view privacy notice" entry. Shows storage model,
+  clipboard-capture on/off, export directory configured yes/no,
   encrypted-backup import-in-progress flag, first-run notice accepted state.
   Import + clear-all leave WorkTrace paused; clear-all runs inside a
   destructive reset guard. The first-run gate is fail-closed (`webview_main`
@@ -129,7 +130,7 @@ WebView (index.html / js/*.js / styles.css)
    (collector thread ──> worktrace.collector)
 ```
 
-Frontend JS layout (Phase R2): feature-split local classic scripts under
+Frontend JS layout: feature-split local classic scripts under
 `worktrace/webview_ui/js/` (`core.js`, `overview.js`, `timeline*.js`,
 `statistics.js`, `settings.js`, `rules*.js`, `init.js`) loaded via plain
 `<script src="js/...">` tags. No ES modules, no bundler, no Node/build

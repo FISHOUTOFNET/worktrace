@@ -38,12 +38,20 @@ each phase does not require editing the same facts in multiple places:
 - **README** must not contain long phase implementation logs or per-phase
   chronology. It is a project overview with a short current-state pointer.
 - **`docs/current-state.md`** is the **only** current shipped behavior source.
-  It is a one-screen snapshot; phase-by-phase details belong in history.
-- **`docs/ui-webview-migration.md`** is **architecture-only**. It must not
-  carry current-status or changelog responsibility.
-- **`docs/history/webview-phases.md`** is the archive for phase-by-phase
-  details. Each phase's full scope is recorded here verbatim.
+  Post-WebView migration, it no longer uses UI migration phase labels (Phase
+  6F etc.) as the current-state identifier; it describes the shipped state
+  directly.
+- **`docs/ui-webview-migration.md`** is **architecture-only**. The WebView
+  migration is closed; this document no longer carries current-status
+  responsibility.
+- **`docs/history/webview-phases.md`** is the archive for the Phase 0A →
+  Phase 6F history. The migration is closed; ordinary maintenance should NOT
+  append new UI migration phase entries.
 - **`docs/release-validation.md`** is the canonical release baseline.
+- Post-migration: ordinary maintenance (docs cleanup, bridge refactoring,
+  test hardening) does NOT require updating the migration archive or
+  creating new phase labels. Only update `docs/current-state.md` when
+  shipped behavior changes.
 - **`docs/release-checklist.md`** is only a compatibility pointer to
   `docs/release-validation.md`; it is retained as a stub to avoid breaking
   references.
@@ -82,10 +90,13 @@ Otherwise stay narrow.
 
 Every 4–6 feature phases, run a **context diet** pass like Phase R1 / DG1:
 
-- Ensure `current-state.md` still matches the latest shipped phase and all
-  status-bearing docs agree on the "current phase" label.
+- Ensure `current-state.md` still matches the latest shipped behavior.
+  Post-WebView migration, there is no "current phase label" to sync;
+  `current-state.md` describes the shipped state directly.
 - Move any newly-accumulated per-phase prose out of README /
-  `ui-webview-migration.md` and into `history/webview-phases.md`.
+  `ui-webview-migration.md` and into `history/webview-phases.md`. The
+  migration archive is closed; do not create new phase entries for ordinary
+  maintenance.
 - Split or parametrize test files that have grown past ~1500 lines /
   accumulated duplicated static-contract assertions.
 - Keep the default reading set (current-state + slim migration doc) small.
