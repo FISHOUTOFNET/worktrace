@@ -109,14 +109,28 @@ def test_m4_split_mixin_selects_bridge_tests_and_boundary(runner, bridge_file):
     # bridge) so the broad bridge test suite + boundary tests run when any
     # mixin body changes. These mixins are not frontend resources, so no
     # import smoke is expected from section B.
+    # Phase M4-followup: section B now also carries the per-feature split-
+    # sensitive bridge tests (time_edit / split / visibility / statistics /
+    # csv_export) plus the settings-privacy / phase1-entry / app-runtime-
+    # privacy-gate tests so a mixin body change can never silently drop a
+    # specialized bridge test that was previously only reachable via the
+    # feature-specific D / E / K1 sections.
     sel = runner.select_targets([bridge_file])
     for expected in [
         "tests/test_webview_bridge.py",
         "tests/test_webview_project_rules_bridge.py",
+        "tests/test_webview_bridge_time_edit.py",
+        "tests/test_webview_bridge_split.py",
         "tests/test_webview_bridge_merge.py",
+        "tests/test_webview_bridge_visibility.py",
         "tests/test_webview_bridge_batch_project.py",
         "tests/test_webview_bridge_batch_note.py",
         "tests/test_webview_bridge_restore.py",
+        "tests/test_webview_bridge_statistics.py",
+        "tests/test_statistics_csv_export.py",
+        "tests/test_settings_privacy_status.py",
+        "tests/test_webview_phase1_entry.py",
+        "tests/test_app_runtime_privacy_gate.py",
         "tests/test_ui_backend_boundary.py",
     ]:
         assert expected in sel.pytest_targets, (
@@ -130,11 +144,17 @@ def test_m4_bridge_settings_py_also_selects_k1_settings_suite(runner):
     clear-all-local-data bridge methods that previously lived in bridge.py.
     It must trigger K1 (Settings / Privacy WebView) in addition to section B
     so the settings-specific static contract, privacy status, packaging, and
-    frontend boundary tests run, plus the import smoke command."""
+    frontend boundary tests run, plus the import smoke command.
+
+    Phase M4-followup: K1 now also carries the phase1 entry test and the
+    app-runtime privacy gate test because bridge_settings.py owns the
+    first-run notice accept flow that the startup gate depends on."""
     sel = runner.select_targets(["worktrace/webview_ui/bridge_settings.py"])
     for expected in (
         "tests/test_settings_privacy_status.py",
         "tests/webview/test_settings_static_contract.py",
+        "tests/test_webview_phase1_entry.py",
+        "tests/test_app_runtime_privacy_gate.py",
         "tests/test_ui_backend_boundary.py",
         "tests/webview/test_frontend_global_boundaries.py",
         "tests/test_webview_packaging.py",
@@ -146,6 +166,114 @@ def test_m4_bridge_settings_py_also_selects_k1_settings_suite(runner):
     assert any(
         "import worktrace.webview_main" in " ".join(s) for s in sel.smoke_commands
     )
+
+
+# ---------------------------------------------------------------------------
+# B/D/E/K1 (Phase M4-followup). Per-split-file specialized test locks.
+# Each split mixin file is a trigger for its own feature section (D / E / K1)
+# in addition to section B. These tests lock the feature-specific specialized
+# tests so a future runner refactor cannot silently drop them.
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_timeline_py_selects_timeline_specialized_tests(runner):
+    """Phase M4-followup: bridge_timeline.py is a D trigger (in addition to
+    a B trigger). It must select the Timeline-specialized bridge + static
+    contract tests, not just the broad bridge suite."""
+    sel = runner.select_targets(["worktrace/webview_ui/bridge_timeline.py"])
+    for expected in (
+        "tests/test_webview_bridge_time_edit.py",
+        "tests/test_webview_bridge_split.py",
+        "tests/test_webview_bridge_visibility.py",
+        "tests/webview/test_timeline_correction_shell_contract.py",
+        "tests/test_timeline_service.py",
+        "tests/test_timeline_api_editing.py",
+        "tests/webview/test_timeline_static_contract.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"bridge_timeline.py must select Timeline specialized test: {expected}"
+        )
+
+
+def test_bridge_statistics_py_selects_statistics_specialized_tests(runner):
+    """Phase M4-followup: bridge_statistics.py is an E trigger (in addition
+    to a B trigger). It must select the Statistics-specialized bridge +
+    export tests, not just the broad bridge suite."""
+    sel = runner.select_targets(["worktrace/webview_ui/bridge_statistics.py"])
+    for expected in (
+        "tests/test_webview_bridge_statistics.py",
+        "tests/test_statistics_csv_export.py",
+        "tests/test_statistics_service.py",
+        "tests/test_export_service.py",
+        "tests/webview/test_statistics_static_contract.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"bridge_statistics.py must select Statistics specialized test: {expected}"
+        )
+
+
+def test_bridge_dialogs_py_selects_statistics_and_settings_tests(runner):
+    """Phase M4-followup: bridge_dialogs.py holds the native save / open
+    file dialog helpers used by both the Statistics CSV export (E) and the
+    Settings backup export / import / manifest preview (K1). It must trigger
+    both E and K1 in addition to B, so the Statistics export tests AND the
+    Settings / privacy tests all run when the shared dialog mixin changes."""
+    sel = runner.select_targets(["worktrace/webview_ui/bridge_dialogs.py"])
+    # Statistics / export (E) specialized tests.
+    for expected in (
+        "tests/test_statistics_csv_export.py",
+        "tests/test_webview_bridge_statistics.py",
+        "tests/test_export_service.py",
+        "tests/webview/test_statistics_static_contract.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"bridge_dialogs.py must select Statistics/export test: {expected}"
+        )
+    # Settings / privacy (K1) specialized tests.
+    for expected in (
+        "tests/test_settings_privacy_status.py",
+        "tests/test_app_runtime_privacy_gate.py",
+        "tests/webview/test_settings_static_contract.py",
+        "tests/test_webview_phase1_entry.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"bridge_dialogs.py must select Settings/privacy test: {expected}"
+        )
+
+
+def test_bridge_settings_py_selects_phase1_and_privacy_gate_tests(runner):
+    """Phase M4-followup: bridge_settings.py owns the first-run notice
+    accept flow (Phase 6E) that the startup gate and app-runtime privacy
+    gate depend on. In addition to the K1 settings static contract /
+    privacy status tests, it must select the phase1 entry test and the
+    app-runtime privacy gate test."""
+    sel = runner.select_targets(["worktrace/webview_ui/bridge_settings.py"])
+    for expected in (
+        "tests/test_settings_privacy_status.py",
+        "tests/test_webview_phase1_entry.py",
+        "tests/test_app_runtime_privacy_gate.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"bridge_settings.py must select Settings/privacy test: {expected}"
+        )
+
+
+def test_bridge_py_and_bridge_overview_py_select_broad_bridge_and_boundary(runner):
+    """Phase M4-followup: bridge.py (the composition class) and
+    bridge_overview.py (the Overview mixin) are B triggers and must still
+    select the broad bridge + boundary tests. bridge.py is also a K1
+    trigger, so it additionally selects the Settings / privacy suite."""
+    for changed in (
+        "worktrace/webview_ui/bridge.py",
+        "worktrace/webview_ui/bridge_overview.py",
+    ):
+        sel = runner.select_targets([changed])
+        assert "tests/test_webview_bridge.py" in sel.pytest_targets, (
+            f"{changed} must select broad bridge test"
+        )
+        assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets, (
+            f"{changed} must select boundary test"
+        )
 
 
 # ---------------------------------------------------------------------------

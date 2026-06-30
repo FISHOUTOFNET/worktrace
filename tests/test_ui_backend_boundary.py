@@ -1305,3 +1305,112 @@ def test_webview_bridge_exposes_union_of_all_mixin_public_methods() -> None:
         "WebViewBridge() is missing public methods declared on bridge mixins: "
         + ", ".join(sorted(missing))
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase M4-followup: fixed expected-set lock on the WebViewBridge public API
+# surface. The union-of-mixin test above guards against a mixin growing a new
+# method that fails to reach ``WebViewBridge``. It does NOT guard against a
+# historically-public method being silently dropped during a split (e.g. a
+# method that lived on ``WebViewBridge`` before Phase M4 and was accidentally
+# left out of every mixin). This fixed set closes that gap: every name listed
+# here MUST remain callable on ``WebViewBridge()``. The set is hand-curated
+# from the actual public methods declared across the 8 bridge files (verified
+# via AST at authoring time); it is intentionally NOT derived dynamically from
+# AST so a split refactor cannot silently shrink the locked surface.
+# ---------------------------------------------------------------------------
+
+EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
+    # window injection
+    "set_window",
+    # Overview / status
+    "get_status",
+    "toggle_pause",
+    "get_overview",
+    "get_recent_activities",
+    # first-run / settings / privacy
+    "get_first_run_notice",
+    "accept_first_run_notice",
+    "get_settings_privacy_status",
+    "set_clipboard_capture_enabled",
+    "export_encrypted_backup",
+    "preview_encrypted_backup_manifest",
+    "import_encrypted_backup",
+    "clear_all_local_data",
+    # Timeline
+    "get_timeline",
+    "get_timeline_session_details",
+    "list_projects_for_timeline",
+    "update_timeline_project",
+    "update_timeline_note",
+    "update_timeline_activity_time",
+    "update_timeline_session_time",
+    "split_timeline_activity",
+    "split_timeline_session",
+    "merge_timeline_activities",
+    "hide_timeline_activity",
+    "soft_delete_timeline_activity",
+    "hide_timeline_session",
+    "soft_delete_timeline_session",
+    "batch_update_timeline_activities_project",
+    "batch_update_timeline_activities_note",
+    "get_timeline_restorable_activities",
+    "restore_timeline_activity",
+    # Statistics / export
+    "get_statistics_export_summary",
+    "export_statistics_csv",
+    # Project Rules
+    "get_project_rules",
+    "set_project_rule_enabled",
+    "create_project_keyword_rule",
+    "update_project_keyword_rule",
+    "delete_project_keyword_rule",
+    "create_project_folder_rule",
+    "update_project_folder_rule",
+    "delete_project_folder_rule",
+    "create_excluded_keyword_rule",
+    "create_excluded_folder_rule",
+    "create_project_for_rules",
+    "update_project_for_rules",
+    "set_project_enabled_for_rules",
+    "archive_project_for_rules",
+    "preview_project_rule_impact",
+    "backfill_project_rule",
+    "automatic_rules_status",
+    "preview_project_rules_batch_impact",
+    "backfill_project_rules_batch",
+    "set_project_rules_batch_enabled",
+}
+
+
+def test_webview_bridge_exposes_expected_fixed_public_api_surface() -> None:
+    """``WebViewBridge()`` must expose every method in the fixed expected set.
+
+    Phase M4-followup: this is the complement to
+    ``test_webview_bridge_exposes_union_of_all_mixin_public_methods``. The
+    union test prevents a mixin from growing a method that fails to reach
+    ``WebViewBridge``. This fixed-set test prevents a historically-public
+    method from being silently dropped during a bridge split (a method that
+    lived on ``WebViewBridge`` before the split and was accidentally left
+    out of every mixin would still pass the union test, because the union is
+    derived from the same mixin files that lost the method).
+
+    The expected set is hand-curated from the actual public methods declared
+    across the 8 bridge files (verified via AST at authoring time). It is
+    intentionally NOT derived dynamically from AST so a split refactor cannot
+    silently shrink the locked surface. If a method is renamed or removed,
+    this test fails and forces an explicit update to the expected set.
+    """
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    runtime_public_methods = {
+        name for name in dir(WebViewBridge())
+        if callable(getattr(WebViewBridge(), name)) and not name.startswith("_")
+    }
+    missing = EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS - runtime_public_methods
+    assert not missing, (
+        "WebViewBridge() is missing expected public API methods (locked "
+        "surface). If a method was intentionally renamed/removed, update "
+        "EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS explicitly. Missing: "
+        + ", ".join(sorted(missing))
+    )

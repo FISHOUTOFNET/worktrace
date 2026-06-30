@@ -1,22 +1,26 @@
 # WorkTrace WebView UI Phase History (Archive)
 
-> **Archive — historical phase log.** This file is the long-form record of
-> every completed WebView migration phase (Phase 0A → Phase 5B.1). It is kept
-> for reference and traceability only. For the current state, read
-> [`docs/current-state.md`](../current-state.md); for architecture decisions,
-> read [`docs/ui-webview-migration.md`](../ui-webview-migration.md).
+> **Archive — historical phase log.** This file is the historical WebView
+> migration phase archive. It covers the completed WebView migration history
+> through Phase 6F legacy Tkinter UI removal. The WebView migration is closed.
+>
+> Current shipped behavior lives in
+> [`docs/current-state.md`](../current-state.md); architecture decisions
+> live in [`docs/ui-webview-migration.md`](../ui-webview-migration.md).
+> This file is not a live status source.
 >
 > This file intentionally retains every phase label, "Implemented Scope",
 > and "Not Implemented" section verbatim so each phase remains auditable.
+> Ordinary maintenance must not append new UI migration phase entries.
 
 ## Status (frozen historical snapshot)
 
 > This `## Status` block was captured when the migration doc was archived.
-> The **live current phase** is in
-> [`../current-state.md`](../current-state.md) (now Phase 5B.1). Treat the
-> list below as a historical narrative, not a live status claim; this
-> archive also contains the later Phase 4A / 4A.1 / 4B / 4B.1 / 5A / 5A.1 /
-> 5B / 5B.1 sections below.
+> Treat the list below as a historical narrative, not a live status claim.
+> The live current state is in
+> [`../current-state.md`](../current-state.md); this archive also contains
+> the later Phase 4A / 4A.1 / 4B / 4B.1 / 5A / 5A.1 / 5B / 5B.1 sections
+> below.
 
 - Phase at archive time: 3C.1 (Overview fully migrated; Timeline read-only page
   migrated and hardened; Timeline basic editing — project reclassification
