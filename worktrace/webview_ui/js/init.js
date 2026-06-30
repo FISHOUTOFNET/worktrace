@@ -409,11 +409,54 @@
     }
     App.init = init;
 
-    // --- DOMContentLoaded wiring (must run at module load) -------------
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init);
-    } else {
+    // --- Bootstrap wiring (must run at module load) -------------------
+    // Phase 6H: gate ``init()`` on BOTH DOMContentLoaded AND the pywebview
+    // bridge being ready. The bridge is ready when either:
+    //   - ``window.pywebview && window.pywebview.api`` already exists
+    //     (pywebview finished injecting before this script ran), OR
+    //   - the ``pywebviewready`` event fires on ``window`` (pywebview
+    //     finishes injecting after this script ran).
+    // Without this gate, ``init()`` runs on DOMContentLoaded and
+    // immediately calls ``App.loadFirstRunNotice()`` -> ``App.callBridge()``.
+    // If the bridge is not yet injected, ``callBridge`` rejects with
+    // "bridge unavailable" and ``loadFirstRunNotice``'s catch branch
+    // renders the blocking "隐私说明加载失败" overlay — a false positive
+    // that blocks the user even though the backend notice is fine.
+    // ``initStarted`` ensures ``init()`` only runs once regardless of
+    // event ordering (DOMContentLoaded before/after pywebviewready, or
+    // both already satisfied at script load). If ``pywebviewready`` has
+    // already fired by the time ``onDomReady`` runs, the
+    // ``isBridgeReady()`` check catches the already-injected state, so
+    // the event being missed is harmless.
+    var initStarted = false;
+
+    function isBridgeReady() {
+        return !!(window.pywebview && window.pywebview.api);
+    }
+
+    function bootstrap() {
+        if (initStarted) return;
+        initStarted = true;
         init();
+    }
+
+    function onBridgeReady() {
+        window.removeEventListener("pywebviewready", onBridgeReady);
+        bootstrap();
+    }
+
+    function onDomReady() {
+        if (isBridgeReady()) {
+            bootstrap();
+        } else {
+            window.addEventListener("pywebviewready", onBridgeReady);
+        }
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", onDomReady);
+    } else {
+        onDomReady();
     }
 
 })();

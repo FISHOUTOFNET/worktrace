@@ -1480,3 +1480,140 @@ def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
         "inside a .then(...) callback on the loadFirstRunNotice promise, "
         "not at the top level of init"
     )
+
+
+# --- Phase 6H: init.js gates init() on pywebview bridge ready ----------
+#
+# On cold start, pywebview injects ``window.pywebview.api`` AFTER the
+# frontend scripts load. The old wiring called ``init()`` directly on
+# DOMContentLoaded, so ``App.loadFirstRunNotice()`` -> ``App.callBridge()``
+# ran before the bridge existed, ``callBridge`` rejected with
+# "bridge unavailable", and ``loadFirstRunNotice``'s catch branch rendered
+# a false "隐私说明加载失败" blocking overlay. The bootstrap must now wait
+# for the ``pywebviewready`` event (or detect the bridge already injected)
+# before calling ``init()``.
+
+
+def test_init_js_gates_bootstrap_on_pywebviewready_event_6h() -> None:
+    """Phase 6H: init.js must wait for the pywebview bridge to be ready
+    before calling ``init()``. The bootstrap wiring must reference the
+    ``pywebviewready`` event so that ``App.loadFirstRunNotice()`` is not
+    called while ``window.pywebview.api`` is still undefined. Without this
+    gate, ``App.callBridge`` rejects with "bridge unavailable" on cold
+    start and ``loadFirstRunNotice``'s catch branch renders a false
+    "隐私说明加载失败" blocking overlay even though the backend notice
+    is fine."""
+    source = read_js("init.js")
+    assert "pywebviewready" in source, (
+        "init.js must reference the pywebviewready event (or equivalent "
+        "bridge-ready gate) before calling init()"
+    )
+    # The event listener must be attached on window so the bridge-ready
+    # callback actually fires.
+    assert 'addEventListener("pywebviewready"' in source or \
+           "addEventListener('pywebviewready'" in source, (
+        "init.js must attach a pywebviewready listener on window"
+    )
+
+
+def test_init_js_does_not_call_init_directly_on_domcontentloaded_6h() -> None:
+    """Phase 6H: the DOMContentLoaded wiring must NOT pass ``init``
+    directly as the listener. It must route through a bridge-ready gate
+    (``onDomReady`` / ``bootstrap``) so ``init()`` only runs after
+    ``window.pywebview.api`` is available. The direct
+    ``addEventListener("DOMContentLoaded", init)`` pattern is forbidden
+    because it would call ``App.loadFirstRunNotice()`` before the bridge
+    is injected, producing a false "隐私说明加载失败" overlay."""
+    source = read_js("init.js")
+    # The forbidden pattern: passing ``init`` directly as the
+    # DOMContentLoaded listener.
+    assert 'addEventListener("DOMContentLoaded", init)' not in source, (
+        "init.js must not pass init directly to DOMContentLoaded; it must "
+        "go through a bridge-ready gate (onDomReady / bootstrap)"
+    )
+    assert "addEventListener('DOMContentLoaded', init)" not in source
+    # The bootstrap must check window.pywebview.api before calling init.
+    assert "pywebview.api" in source, (
+        "init.js must check window.pywebview.api before calling init()"
+    )
+
+
+def test_init_js_bootstrap_runs_init_only_once_6h() -> None:
+    """Phase 6H: the bootstrap wiring must guarantee ``init()`` runs only
+    once regardless of whether DOMContentLoaded / pywebviewready fire
+    before or after each other (or are already satisfied at script load).
+    A re-entrant guard flag (e.g. ``initStarted``) must prevent double
+    initialization."""
+    source = read_js("init.js")
+    # A guard flag must be declared.
+    assert re.search(
+        r"var\s+init(?:Started|Done|Invoked|Initialized|Ran)\s*=", source
+    ), (
+        "init.js must declare a re-entrant guard flag (e.g. initStarted) "
+        "so init() only runs once"
+    )
+    # The guard must be checked before calling init(). Accept either the
+    # early-return form (``if (initStarted) return;``) or the negated
+    # guarded-call form (``if (!initStarted) { ... init(); }``).
+    assert re.search(
+        r"if\s*\(\s*!?\s*init(?:Started|Done|Invoked|Initialized|Ran)\s*\)",
+        source,
+    ), (
+        "init.js bootstrap must check the guard flag before calling init() "
+        "so init() never runs twice"
+    )
+
+
+def test_init_js_bootstrap_handles_bridge_already_ready_6h() -> None:
+    """Phase 6H: when the bridge is already injected at bootstrap time
+    (``window.pywebview && window.pywebview.api`` exists), the bootstrap
+    must call ``init()`` immediately without waiting for the
+    ``pywebviewready`` event (which will never fire again). This covers
+    the case where pywebview finished injecting before the frontend
+    script ran."""
+    source = read_js("init.js")
+    # A bridge-ready helper must exist and check both window.pywebview
+    # and window.pywebview.api.
+    assert re.search(r"function\s+isBridgeReady\s*\(", source), (
+        "init.js must define an isBridgeReady() helper that checks "
+        "window.pywebview && window.pywebview.api"
+    )
+    # The onDomReady handler must branch on isBridgeReady(): call
+    # bootstrap() directly when ready, otherwise attach the
+    # pywebviewready listener.
+    pos = source.find("function onDomReady")
+    assert pos != -1, "init.js must define function onDomReady"
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 800]
+    assert "isBridgeReady()" in body, (
+        "onDomReady must call isBridgeReady() to detect an already-injected "
+        "bridge"
+    )
+    assert "bootstrap()" in body, (
+        "onDomReady must call bootstrap() when the bridge is already ready"
+    )
+    assert "pywebviewready" in body, (
+        "onDomReady must attach the pywebviewready listener when the bridge "
+        "is not yet ready"
+    )
+
+
+def test_init_js_does_not_use_storage_or_network_apis_6h() -> None:
+    """Phase 6H: the init.js bootstrap wiring must not introduce any
+    browser storage (localStorage / sessionStorage / cookie) or network
+    (fetch / XMLHttpRequest / WebSocket / EventSource / navigator.clipboard)
+    API. The pywebview bridge is the only communication channel."""
+    source = read_js("init.js")
+    for forbidden in (
+        "fetch(",
+        "XMLHttpRequest",
+        "WebSocket",
+        "EventSource",
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "navigator.clipboard",
+    ):
+        assert forbidden not in source, (
+            "init.js must not use: " + forbidden
+        )
