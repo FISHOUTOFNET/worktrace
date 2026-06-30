@@ -1,4 +1,5 @@
 from worktrace.constants import UNCATEGORIZED_PROJECT
+from worktrace.db import get_connection, now_str
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service, clipboard_service, context_service, project_service
 from worktrace.services.context_service import recompute_context_assignments_for_date
@@ -261,7 +262,11 @@ def test_clipboard_transition_expires_after_ten_seconds(temp_db):
 
     recompute_context_assignments_for_date("2026-06-18")
 
-    assert activity_service.get_activity(target)["project_name"] == UNCATEGORIZED_PROJECT
+    # Clipboard transition expired (17s > CLIPBOARD_TRANSITION_SECONDS), so
+    # the assignment must NOT be clipboard_transition_context. Target still
+    # gets B via direct assignment anchor carry (same_project_context) because
+    # source is a manual direct anchor within the carry window.
+    assert _assignment_source(target) == "same_project_context"
 
 
 # --- Short-gap same-project anchor bridging ---------------------------
@@ -477,3 +482,221 @@ def test_short_gap_bridges_multiple_middle_anchors(temp_db):
     # Total middle duration: 09:01:00 → 09:04:00 = 180s < 300s
     assert activity_service.get_activity(middle1)["project_id"] == project
     assert activity_service.get_activity(middle2)["project_id"] == project
+
+
+# ---------------------------------------------------------------------------
+# Direct assignment anchor bridge (keyword_rule / folder_rule / manual)
+# ---------------------------------------------------------------------------
+
+def _set_direct_assignment_source(activity_id: int, source: str, project_id: int) -> None:
+    """Override a browser activity's assignment source to a direct-assignment
+    source (``keyword_rule`` / ``folder_rule`` / ``manual`` / ``midnight_anchor``)
+    via direct SQL.
+
+    This simulates a keyword/folder rule match without actually creating rules.
+    The activity must NOT be a file-context anchor (use Edge/browser activities).
+    ``manual_override`` is cleared so the main loop does not skip it as a manual
+    record, and ``auto_classified`` is set to match rule-assigned semantics.
+    """
+    ts = now_str()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_project_assignment
+            SET source = ?, project_id = ?, is_manual = 0, confidence = 80,
+                suggested_project_name = NULL, updated_at = ?
+            WHERE activity_id = ?
+            """,
+            (source, project_id, ts, activity_id),
+        )
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET project_id = ?, manual_override = 0, auto_classified = 1, updated_at = ?
+            WHERE id = ?
+            """,
+            (project_id, ts, activity_id),
+        )
+
+
+def _assignment_source(activity_id: int) -> str:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT source FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+    return str(row["source"]) if row else ""
+
+
+# A. keyword_rule direct anchor bridge → same_project_context
+
+def test_keyword_rule_direct_anchor_bridge(temp_db):
+    """A normal browser activity sandwiched between two keyword_rule direct
+    assignment anchors of the same project inherits that project with source
+    ``same_project_context``."""
+    project = project_service.create_project("P")
+    a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
+    b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
+    c = _activity("Edge", "msedge.exe", "Keyword C", "09:20:00")
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    _set_direct_assignment_source(a, "keyword_rule", project)
+    _set_direct_assignment_source(c, "keyword_rule", project)
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    row = activity_service.get_activity(b)
+    assert row["project_id"] == project
+    assert _assignment_source(b) == "same_project_context"
+
+
+# B. folder_rule direct anchor bridge → same_project_context
+
+def test_folder_rule_direct_anchor_bridge(temp_db):
+    """A folder_rule direct assignment anchor produces same_project_context
+    carry for a sandwiched normal activity."""
+    project = project_service.create_project("P")
+    a = _activity("Edge", "msedge.exe", "Folder A", "09:00:00")
+    b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
+    c = _activity("Edge", "msedge.exe", "Folder C", "09:20:00")
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    _set_direct_assignment_source(a, "folder_rule", project)
+    _set_direct_assignment_source(c, "folder_rule", project)
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    row = activity_service.get_activity(b)
+    assert row["project_id"] == project
+    assert _assignment_source(b) == "same_project_context"
+
+
+# B-variant. manual direct anchor bridge → same_project_context
+
+def test_manual_direct_anchor_bridge(temp_db):
+    """A manual direct assignment anchor (browser activity, not a file anchor)
+    produces same_project_context carry."""
+    project = project_service.create_project("P")
+    a = _activity("Edge", "msedge.exe", "Manual A", "09:00:00")
+    b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
+    c = _activity("Edge", "msedge.exe", "Manual C", "09:20:00")
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    _set_direct_assignment_source(a, "manual", project)
+    _set_direct_assignment_source(c, "manual", project)
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    row = activity_service.get_activity(b)
+    assert row["project_id"] == project
+    assert _assignment_source(b) == "same_project_context"
+
+
+# C. Different project direct anchors do not bridge
+
+def test_direct_anchor_bridge_does_not_cross_different_projects(temp_db):
+    """When the two surrounding direct anchors belong to different projects,
+    the middle activity stays uncategorized."""
+    p1 = project_service.create_project("P1")
+    p2 = project_service.create_project("P2")
+    a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
+    b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
+    c = _activity("Edge", "msedge.exe", "Keyword C", "09:20:00")
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    _set_direct_assignment_source(a, "keyword_rule", p1)
+    _set_direct_assignment_source(c, "keyword_rule", p2)
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(b)["project_name"] == UNCATEGORIZED_PROJECT
+
+
+# D. Manual records are not overwritten
+
+def test_direct_anchor_bridge_does_not_override_manual(temp_db):
+    """A manually-assigned middle activity is not overwritten by direct anchor
+    context carry."""
+    project = project_service.create_project("P")
+    manual_project = project_service.create_project("Manual")
+    a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
+    b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
+    c = _activity("Edge", "msedge.exe", "Keyword C", "09:20:00")
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    _set_direct_assignment_source(a, "keyword_rule", project)
+    _set_direct_assignment_source(c, "keyword_rule", project)
+    activity_service.update_activity_project(b, manual_project, manual=True)
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(b)["project_id"] == manual_project
+    assert _assignment_source(b) == "manual"
+
+
+# E. No low-confidence chain propagation
+
+def test_same_project_context_does_not_chain_as_direct_anchor(temp_db):
+    """A ``same_project_context`` activity is not a direct assignment anchor
+    and must not chain context onward.
+
+    Setup:
+      A: keyword_rule, project P at 09:00 (closed 09:01)
+      B: normal browser, gets same_project_context → P at 09:05
+      C: normal browser, uncategorized at 09:25 (out of A's 15-min carry window)
+
+    B is same_project_context (not effective anchor, not file anchor, not direct).
+    A is out of carry window for C. So C stays uncategorized — it does NOT
+    inherit via B.
+    """
+    project = project_service.create_project("P")
+    a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
+    activity_service.close_current_open_record("2026-06-18 09:01:00")
+    _set_direct_assignment_source(a, "keyword_rule", project)
+    b = _activity("Edge", "msedge.exe", "Plain B", "09:05:00")
+    activity_service.close_current_open_record("2026-06-18 09:06:00")
+    c = _activity("Edge", "msedge.exe", "Plain C", "09:25:00")
+    activity_service.close_current_open_record("2026-06-18 09:26:00")
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    # B inherits from A (within carry window).
+    assert activity_service.get_activity(b)["project_id"] == project
+    assert _assignment_source(b) == "same_project_context"
+    # C does NOT inherit — A is out of carry window, B is not an effective anchor.
+    assert activity_service.get_activity(c)["project_name"] == UNCATEGORIZED_PROJECT
+
+
+# F. File-context anchor carry still uses anchor_context source
+
+def test_file_anchor_carry_source_is_anchor_context(temp_db):
+    """A normal activity sandwiched between two file-context anchors of the
+    same project inherits with source ``anchor_context`` (not
+    ``same_project_context``), even though the file anchors have source
+    ``manual``."""
+    project = project_service.create_project("A")
+    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
+    browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
+    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:20:00", project)
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(browser)["project_id"] == project
+    assert _assignment_source(browser) == "anchor_context"
+
+
+# G. Source distinction: file anchors vs direct assignment anchors
+
+def test_direct_anchor_carry_source_is_same_project_context(temp_db):
+    """When both surrounding anchors are direct assignment anchors (browser
+    activities with keyword_rule), the carry source is
+    ``same_project_context`` — distinct from file-anchor carry which uses
+    ``anchor_context``."""
+    project = project_service.create_project("P")
+    a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
+    b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
+    c = _activity("Edge", "msedge.exe", "Keyword C", "09:20:00")
+    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    _set_direct_assignment_source(a, "keyword_rule", project)
+    _set_direct_assignment_source(c, "keyword_rule", project)
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    assert activity_service.get_activity(b)["project_id"] == project
+    assert _assignment_source(b) == "same_project_context"

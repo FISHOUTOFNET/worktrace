@@ -72,6 +72,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "midnight_anchor" in assignment_schema
     assert "keyword_rule" in assignment_schema
     assert "clipboard_transition_context" in assignment_schema
+    assert "same_project_context" in assignment_schema
     assert "anchor_keyword" not in assignment_schema
     assert "anchor_resource_default" not in assignment_schema
     assert "rule" not in tables

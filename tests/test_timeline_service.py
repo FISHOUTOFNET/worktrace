@@ -399,3 +399,103 @@ def test_project_session_note_can_be_cleared(temp_db):
     timeline_service.update_session_note("2026-06-18", first, "")
 
     assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["session_note"] == ""
+
+
+# --- Shared anchor predicate reuse (timeline_service ↔ anchor_predicates) ---
+
+def test_is_project_anchor_delegates_to_shared_file_context_predicate():
+    """``_is_project_anchor`` reuses ``is_file_context_anchor`` so that browser
+    tabs / email are excluded and file anchors (docx/pdf/xlsx) are included,
+    while also requiring a concrete display project."""
+    # File anchor assigned to a concrete project → True
+    file_row = {
+        "status": "normal",
+        "assignment_source": "manual",
+        "display_project_name": "A",
+        "resource_is_anchor": True,
+        "resource_kind": "file",
+        "resource_display_name": "report.docx",
+    }
+    assert timeline_service._is_project_anchor(file_row) is True
+
+    # Browser tab → False (is_file_context_anchor returns False)
+    browser_row = {
+        "status": "normal",
+        "assignment_source": "uncategorized",
+        "display_project_name": UNCATEGORIZED_PROJECT,
+        "resource_is_anchor": True,
+        "resource_kind": "browser_tab",
+        "resource_display_name": "Search",
+    }
+    assert timeline_service._is_project_anchor(browser_row) is False
+
+    # Email → False
+    email_row = {
+        "status": "normal",
+        "assignment_source": "uncategorized",
+        "display_project_name": UNCATEGORIZED_PROJECT,
+        "resource_is_anchor": True,
+        "resource_kind": "email",
+        "resource_display_name": "Inbox",
+    }
+    assert timeline_service._is_project_anchor(email_row) is False
+
+    # File anchor but uncategorized project → False
+    uncategorized_file_row = {
+        "status": "normal",
+        "assignment_source": "uncategorized",
+        "display_project_name": UNCATEGORIZED_PROJECT,
+        "resource_is_anchor": True,
+        "resource_kind": "file",
+        "resource_display_name": "loose.docx",
+    }
+    assert timeline_service._is_project_anchor(uncategorized_file_row) is False
+
+    # midnight_anchor with concrete project → True
+    midnight_row = {
+        "status": "normal",
+        "assignment_source": "midnight_anchor",
+        "display_project_name": "A",
+        "resource_is_anchor": False,
+        "resource_kind": "",
+        "resource_display_name": "",
+    }
+    assert timeline_service._is_project_anchor(midnight_row) is True
+
+
+def test_get_session_anchor_folders_excludes_browser_and_includes_file_anchors(temp_db):
+    """``get_session_anchor_folders`` does not return browser/email folders,
+    while file anchors (docx/pdf/xlsx) with a local path still surface their
+    parent directory."""
+    project = project_service.create_project("A")
+
+    docx_id = activity_service.create_activity(
+        "Word", "winword.exe", "report.docx",
+        start_time="2026-06-18 09:00:00",
+        file_path_hint=r"C:\Projects\A\report.docx",
+        project_id=project,
+    )
+    activity_service.finalize_created_activity(docx_id)
+    activity_service.close_activity(docx_id, "2026-06-18 09:20:00")
+
+    browser_id = activity_service.create_activity(
+        "Edge", "msedge.exe", "Search",
+        start_time="2026-06-18 09:20:00",
+    )
+    activity_service.finalize_created_activity(browser_id)
+    activity_service.close_activity(browser_id, "2026-06-18 09:30:00")
+
+    pdf_id = activity_service.create_activity(
+        "Adobe", "acrobat.exe", "slides.pdf",
+        start_time="2026-06-18 09:30:00",
+        file_path_hint=r"C:\Projects\A\slides.pdf",
+        project_id=project,
+    )
+    activity_service.finalize_created_activity(pdf_id)
+    activity_service.close_activity(pdf_id, "2026-06-18 09:40:00")
+
+    folders = timeline_service.get_session_anchor_folders([docx_id, browser_id, pdf_id])
+
+    # Browser must NOT produce a folder; docx and pdf share the same parent.
+    assert len(folders) == 1
+    assert folders[0] == r"C:\Projects\A"

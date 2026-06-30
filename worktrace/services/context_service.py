@@ -3,12 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..constants import (
-    ANCHOR_FILE_EXTENSIONS,
     CLIPBOARD_TRANSITION_SECONDS,
     DEFAULT_CONTEXT_CARRY_MINUTES,
     REPORT_CONTEXT_SHORT_MERGE_SECONDS,
-    STATUS_ERROR,
-    STATUS_EXCLUDED,
     STATUS_IDLE,
     STATUS_NORMAL,
     STATUS_PAUSED,
@@ -16,20 +13,34 @@ from ..constants import (
 )
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from . import clipboard_service, session_boundary_service
+from .anchor_predicates import (
+    DIRECT_ASSIGNMENT_SOURCES,
+    is_direct_assignment_anchor,
+    is_file_context_anchor,
+    row_project_id as _row_project_id_helper,
+)
 from .project_inference_service import assign_project_for_activity
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
 
 INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED}
-DIRECT_ASSIGNMENT_SOURCES = {"manual", "folder_rule", "keyword_rule", "midnight_anchor"}
-# ``anchor_context`` covers two context-assignment scenarios:
-#   1. Ordinary anchor context carry — auxiliary activities between two
-#      same-project anchors inherit the anchor's project.
-#   2. Short same-project gap bridging — a short uncategorized context
-#      anchor (e.g. a brief .doc / .docx Word activity) sandwiched
-#      between two same-project anchors is bridged to that project.
-# Both scenarios reuse the ``anchor_context`` source; no new schema
-# source is introduced.
+# Sources that already represent derived context and must not chain onward
+# as direct assignment anchors (avoids low-confidence propagation).
+_CONTEXT_DERIVED_SOURCES = {
+    "anchor_context",
+    "same_project_context",
+    "clipboard_transition_context",
+    "suggested_project_name",
+    "uncategorized",
+}
+# Sources whose result may be overwritten by context inference (i.e. only
+# low-confidence or already-derived sources are eligible for rewrite).
+_OVERWRITABLE_SOURCES = {
+    "uncategorized",
+    "suggested_project_name",
+    "anchor_context",
+    "same_project_context",
+}
 _CONTEXT_RECOMPUTE_CACHE: dict[str, tuple] = {}
 
 
@@ -60,17 +71,30 @@ def recompute_context_assignments_for_date(date: str) -> None:
             continue
         if row.get("assignment_source") in DIRECT_ASSIGNMENT_SOURCES | {"clipboard_transition_context"}:
             continue
-        if _is_context_anchor(row):
+        if _is_file_context_anchor(row):
             continue
         if int(row["manual_override"] or 0) or int(row["assignment_is_manual"] or 0):
             continue
+        # Only overwrite low-confidence / derived sources. Do not overwrite
+        # activities that already belong to another concrete project via a
+        # higher-confidence path.
+        source = row.get("assignment_source")
+        if source is not None and source not in _OVERWRITABLE_SOURCES:
+            continue
 
-        target_project_id = _infer_context_project(rows, index, carry_minutes, uncategorized_id)
-        source = "anchor_context" if target_project_id != uncategorized_id else "uncategorized"
-        confidence = 60 if source == "anchor_context" else 0
+        target_project_id, target_source = _infer_context_project(
+            rows, index, carry_minutes, uncategorized_id
+        )
+        if target_project_id == uncategorized_id or target_project_id <= 0:
+            source = "uncategorized"
+            confidence = 0
+            target_project_id = uncategorized_id
+        else:
+            source = target_source
+            confidence = 60
         _sync_assignment_and_activity(
             int(row["id"]),
-            target_project_id,
+            int(target_project_id),
             source,
             confidence,
             is_manual=False,
@@ -191,7 +215,7 @@ def _recompute_anchor_rows(rows: list[dict]) -> bool:
     for row in rows:
         if row["status"] == STATUS_NORMAL and row.get("assignment_source") == "midnight_anchor":
             continue
-        if _is_context_anchor(row):
+        if _is_file_context_anchor(row):
             if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
                 continue
             assignment = assign_project_for_activity(int(row["id"]))
@@ -296,41 +320,50 @@ def _set_clipboard_context_assignment(row: dict, project_id: int) -> None:
     row["assignment_is_manual"] = 0
 
 
-def _recompute_short_gap_anchor_rows(rows: list[dict], uncategorized_id: int) -> bool:
-    """Bridge short uncategorized context anchors between same-project anchors.
+# ---------------------------------------------------------------------------
+# File-context-anchor short-gap bridge
+# ---------------------------------------------------------------------------
 
-    For each context anchor row that is currently uncategorized (and not
-    manual / not a direct-rule assignment), check whether it is sandwiched
-    between two concrete (non-uncategorized) same-project anchors with a
-    total middle-activity duration under ``REPORT_CONTEXT_SHORT_MERGE_SECONDS``.
-    If so, persist the assignment with source ``anchor_context`` and update
-    the in-memory row so subsequent non-anchor rows in the main loop see
-    the bridged project.
+
+def _recompute_short_gap_anchor_rows(rows: list[dict], uncategorized_id: int) -> bool:
+    """Bridge short uncategorized file-context anchors between same-project
+    concrete effective context anchors.
+
+    For each file-context anchor row that is currently uncategorized (and
+    not manual / not a direct-rule assignment), check whether it is
+    sandwiched between two concrete (non-uncategorized) same-project
+    effective anchors with a total middle-activity duration under
+    ``REPORT_CONTEXT_SHORT_MERGE_SECONDS``. If so, persist the assignment
+    with source ``anchor_context`` and update the in-memory row so
+    subsequent non-anchor rows in the main loop see the bridged project.
 
     This covers the real-world scenario where a brief .doc / .docx Word
-    activity (which is itself a context anchor) is sandwiched between two
-    same-project anchors but does not hit any folder / keyword rule.
-    Without this pass the anchor would stay uncategorized and would also
-    block context carry for subsequent auxiliary activities.
+    activity (which is itself a file-context anchor) is sandwiched between
+    two same-project anchors but does not hit any folder / keyword rule.
 
     Conditions (all must hold):
-      - The row is a context anchor (``_is_context_anchor``).
+      - The row is a file-context anchor (``is_file_context_anchor``).
       - The row's current assignment is uncategorized (not manual, not
-        folder_rule / keyword_rule / midnight_anchor / clipboard_transition_context).
+        folder_rule / keyword_rule / midnight_anchor /
+        clipboard_transition_context).
       - No manual_override or assignment_is_manual.
-      - Previous and next concrete anchors exist and belong to the same
-        non-uncategorized project.
+      - Previous and next concrete effective anchors exist and belong to
+        the same non-uncategorized project.
       - No interrupt status (idle / paused) between the anchors.
       - No session boundary between prev anchor and next anchor.
       - All middle activities (between the two anchors) are normal,
         visible, and non-deleted.
       - Total duration of middle activities <= threshold.
+
+    Direct assignment anchors do NOT enter this pass; they participate in
+    context carry via ``_infer_context_project`` as effective context
+    anchors with source ``same_project_context``.
     """
     changed = False
     for index, row in enumerate(rows):
         if row.get("status") != STATUS_NORMAL:
             continue
-        if not _is_context_anchor(row):
+        if not _is_file_context_anchor(row):
             continue
         source = row.get("assignment_source")
         if source in DIRECT_ASSIGNMENT_SOURCES or source == "clipboard_transition_context":
@@ -353,13 +386,14 @@ def _short_gap_bridge_target(
 ) -> int | None:
     """Return the target project_id for short-gap bridging, or None."""
     row = rows[index]
-    # Use the "concrete" anchor lookups so that other uncategorized context
-    # anchors sitting between the same two same-project anchors are skipped
-    # (rather than terminating the search). This lets every middle anchor in
-    # a run of multiple short uncategorized anchors bridge to the surrounding
-    # project, instead of only the first one.
-    prev_anchor = _find_previous_concrete_anchor(rows, index, uncategorized_id)
-    next_anchor = _find_next_concrete_anchor(rows, index, uncategorized_id)
+    # Use the "concrete effective" anchor lookups so that other
+    # uncategorized file-context anchors sitting between the same two
+    # same-project anchors are skipped (rather than terminating the
+    # search). This lets every middle anchor in a run of multiple short
+    # uncategorized anchors bridge to the surrounding project, instead of
+    # only the first one.
+    prev_anchor = _find_previous_concrete_effective_anchor(rows, index, uncategorized_id)
+    next_anchor = _find_next_concrete_effective_anchor(rows, index, uncategorized_id)
     if not prev_anchor or not next_anchor:
         return None
     prev_project = _row_project_id(prev_anchor)
@@ -427,126 +461,203 @@ def _set_short_gap_context_assignment(row: dict, project_id: int) -> None:
     row["assignment_is_manual"] = 0
 
 
-def _infer_context_project(rows: list[dict], index: int, carry_minutes: int, uncategorized_id: int) -> int:
+# ---------------------------------------------------------------------------
+# Context inference
+# ---------------------------------------------------------------------------
+
+
+def _is_file_context_anchor(row: dict) -> bool:
+    """File-context anchor predicate (delegates to the shared helper)."""
+    return is_file_context_anchor(row)
+
+
+def _is_effective_context_anchor(row: dict, uncategorized_id: int) -> bool:
+    """A row that can propagate context to its neighbors.
+
+    Effective context anchors are:
+      - file-context anchors (always — their uncategorized state is
+        handled separately by the existing "nearest uncategorized anchor
+        blocks carry" protection);
+      - direct assignment anchors (``manual`` / ``folder_rule`` /
+        ``keyword_rule`` / ``midnight_anchor``) bound to a concrete
+        project.
+
+    Already-derived sources (``anchor_context`` / ``same_project_context``
+    / ``clipboard_transition_context`` / ``suggested_project_name`` /
+    ``uncategorized``) are NOT effective context anchors and must not
+    chain onward as direct anchors.
+    """
+    if row.get("status") != STATUS_NORMAL:
+        return False
+    if is_file_context_anchor(row):
+        return True
+    if is_direct_assignment_anchor(row, uncategorized_id):
+        return True
+    return False
+
+
+def _infer_context_project(
+    rows: list[dict], index: int, carry_minutes: int, uncategorized_id: int
+) -> tuple[int, str]:
+    """Return ``(target_project_id, source)`` for the row at ``index``.
+
+    ``source`` is ``anchor_context`` when the carry comes from a
+    file-context anchor, ``same_project_context`` when it comes from a
+    direct assignment anchor, or ``uncategorized`` when no carry applies.
+    """
     row = rows[index]
     if _nearest_anchor_is_uncategorized(rows, index, -1, uncategorized_id) or _nearest_anchor_is_uncategorized(rows, index, 1, uncategorized_id):
-        return uncategorized_id
-    previous_anchor = _find_previous_anchor(rows, index, uncategorized_id)
-    next_anchor = _find_next_anchor(rows, index, uncategorized_id)
+        return uncategorized_id, "uncategorized"
+    previous_anchor = _find_previous_effective_anchor(rows, index, uncategorized_id)
+    next_anchor = _find_next_effective_anchor(rows, index, uncategorized_id)
 
     if previous_anchor and next_anchor:
         previous_project = _row_project_id(previous_anchor)
         next_project = _row_project_id(next_anchor)
         if previous_project == next_project:
-            return previous_project
-        return uncategorized_id
+            return previous_project, _anchor_source(previous_anchor, next_anchor, uncategorized_id)
+        return uncategorized_id, "uncategorized"
 
     if previous_anchor and not next_anchor:
         if _minutes_between(_anchor_context_time(previous_anchor), row["start_time"]) <= carry_minutes:
-            return _row_project_id(previous_anchor)
+            return _row_project_id(previous_anchor), _anchor_source(previous_anchor, None, uncategorized_id)
     if next_anchor and not previous_anchor:
         if _minutes_between(row["start_time"], next_anchor["start_time"]) <= carry_minutes:
-            return _row_project_id(next_anchor)
+            return _row_project_id(next_anchor), _anchor_source(next_anchor, None, uncategorized_id)
 
-    return uncategorized_id
+    return uncategorized_id, "uncategorized"
+
+
+def _anchor_source(*anchors_and_uncategorized: object) -> str:
+    """Pick the source for a context-carry result.
+
+    The last positional argument is the ``uncategorized_id``; preceding
+    arguments are the contributing anchor dicts.
+
+    File-context anchors take priority: if any contributing anchor is a
+    file-context anchor, the carry is ``anchor_context``. This ensures
+    that a file anchor with ``source=manual`` (which is also a direct
+    assignment anchor) still produces ``anchor_context`` carry, since
+    the file itself is the context signal.
+
+    If no contributor is a file anchor but at least one is a direct
+    assignment anchor (``keyword_rule`` / ``folder_rule`` / ``manual`` /
+    ``midnight_anchor``), the carry is ``same_project_context``.
+
+    Otherwise, default to ``anchor_context``.
+    """
+    if not anchors_and_uncategorized:
+        return "anchor_context"
+    uncategorized_id = anchors_and_uncategorized[-1]
+    anchors = anchors_and_uncategorized[:-1]
+    try:
+        uncategorized_id = int(uncategorized_id)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "anchor_context"
+    for anchor in anchors:
+        if anchor is None:
+            continue
+        if is_file_context_anchor(anchor):
+            return "anchor_context"
+    for anchor in anchors:
+        if anchor is None:
+            continue
+        if is_direct_assignment_anchor(anchor, uncategorized_id):
+            return "same_project_context"
+    return "anchor_context"
 
 
 def _nearest_anchor_is_uncategorized(rows: list[dict], index: int, step: int, uncategorized_id: int) -> bool:
+    """If the nearest effective file-context anchor (in the step direction)
+    is uncategorized, block carry — preserves the existing protection."""
     pos = index + step
     while 0 <= pos < len(rows):
         row = rows[pos]
         if row["status"] in INTERRUPT_STATUSES:
             return False
-        if _is_context_anchor(row):
+        # Only file-context anchors participate in the uncategorized
+        # block-carry protection; direct assignment anchors never carry
+        # the "uncategorized" state because they require a concrete
+        # project by definition.
+        if is_file_context_anchor(row):
             return _row_project_id(row) == uncategorized_id
+        if _is_effective_context_anchor(row, uncategorized_id):
+            # A direct assignment anchor breaks the uncategorized scan.
+            return False
         pos += step
     return False
 
 
-def _find_previous_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
+def _find_previous_effective_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
     for pos in range(index - 1, -1, -1):
         row = rows[pos]
         if row["status"] in INTERRUPT_STATUSES:
             return None
-        if _is_context_anchor(row):
+        if _is_effective_context_anchor(row, uncategorized_id):
             project_id = _row_project_id(row)
-            return row if project_id != uncategorized_id else None
+            # File-context anchors that are uncategorized block the scan
+            # (preserves existing carry protection). Direct assignment
+            # anchors are always concrete (guarded by predicate).
+            if is_file_context_anchor(row) and project_id == uncategorized_id:
+                return None
+            return row
     return None
 
 
-def _find_next_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
+def _find_next_effective_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
     for pos in range(index + 1, len(rows)):
         row = rows[pos]
         if row["status"] in INTERRUPT_STATUSES:
             return None
-        if _is_context_anchor(row):
+        if _is_effective_context_anchor(row, uncategorized_id):
             project_id = _row_project_id(row)
-            return row if project_id != uncategorized_id else None
+            if is_file_context_anchor(row) and project_id == uncategorized_id:
+                return None
+            return row
     return None
 
 
-def _find_previous_concrete_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
-    """Like _find_previous_anchor, but skips uncategorized context anchors
-    instead of stopping at them. Used by short-gap bridging, which needs to
-    locate the surrounding non-uncategorized ("concrete") anchors even when
-    other uncategorized anchors sit in between (so every middle anchor in a
-    run gets bridged, not just the first)."""
+def _find_previous_concrete_effective_anchor(
+    rows: list[dict], index: int, uncategorized_id: int
+) -> dict | None:
+    """Like ``_find_previous_effective_anchor``, but skips uncategorized
+    file-context anchors instead of stopping at them.
+
+    Used by short-gap bridging, which needs to locate the surrounding
+    non-uncategorized concrete anchors even when other uncategorized
+    anchors sit in between.
+    """
     for pos in range(index - 1, -1, -1):
         row = rows[pos]
         if row["status"] in INTERRUPT_STATUSES:
             return None
-        if _is_context_anchor(row):
+        if _is_effective_context_anchor(row, uncategorized_id):
             project_id = _row_project_id(row)
-            if project_id != uncategorized_id:
-                return row
+            if project_id == uncategorized_id:
+                continue
+            return row
     return None
 
 
-def _find_next_concrete_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
-    """Like _find_next_anchor, but skips uncategorized context anchors
-    instead of stopping at them. See _find_previous_concrete_anchor."""
+def _find_next_concrete_effective_anchor(
+    rows: list[dict], index: int, uncategorized_id: int
+) -> dict | None:
+    """Like ``_find_next_effective_anchor``, but skips uncategorized
+    file-context anchors instead of stopping at them."""
     for pos in range(index + 1, len(rows)):
         row = rows[pos]
         if row["status"] in INTERRUPT_STATUSES:
             return None
-        if _is_context_anchor(row):
+        if _is_effective_context_anchor(row, uncategorized_id):
             project_id = _row_project_id(row)
-            if project_id != uncategorized_id:
-                return row
+            if project_id == uncategorized_id:
+                continue
+            return row
     return None
 
 
 def _row_project_id(row: dict) -> int:
-    return int(row.get("assignment_project_id") or row.get("project_id") or 0)
-
-
-_ANCHOR_EXT_SET = frozenset(ext.casefold() for ext in ANCHOR_FILE_EXTENSIONS)
-
-
-def _is_context_anchor(row: dict) -> bool:
-    if row["status"] != STATUS_NORMAL:
-        return False
-    if row.get("assignment_source") == "midnight_anchor":
-        return True
-    if not row.get("resource_is_anchor"):
-        return False
-    # Only file-based anchors with ANCHOR_FILE_EXTENSIONS are context anchors.
-    # Browser tabs, email messages, and code files (.py, .js, etc.) are
-    # resource anchors for identity but should be auxiliary for context carry.
-    if row.get("resource_kind") in ("browser_tab", "email"):
-        return False
-    display_name = str(row.get("resource_display_name") or "").strip()
-    if display_name:
-        _, ext = _split_ext(display_name)
-        if ext and ext.casefold() in _ANCHOR_EXT_SET:
-            return True
-    return False
-
-
-def _split_ext(name: str) -> tuple[str, str]:
-    import ntpath
-    _, ext = ntpath.splitext(name)
-    return name, ext
+    return _row_project_id_helper(row)
 
 
 def _anchor_context_time(row: dict) -> str:

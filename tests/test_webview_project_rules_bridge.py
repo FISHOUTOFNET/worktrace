@@ -603,7 +603,7 @@ def test_set_project_rule_enabled_never_calls_create_edit_delete_or_project_togg
         "delete_keyword_rule",
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
-        "backfill_folder_rule",
+        "backfill_project_rule",
     ):
         monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
 
@@ -1186,7 +1186,7 @@ def test_create_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "delete_keyword_rule",
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
-        "backfill_folder_rule",
+        "backfill_project_rule",
     ):
         monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
 
@@ -1618,7 +1618,7 @@ def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "delete_keyword_rule",
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
-        "backfill_folder_rule",
+        "backfill_project_rule",
     ):
         monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
 
@@ -4634,7 +4634,6 @@ def test_preview_and_backfill_do_not_cross_call_other_project_rules_apis(monkeyp
         "delete_keyword_rule",
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
-        "backfill_folder_rule",
     ):
         monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
 
@@ -5277,7 +5276,6 @@ def test_batch_bridge_methods_do_not_cross_call_other_apis(monkeypatch):
         "delete_keyword_rule",
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
-        "backfill_folder_rule",
         "preview_project_rule_impact",
         "backfill_project_rule",
     ):

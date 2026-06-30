@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
             'manual',
             'keyword_rule',
             'anchor_context',
+            'same_project_context',
             'clipboard_transition_context',
             'folder_rule',
             'midnight_anchor',

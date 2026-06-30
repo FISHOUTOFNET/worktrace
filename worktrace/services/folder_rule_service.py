@@ -216,60 +216,6 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
     }
 
 
-def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict:
-    if mode != "safe":
-        raise ValueError("only safe backfill is supported")
-    with get_connection() as conn:
-        rule = conn.execute("SELECT * FROM folder_project_rule WHERE id = ?", (rule_id,)).fetchone()
-        if not rule:
-            raise ValueError(f"folder rule not found: {rule_id}")
-        rows = conn.execute(
-            """
-            SELECT
-                a.*,
-                ar.path_hint AS resource_path_hint,
-                ar.is_anchor AS resource_is_anchor
-            FROM activity_log a
-            LEFT JOIN activity_resource ar ON ar.activity_id = a.id
-            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            WHERE a.is_deleted = 0
-              AND a.manual_override = 0
-              AND COALESCE(apa.is_manual, 0) = 0
-            """
-        ).fetchall()
-        activity_ids = []
-        for row in rows:
-            if _activity_matches_folder(dict(row), rule["folder_path"], bool(rule["recursive"]), int(rule["id"])):
-                activity_ids.append(int(row["id"]))
-
-        ts = now_str()
-        for activity_id in activity_ids:
-            conn.execute(
-                """
-                UPDATE activity_log
-                SET project_id = ?, auto_classified = 1, updated_at = ?
-                WHERE id = ?
-                """,
-                (rule["project_id"], ts, activity_id),
-            )
-            conn.execute(
-                """
-                INSERT INTO activity_project_assignment(
-                    activity_id, project_id, confidence, source, is_manual, created_at, updated_at
-                )
-                VALUES (?, ?, 85, 'folder_rule', 0, ?, ?)
-                ON CONFLICT(activity_id) DO UPDATE SET
-                    project_id = excluded.project_id,
-                    confidence = excluded.confidence,
-                    source = excluded.source,
-                    is_manual = excluded.is_manual,
-                    updated_at = excluded.updated_at
-                """,
-                (activity_id, rule["project_id"], ts, ts),
-            )
-    return {"updated_activity_count": len(activity_ids), "mode": mode}
-
-
 def _activity_matches_folder(activity: dict, folder_path: str, recursive: bool = True, rule_id: int | None = None) -> bool:
     # Resource-first: check both resource_path_hint and file_path_hint.
     # A non-anchor resource may store a name-only path_hint (e.g. "floorplan.dwg")

@@ -72,61 +72,52 @@ def test_folder_rule_wins_over_keyword_rule_and_source_is_persisted(temp_db):
 
 
 def test_backfill_safe_does_not_overwrite_manual_override(temp_db):
+    """Backfill via the safe path skips manual_override activities.
+
+    The legacy ``folder_rule_service.backfill_folder_rule`` entry was
+    removed; the safe path lives in ``rule_impact_service``. This test
+    keeps coverage of the manual-override skip behavior at the folder
+    backfill level by exercising the new safe path.
+    """
+    from worktrace.db import get_connection, now_str
+    from worktrace.services import rule_impact_service
+
     folder_project = project_service.create_project("Folder")
     manual_project = project_service.create_project("Manual")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
     aid = _activity_with_path("D:\\CaseA\\Manual.docx", "Manual.docx - Word")
     activity_service.update_activity_project(aid, manual_project, manual=True)
-    result = folder_rule_service.backfill_folder_rule(rule_id)
-    assert result["updated_activity_count"] == 0
-    assert activity_service.get_activity(aid)["project_id"] == manual_project
-
-
-def test_backfill_safe_updates_non_manual_activity(temp_db):
-    folder_project = project_service.create_project("Folder")
-    previous_project = project_service.create_project("Previous")
-    rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
-    aid = _activity_with_path("D:\\CaseA\\Previous.docx", "Previous.docx - Word")
-    activity_service.update_activity_project(aid, previous_project, manual=False)
-    result = folder_rule_service.backfill_folder_rule(rule_id)
-    assert result["updated_activity_count"] == 1
-    assert activity_service.get_activity(aid)["project_id"] == folder_project
-
-
-def test_backfill_safe_updates_non_whitelisted_extension_activity(temp_db):
-    folder_project = project_service.create_project("Folder")
-    rule_id = folder_rule_service.create_or_update_folder_rule("D:\\Design", folder_project)
-    aid = activity_service.create_activity(
-        "AutoCAD",
-        "acad.exe",
-        "floorplan.dwg - AutoCAD",
-        file_path_hint="D:\\Design\\floorplan.dwg",
-        start_time="2026-06-18 09:00:00",
-    )
-
-    result = folder_rule_service.backfill_folder_rule(rule_id)
-
-    assert result["updated_activity_count"] == 1
-    assert activity_service.get_activity(aid)["project_id"] == folder_project
-
-
-def test_backfill_safe_does_not_overwrite_manual_assignment(temp_db):
-    folder_project = project_service.create_project("Folder")
-    manual_project = project_service.create_project("Manual")
-    rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
-    aid = _activity_with_path("D:\\CaseA\\Assigned.docx", "Assigned.docx - Word")
-    activity_service.update_activity_project(aid, manual_project, manual=True)
-    result = folder_rule_service.backfill_folder_rule(rule_id)
-    assert result["updated_activity_count"] == 0
+    # Close via direct SQL (bypass close_activity's automatic rule
+    # re-trigger) so the activity is classified as manual_skipped rather
+    # than in_progress_skipped.
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
+            ("2026-06-18 09:10:00", 600, now_str(), aid),
+        )
+    result = rule_impact_service.backfill_rule_impact("folder", rule_id)
+    assert result["updated_count"] == 0
+    assert result["manual_skipped_count"] == 1
     assert activity_service.get_activity(aid)["project_id"] == manual_project
 
 
 def test_backfill_safe_updates_eligible_activity(temp_db):
+    """The safe path updates an eligible closed activity under the rule's folder."""
+    from worktrace.db import get_connection, now_str
+    from worktrace.services import rule_impact_service
+
     folder_project = project_service.create_project("Folder")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
     aid = _activity_with_path("D:\\CaseA\\Eligible.docx", "Eligible.docx - Word")
-    result = folder_rule_service.backfill_folder_rule(rule_id)
-    assert result["updated_activity_count"] == 1
+    # Close via direct SQL to bypass close_activity's automatic rule
+    # re-trigger so backfill sees a closed-but-unassigned eligible activity.
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
+            ("2026-06-18 09:10:00", 600, now_str(), aid),
+        )
+    result = rule_impact_service.backfill_rule_impact("folder", rule_id)
+    assert result["updated_count"] == 1
     assert activity_service.get_activity(aid)["project_id"] == folder_project
 
 

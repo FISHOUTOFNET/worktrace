@@ -156,10 +156,25 @@ def test_safe_backfill_uses_index_only_after_valid_from(temp_db, tmp_path):
         "report.docx - Word",
         start_time="2026-06-18 11:00:00",
     )
+    # Close both via direct SQL (bypass close_activity's automatic-rule
+    # re-trigger) so backfill sees eligible closed-but-unassigned activities.
+    from worktrace.db import get_connection, now_str
 
-    result = folder_rule_service.backfill_folder_rule(rule_id)
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
+            ("2026-06-18 09:10:00", 600, now_str(), early),
+        )
+        conn.execute(
+            "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
+            ("2026-06-18 11:10:00", 600, now_str(), late),
+        )
 
-    assert result["updated_activity_count"] == 1
+    from worktrace.services import rule_impact_service
+
+    result = rule_impact_service.backfill_rule_impact("folder", rule_id)
+
+    assert result["updated_count"] == 1
     assert activity_service.get_activity(early)["project_id"] != project
     assert activity_service.get_activity(late)["project_id"] == project
 

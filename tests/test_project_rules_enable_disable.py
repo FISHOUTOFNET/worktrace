@@ -206,7 +206,9 @@ def test_folder_toggle_does_not_trigger_backfill(temp_db, monkeypatch):
     def fail_backfill(*args, **kwargs):
         raise AssertionError("backfill must not run")
 
-    monkeypatch.setattr(folder_rule_service, "backfill_folder_rule", fail_backfill)
+    from worktrace.services import rule_impact_service
+
+    monkeypatch.setattr(rule_impact_service, "backfill_rule_impact", fail_backfill)
 
     assert rule_api.set_project_rule_enabled("folder", rule_id, False)["ok"] is True
 

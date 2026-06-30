@@ -458,7 +458,9 @@ def test_create_keyword_rule_does_not_call_backfill(temp_db, monkeypatch):
     def fail_backfill(*args, **kwargs):
         raise AssertionError("backfill must not run during keyword create")
 
-    monkeypatch.setattr(folder_rule_service, "backfill_folder_rule", fail_backfill)
+    from worktrace.services import rule_impact_service
+
+    monkeypatch.setattr(rule_impact_service, "backfill_rule_impact", fail_backfill)
     result = rule_api.create_project_keyword_rule(project, "Spec")
     assert result["ok"] is True
 

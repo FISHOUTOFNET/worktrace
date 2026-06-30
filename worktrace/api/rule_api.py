@@ -853,10 +853,6 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict[str
     return folder_rule_service.preview_folder_rule_conflicts(folder_path, project_id)
 
 
-def backfill_folder_rule(rule_id: int, mode: str = "safe") -> dict[str, Any]:
-    return folder_rule_service.backfill_folder_rule(rule_id, mode=mode)
-
-
 # --- Phase 6G: Excluded-rule creation facades ----------------------------
 
 
@@ -964,7 +960,6 @@ def create_excluded_folder_rule_for_webview(
 
 __all__ = [
     "automatic_rules_status",
-    "backfill_folder_rule",
     "backfill_project_rule",
     "backfill_project_rules_batch",
     "create_excluded_folder_rule_for_webview",

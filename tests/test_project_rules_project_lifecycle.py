@@ -808,7 +808,9 @@ def test_lifecycle_does_not_invoke_backfill(temp_db, monkeypatch):
     def fail_backfill(*args, **kwargs):
         raise AssertionError("backfill must not run during project lifecycle")
 
-    monkeypatch.setattr(folder_rule_service, "backfill_folder_rule", fail_backfill)
+    from worktrace.services import rule_impact_service
+
+    monkeypatch.setattr(rule_impact_service, "backfill_rule_impact", fail_backfill)
 
     project_api.update_project_for_rules(project_id, "Renamed", "new")
     project_api.set_project_enabled_for_rules(project_id, False)

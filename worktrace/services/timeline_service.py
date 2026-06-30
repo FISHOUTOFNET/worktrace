@@ -4,7 +4,6 @@ from bisect import bisect_left
 from datetime import date as date_type, datetime, time as datetime_time, timedelta
 
 from ..constants import (
-    ANCHOR_FILE_EXTENSIONS,
     DEFAULT_CONTEXT_CARRY_MINUTES,
     DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
     REPORT_CONTEXT_SHORT_MERGE_SECONDS,
@@ -21,6 +20,7 @@ from ..path_utils import split_file_path
 from ..resources.title_parsing import extract_anchor_file_name
 from . import folder_rule_service, session_boundary_service, session_note_service
 from .activity_service import update_activities_project
+from .anchor_predicates import is_file_context_anchor
 from .context_service import recompute_context_assignments_for_date
 from .live_time_service import snapshot_elapsed_seconds, snapshot_extra_seconds
 from .project_service import get_or_create_uncategorized_project
@@ -111,6 +111,16 @@ def get_session_activity_details(
 
 
 def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
+    """Return the local anchor folders for the given session activities.
+
+    Reuses the shared file-context-anchor predicate so that browser tabs
+    / email / code files are not treated as session anchor folders, while
+    file-context anchors (docx / pdf / xlsx / ...) still surface their
+    parent directory. The row's project state is intentionally NOT
+    required to be concrete: this function only returns the explainable
+    anchor folder for the session, regardless of whether the activity has
+    been assigned to a project.
+    """
     if not activity_ids:
         return []
     placeholders = ",".join("?" for _ in activity_ids)
@@ -127,7 +137,7 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
         ).fetchall()
     folders = []
     for row in [attach_resource(item) for item in dict_rows(rows)]:
-        if not row.get("resource_is_anchor"):
+        if not is_file_context_anchor(row):
             continue
         path_hint = (row.get("resource_path_hint") or "").strip()
         folder = ""
@@ -460,28 +470,27 @@ def _find_short_context_merge(
     return None
 
 
-_PROJECT_ANCHOR_EXT_SET = frozenset(ext.casefold() for ext in ANCHOR_FILE_EXTENSIONS)
-
-
 def _is_project_anchor(row: dict) -> bool:
+    """A row that can act as a session anchor for timeline / report merge.
+
+    Reuses the shared file-context-anchor predicate so the timeline layer
+    does not duplicate the file-extension / browser / email rules. Project
+    anchors additionally require the display project to be a concrete
+    (non-uncategorized) project. The ``midnight_anchor`` source keeps its
+    existing allow-when-concrete-project behavior.
+
+    Direct assignment anchors are NOT promoted to project anchors here:
+    they participate in context carry (``context_service``) but the
+    timeline session concept only treats file-context anchors (and
+    midnight anchors) as session boundaries.
+    """
     if row.get("status") != STATUS_NORMAL:
         return False
     if row.get("assignment_source") == "midnight_anchor":
         return (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
-    if not row.get("resource_is_anchor"):
+    if not is_file_context_anchor(row):
         return False
-    # Only file-based anchors with ANCHOR_FILE_EXTENSIONS are project anchors
-    # for session merge.  Browser tabs, email messages, and code files are
-    # resource anchors for identity but should be auxiliary for merge purposes.
-    if row.get("resource_kind") in ("browser_tab", "email"):
-        return False
-    display_name = str(row.get("resource_display_name") or row.get("activity_display_name") or "").strip()
-    if display_name:
-        import ntpath
-        _, ext = ntpath.splitext(display_name)
-        if ext and ext.casefold() in _PROJECT_ANCHOR_EXT_SET:
-            return (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
-    return False
+    return (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
 
 
 def _is_same_report_project_normal(row: dict, anchor_key: str) -> bool:

@@ -652,7 +652,9 @@ def test_folder_crud_does_not_trigger_backfill(temp_db, monkeypatch):
         called["backfill"] += 1
         return {}
 
-    monkeypatch.setattr(folder_rule_service, "backfill_folder_rule", _spy_backfill)
+    from worktrace.services import rule_impact_service
+
+    monkeypatch.setattr(rule_impact_service, "backfill_rule_impact", _spy_backfill)
 
     created = rule_api.create_project_folder_rule(project, r"D:\Work", True)
     rule_api.update_project_folder_rule(created["rule"]["id"], r"D:\New", False)
