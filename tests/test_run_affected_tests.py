@@ -917,3 +917,24 @@ def test_k2_does_not_trigger_timeline_static_contract(runner):
         "tests/webview/test_project_rules_static_contract.py"
         not in sel.pytest_targets
     )
+
+
+# ---------------------------------------------------------------------------
+# L1. Context assignment service -> context_service tests + timeline service
+# ---------------------------------------------------------------------------
+
+
+def test_context_service_py_selects_l1_targets(runner):
+    """L1: context_service.py carries the context assignment logic
+    (anchor context carry + short-gap same-project bridging), so it
+    must select the L1 target set (context_service tests + timeline
+    service tests + boundary tests)."""
+    sel = runner.select_targets(["worktrace/services/context_service.py"])
+    for expected in (
+        "tests/test_context_service.py",
+        "tests/test_timeline_service.py",
+        "tests/test_ui_backend_boundary.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"context_service.py must trigger L1 target: {expected}"
+        )

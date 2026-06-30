@@ -6,6 +6,7 @@ from ..constants import (
     ANCHOR_FILE_EXTENSIONS,
     CLIPBOARD_TRANSITION_SECONDS,
     DEFAULT_CONTEXT_CARRY_MINUTES,
+    REPORT_CONTEXT_SHORT_MERGE_SECONDS,
     STATUS_ERROR,
     STATUS_EXCLUDED,
     STATUS_IDLE,
@@ -21,6 +22,14 @@ from .settings_service import get_int_setting
 
 INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED}
 DIRECT_ASSIGNMENT_SOURCES = {"manual", "folder_rule", "keyword_rule", "midnight_anchor"}
+# ``anchor_context`` covers two context-assignment scenarios:
+#   1. Ordinary anchor context carry — auxiliary activities between two
+#      same-project anchors inherit the anchor's project.
+#   2. Short same-project gap bridging — a short uncategorized context
+#      anchor (e.g. a brief .doc / .docx Word activity) sandwiched
+#      between two same-project anchors is bridged to that project.
+# Both scenarios reuse the ``anchor_context`` source; no new schema
+# source is introduced.
 _CONTEXT_RECOMPUTE_CACHE: dict[str, tuple] = {}
 
 
@@ -40,6 +49,8 @@ def recompute_context_assignments_for_date(date: str) -> None:
     if _recompute_anchor_rows(rows):
         rows = _load_rows(start, end)
     if _recompute_clipboard_transition_rows(rows, uncategorized_id):
+        rows = _load_rows(start, end)
+    if _recompute_short_gap_anchor_rows(rows, uncategorized_id):
         rows = _load_rows(start, end)
 
     for index, row in enumerate(rows):
@@ -285,6 +296,137 @@ def _set_clipboard_context_assignment(row: dict, project_id: int) -> None:
     row["assignment_is_manual"] = 0
 
 
+def _recompute_short_gap_anchor_rows(rows: list[dict], uncategorized_id: int) -> bool:
+    """Bridge short uncategorized context anchors between same-project anchors.
+
+    For each context anchor row that is currently uncategorized (and not
+    manual / not a direct-rule assignment), check whether it is sandwiched
+    between two concrete (non-uncategorized) same-project anchors with a
+    total middle-activity duration under ``REPORT_CONTEXT_SHORT_MERGE_SECONDS``.
+    If so, persist the assignment with source ``anchor_context`` and update
+    the in-memory row so subsequent non-anchor rows in the main loop see
+    the bridged project.
+
+    This covers the real-world scenario where a brief .doc / .docx Word
+    activity (which is itself a context anchor) is sandwiched between two
+    same-project anchors but does not hit any folder / keyword rule.
+    Without this pass the anchor would stay uncategorized and would also
+    block context carry for subsequent auxiliary activities.
+
+    Conditions (all must hold):
+      - The row is a context anchor (``_is_context_anchor``).
+      - The row's current assignment is uncategorized (not manual, not
+        folder_rule / keyword_rule / midnight_anchor / clipboard_transition_context).
+      - No manual_override or assignment_is_manual.
+      - Previous and next concrete anchors exist and belong to the same
+        non-uncategorized project.
+      - No interrupt status (idle / paused) between the anchors.
+      - No session boundary between prev anchor and next anchor.
+      - All middle activities (between the two anchors) are normal,
+        visible, and non-deleted.
+      - Total duration of middle activities <= threshold.
+    """
+    changed = False
+    for index, row in enumerate(rows):
+        if row.get("status") != STATUS_NORMAL:
+            continue
+        if not _is_context_anchor(row):
+            continue
+        source = row.get("assignment_source")
+        if source in DIRECT_ASSIGNMENT_SOURCES or source == "clipboard_transition_context":
+            continue
+        if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
+            continue
+        # Only bridge rows that are currently uncategorized.
+        if _row_project_id(row) != uncategorized_id:
+            continue
+        target = _short_gap_bridge_target(rows, index, uncategorized_id)
+        if target is None:
+            continue
+        _set_short_gap_context_assignment(row, target)
+        changed = True
+    return changed
+
+
+def _short_gap_bridge_target(
+    rows: list[dict], index: int, uncategorized_id: int
+) -> int | None:
+    """Return the target project_id for short-gap bridging, or None."""
+    row = rows[index]
+    # Use the "concrete" anchor lookups so that other uncategorized context
+    # anchors sitting between the same two same-project anchors are skipped
+    # (rather than terminating the search). This lets every middle anchor in
+    # a run of multiple short uncategorized anchors bridge to the surrounding
+    # project, instead of only the first one.
+    prev_anchor = _find_previous_concrete_anchor(rows, index, uncategorized_id)
+    next_anchor = _find_next_concrete_anchor(rows, index, uncategorized_id)
+    if not prev_anchor or not next_anchor:
+        return None
+    prev_project = _row_project_id(prev_anchor)
+    next_project = _row_project_id(next_anchor)
+    if prev_project != next_project or prev_project == uncategorized_id:
+        return None
+    # Find the index range of middle activities (between prev and next
+    # anchor, exclusive of both anchors).
+    prev_idx = rows.index(prev_anchor)
+    next_idx = rows.index(next_anchor)
+    if next_idx - prev_idx < 2:
+        return None
+    # All middle activities must be normal, visible, non-deleted.
+    for mid_idx in range(prev_idx + 1, next_idx):
+        mid_row = rows[mid_idx]
+        if mid_row.get("status") != STATUS_NORMAL:
+            return None
+        if int(mid_row.get("is_hidden") or 0) or int(mid_row.get("is_deleted") or 0):
+            return None
+    # No session boundary between prev anchor and next anchor.
+    if _has_session_boundary_in_range(rows, prev_idx, next_idx):
+        return None
+    # Total duration of middle activities must be under the threshold.
+    middle_duration = _total_middle_duration_seconds(rows, prev_idx, next_idx)
+    if middle_duration > REPORT_CONTEXT_SHORT_MERGE_SECONDS:
+        return None
+    return prev_project
+
+
+def _has_session_boundary_in_range(rows: list[dict], start_idx: int, end_idx: int) -> bool:
+    """Check if any consecutive pair between start_idx and end_idx has a session boundary."""
+    for i in range(start_idx, end_idx):
+        if _has_session_boundary_between(rows[i], rows[i + 1]):
+            return True
+    return False
+
+
+def _total_middle_duration_seconds(rows: list[dict], start_idx: int, end_idx: int) -> int:
+    """Sum durations of rows strictly between start_idx and end_idx."""
+    total = 0
+    for i in range(start_idx + 1, end_idx):
+        mid_row = rows[i]
+        start_time = str(mid_row.get("start_time") or "")
+        end_time = str(mid_row.get("end_time") or "")
+        if not start_time or not end_time:
+            continue
+        seconds = _seconds_between(start_time, end_time)
+        if seconds is not None and seconds > 0:
+            total += seconds
+    return total
+
+
+def _set_short_gap_context_assignment(row: dict, project_id: int) -> None:
+    _sync_assignment_and_activity(
+        int(row["id"]),
+        int(project_id),
+        "anchor_context",
+        60,
+        is_manual=False,
+        auto_classified=False,
+    )
+    row["assignment_project_id"] = int(project_id)
+    row["project_id"] = int(project_id)
+    row["assignment_source"] = "anchor_context"
+    row["assignment_is_manual"] = 0
+
+
 def _infer_context_project(rows: list[dict], index: int, carry_minutes: int, uncategorized_id: int) -> int:
     row = rows[index]
     if _nearest_anchor_is_uncategorized(rows, index, -1, uncategorized_id) or _nearest_anchor_is_uncategorized(rows, index, 1, uncategorized_id):
@@ -340,6 +482,37 @@ def _find_next_anchor(rows: list[dict], index: int, uncategorized_id: int) -> di
         if _is_context_anchor(row):
             project_id = _row_project_id(row)
             return row if project_id != uncategorized_id else None
+    return None
+
+
+def _find_previous_concrete_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
+    """Like _find_previous_anchor, but skips uncategorized context anchors
+    instead of stopping at them. Used by short-gap bridging, which needs to
+    locate the surrounding non-uncategorized ("concrete") anchors even when
+    other uncategorized anchors sit in between (so every middle anchor in a
+    run gets bridged, not just the first)."""
+    for pos in range(index - 1, -1, -1):
+        row = rows[pos]
+        if row["status"] in INTERRUPT_STATUSES:
+            return None
+        if _is_context_anchor(row):
+            project_id = _row_project_id(row)
+            if project_id != uncategorized_id:
+                return row
+    return None
+
+
+def _find_next_concrete_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
+    """Like _find_next_anchor, but skips uncategorized context anchors
+    instead of stopping at them. See _find_previous_concrete_anchor."""
+    for pos in range(index + 1, len(rows)):
+        row = rows[pos]
+        if row["status"] in INTERRUPT_STATUSES:
+            return None
+        if _is_context_anchor(row):
+            project_id = _row_project_id(row)
+            if project_id != uncategorized_id:
+                return row
     return None
 
 

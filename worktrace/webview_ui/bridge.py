@@ -305,8 +305,8 @@ _BATCH_PROJECT_ERROR_MESSAGES = {
     "invalid_selection": "请选择至少两个活动",
     "batch_too_large": "一次最多修改 100 条活动",
     "invalid_project": "请选择有效的项目",
-    "in_progress": "进行中记录暂不支持批量修改",
-    "hidden_activity": "隐藏记录暂不支持批量修改",
+    "in_progress": "进行中记录无法批量修改",
+    "hidden_activity": "隐藏记录无法批量修改",
     "operation_failed": "操作失败",
 }
 
@@ -318,8 +318,8 @@ _BATCH_NOTE_ERROR_MESSAGES = {
     "batch_too_large": "一次最多修改 100 条活动",
     "invalid_note": "请输入有效备注",
     "note_too_long": "备注过长",
-    "in_progress": "进行中记录暂不支持批量修改",
-    "hidden_activity": "隐藏记录暂不支持批量修改",
+    "in_progress": "进行中记录无法批量修改",
+    "hidden_activity": "隐藏记录无法批量修改",
     "operation_failed": "操作失败",
 }
 
@@ -330,7 +330,7 @@ _RESTORE_ERROR_MESSAGES = {
     "invalid_activity": "请选择有效的活动",
     "not_found": "活动不存在",
     "not_restorable": "该活动无需恢复",
-    "in_progress": "进行中记录暂不支持恢复",
+    "in_progress": "进行中记录无法恢复",
     "invalid_date": "日期无效",
     "operation_failed": "恢复失败",
 }
@@ -578,15 +578,16 @@ class WebViewBridge(ProjectRulesBridgeMixin):
     def get_overview(self) -> dict[str, Any]:
         """Return today's overview KPIs and current activity summary.
 
-        Phase 6G: also returns raw seconds + snapshot fields so the
-        frontend 1-second ticker can increment the display without a
-        bridge round-trip. ``today_total_seconds`` already includes the
-        current activity's live seconds (the summary is built with
-        ``include_live=True``); the ticker must NOT add
-        ``current_activity_elapsed_seconds`` on top of it. Instead the
-        ticker adds ``(now - snapshot_at_epoch_ms)`` to both
-        ``today_total_seconds`` and ``current_activity_elapsed_seconds``
-        only when the activity is running (not paused / not idle).
+        Returns raw seconds + snapshot fields so the frontend 1-second
+        ticker can increment the display without a bridge round-trip.
+        ``today_total_seconds`` already includes the current activity's
+        live seconds (the summary is built with ``include_live=True``);
+        the ticker must NOT add ``current_activity_elapsed_seconds`` on
+        top of it. Instead the ticker adds ``(now - snapshot_at_epoch_ms)``
+        to ``today_total_seconds`` and to EITHER ``classified_seconds``
+        OR ``uncategorized_seconds`` (never both) depending on whether
+        the current activity is classified, and only when the activity
+        is running (not paused / not idle).
         """
         try:
             today = timeline_api.get_default_report_date()
@@ -595,20 +596,43 @@ class WebViewBridge(ProjectRulesBridgeMixin):
             project_count = len(project_api.list_active_projects())
             current = _snapshot_summary(snapshot)
             total_seconds = int(summary.get("total_duration") or 0)
+            classified_seconds = int(summary.get("classified_duration") or 0)
+            uncategorized_seconds = int(summary.get("uncategorized_duration") or 0)
+            # Determine whether the current activity is classified or
+            # uncategorized so the frontend ticker knows which KPI to
+            # increment. Uses the snapshot's inferred_project_name; if
+            # it equals UNCATEGORIZED_PROJECT the activity is
+            # uncategorized. No file path / window title / clipboard
+            # content is surfaced.
+            current_project_name = ""
+            current_is_uncategorized = True
+            if snapshot and current.get("active"):
+                current_project_name = str(snapshot.get("inferred_project_name") or "")
+                current_is_uncategorized = (
+                    not current_project_name
+                    or current_project_name == UNCATEGORIZED_PROJECT
+                )
+            current["is_uncategorized"] = bool(current_is_uncategorized)
+            current["is_classified"] = not bool(current_is_uncategorized)
             return {
                 "ok": True,
                 "date": today,
                 "total_duration": format_duration(total_seconds),
-                "classified_duration": format_duration(summary.get("classified_duration") or 0),
-                "uncategorized_duration": format_duration(summary.get("uncategorized_duration") or 0),
+                "classified_duration": format_duration(classified_seconds),
+                "uncategorized_duration": format_duration(uncategorized_seconds),
                 "project_count": project_count,
                 "current_activity": current,
-                # Phase 6G raw seconds + snapshot fields for the 1-second
-                # local ticker. The ticker only updates DOM text; it
-                # never calls a bridge method or writes the DB.
+                # Raw seconds + snapshot fields for the 1-second local
+                # ticker. The ticker only updates DOM text; it never
+                # calls a bridge method or writes the DB.
                 "snapshot_at_epoch_ms": int(time.time() * 1000),
                 "today_total_seconds": total_seconds,
                 "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
+                # Display-safe raw seconds for classified / uncategorized
+                # so the frontend ticker can increment the correct KPI
+                # without parsing "HH:MM:SS" strings.
+                "classified_seconds": classified_seconds,
+                "uncategorized_seconds": uncategorized_seconds,
             }
         except Exception:
             logger.exception("webview bridge get_overview failed")

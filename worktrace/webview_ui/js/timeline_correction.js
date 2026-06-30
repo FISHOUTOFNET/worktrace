@@ -321,7 +321,7 @@
                 + '<div class="correction-shell-actions-hint">'
                 + '会话级操作（项目与备注 / 时间修正 / 拆分 / 可见性）请在上方“编辑当前时段”面板中执行；'
                 + '单条活动操作（编辑时间 / 拆分 / 与下一条合并 / 隐藏 / 删除）请在左侧活动详情列表中对应行执行。'
-                + ' <span class="danger-note">隐藏与删除为软操作，本阶段不会物理删除数据。</span>'
+                + ' <span class="danger-note">隐藏与删除为软操作，不会物理删除数据。</span>'
                 + '</div>';
             actionsEl.innerHTML = guidance;
         }
@@ -388,14 +388,16 @@
 
     function openCorrectionShell(mode, activityId) {
         // Refuse to open while there are unsaved edits so the shell does
-        // not override in-progress inputs.
+        // not override in-progress inputs. The shell is still hidden at
+        // this point, so surface the refusal on the visible edit-status
+        // area instead of the hidden shell status.
         if (App.isEditDirty()) {
-            setCorrectionShellStatus("请先保存或取消当前编辑", true);
+            if (App.showEditStatus) App.showEditStatus("请先保存或取消当前编辑", true);
             return;
         }
         var session = getSelectedSession();
         if (!session) {
-            setCorrectionShellStatus("请先选择一个时段", true);
+            if (App.showEditStatus) App.showEditStatus("请先选择左侧时段", true);
             return;
         }
         // activity-level open requires the activity id to still exist in the
@@ -411,7 +413,7 @@
                 }
             }
             if (!found) {
-                setCorrectionShellStatus("该活动已不存在，请刷新后重试", true);
+                if (App.showEditStatus) App.showEditStatus("该活动已不存在，请刷新后重试", true);
                 return;
             }
         }
@@ -434,6 +436,19 @@
         // Phase 3B.9: clear every action status area on open so stale
         // messages from a previous shell session do not linger.
         resetCorrectionActionStatus();
+        // Scroll and focus the shell title so the user sees the panel
+        // opened in response to their click, avoiding the impression of
+        // a no-op click.
+        var titleEl = document.querySelector(".correction-shell-title");
+        if (titleEl) {
+            if (titleEl.scrollIntoView) {
+                titleEl.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+            if (titleEl.focus) {
+                titleEl.setAttribute("tabindex", "-1");
+                titleEl.focus();
+            }
+        }
     }
     App.openCorrectionShell = openCorrectionShell;
 

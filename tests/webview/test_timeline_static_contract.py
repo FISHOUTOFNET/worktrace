@@ -102,14 +102,14 @@ def test_index_html_unmigrated_pages_still_have_placeholders():
     # Phase 5C: boundary copy updated to mention keyword creation.
     assert "启用/停用" in rules_section
     assert "新增关键词规则" in rules_section
-    # Phase 5D: boundary copy updated to mention keyword deletion.
-    assert "删除已有关键词规则" in rules_section
+    # Phase 5D: boundary copy updated to mention folder creation and archiving.
+    assert "新增文件夹规则" in rules_section
+    assert "归档" in rules_section
     assert "编辑" in rules_section
-    assert "预览单条规则影响" in rules_section
-    assert "安全应用" in rules_section
-    assert "自动规则" in rules_section
+    assert "预览规则影响" in rules_section
+    assert "批量应用" in rules_section
+    assert "自动归类" in rules_section
     assert "批量" in rules_section
-    assert "项目硬删除" in rules_section
 
     # Phase 6A: Settings / Privacy is now migrated as a read-only WebView
     # status page. The old placeholder copy must not appear in its section.
@@ -757,7 +757,7 @@ def test_app_js_disables_in_progress_activity_time_edit():
     """Phase 3B.1: in-progress activities must have their '编辑时间' button
     disabled, and the session-level time section must show a hint."""
     source = read_all_js()
-    assert "进行中记录暂不支持时间修正" in source
+    assert "进行中记录无法修改时间" in source
 
 
 
@@ -765,7 +765,7 @@ def test_app_js_disables_multi_activity_session_time_edit():
     """Phase 3B.1: multi-activity sessions must show the 'multi-activity
     not supported' hint instead of the time inputs."""
     source = read_all_js()
-    assert "多活动 session 暂不支持整体时间修改" in source
+    assert "多活动时段无法修改整体时间" in source
 
 
 
@@ -1299,7 +1299,7 @@ def test_app_js_split_disables_multi_activity_session():
     """Phase 3B.2: multi-activity sessions must show the 'multi-activity
     not supported' hint for the session-level split."""
     source = read_all_js()
-    assert "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动" in source
+    assert "多活动时段请在活动详情中拆分单条活动" in source
 
 
 
@@ -1307,7 +1307,7 @@ def test_app_js_split_disables_in_progress_activity():
     """Phase 3B.2: in-progress activities must be disabled or show a hint
     for splitting."""
     source = read_all_js()
-    assert "进行中记录暂不支持拆分" in source
+    assert "进行中记录无法拆分" in source
 
 
 
@@ -2057,7 +2057,7 @@ def test_app_js_delete_uses_window_confirm():
     soft-delete hint to avoid accidental deletion."""
     source = read_all_js()
     assert "window.confirm" in source
-    assert "确定从 Timeline 删除这条记录吗？本阶段不会物理删除数据。" in source
+    assert "确定从 Timeline 删除这条记录吗？不会物理删除数据。" in source
 
 
 
@@ -2273,11 +2273,11 @@ def test_app_js_dirty_guard_text_still_present_3c():
 
 
 def test_index_html_soft_delete_copy_still_present_3c():
-    """Phase 3C: the soft delete copy '本阶段不会物理删除数据' must
+    """Phase 3C: the soft delete copy '不会物理删除数据' must
     still be present (regression lock — delete is still soft delete)."""
     source = read_all_js()
-    assert "本阶段不会物理删除数据" in source, (
-        "soft delete copy '本阶段不会物理删除数据' must remain"
+    assert "不会物理删除数据" in source, (
+        "soft delete copy '不会物理删除数据' must remain"
     )
 
 
@@ -2361,8 +2361,9 @@ def test_styles_css_no_external_resources_3c():
 
 
 def test_index_html_correction_shell_cards_still_present_3c():
-    """Phase 3C: all six correction shell cards must still be present
-    (regression lock)."""
+    """Phase 3C: the five available correction shell cards must still be
+    present (regression lock). The dev-phase not-implemented card has
+    been removed per the productization cleanup and must NOT reappear."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for card_id in (
         "correction-shell-context-card",
@@ -2370,11 +2371,14 @@ def test_index_html_correction_shell_cards_still_present_3c():
         "correction-shell-single-action-card",
         "correction-shell-batch-action-card",
         "correction-shell-restore-card",
-        "correction-shell-not-implemented-card",
     ):
         assert card_id in source, (
             "index.html must still contain correction shell card: " + card_id
         )
+    assert "correction-shell-not-implemented-card" not in source, (
+        "index.html must not contain the not-implemented card; the "
+        "dev-phase unavailable feature list has been removed"
+    )
 
 
 
@@ -2394,18 +2398,15 @@ def test_index_html_no_forbidden_batch_ui_3c():
 
 
 def test_index_html_not_implemented_card_lists_unavailable_3c():
-    """Phase 3C: the not-implemented card must still list all unavailable
-    capabilities (regression lock)."""
+    """Phase 3C: the not-implemented card must NOT exist in index.html.
+    The card previously listed future features; this dev-phase
+    unavailable-feature list has been removed per the productization
+    cleanup. Only currently-available capabilities are shown."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    not_impl_pos = source.find("correction-shell-not-implemented-card")
-    assert not_impl_pos != -1
-    not_impl_section = source[not_impl_pos:not_impl_pos + 600]
-    for keyword in ("批量隐藏", "批量删除", "批量恢复", "撤销栈",
-                    "永久删除", "批量时间", "批量拆分", "批量合并",
-                    "自动规则", "重叠检测"):
-        assert keyword in not_impl_section, (
-            "not-implemented card must list: " + keyword
-        )
+    assert "correction-shell-not-implemented-card" not in source, (
+        "index.html must not contain the not-implemented card; the "
+        "dev-phase unavailable feature list has been removed"
+    )
 
 
 
@@ -2654,24 +2655,22 @@ def test_app_js_soft_delete_copy_still_not_permanent_3c1():
     """Phase 3C.1: soft delete copy must still say not physical / not
     permanent delete (regression lock)."""
     source = read_all_js()
-    assert "本阶段不会物理删除数据" in source, (
-        "soft delete copy '本阶段不会物理删除数据' must remain"
+    assert "不会物理删除数据" in source, (
+        "soft delete copy '不会物理删除数据' must remain"
     )
 
 
 
 def test_app_js_restore_copy_still_no_batch_undo_permanent_3c1():
-    """Phase 3C.1: restore copy must still say no batch restore / no undo
-    stack / no permanent delete (regression lock)."""
+    """Phase 3C.1: the not-implemented card that previously listed
+    unavailable capabilities (batch restore / undo stack / permanent
+    delete) has been removed per the productization cleanup and must
+    NOT reappear."""
     html = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    # The not-implemented card lists the unavailable capabilities.
-    not_impl_pos = html.find("correction-shell-not-implemented-card")
-    assert not_impl_pos != -1
-    not_impl_section = html[not_impl_pos:not_impl_pos + 600]
-    for keyword in ("批量恢复", "撤销栈", "永久删除"):
-        assert keyword in not_impl_section, (
-            "not-implemented card must still list: " + keyword
-        )
+    assert "correction-shell-not-implemented-card" not in html, (
+        "index.html must not contain the not-implemented card; the "
+        "dev-phase unavailable feature list has been removed"
+    )
 
 
 

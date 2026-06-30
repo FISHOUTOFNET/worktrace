@@ -52,10 +52,57 @@ def test_index_html_settings_page_section_is_migrated_6a() -> None:
     assert pos != -1, "page-settings section must exist"
     section = source[pos:pos + 1200]
     assert "WebView 迁移中" not in section
-    # The migrated page must announce its read-only nature so the user
-    # understands no write action is offered here yet.
+    # The migrated page must announce its purpose in user language.
     assert "设置与隐私" in section
-    assert "只读" in section or "暂不开放" in section
+    assert "管理本地隐私设置" in section
+
+
+def test_index_html_settings_page_no_refresh_status_text() -> None:
+    """The Settings page must not contain a resident '刷新状态' button
+    or label. Status is auto-refreshed on page entry and after operations."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="page-settings"')
+    assert pos != -1
+    end = source.find("</section>", pos)
+    section = source[pos:end]
+    assert "刷新状态" not in section, (
+        "Settings page must not contain '刷新状态'; the refresh button "
+        "has been removed"
+    )
+
+
+def test_index_html_settings_page_no_dev_phase_write_text() -> None:
+    """The Settings page must not contain dev-phase write restriction
+    copy like '其他写操作暂不开放'."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    pos = source.find('id="page-settings"')
+    assert pos != -1
+    end = source.find("</section>", pos)
+    section = source[pos:end]
+    assert "其他写操作暂不开放" not in section, (
+        "Settings page must not contain '其他写操作暂不开放'"
+    )
+
+
+def test_index_html_no_dev_phase_copy_in_main_ui() -> None:
+    """The main UI (index.html user-visible DOM text) must NOT contain
+    dev-phase copy. These phrases imply a future roadmap and should be
+    removed or rewritten in user language. This test only checks
+    user-visible DOM text in index.html, NOT JS comments, Python
+    docstrings, docs, or test descriptions."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for forbidden in (
+        "后续阶段",
+        "暂未开放",
+        "暂不开放",
+        "暂不支持",
+        "其他写操作暂不开放",
+        "当前支持查看",
+        "本阶段",
+    ):
+        assert forbidden not in source, (
+            "index.html must not contain dev-phase copy: " + forbidden
+        )
 
 
 def test_index_html_settings_required_dom_ids_6a() -> None:
@@ -63,7 +110,6 @@ def test_index_html_settings_required_dom_ids_6a() -> None:
     required DOM ids."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for dom_id in (
-        "settings-refresh-btn",
         "settings-error",
         "settings-loading",
         "settings-status",
@@ -317,15 +363,15 @@ def test_settings_js_lazy_load_in_switch_page_6a() -> None:
     assert "loadSettingsPrivacyStatus" in body
 
 
-def test_settings_js_refresh_button_binding_in_init_buttons_6a() -> None:
-    """Phase 6A: initButtons must bind the settings-refresh-btn to
-    ``App.loadSettingsPrivacyStatus`` (read-only refresh)."""
+def test_settings_js_no_refresh_button_binding_in_init_buttons() -> None:
+    """The settings-refresh-btn DOM id must not appear in init.js because
+    the Settings page no longer has a resident refresh button. Status is
+    auto-refreshed on page entry and after operations."""
     source = read_js("init.js")
-    pos = source.find("function initButtons")
-    assert pos != -1
-    body = source[pos:pos + 6000]
-    assert "settings-refresh-btn" in body
-    assert "loadSettingsPrivacyStatus" in body
+    assert "settings-refresh-btn" not in source, (
+        "init.js must not reference settings-refresh-btn; the refresh "
+        "button has been removed from the Settings page"
+    )
 
 
 # --- Stylesheet ----------------------------------------------------------
@@ -338,7 +384,6 @@ def test_styles_css_has_settings_scoped_classes_6a() -> None:
     for cls in (
         ".settings-header",
         ".settings-subtitle",
-        ".settings-refresh-btn",
         ".settings-loading",
         ".settings-error",
         ".settings-status",
@@ -1086,13 +1131,13 @@ def test_settings_js_load_first_run_notice_shows_gate_when_unaccepted_6e() -> No
     """Phase 6E: ``loadFirstRunNotice`` must set
     ``App.firstRunNoticeRequired = true`` and call ``showFirstRunNotice``
     with mode ``"gate"`` when the backend reports
-    ``data.accepted === false``. This locks the blocking-gate behavior
+    ``result.accepted === false``. This locks the blocking-gate behavior
     in source so the user cannot be silently bypassed."""
     source = read_js("settings.js")
     pos = source.find("function loadFirstRunNotice")
     assert pos != -1
     body = source[pos:pos + 2500]
-    assert "data.accepted === false" in body
+    assert "result.accepted === false" in body
     assert 'App.firstRunNoticeRequired = true' in body
     assert 'showFirstRunNotice' in body
     assert '"gate"' in body or "'gate'" in body
@@ -1119,7 +1164,11 @@ def test_settings_js_open_privacy_notice_uses_view_mode_only_6e() -> None:
     source = read_js("settings.js")
     pos = source.find("function openPrivacyNoticeFromSettings")
     assert pos != -1
-    body = source[pos:pos + 1500]
+    # Slice to the next sibling function so the body covers the whole
+    # openPrivacyNoticeFromSettings implementation, including the strict
+    # fail-closed error branch which precedes the showFirstRunNotice call.
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 3000]
     assert "showFirstRunNotice" in body
     assert '"view"' in body or "'view'" in body
     # The view-mode function must not call accept or any write bridge.
@@ -1370,20 +1419,21 @@ def test_settings_js_clipboard_toggle_still_uses_settingsLoaded() -> None:
 # --- Phase 6G: First-run notice JS fallback ----------------------------
 
 
-def test_settings_js_has_first_run_notice_fallback_text() -> None:
-    """Phase 6G: settings.js must define ``FIRST_RUN_NOTICE_FALLBACK_TEXT``
-    and ``buildFirstRunNoticeFallback`` so the frontend can render the
-    privacy notice body even when the bridge call itself rejects (e.g.
-    pywebview bridge error). The backend is fail-closed and returns the
-    full notice body even when the accepted-state read fails; this JS
-    fallback only triggers on bridge-level rejection."""
+def test_settings_js_has_no_first_run_notice_fallback_text() -> None:
+    """The frontend must NOT maintain a JS-side privacy notice fallback
+    body. The privacy notice text is the sole responsibility of the
+    backend (``PRIVACY_NOTICE_TEXT`` in ``constants.py``). On bridge
+    failure the frontend must show a blocking error overlay with NO
+    notice body, NO highlights, NO title, and a disabled/hidden accept
+    button (strict fail-closed)."""
     source = read_js("settings.js")
-    assert "FIRST_RUN_NOTICE_FALLBACK_TEXT" in source, (
-        "settings.js must define FIRST_RUN_NOTICE_FALLBACK_TEXT for the "
-        "JS-side fallback notice body"
+    assert "FIRST_RUN_NOTICE_FALLBACK_TEXT" not in source, (
+        "settings.js must NOT define FIRST_RUN_NOTICE_FALLBACK_TEXT; "
+        "the privacy notice body must come from the backend only"
     )
-    assert "function buildFirstRunNoticeFallback" in source, (
-        "settings.js must define function buildFirstRunNoticeFallback"
+    assert "buildFirstRunNoticeFallback" not in source, (
+        "settings.js must NOT define buildFirstRunNoticeFallback; "
+        "no JS-side fallback notice body is allowed"
     )
 
 

@@ -811,3 +811,76 @@ def test_get_timeline_returns_total_seconds_and_snapshot_fields(bridge):
     assert isinstance(result["sessions"], list)
     for session in result["sessions"]:
         assert isinstance(session["duration_seconds"], int)
+
+
+# --- Overview ticker: classified / uncategorized raw seconds -----------
+# The 1-second local ticker must update kpi-total / kpi-classified /
+# kpi-uncategorized on the same口径 (same basis). The backend
+# ``get_overview`` payload must include numeric ``classified_seconds``
+# and ``uncategorized_seconds`` fields (raw ints, not parsed from
+# ``HH:MM:SS`` strings) plus ``current_activity.is_classified`` /
+# ``current_activity.is_uncategorized`` so the frontend knows which
+# KPI to increment.
+
+
+def test_get_overview_returns_classified_and_uncategorized_seconds(bridge):
+    """``get_overview`` must include ``classified_seconds`` and
+    ``uncategorized_seconds`` as ints so the frontend ticker can update
+    kpi-classified / kpi-uncategorized without parsing duration strings."""
+    settings_service.clear_settings_cache()
+    result = bridge.get_overview()
+
+    assert result["ok"] is True
+    assert "classified_seconds" in result
+    assert "uncategorized_seconds" in result
+    assert isinstance(result["classified_seconds"], int)
+    assert isinstance(result["uncategorized_seconds"], int)
+
+
+def test_get_overview_current_activity_has_classification_flags(bridge):
+    """``current_activity`` must include ``is_classified`` and
+    ``is_uncategorized`` booleans so the frontend ticker knows which KPI
+    to increment (only one of the two, never both)."""
+    settings_service.clear_settings_cache()
+    result = bridge.get_overview()
+
+    assert result["ok"] is True
+    current = result["current_activity"]
+    assert isinstance(current, dict)
+    assert "is_classified" in current
+    assert "is_uncategorized" in current
+    assert isinstance(current["is_classified"], bool)
+    assert isinstance(current["is_uncategorized"], bool)
+
+
+def test_get_overview_classified_plus_uncategorized_le_total(bridge):
+    """``classified_seconds + uncategorized_seconds`` must be <=
+    ``today_total_seconds`` (the KPIs must not double-count)."""
+    settings_service.clear_settings_cache()
+    result = bridge.get_overview()
+
+    assert result["ok"] is True
+    total = result["today_total_seconds"]
+    classified = result["classified_seconds"]
+    uncategorized = result["uncategorized_seconds"]
+    assert classified + uncategorized <= total
+
+
+def test_get_overview_classified_uncategorized_match_string_durations(bridge):
+    """The numeric ``classified_seconds`` / ``uncategorized_seconds``
+    must be consistent with the legacy ``classified_duration`` /
+    ``uncategorized_duration`` string fields (both derive from the same
+    underlying summary)."""
+    settings_service.clear_settings_cache()
+    result = bridge.get_overview()
+
+    assert result["ok"] is True
+    # Parse the HH:MM:SS strings and verify they match the int seconds.
+    def _parse_hms(s: str) -> int:
+        parts = s.split(":")
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+
+    assert result["classified_seconds"] == _parse_hms(result["classified_duration"])
+    assert result["uncategorized_seconds"] == _parse_hms(
+        result["uncategorized_duration"]
+    )

@@ -190,8 +190,8 @@ def test_app_js_destructive_action_copy_is_unified():
         "delete must succeed with 已删除 and fail with 删除失败"
     )
     # Delete confirmation must still say soft delete
-    assert "本阶段不会物理删除数据" in source, (
-        "delete confirmation must still say 本阶段不会物理删除数据"
+    assert "不会物理删除数据" in source, (
+        "delete confirmation must still say 不会物理删除数据"
     )
 
 
@@ -462,24 +462,34 @@ def test_index_html_correction_shell_has_required_areas():
 
 
 
-def test_index_html_correction_shell_title_is_advanced_correction():
-    """Phase 3B.5B: the shell title must be 高级纠错."""
+def test_index_html_correction_shell_title_is_correction_panel():
+    """The shell title must be 纠错面板 (renamed from 高级纠错 to better
+    reflect that the panel is a batch correction panel, not a hidden
+    advanced feature)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    assert "高级纠错" in source, (
-        "correction shell title must be 高级纠错"
+    assert "纠错面板" in source, (
+        "correction shell title must be 纠错面板"
+    )
+    # The old dev-phase wording 高级纠错 must no longer appear in the UI.
+    assert "高级纠错" not in source, (
+        "correction shell must not use the old 高级纠错 wording"
     )
 
 
 
 def test_index_html_has_session_level_open_correction_entry():
-    """Phase 3B.5B: the session-level edit panel must have a
-    打开高级纠错 entry button."""
+    """The session-level edit panel must have a 打开纠错面板 entry button
+    (renamed from 打开高级纠错)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="open-correction-shell-btn"' in source, (
         "session-level edit panel must have an open-correction-shell button"
     )
-    assert "打开高级纠错" in source, (
-        "session-level open button text must be 打开高级纠错"
+    assert "打开纠错面板" in source, (
+        "session-level open button text must be 打开纠错面板"
+    )
+    # The old dev-phase wording 打开高级纠错 must no longer appear.
+    assert "打开高级纠错" not in source, (
+        "session-level open button must not use the old 打开高级纠错 wording"
     )
 
 
@@ -1060,6 +1070,26 @@ def test_app_js_open_correction_shell_dirty_refusal_preserves_state():
 
 
 
+def test_app_js_open_correction_shell_scrolls_and_focuses_panel():
+    """After a successful open, openCorrectionShell must scroll / focus the
+    correction shell title so the user sees the panel appear. This avoids
+    the 'click with no visible feedback' problem."""
+    source = read_all_js()
+    body = func_body(source, "openCorrectionShell")
+    assert "scrollIntoView" in body, (
+        "openCorrectionShell must call scrollIntoView on the shell title "
+        "so the user sees the panel appear"
+    )
+    assert "focus" in body, (
+        "openCorrectionShell must focus the shell title so the user sees "
+        "the panel appear"
+    )
+    assert "correction-shell-title" in body, (
+        "openCorrectionShell must scroll / focus the correction-shell-title"
+    )
+
+
+
 def test_app_js_get_selected_session_uses_current_sessions():
     """Phase 3B.5B.1: getSelectedSession must look the session up from
     currentSessions so a stale / disappeared session cannot open the
@@ -1290,7 +1320,7 @@ def test_index_html_batch_hint_only_project():
     """Phase 3B.6: the batch section hint must state that only batch
     project reassignment is supported."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    assert "仅支持批量设置项目" in source, (
+    assert "批量操作仅支持设置项目" in source, (
         "batch section hint must state only project batch is supported"
     )
     # The hint must also list the unsupported batch operations.
@@ -1502,8 +1532,8 @@ def test_bridge_batch_error_messages_dict():
             "bridge must map the '" + code + "' error code"
         )
     for msg in ("请选择至少两个活动", "一次最多修改 100 条活动",
-                "请选择有效的项目", "进行中记录暂不支持批量修改",
-                "隐藏记录暂不支持批量修改", "操作失败"):
+                "请选择有效的项目", "进行中记录无法批量修改",
+                "隐藏记录无法批量修改", "操作失败"):
         assert msg in bridge_src, (
             "bridge must contain the Chinese message: " + msg
         )
@@ -2292,8 +2322,8 @@ def test_bridge_batch_note_error_messages_dict():
         )
     for msg in ("请选择至少两个活动", "一次最多修改 100 条活动",
                 "请输入有效备注", "备注过长",
-                "进行中记录暂不支持批量修改",
-                "隐藏记录暂不支持批量修改", "操作失败"):
+                "进行中记录无法批量修改",
+                "隐藏记录无法批量修改", "操作失败"):
         assert msg in bridge_src, (
             "bridge must contain the Chinese message: " + msg
         )
@@ -2575,21 +2605,15 @@ def test_index_html_has_restore_section():
 
 
 def test_index_html_restore_hint_no_batch_undo_permanent():
-    """Phase 3B.8: the restore hint must state that batch restore, undo
-    stack, and permanent delete are not supported."""
+    """Phase 3B.8: the restore hint must be present in index.html,
+    informing the user that restores are performed one record at a time."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     hint_start = source.find("correction-shell-restore-hint")
     assert hint_start != -1, "index.html must contain the restore hint"
     # Extract a window around the hint to check its text.
     hint_window = source[hint_start:hint_start + 500]
-    assert "批量恢复" in hint_window or "批量" in hint_window, (
-        "restore hint must mention batch restore is not supported"
-    )
-    assert "撤销" in hint_window, (
-        "restore hint must mention undo stack is not supported"
-    )
-    assert "永久删除" in hint_window, (
-        "restore hint must mention permanent delete is not supported"
+    assert "恢复" in hint_window, (
+        "restore hint must mention that restores are performed one at a time"
     )
 
 
@@ -2921,7 +2945,7 @@ def test_bridge_restore_error_messages_dict():
             "bridge must map the '" + code + "' error code"
         )
     for msg in ("请选择有效的活动", "活动不存在", "该活动无需恢复",
-                "进行中记录暂不支持恢复", "日期无效", "恢复失败",
+                "进行中记录无法恢复", "日期无效", "恢复失败",
                 "加载可恢复记录失败"):
         assert msg in bridge_src, (
             "bridge must contain the Chinese message: " + msg
@@ -3329,23 +3353,15 @@ def test_index_html_correction_shell_has_restore_card_3b9():
 
 
 def test_index_html_correction_shell_has_not_implemented_card_3b9():
-    """Phase 3B.9: index.html must contain a not-implemented hint card
-    that explicitly lists the unsupported batch / undo / permanent delete
-    capabilities."""
+    """Phase 3B.9: the not-implemented hint card was removed during
+    consolidation; index.html must NOT contain it."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    assert 'id="correction-shell-not-implemented-card"' in source, (
-        "index.html must contain #correction-shell-not-implemented-card"
+    assert 'id="correction-shell-not-implemented-card"' not in source, (
+        "index.html must not contain #correction-shell-not-implemented-card"
     )
-    card_start = source.find('id="correction-shell-not-implemented-card"')
-    card_end = source.find("</div>", source.find(
-        "correction-shell-card-hint", card_start))
-    card_block = source[card_start:card_end]
-    # The hint must mention each forbidden capability family.
-    for keyword in ("批量隐藏", "批量删除", "批量恢复", "撤销栈",
-                    "永久删除", "批量时间", "批量拆分", "批量合并"):
-        assert keyword in card_block, (
-            "not-implemented card must mention " + keyword
-        )
+    assert "correction-shell-not-implemented-card" not in source, (
+        "index.html must not contain the not-implemented card"
+    )
 
 
 
@@ -3356,9 +3372,9 @@ def test_index_html_correction_shell_card_headers_present_3b9():
         "index.html must define .correction-shell-card-header elements"
     )
     # Count occurrences: context / activity / single-action / batch /
-    # restore / not-implemented = 6 headers.
-    assert source.count("correction-shell-card-header") >= 6, (
-        "index.html must contain at least 6 card headers"
+    # restore = 5 headers (the not-implemented card was removed).
+    assert source.count("correction-shell-card-header") >= 5, (
+        "index.html must contain at least 5 card headers"
     )
 
 
@@ -4219,8 +4235,8 @@ def test_app_js_correction_shell_no_external_links_3b9_1():
 
 
 def test_index_html_correction_shell_cards_still_present_3b9_1():
-    """Phase 3B.9.1: all six correction shell cards must still be present
-    in index.html."""
+    """Phase 3B.9.1: the remaining correction shell cards must still be
+    present in index.html, and the not-implemented card must NOT exist."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for card_id in (
         "correction-shell-context-card",
@@ -4228,11 +4244,13 @@ def test_index_html_correction_shell_cards_still_present_3b9_1():
         "correction-shell-single-action-card",
         "correction-shell-batch-action-card",
         "correction-shell-restore-card",
-        "correction-shell-not-implemented-card",
     ):
         assert card_id in source, (
             "index.html must contain " + card_id
         )
+    assert "correction-shell-not-implemented-card" not in source, (
+        "index.html must not contain the not-implemented card"
+    )
 
 
 
@@ -4281,9 +4299,8 @@ def test_index_html_no_forbidden_batch_ui_3b9_1():
         "undo-stack",
         "permanent-delete",
     ):
-        # The not-implemented card may mention these as "暂不开放" text;
-        # that is allowed. Forbidden UI controls (buttons / checkboxes with
-        # these ids) are what we check for.
+        # The not-implemented card has been removed; only the forbidden
+        # UI control ids are checked here.
         assert ('id="' + forbidden + '"') not in source, (
             "index.html must not contain forbidden UI control id: "
             + forbidden
@@ -4291,19 +4308,17 @@ def test_index_html_no_forbidden_batch_ui_3b9_1():
 
 
 
-def test_index_html_not_implemented_card_lists_unavailable_3b9_1():
-    """Phase 3B.9.1: the not-implemented card must list all unavailable
-    capabilities."""
+def test_index_html_no_not_implemented_card():
+    """The 'not-implemented' card must NOT exist in index.html. The card
+    previously listed future features like 批量隐藏 / 批量删除 / 批量恢复 /
+    撤销栈 / 永久删除 / 批量时间 / 批量拆分 / 批量合并 — this dev-phase
+    '暂未开放' list has been removed per the productization cleanup. Only
+    currently-available capabilities are shown."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    not_impl_pos = source.find("correction-shell-not-implemented-card")
-    assert not_impl_pos != -1
-    not_impl_section = source[not_impl_pos:not_impl_pos + 600]
-    for keyword in ("批量隐藏", "批量删除", "批量恢复", "撤销栈",
-                    "永久删除", "批量时间", "批量拆分", "批量合并",
-                    "自动规则", "重叠检测"):
-        assert keyword in not_impl_section, (
-            "not-implemented card must list: " + keyword
-        )
+    assert "correction-shell-not-implemented-card" not in source, (
+        "index.html must not contain the not-implemented card; "
+        "the dev-phase '暂未开放' feature list has been removed"
+    )
 
 
 

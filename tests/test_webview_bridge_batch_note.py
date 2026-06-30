@@ -8,8 +8,8 @@ Covers ``WebViewBridge.batch_update_timeline_activities_note``:
 - batch_too_large returns the ``一次最多修改 100 条活动`` message;
 - invalid_note returns the ``请输入有效备注`` message;
 - note_too_long returns the ``备注过长`` message;
-- in_progress activity returns the ``进行中记录暂不支持批量修改`` message;
-- hidden_activity returns the ``隐藏记录暂不支持批量修改`` message;
+- in_progress activity returns the ``进行中记录无法批量修改`` message;
+- hidden_activity returns the ``隐藏记录无法批量修改`` message;
 - operation_failed returns the generic ``操作失败`` message;
 - unknown error codes collapse to ``操作失败``;
 - bool / None note is rejected;
@@ -260,7 +260,7 @@ def test_batch_hidden_activity(bridge):
     activity_service.hide_activity(ids[1])
     result = bridge.batch_update_timeline_activities_note(ids, "note")
     assert result["ok"] is False
-    assert result["error"] == "隐藏记录暂不支持批量修改"
+    assert result["error"] == "隐藏记录无法批量修改"
 
 
 def test_batch_in_progress_activity(bridge):
@@ -271,7 +271,7 @@ def test_batch_in_progress_activity(bridge):
     activity_service.finalize_created_activity(a2)
     result = bridge.batch_update_timeline_activities_note([a1, a2], "note")
     assert result["ok"] is False
-    assert result["error"] == "进行中记录暂不支持批量修改"
+    assert result["error"] == "进行中记录无法批量修改"
 
 
 # --- batch_update_timeline_activities_note: operation_failed -------------
@@ -435,8 +435,8 @@ def test_batch_all_chinese_error_messages_present(bridge):
         ("batch_too_large", "一次最多修改 100 条活动"),
         ("invalid_note", "请输入有效备注"),
         ("note_too_long", "备注过长"),
-        ("in_progress", "进行中记录暂不支持批量修改"),
-        ("hidden_activity", "隐藏记录暂不支持批量修改"),
+        ("in_progress", "进行中记录无法批量修改"),
+        ("hidden_activity", "隐藏记录无法批量修改"),
         ("operation_failed", "操作失败"),
     ]
     for code, expected_msg in cases:

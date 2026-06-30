@@ -9,7 +9,7 @@ Covers ``WebViewBridge.restore_timeline_activity`` and
   ``{"ok": false, "error": "请选择有效的活动"}``;
 - nonexistent activity returns ``活动不存在``;
 - normal (not hidden / not deleted) activity returns ``该活动无需恢复``;
-- in-progress activity returns ``进行中记录暂不支持恢复``;
+- in-progress activity returns ``进行中记录无法恢复``;
 - race-condition / unexpected ``operation_failed`` returns ``恢复失败``
   without exposing internal detail;
 - unknown ``TimelineRestoreActivityError`` code collapses to ``恢复失败``;
@@ -204,7 +204,7 @@ def test_restore_timeline_activity_normal_not_restorable(bridge):
 
 
 def test_restore_timeline_activity_in_progress(bridge):
-    """An in-progress activity returns ``进行中记录暂不支持恢复``."""
+    """An in-progress activity returns ``进行中记录无法恢复``."""
     aid = activity_service.create_activity(
         "Word", "winword.exe", "A1.docx", start_time="2026-06-25 09:00:00"
     )
@@ -218,7 +218,7 @@ def test_restore_timeline_activity_in_progress(bridge):
         )
     result = bridge.restore_timeline_activity(aid)
     assert result["ok"] is False
-    assert result["error"] == "进行中记录暂不支持恢复"
+    assert result["error"] == "进行中记录无法恢复"
     _assert_no_sensitive_keys(result)
 
 

@@ -223,10 +223,10 @@
             var aid = a.activity_id || 0;
             var editBtnDisabled = a.is_in_progress || !aid;
             var editBtnTitle = a.is_in_progress
-                ? "进行中记录暂不支持时间修正"
+                ? "进行中记录无法修改时间"
                 : (aid ? "编辑该活动时间" : "活动 ID 缺失，无法编辑");
             var splitBtnTitle = a.is_in_progress
-                ? "进行中记录暂不支持拆分"
+                ? "进行中记录无法拆分"
                 : (aid ? "在该时间点拆分此活动" : "活动 ID 缺失，无法拆分");
             // Phase 3B.3: per-activity "与下一条合并" button. The button is
             // disabled when there is no next activity, when either the
@@ -239,11 +239,11 @@
             var mergeBtnTitle = !aid
                 ? "活动 ID 缺失，无法合并"
                 : (a.is_in_progress
-                    ? "进行中记录暂不支持合并"
+                    ? "进行中记录无法合并"
                     : (!hasNext
                         ? "已是最后一条活动，没有下一条可合并"
                         : (nextInProgress
-                            ? "下一条活动进行中，暂不支持合并"
+                            ? "下一条活动进行中，无法合并"
                             : "将此活动与下一条活动合并")));
             // Phase 3B.4: per-activity "隐藏" and "删除" buttons. Both are
             // disabled for in-progress activities (raw end_time IS NULL) and
@@ -251,7 +251,7 @@
             // confirmation dialog (window.confirm) before calling the bridge.
             var visibilityBtnDisabled = a.is_in_progress || !aid;
             var visibilityBtnTitle = a.is_in_progress
-                ? "进行中记录暂不支持隐藏或删除"
+                ? "进行中记录无法隐藏或删除"
                 : (aid ? "从 Timeline 隐藏或删除此活动" : "活动 ID 缺失，无法操作");
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '">'
                 + '<div class="detail-item-time">' + App.escapeHtml(timeRange) + '</div>'
@@ -1050,7 +1050,7 @@
         // Lightweight confirmation so the user does not accidentally
         // soft-delete. The message makes clear this is not a permanent
         // delete. Uses native window.confirm — no third-party library.
-        var confirmed = window.confirm("确定从 Timeline 删除这条记录吗？本阶段不会物理删除数据。");
+        var confirmed = window.confirm("确定从 Timeline 删除这条记录吗？不会物理删除数据。");
         if (!confirmed) return;
 
         setDeleteSaving(btn, true);
@@ -1091,14 +1091,14 @@
         if (isMulti) {
             singleEl.hidden = true;
             multiEl.hidden = false;
-            multiEl.textContent = "多活动 session 暂不支持整体隐藏/删除，请在活动详情中逐条处理。";
+            multiEl.textContent = "多活动时段请在活动详情中逐条隐藏或删除。";
             showVisibilityStatus("", false);
             return;
         }
         if (inProgress) {
             singleEl.hidden = true;
             multiEl.hidden = false;
-            multiEl.textContent = "进行中记录暂不支持隐藏或删除。";
+            multiEl.textContent = "进行中记录无法隐藏或删除。";
             showVisibilityStatus("", false);
             return;
         }
@@ -1122,7 +1122,7 @@
         if (singleEl) singleEl.hidden = true;
         if (multiEl) {
             multiEl.hidden = true;
-            multiEl.textContent = "多活动 session 暂不支持整体隐藏/删除，请在活动详情中逐条处理。";
+            multiEl.textContent = "多活动时段请在活动详情中逐条隐藏或删除。";
         }
         if (hideBtn) { hideBtn.disabled = true; hideBtn.textContent = "隐藏此 session"; }
         if (deleteBtn) { deleteBtn.disabled = true; deleteBtn.textContent = "删除此 session"; }
@@ -1173,11 +1173,11 @@
         if (!App.editingSession || App.hideSaving) return;
         var activityIds = App.editingSession.activity_ids || [];
         if (activityIds.length !== 1) {
-            showVisibilityStatus("多活动 session 暂不支持整体隐藏，请在活动详情中逐条处理", true);
+            showVisibilityStatus("多活动时段请在活动详情中逐条隐藏", true);
             return;
         }
         if (App.editingSession.is_in_progress) {
-            showVisibilityStatus("进行中记录暂不支持隐藏或删除", true);
+            showVisibilityStatus("进行中记录无法隐藏或删除", true);
             return;
         }
         if (isEditDirty()) {
@@ -1206,18 +1206,18 @@
         if (!App.editingSession || App.deleteSaving) return;
         var activityIds = App.editingSession.activity_ids || [];
         if (activityIds.length !== 1) {
-            showVisibilityStatus("多活动 session 暂不支持整体删除，请在活动详情中逐条处理", true);
+            showVisibilityStatus("多活动时段请在活动详情中逐条删除", true);
             return;
         }
         if (App.editingSession.is_in_progress) {
-            showVisibilityStatus("进行中记录暂不支持隐藏或删除", true);
+            showVisibilityStatus("进行中记录无法隐藏或删除", true);
             return;
         }
         if (isEditDirty()) {
             showVisibilityStatus("请先保存或取消当前编辑", true);
             return;
         }
-        var confirmed = window.confirm("确定从 Timeline 删除这条记录吗？本阶段不会物理删除数据。");
+        var confirmed = window.confirm("确定从 Timeline 删除这条记录吗？不会物理删除数据。");
         if (!confirmed) return;
 
         setSessionDeleteSaving(true);
@@ -1684,7 +1684,7 @@
         if (isMulti) {
             singleEl.hidden = true;
             multiEl.hidden = false;
-            multiEl.textContent = "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动。";
+            multiEl.textContent = "多活动时段请在活动详情中拆分单条活动。";
             showSplitStatus("", false);
             return;
         }
@@ -1693,7 +1693,7 @@
             // the displayed end_time may be a projected value.
             singleEl.hidden = true;
             multiEl.hidden = false;
-            multiEl.textContent = "进行中记录暂不支持拆分。";
+            multiEl.textContent = "进行中记录无法拆分。";
             showSplitStatus("", false);
             return;
         }
@@ -1720,7 +1720,7 @@
         if (singleEl) singleEl.hidden = true;
         if (multiEl) {
             multiEl.hidden = true;
-            multiEl.textContent = "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动。";
+            multiEl.textContent = "多活动时段请在活动详情中拆分单条活动。";
         }
         if (splitEl) { splitEl.value = ""; splitEl.disabled = true; }
         if (saveBtn) saveBtn.disabled = true;
@@ -1759,11 +1759,11 @@
         if (!App.editingSession || App.sessionSplitSaving) return;
         var activityIds = App.editingSession.activity_ids || [];
         if (activityIds.length !== 1) {
-            showSplitStatus("多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动", true);
+            showSplitStatus("多活动时段请在活动详情中拆分单条活动", true);
             return;
         }
         if (App.editingSession.is_in_progress) {
-            showSplitStatus("进行中记录暂不支持拆分", true);
+            showSplitStatus("进行中记录无法拆分", true);
             return;
         }
         var splitEl = document.getElementById("edit-split-time");
@@ -1853,7 +1853,7 @@
         if (isMulti) {
             singleEl.hidden = true;
             multiEl.hidden = false;
-            multiEl.textContent = "多活动 session 暂不支持整体时间修改，请在活动详情中修改单条活动时间。";
+            multiEl.textContent = "多活动时段请在活动详情中修改单条活动时间。";
             showTimeStatus("", false);
             return;
         }
@@ -1862,7 +1862,7 @@
             // projected value, so editing is not safe. Show the hint instead.
             singleEl.hidden = true;
             multiEl.hidden = false;
-            multiEl.textContent = "进行中记录暂不支持时间修正。";
+            multiEl.textContent = "进行中记录无法修改时间。";
             showTimeStatus("", false);
             return;
         }
@@ -1888,7 +1888,7 @@
         if (singleEl) singleEl.hidden = true;
         if (multiEl) {
             multiEl.hidden = true;
-            multiEl.textContent = "多活动 session 暂不支持整体时间修改，请在活动详情中修改单条活动时间。";
+            multiEl.textContent = "多活动时段请在活动详情中修改单条活动时间。";
         }
         if (startEl) { startEl.value = ""; startEl.disabled = true; }
         if (endEl) { endEl.value = ""; endEl.disabled = true; }
@@ -1930,11 +1930,11 @@
         if (!App.editingSession || App.timeSaving) return;
         var activityIds = App.editingSession.activity_ids || [];
         if (activityIds.length !== 1) {
-            showTimeStatus("多活动 session 暂不支持整体时间修改", true);
+            showTimeStatus("多活动时段无法修改整体时间", true);
             return;
         }
         if (App.editingSession.is_in_progress) {
-            showTimeStatus("进行中记录暂不支持时间修正", true);
+            showTimeStatus("进行中记录无法修改时间", true);
             return;
         }
         var startEl = document.getElementById("edit-start-time");

@@ -502,21 +502,56 @@
     }
 
     function applyLocalTicker() {
-        // Overview page: update KPI total + current activity display.
+        // Overview page: update KPI total + classified + uncategorized +
+        // current activity display. total / classified / uncategorized
+        // must use the same delta so the KPIs stay consistent. The delta
+        // is added to EITHER classified OR uncategorized (never both)
+        // depending on the current activity's classification state.
         var ov = App.lastOverviewSnapshot;
         if (ov && App.currentPage === "overview") {
             var delta = 0;
+            var currentIsUncategorized = true;
             if (tickerCurrentActivityRunning(ov)) {
                 delta = tickerDeltaSeconds(ov);
+            }
+            var current = ov.current_activity || {};
+            // Determine which KPI gets the delta. If the current
+            // activity is classified, increment classified; otherwise
+            // increment uncategorized. Only one gets the delta.
+            if (current.is_classified === true) {
+                currentIsUncategorized = false;
+            } else if (current.is_uncategorized === true) {
+                currentIsUncategorized = true;
+            } else {
+                // Fallback: if the backend did not provide
+                // is_classified / is_uncategorized, do not increment
+                // either KPI (avoid guessing). The next backend refresh
+                // will calibrate.
+                currentIsUncategorized = null;
             }
             var totalEl = document.getElementById("kpi-total");
             if (totalEl) {
                 var totalSec = parseInt(ov.today_total_seconds, 10) || 0;
                 totalEl.textContent = App.formatDuration(totalSec + delta);
             }
+            var classifiedEl = document.getElementById("kpi-classified");
+            if (classifiedEl) {
+                var classifiedSec = parseInt(ov.classified_seconds, 10) || 0;
+                if (currentIsUncategorized === false) {
+                    classifiedSec += delta;
+                }
+                classifiedEl.textContent = App.formatDuration(classifiedSec);
+            }
+            var uncategorizedEl = document.getElementById("kpi-uncategorized");
+            if (uncategorizedEl) {
+                var uncategorizedSec = parseInt(ov.uncategorized_seconds, 10) || 0;
+                if (currentIsUncategorized === true) {
+                    uncategorizedSec += delta;
+                }
+                uncategorizedEl.textContent = App.formatDuration(uncategorizedSec);
+            }
             var currentEl = document.getElementById("current-activity");
             if (currentEl) {
-                var current = ov.current_activity || {};
                 if (current.active) {
                     var elapsedSec = parseInt(current.elapsed_seconds, 10) || 0;
                     // Rebuild the display string with the incremented

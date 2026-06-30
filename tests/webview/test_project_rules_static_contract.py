@@ -107,14 +107,11 @@ def test_project_rules_phase_5b_boundary_copy_present():
     section = _rules_section()
     # Phase 5H: the boundary copy now mentions project lifecycle
     # (create/edit/enable-disable/archive) and single-rule impact preview +
-    # safe backfill as supported capabilities alongside the existing
-    # folder/keyword rule CRUD. The unsupported-ops clause references
-    # automatic rules, batch operations, and project hard delete.
+    # apply-to-history as supported capabilities alongside the existing
+    # folder/keyword rule CRUD and batch operations.
     assert "启用/停用" in section
     assert "新增关键词规则" in section
-    assert "删除已有关键词规则" in section
-    assert "新增/编辑/删除文件夹规则" in section
-    for term in ("编辑", "删除", "预览单条规则影响", "安全应用"):
+    for term in ("编辑", "归档", "预览规则影响", "应用到历史记录"):
         assert term in section
 
 
@@ -1521,14 +1518,12 @@ def test_project_rules_keyword_delete_packaging_spec_still_includes_rules_js():
 
 
 def test_project_rules_keyword_delete_boundary_copy_present():
-    # Phase 5D regression lock: the boundary copy must mention keyword rule
-    # deletion as a supported capability and still reference the remaining
-    # future capabilities.
+    # Phase 5D regression lock: the boundary copy must reference the
+    # supported rule capabilities after the productized copy refresh.
     section = _rules_section()
     assert "启用/停用" in section
     assert "新增关键词规则" in section
-    assert "删除已有关键词规则" in section
-    for term in ("编辑", "删除", "预览单条规则影响", "安全应用"):
+    for term in ("编辑", "归档", "预览规则影响", "应用到历史记录"):
         assert term in section
 
 
@@ -3389,15 +3384,12 @@ def test_project_rules_keyword_edit_stale_guard_preserved():
 
 
 def test_project_rules_keyword_edit_boundary_copy_present():
-    # Phase 5F regression lock: the boundary copy must mention keyword rule
-    # edit as a supported capability and still reference the remaining
-    # future capabilities.
+    # Phase 5F regression lock: the boundary copy must reference the
+    # supported rule capabilities after the productized copy refresh.
     section = _rules_section()
     assert "启用/停用" in section
     assert "新增关键词规则" in section
-    assert "编辑已有关键词规则" in section
-    assert "删除已有关键词规则" in section
-    for term in ("编辑", "删除", "预览单条规则影响", "安全应用"):
+    for term in ("编辑", "归档", "预览规则影响", "应用到历史记录"):
         assert term in section
 
 
@@ -4187,15 +4179,14 @@ def test_project_rules_impact_panel_dom_id_exists():
 
 
 def test_project_rules_impact_readonly_hint_mentions_5h_capabilities():
-    # Phase 5H: the readonly hint must mention the new single-rule
-    # preview + safe backfill capability and still flag the deferred
-    # capabilities (automatic rules, batch ops, project hard delete).
+    # Phase 5H: the readonly hint must mention the rule preview +
+    # apply-to-history capability and the supported batch operations.
     section = _rules_section()
     for term in (
-        "预览单条规则影响",
-        "安全应用",
-        "自动规则",
-        "项目硬删除",
+        "预览规则影响",
+        "应用到历史记录",
+        "批量预览",
+        "批量应用",
     ):
         assert term in section, (
             "rules-readonly-hint must mention Phase 5H capability: " + term

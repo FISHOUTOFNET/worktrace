@@ -466,6 +466,19 @@ RULES: list[dict] = [
         "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
     },
+    {
+        "id": "L1. Context assignment service",
+        "triggers": [
+            "worktrace/services/context_service.py",
+        ],
+        "tests": [
+            "tests/test_context_service.py",
+            "tests/test_timeline_service.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [],
+        "warnings": [],
+    },
 ]
 
 

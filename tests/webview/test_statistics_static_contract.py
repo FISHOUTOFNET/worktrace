@@ -148,23 +148,17 @@ def test_index_html_statistics_export_action_enabled_4b():
 
 
 def test_index_html_statistics_export_hint_csv_enabled_4b():
-    """Phase 4B: the export hint must announce CSV is supported and that
-    Excel / PDF / timesheet / folder-open / auto-submit remain unsupported."""
+    """Phase 4B: the export hint must announce CSV is the supported format
+    for closed, non-hidden activity records in the current range."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find("stats-export-hint")
     assert pos != -1
     section = source[pos:pos + 600]
     # The hint must clearly state CSV is the supported format.
-    assert "当前支持 CSV 导出" in section
+    assert "导出当前范围内已结束、非隐藏的活动记录为 CSV" in section
     assert "导出范围最多 31 天" in section
-    assert "已结束的非隐藏记录" in section
-    assert "不含窗口标题、文件路径等敏感信息" in section
-    # Excel / PDF / timesheet / folder-open / auto-submit remain unsupported.
-    assert "Excel" in section
-    assert "PDF" in section
-    assert "timesheet" in section
-    assert "打开文件夹" in section
-    assert "自动提交工时" in section
+    assert "已结束、非隐藏的活动记录" in section
+    assert "不包含窗口标题、文件路径等敏感信息" in section
     # The old 4A copy must be gone.
     assert "本阶段不支持写出" not in section
 
@@ -418,9 +412,9 @@ def test_styles_css_timeline_and_correction_shell_not_removed_4a():
 
 
 def test_index_html_project_rules_page_migrated_after_5b():
-    """Phase 5B/5C/5D: Project Rules is migrated; supports existing rule
-    toggles (5B), keyword rule creation (5C), and keyword rule deletion (5D).
-    The boundary copy lists the supported ops and the not-yet-open ops."""
+    """Phase 5B/5C: Project Rules is migrated; supports existing rule
+    toggles (5B) and keyword rule creation (5C). The boundary copy lists
+    the supported ops."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-rules"')
     assert pos != -1
@@ -432,16 +426,13 @@ def test_index_html_project_rules_page_migrated_after_5b():
     # supported-ops clause still references enable/disable.
     assert "启用/停用" in section
     assert "新增关键词规则" in section
-    # Phase 5D: boundary copy updated to mention keyword deletion.
-    assert "删除已有关键词规则" in section
-    # Phase 5H: single-rule impact preview + safe backfill are now supported;
-    # automatic rules / batch ops / hard delete remain not-yet-open.
+    # Phase 5H: single-rule impact preview + apply-to-history are now
+    # supported alongside batch preview / apply / enable / disable.
     assert "编辑" in section
-    assert "预览单条规则影响" in section
-    assert "安全应用" in section
-    assert "自动规则" in section
+    assert "归档" in section
+    assert "预览规则影响" in section
+    assert "应用到历史记录" in section
     assert "批量" in section
-    assert "项目硬删除" in section
 
 
 
@@ -779,11 +770,7 @@ def test_index_html_statistics_export_hint_csv_enabled_4a1_to_4b():
     assert pos != -1
     section = source[pos:pos + 2000]
     # CSV is now supported; the hint announces it.
-    assert "当前支持 CSV 导出" in section
-    # Excel / PDF / timesheet remain explicitly unsupported.
-    assert "Excel" in section
-    assert "PDF" in section
-    assert "timesheet" in section
+    assert "导出当前范围内已结束、非隐藏的活动记录为 CSV" in section
     # The old 4A.1 read-only copy must be gone.
     assert "本阶段不支持写出" not in section
     assert "不打开保存对话框" not in section

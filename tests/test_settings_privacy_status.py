@@ -1959,31 +1959,29 @@ def test_api_first_run_notice_payload_does_not_leak_sensitive_tokens(temp_db) ->
 
 
 def test_api_first_run_notice_fail_closed_on_accepted_read_exception(temp_db) -> None:
-    # Phase 6G fail-closed: when reading the accepted state raises, the
-    # facade must NOT return ``{"ok": False, "error": ...}`` with an
-    # empty notice body. Instead it returns ``ok=True`` with
-    # ``accepted=False`` (gate stays closed) AND the full fallback
-    # notice text so the frontend can still render the privacy notice.
+    # Strict fail-closed: when reading the accepted state raises, the
+    # facade must NOT return a fallback notice body. It must return
+    # ``{"ok": False, "error": "<stable Chinese>"}`` with NO title,
+    # NO highlights, NO notice_text, and NO warning. The frontend must
+    # show a blocking error overlay and must NOT allow the user to
+    # accept. The collector and folder index worker are not started.
     with patch.object(
         settings_api,
         "first_run_notice_accepted",
         side_effect=RuntimeError("SECRET " + SENSITIVE_PASSPHRASE + " sqlite3."),
     ):
         result = get_first_run_notice_for_webview()
-    # Must NOT return the old empty-body error payload.
-    assert result != {"ok": False, "error": "加载隐私说明失败"}
-    assert result.get("ok") is True
-    assert result["accepted"] is False
-    # Fallback notice body fields must be present and non-empty.
-    assert isinstance(result["title"], str) and result["title"]
-    assert isinstance(result["highlights"], list) and result["highlights"]
-    for item in result["highlights"]:
-        assert isinstance(item, str) and item
-    assert isinstance(result["notice_text"], str) and result["notice_text"]
-    # A warning field must be present so the frontend can surface a
-    # soft warning to the user.
-    assert "warning" in result
-    assert isinstance(result["warning"], str) and result["warning"]
+    # Strict fail-closed payload: only ok=False + stable error string.
+    assert result == {
+        "ok": False,
+        "error": "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请重启应用或重新安装。",
+    }
+    # No notice body fields may be present (no fallback text from JS or
+    # backend). The frontend must not render any notice body.
+    for forbidden_key in ("title", "highlights", "notice_text", "warning", "accepted"):
+        assert forbidden_key not in result, (
+            f"fail-closed payload must not include notice body key: {forbidden_key!r}"
+        )
     # The payload must not leak the raw exception / passphrase / SQL.
     serialized = json.dumps(result, ensure_ascii=False)
     for token in (SENSITIVE_PASSPHRASE, "SECRET", "RuntimeError", "Traceback", "sqlite3."):
@@ -2073,6 +2071,16 @@ def test_api_accept_first_run_notice_does_not_call_collector(temp_db) -> None:
     with patch("worktrace.api.app_api.start_collector") as mock_start:
         accept_first_run_notice_for_webview()
         mock_start.assert_not_called()
+
+
+def test_api_accept_first_run_notice_does_not_call_background_workers(temp_db) -> None:
+    # accept_first_run_notice_for_webview only writes the accepted flag;
+    # it must NOT start the folder index worker / background workers.
+    # Starting workers is the bridge's responsibility after a successful
+    # accept, gated on the privacy notice.
+    with patch("worktrace.api.app_api.start_background_workers") as mock_workers:
+        accept_first_run_notice_for_webview()
+        mock_workers.assert_not_called()
 
 
 def test_api_accept_first_run_notice_does_not_call_set_setting_value(temp_db) -> None:
@@ -2176,9 +2184,11 @@ def test_bridge_accept_first_run_notice_does_not_call_collector_on_api_failure(t
         settings_api,
         "accept_first_run_notice_for_webview",
         return_value={"ok": False, "error": "确认隐私说明失败"},
-    ), patch("worktrace.api.app_api.start_collector") as mock_start:
+    ), patch("worktrace.api.app_api.start_collector") as mock_start, \
+            patch("worktrace.api.app_api.start_background_workers") as mock_workers:
         result = bridge.accept_first_run_notice()
     mock_start.assert_not_called()
+    mock_workers.assert_not_called()
     assert result == {"ok": False, "error": "确认隐私说明失败"}
 
 

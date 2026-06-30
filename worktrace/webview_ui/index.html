@@ -108,7 +108,7 @@
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
                             <div class="edit-panel-title">编辑当前时段</div>
                             <div class="edit-panel-header-actions">
-                                <button id="open-correction-shell-btn" class="edit-btn edit-shell-open-btn" type="button">打开高级纠错</button>
+                                <button id="open-correction-shell-btn" class="edit-btn edit-shell-open-btn" type="button">打开纠错面板</button>
                             </div>
                             <div class="edit-section-label">项目与备注</div>
                             <div class="edit-field">
@@ -145,7 +145,7 @@
                                     </div>
                                 </div>
                                 <div id="edit-time-multi" class="edit-time-hint" hidden>
-                                    多活动 session 暂不支持整体时间修改，请在活动详情中修改单条活动时间。
+                                    多活动时段请在活动详情中修改单条活动时间。
                                 </div>
                                 <div id="edit-time-status" class="edit-status" hidden></div>
                             </div>
@@ -161,7 +161,7 @@
                                     </div>
                                 </div>
                                 <div id="edit-split-multi" class="edit-time-hint" hidden>
-                                    多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动。
+                                    多活动时段请在活动详情中拆分单条活动。
                                 </div>
                                 <div id="edit-split-status" class="edit-status" hidden></div>
                             </div>
@@ -173,11 +173,11 @@
                                         <button id="edit-visibility-delete-btn" class="edit-btn edit-visibility-delete-btn" type="button" disabled>删除此 session</button>
                                     </div>
                                     <div class="edit-time-hint">
-                                        隐藏后将从默认 Timeline 隐藏；删除为软删除，本阶段不会物理删除数据。
+                                        隐藏后将从默认 Timeline 隐藏；删除为软删除，不会物理删除数据。
                                     </div>
                                 </div>
                                 <div id="edit-visibility-multi" class="edit-time-hint" hidden>
-                                    多活动 session 暂不支持整体隐藏/删除，请在活动详情中逐条处理。
+                                    多活动时段请在活动详情中逐条隐藏或删除。
                                 </div>
                                 <div id="edit-visibility-status" class="edit-status" hidden></div>
                             </div>
@@ -185,7 +185,7 @@
                         <div id="timeline-correction-shell" class="correction-shell" hidden>
                             <div class="correction-shell-header">
                                 <div class="correction-shell-title-group">
-                                    <div class="correction-shell-title">高级纠错</div>
+                                    <div class="correction-shell-title">纠错面板</div>
                                     <div id="correction-shell-subtitle" class="correction-shell-subtitle">选择一个时段后打开</div>
                                 </div>
                                 <button id="correction-shell-close-btn" class="edit-btn correction-shell-close-btn" type="button">返回时间详情</button>
@@ -211,7 +211,7 @@
                                 <div class="correction-shell-batch-section" id="correction-shell-batch-project-section">
                                     <div class="edit-section-label">批量项目重分类</div>
                                     <div class="edit-time-hint correction-shell-batch-hint">
-                                        仅支持批量设置项目；暂不支持批量时间、拆分、合并、隐藏或删除。
+                                        批量操作仅支持设置项目。时间、拆分、合并、隐藏或删除请在单条活动详情中处理。
                                     </div>
                                     <div class="correction-shell-batch-summary">
                                         <span id="correction-shell-batch-count" class="correction-shell-batch-count">已选择 0 条</span>
@@ -232,7 +232,7 @@
                                 <div class="correction-shell-batch-section" id="correction-shell-batch-note-section">
                                     <div class="edit-section-label">批量备注覆盖</div>
                                     <div class="edit-time-hint correction-shell-batch-hint">
-                                        仅支持将所选活动的备注覆盖为同一内容；暂不支持追加、合并或保留旧备注。
+                                        将所选活动的备注统一覆盖为同一内容。如需逐条编辑，请在活动详情中处理。
                                     </div>
                                     <div class="edit-field">
                                         <label for="correction-shell-batch-note-text" class="edit-label">备注内容</label>
@@ -251,16 +251,10 @@
                                 <div class="correction-shell-card-header">可恢复记录</div>
                                 <div class="correction-shell-restore-section" id="correction-shell-restore-section">
                                     <div class="edit-time-hint correction-shell-restore-hint">
-                                        仅支持恢复单条隐藏或软删除记录；暂不支持批量恢复、撤销栈或永久删除。
+                                        每次恢复一条隐藏或软删除记录。如需批量处理，请逐条恢复。
                                     </div>
                                     <div id="correction-shell-restore-list" class="correction-shell-restore-list"></div>
                                     <div id="correction-shell-restore-status" class="edit-status" hidden></div>
-                                </div>
-                            </div>
-                            <div id="correction-shell-not-implemented-card" class="correction-shell-card correction-shell-not-implemented-card">
-                                <div class="correction-shell-card-header">暂未开放</div>
-                                <div class="edit-time-hint correction-shell-card-hint">
-                                    暂不开放：批量隐藏 / 批量删除 / 批量恢复 / 恢复全部 / 撤销栈 / 永久删除 / 批量时间修正 / 批量拆分 / 批量合并 / 备注 append/merge / 自动规则 / 全局重叠检测。
                                 </div>
                             </div>
                         </div>
@@ -382,7 +376,7 @@
                         </div>
                     </div>
                     <div class="stats-export-hint">
-                        当前支持 CSV 导出。导出范围最多 31 天，仅包含已结束的非隐藏记录，不含窗口标题、文件路径等敏感信息。暂不支持 Excel、PDF、timesheet 模板、打开文件夹或自动提交工时。
+                        导出当前范围内已结束、非隐藏的活动记录为 CSV；不包含窗口标题、文件路径等敏感信息。导出范围最多 31 天。
                     </div>
                     <div id="stats-export-status" class="stats-export-status" hidden></div>
                     <button id="stats-export-action-btn" class="stats-export-action-btn" type="button">导出 CSV</button>
@@ -396,7 +390,7 @@
                     </div>
                 </header>
                 <div id="rules-readonly-hint" class="rules-readonly-hint">
-                    当前支持查看项目规则、启用/停用已有文件夹或关键词规则、新增关键词规则、编辑已有关键词规则、删除已有关键词规则、新增/编辑/删除文件夹规则，新增、编辑、启用/停用、归档已有用户项目，预览单条规则影响并安全应用到符合条件的历史记录，自动规则（已启用的文件夹/关键词规则会自动应用到后续符合条件的已关闭记录），以及选中规则的批量预览、批量应用、批量启用、批量停用。项目硬删除、项目恢复/取消归档、批量新增/编辑/删除将在后续阶段开放。
+                    用文件夹或关键词规则自动归类活动。你可以先预览规则影响，再应用到历史记录。支持项目与规则的新增、编辑、启用/停用、归档，以及选中规则的批量预览、批量应用、批量启用、批量停用。
                 </div>
                 <form id="rules-project-create-form" class="rules-project-create-form" autocomplete="off" onsubmit="return false;">
                     <div class="rules-project-create-title">新增项目</div>
@@ -460,9 +454,8 @@
                 <header class="page-header settings-header">
                     <div class="settings-header-text">
                         <h1>设置与隐私</h1>
-                        <p class="settings-subtitle">本页面展示本地存储与隐私安全状态，开放剪贴板记录开关、加密备份导出 / 清单预览、加密备份导入（替换）以及清空本地数据；其他写操作暂不开放。</p>
+                        <p class="settings-subtitle">管理本地隐私设置、加密备份和本地数据。</p>
                     </div>
-                    <button id="settings-refresh-btn" type="button" class="settings-refresh-btn">刷新状态</button>
                 </header>
                 <div id="settings-loading" class="settings-loading" hidden>正在加载设置状态…</div>
                 <div id="settings-error" class="settings-error" hidden>加载设置状态失败</div>

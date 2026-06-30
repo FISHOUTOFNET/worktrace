@@ -98,13 +98,11 @@
     App.setSettingsDangerControlsDisabled = setSettingsDangerControlsDisabled;
 
     function setSettingsControlsDisabled(disabled) {
-        // Shared disable for the refresh button, the capture toggle, the
-        // backup controls (export / manifest / import), and the danger
-        // controls (clear-all). While any read or write is in flight, all
-        // Settings controls are disabled to prevent races between the
-        // capture toggle, backup operations, and destructive reset.
-        var btn = document.getElementById("settings-refresh-btn");
-        if (btn) btn.disabled = disabled;
+        // Shared disable for the capture toggle, the backup controls
+        // (export / manifest / import), and the danger controls (clear-all).
+        // While any read or write is in flight, all Settings controls are
+        // disabled to prevent races between the capture toggle, backup
+        // operations, and destructive reset.
         var toggle = document.getElementById("settings-clipboard-toggle");
         if (toggle) toggle.disabled = disabled || !App.settingsLoaded;
         setSettingsBackupControlsDisabled(disabled);
@@ -652,32 +650,8 @@
     // The notice text is never persisted to browser storage; it is held
     // in JS memory only for the duration of the overlay display.
 
-    var FIRST_RUN_NOTICE_LOAD_ERROR = "加载隐私说明失败";
+    var FIRST_RUN_NOTICE_LOAD_ERROR = "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请重启应用或重新安装。";
     var FIRST_RUN_NOTICE_ACCEPT_ERROR = "确认隐私说明失败";
-
-    // Phase 6G: JS-side fallback notice body. The backend
-    // ``get_first_run_notice_for_webview`` is fail-closed and returns the
-    // full notice text even when the accepted-state read fails; this JS
-    // fallback only triggers when the bridge call itself rejects (e.g.
-    // pywebview bridge error) so the user still sees the privacy notice
-    // body instead of an empty-notice error overlay. Keep this text in
-    // sync with ``PRIVACY_NOTICE_TEXT`` in ``worktrace/constants.py``.
-    var FIRST_RUN_NOTICE_FALLBACK_TEXT =
-        "WorkTrace 是本地活动追踪工具。\n\n" +
-        "- 数据仅保存在本机，不上传任何服务器。\n" +
-        "- 不截屏、不录屏、不记录窗口标题正文、不读取剪贴板正文。\n" +
-        "- 仅记录应用名、资源显示名、归属项目与时间区间。\n" +
-        "- 用户可随时清空本地数据。\n\n" +
-        "点击「我已了解」开始记录。";
-
-    function buildFirstRunNoticeFallback() {
-        return {
-            accepted: false,
-            title: "WorkTrace 隐私说明",
-            highlights: ["本地保存", "不截屏录屏", "不主动读正文", "用户可清空"],
-            notice_text: FIRST_RUN_NOTICE_FALLBACK_TEXT,
-        };
-    }
 
     function setFirstRunNoticeError(message) {
         var el = document.getElementById("first-run-notice-error");
@@ -753,6 +727,34 @@
     }
     App.showFirstRunNotice = showFirstRunNotice;
 
+    function showFirstRunNoticeBlockingError(message) {
+        // Strict fail-closed: show the overlay with NO notice body, NO
+        // highlights, NO title, and the accept button disabled / hidden.
+        // The user cannot accept and cannot bypass the gate. Only the
+        // stable error message is displayed.
+        var titleEl = document.getElementById("first-run-notice-title");
+        if (titleEl) titleEl.textContent = "";
+        var highlightsEl = document.getElementById("first-run-notice-highlights");
+        if (highlightsEl) {
+            while (highlightsEl.firstChild) {
+                highlightsEl.removeChild(highlightsEl.firstChild);
+            }
+        }
+        var textEl = document.getElementById("first-run-notice-text");
+        if (textEl) textEl.textContent = "";
+        var acceptBtn = document.getElementById("first-run-notice-accept-btn");
+        if (acceptBtn) {
+            acceptBtn.hidden = true;
+            acceptBtn.disabled = true;
+        }
+        var closeBtn = document.getElementById("first-run-notice-close-btn");
+        if (closeBtn) closeBtn.hidden = true;
+        setFirstRunNoticeError(message || FIRST_RUN_NOTICE_LOAD_ERROR);
+        var overlay = document.getElementById("first-run-notice-overlay");
+        if (overlay) overlay.hidden = false;
+    }
+    App.showFirstRunNoticeBlockingError = showFirstRunNoticeBlockingError;
+
     function hideFirstRunNotice() {
         // Hide the overlay. In "view" mode this is the close button's
         // handler. In "gate" mode this is only called after a successful
@@ -771,50 +773,43 @@
     function loadFirstRunNotice() {
         // Initial first-run notice load. Called once during init. If the
         // backend reports ``accepted === false``, show the blocking gate
-        // overlay; otherwise leave the overlay hidden. Failures display
-        // the stable Chinese error inside the overlay and keep the gate
-        // visible so the user is never silently bypassed.
-        //
-        // Phase 6G: on bridge-level failure the overlay is shown with a
-        // JS-side fallback notice body so the user always sees the
-        // privacy notice text. The backend is fail-closed and returns
-        // the full notice body even when the accepted-state read fails,
-        // so this fallback only triggers on bridge rejection.
+        // overlay; otherwise leave the overlay hidden. On any failure
+        // (bridge returns ok:false or rejects) show a strict fail-closed
+        // blocking error overlay with NO notice body and a disabled
+        // accept button so the user cannot bypass the gate.
         if (App.firstRunNoticeLoading || App.firstRunNoticeLoaded) return Promise.resolve();
         App.firstRunNoticeLoading = true;
         return App.callBridge("get_first_run_notice").then(function (result) {
             App.firstRunNoticeLoading = false;
             App.firstRunNoticeLoaded = true;
-            var data = App.handleResult(result, function (msg) {
-                // Bridge already collapsed to a stable Chinese message.
-                // Force the gate open with the fallback notice body so
-                // the user is not silently bypassed and still sees the
-                // privacy text.
+            if (!result || result.ok === false) {
+                // Backend returned ok:false (e.g. accepted-state read
+                // failure). Strict fail-closed: show blocking error,
+                // no notice body, accept disabled.
                 App.firstRunNoticeRequired = true;
-                showFirstRunNotice(buildFirstRunNoticeFallback(), "gate");
-                setFirstRunNoticeError(msg || FIRST_RUN_NOTICE_LOAD_ERROR);
-            });
-            if (!data) return;
-            if (data.accepted === false) {
-                // First run: show the blocking gate. The close button is
+                showFirstRunNoticeBlockingError(
+                    (result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR
+                );
+                return;
+            }
+            if (result.accepted === false) {
+                // First run: show the blocking gate with the official
+                // notice body from the backend. The close button is
                 // hidden; only accept can dismiss it.
                 App.firstRunNoticeRequired = true;
-                showFirstRunNotice(data, "gate");
+                showFirstRunNotice(result, "gate");
             } else {
                 // Already accepted: keep the overlay hidden. The user
                 // can still view the notice read-only from Settings.
                 App.firstRunNoticeRequired = false;
             }
         }).catch(function () {
-            // Never read .message; show stable Chinese error. Fail open
-            // the gate so the user is not silently bypassed. Use the
-            // JS-side fallback notice body so the user still sees the
-            // privacy text instead of an empty overlay.
+            // Bridge rejection: strict fail-closed. Show blocking error
+            // with no notice body and disabled accept button.
             App.firstRunNoticeLoading = false;
             App.firstRunNoticeLoaded = true;
             App.firstRunNoticeRequired = true;
-            showFirstRunNotice(buildFirstRunNoticeFallback(), "gate");
-            setFirstRunNoticeError(FIRST_RUN_NOTICE_LOAD_ERROR);
+            showFirstRunNoticeBlockingError(FIRST_RUN_NOTICE_LOAD_ERROR);
         });
     }
     App.loadFirstRunNotice = loadFirstRunNotice;
@@ -869,32 +864,66 @@
 
     function openPrivacyNoticeFromSettings() {
         // Read-only "查看隐私说明" entry on the Settings / Privacy page.
-        // Loads (or reuses) the notice payload and shows the overlay in
-        // "view" mode: the close button is visible, the accept button is
-        // hidden, and closing does NOT write any setting or start the
-        // collector. The notice text is held in JS memory only for the
-        // duration of the display; no browser storage APIs are used.
+        // Loads the notice payload and shows the overlay in "view" mode:
+        // the close button is visible, the accept button is hidden, and
+        // closing does NOT write any setting or start the collector. The
+        // notice text is held in JS memory only for the duration of the
+        // display; no browser storage APIs are used.
         //
-        // Phase 6G: on bridge-level failure the overlay is shown with a
-        // JS-side fallback notice body so the user always sees the
-        // privacy notice text instead of an empty overlay.
+        // On failure (ok:false or bridge rejection): show the overlay
+        // with a stable error message and NO notice body. The close
+        // button is shown so the user can dismiss the overlay; the
+        // accept button is hidden so no re-accept can occur. Closing
+        // does NOT change the accepted state or start the collector.
         App.callBridge("get_first_run_notice").then(function (result) {
-            var data = App.handleResult(result, function (msg) {
-                // Bridge already collapsed to a stable Chinese message.
-                // Show the overlay in view mode with the fallback notice
-                // body so the user can still read the privacy text and
-                // close it.
-                showFirstRunNotice(buildFirstRunNoticeFallback(), "view");
-                setFirstRunNoticeError(msg || FIRST_RUN_NOTICE_LOAD_ERROR);
-            });
-            if (!data) return;
-            showFirstRunNotice(data, "view");
+            if (!result || result.ok === false) {
+                // Backend returned ok:false. Show the overlay in view
+                // mode with only the error message and a close button.
+                // No notice body, no accept button.
+                App.firstRunNoticeViewingFromSettings = true;
+                var titleEl = document.getElementById("first-run-notice-title");
+                if (titleEl) titleEl.textContent = "";
+                var highlightsEl = document.getElementById("first-run-notice-highlights");
+                if (highlightsEl) {
+                    while (highlightsEl.firstChild) {
+                        highlightsEl.removeChild(highlightsEl.firstChild);
+                    }
+                }
+                var textEl = document.getElementById("first-run-notice-text");
+                if (textEl) textEl.textContent = "";
+                var acceptBtn = document.getElementById("first-run-notice-accept-btn");
+                if (acceptBtn) acceptBtn.hidden = true;
+                var closeBtn = document.getElementById("first-run-notice-close-btn");
+                if (closeBtn) closeBtn.hidden = false;
+                setFirstRunNoticeError(
+                    (result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR
+                );
+                var overlay = document.getElementById("first-run-notice-overlay");
+                if (overlay) overlay.hidden = false;
+                return;
+            }
+            showFirstRunNotice(result, "view");
         }).catch(function () {
-            // Never read .message; show stable Chinese error. Use the
-            // JS-side fallback notice body so the user still sees the
-            // privacy text instead of an empty overlay.
-            showFirstRunNotice(buildFirstRunNoticeFallback(), "view");
+            // Bridge rejection: show the overlay in view mode with only
+            // the error message and a close button. No notice body.
+            App.firstRunNoticeViewingFromSettings = true;
+            var titleEl = document.getElementById("first-run-notice-title");
+            if (titleEl) titleEl.textContent = "";
+            var highlightsEl = document.getElementById("first-run-notice-highlights");
+            if (highlightsEl) {
+                while (highlightsEl.firstChild) {
+                    highlightsEl.removeChild(highlightsEl.firstChild);
+                }
+            }
+            var textEl = document.getElementById("first-run-notice-text");
+            if (textEl) textEl.textContent = "";
+            var acceptBtn = document.getElementById("first-run-notice-accept-btn");
+            if (acceptBtn) acceptBtn.hidden = true;
+            var closeBtn = document.getElementById("first-run-notice-close-btn");
+            if (closeBtn) closeBtn.hidden = false;
             setFirstRunNoticeError(FIRST_RUN_NOTICE_LOAD_ERROR);
+            var overlay = document.getElementById("first-run-notice-overlay");
+            if (overlay) overlay.hidden = false;
         });
     }
     App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;

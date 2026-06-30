@@ -7,8 +7,8 @@ Covers ``WebViewBridge.batch_update_timeline_activities_project``:
   returns ``{"ok": false, "error": ...}`` with clear Chinese messages;
 - batch_too_large returns the ``一次最多修改 100 条活动`` message;
 - invalid_project returns the ``请选择有效的项目`` message;
-- in_progress activity returns the ``进行中记录暂不支持批量修改`` message;
-- hidden_activity returns the ``隐藏记录暂不支持批量修改`` message;
+- in_progress activity returns the ``进行中记录无法批量修改`` message;
+- hidden_activity returns the ``隐藏记录无法批量修改`` message;
 - operation_failed returns the generic ``操作失败`` message;
 - unknown error codes collapse to ``操作失败``;
 - bool project_id is rejected;
@@ -253,7 +253,7 @@ def test_batch_hidden_activity(bridge):
     activity_service.hide_activity(ids[1])
     result = bridge.batch_update_timeline_activities_project(ids, project)
     assert result["ok"] is False
-    assert result["error"] == "隐藏记录暂不支持批量修改"
+    assert result["error"] == "隐藏记录无法批量修改"
 
 
 def test_batch_in_progress_activity(bridge):
@@ -265,7 +265,7 @@ def test_batch_in_progress_activity(bridge):
     activity_service.finalize_created_activity(a2)
     result = bridge.batch_update_timeline_activities_project([a1, a2], project)
     assert result["ok"] is False
-    assert result["error"] == "进行中记录暂不支持批量修改"
+    assert result["error"] == "进行中记录无法批量修改"
 
 
 # --- batch_update_timeline_activities_project: operation_failed -----------

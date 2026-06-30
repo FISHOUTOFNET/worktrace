@@ -519,7 +519,7 @@ _FIRST_RUN_NOTICE_TITLE = "WorkTrace 隐私说明"
 def get_first_run_notice_for_webview() -> dict[str, Any]:
     """Return the display-safe first-run privacy notice payload for WebView.
 
-    Phase 6E narrow read facade. Zero parameters. Returns the narrow
+    Narrow read facade. Zero parameters. On success returns the narrow
     payload ``{"ok": True, "accepted": bool, "title": str,
     "highlights": list[str], "notice_text": str}``.
 
@@ -531,18 +531,17 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
     - ``highlights`` is the fixed list aligned with the legacy first-run
       dialog (``["本地保存", "不截屏录屏", "不主动读正文", "用户可清空"]``).
 
+    Strict fail-closed: if reading ``accepted`` raises (e.g. settings
+    hiccup), the method returns ``{"ok": False, "error": "<stable
+    Chinese>"}`` WITHOUT any notice_text. The frontend must display a
+    blocking error overlay, must NOT render a fallback notice body, and
+    must NOT allow the user to accept. The collector and folder index
+    worker are not started. This is the sole notice-text source; the
+    frontend does not maintain a second fallback copy.
+
     The payload is JSON-serializable and never carries the full path, DB
     path, export path, clipboard content, window title, file path hint,
     note, SQL, traceback, or raw exception.
-
-    Phase 6G fail-closed: if reading ``accepted`` raises (e.g. settings
-    hiccup), the method returns ``ok=True`` with ``accepted=False`` AND
-    the full fallback ``title`` / ``highlights`` / ``notice_text`` so
-    the frontend can still render the privacy notice text. The user
-    must see the privacy notice body even when the accepted-state read
-    fails; the gate stays closed (``accepted=False``) so the collector
-    and folder index worker are not started. A ``warning`` field is
-    included so the frontend can optionally surface a soft warning.
 
     This facade does not call backup export / import / manifest,
     ``clear_all_local_data``, ``set_setting_value``, or any collector
@@ -551,16 +550,12 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
     try:
         accepted = bool(first_run_notice_accepted())
     except Exception:
-        # Fail-closed: accepted stays False (gate stays closed) but the
-        # notice body is still returned so the frontend can render the
-        # privacy text. Never return an empty-notice error payload.
+        # Strict fail-closed: do NOT return a fallback notice body. The
+        # frontend must show a blocking error and must not allow accept.
+        # Never expose raw exception text / traceback / SQL / paths.
         return {
-            "ok": True,
-            "accepted": False,
-            "title": _FIRST_RUN_NOTICE_TITLE,
-            "highlights": list(_FIRST_RUN_NOTICE_HIGHLIGHTS),
-            "notice_text": str(PRIVACY_NOTICE_TEXT),
-            "warning": "隐私说明确认状态读取失败，请重新确认",
+            "ok": False,
+            "error": "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请重启应用或重新安装。",
         }
     return {
         "ok": True,
