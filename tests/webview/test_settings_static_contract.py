@@ -1475,7 +1475,7 @@ def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
     # refreshAll() call.
     refresh_pos = body.find("refreshAll()")
     between = body[load_pos:refresh_pos]
-    assert ".then(function () {" in between or ".then(function() {" in between, (
+    assert ".then(function" in between, (
         "init() must call refreshAll/startAutoRefresh/startLocalTicker "
         "inside a .then(...) callback on the loadFirstRunNotice promise, "
         "not at the top level of init"
@@ -1617,3 +1617,83 @@ def test_init_js_does_not_use_storage_or_network_apis_6h() -> None:
         assert forbidden not in source, (
             "init.js must not use: " + forbidden
         )
+
+
+# --- Phase 6I: notice load failure does not start main UI refresh --------
+#
+# loadFirstRunNotice() now resolves to a boolean: ``true`` when the notice
+# state was successfully confirmed, ``false`` on backend ``ok:false`` or
+# bridge rejection. init() must only start refreshAll / startAutoRefresh /
+# startLocalTicker when the boolean is true. On failure the blocking error
+# overlay is already shown by loadFirstRunNotice; the collector and main UI
+# auto-refresh must NOT start (fail-closed). Additionally, the catch branch
+# of loadFirstRunNotice must NOT set ``firstRunNoticeLoaded = true`` so a
+# transient bridge rejection does not permanently lock the frontend state.
+
+
+def test_init_js_does_not_start_refresh_on_notice_load_failure_6i() -> None:
+    """Phase 6I: init() must not call refreshAll / startAutoRefresh /
+    startLocalTicker when loadFirstRunNotice resolves false (notice load
+    failed). The refresh calls must be guarded by a notice-confirmed check
+    so a failed notice load leaves the main UI auto-refresh off
+    (fail-closed). The old catch branch that unconditionally started
+    refreshAll / startAutoRefresh / startLocalTicker is forbidden."""
+    source = read_js("init.js")
+    pos = source.find("function init()")
+    assert pos != -1, "init.js must define function init()"
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 2500]
+    # The .then callback must receive a notice-confirmed boolean and guard
+    # the refresh calls on it so a failed notice load does not start refresh.
+    assert "noticeConfirmed" in body, (
+        "init() .then callback must receive a noticeConfirmed boolean "
+        "from loadFirstRunNotice"
+    )
+    assert "if (!noticeConfirmed) return;" in body or \
+           "if (!noticeConfirmed) return" in body, (
+        "init() must guard refresh calls on noticeConfirmed"
+    )
+    # The old catch branch that unconditionally started refresh must not
+    # exist. A .catch on the loadFirstRunNotice chain that contains
+    # refreshAll / startAutoRefresh / startLocalTicker is forbidden.
+    catch_pos = body.find(".catch(function")
+    if catch_pos != -1:
+        catch_body = body[catch_pos:catch_pos + 600]
+        for call in ("refreshAll()", "startAutoRefresh()", "startLocalTicker()"):
+            assert call not in catch_body, (
+                "init() catch branch must not call " + call + " on notice "
+                "load failure (fail-closed)"
+            )
+
+
+def test_settings_js_load_first_run_notice_catch_does_not_lock_state_6i() -> None:
+    """Phase 6I: the catch branch of loadFirstRunNotice must NOT set
+    ``App.firstRunNoticeLoaded = true``. A bridge rejection may be
+    transient (bridge not yet injected, temporary unavailability), so
+    permanently marking the notice as loaded would prevent any retry and
+    lock the user out. The catch must still show the blocking error
+    overlay (fail-closed UI) but leave the loaded flag false so a retry
+    or app restart can re-attempt the load. The backend ``ok:false``
+    path (real backend failure) still sets ``firstRunNoticeLoaded = true``
+    for strict fail-closed since the backend is broken and retrying will
+    not help."""
+    source = read_js("settings.js")
+    pos = source.find("function loadFirstRunNotice")
+    assert pos != -1
+    # Slice to the next sibling function so we cover the whole
+    # loadFirstRunNotice implementation including the catch block.
+    end = source.find("\n    function ", pos + 1)
+    body = source[pos:end if end != -1 else pos + 3000]
+    # Locate the catch block within loadFirstRunNotice.
+    catch_pos = body.find(".catch(function")
+    assert catch_pos != -1, "loadFirstRunNotice must have a catch block"
+    # Slice the catch block body (generous window).
+    catch_body = body[catch_pos:catch_pos + 800]
+    assert "firstRunNoticeLoaded = true" not in catch_body, (
+        "loadFirstRunNotice catch must not set firstRunNoticeLoaded = true; "
+        "bridge rejection may be transient and must allow retry"
+    )
+    # The catch must still show the blocking error (fail-closed UI).
+    assert "showFirstRunNoticeBlockingError" in catch_body, (
+        "loadFirstRunNotice catch must still show the blocking error overlay"
+    )

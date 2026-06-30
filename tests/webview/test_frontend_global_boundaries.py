@@ -820,7 +820,7 @@ def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
     # The refresh calls must be inside a .then(...) callback on the
     # loadFirstRunNotice promise, not at the top level of init.
     between = body[load_pos:refresh_pos]
-    assert ".then(function () {" in between or ".then(function() {" in between, (
+    assert ".then(function" in between, (
         "init() must call refreshAll / startAutoRefresh inside a "
         ".then(...) callback on the loadFirstRunNotice promise, not at "
         "the top level of init"

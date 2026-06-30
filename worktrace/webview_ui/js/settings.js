@@ -771,13 +771,27 @@
     App.hideFirstRunNotice = hideFirstRunNotice;
 
     function loadFirstRunNotice() {
-        // Initial first-run notice load. Called once during init. If the
-        // backend reports ``accepted === false``, show the blocking gate
-        // overlay; otherwise leave the overlay hidden. On any failure
-        // (bridge returns ok:false or rejects) show a strict fail-closed
-        // blocking error overlay with NO notice body and a disabled
-        // accept button so the user cannot bypass the gate.
-        if (App.firstRunNoticeLoading || App.firstRunNoticeLoaded) return Promise.resolve();
+        // Initial first-run notice load. Called once during init. Returns a
+        // Promise that resolves to ``true`` when the backend notice state
+        // was successfully confirmed (whether accepted or not), and
+        // ``false`` when the load failed. The caller (init) uses the
+        // boolean to decide whether to start the main UI refresh /
+        // auto-refresh / local ticker: only start them when the notice
+        // state is confirmed.
+        //
+        // Failure handling:
+        //   - Backend ``ok:false`` (real backend read failure): strict
+        //     fail-closed. Show blocking error with no notice body and
+        //     disabled accept. Set ``firstRunNoticeLoaded = true`` so the
+        //     state is locked; the backend is broken and retrying from the
+        //     frontend will not help.
+        //   - Bridge rejection (bridge unavailable / transient error):
+        //     show the same blocking error overlay so the user is not
+        //     left looking at a blank UI, but do NOT set
+        //     ``firstRunNoticeLoaded = true``. This leaves the door open
+        //     for a retry (e.g. after the bridge recovers or after an app
+        //     restart) so the frontend state is not permanently locked.
+        if (App.firstRunNoticeLoading || App.firstRunNoticeLoaded) return Promise.resolve(true);
         App.firstRunNoticeLoading = true;
         return App.callBridge("get_first_run_notice").then(function (result) {
             App.firstRunNoticeLoading = false;
@@ -790,7 +804,7 @@
                 showFirstRunNoticeBlockingError(
                     (result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR
                 );
-                return;
+                return false;
             }
             if (result.accepted === false) {
                 // First run: show the blocking gate with the official
@@ -803,13 +817,21 @@
                 // can still view the notice read-only from Settings.
                 App.firstRunNoticeRequired = false;
             }
+            return true;
         }).catch(function () {
-            // Bridge rejection: strict fail-closed. Show blocking error
-            // with no notice body and disabled accept button.
+            // Bridge rejection: show the blocking error overlay
+            // (fail-closed UI) but do NOT set ``firstRunNoticeLoaded =
+            // true``. A bridge rejection may be transient (bridge not
+            // yet injected, temporary unavailability); permanently
+            // marking the notice as loaded would prevent any retry and
+            // lock the user out. The caller (init) receives ``false``
+            // and does not start the main UI refresh. The backend
+            // ``ok:false`` path above is the strict fail-closed path
+            // that does lock the state.
             App.firstRunNoticeLoading = false;
-            App.firstRunNoticeLoaded = true;
             App.firstRunNoticeRequired = true;
             showFirstRunNoticeBlockingError(FIRST_RUN_NOTICE_LOAD_ERROR);
+            return false;
         });
     }
     App.loadFirstRunNotice = loadFirstRunNotice;

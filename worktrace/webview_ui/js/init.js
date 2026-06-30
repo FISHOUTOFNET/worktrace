@@ -394,14 +394,17 @@
         // backend startup gate (webview_main.py) is the final safety
         // boundary; awaiting here eliminates the frontend race where
         // refreshAll could fire before the gate overlay was up.
-        App.loadFirstRunNotice().then(function () {
-            refreshAll();
-            startAutoRefresh();
-            startLocalTicker();
-        }).catch(function () {
-            // If the notice load itself fails (e.g. bridge error), still
-            // refresh the UI so the user sees something; the gate overlay
-            // will already be shown by loadFirstRunNotice's error path.
+        //
+        // Phase 6I: loadFirstRunNotice resolves to ``true`` only when the
+        // notice state was successfully confirmed. On failure (backend
+        // ok:false or bridge rejection) it resolves ``false`` after
+        // showing the blocking error overlay. The main UI refresh /
+        // auto-refresh / local ticker must NOT start on failure
+        // (fail-closed): the collector is not running and auto-refreshing
+        // the sidebar would imply data collection is active. The old
+        // catch branch that unconditionally started refresh is removed.
+        App.loadFirstRunNotice().then(function (noticeConfirmed) {
+            if (!noticeConfirmed) return;
             refreshAll();
             startAutoRefresh();
             startLocalTicker();
