@@ -9,8 +9,6 @@ cover:
   to WebView);
 - ``python -m worktrace.main`` defaults to the WebView entry point and does
   not instantiate the legacy Tkinter ``WorkTraceApp``;
-- the legacy ``--webview`` flag is accepted as a no-op compatibility flag
-  and does not alter behavior;
 - importing worktrace.main does not start the GUI;
 - WebView2 runtime_check is importable, never raises, and does not block
   non-Windows;
@@ -124,9 +122,7 @@ def test_spec_retains_win32timezone():
 
 def test_entry_script_forwards_to_worktrace_main():
     """The entry script must fall through to worktrace.main.main for the
-    default invocation. ``--webview`` is no longer required to opt in (the
-    default is WebView as of Phase 1), but it must still be tolerated as a
-    no-op compatibility flag."""
+    default invocation. WebView is the default and only UI as of Phase 1."""
     source = _read(ENTRY_PATH)
     assert "--open-files-helper" in source
     assert "from worktrace.main import main" in source
@@ -151,20 +147,6 @@ def test_main_module_does_not_import_worktrace_app():
     assert "from worktrace.ui.app" not in source
 
 
-def test_main_webview_compat_flag_detected():
-    """``--webview`` is accepted as a no-op compatibility flag.
-
-    Phase 1 made WebView the default, so the flag does not change behavior;
-    it is retained only so existing scripts that pass ``--webview`` keep
-    working.
-    """
-    from worktrace.main import _has_webview_compat_flag
-
-    assert _has_webview_compat_flag(["--webview"]) is True
-    assert _has_webview_compat_flag([]) is False
-    assert _has_webview_compat_flag(["--foo"]) is False
-
-
 def test_main_defaults_to_webview_without_flag():
     """``main([])`` must delegate to ``webview_main.main()``.
 
@@ -185,12 +167,10 @@ def test_main_defaults_to_webview_without_flag():
     assert called["count"] == 1
 
 
-def test_main_routes_to_webview_with_compat_flag():
-    """``main(["--webview"])`` delegates to ``webview_main.main()`` too.
-
-    The legacy opt-in flag is now a no-op: both ``main([])`` and
-    ``main(["--webview"])`` start the WebView UI.
-    """
+def test_main_ignores_extra_args():
+    """``main`` must ignore any command-line args and always delegate to
+    ``webview_main.main()``. WebView is the only UI; there is no argparse
+    layer and no flag parsing."""
     import worktrace.main as main_mod
 
     called = {"count": 0}
@@ -200,7 +180,7 @@ def test_main_routes_to_webview_with_compat_flag():
         return 0
 
     with patch("worktrace.webview_main.main", fake_webview_main):
-        result = main_mod.main(["--webview"])
+        result = main_mod.main(["--unknown-arg"])
     assert result == 0
     assert called["count"] == 1
 

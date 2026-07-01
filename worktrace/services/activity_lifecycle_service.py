@@ -26,11 +26,11 @@ transition in WorkTrace:
 
 ``activity_service`` is now a pure low-level CRUD helper
 (``insert_activity_row``, ``close_activity_row``, ``close_all_open_rows``,
-``create_activity`` / ``close_activity`` / ``close_current_open_record``
-as compat aliases). It does NOT close pre-existing open rows, does NOT
-run project inference, and does NOT import this module. Production
-callers (collector, recovery, clipboard, shutdown) route through this
-facade so the open-row state machine has exactly one owner.
+``create_activity`` / ``close_activity`` as low-level helpers). It does
+NOT close pre-existing open rows, does NOT run project inference, and
+does NOT import this module. Production callers (collector, recovery,
+clipboard, shutdown) route through this facade so the open-row state
+machine has exactly one owner.
 
 Design rules
 ------------

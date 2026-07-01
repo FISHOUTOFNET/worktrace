@@ -121,9 +121,8 @@
 - The legacy Tkinter / CustomTkinter UI under `worktrace/ui` is retained only
   as legacy code pending removal. It is **not** a supported runtime path and
   must not be started by the default entry point.
-- `python -m worktrace.main` starts the WebView UI. `python -m worktrace.main
-  --webview` is accepted as a no-op compatibility flag and does not change
-  behavior.
+- `python -m worktrace.main` starts the WebView UI. (A `--webview` no-op
+  compatibility flag was accepted during this phase and later removed.)
 - The packaged `WorkTrace.exe` defaults to the WebView UI.
 
 ## 1. Phase 1 Is A Destructive Migration
@@ -243,7 +242,7 @@ The migration is phased so each step is independently shippable:
 - Phase 1: **Default WebView entry + Overview full migration + no Tkinter
   fallback.** The default `python -m worktrace.main` starts the WebView UI;
   the packaged `WorkTrace.exe` defaults to the WebView UI; the legacy
-  `--webview` flag is a no-op; the Overview page is a production page
+  `--webview` flag was a no-op at this phase (later removed); the Overview page is a production page
   (collector status, pause/resume, today's date, total/classified/
   uncategorized duration, project count, current activity summary, recent
   sessions, auto-refresh, in-page error banner); missing WebView2 Runtime
@@ -568,9 +567,9 @@ backend used by the default UI entry point.
 ## Entry Points
 
 - `python -m worktrace.main` — starts the WebView UI (default, Phase 1).
-- `python -m worktrace.main --webview` — accepted as a no-op compatibility
-  flag. It does not change behavior; both `main([])` and
-  `main(["--webview"])` start the WebView UI.
+  `main` ignores any command-line args; there is no argparse layer and no
+  `--webview` flag (the historical no-op compat flag was removed once
+  WebView became the sole shipping UI).
 - `python -m worktrace.webview_main` — equivalent direct WebView entry
   point, retained for development convenience.
 - `WorkTrace.exe` (packaged) — defaults to the WebView UI. The PyInstaller
@@ -582,8 +581,9 @@ Phase 1 made the WebView UI the default and only shipping UI:
 
 - `worktrace/main.py` delegates to `worktrace.webview_main.main()` by
   default. It no longer imports or instantiates
-  `worktrace.ui.app.WorkTraceApp`. The `--webview` flag is accepted as a
-  no-op compatibility flag.
+  `worktrace.ui.app.WorkTraceApp`. A `--webview` no-op compatibility flag
+  was accepted at this phase (later removed once WebView became the sole
+  shipping UI).
 - `worktrace/webview_main.py` is the default entry point. When the WebView2
   Runtime is missing on Windows, it prints a clear Chinese install prompt
   and exits with a non-zero code. When `pywebview` is missing, it prints a
@@ -4230,10 +4230,10 @@ Implemented in Phase 5B.1:
 - **API layer hardening** (`worktrace/api/rule_api.py`):
   - `rule_type` validation now rejects every non-string type (including
     unhashable `list` / `dict`) without leaking a `TypeError`.
-  - Existing `_valid_rule_id` / `_valid_enabled` helpers and the
-    pre-update existence check (`_rule_exists`) are unchanged. SQLite
-    UPDATE no-op behavior on a missing rule still returns `not_found`, never
-    success.
+  - Existing rule-id / enabled validation (now routed through
+    `_write_contract.valid_int` / `valid_bool`) and the pre-update
+    existence check (`_rule_exists`) are unchanged. SQLite UPDATE no-op
+    behavior on a missing rule still returns `not_found`, never success.
   - Unknown exceptions from `rule_service.set_rule_enabled` /
     `folder_rule_service.set_folder_rule_enabled` still collapse to
     `operation_failed` and never surface raw exception text, SQL,
@@ -5836,8 +5836,9 @@ Implemented in Phase 5I:
     `_PROJECT_RULE_BATCH_APPLY_MESSAGES`,
     `_PROJECT_RULE_BATCH_TOGGLE_MESSAGES`); unknown codes collapse to a
     per-action Chinese message. `_validate_batch_rules` enforces the same
-    shape at the bridge. `bridge.py` re-exports the three maps for
-    backward compatibility.
+    shape at the bridge. The three maps live in `bridge_rules.py` and are
+    imported from that module directly (an earlier re-export through
+    `bridge.py` was later removed).
   - No `.message` reads, no traceback / SQL / path / window_title /
     clipboard / note leak. All payloads JSON-serializable.
 - Frontend (`worktrace/webview_ui/js/rules.js`,
@@ -5885,7 +5886,7 @@ Implemented in Phase 5I:
     payload, invalid-input short-circuit, stable error map, unknown-code
     collapse, exception collapse, no-sensitive-token leak,
     JSON-serializable; plus cross-call verification and 5I message-map
-    re-export.
+    stability.
   - Extended static contract tests in
     `tests/webview/test_project_rules_static_contract.py` (+11 tests,
     364 total): batch DOM ids exist + hidden by default, static button
@@ -5978,7 +5979,7 @@ user-visible capability. It only:
   update so enabled rules apply to just-closed eligible activities.
   **Note (lifecycle hard cutover):** this close-finalize behavior has since
   moved to `activity_lifecycle_service.finalize_closed_activity_ids`;
-  `activity_service.close_activity` is now a low-level compat alias that
+  `activity_service.close_activity` is now a low-level CRUD helper that
   does NOT run project inference. Production open-row lifecycle must use
   `activity_lifecycle_service`, not `activity_service.close_activity`.
 

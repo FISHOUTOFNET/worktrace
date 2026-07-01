@@ -202,9 +202,6 @@ backend used by the default UI entry point.
 ## Entry Points
 
 - `python -m worktrace.main` — starts the WebView UI (default, Phase 1).
-- `python -m worktrace.main --webview` — accepted as a no-op compatibility
-  flag. It does not change behavior; both `main([])` and
-  `main(["--webview"])` start the WebView UI.
 - `python -m worktrace.webview_main` — equivalent direct WebView entry
   point, retained for development convenience.
 - `WorkTrace.exe` (packaged) — defaults to the WebView UI. The PyInstaller

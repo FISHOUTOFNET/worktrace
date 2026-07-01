@@ -4,7 +4,7 @@ This service consolidates every live-projection decision that was previously
 scattered across:
 
 - ``bridge_common._can_live_project_snapshot`` / ``_find_live_projection_target``
-- ``bridge_common._snapshot_live_projected_seconds``
+- ``bridge_common._snapshot_live_duration`` (legacy snapshot duration helper)
 - ``bridge_common._snapshot_summary`` (live bits)
 - ``timeline_service._live_duration_for_row``
 - ``statistics_service._live_projection``
@@ -17,9 +17,9 @@ The service is the ONLY place that decides:
 - whether the current snapshot is eligible for live display;
 - whether the live display is a *virtual* (unpersisted) item, a *persisted
   open* item, or a *non-normal* status item (idle / paused / excluded / error);
-- the display project, display resource, baseline seconds, baseline epoch,
-  pending/carry seconds, virtual session, virtual detail row, live row
-  identity, and refresh-revision inputs.
+- the display project, display resource, fetched snapshot duration,
+  start-time anchor, carry seconds, virtual session, virtual detail row,
+  live row identity, and refresh-revision inputs.
 
 Display projection is purely a UI overlay. It NEVER writes the DB, NEVER
 changes the 30-second collector persistence threshold, and NEVER persists
@@ -306,8 +306,8 @@ def _start_time_epoch_ms(snapshot: dict[str, Any] | None) -> int:
     Returns ``0`` when the snapshot is missing or the start_time cannot
     be parsed. Used by the unified live clock so the frontend can compute
     ``display_seconds = carry_seconds + floor((Date.now() -
-    live_started_at_epoch_ms) / 1000)`` from a single stable anchor
-    instead of a response-time baseline.
+    live_started_at_epoch_ms) / 1000)`` from a single stable start-time
+    anchor.
     """
     if not snapshot:
         return 0

@@ -387,7 +387,7 @@ This section validates the Phase 1B.1 hardening of the encrypted backup import p
 
 This section is the validation framework for the WebView UI migration documented in [`docs/ui-webview-migration.md`](ui-webview-migration.md). Phase 1 is a destructive migration: the WebView UI is the default and only shipping UI. The legacy Tkinter / CustomTkinter UI under `worktrace/ui` was deleted in Phase 6F; it is not a supported runtime path and is not started by the default entry point.
 
-Phase 1 makes `python -m worktrace.main` (and the packaged `WorkTrace.exe`) start the WebView UI directly. The legacy `--webview` flag is accepted as a no-op compatibility flag. When the WebView2 Runtime is missing on Windows, WorkTrace prints a clear install prompt and exits with a non-zero code; it does not auto-download the runtime and does not fall back to Tkinter.
+Phase 1 makes `python -m worktrace.main` (and the packaged `WorkTrace.exe`) start the WebView UI directly. When the WebView2 Runtime is missing on Windows, WorkTrace prints a clear install prompt and exits with a non-zero code; it does not auto-download the runtime and does not fall back to Tkinter.
 
 This section is scoped to the default WebView entry point, the Overview page, the bridge, the runtime, and the packaging. It does not validate Timeline, Statistics/Export, Rules, or Settings pages (those were migrated in later phases; the legacy Tkinter code was deleted in Phase 6F). It does not introduce field-level encryption, SQLCipher, AI, server, payment, license, token, or subscription features.
 
@@ -402,16 +402,15 @@ This section is scoped to the default WebView entry point, the Overview page, th
 
 ### Validation Items
 
-1. [ ] `python -m worktrace.main` starts the WebView UI (no `--webview` flag required).
-2. [ ] `python -m worktrace.main --webview` behaves identically to `python -m worktrace.main` (no-op compatibility flag).
-3. [ ] WebView frontend resources do not contain `http://` or `https://` external links.
-4. [ ] The WebView bridge does not import `worktrace.services`, `worktrace.db`, `worktrace.collector`, `worktrace.security`, `worktrace.runtime`, or `worktrace.config`.
-5. [ ] Closing the WebView window triggers `AppRuntime.shutdown` and leaves no collector thread, folder-index worker, or database lock resident.
-6. [ ] The PyInstaller build passes with the WebView entry point and resources bundled.
-7. [ ] The per-user installer build passes and installs without administrator privileges.
-8. [ ] The packaged `dist\WorkTrace.exe` defaults to the WebView UI and starts normally.
-9. [ ] When WebView2 Runtime is missing, WorkTrace shows a clear install prompt and exits with a non-zero code; it does not fall back to Tkinter.
-10. [ ] When `pywebview` is missing, WorkTrace shows a clear install prompt and exits with a non-zero code; it does not fall back to Tkinter.
+1. [ ] `python -m worktrace.main` starts the WebView UI (no flags required).
+2. [ ] WebView frontend resources do not contain `http://` or `https://` external links.
+3. [ ] The WebView bridge does not import `worktrace.services`, `worktrace.db`, `worktrace.collector`, `worktrace.security`, `worktrace.runtime`, or `worktrace.config`.
+4. [ ] Closing the WebView window triggers `AppRuntime.shutdown` and leaves no collector thread, folder-index worker, or database lock resident.
+5. [ ] The PyInstaller build passes with the WebView entry point and resources bundled.
+6. [ ] The per-user installer build passes and installs without administrator privileges.
+7. [ ] The packaged `dist\WorkTrace.exe` defaults to the WebView UI and starts normally.
+8. [ ] When WebView2 Runtime is missing, WorkTrace shows a clear install prompt and exits with a non-zero code; it does not fall back to Tkinter.
+9. [ ] When `pywebview` is missing, WorkTrace shows a clear install prompt and exits with a non-zero code; it does not fall back to Tkinter.
 
 ### Manual Validation Checklist
 
@@ -446,7 +445,6 @@ This section is scoped to the default WebView entry point, the Overview page, th
 #### X. Phase 1 Source Run Validation
 
 - [ ] `python -m worktrace.main` starts the WebView UI (default, no flag).
-- [ ] `python -m worktrace.main --webview` also starts the WebView UI (no-op compat flag).
 - [ ] On a machine without WebView2 Runtime, `python -m worktrace.main` prints the clear missing-runtime message and exits with code 2; no Tkinter UI is started.
 
 #### Y. Phase 1 PyInstaller Build Validation
@@ -454,7 +452,6 @@ This section is scoped to the default WebView entry point, the Overview page, th
 - [ ] `python -m PyInstaller --noconfirm --clean WorkTrace.spec` completes without error.
 - [ ] `dist\WorkTrace.exe` exists.
 - [ ] `dist\WorkTrace.exe` (no args) starts the WebView UI.
-- [ ] `dist\WorkTrace.exe --webview` also starts the WebView UI (no-op compat flag).
 - [ ] The bundle includes `worktrace/webview_ui/index.html`, `app.js`, `styles.css` (verified by build success and runtime resource resolution).
 
 #### Z. Phase 1 Installer Build Validation
@@ -491,7 +488,6 @@ This section is scoped to the default WebView entry point, the Overview page, th
 
 - `python -m worktrace.main` does not start the WebView UI by default.
 - `python -m worktrace.main` imports or instantiates the legacy Tkinter UI (deleted in Phase 6F) on the default path.
-- `--webview` changes behavior (e.g. only `--webview` starts the WebView UI).
 - WorkTrace falls back to the Tkinter UI when the WebView2 Runtime is missing or when `pywebview` is missing.
 - The missing-runtime message contains the words `Tkinter`, `fallback`, or `继续使用默认`.
 - The WebView bridge imports `worktrace.services`, `worktrace.db`, `worktrace.collector`, `worktrace.security`, `worktrace.runtime`, or `worktrace.config`.

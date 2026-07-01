@@ -35,9 +35,8 @@ Shared helpers (``_coerce_activity_ids``, ``_validate_datetime_inputs``,
 ``_safe_resource_display_name``, ``_snapshot_summary``,
 ``_statistics_summary_payload``, ``_GENERIC_ERROR``, ``_RECENT_LIMIT``,
 ``_DATE_SHAPE_RE``, ``_DATETIME_SHAPE_RE``) live in ``bridge_common.py``.
-Each mixin imports what it needs from ``bridge_common``; this module
-re-exports the symbols that existing tests import from
-``worktrace.webview_ui.bridge`` for backward compatibility.
+Each mixin imports what it needs from its own owning module; this module
+only exposes ``WebViewBridge``.
 
 The bridge is the only data path between JS and Python. As of Phase 1 the
 Overview page is fully migrated: ``get_status``, ``toggle_pause``,
@@ -223,43 +222,11 @@ from ..api import (
     statistics_api,
     timeline_api,
 )
-from .bridge_common import _safe_resource_display_name
 from .bridge_dialogs import BridgeDialogMixin
 from .bridge_overview import OverviewBridgeMixin
-from .bridge_rules import (
-    ProjectRulesBridgeMixin,
-    # Re-exported so existing tests that reference
-    # ``bridge_module._PROJECT_RULE_...`` / ``bridge_module._project_...``
-    # continue to resolve after the Phase M3 split.
-    _PROJECT_LIFECYCLE_ARCHIVE_MESSAGES,
-    _PROJECT_LIFECYCLE_CREATE_MESSAGES,
-    _PROJECT_LIFECYCLE_TOGGLE_MESSAGES,
-    _PROJECT_LIFECYCLE_UPDATE_MESSAGES,
-    _PROJECT_RULE_BACKFILL_MESSAGES,
-    _PROJECT_RULE_BATCH_APPLY_MESSAGES,
-    _PROJECT_RULE_BATCH_PREVIEW_MESSAGES,
-    _PROJECT_RULE_BATCH_TOGGLE_MESSAGES,
-    _PROJECT_RULE_CREATE_MESSAGES,
-    _PROJECT_RULE_DELETE_MESSAGES,
-    _PROJECT_RULE_FOLDER_CREATE_MESSAGES,
-    _PROJECT_RULE_FOLDER_DELETE_MESSAGES,
-    _PROJECT_RULE_FOLDER_UPDATE_MESSAGES,
-    _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES,
-    _PROJECT_RULE_UPDATE_MESSAGES,
-    _PROJECT_RULE_WRITE_MESSAGES,
-    _project_lifecycle_summary,
-    _project_rules_bool,
-    _project_rules_folder_payload,
-    _project_rules_int,
-    _project_rules_keyword_payload,
-    _project_rules_list,
-    _project_rules_mapping,
-    _project_rules_project_payload,
-    _project_rules_summary,
-    _project_rules_text,
-)
+from .bridge_rules import ProjectRulesBridgeMixin
 from .bridge_settings import SettingsBridgeMixin
-from .bridge_statistics import StatisticsBridgeMixin, _STATISTICS_EXPORT_ERROR_MESSAGES
+from .bridge_statistics import StatisticsBridgeMixin
 from .bridge_timeline import TimelineBridgeMixin
 
 logger = logging.getLogger(__name__)
@@ -301,36 +268,4 @@ class WebViewBridge(
         self._window = window
 
 
-__all__ = [
-    "WebViewBridge",
-    # Re-exported for backward compatibility with tests that import
-    # these symbols from ``worktrace.webview_ui.bridge``.
-    "_safe_resource_display_name",
-    "_STATISTICS_EXPORT_ERROR_MESSAGES",
-    "_PROJECT_LIFECYCLE_ARCHIVE_MESSAGES",
-    "_PROJECT_LIFECYCLE_CREATE_MESSAGES",
-    "_PROJECT_LIFECYCLE_TOGGLE_MESSAGES",
-    "_PROJECT_LIFECYCLE_UPDATE_MESSAGES",
-    "_PROJECT_RULE_BACKFILL_MESSAGES",
-    "_PROJECT_RULE_BATCH_APPLY_MESSAGES",
-    "_PROJECT_RULE_BATCH_PREVIEW_MESSAGES",
-    "_PROJECT_RULE_BATCH_TOGGLE_MESSAGES",
-    "_PROJECT_RULE_CREATE_MESSAGES",
-    "_PROJECT_RULE_DELETE_MESSAGES",
-    "_PROJECT_RULE_FOLDER_CREATE_MESSAGES",
-    "_PROJECT_RULE_FOLDER_DELETE_MESSAGES",
-    "_PROJECT_RULE_FOLDER_UPDATE_MESSAGES",
-    "_PROJECT_RULE_IMPACT_PREVIEW_MESSAGES",
-    "_PROJECT_RULE_UPDATE_MESSAGES",
-    "_PROJECT_RULE_WRITE_MESSAGES",
-    "_project_lifecycle_summary",
-    "_project_rules_bool",
-    "_project_rules_folder_payload",
-    "_project_rules_int",
-    "_project_rules_keyword_payload",
-    "_project_rules_list",
-    "_project_rules_mapping",
-    "_project_rules_project_payload",
-    "_project_rules_summary",
-    "_project_rules_text",
-]
+__all__ = ["WebViewBridge"]

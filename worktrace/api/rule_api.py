@@ -43,18 +43,6 @@ class ProjectRuleWriteError(Exception):
         self.code = code
 
 
-def _valid_rule_id(rule_id: Any) -> bool:
-    """Backward-compatible alias kept for any external caller; new code
-    should use ``_write_contract.valid_int`` directly."""
-    return valid_int(rule_id)
-
-
-def _valid_enabled(enabled: Any) -> bool:
-    """Backward-compatible alias kept for any external caller; new code
-    should use ``_write_contract.valid_bool`` directly."""
-    return valid_bool(enabled)
-
-
 def _rule_exists(rule_type: str, rule_id: int) -> bool:
     if rule_type == "folder":
         return any(

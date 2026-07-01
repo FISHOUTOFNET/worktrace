@@ -160,13 +160,13 @@ class TimelineBridgeMixin:
           the live seconds from ``timeline_service._live_duration_for_row``.
         - **closed DB session** — a finalized session row.
 
-        ``today_total_seconds`` includes the virtual live session's baseline
-        so the displayed total matches the sum of session durations at
-        backend response time. The frontend ticker adds the unified live
-        clock delta (``live_started_at_epoch_ms`` + ``carry_seconds``)
-        only to the virtual / in-progress session. Historical dates are
-        never projected. idle / paused / excluded / error snapshots never
-        produce a virtual session.
+        ``today_total_seconds`` includes the virtual live session's fetched
+        snapshot duration so the displayed total matches the sum of session
+        durations. The frontend ticker adds the unified live clock delta
+        (``live_started_at_epoch_ms`` + ``carry_seconds``) only to the
+        virtual / in-progress session. Historical dates are never projected.
+        idle / paused / excluded / error snapshots never produce a virtual
+        session.
         """
         try:
             report_date = date or timeline_api.get_default_report_date()
@@ -190,8 +190,7 @@ class TimelineBridgeMixin:
                 snapshot, report_date=report_date, today=today
             )
             sessions: list[dict[str, Any]] = []
-            target_session_id = ""
-            target_projected_seconds = 0
+            virtual_session_seconds = 0
             # Prepend a virtual live session when the current snapshot is a
             # normal unpersisted activity on today's date. This is
             # display-only; the DB is never written.
@@ -200,8 +199,7 @@ class TimelineBridgeMixin:
             )
             if virtual_session is not None:
                 vseconds = int(virtual_session.get("duration_seconds") or 0)
-                target_projected_seconds = vseconds
-                target_session_id = str(virtual_session.get("session_id") or "")
+                virtual_session_seconds = vseconds
                 sessions.append(
                     {
                         "session_id": str(virtual_session.get("session_id") or "virtual-live"),
@@ -276,12 +274,11 @@ class TimelineBridgeMixin:
                 # virtual session. No-op for closed / non-matching rows.
                 live_display_api.apply_persisted_open_overlay_to_row(row, persisted_overlay)
                 sessions.append(row)
-            # Include the virtual session baseline in the totals so the
-            # displayed total matches the sum of session durations at
-            # backend response time. The frontend ticker only adds the
-            # unified live clock delta on top, so there is no
-            # double-counting.
-            display_total_seconds = total_seconds + target_projected_seconds
+            # Include the virtual session's fetched snapshot duration in
+            # the totals so the displayed total matches the sum of session
+            # durations. The frontend ticker only adds the unified live
+            # clock delta on top, so there is no double-counting.
+            display_total_seconds = total_seconds + virtual_session_seconds
             return {
                 "ok": True,
                 "date": report_date,
@@ -295,14 +292,6 @@ class TimelineBridgeMixin:
                 # writes the DB.
                 "today_total_seconds": display_total_seconds,
                 "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
-                # Live projection metadata (kept for backward compat). When
-                # a virtual session was prepended, ``live_projected_session_id``
-                # is ``"virtual-live"`` and ``live_projected_seconds`` is the
-                # backend response-time baseline. Persisted-open sessions do
-                # not need this field (their ``duration_seconds`` already
-                # includes the live seconds).
-                "live_projected_session_id": target_session_id,
-                "live_projected_seconds": target_projected_seconds,
             }
         except Exception:
             logger.exception("webview bridge get_timeline failed")
@@ -331,8 +320,8 @@ class TimelineBridgeMixin:
         the raw ``window_title`` column. Raw window titles, file paths,
         and notes are not surfaced.
 
-        Each row carries ``duration_seconds`` (backend response-time
-        baseline), ``is_in_progress``, ``is_virtual``, ``is_virtual_live``,
+        Each row carries ``duration_seconds`` (fetched snapshot duration),
+        ``is_in_progress``, ``is_virtual``, ``is_virtual_live``,
         ``live_display_key``, ``activity_id``, ``source``,
         ``edit_disabled``, and ``disable_reason`` so the frontend ticker
         can locate the live row by flag and increment its duration by the

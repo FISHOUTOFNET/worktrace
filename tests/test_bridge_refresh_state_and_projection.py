@@ -369,13 +369,24 @@ def test_get_recent_activities_no_projection_for_persisted_snapshot(bridge):
 
 
 def test_get_timeline_returns_required_projection_fields(bridge):
-    """Section 2: ``get_timeline`` payload must carry
-    ``live_projected_session_id`` and ``live_projected_seconds``."""
+    """Section 2: ``get_timeline`` payload must NOT carry the legacy
+    root-level ``live_projected_session_id`` / ``live_projected_seconds``
+    fields. Live projection metadata lives only on the per-row contract
+    (``live_state``, ``stable_live_key_hash``, ``live_started_at_epoch_ms``,
+    ``carry_seconds``)."""
     _set_snapshot(None)
     result = bridge.get_timeline()
     assert result["ok"] is True
-    assert "live_projected_session_id" in result
-    assert "live_projected_seconds" in result
+    # The root-level projection fields have been removed; assert they
+    # are absent so a future regression is caught.
+    assert "live_projected_session_id" not in result, (
+        "get_timeline must not return legacy root-level "
+        "live_projected_session_id"
+    )
+    assert "live_projected_seconds" not in result, (
+        "get_timeline must not return legacy root-level "
+        "live_projected_seconds"
+    )
     # Legacy live clock fields have been removed from the timeline
     # payload; assert they are absent so a future regression is caught.
     assert "snapshot_at_epoch_ms" not in result, (
@@ -392,40 +403,46 @@ def test_get_timeline_returns_required_projection_fields(bridge):
 
 def test_get_timeline_does_not_project_historical_date(bridge):
     """Section 12: historical dates must NOT be live-projected. Only today
-    is eligible for projection."""
+    is eligible for projection. No virtual session is prepended and the
+    root-level projection fields are absent."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     result = bridge.get_timeline(yesterday)
     assert result["ok"] is True
-    assert result["live_projected_session_id"] == ""
-    assert result["live_projected_seconds"] == 0
+    assert "live_projected_session_id" not in result
+    assert "live_projected_seconds" not in result
     for s in result["sessions"]:
         assert s["is_live_projected"] is False
+        assert s["is_virtual_live"] is False
 
 
 def test_get_timeline_no_projection_for_persisted_snapshot(bridge):
     """Section 12: when the current snapshot is already persisted, no
     short-activity projection is applied (avoid double counting). The
-    real ``is_in_progress`` session alone carries the live duration."""
+    real ``is_in_progress`` session alone carries the live duration.
+    Root-level projection fields are absent."""
     _set_snapshot(
         _normal_snapshot(is_persisted=True, persisted_activity_id=123)
     )
     result = bridge.get_timeline()
-    assert result["live_projected_session_id"] == ""
-    assert result["live_projected_seconds"] == 0
+    assert "live_projected_session_id" not in result
+    assert "live_projected_seconds" not in result
 
 
 def test_get_timeline_no_projection_for_paused_snapshot(bridge):
     """Section 12: paused / idle / excluded / error snapshots must NOT
-    produce Timeline projection."""
+    produce Timeline projection. No virtual session is prepended and the
+    root-level projection fields are absent."""
     for status in ("idle", "paused", "excluded", "error"):
         _set_snapshot(_normal_snapshot(status=status))
         result = bridge.get_timeline()
-        assert result["live_projected_session_id"] == "", (
-            "paused/idle/excluded/error snapshot must not produce Timeline "
-            "projection (status=" + status + ")"
+        assert "live_projected_session_id" not in result, (
+            "paused/idle/excluded/error snapshot must not produce root-level "
+            "projection field (status=" + status + ")"
         )
-        assert result["live_projected_seconds"] == 0
+        assert "live_projected_seconds" not in result
+        for s in result["sessions"]:
+            assert s["is_virtual_live"] is False
 
 
 # --- get_timeline_session_details: duration_seconds -----------------------
@@ -510,33 +527,36 @@ def test_get_recent_activities_prepends_virtual_item_for_normal_snapshot(bridge)
 def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
     """Phase R3: when the current snapshot is a normal unpersisted
     activity, ``get_timeline`` must prepend a virtual live session.
-    ``today_total_seconds`` must include the virtual session's baseline so
-    the displayed total is non-zero even when there are no DB sessions."""
+    ``today_total_seconds`` must include the virtual session's fetched
+    snapshot duration so the displayed total is non-zero even when there
+    are no DB sessions. Root-level projection fields are absent; live
+    metadata lives only on the per-row contract."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     result = bridge.get_timeline()
     assert result["ok"] is True
-    # Verification item 21: the virtual session id must include a stable
-    # live identity hash, not the fixed "virtual-live" string.
-    assert result["live_projected_session_id"].startswith("virtual-live:")
-    assert result["live_projected_seconds"] > 0
+    # Root-level projection fields must NOT be present.
+    assert "live_projected_session_id" not in result
+    assert "live_projected_seconds" not in result
     sessions = result["sessions"]
     assert len(sessions) >= 1, "virtual live session must be prepended"
     virtual = sessions[0]
+    # Virtual live session contract fields.
     assert virtual["is_virtual"] is True
     assert virtual["is_virtual_live"] is True
+    assert virtual["live_state"] == "virtual"
+    assert virtual["session_id"].startswith("virtual-live:")
     assert virtual["source"] == "snapshot"
     assert virtual["edit_disabled"] is True
     assert virtual["is_in_progress"] is True
     assert virtual["live_display_key"]
-    # Verification item 12/16/21: stable_live_key / stable_live_key_hash
-    # must be present so the frontend continuity key survives the
-    # virtual → persisted_open transition.
+    # Unified live clock fields (scheme A).
     assert virtual["stable_live_key"]
     assert virtual["stable_live_key_hash"]
-    assert virtual["session_id"].startswith("virtual-live:")
-    # Timeline total must not be 0 when a virtual session exists.
+    assert int(virtual["live_started_at_epoch_ms"]) > 0
+    assert int(virtual["carry_seconds"]) >= 0
+    assert int(virtual["duration_seconds"]) > 0
+    # Timeline total must include the virtual session's duration.
     assert int(result["today_total_seconds"]) > 0
-    # The virtual session's duration must be included in the total.
     assert int(result["today_total_seconds"]) >= int(virtual["duration_seconds"])
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from worktrace.webview_ui import bridge as bridge_module
+from worktrace.webview_ui import bridge_rules as bridge_rules_module
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
@@ -2856,15 +2857,15 @@ def test_folder_bridge_methods_error_message_maps_are_distinct_and_stable():
     # ``not_found`` and ``operation_failed`` to distinct, stable Chinese
     # messages so a folder-update failure is never reported with a
     # folder-delete message and vice versa.
-    assert bridge_module._PROJECT_RULE_FOLDER_CREATE_MESSAGES["operation_failed"] == "新增文件夹规则失败"
-    assert bridge_module._PROJECT_RULE_FOLDER_UPDATE_MESSAGES["not_found"] == "文件夹规则不存在"
-    assert bridge_module._PROJECT_RULE_FOLDER_UPDATE_MESSAGES["operation_failed"] == "保存文件夹规则失败"
-    assert bridge_module._PROJECT_RULE_FOLDER_DELETE_MESSAGES["not_found"] == "文件夹规则不存在"
-    assert bridge_module._PROJECT_RULE_FOLDER_DELETE_MESSAGES["operation_failed"] == "删除文件夹规则失败"
+    assert bridge_rules_module._PROJECT_RULE_FOLDER_CREATE_MESSAGES["operation_failed"] == "新增文件夹规则失败"
+    assert bridge_rules_module._PROJECT_RULE_FOLDER_UPDATE_MESSAGES["not_found"] == "文件夹规则不存在"
+    assert bridge_rules_module._PROJECT_RULE_FOLDER_UPDATE_MESSAGES["operation_failed"] == "保存文件夹规则失败"
+    assert bridge_rules_module._PROJECT_RULE_FOLDER_DELETE_MESSAGES["not_found"] == "文件夹规则不存在"
+    assert bridge_rules_module._PROJECT_RULE_FOLDER_DELETE_MESSAGES["operation_failed"] == "删除文件夹规则失败"
     # The create map must NOT have a ``not_found`` entry (create uses
     # ``project_not_found`` instead).
-    assert "not_found" not in bridge_module._PROJECT_RULE_FOLDER_CREATE_MESSAGES
-    assert bridge_module._PROJECT_RULE_FOLDER_CREATE_MESSAGES["project_not_found"] == "项目不存在或不可用"
+    assert "not_found" not in bridge_rules_module._PROJECT_RULE_FOLDER_CREATE_MESSAGES
+    assert bridge_rules_module._PROJECT_RULE_FOLDER_CREATE_MESSAGES["project_not_found"] == "项目不存在或不可用"
 
 
 def test_create_project_folder_rule_never_forwards_bool_project_id_to_api(monkeypatch):
@@ -4705,13 +4706,13 @@ def test_preview_and_backfill_payloads_are_json_serializable(monkeypatch):
     assert backfill["ok"] is True
 
 
-def test_bridge_re_exports_5h_message_maps_for_test_compatibility():
-    # Phase 5H regression lock: ``bridge.py`` must re-export the 5H message
-    # maps so existing tests that import from ``bridge`` (not
-    # ``bridge_rules``) continue to work.
-    from worktrace.webview_ui.bridge import (
-        _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES,
+def test_bridge_rules_5h_message_maps_are_stable_chinese():
+    # Phase 5H regression lock: the 5H message maps owned by
+    # ``bridge_rules`` must remain stable Chinese so impact preview and
+    # backfill error codes map to the documented messages.
+    from worktrace.webview_ui.bridge_rules import (
         _PROJECT_RULE_BACKFILL_MESSAGES,
+        _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES,
     )
 
     assert _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES["invalid_input"] == "操作无效"
@@ -5327,12 +5328,13 @@ def test_batch_bridge_payloads_are_json_serializable(monkeypatch):
     assert status["ok"] is True
 
 
-def test_bridge_re_exports_5i_batch_message_maps_for_test_compatibility():
-    # Phase 5I regression lock: ``bridge.py`` must re-export the 3 batch
-    # message maps so tests importing from ``bridge`` continue to work.
-    from worktrace.webview_ui.bridge import (
-        _PROJECT_RULE_BATCH_PREVIEW_MESSAGES,
+def test_bridge_rules_5i_batch_message_maps_are_stable_chinese():
+    # Phase 5I regression lock: the 3 batch message maps owned by
+    # ``bridge_rules`` must remain stable Chinese so batch preview / apply
+    # / toggle error codes map to the documented messages.
+    from worktrace.webview_ui.bridge_rules import (
         _PROJECT_RULE_BATCH_APPLY_MESSAGES,
+        _PROJECT_RULE_BATCH_PREVIEW_MESSAGES,
         _PROJECT_RULE_BATCH_TOGGLE_MESSAGES,
     )
 

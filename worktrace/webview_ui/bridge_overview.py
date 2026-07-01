@@ -192,14 +192,13 @@ class OverviewBridgeMixin:
           the live seconds from ``timeline_service._live_duration_for_row``.
         - **closed DB item** — a finalized session row.
 
-        Each item carries ``duration_seconds`` (backend response-time
-        baseline), ``is_in_progress``, ``is_live_projected`` (kept for
-        backward compat; true for virtual live items), ``is_virtual``,
-        ``is_virtual_live``, ``live_display_key``, ``activity_id``,
-        ``source``, and ``edit_disabled``. The frontend ticker locates the
-        live item by flag (not by a single-scenario index) and increments
-        its ``duration_seconds`` by the unified live clock delta
-        (``live_started_at_epoch_ms`` + ``carry_seconds``).
+        Each item carries ``duration_seconds`` (fetched snapshot duration),
+        ``is_in_progress``, ``is_live_projected`` (true for virtual live
+        items), ``is_virtual``, ``is_virtual_live``, ``live_display_key``,
+        ``activity_id``, ``source``, and ``edit_disabled``. The frontend
+        ticker locates the live item by flag (not by a single-scenario index)
+        and increments its ``duration_seconds`` by the unified live clock
+        delta (``live_started_at_epoch_ms`` + ``carry_seconds``).
         """
         try:
             today = timeline_api.get_default_report_date()
@@ -326,7 +325,7 @@ class OverviewBridgeMixin:
         (``live_started_at_epoch_ms``, ``carry_seconds``,
         ``stable_live_key``, ``stable_live_key_hash``) so the frontend
         ticker can compute the live duration from a stable start-time
-        anchor instead of a response-time baseline (verification item 6).
+        anchor (verification item 6).
 
         The bridge method only calls the ``settings_api.get_refresh_state``
         facade and wraps the result with a stable error payload. It does

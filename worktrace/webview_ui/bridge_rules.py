@@ -17,9 +17,9 @@ over verbatim:
 the 12 Project Rules bridge method names stay on ``WebViewBridge`` and the
 frontend / tests see no API-surface change. The module-level payload
 helpers (``_project_rules_project_payload`` etc.) and the Chinese
-error-message maps (``_PROJECT_RULE_WRITE_MESSAGES`` etc.) live here now;
-``bridge.py`` re-exports the names that existing tests reference via
-``bridge_module._PROJECT_RULE_...`` for backward compatibility.
+error-message maps (``_PROJECT_RULE_WRITE_MESSAGES`` etc.) live here and
+are imported from this module directly; ``bridge.py`` no longer re-exports
+them.
 """
 
 from __future__ import annotations

@@ -7,15 +7,15 @@ ActivityLifecycle hard cutover (see architecture.md §"Write side"):
   open-row lifecycle transitions (start / persist / close / close-all /
   midnight / recovery).
 - ``activity_service`` is a pure low-level CRUD helper: it must NOT import
-  ``activity_lifecycle_service`` and its old lifecycle-named methods
-  (``create_activity`` / ``close_activity`` / ``close_current_open_record``)
-  must NOT be called from production paths for open-row lifecycle.
+  ``activity_lifecycle_service`` and its low-level lifecycle helpers
+  (``create_activity`` / ``close_activity``) must NOT be called from
+  production paths for open-row lifecycle.
 - Production callers (collector / state_machine / runtime / recovery) must
-  NOT call the old ``activity_service.close_current_open_record()`` entry
-  or use direct SQL ``UPDATE activity_log SET end_time`` to close open rows.
+  NOT use direct SQL ``UPDATE activity_log SET end_time`` to close open rows;
+  they must route through ``activity_lifecycle_service``.
 - ``activity_lifecycle_service`` must NOT delegate close-finalize to the
-  old ``activity_service.close_activity()`` / ``close_current_open_record()``
-  methods; it owns the close + finalize itself.
+  old ``activity_service.close_activity()`` method; it owns the close +
+  finalize itself.
 - ``recovery_service`` must NOT close open rows via direct SQL; it must
   delegate to the lifecycle recovery helpers.
 
@@ -71,9 +71,9 @@ def test_activity_service_does_not_import_activity_lifecycle_service() -> None:
 def test_activity_lifecycle_service_does_not_call_old_lifecycle_close_methods() -> None:
     """``activity_lifecycle_service`` must own close + finalize itself. It
     must NOT delegate the close-finalize step to the old
-    ``activity_service.close_activity()`` or
-    ``activity_service.close_current_open_record()`` methods — those are
-    compat aliases that no longer carry lifecycle semantics.
+    ``activity_service.close_activity()`` /
+    ``activity_service.create_activity()`` methods — those are low-level
+    CRUD helpers that no longer carry lifecycle semantics.
 
     The facade IS allowed to call low-level helpers
     (``close_all_open_rows`` / ``close_activity_row`` /
@@ -83,7 +83,6 @@ def test_activity_lifecycle_service_does_not_call_old_lifecycle_close_methods() 
     source = _read(SERVICES_DIR / "activity_lifecycle_service.py")
     for forbidden in (
         "activity_service.close_activity(",
-        "activity_service.close_current_open_record(",
         "activity_service.create_activity(",
     ):
         assert forbidden not in source, (
@@ -94,20 +93,16 @@ def test_activity_lifecycle_service_does_not_call_old_lifecycle_close_methods() 
 
 
 # ---------------------------------------------------------------------------
-# collector / state_machine must not call old close entries
+# collector / state_machine must route close-all through the lifecycle facade
 # ---------------------------------------------------------------------------
 
 
-def test_state_machine_does_not_call_old_close_current_open_record() -> None:
+def test_state_machine_routes_close_all_through_lifecycle_facade() -> None:
     """``collector/state_machine.py`` stopped / paused / time_jump paths
     must use ``activity_lifecycle_service.close_all_open_activities(...)``
-    instead of the old ``activity_service.close_current_open_record()``.
-    The old entry is a compat alias for tests / fixtures only."""
+    to close open rows. ``activity_service`` low-level helpers must NOT be
+    called directly for close-all."""
     source = _read(COLLECTOR_DIR / "state_machine.py")
-    assert "activity_service.close_current_open_record" not in source, (
-        "state_machine.py must not call activity_service.close_current_open_record(); "
-        "use activity_lifecycle_service.close_all_open_activities instead"
-    )
     # The state machine must route close-all through the lifecycle facade.
     assert "activity_lifecycle_service.close_all_open_activities" in source, (
         "state_machine.py must call activity_lifecycle_service.close_all_open_activities "
@@ -116,20 +111,16 @@ def test_state_machine_does_not_call_old_close_current_open_record() -> None:
 
 
 # ---------------------------------------------------------------------------
-# runtime / app_runtime must not call old close entries
+# runtime / app_runtime must route close-all through the lifecycle facade
 # ---------------------------------------------------------------------------
 
 
-def test_app_runtime_does_not_call_old_close_current_open_record() -> None:
+def test_app_runtime_routes_close_all_through_lifecycle_facade() -> None:
     """``runtime/app_runtime.py`` shutdown must use
-    ``activity_lifecycle_service.close_all_open_activities(...)`` instead
-    of the old ``activity_service.close_current_open_record()``. The
-    runtime should not import ``activity_service`` just for close-all."""
+    ``activity_lifecycle_service.close_all_open_activities(...)`` to close
+    open rows. The runtime should not import ``activity_service`` just for
+    close-all."""
     source = _read(RUNTIME_DIR / "app_runtime.py")
-    assert "activity_service.close_current_open_record" not in source, (
-        "app_runtime.py must not call activity_service.close_current_open_record(); "
-        "use activity_lifecycle_service.close_all_open_activities for shutdown close-all"
-    )
     # The runtime must route shutdown close-all through the lifecycle facade.
     assert "activity_lifecycle_service.close_all_open_activities" in source, (
         "app_runtime.py must call activity_lifecycle_service.close_all_open_activities "
@@ -174,12 +165,11 @@ def test_recovery_service_does_not_direct_sql_close_open_row() -> None:
 
 def test_recovery_service_does_not_call_old_close_entries() -> None:
     """``recovery_service.py`` must not call the old
-    ``activity_service.close_activity()`` / ``close_current_open_record()``
-    for recovery close. It must use the lifecycle recovery helpers."""
+    ``activity_service.close_activity()`` for recovery close. It must use
+    the lifecycle recovery helpers."""
     source = _read(SERVICES_DIR / "recovery_service.py")
     for forbidden in (
         "activity_service.close_activity(",
-        "activity_service.close_current_open_record(",
     ):
         assert forbidden not in source, (
             "recovery_service.py must not call " + forbidden + "; use "
@@ -188,14 +178,14 @@ def test_recovery_service_does_not_call_old_close_entries() -> None:
 
 
 # ---------------------------------------------------------------------------
-# activity_service old lifecycle methods must not carry finalize semantics
+# activity_service low-level helpers must not carry finalize semantics
 # ---------------------------------------------------------------------------
 
 
 def test_activity_service_close_methods_do_not_call_finalize() -> None:
-    """The old ``activity_service.close_activity()`` /
-    ``close_current_open_record()`` methods are compat aliases for tests /
-    fixtures. They must NOT call ``finalize_closed_activity_ids`` or
+    """The ``activity_service.close_activity()`` method is a low-level CRUD
+    helper for tests / fixtures. It must NOT call
+    ``finalize_closed_activity_ids`` or
     ``project_inference_service.process_new_activity`` — those lifecycle
     semantics live only in the lifecycle facade now.
 
@@ -207,7 +197,7 @@ def test_activity_service_close_methods_do_not_call_finalize() -> None:
     source = _read(SERVICES_DIR / "activity_service.py")
     # Locate the close_activity function body and verify it does not
     # call the finalize helper or project inference.
-    for func_name in ("close_activity", "close_current_open_record"):
+    for func_name in ("close_activity",):
         pos = source.find("def " + func_name + "(")
         if pos == -1:
             continue  # function may have been removed entirely — that's fine
@@ -233,11 +223,10 @@ def test_activity_service_create_activity_does_not_close_old_rows() -> None:
     assert pos != -1, "activity_service must define create_activity"
     next_def = source.find("\ndef ", pos + 1)
     body = source[pos:next_def if next_def != -1 else pos + 3000]
-    # Must not call close_all_open_rows / close_current_open_record inside
+    # Must not call close_all_open_rows / close_activity_row inside
     # create_activity (closing old rows is the lifecycle facade's job).
     for forbidden in (
         "close_all_open_rows",
-        "close_current_open_record",
         "close_activity_row",
         "finalize_closed_activity_ids",
     ):

@@ -968,7 +968,7 @@ def test_bridge_set_window_does_not_start_gui():
 def test_bridge_export_error_messages_are_stable_chinese():
     """All error codes map to stable Chinese messages; unknown codes
     collapse to '导出失败'."""
-    from worktrace.webview_ui.bridge import _STATISTICS_EXPORT_ERROR_MESSAGES
+    from worktrace.webview_ui.bridge_statistics import _STATISTICS_EXPORT_ERROR_MESSAGES
 
     expected = {
         "invalid_date": "请选择有效日期",

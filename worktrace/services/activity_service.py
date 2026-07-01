@@ -160,7 +160,7 @@ def create_activity(
     manual_override: bool = False,
     resource: DetectedResource | None = None,
 ) -> int:
-    """Low-level insert of a new open activity row (compat alias).
+    """Low-level insert of a new open activity row.
 
     .. warning::
 
@@ -171,8 +171,7 @@ def create_activity(
         Facade). Tests / fixtures may use this helper to construct data
         directly.
 
-    Equivalent to :func:`insert_activity_row`. Retained under the
-    historical name for test/fixture compatibility.
+    Equivalent to :func:`insert_activity_row`.
     """
     return insert_activity_row(
         app_name=app_name,
@@ -265,7 +264,7 @@ def _detect_resource_for_activity(
 
 
 def close_activity(activity_id: int, end_time: str, duration_seconds: int | None = None) -> None:
-    """Low-level close of a single open activity row (compat alias).
+    """Low-level close of a single open activity row.
 
     Pure CRUD: does NOT run project inference / automatic rules.
     Production open-row lifecycle must use
@@ -273,18 +272,6 @@ def close_activity(activity_id: int, end_time: str, duration_seconds: int | None
     and then finalizes. Tests / fixtures may use this helper directly.
     """
     close_activity_row(activity_id, end_time, duration_seconds=duration_seconds)
-
-
-def close_current_open_record(end_time: str | None = None) -> None:
-    """Low-level close of every open activity row (``end_time IS NULL``).
-
-    Pure CRUD: does NOT run project inference / automatic rules.
-    Production open-row lifecycle must use
-    ``activity_lifecycle_service.close_all_open_activities`` which calls
-    :func:`close_all_open_rows` and then finalizes. Tests / fixtures may
-    use this helper directly.
-    """
-    close_all_open_rows(end_time)
 
 
 def increment_activity_duration(activity_id: int, seconds: int) -> None:

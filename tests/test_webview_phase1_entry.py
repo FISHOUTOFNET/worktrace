@@ -4,8 +4,8 @@ These tests cover the destructive Phase 1 migration invariants:
 
 - ``worktrace.main.main([])`` defaults to WebView, not the legacy Tkinter
   ``WorkTraceApp``;
-- the legacy ``--webview`` flag is a no-op compatibility flag (it does not
-  change behavior, and omitting it still starts the WebView UI);
+- ``main`` ignores any command-line args (there is no argparse layer;
+  WebView is the only UI);
 - when the WebView2 Runtime is missing on Windows, ``webview_main.main``
   returns a non-zero exit code, prints a clear Chinese install prompt, and
   does not start any Tkinter UI;
@@ -52,9 +52,9 @@ def test_main_defaults_to_webview_without_instantiating_tkinter():
     assert "WorkTraceApp" not in source
 
 
-def test_main_with_webview_compat_flag_behaves_same_as_no_flag():
-    """``main(["--webview"])`` and ``main([])`` must both start the WebView
-    UI. The legacy flag is a no-op kept only for backwards compatibility."""
+def test_main_ignores_all_args_and_starts_webview():
+    """``main`` must ignore any args and always start the WebView UI.
+    There is no argparse layer; args are silently discarded."""
     import worktrace.main as main_mod
 
     calls = []
@@ -65,7 +65,7 @@ def test_main_with_webview_compat_flag_behaves_same_as_no_flag():
 
     with patch("worktrace.webview_main.main", fake_webview_main):
         main_mod.main([])
-        main_mod.main(["--webview"])
+        main_mod.main(["--unknown"])
         main_mod.main(["--other-flag"])
 
     assert calls == ["webview", "webview", "webview"]

@@ -52,17 +52,17 @@ def test_project_stats_use_short_context_merge_without_changing_raw_project(temp
     activity_service.finalize_created_activity(a1)
     # create_activity no longer auto-closes old rows (lifecycle hard
     # cutover); close the previous open activity before creating the next.
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    activity_service.close_all_open_rows("2026-06-18 09:05:00")
     b = activity_service.create_activity(
         "Word", "word.exe", "B1.docx", project_id=project_b, start_time="2026-06-18 09:05:00"
     )
     activity_service.finalize_created_activity(b)
-    activity_service.close_current_open_record("2026-06-18 09:09:00")
+    activity_service.close_all_open_rows("2026-06-18 09:09:00")
     a2 = activity_service.create_activity(
         "Word", "word.exe", "A2.docx", project_id=project_a, start_time="2026-06-18 09:09:00"
     )
     activity_service.finalize_created_activity(a2)
-    activity_service.close_current_open_record("2026-06-18 09:15:00")
+    activity_service.close_all_open_rows("2026-06-18 09:15:00")
 
     stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
 
@@ -79,22 +79,22 @@ def test_statistics_split_cross_midnight_projects_by_calendar_day(temp_db):
     activity_service.finalize_created_activity(a1)
     # create_activity no longer auto-closes old rows (lifecycle hard
     # cutover); close the previous open activity before creating the next.
-    activity_service.close_current_open_record("2026-06-19 00:10:00")
+    activity_service.close_all_open_rows("2026-06-19 00:10:00")
     a2 = activity_service.create_activity(
         "Word", "word.exe", "A2.docx", project_id=project_a, start_time="2026-06-19 00:10:00"
     )
     activity_service.finalize_created_activity(a2)
-    activity_service.close_current_open_record("2026-06-19 00:30:00")
+    activity_service.close_all_open_rows("2026-06-19 00:30:00")
     b = activity_service.create_activity(
         "Word", "word.exe", "B1.docx", project_id=project_b, start_time="2026-06-19 00:30:00"
     )
     activity_service.finalize_created_activity(b)
-    activity_service.close_current_open_record("2026-06-19 00:45:00")
+    activity_service.close_all_open_rows("2026-06-19 00:45:00")
     idle = activity_service.create_activity(
         "空闲", "idle", "用户空闲", status="idle", start_time="2026-06-19 00:45:00"
     )
     activity_service.finalize_created_activity(idle)
-    activity_service.close_current_open_record("2026-06-19 01:15:00")
+    activity_service.close_all_open_rows("2026-06-19 01:15:00")
 
     previous = statistics_service.get_summary("2026-06-18", "2026-06-18")
     current = statistics_service.get_summary("2026-06-19", "2026-06-19")

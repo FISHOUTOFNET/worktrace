@@ -379,16 +379,17 @@ def test_timeline_session_renders_data_session_id():
     )
 
 
-# --- Section 6/7: ticker uses unified projection helper ------------------
+# --- Section 6/7: ticker uses unified live clock model ------------------
 
 
-def test_core_js_defines_projection_helpers():
-    """Section 6: core.js must define the unified projection helpers
-    ``projectLiveSeconds``, ``readDurationSecondsFromText``,
-    ``renderDurationMonotonic``, and ``resetMonotonicRenderState``."""
+def test_core_js_defines_monotonic_render_helpers():
+    """Section 6: core.js must define the monotonic-render helpers used by
+    the unified live clock (``live_started_at_epoch_ms + carry_seconds``).
+    The ticker computes live deltas from ``live_started_at_epoch_ms`` +
+    ``carry_seconds`` directly; no separate legacy projection helper
+    exists."""
     source = read_js("core.js")
     for name in (
-        "projectLiveSeconds",
         "readDurationSecondsFromText",
         "renderDurationMonotonic",
         "resetMonotonicRenderState",
@@ -685,7 +686,7 @@ def test_render_session_details_skips_rerender_when_editing():
 def test_ticker_uses_unified_live_clock_scheme_a():
     """Verification item 6: the ticker must use the unified live clock
     (scheme A: ``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
-    instead of a response-time baseline. ``tickerDeltaSeconds`` must read
+    anchored on a stable start-time anchor. ``tickerDeltaSeconds`` must read
     ``live_started_at_epoch_ms`` and ``carry_seconds`` from the payload.
     It must NOT fall back to ``snapshot_at_epoch_ms``; when
     ``live_started_at_epoch_ms`` is missing it returns 0."""
@@ -707,7 +708,7 @@ def test_ticker_uses_unified_live_clock_scheme_a():
 
 def test_frontend_js_does_not_contain_legacy_live_clock_fields():
     """Static boundary test (spec §VIII Live clock boundary): the entire
-    frontend JS bundle must NOT contain the legacy response-time baseline
+    frontend JS bundle must NOT contain the legacy baseline
     field names ``snapshot_at_epoch_ms`` or ``baseline_epoch_ms`` anywhere.
     The unified live clock uses only ``live_started_at_epoch_ms`` +
     ``carry_seconds``; the old baseline scheme has been removed entirely

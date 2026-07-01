@@ -1133,9 +1133,9 @@ lifecycle commands through `activity_lifecycle_service` (Section 23.9).
 
 `create_activity(...)` is a pure low-level insert: it does **not** close
 pre-existing open rows and does **not** run project inference / automatic
-rules. `close_activity(...)` and `close_current_open_record(...)` are
-compat aliases for tests / fixtures / manual closed-row operations: they
-do **not** run `finalize_closed_activity_ids` or
+rules. `close_activity(...)` is a low-level helper for tests / fixtures /
+manual closed-row operations: it does **not** run
+`finalize_closed_activity_ids` or
 `project_inference_service.process_new_activity`. All close-finalize
 semantics live exclusively in the lifecycle facade.
 

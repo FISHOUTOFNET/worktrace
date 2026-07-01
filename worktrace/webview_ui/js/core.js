@@ -520,11 +520,7 @@
     // --- Phase 6H-followup: unified projection / monotonic helpers -------
     // These helpers are shared by Overview KPI, current activity, recent,
     // Timeline total, Timeline session, and Timeline details so every live
-    // target uses the same projection + monotonic-render contract.
-    //
-    // ``projectLiveSeconds`` computes the live display seconds from a
-    // backend baseline plus the wall-clock delta since ``baselineEpochMs``.
-    // It never writes the DB and never calls the bridge.
+    // target uses the same monotonic-render contract.
     //
     // ``readDurationSecondsFromText`` reads the ``data-duration-seconds``
     // attribute (preferred) or parses the ``HH:MM:SS`` text as a fallback.
@@ -536,19 +532,7 @@
     // the DOM is kept unchanged. A larger decrease (real state change) or
     // ``allowDecrease === true`` always overwrites. The backend refresh
     // path must reset the monotonic state (or pass ``allowDecrease = true``)
-    // so the real baseline can replace the projected value.
-    function projectLiveSeconds(baseSeconds, baselineEpochMs) {
-        var base = parseInt(baseSeconds, 10) || 0;
-        if (base < 0) base = 0;
-        if (!baselineEpochMs) return base;
-        var baseline = parseInt(baselineEpochMs, 10);
-        if (!baseline || isNaN(baseline)) return base;
-        var delta = Math.floor((Date.now() - baseline) / 1000);
-        if (delta < 0) delta = 0;
-        return base + delta;
-    }
-    App.projectLiveSeconds = projectLiveSeconds;
-
+    // so the real snapshot duration can replace the projected value.
     function readDurationSecondsFromText(el) {
         if (!el) return 0;
         var attr = el.getAttribute("data-duration-seconds");

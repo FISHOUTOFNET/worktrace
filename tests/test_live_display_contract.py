@@ -179,7 +179,7 @@ def test_get_refresh_state_returns_unified_live_clock_fields(bridge):
     """Verification item 4/6: ``get_refresh_state`` must return the unified
     live clock fields so the frontend ticker can use scheme A
     (``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
-    instead of a response-time baseline."""
+    anchored on a stable start-time anchor."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     state = bridge.get_refresh_state()
     assert state["ok"] is True

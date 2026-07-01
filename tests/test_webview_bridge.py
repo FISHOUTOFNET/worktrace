@@ -23,10 +23,8 @@ import pytest
 from worktrace import db
 from worktrace.resources.types import DetectedResource
 from worktrace.services import activity_service, project_service, settings_service
-from worktrace.webview_ui.bridge import (
-    WebViewBridge,
-    _safe_resource_display_name,
-)
+from worktrace.webview_ui.bridge import WebViewBridge
+from worktrace.webview_ui.bridge_common import _safe_resource_display_name
 
 
 @pytest.fixture()

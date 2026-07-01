@@ -1204,8 +1204,8 @@ def test_app_runtime_py_selects_lifecycle_boundary_suite(runner):
     lifecycle facade (activity_lifecycle_service.close_all_open_activities).
     Changes must trigger the Rule N lifecycle boundary suite in addition
     to the K2 startup/privacy-gate suite. This ensures the static
-    boundary test verifies the shutdown path does not call the old
-    activity_service.close_current_open_record entry."""
+    boundary test verifies the shutdown path routes close-all through the
+    lifecycle facade."""
     sel = runner.select_targets(["worktrace/runtime/app_runtime.py"])
     for expected in (
         "tests/test_activity_lifecycle_service.py",

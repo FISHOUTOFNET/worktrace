@@ -18,12 +18,35 @@ def _activity(app, process, title, start, project_id=None, status="normal"):
     return aid
 
 
+def _closed_activity(app, process, title, start, end, project_id=None, status="normal"):
+    """Create a closed activity with explicit start/end times.
+
+    Unlike ``_activity`` (which inserts an open row and relies on a later
+    ``close_all_open_rows`` to close everything with the same end_time),
+    this helper inserts a row and immediately closes it with the given
+    ``end``, so the activity's ``duration_seconds`` reflects the real
+    sequential interval. Required for short-gap bridging tests whose
+    assertions depend on ``REPORT_CONTEXT_SHORT_MERGE_SECONDS`` (300s).
+    """
+    aid = activity_service.insert_activity_row(
+        app,
+        process,
+        title,
+        start_time=f"2026-06-18 {start}",
+        project_id=project_id,
+        status=status,
+    )
+    activity_service.close_activity_row(aid, f"2026-06-18 {end}")
+    activity_service.finalize_created_activity(aid)
+    return aid
+
+
 def test_same_project_different_anchor_files_classify_auxiliary(temp_db):
     project = project_service.create_project("A")
     _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -35,7 +58,7 @@ def test_generic_app_between_same_project_anchors_uses_same_context_carry(temp_d
     _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
     trae = _activity("Trae CN.exe", "Trae CN.exe", "db.py - WorkTrace - Trae CN", "09:10:00")
     _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -49,7 +72,7 @@ def test_uncategorized_anchor_stops_context_scan(temp_db):
     unassigned_anchor = _activity("Word", "winword.exe", "Loose_file.docx", "09:05:00")
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -62,7 +85,7 @@ def test_same_project_anchors_classify_auxiliary_without_carry_window_limit(temp
     _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
     browser = _activity("Edge", "msedge.exe", "Search", "12:00:00")
     _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "15:00:00", project)
-    activity_service.close_current_open_record("2026-06-18 15:10:00")
+    activity_service.close_all_open_rows("2026-06-18 15:10:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -73,7 +96,7 @@ def test_next_anchor_classifies_auxiliary_inside_carry_window(temp_db):
     project = project_service.create_project("A")
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("Word", "winword.exe", "A_file.docx", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -84,7 +107,7 @@ def test_next_anchor_does_not_classify_auxiliary_outside_carry_window(temp_db):
     project = project_service.create_project("A")
     browser = _activity("Edge", "msedge.exe", "Search", "09:00:00")
     _activity("Word", "winword.exe", "A_file.docx", "09:30:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:40:00")
+    activity_service.close_all_open_rows("2026-06-18 09:40:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -97,7 +120,7 @@ def test_different_project_anchors_leave_auxiliary_uncategorized(temp_db):
     _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project_a)
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("Word", "winword.exe", "B_file.docx", "09:20:00", project_b)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -110,7 +133,7 @@ def test_interrupt_and_carry_window_stop_context(temp_db):
     interrupted = _activity("空闲", "idle", "用户空闲", "09:05:00", status="idle")
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     late = _activity("Edge", "msedge.exe", "Later Search", "09:40:00")
-    activity_service.close_current_open_record("2026-06-18 09:45:00")
+    activity_service.close_all_open_rows("2026-06-18 09:45:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -126,7 +149,7 @@ def test_excluded_and_error_do_not_stop_context_scan(temp_db):
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("异常", "error", "采集异常", "09:15:00", status="error")
     _activity("Word", "winword.exe", "A_file_2.docx", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -139,7 +162,7 @@ def test_recompute_is_idempotent_and_preserves_manual_auxiliary(temp_db):
     _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project)
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("Word", "winword.exe", "A_file_2.docx", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
     activity_service.update_activity_project(browser, manual_project, manual=True)
 
     recompute_context_assignments_for_date("2026-06-18")
@@ -157,7 +180,7 @@ def test_recompute_context_skips_when_date_fingerprint_is_unchanged(temp_db, mon
     _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project)
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("Word", "winword.exe", "A_file_2.docx", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
     calls = []
     original = context_service._load_rows
 
@@ -181,7 +204,7 @@ def test_recompute_context_runs_again_when_date_fingerprint_changes(temp_db, mon
     _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project)
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("Word", "winword.exe", "A_file_2.docx", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
     calls = []
     original = context_service._load_rows
 
@@ -194,7 +217,7 @@ def test_recompute_context_runs_again_when_date_fingerprint_changes(temp_db, mon
     recompute_context_assignments_for_date("2026-06-18")
     first_call_count = len(calls)
     _activity("Word", "winword.exe", "A_file_3.docx", "09:40:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:50:00")
+    activity_service.close_all_open_rows("2026-06-18 09:50:00")
     recompute_context_assignments_for_date("2026-06-18")
 
     assert len(calls) > first_call_count
@@ -208,7 +231,7 @@ def test_clipboard_transition_context_beats_anchor_context(temp_db):
     source = _activity("Edge", "msedge.exe", "B Dashboard", "09:04:00", project_b)
     target = _activity("Edge", "msedge.exe", "Search", "09:04:08")
     _activity("Word", "winword.exe", "A_file_2.docx", "09:10:00", project_a)
-    activity_service.close_current_open_record("2026-06-18 09:20:00")
+    activity_service.close_all_open_rows("2026-06-18 09:20:00")
     activity_service.update_activity_project(target, project_a, manual=False)
     clipboard_service.record_clipboard_event(
         source,
@@ -235,7 +258,7 @@ def test_clipboard_transition_does_not_override_direct_conflict(temp_db):
     project_b = project_service.create_project("B")
     source = _activity("Edge", "msedge.exe", "B Dashboard", "09:00:00", project_b)
     target = _activity("Word", "winword.exe", "A_file.docx", "09:00:08", project_a)
-    activity_service.close_current_open_record("2026-06-18 09:10:00")
+    activity_service.close_all_open_rows("2026-06-18 09:10:00")
     clipboard_service.record_clipboard_event(
         source,
         "copied from B",
@@ -252,7 +275,7 @@ def test_clipboard_transition_expires_after_ten_seconds(temp_db):
     project_b = project_service.create_project("B")
     source = _activity("Edge", "msedge.exe", "B Dashboard", "09:00:00", project_b)
     target = _activity("Edge", "msedge.exe", "Search", "09:00:20")
-    activity_service.close_current_open_record("2026-06-18 09:10:00")
+    activity_service.close_all_open_rows("2026-06-18 09:10:00")
     clipboard_service.record_clipboard_event(
         source,
         "copied from B",
@@ -286,10 +309,9 @@ def test_short_gap_same_project_bridges_middle_word_docx(temp_db):
     """A short uncategorized .docx anchor between two same-project anchors
     is bridged to the surrounding project."""
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:03:00")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", "09:05:00", project)
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -303,10 +325,9 @@ def test_short_gap_middle_anchor_is_resource_anchor(temp_db):
     and extension in ANCHOR_FILE_EXTENSIONS). This confirms the bridging
     covers the 'middle row itself is a context anchor' scenario."""
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:03:00")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", "09:05:00", project)
 
     row = activity_service.get_activity(middle)
     assert row.get("resource_is_anchor") is True
@@ -321,10 +342,9 @@ def test_short_gap_middle_anchor_not_skipped_by_is_context_anchor(temp_db):
     verified by confirming the middle anchor gets bridged (if it were
     skipped, it would stay uncategorized)."""
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:03:00")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", "09:05:00", project)
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -337,10 +357,9 @@ def test_short_gap_persists_assignment_with_anchor_context_source(temp_db):
     """The bridging must persist to ``activity_project_assignment`` with
     source ``anchor_context`` and sync ``activity_log.project_id``."""
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:03:00")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", "09:05:00", project)
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -364,11 +383,10 @@ def test_short_gap_exceeding_threshold_does_not_bridge(temp_db):
     ``REPORT_CONTEXT_SHORT_MERGE_SECONDS`` (300s), the middle anchor is
     NOT bridged."""
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:10:00")
     # 09:01:00 → 09:10:00 = 540s > 300s threshold
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:10:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:15:00")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:10:00", "09:15:00", project)
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -381,10 +399,9 @@ def test_short_gap_different_project_anchors_do_not_bridge(temp_db):
     middle anchor is NOT bridged."""
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")
-    _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project_a)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
-    _activity("Word", "winword.exe", "B_file.docx", "09:03:00", project_b)
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    _closed_activity("Word", "winword.exe", "A_file.docx", "09:00:00", "09:01:00", project_a)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:03:00")
+    _closed_activity("Word", "winword.exe", "B_file.docx", "09:03:00", "09:05:00", project_b)
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -397,10 +414,9 @@ def test_short_gap_does_not_override_manual_assignment(temp_db):
     by short-gap bridging."""
     project = project_service.create_project("A")
     manual_project = project_service.create_project("Manual")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:03:00")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", "09:05:00", project)
     # Manually assign the middle to a different project.
     activity_service.update_activity_project(middle, manual_project, manual=True)
 
@@ -420,11 +436,10 @@ def test_short_gap_paused_interrupt_prevents_bridging(temp_db):
     """A paused activity between the middle anchor and the next anchor
     prevents bridging (``_find_next_anchor`` returns None on interrupt)."""
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
-    _activity("已暂停", "paused", "用户暂停", "09:02:00", status="paused")
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:02:00")
+    _closed_activity("已暂停", "paused", "用户暂停", "09:02:00", "09:03:00", status="paused")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", "09:05:00", project)
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -436,11 +451,10 @@ def test_short_gap_idle_interrupt_prevents_bridging(temp_db):
     """An idle activity between the middle anchor and the next anchor
     prevents bridging."""
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
-    _activity("空闲", "idle", "用户空闲", "09:02:00", status="idle")
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:02:00")
+    _closed_activity("空闲", "idle", "用户空闲", "09:02:00", "09:03:00", status="idle")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", "09:05:00", project)
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -452,13 +466,11 @@ def test_short_gap_hidden_middle_prevents_bridging(temp_db):
     """A hidden middle activity prevents bridging (all middle activities
     must be visible)."""
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle = _activity("Word", "winword.exe", "Loose_file.docx", "09:01:00")
-    activity_service.close_current_open_record("2026-06-18 09:05:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:05:00")
     # Hide the middle activity after closing.
     activity_service.hide_activity(middle)
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:06:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:08:00")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:06:00", "09:08:00", project)
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -471,15 +483,16 @@ def test_short_gap_bridges_multiple_middle_anchors(temp_db):
     """Multiple short middle anchors between the same-project anchors are
     all bridged when the total duration is under the threshold."""
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
-    middle1 = _activity("Word", "winword.exe", "Loose_1.docx", "09:01:00")
-    middle2 = _activity("Word", "winword.exe", "Loose_2.docx", "09:02:00")
-    _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:04:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:06:00")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    # middle1: 09:01:00 → 09:02:00 = 60s
+    middle1 = _closed_activity("Word", "winword.exe", "Loose_1.docx", "09:01:00", "09:02:00")
+    # middle2: 09:02:00 → 09:04:00 = 120s
+    middle2 = _closed_activity("Word", "winword.exe", "Loose_2.docx", "09:02:00", "09:04:00")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:04:00", "09:06:00", project)
 
     recompute_context_assignments_for_date("2026-06-18")
 
-    # Total middle duration: 09:01:00 → 09:04:00 = 180s < 300s
+    # Total middle duration: 60 + 120 = 180s < 300s
     assert activity_service.get_activity(middle1)["project_id"] == project
     assert activity_service.get_activity(middle2)["project_id"] == project
 
@@ -538,7 +551,7 @@ def test_keyword_rule_direct_anchor_bridge(temp_db):
     a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
     b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
     c = _activity("Edge", "msedge.exe", "Keyword C", "09:20:00")
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
     _set_direct_assignment_source(a, "keyword_rule", project)
     _set_direct_assignment_source(c, "keyword_rule", project)
 
@@ -558,7 +571,7 @@ def test_folder_rule_direct_anchor_bridge(temp_db):
     a = _activity("Edge", "msedge.exe", "Folder A", "09:00:00")
     b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
     c = _activity("Edge", "msedge.exe", "Folder C", "09:20:00")
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
     _set_direct_assignment_source(a, "folder_rule", project)
     _set_direct_assignment_source(c, "folder_rule", project)
 
@@ -578,7 +591,7 @@ def test_manual_direct_anchor_bridge(temp_db):
     a = _activity("Edge", "msedge.exe", "Manual A", "09:00:00")
     b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
     c = _activity("Edge", "msedge.exe", "Manual C", "09:20:00")
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
     _set_direct_assignment_source(a, "manual", project)
     _set_direct_assignment_source(c, "manual", project)
 
@@ -599,7 +612,7 @@ def test_direct_anchor_bridge_does_not_cross_different_projects(temp_db):
     a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
     b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
     c = _activity("Edge", "msedge.exe", "Keyword C", "09:20:00")
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
     _set_direct_assignment_source(a, "keyword_rule", p1)
     _set_direct_assignment_source(c, "keyword_rule", p2)
 
@@ -618,7 +631,7 @@ def test_direct_anchor_bridge_does_not_override_manual(temp_db):
     a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
     b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
     c = _activity("Edge", "msedge.exe", "Keyword C", "09:20:00")
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
     _set_direct_assignment_source(a, "keyword_rule", project)
     _set_direct_assignment_source(c, "keyword_rule", project)
     activity_service.update_activity_project(b, manual_project, manual=True)
@@ -646,12 +659,12 @@ def test_same_project_context_does_not_chain_as_direct_anchor(temp_db):
     """
     project = project_service.create_project("P")
     a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
-    activity_service.close_current_open_record("2026-06-18 09:01:00")
+    activity_service.close_all_open_rows("2026-06-18 09:01:00")
     _set_direct_assignment_source(a, "keyword_rule", project)
     b = _activity("Edge", "msedge.exe", "Plain B", "09:05:00")
-    activity_service.close_current_open_record("2026-06-18 09:06:00")
+    activity_service.close_all_open_rows("2026-06-18 09:06:00")
     c = _activity("Edge", "msedge.exe", "Plain C", "09:25:00")
-    activity_service.close_current_open_record("2026-06-18 09:26:00")
+    activity_service.close_all_open_rows("2026-06-18 09:26:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -673,7 +686,7 @@ def test_file_anchor_carry_source_is_anchor_context(temp_db):
     _activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", project)
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -692,7 +705,7 @@ def test_direct_anchor_carry_source_is_same_project_context(temp_db):
     a = _activity("Edge", "msedge.exe", "Keyword A", "09:00:00")
     b = _activity("Edge", "msedge.exe", "Plain B", "09:10:00")
     c = _activity("Edge", "msedge.exe", "Keyword C", "09:20:00")
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
     _set_direct_assignment_source(a, "keyword_rule", project)
     _set_direct_assignment_source(c, "keyword_rule", project)
 

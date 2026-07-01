@@ -7,7 +7,7 @@ def _activity(app, process, title, start, project_id=None, status="normal"):
     # create_activity no longer auto-closes old rows (lifecycle hard
     # cutover); close any existing open activity using the new start
     # time as the end time, mimicking the old create_activity behavior.
-    activity_service.close_current_open_record(f"2026-06-18 {start}")
+    activity_service.close_all_open_rows(f"2026-06-18 {start}")
     aid = activity_service.create_activity(
         app,
         process,
@@ -21,7 +21,7 @@ def _activity(app, process, title, start, project_id=None, status="normal"):
 
 
 def _activity_at(app, process, title, start_time, project_id=None, status="normal"):
-    activity_service.close_current_open_record(start_time)
+    activity_service.close_all_open_rows(start_time)
     aid = activity_service.create_activity(
         app,
         process,
@@ -41,7 +41,7 @@ def test_sessions_merge_same_project_and_split_a_b_a(temp_db):
     _activity("Word", "winword.exe", "B1.docx", "09:30:00", project_b)
     _activity("Word", "winword.exe", "A2.docx", "10:00:00", project_a)
     _activity("Word", "winword.exe", "A3.docx", "10:05:00", project_a)
-    activity_service.close_current_open_record("2026-06-18 10:10:00")
+    activity_service.close_all_open_rows("2026-06-18 10:10:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
     latest_details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
@@ -58,7 +58,7 @@ def test_same_project_after_midnight_is_split_by_calendar_day(temp_db):
     _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 23:50:00", project_a)
     _activity_at("Word", "winword.exe", "A2.docx", "2026-06-19 00:10:00", project_a)
     _activity_at("Word", "winword.exe", "B1.docx", "2026-06-19 00:30:00", project_b)
-    activity_service.close_current_open_record("2026-06-19 00:45:00")
+    activity_service.close_all_open_rows("2026-06-19 00:45:00")
 
     previous_day = timeline_service.get_project_sessions_by_date("2026-06-18")
     next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
@@ -76,7 +76,7 @@ def test_same_project_next_day_does_not_carry_when_previous_activity_ended_befor
     first = _activity_at("Word", "winword.exe", "A1.docx", "2026-06-18 23:40:00", project_a)
     activity_service.close_activity(first, "2026-06-18 23:50:00")
     _activity_at("Word", "winword.exe", "A2.docx", "2026-06-19 08:00:00", project_a)
-    activity_service.close_current_open_record("2026-06-19 08:30:00")
+    activity_service.close_all_open_rows("2026-06-19 08:30:00")
 
     previous_day = timeline_service.get_project_sessions_by_date("2026-06-18")
     next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
@@ -88,9 +88,9 @@ def test_same_project_next_day_does_not_carry_when_previous_activity_ended_befor
 
 def test_idle_and_uncategorized_split_at_midnight(temp_db):
     _activity_at("空闲", "idle", "用户空闲", "2026-06-18 23:50:00", status="idle")
-    activity_service.close_current_open_record("2026-06-19 00:10:00")
+    activity_service.close_all_open_rows("2026-06-19 00:10:00")
     _activity_at("Edge", "msedge.exe", "Search", "2026-06-19 00:10:00")
-    activity_service.close_current_open_record("2026-06-19 00:30:00")
+    activity_service.close_all_open_rows("2026-06-19 00:30:00")
 
     previous_day = timeline_service.get_project_sessions_by_date("2026-06-18")
     next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
@@ -125,7 +125,7 @@ def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):
     _activity("Edge", "msedge.exe", "Search 1", "09:10:00")
     _activity("Chrome", "chrome.exe", "Search 2", "09:15:00")
     _activity("Word", "winword.exe", "A2.docx", "09:20:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
     details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
@@ -141,7 +141,7 @@ def test_short_other_project_between_same_project_anchors_reports_inside_anchor_
     _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
     b_activity = _activity("Word", "winword.exe", "B1.docx", "09:05:00", project_b)
     _activity("Word", "winword.exe", "A2.docx", "09:09:00", project_a)
-    activity_service.close_current_open_record("2026-06-18 09:15:00")
+    activity_service.close_all_open_rows("2026-06-18 09:15:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
     details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
@@ -159,7 +159,7 @@ def test_short_idle_between_same_project_anchors_reports_inside_anchor_session(t
     _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
     idle_activity = _activity("空闲", "idle", "用户空闲", "09:05:00", status="idle")
     _activity("Word", "winword.exe", "A2.docx", "09:08:00", project_a)
-    activity_service.close_current_open_record("2026-06-18 09:12:00")
+    activity_service.close_all_open_rows("2026-06-18 09:12:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
     details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
@@ -179,7 +179,7 @@ def test_five_minute_other_project_between_anchors_does_not_merge(temp_db):
     _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
     _activity("Word", "winword.exe", "B1.docx", "09:05:00", project_b)
     _activity("Word", "winword.exe", "A2.docx", "09:10:00", project_a)
-    activity_service.close_current_open_record("2026-06-18 09:12:00")
+    activity_service.close_all_open_rows("2026-06-18 09:12:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
@@ -193,7 +193,7 @@ def test_short_other_project_does_not_merge_when_anchor_gap_exceeds_context_wind
     activity_service.close_activity(first_anchor, "2026-06-18 09:00:30")
     _activity("Word", "winword.exe", "B1.docx", "09:20:00", project_b)
     _activity("Word", "winword.exe", "A2.docx", "09:24:00", project_a)
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
@@ -205,7 +205,7 @@ def test_activity_group_correction_updates_selected_activities(temp_db):
     project_b = project_service.create_project("B")
     _activity("Word", "winword.exe", "Contract.docx", "09:00:00", project_a)
     _activity("Word", "winword.exe", "Contract.docx", "09:10:00", project_a)
-    activity_service.close_current_open_record("2026-06-18 09:20:00")
+    activity_service.close_all_open_rows("2026-06-18 09:20:00")
 
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
     timeline_service.update_activity_group_project(session["activity_ids"], project_b)
@@ -217,7 +217,7 @@ def test_activity_group_correction_updates_selected_activities(temp_db):
 def test_auxiliary_activity_can_be_corrected_for_current_record(temp_db):
     project = project_service.create_project("A")
     activity = _activity("Edge", "msedge.exe", "Search", "09:00:00")
-    activity_service.close_current_open_record("2026-06-18 09:10:00")
+    activity_service.close_all_open_rows("2026-06-18 09:10:00")
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
     assert session["project_name"] == UNCATEGORIZED_PROJECT
     timeline_service.update_activity_group_project([activity], project)
@@ -228,7 +228,7 @@ def test_activity_details_keep_same_app_activity_names(temp_db):
     _activity("Edge", "msedge.exe", "Search", "09:00:00")
     _activity("Edge", "msedge.exe", "Docs", "09:10:00")
     _activity("Edge", "msedge.exe", "Search", "09:20:00")
-    activity_service.close_current_open_record("2026-06-18 09:30:00")
+    activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
     details = timeline_service.get_session_activity_details(session["activity_ids"])
@@ -385,7 +385,7 @@ def test_project_session_note_attaches_to_session_by_first_activity(temp_db):
     project = project_service.create_project("Client")
     first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
     _activity_at("Word", "winword.exe", "Spec 2.docx", "2026-06-18 09:10:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:20:00")
+    activity_service.close_all_open_rows("2026-06-18 09:20:00")
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
     timeline_service.update_session_note("2026-06-18", first, "follow up with client")
@@ -398,7 +398,7 @@ def test_project_session_note_attaches_to_session_by_first_activity(temp_db):
 def test_project_session_note_can_be_cleared(temp_db):
     project = project_service.create_project("Client")
     first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
-    activity_service.close_current_open_record("2026-06-18 09:20:00")
+    activity_service.close_all_open_rows("2026-06-18 09:20:00")
 
     timeline_service.update_session_note("2026-06-18", first, "temporary")
     timeline_service.update_session_note("2026-06-18", first, "")
