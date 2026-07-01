@@ -94,6 +94,72 @@
         });
     }
 
+    // Phase 七.1: single-sample Overview bundle. Replaces the previous
+    // parallel ``get_overview`` + ``get_recent_activities`` calls which
+    // naturally produced two different snapshot samples (the recent live
+    // row could be 1-2 seconds ahead of the current activity, causing
+    // the frontend to freeze the current activity while waiting for it
+    // to catch up). The bundle reads the snapshot ONCE in the backend
+    // and returns ``live_projection`` + ``overview`` KPI + ``current_activity``
+    // + ``activities`` + ``sample_id`` from the same sample.
+    //
+    // The bundle response is split into the shapes ``showOverview`` and
+    // ``showRecent`` expect: the overview sub-payload is augmented with
+    // ``live_projection`` / ``live_display`` / ``current_activity`` so the
+    // ticker (which prefers ``live_projection``) reads from the single
+    // source of truth; the recent payload is wrapped as
+    // ``{activities, live_projection, live_display}`` so ``showRecent``
+    // and the recent-branch ticker see the same sample.
+    function refreshOverviewBundle() {
+        var token = ++App.overviewRequestToken;
+        App.recentRequestToken = token;  // single token for the bundle
+        return App.callBridge("get_overview_live_bundle").then(function (result) {
+            if (token !== App.overviewRequestToken) return;  // stale
+            var bundle = App.handleResult(result, function (msg) {
+                throw new Error(msg);
+            });
+            if (!bundle) return;
+            var overview = bundle.overview || {};
+            // Augment the overview sub-payload with the bundle-level
+            // fields the ticker / showOverview read so a single sample
+            // drives KPIs, current activity, and the recent live row.
+            overview.date = bundle.date || overview.date;
+            overview.current_activity = bundle.current_activity || overview.current_activity;
+            overview.live_projection = bundle.live_projection || overview.live_projection;
+            overview.live_display = bundle.live_display || bundle.live_projection || overview.live_display;
+            overview.sample_id = bundle.sample_id || overview.sample_id;
+            // KPI fields may live at the bundle root (legacy get_overview
+            // shape) — copy them in when the overview sub-payload does
+            // not already carry them.
+            if (overview.today_total_seconds === undefined) {
+                overview.today_total_seconds = bundle.today_total_seconds || 0;
+            }
+            if (overview.classified_seconds === undefined) {
+                overview.classified_seconds = bundle.classified_seconds || 0;
+            }
+            if (overview.uncategorized_seconds === undefined) {
+                overview.uncategorized_seconds = bundle.uncategorized_seconds || 0;
+            }
+            if (overview.current_activity_elapsed_seconds === undefined) {
+                overview.current_activity_elapsed_seconds = bundle.current_activity_elapsed_seconds || 0;
+            }
+            App.showOverview(overview);
+            // Build the recent payload shape from the bundle's activities +
+            // live_projection so showRecent and the recent ticker branch
+            // use the same single sample.
+            App.showRecent({
+                activities: bundle.activities || [],
+                live_projection: bundle.live_projection || null,
+                live_display: bundle.live_display || bundle.current_activity || null,
+                sample_id: bundle.sample_id || ""
+            });
+        }).catch(function () {
+            if (token !== App.overviewRequestToken) return;  // stale
+            App.showError("刷新失败");
+        });
+    }
+    App.refreshOverviewBundle = refreshOverviewBundle;
+
     function refreshTimeline() {
         return new Promise(function (resolve, reject) {
             var dateEl = document.getElementById("timeline-date-display");
@@ -135,8 +201,11 @@
         App.pendingPageRefresh = false;
         var promises = [refreshStatus()];
         if (App.currentPage === "overview") {
-            promises.push(refreshOverview());
-            promises.push(refreshRecent());
+            // Phase 七.1: single-sample Overview bundle. One backend call
+            // returns KPI + current activity + recent + live_projection
+            // from the same snapshot sample, eliminating the multi-sample
+            // drift between current activity and the recent live row.
+            promises.push(refreshOverviewBundle());
         } else if (App.currentPage === "timeline" && App.timelineLoaded) {
             // Phase R3 issue 11: skip Timeline refresh when an editor /
             // split editor / dirty session edit / correction shell is
@@ -199,9 +268,10 @@
         App.reconcileInFlight = true;
         var promises = [refreshStatus()];
         // Overview is always refreshed: the sidebar / current activity
-        // display depend on it on every page.
-        promises.push(refreshOverview());
-        promises.push(refreshRecent());
+        // display depend on it on every page. Phase 七.1: use the
+        // single-sample bundle so current activity / KPI / recent live
+        // row do not drift apart during reconciliation.
+        promises.push(refreshOverviewBundle());
         // Timeline is only re-rendered when no editing / split / correction
         // shell write is in progress so input focus is never lost. When the
         // user is editing, the next heartbeat revision check (which also

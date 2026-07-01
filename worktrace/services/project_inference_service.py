@@ -4,7 +4,7 @@ import ntpath
 import re
 import time
 
-from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL
+from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..db import get_connection, get_db_path, now_str
 from ..path_utils import has_auto_project_extension, looks_like_local_file_path
 from . import clipboard_service, folder_index_service, folder_rule_service
@@ -403,21 +403,87 @@ def candidate_project_name_for_activity(
     resource: dict | None = None,
 ) -> str | None:
     """Return the display project name that automatic inference would use without writing to DB."""
+    label = candidate_project_label_for_activity(activity, resource)
+    if label is None:
+        return None
+    name = str(label.get("name") or "").strip()
+    return name or None
+
+
+def candidate_project_label_for_activity(
+    activity: dict,
+    resource: dict | None = None,
+) -> dict | None:
+    """Return a display-safe candidate project *label* for an activity.
+
+    This is the display-safe candidate helper used by the project-ownership
+    state machine (``project_ownership_service``). It reuses the existing
+    resource-first inference (``_infer_project_resource_first``) — it never
+    re-implements folder / keyword / suggested-project logic and never
+    creates a new project.
+
+    Returns a dict with the following keys (all display-safe):
+
+    - ``id``            — concrete project id, or ``None`` when the
+                          candidate is a suggested-project name or
+                          uncategorized (no concrete project row).
+    - ``name``          — display project name.
+    - ``description``   — concrete project description, or ``""`` when
+                          the candidate has no concrete project row
+                          (suggested / uncategorized).
+    - ``source``        — one of ``folder_rule`` / ``keyword_rule`` /
+                          ``suggested_project_name`` / ``uncategorized``.
+    - ``is_uncategorized`` — ``True`` when the candidate is uncategorized.
+    - ``is_suggested_project`` — ``True`` when the candidate is a
+                          suggested-project name (no concrete project).
+
+    Returns ``None`` when the activity is ``None`` / empty.
+    """
     activity_dict = dict(activity or {})
+    if not activity_dict:
+        return None
     with get_connection() as conn:
         activity_id = activity_dict.get("id")
         if activity_id:
             resolved_resource = _resource_for_activity(conn, int(activity_id), activity_dict)
         else:
             resolved_resource = resource or _resource_from_activity_dict(activity_dict)
-        project_id, source, _confidence, suggested_name = _infer_project_resource_first(conn, activity_dict, resolved_resource)
-        if source == "suggested_project_name":
-            return suggested_name
+        project_id, source, _confidence, suggested_name = _infer_project_resource_first(
+            conn, activity_dict, resolved_resource
+        )
         uncategorized_id = _get_uncategorized_project_id(conn)
-        if int(project_id) == int(uncategorized_id):
-            return None
-        row = conn.execute("SELECT name FROM project WHERE id = ?", (project_id,)).fetchone()
-        return str(row["name"]) if row and row["name"] else None
+        is_uncategorized = int(project_id) == int(uncategorized_id)
+        if source == "suggested_project_name":
+            return {
+                "id": None,
+                "name": str(suggested_name or "").strip(),
+                "description": "",
+                "source": "suggested_project_name",
+                "is_uncategorized": False,
+                "is_suggested_project": True,
+            }
+        if is_uncategorized:
+            return {
+                "id": None,
+                "name": UNCATEGORIZED_PROJECT,
+                "description": "",
+                "source": "uncategorized",
+                "is_uncategorized": True,
+                "is_suggested_project": False,
+            }
+        row = conn.execute(
+            "SELECT name, description FROM project WHERE id = ?", (project_id,)
+        ).fetchone()
+        name = str(row["name"]) if row and row["name"] else ""
+        description = str(row["description"]) if row and row["description"] else ""
+        return {
+            "id": int(project_id),
+            "name": name,
+            "description": description,
+            "source": source,
+            "is_uncategorized": False,
+            "is_suggested_project": False,
+        }
 
 
 def _resource_from_activity_dict(activity: dict) -> dict:

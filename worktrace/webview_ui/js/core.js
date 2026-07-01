@@ -574,6 +574,20 @@
     }
     App.resetMonotonicRenderState = resetMonotonicRenderState;
 
+    // Unified project label contract (section 五.4):
+    //   project_label = name if description empty else f"{name}（{description}）"
+    // Uses full-width Chinese parentheses with no surrounding space so the
+    // label stays compact and consistent across Overview / Recent / Timeline
+    // session / Timeline detail / virtual / pending / persisted-open rows.
+    function formatProjectLabel(name, description) {
+        var n = String(name || "").trim();
+        if (!n) n = "未归类";
+        var d = String(description || "").trim();
+        if (!d) return n;
+        return n + "（" + d + "）";
+    }
+    App.formatProjectLabel = formatProjectLabel;
+
     // --- Phase 6H-followup: 1-second heartbeat local ticker ---------------
     // ``applyLocalTicker`` is the first phase of the unified heartbeat. It
     // re-renders already-fetched durations with a wall-clock delta so the
@@ -603,9 +617,16 @@
     // (``live_started_at_epoch_ms``) so the delta does not drift between
     // refreshes. Returns 0 when the payload has no live clock fields or
     // when the current activity is not live-eligible.
+    //
+    // Section 七.2: the ticker reads from the SINGLE page-level live
+    // projection. When the payload carries a ``live_projection`` field
+    // (Overview bundle / Timeline / Detail), that field is the single
+    // source of truth. Legacy payloads without ``live_projection`` fall
+    // back to ``live_display`` / ``current_activity`` so the Timeline
+    // main payload (which still carries ``live_display``) keeps working.
     function tickerDeltaSeconds(payload) {
         if (!payload) return 0;
-        var ld = payload.live_display || payload.current_activity;
+        var ld = payload.live_projection || payload.live_display || payload.current_activity;
         if (!ld) return 0;
         var startedAt = parseInt(ld.live_started_at_epoch_ms, 10);
         if (!startedAt || isNaN(startedAt)) {
@@ -613,7 +634,14 @@
             return 0;
         }
         var carry = parseInt(ld.carry_seconds, 10) || 0;
-        var elapsedAtResponse = parseInt(ld.elapsed_seconds, 10) || 0;
+        // ``live_projection`` carries ``duration_seconds`` (display
+        // seconds at response time); legacy ``live_display`` /
+        // ``current_activity`` carry ``elapsed_seconds``. Accept either
+        // so the delta baseline matches the field the backend wrote.
+        var elapsedAtResponse = parseInt(ld.duration_seconds, 10);
+        if (isNaN(elapsedAtResponse)) {
+            elapsedAtResponse = parseInt(ld.elapsed_seconds, 10) || 0;
+        }
         var displaySeconds = carry + Math.floor((tickerNowEpochMs() - startedAt) / 1000);
         var delta = displaySeconds - elapsedAtResponse;
         return delta > 0 ? delta : 0;
@@ -625,8 +653,16 @@
     // duration. paused / idle / excluded / error / none never do. This
     // fixes issue 1: idle / excluded / error were previously still
     // locally timed because only active + !is_paused was checked.
+    //
+    // Section 七.2: prefer ``live_projection.live_state`` (single source
+    // of truth) when present; fall back to ``live_display`` /
+    // ``current_activity`` for legacy payloads.
     function tickerLiveEligible(payload) {
         if (!payload) return false;
+        var lp = payload.live_projection;
+        if (lp) {
+            return lp.live_state === "virtual" || lp.live_state === "persisted_open";
+        }
         var ld = payload.live_display;
         if (ld) {
             return ld.live_state === "virtual" || ld.live_state === "persisted_open";
@@ -720,8 +756,10 @@
                     // Unified live clock (scheme A): compute the display
                     // seconds from the stable start-time anchor so the
                     // current activity display does not drift between
-                    // refreshes (verification item 6).
-                    var ld = ov.live_display || current;
+                    // refreshes (verification item 6). Section 七.2:
+                    // prefer ``live_projection`` (single source of truth)
+                    // when the Overview bundle is in use.
+                    var ld = ov.live_projection || ov.live_display || current;
                     var startedAt = parseInt(ld.live_started_at_epoch_ms, 10);
                     var carry = parseInt(ld.carry_seconds, 10) || 0;
                     var elapsedSec = parseInt(current.elapsed_seconds, 10) || 0;

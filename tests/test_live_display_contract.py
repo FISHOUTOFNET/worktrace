@@ -648,11 +648,14 @@ def test_persisted_open_natural_duration_does_not_change_revision(bridge):
     ``updated_at`` from the per-row structural signature."""
     from worktrace.services import activity_service
 
+    # Use today's date so the activity is included in the default
+    # report_date scope of ``get_refresh_state``.
+    today = datetime.now().strftime("%Y-%m-%d")
     # Insert a closed activity so the revision has a baseline.
     aid = activity_service.create_activity(
-        "App", "App.exe", "Spec", start_time="2026-07-01 09:00:00"
+        "App", "App.exe", "Spec", start_time=f"{today} 09:00:00"
     )
-    activity_service.close_activity(aid, "2026-07-01 09:30:00")
+    activity_service.close_activity(aid, f"{today} 09:30:00")
     r1 = bridge.get_refresh_state()["refresh_revision"]
 
     # Update the duration (natural growth) — this should NOT change the
@@ -671,10 +674,11 @@ def test_manual_project_edit_changes_revision(bridge):
     ``refresh_revision``."""
     from worktrace.services import activity_service, project_service
 
+    today = datetime.now().strftime("%Y-%m-%d")
     aid = activity_service.create_activity(
-        "App", "App.exe", "Spec", start_time="2026-07-01 09:00:00"
+        "App", "App.exe", "Spec", start_time=f"{today} 09:00:00"
     )
-    activity_service.close_activity(aid, "2026-07-01 09:30:00")
+    activity_service.close_activity(aid, f"{today} 09:30:00")
     r1 = bridge.get_refresh_state()["refresh_revision"]
 
     # Assign a project — a structural change.
@@ -691,14 +695,15 @@ def test_time_edit_changes_revision(bridge):
     must change ``refresh_revision``."""
     from worktrace.services import activity_service
 
+    today = datetime.now().strftime("%Y-%m-%d")
     aid = activity_service.create_activity(
-        "App", "App.exe", "Spec", start_time="2026-07-01 09:00:00"
+        "App", "App.exe", "Spec", start_time=f"{today} 09:00:00"
     )
-    activity_service.close_activity(aid, "2026-07-01 09:30:00")
+    activity_service.close_activity(aid, f"{today} 09:30:00")
     r1 = bridge.get_refresh_state()["refresh_revision"]
 
     # Edit the time — a structural change.
-    activity_service.update_activity_time(aid, "2026-07-01 09:05:00", "2026-07-01 09:30:00")
+    activity_service.update_activity_time(aid, f"{today} 09:05:00", f"{today} 09:30:00")
     r2 = bridge.get_refresh_state()["refresh_revision"]
     assert r1 != r2
 

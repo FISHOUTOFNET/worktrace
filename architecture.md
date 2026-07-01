@@ -1291,6 +1291,41 @@ transition.
 Statistics / Export remain closed-only; the live overlay must not
 alter closed-only semantics.
 
+### 23.11 project_ownership_service.py
+
+**Pure project-ownership state machine.** This service owns the
+display-safe project label contract and the 30-second project
+ownership pending state machine. It does NOT own DB open-row
+lifecycle — that remains the sole responsibility of
+`activity_lifecycle_service`.
+
+Responsibilities:
+
+- `ProjectLabel` / `ProjectTransition` / `ProjectOwnershipState`
+  dataclasses (display-safe, frozen);
+- `begin_ownership_for_new_resource(...)` — compute the initial
+  ownership state when a resource signature changes (resource identity
+  immediate, project ownership delayed);
+- `advance_ownership(...)` — advance the pending timer on an unchanged
+  resource signature; confirm the candidate when the 30-second
+  threshold elapses;
+- `clear_ownership_state()` — return a fresh empty state for session
+  boundaries (pause / stop / midnight split / recovery / time jump);
+- `serialize_project_ownership(...)` — serialize the state into a
+  display-safe JSON dict for the snapshot / live projection.
+
+The in-memory ownership state is held by `AutoActivityRecorder`
+(consistent with its other in-memory state:
+`current_payload` / `current_signature` / `current_start_time` /
+`persisted_activity_id` / `current_extra_seconds`). This service only
+provides the logic; the recorder owns the state lifecycle.
+
+Candidate inference reuses `project_inference_service` — folder /
+keyword / suggested-project logic is never re-implemented here. This
+service NEVER creates / closes / splits / reopens an `activity_log`
+row. DB open-row lifecycle is the exclusive responsibility of
+`activity_lifecycle_service`.
+
 ---
 
 ## 24. UI Requirements
@@ -1685,3 +1720,147 @@ export an Excel timesheet from the UI,
 and clear or export all local data,
 without registration, network access, administrator privileges, screenshots, keyboard logging, content reading, or data upload.
 ```
+
+---
+
+## 33. Live Display & Project Ownership Architecture
+
+This section documents the final architecture that separates resource
+identity, project ownership, history persistence, and live UI
+projection into orthogonal concerns. The previous model conflated these
+into a single `snapshot` / `virtual-live` semantic, causing the UI to
+flap between projects on every window switch and producing multi-sample
+drift between Overview current activity and recent live rows.
+
+### 33.1 Resource Identity Immediate
+
+Window, file, browser page, and application resource changes are
+reflected in the current-activity snapshot **immediately**. The
+`AutoActivityRecorder` ends the current resource and begins a new
+resource as soon as the signature changes — there is no 30-second delay
+on resource identity. The UI must never continue showing the old
+window/page after the user has switched.
+
+### 33.2 Project Ownership Delayed
+
+When a resource signature changes, the **project ownership** enters a
+30-second confirmation period:
+
+- `resource_name` / `activity_display_name` show the new resource;
+- `display_project` continues to show the last confirmed project
+  (inherited);
+- `candidate_project` holds the new resource's inferred project;
+- `project_transition.pending = true`.
+
+After 30 seconds:
+
+- If the candidate matches the last display project: pending ends,
+  project unchanged.
+- If the candidate differs and is still stable: confirm the candidate
+  as the new display project.
+- If the candidate is uncategorized: confirm uncategorized to avoid
+  long-term polluting the previous project.
+
+The first activity of a session has no prior confirmed project, so
+display == candidate immediately (no pending window).
+
+### 33.3 History Persistence Independent
+
+The 30-second history-persistence threshold
+(`HISTORY_PERSIST_THRESHOLD_SECONDS`) is **orthogonal** to the project
+ownership pending state. A clipboard force-persist can turn a virtual
+activity into `persisted_open` before the 30-second ownership
+threshold, but the live display still follows `display_project` until
+the pending window elapses.
+
+The two state axes are:
+
+- `live_state = virtual | persisted_open | idle | paused | excluded | error | none`
+- `project_transition_pending = true | false`
+
+### 33.4 activity_lifecycle_service Remains Sole Open-Row Command Owner
+
+`activity_lifecycle_service` is the sole open-row command facade. It
+owns:
+
+- create open activity;
+- close open activity;
+- virtual → persisted_open;
+- clipboard force-persist;
+- midnight split;
+- recovery close;
+- close-finalize project inference.
+
+The new `project_ownership_service` does NOT create, close, split, or
+reopen `activity_log` rows. It only computes and maintains the
+display/candidate/pending semantics. DB open-row lifecycle remains the
+exclusive responsibility of `activity_lifecycle_service`.
+
+### 33.5 Live Projection Unified
+
+`live_display_service.build_live_projection()` is the single source of
+truth for every live UI consumer (Overview / Recent / Timeline / Detail
+/ live KPI). The projection carries:
+
+- `display_project` / `candidate_project` / `project_transition` /
+  `project_transition_pending` (project ownership contract);
+- `live_started_at_epoch_ms` / `carry_seconds` / `duration_seconds`
+  (unified live clock, scheme A);
+- `stable_live_key` / `stable_live_key_hash` (stable live identity);
+- `live_state` / `is_virtual_live` / `is_in_progress`
+  (persisted/virtual/system state).
+
+Overview / Recent / Timeline / Detail must NOT each re-interpret
+`inferred_project_name`, `is_virtual_live`, or `duration_seconds`
+independently. The legacy `inferred_project_name` field mirrors
+`display_project.name` for backward compatibility but is NOT the
+authoritative source.
+
+### 33.6 Overview Bundle Single-Sample
+
+The Overview page uses a single backend call
+`get_overview_live_bundle()` which returns:
+
+- `live_projection` (the unified live projection);
+- `overview` KPI (with `include_live=True`);
+- `current_activity` summary;
+- `activities` (recent activities list);
+- `sample_id` (= `stable_live_key_hash`).
+
+All sub-payloads derive from the SAME snapshot sample. The frontend no
+longer makes parallel `get_overview()` + `get_recent_activities()` calls
+that naturally produce two different samples (the recent live row could
+be 1-2 seconds ahead of the current activity, causing the frontend to
+freeze the current activity while waiting for it to catch up).
+
+During a pending project transition the recent live row uses the
+display project (NOT the candidate), so it never appears as a separate
+candidate-project row.
+
+### 33.7 Export Preview Remains Finalized-Row Only
+
+`statistics_service.get_statistics_export_summary()` (Statistics /
+Export page) only aggregates **closed** activities
+(`is_in_progress == False`). The current live activity is NOT projected
+into the export preview, CSV, or Excel output. This matches the
+documented Phase 4A semantics: the read-only preview is stable and
+deterministic.
+
+Overview KPI (`get_summary(include_live=True)`) DOES project the live
+activity via `_live_projection`, which uses `display_project` (not
+`candidate_project`) during pending. The two paths are intentionally
+distinct: KPI is real-time; export is finalized-only.
+
+### 33.8 Short Activity Blind Merge Preserved
+
+The existing short-activity absorption strategy
+(`_merge_or_pend_short_seconds`) is intentionally **project-blind**.
+Short activities exist to avoid excessive fragment records; whether
+they belong to the same project is irrelevant. The new display-level
+project ownership pending is a SEPARATE concern and does NOT change
+the short-activity merge policy.
+
+The `pending_short_seconds` accumulator and the
+`short_activity_carry_duration` helper continue to work as before. The
+unified live clock adds carry seconds to the virtual snapshot's
+elapsed seconds so consecutive <30s activities do not lose seconds.

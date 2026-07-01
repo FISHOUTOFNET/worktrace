@@ -230,23 +230,32 @@ def test_heartbeat_does_not_auto_call_load_project_rules():
 def test_low_frequency_reconciliation_exists():
     """Section 8/10: a low-frequency reconciliation must exist so a stalled
     revision signal cannot freeze the UI forever. It must refresh status +
-    Overview + current Timeline, but NOT Rules / Settings / Statistics."""
+    Overview + current Timeline, but NOT Rules / Settings / Statistics.
+
+    Section 七.1: Overview now uses the single ``get_overview_live_bundle``
+    call (fusing overview + recent into one sample). The reconciliation
+    may call either ``refreshOverviewBundle`` or the legacy
+    ``refreshOverview`` / ``refreshRecent`` pair — both paths refresh
+    the Overview + recent data."""
     source = read_js("init.js")
     assert "function fullReconcileCollectionViews" in source, (
         "init.js must define fullReconcileCollectionViews for low-frequency "
         "collection reconciliation"
     )
     body = func_body(source, "fullReconcileCollectionViews")
-    # Must refresh status + overview + recent (the collector / sidebar /
-    # current-activity view).
+    # Must refresh status (the collector / sidebar / current-activity view).
     assert "refreshStatus" in body, (
         "fullReconcileCollectionViews must refresh collector status"
     )
-    assert "refreshOverview" in body, (
-        "fullReconcileCollectionViews must refresh Overview"
-    )
-    assert "refreshRecent" in body, (
-        "fullReconcileCollectionViews must refresh recent activities"
+    # Must refresh Overview + recent. Under the bundle contract this is
+    # done via ``refreshOverviewBundle``; the legacy separate-call path
+    # (``refreshOverview`` + ``refreshRecent``) is also acceptable as a
+    # fallback. At least one of the two paths must be present.
+    has_bundle = "refreshOverviewBundle" in body
+    has_legacy = "refreshOverview" in body and "refreshRecent" in body
+    assert has_bundle or has_legacy, (
+        "fullReconcileCollectionViews must refresh Overview + recent via "
+        "refreshOverviewBundle (preferred) or refreshOverview + refreshRecent"
     )
     # Must NOT reference Rules / Settings / Statistics.
     assert "loadProjectRules" not in body

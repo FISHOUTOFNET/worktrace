@@ -74,7 +74,7 @@
                 + ' data-duration-seconds="' + (isNaN(durSec) ? 0 : durSec) + '"'
                 + '>'
                 + '<div>'
-                + '<div class="recent-item-project">' + App.escapeHtml(item.project_name) + '</div>'
+                + '<div class="recent-item-project">' + App.escapeHtml(App.formatProjectLabel(item.project_name, item.project_description)) + '</div>'
                 + '<div class="recent-item-time">' + App.escapeHtml(timeRange) + '</div>'
                 + '<div class="recent-item-status">' + App.escapeHtml(item.status || "") + '</div>'
                 + '</div>'

@@ -201,39 +201,52 @@ def _display_app_name(snapshot: dict[str, Any] | None) -> str:
     return str(snapshot.get("app_name") or "").strip()
 
 
+def _snapshot_display_project_dict(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the display-safe ``display_project`` dict from a snapshot.
+
+    The new project-ownership contract writes a structured
+    ``display_project`` block into the snapshot. This helper reads it
+    back. Returns ``None`` for legacy snapshots that pre-date the
+    ownership contract (callers fall back to ``_display_project_name``).
+    """
+    if not snapshot:
+        return None
+    dp = snapshot.get("display_project")
+    if isinstance(dp, dict) and dp:
+        return dp
+    return None
+
+
 def _display_project_name(snapshot: dict[str, Any] | None) -> str:
     """Return the unified display project name for a snapshot.
 
-    Resolution order for persisted_open snapshots:
+    Resolution order:
 
-    1. The real DB row's concrete ``project_name`` (i.e. NOT
-       ``UNCATEGORIZED_PROJECT``). This is the authoritative display
-       project once the row has been classified — either by the
-       open-row sync helper (``sync_persisted_open_activity_project``)
-       at the virtual → persisted_open transition, or by a subsequent
-       manual / rule reassignment.
-    2. The DB row is uncategorized BUT the assignment carries a
-       ``suggested_project_name`` (source = ``suggested_project_name``).
-       The suggested name is surfaced so the user sees the inferred
-       project instead of ``未归类`` even when no concrete project row
-       exists yet. This mirrors ``timeline_service._attach_display_project``.
-    3. The snapshot's ``inferred_project_name`` — defensive fallback for
-       the window between ``create_activity`` and the open-row sync, and
-       for any future caller that writes a persisted_activity_id without
-       running the sync. Without this fallback the display would briefly
-       revert to ``未归类`` even though the snapshot already carries the
-       inferred concrete / suggested name.
+    1. The snapshot's structured ``display_project.name`` block (written
+       by the project-ownership state machine). This is the authoritative
+       display project for BOTH virtual and persisted_open snapshots.
+       During a 30-second pending transition the display project is the
+       *inherited* last-confirmed project, NOT the candidate — this
+       ensures clipboard force-persist does not bypass the pending
+       window on the display side.
+    2. For persisted_open rows without a ``display_project`` block
+       (legacy snapshots): the real DB row's concrete ``project_name``,
+       then ``suggested_project_name``, then
+       ``inferred_project_name`` — the legacy resolution chain.
+    3. For virtual snapshots without a ``display_project`` block: the
+       snapshot's ``inferred_project_name`` (legacy fallback).
     4. ``UNCATEGORIZED_PROJECT``.
-
-    For virtual (unpersisted) snapshots, only step 3 / 4 apply: the
-    snapshot's ``inferred_project_name`` is the display project (it
-    already reflects folder / keyword / suggested-project inference).
 
     Empty / whitespace-only maps to ``UNCATEGORIZED_PROJECT`` so an
     unnamed current activity aligns with the ``未归类`` session row.
     """
     if not snapshot:
         return UNCATEGORIZED_PROJECT
+    dp = _snapshot_display_project_dict(snapshot)
+    if dp:
+        name = str(dp.get("name") or "").strip()
+        if name:
+            return name
     persisted_id = snapshot_persisted_id(snapshot)
     if persisted_id:
         try:
@@ -244,12 +257,6 @@ def _display_project_name(snapshot: dict[str, Any] | None) -> str:
             db_name = str(row.get("project_name") or "").strip()
             if db_name and db_name != UNCATEGORIZED_PROJECT:
                 return db_name
-            # DB row is uncategorized — check the assignment for a
-            # suggested_project_name before falling back to the
-            # snapshot's inferred name. This keeps the persisted_open
-            # display consistent with Timeline sessions / detail rows
-            # (which already honor suggested_project_name via
-            # ``_attach_display_project``).
             try:
                 from .project_inference_service import get_assignment_for_activity
 
@@ -261,6 +268,36 @@ def _display_project_name(snapshot: dict[str, Any] | None) -> str:
                 return suggested
     name = str(snapshot.get("inferred_project_name") or "").strip()
     return name if name else UNCATEGORIZED_PROJECT
+
+
+def _display_project_description(snapshot: dict[str, Any] | None) -> str:
+    """Return the display project description for a snapshot.
+
+    Reads the structured ``display_project.description`` block when
+    present (new ownership contract). Otherwise resolves the display
+    project name (which falls back to ``inferred_project_name`` for
+    legacy / virtual snapshots) and looks up the concrete project's
+    description by name. Returns ``""`` for uncategorized /
+    suggested-project candidates (no concrete project row).
+    """
+    if not snapshot:
+        return ""
+    dp = _snapshot_display_project_dict(snapshot)
+    if dp:
+        return str(dp.get("description") or "")
+    # No structured display_project block — resolve the display name and
+    # look up the concrete project's description by name. This mirrors
+    # ``_display_project_name`` which falls back to ``inferred_project_name``
+    # for virtual / legacy snapshots, ensuring the description is consistent
+    # with the name across the full display chain.
+    dp_name = _display_project_name(snapshot)
+    if dp_name and dp_name != UNCATEGORIZED_PROJECT:
+        from . import project_service
+
+        existing = project_service.get_project_by_name(dp_name)
+        if existing:
+            return str(existing.get("description") or "")
+    return ""
 
 
 def _stable_live_key(snapshot: dict[str, Any] | None) -> str:
@@ -537,6 +574,18 @@ def build_current_activity_summary(
             "source": "none",
             "is_uncategorized": True,
             "is_classified": False,
+            "project_description": "",
+            "display_project": None,
+            "candidate_project": None,
+            "project_transition": {
+                "pending": False,
+                "started_at": "",
+                "elapsed_seconds": 0,
+                "threshold_seconds": 30,
+                "from_project_id": None,
+                "to_project_id": None,
+            },
+            "project_transition_pending": False,
         }
     if today is None:
         today = timeline_service.get_default_report_date()
@@ -545,6 +594,7 @@ def build_current_activity_summary(
     live_state = classify_live_state(snapshot)
     elapsed_seconds = _snapshot_total_seconds(snapshot)
     project_name = _display_project_name(snapshot)
+    project_description = _display_project_description(snapshot)
     resource_name = _display_resource_name(snapshot)
     app_name = _display_app_name(snapshot)
     start_time = str(snapshot.get("start_time") or "")
@@ -569,6 +619,34 @@ def build_current_activity_summary(
     if is_virtual_live:
         carry_seconds = short_activity_carry_seconds(snapshot, report_date)
     display_seconds = elapsed_seconds + carry_seconds
+    # Project-ownership contract fields. The snapshot carries a
+    # structured ``display_project`` / ``candidate_project`` /
+    # ``project_transition`` block written by the ownership state
+    # machine. These are surfaced verbatim (display-safe) so the
+    # frontend can render a "确认中" indicator during the 30-second
+    # pending window without re-reading the raw snapshot.
+    display_project_dict = _snapshot_display_project_dict(snapshot) or {
+        "id": None,
+        "name": project_name,
+        "description": project_description,
+        "source": "uncategorized",
+        "is_uncategorized": is_uncategorized,
+        "is_suggested_project": False,
+    }
+    candidate_project_dict = snapshot.get("candidate_project") if snapshot else None
+    if not isinstance(candidate_project_dict, dict) or not candidate_project_dict:
+        candidate_project_dict = display_project_dict
+    project_transition_dict = snapshot.get("project_transition") if snapshot else None
+    if not isinstance(project_transition_dict, dict):
+        project_transition_dict = {
+            "pending": False,
+            "started_at": "",
+            "elapsed_seconds": 0,
+            "threshold_seconds": 30,
+            "from_project_id": None,
+            "to_project_id": None,
+        }
+    project_transition_pending = bool(project_transition_dict.get("pending"))
     # Unified live clock (scheme A): the frontend computes
     # ``display_seconds = carry_seconds + floor((Date.now() -
     # live_started_at_epoch_ms) / 1000)`` so the same current activity
@@ -616,6 +694,12 @@ def build_current_activity_summary(
         "source": "db" if is_in_progress else ("snapshot" if is_virtual_live else "none"),
         "is_uncategorized": bool(is_uncategorized),
         "is_classified": not bool(is_uncategorized),
+        # Project-ownership contract fields (display-safe).
+        "project_description": project_description,
+        "display_project": display_project_dict,
+        "candidate_project": candidate_project_dict,
+        "project_transition": project_transition_dict,
+        "project_transition_pending": project_transition_pending,
     }
 
 
@@ -667,11 +751,12 @@ def build_virtual_session(
     carry = short_activity_carry_seconds(snapshot, report_date)
     duration_seconds = elapsed + carry
     project_name = _display_project_name(snapshot)
+    project_description = _display_project_description(snapshot)
     start_time = str(snapshot.get("start_time") or "")
     return {
         "session_id": _virtual_session_id(snapshot),
         "project_name": project_name,
-        "project_description": "",
+        "project_description": project_description,
         "project_id": 0,
         "start_time": start_time,
         "end_time": None,
@@ -726,6 +811,7 @@ def build_virtual_detail_row(
     carry = short_activity_carry_seconds(snapshot, report_date)
     duration_seconds = elapsed + carry
     project_name = _display_project_name(snapshot)
+    project_description = _display_project_description(snapshot)
     resource_name = _display_resource_name(snapshot)
     app_name = _display_app_name(snapshot)
     start_time = str(snapshot.get("start_time") or "")
@@ -741,6 +827,7 @@ def build_virtual_detail_row(
         "resource_type": format_resource_type(resource_kind, resource_subtype),
         "resource_name": resource_name,
         "project_name": project_name,
+        "project_description": project_description,
         "status": STATUS_NORMAL,
         "is_in_progress": True,
         "is_virtual": True,
@@ -1204,12 +1291,80 @@ def assert_live_row_contract(row: dict[str, Any]) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Unified live projection (single source of truth for live UI)
+# ---------------------------------------------------------------------------
+
+
+def build_live_projection(
+    snapshot: dict[str, Any] | None,
+    report_date: str | None = None,
+    today: str | None = None,
+) -> dict[str, Any]:
+    """Build the unified live projection — the single source of truth for
+    every live UI consumer (Overview / Recent / Timeline / Detail / live
+    KPI).
+
+    The projection is derived from ONE snapshot sample. It carries the
+    display-safe ``display_project`` / ``candidate_project`` /
+    ``project_transition`` contract, the unified live clock
+    (``live_started_at_epoch_ms`` / ``carry_seconds`` / ``display_seconds``),
+    and the stable live identity (``stable_live_key`` /
+    ``stable_live_key_hash``).
+
+    ``live_state`` and ``project_transition_pending`` are intentionally
+    orthogonal: a clipboard force-persist can make the activity
+    ``persisted_open`` while ``project_transition_pending`` is still
+    ``True`` (the DB row exists, but the display project is still the
+    inherited last-confirmed project until the 30-second window
+    elapses).
+
+    The payload is display-safe: no raw ``window_title`` /
+    ``file_path_hint`` / clipboard / note / SQL / traceback.
+    """
+    summary = build_current_activity_summary(snapshot, report_date=report_date, today=today)
+    return {
+        "resource_name": str(summary.get("resource_name") or ""),
+        "app_name": str(summary.get("app_name") or ""),
+        "display_project": summary.get("display_project"),
+        "candidate_project": summary.get("candidate_project"),
+        "project_transition": summary.get("project_transition"),
+        "project_transition_pending": bool(summary.get("project_transition_pending")),
+        "duration_seconds": int(summary.get("elapsed_seconds") or 0),
+        "live_started_at_epoch_ms": int(summary.get("live_started_at_epoch_ms") or 0),
+        "carry_seconds": int(summary.get("carry_seconds") or 0),
+        "stable_live_key": str(summary.get("stable_live_key") or ""),
+        "stable_live_key_hash": str(summary.get("stable_live_key_hash") or ""),
+        "live_state": str(summary.get("live_state") or "none"),
+        "is_virtual_live": bool(summary.get("is_virtual_live")),
+        "is_in_progress": bool(summary.get("is_in_progress")),
+        "persisted_activity_id": int(summary.get("persisted_activity_id") or 0),
+        "activity_id": summary.get("activity_id"),
+        "source": str(summary.get("source") or "none"),
+        "edit_disabled": not bool(summary.get("is_in_progress")),
+        "disable_reason": (
+            _VIRTUAL_EDIT_DISABLE_REASON
+            if summary.get("is_virtual_live")
+            else ""
+        ),
+        # Convenience: the display project name + description for
+        # consumers that only need the label.
+        "project_name": str(summary.get("project_name") or ""),
+        "project_description": str(summary.get("project_description") or ""),
+        "is_uncategorized": bool(summary.get("is_uncategorized")),
+        "is_classified": bool(summary.get("is_classified")),
+        "status": str(summary.get("status") or ""),
+        "start_time": str(summary.get("start_time") or ""),
+    }
+
+
 __all__ = [
     "LIVE_ROW_CONTRACT_FIELDS",
     "apply_live_row_contract",
     "apply_persisted_open_overlay_to_row",
     "assert_live_row_contract",
     "build_current_activity_summary",
+    "build_live_projection",
     "build_live_row_contract",
     "build_persisted_open_overlay",
     "build_virtual_detail_row",

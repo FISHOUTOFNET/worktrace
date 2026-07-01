@@ -72,7 +72,11 @@ def initialize_database(path: str | Path | None = None) -> None:
 def seed_defaults(conn: sqlite3.Connection) -> None:
     ts = now_str()
     defaults = {
-        "poll_interval_seconds": "3",
+        # Section 八: poll interval default is 1 second. WorkTrace is a
+        # local automatic time-tracking tool; the immediacy of current
+        # activity change perception takes priority over the minor polling
+        # overhead. No system-level foreground event hook is used.
+        "poll_interval_seconds": "1",
         "idle_threshold_seconds": str(DEFAULT_IDLE_THRESHOLD_SECONDS),
         "current_activity_snapshot": "",
         "pending_short_seconds": "0",

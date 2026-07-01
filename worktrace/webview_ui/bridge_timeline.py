@@ -182,6 +182,15 @@ class TimelineBridgeMixin:
             live_display = live_display_api.build_current_activity_summary(
                 snapshot, report_date=report_date, today=today
             )
+            # Unified live projection built from the SAME snapshot sample
+            # so the Timeline session / detail ticker uses a single
+            # source of truth (verification item 五.3: Timeline must
+            # return sessions + same-sample live_projection). The detail
+            # payload carries its own live_projection; the main Timeline
+            # payload's projection is NOT reused for the detail ticker.
+            live_projection = live_display_api.build_live_projection(
+                snapshot, report_date=report_date, today=today
+            )
             # Build the persisted-open overlay once so every DB session
             # that matches the persisted_activity_id can carry the same
             # stable live fields as the virtual session (verification
@@ -286,6 +295,13 @@ class TimelineBridgeMixin:
                 "total_seconds": display_total_seconds,
                 "current_activity": current,
                 "live_display": live_display,
+                # Unified live projection (single source of truth for the
+                # Timeline session ticker). Built from the SAME snapshot
+                # sample as ``live_display`` / ``current_activity`` /
+                # sessions so the frontend ticker computes display seconds
+                # once and distributes to every consumer.
+                "live_projection": live_projection,
+                "sample_id": str(live_projection.get("stable_live_key_hash") or ""),
                 "sessions": sessions,
                 # Raw seconds for the 1-second local ticker. The ticker
                 # only updates DOM text; it never calls a bridge method or
@@ -341,6 +357,16 @@ class TimelineBridgeMixin:
             live_display = live_display_api.build_current_activity_summary(
                 snapshot, report_date=date, today=today
             )
+            # Detail payload carries its OWN live_projection (verification
+            # item 五.3: detail ticker must NOT reuse the Timeline main
+            # payload's projection). The detail payload and the Timeline
+            # main payload are separate bridge calls that may arrive at
+            # different times; using the main payload's projection for the
+            # detail ticker caused the detail duration to drift relative
+            # to its own baseline.
+            detail_live_projection = live_display_api.build_live_projection(
+                snapshot, report_date=date, today=today
+            )
             # Build the persisted-open overlay once so every DB detail row
             # that matches the persisted_activity_id can carry the same
             # stable live fields as the virtual detail row (verification
@@ -369,6 +395,9 @@ class TimelineBridgeMixin:
                             "resource_type": str(virtual_row.get("resource_type") or ""),
                             "resource_name": str(virtual_row.get("resource_name") or "未知"),
                             "project_name": str(virtual_row.get("project_name") or "未归类"),
+                            # Project description for the project_label contract
+                            # (name if description empty else f"{name}（{description}）").
+                            "project_description": str(virtual_row.get("project_description") or ""),
                             "status": str(virtual_row.get("status") or ""),
                             "is_in_progress": True,
                             "is_live_projected": True,
@@ -396,6 +425,12 @@ class TimelineBridgeMixin:
                     # (verification item 8: detail ticker must not use
                     # Timeline main payload delta).
                     "live_display": live_display,
+                    # Detail payload's OWN live projection (verification
+                    # item 五.3: detail ticker must use the detail
+                    # payload's own projection, NOT the Timeline main
+                    # payload's projection).
+                    "live_projection": detail_live_projection,
+                    "sample_id": str(detail_live_projection.get("stable_live_key_hash") or ""),
                 }
             rows = timeline_api.get_session_activity_details(
                 ids,
@@ -420,6 +455,9 @@ class TimelineBridgeMixin:
                     ),
                     "resource_name": _safe_resource_display_name(row),
                     "project_name": str(row.get("project_name") or "未归类"),
+                    # Project description for the project_label contract
+                    # (name if description empty else f"{name}（{description}）").
+                    "project_description": str(row.get("project_description") or ""),
                     "status": str(row.get("status") or ""),
                     "is_in_progress": is_in_progress,
                     "is_live_projected": is_in_progress,
@@ -452,6 +490,12 @@ class TimelineBridgeMixin:
                 # payload's delta for the detail ticker caused the detail
                 # duration to drift relative to its own baseline.
                 "live_display": live_display,
+                # Detail payload's OWN live projection (verification item
+                # 五.3). Detail ticker must use this projection, NOT the
+                # Timeline main payload's projection, so the detail
+                # duration does not drift relative to its own baseline.
+                "live_projection": detail_live_projection,
+                "sample_id": str(detail_live_projection.get("stable_live_key_hash") or ""),
             }
         except Exception:
             logger.exception("webview bridge get_timeline_session_details failed")

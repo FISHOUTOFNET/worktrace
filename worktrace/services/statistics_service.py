@@ -156,6 +156,8 @@ def _live_projection(start_date: str, end_date: str) -> dict | None:
     suddenly jump when the next activity persists.
     """
     from .live_display_service import (
+        _display_project_description,
+        _display_project_name,
         short_activity_carry_seconds,
         classify_live_state,
         is_live_eligible_for_normal,
@@ -180,13 +182,12 @@ def _live_projection(start_date: str, end_date: str) -> dict | None:
     # Include the short-activity carry seconds so consecutive <30s
     # activities do not first lose seconds and then suddenly jump.
     duration = duration + short_activity_carry_seconds(snapshot, report_date)
-    project = str(snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
-    description = ""
-    if project != UNCATEGORIZED_PROJECT:
-        from . import project_service
-
-        existing = project_service.get_project_by_name(project)
-        description = str((existing or {}).get("description") or "")
+    # Use the display project from the project-ownership contract — NOT
+    # the raw ``inferred_project_name`` / candidate project. During a
+    # 30-second pending transition the live KPI must attribute time to
+    # the inherited display project, not the candidate.
+    project = _display_project_name(snapshot)
+    description = _display_project_description(snapshot)
     return {
         "status": STATUS_NORMAL,
         "duration_seconds": duration,

@@ -49,10 +49,7 @@
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
             var timeRange = App.formatTimeRange(s.start_time, s.end_time, s.is_in_progress);
-            var projectLabel = s.project_name || "未归类";
-            if (s.project_description) {
-                projectLabel += " (" + s.project_description + ")";
-            }
+            var projectLabel = App.formatProjectLabel(s.project_name, s.project_description);
             // Phase 6H-followup: prefer ``duration_seconds`` (raw int from
             // the backend) over the pre-formatted ``duration`` string so
             // the ticker / monotonic helper can recompute from a stable
@@ -366,7 +363,7 @@
                 + '<span class="detail-item-type">' + App.escapeHtml(a.resource_type || "") + '</span>'
                 + '<span class="detail-item-app">' + App.escapeHtml(a.app_name || "") + '</span>'
                 + '</div>'
-                + '<div class="detail-item-project" title="' + App.escapeHtml(a.project_name || "未归类") + '">' + App.escapeHtml(a.project_name || "未归类") + '</div>'
+                + '<div class="detail-item-project" title="' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '">' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '</div>'
                 + '<div class="detail-item-duration" data-duration-seconds="' + (isNaN(aDurSec) ? 0 : aDurSec) + '">' + App.escapeHtml(aDurText) + '</div>'
                 // Phase 3B.5A: per-activity correction actions are grouped
                 // into three visually distinct groups with a stable order:

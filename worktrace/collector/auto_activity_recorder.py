@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..constants import (
@@ -26,6 +26,15 @@ from ..services.activity_lifecycle_service import (
     persist_midnight_anchor,
     persist_open_activity_if_ready,
 )
+from ..services.project_ownership_service import (
+    ProjectOwnershipState,
+    advance_ownership,
+    begin_ownership_for_new_resource,
+    candidate_project_for_activity,
+    clear_ownership_state,
+    serialize_project_ownership,
+    uncategorized_label,
+)
 from ..services.settings_service import get_setting, set_setting
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
@@ -48,6 +57,14 @@ class AutoActivityRecorder:
     persisted_activity_id: int | None = None
     current_extra_seconds: int = 0
     resume_after_short_activity: dict | None = None
+    # Project ownership state machine. The recorder owns the in-memory
+    # state (consistent with current_payload / current_signature /
+    # current_start_time / persisted_activity_id /
+    # current_extra_seconds); the pure logic lives in
+    # ``project_ownership_service``. This state drives the
+    # display_project / candidate_project / project_transition fields
+    # written into the current-activity snapshot.
+    project_ownership_state: ProjectOwnershipState | None = field(default=None)
 
     def observe(
         self,
@@ -62,6 +79,13 @@ class AutoActivityRecorder:
         if self.current_signature == signature:
             self.current_payload = {**self.current_payload, **{k: v for k, v in payload.items() if v is not None}}
             self.current_last_seen_time = at_time
+            # Advance the project-ownership pending timer on an
+            # unchanged resource signature. When the 30-second pending
+            # window elapses the candidate is confirmed and becomes the
+            # new display project.
+            self.project_ownership_state = advance_ownership(
+                self.project_ownership_state, at_time
+            )
             self._ensure_persisted_if_ready(at_time)
             self._update_persisted_progress(at_time)
             self._write_snapshot(at_time)
@@ -103,6 +127,9 @@ class AutoActivityRecorder:
 
     def stop(self, at_time: str, merge_transient: bool = True) -> None:
         self.finish_current(at_time, merge_transient=merge_transient)
+        # Session boundary: clear the ownership state so the previous
+        # session's display project is NOT inherited into a new session.
+        self.project_ownership_state = clear_ownership_state()
 
     def split_at_midnight(self, at_time: str) -> bool:
         if self.current_payload is None or self.current_start_time is None:
@@ -134,9 +161,38 @@ class AutoActivityRecorder:
         self.persisted_activity_id = None
         self.current_extra_seconds = 0
         self.resume_after_short_activity = None
+        self._begin_project_ownership(payload, at_time)
         self._ensure_persisted_if_ready(at_time)
         self._update_persisted_progress(at_time)
         self._write_snapshot(at_time)
+
+    def _begin_project_ownership(self, payload: dict, at_time: str) -> None:
+        """Initialize project ownership for a new resource signature.
+
+        Resource identity is immediate — the snapshot will reflect the
+        new resource right away. Project ownership is *delayed*: when
+        the candidate project for the new resource differs from the
+        last confirmed project, a 30-second pending window starts.
+        During pending the display project continues to show the last
+        confirmed project.
+
+        System statuses (idle / paused / excluded / error) clear the
+        ownership state so the previous session's project is not
+        inherited across a system-status boundary.
+        """
+        status = str(payload.get("status") or STATUS_NORMAL)
+        if status in SYSTEM_STATUSES:
+            # Session boundary: clear ownership so the previous
+            # session's display project is not inherited.
+            self.project_ownership_state = clear_ownership_state()
+            return
+        resource = payload.get("resource")
+        candidate = candidate_project_for_activity(payload, resource)
+        self.project_ownership_state = begin_ownership_for_new_resource(
+            self.project_ownership_state,
+            candidate,
+            at_time,
+        )
 
     def ensure_persisted_for_clipboard(self, at_time: str) -> int | None:
         self._ensure_persisted_if_ready(at_time, force=True)
@@ -163,6 +219,15 @@ class AutoActivityRecorder:
         # re-check it); clipboard force-persist bypasses the threshold
         # but is restricted to STATUS_NORMAL by the ``allowed_statuses``
         # set above.
+        #
+        # NOTE: clipboard force-persist may create a real open DB row
+        # BEFORE the 30-second project-ownership pending window elapses.
+        # The DB row's project assignment is converged by the facade's
+        # open-row sync, but the live UI display still follows the
+        # snapshot's ``display_project`` (driven by the ownership state
+        # machine) until the pending window elapses or the activity
+        # ends. The two concerns (DB persistence / project ownership)
+        # are intentionally orthogonal.
         if force:
             activity_id = force_persist_open_activity_for_clipboard(
                 start_time=self.current_start_time,
@@ -219,6 +284,13 @@ class AutoActivityRecorder:
         return HISTORY_PERSIST_THRESHOLD_SECONDS
 
     def _merge_or_pend_short_seconds(self, seconds: int) -> None:
+        # Short-activity blind merge: seconds are absorbed into the
+        # latest closed normal activity (regardless of project) or
+        # pended for the next persistence. This is intentionally
+        # project-blind — short activities exist to avoid fragmenting
+        # the activity log with sub-30s rows. Project ownership pending
+        # is a separate, display-level concern and does NOT change this
+        # merge policy.
         if seconds <= 0:
             return
         target = activity_service.get_latest_closed_auto_normal_activity(
@@ -256,6 +328,11 @@ class AutoActivityRecorder:
         self.persisted_activity_id = int(target["id"])
         stored_duration = int(target.get("duration_seconds") or 0)
         self.current_extra_seconds = max(0, stored_duration - _seconds_between(start_time, at_time))
+        # Recompute project ownership for the resumed activity so the
+        # display project reflects the resumed resource's candidate
+        # (which should match the last confirmed project, producing no
+        # pending).
+        self._begin_project_ownership(payload, at_time)
         self._update_persisted_progress(at_time)
         self._write_snapshot(at_time)
         return True
@@ -305,12 +382,31 @@ class AutoActivityRecorder:
                 or self.current_payload.get("process_name")
                 or ""
             )
-        inferred_project_name = _snapshot_project_name(
-            self.current_payload,
-            self.persisted_activity_id,
-            resource=resource if resource is not None and isinstance(resource, DetectedResource) else None,
-        )
+        status = self.current_payload.get("status") or STATUS_NORMAL
+
+        # ---- Project ownership ----
+        ownership = self.project_ownership_state
+        if status in SYSTEM_STATUSES or ownership is None or ownership.display_project is None:
+            display_label = uncategorized_label()
+            candidate_label = uncategorized_label()
+            transition_dict = serialize_project_ownership(None)["project_transition"]
+        else:
+            display_label = ownership.display_project
+            candidate_label = ownership.candidate_project or uncategorized_label()
+            transition_dict = ownership.project_transition.to_dict()
+
+        display_project_dict = display_label.to_dict()
+        candidate_project_dict = candidate_label.to_dict()
+        project_transition_pending = bool(transition_dict.get("pending"))
+
+        # Legacy ``inferred_project_name`` now mirrors the display
+        # project name so legacy readers (statistics_service live
+        # projection, refresh-revision) see the display project rather
+        # than the candidate. New readers should use ``display_project``.
+        inferred_project_name = display_label.name or UNCATEGORIZED_PROJECT
+
         payload = {
+            # ---- Legacy fields (kept for transition) ----
             "app_name": self.current_payload.get("app_name") or "",
             "process_name": self.current_payload.get("process_name") or "",
             "window_title": self.current_payload.get("window_title") or "",
@@ -323,12 +419,17 @@ class AutoActivityRecorder:
             "resource_path_hint": resource_path_hint,
             "resource_uri_host": resource_uri_host,
             "inferred_project_name": inferred_project_name,
-            "status": self.current_payload.get("status") or STATUS_NORMAL,
+            "status": status,
             "start_time": self.current_start_time,
             "elapsed_seconds": elapsed,
             "extra_seconds": self.current_extra_seconds,
             "persisted_activity_id": self.persisted_activity_id,
             "is_persisted": self.persisted_activity_id is not None,
+            # ---- New project-ownership contract ----
+            "display_project": display_project_dict,
+            "candidate_project": candidate_project_dict,
+            "project_transition": transition_dict,
+            "project_transition_pending": project_transition_pending,
         }
         set_setting("current_activity_snapshot", json.dumps(payload, ensure_ascii=False))
 
@@ -343,44 +444,3 @@ def _activity_signature(activity: dict) -> tuple[str, ...]:
         str(activity.get("window_title") or ""),
         activity.get("file_path_hint"),
     )
-
-
-def _snapshot_project_name(
-    activity: dict | None = None,
-    persisted_activity_id: int | None = None,
-    resource: DetectedResource | None = None,
-) -> str:
-    if activity and activity.get("status") in SYSTEM_STATUSES:
-        return UNCATEGORIZED_PROJECT
-    if persisted_activity_id is not None:
-        activity_row = activity_service.get_activity(persisted_activity_id)
-        if activity_row and activity_row.get("project_name") and activity_row["project_name"] != UNCATEGORIZED_PROJECT:
-            return activity_row["project_name"]
-    # Resource-first preview: use the full resource-first inference (which
-    # includes folder rules, keyword rules, and suggested project name) so
-    # that the snapshot reflects the same project that would be assigned on
-    # persistence.
-    from ..services.project_inference_service import candidate_project_name_for_activity
-
-    # Build an activity dict that carries the detected resource's path so the
-    # inference can match folder rules even before the activity is persisted.
-    activity_for_inference = dict(activity or {})
-    if resource is not None and not activity_for_inference.get("file_path_hint") and resource.path_hint:
-        activity_for_inference["file_path_hint"] = resource.path_hint
-
-    resource_dict = None
-    if resource is not None:
-        resource_dict = {
-            "resource_kind": resource.resource_kind,
-            "resource_subtype": resource.resource_subtype,
-            "display_name": resource.display_name,
-            "identity_key": resource.identity_key,
-            "is_anchor": int(resource.is_anchor),
-            "app_name": resource.app_name,
-            "process_name": resource.process_name,
-            "window_title": resource.window_title,
-            "path_hint": resource.path_hint,
-            "uri_host": resource.uri_host,
-        }
-
-    return candidate_project_name_for_activity(activity_for_inference, resource_dict) or UNCATEGORIZED_PROJECT

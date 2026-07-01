@@ -202,101 +202,166 @@ class OverviewBridgeMixin:
         """
         try:
             today = timeline_api.get_default_report_date()
-            sessions = timeline_api.get_project_sessions_by_date(
-                today,
-                include_hidden=False,
-                ensure_context=True,
-            )
             snapshot = settings_api.get_current_activity_snapshot()
-            live_display = live_display_api.build_current_activity_summary(
-                snapshot, report_date=today, today=today
-            )
-            # Build the persisted-open overlay once so every DB session
-            # item that matches the persisted_activity_id can carry the
-            # same stable live fields as the virtual item (verification
-            # items 12, 16, 21). The overlay is None when the snapshot is
-            # not persisted_open.
-            persisted_overlay = live_display_api.build_persisted_open_overlay(
-                snapshot, report_date=today, today=today
-            )
-            items: list[dict[str, Any]] = []
-            # Prepend a virtual live item when the current snapshot is a
-            # normal unpersisted activity. This is display-only; the DB is
-            # never written and the 30-second persistence threshold is
-            # preserved.
-            if live_display.get("is_virtual_live"):
-                virtual = live_display_api.build_virtual_session(
-                    snapshot, report_date=today, today=today
-                )
-                if virtual:
-                    items.append(
-                        {
-                            "project_name": str(virtual.get("project_name") or "未归类"),
-                            "start_time": str(virtual.get("start_time") or ""),
-                            "end_time": "",
-                            "duration": str(virtual.get("duration") or "00:00:00"),
-                            "duration_seconds": int(virtual.get("duration_seconds") or 0),
-                            "is_in_progress": True,
-                            "is_live_projected": True,
-                            "is_virtual": True,
-                            "is_virtual_live": True,
-                            "live_display_key": str(virtual.get("live_display_key") or ""),
-                            # Stable live identity so the frontend continuity
-                            # key survives the virtual → persisted_open
-                            # transition (verification items 12, 16, 21).
-                            "stable_live_key": str(virtual.get("stable_live_key") or ""),
-                            "stable_live_key_hash": str(virtual.get("stable_live_key_hash") or ""),
-                            # Unified live clock fields (scheme A).
-                            "live_state": "virtual",
-                            "live_started_at_epoch_ms": int(virtual.get("live_started_at_epoch_ms") or 0),
-                            "carry_seconds": int(virtual.get("carry_seconds") or 0),
-                            "disable_reason": str(virtual.get("disable_reason") or ""),
-                            "activity_id": 0,
-                            "source": "snapshot",
-                            "edit_disabled": True,
-                            "status": "进行中",
-                        }
-                    )
-            limited = sessions[:_RECENT_LIMIT]
-            for session in limited:
-                base_seconds = int(session.get("duration_seconds") or 0)
-                is_in_progress = bool(session.get("is_in_progress"))
-                row = {
-                    "project_name": str(session.get("project_name") or "未归类"),
-                    "start_time": str(session.get("start_time") or ""),
-                    "end_time": str(session.get("end_time") or ""),
-                    "duration": format_duration(base_seconds),
-                    "duration_seconds": base_seconds,
-                    "is_in_progress": is_in_progress,
-                    "is_live_projected": is_in_progress,
-                    "is_virtual": False,
-                    "is_virtual_live": False,
-                    "live_display_key": "",
-                    "live_state": "",
-                    "stable_live_key": "",
-                    "stable_live_key_hash": "",
-                    "live_started_at_epoch_ms": 0,
-                    "carry_seconds": 0,
-                    "activity_id": int(session.get("first_activity_id") or 0) or 0,
-                    "source": "db",
-                    "edit_disabled": False,
-                    "disable_reason": "",
-                    "status": str(session.get("status_summary") or session.get("status") or ""),
-                }
-                # Apply the persisted-open overlay so the matching DB row
-                # carries the same stable live fields as the virtual item.
-                # This is a no-op for closed / non-matching rows.
-                live_display_api.apply_persisted_open_overlay_to_row(row, persisted_overlay)
-                items.append(row)
-            return {
-                "ok": True,
-                "activities": items,
-                # Unified live-display payload so the frontend ticker can
-                # decide eligibility without re-reading the raw snapshot.
-                "live_display": live_display,
-            }
+            return self._build_recent_payload(snapshot, today)
         except Exception:
             logger.exception("webview bridge get_recent_activities failed")
+            return dict(_GENERIC_ERROR)
+
+    def _build_recent_payload(
+        self,
+        snapshot: dict[str, Any] | None,
+        today: str,
+    ) -> dict[str, Any]:
+        """Build the recent-activities payload from a single snapshot.
+
+        Shared by :meth:`get_recent_activities` and
+        :meth:`get_overview_live_bundle` so both paths consume the SAME
+        snapshot sample (no multi-sample drift).
+        """
+        sessions = timeline_api.get_project_sessions_by_date(
+            today,
+            include_hidden=False,
+            ensure_context=True,
+        )
+        live_display = live_display_api.build_current_activity_summary(
+            snapshot, report_date=today, today=today
+        )
+        persisted_overlay = live_display_api.build_persisted_open_overlay(
+            snapshot, report_date=today, today=today
+        )
+        items: list[dict[str, Any]] = []
+        if live_display.get("is_virtual_live"):
+            virtual = live_display_api.build_virtual_session(
+                snapshot, report_date=today, today=today
+            )
+            if virtual:
+                items.append(
+                    {
+                        "project_name": str(virtual.get("project_name") or "未归类"),
+                        "project_description": str(virtual.get("project_description") or ""),
+                        "start_time": str(virtual.get("start_time") or ""),
+                        "end_time": "",
+                        "duration": str(virtual.get("duration") or "00:00:00"),
+                        "duration_seconds": int(virtual.get("duration_seconds") or 0),
+                        "is_in_progress": True,
+                        "is_live_projected": True,
+                        "is_virtual": True,
+                        "is_virtual_live": True,
+                        "live_display_key": str(virtual.get("live_display_key") or ""),
+                        "stable_live_key": str(virtual.get("stable_live_key") or ""),
+                        "stable_live_key_hash": str(virtual.get("stable_live_key_hash") or ""),
+                        "live_state": "virtual",
+                        "live_started_at_epoch_ms": int(virtual.get("live_started_at_epoch_ms") or 0),
+                        "carry_seconds": int(virtual.get("carry_seconds") or 0),
+                        "disable_reason": str(virtual.get("disable_reason") or ""),
+                        "activity_id": 0,
+                        "source": "snapshot",
+                        "edit_disabled": True,
+                        "status": "进行中",
+                    }
+                )
+        limited = sessions[:_RECENT_LIMIT]
+        for session in limited:
+            base_seconds = int(session.get("duration_seconds") or 0)
+            is_in_progress = bool(session.get("is_in_progress"))
+            row = {
+                "project_name": str(session.get("project_name") or "未归类"),
+                "project_description": str(session.get("project_description") or ""),
+                "start_time": str(session.get("start_time") or ""),
+                "end_time": str(session.get("end_time") or ""),
+                "duration": format_duration(base_seconds),
+                "duration_seconds": base_seconds,
+                "is_in_progress": is_in_progress,
+                "is_live_projected": is_in_progress,
+                "is_virtual": False,
+                "is_virtual_live": False,
+                "live_display_key": "",
+                "live_state": "",
+                "stable_live_key": "",
+                "stable_live_key_hash": "",
+                "live_started_at_epoch_ms": 0,
+                "carry_seconds": 0,
+                "activity_id": int(session.get("first_activity_id") or 0) or 0,
+                "source": "db",
+                "edit_disabled": False,
+                "disable_reason": "",
+                "status": str(session.get("status_summary") or session.get("status") or ""),
+            }
+            live_display_api.apply_persisted_open_overlay_to_row(row, persisted_overlay)
+            items.append(row)
+        return {
+            "ok": True,
+            "activities": items,
+            "live_display": live_display,
+        }
+
+    def get_overview_live_bundle(self) -> dict[str, Any]:
+        """Return Overview KPI + current activity + recent activities + live
+        projection in a SINGLE backend call from a SINGLE snapshot sample.
+
+        Replaces the previous parallel ``get_overview`` +
+        ``get_recent_activities`` calls which naturally produced two
+        different snapshot samples (the recent live row could be 1-2
+        seconds ahead of the current activity, causing the frontend to
+        freeze the current activity while waiting for it to catch up).
+
+        The bundle reads the snapshot ONCE and derives every sub-payload
+        from it:
+
+        - ``live_projection`` — the unified live projection (single
+          source of truth for the frontend ticker);
+        - ``overview`` — KPI totals (with ``include_live=True`` so the
+          live projection's display project is counted);
+        - ``current_activity`` — the current-activity summary;
+        - ``activities`` — the recent-activities list;
+        - ``sample_id`` — ``stable_live_key_hash`` so the frontend can
+          verify all sub-payloads came from the same sample.
+
+        Pending project transitions are honored: the recent live row
+        uses the display project (NOT the candidate project), so it
+        never appears as a separate candidate-project row during the
+        30-second pending window.
+        """
+        try:
+            today = timeline_api.get_default_report_date()
+            snapshot = settings_api.get_current_activity_snapshot()
+            # Build every sub-payload from the SAME snapshot sample.
+            live_projection = live_display_api.build_live_projection(
+                snapshot, report_date=today, today=today
+            )
+            summary = statistics_api.get_summary(today, today, include_live=True)
+            project_count = len(project_api.list_active_projects())
+            current = _snapshot_summary(snapshot)
+            recent = self._build_recent_payload(snapshot, today)
+            total_seconds = int(summary.get("total_duration") or 0)
+            classified_seconds = int(summary.get("classified_duration") or 0)
+            uncategorized_seconds = int(summary.get("uncategorized_duration") or 0)
+            sample_id = str(live_projection.get("stable_live_key_hash") or "")
+            return {
+                "ok": True,
+                "date": today,
+                "sample_id": sample_id,
+                "live_projection": live_projection,
+                "overview": {
+                    "total_duration": format_duration(total_seconds),
+                    "classified_duration": format_duration(classified_seconds),
+                    "uncategorized_duration": format_duration(uncategorized_seconds),
+                    "project_count": project_count,
+                    "today_total_seconds": total_seconds,
+                    "classified_seconds": classified_seconds,
+                    "uncategorized_seconds": uncategorized_seconds,
+                },
+                "current_activity": current,
+                "activities": recent.get("activities", []),
+                # Keep ``live_display`` as an alias of the live projection's
+                # current-activity summary so legacy frontend code that
+                # reads ``live_display`` keeps working during the transition.
+                "live_display": current,
+                "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
+            }
+        except Exception:
+            logger.exception("webview bridge get_overview_live_bundle failed")
             return dict(_GENERIC_ERROR)
 
     def get_refresh_state(self, report_date=None) -> dict[str, Any]:
