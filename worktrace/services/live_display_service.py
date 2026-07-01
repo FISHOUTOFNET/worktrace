@@ -230,6 +230,64 @@ def _display_project_name(snapshot: dict[str, Any] | None) -> str:
     return name if name else UNCATEGORIZED_PROJECT
 
 
+def _stable_live_key(snapshot: dict[str, Any] | None) -> str:
+    """Build a STABLE live identity for the current activity.
+
+    Unlike ``_live_display_key``, this key does NOT include
+    ``is_persisted`` / ``persisted_activity_id`` / ``inferred_project_name``
+    so it remains the same when the activity transitions from virtual
+    (unpersisted) to persisted_open. The frontend ticker uses this key as
+    the continuity anchor so the duration display does not reset when the
+    30-second persistence threshold is crossed.
+
+    The key is constructed ONLY from sanitized display fields
+    (``resource_display_name`` / ``activity_display_name`` / ``app_name`` /
+    ``process_name`` / ``start_time`` / ``status``). Raw ``window_title``,
+    ``file_path_hint``, ``note`` and ``clipboard`` are NEVER included.
+    """
+    if not snapshot:
+        return ""
+    parts = [
+        str(snapshot.get("resource_display_name") or ""),
+        str(snapshot.get("activity_display_name") or ""),
+        str(snapshot.get("app_name") or ""),
+        str(snapshot.get("process_name") or ""),
+        str(snapshot.get("start_time") or ""),
+        str(snapshot.get("status") or ""),
+    ]
+    return "|".join(parts)
+
+
+def _stable_live_key_hash(snapshot: dict[str, Any] | None) -> str:
+    """Return a short hash of the stable_live_key for use in UI ids."""
+    key = _stable_live_key(snapshot)
+    if not key:
+        return ""
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
+
+def _start_time_epoch_ms(snapshot: dict[str, Any] | None) -> int:
+    """Convert the snapshot's ``start_time`` (``YYYY-MM-DD HH:MM:SS``) to
+    epoch milliseconds.
+
+    Returns ``0`` when the snapshot is missing or the start_time cannot
+    be parsed. Used by the unified live clock so the frontend can compute
+    ``display_seconds = carry_seconds + floor((Date.now() -
+    live_started_at_epoch_ms) / 1000)`` from a single stable anchor
+    instead of a response-time baseline.
+    """
+    if not snapshot:
+        return 0
+    start_time = str(snapshot.get("start_time") or "")
+    if not start_time:
+        return 0
+    try:
+        dt = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return 0
+    return int(dt.timestamp() * 1000)
+
+
 def _live_display_key(snapshot: dict[str, Any] | None) -> str:
     """Build a display-safe live-display identity for the current activity.
 
@@ -434,6 +492,10 @@ def build_current_activity_summary(
             "is_in_progress": False,
             "is_virtual_live": False,
             "live_display_key": "",
+            "stable_live_key": "",
+            "stable_live_key_hash": "",
+            "live_started_at_epoch_ms": 0,
+            "carry_seconds": 0,
             "resource_name": "",
             "app_name": "",
             "start_time": "",
@@ -474,6 +536,13 @@ def build_current_activity_summary(
     if is_virtual_live:
         carry_seconds = carry_baseline_seconds(snapshot, report_date)
     display_seconds = elapsed_seconds + carry_seconds
+    # Unified live clock (scheme A): the frontend computes
+    # ``display_seconds = carry_seconds + floor((Date.now() -
+    # live_started_at_epoch_ms) / 1000)`` so the same current activity
+    # does not jump fast/slow across refreshes. The start_time is the
+    # stable anchor; carry_seconds captures pending short-activity
+    # accumulation. Both come from the SAME snapshot sample.
+    live_started_at_epoch_ms = _start_time_epoch_ms(snapshot)
     from ..formatters import format_duration
 
     state_label = "已进入历史" if is_persisted else "暂不入历史"
@@ -500,6 +569,12 @@ def build_current_activity_summary(
         "is_in_progress": bool(is_in_progress),
         "is_virtual_live": bool(is_virtual_live),
         "live_display_key": _live_display_key(snapshot),
+        "stable_live_key": _stable_live_key(snapshot),
+        "stable_live_key_hash": _stable_live_key_hash(snapshot),
+        # Unified live clock fields (scheme A). The frontend computes
+        # ``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``.
+        "live_started_at_epoch_ms": int(live_started_at_epoch_ms or 0),
+        "carry_seconds": int(carry_seconds),
         "resource_name": resource_name,
         "app_name": app_name,
         "start_time": start_time,
@@ -509,6 +584,22 @@ def build_current_activity_summary(
         "is_uncategorized": bool(is_uncategorized),
         "is_classified": not bool(is_uncategorized),
     }
+
+
+def _virtual_session_id(snapshot: dict[str, Any] | None) -> str:
+    """Return the stable virtual session id for a snapshot.
+
+    The id is ``"virtual-live:<stable_live_key_hash>"`` so the same logical
+    activity keeps the same id across the virtual → persisted_open
+    transition (the persisted row uses its real DB id, but the stable hash
+    lets the frontend continuity key survive the transition). When the
+    snapshot is empty the legacy ``"virtual-live"`` sentinel is returned
+    so callers can still detect "no virtual session".
+    """
+    h = _stable_live_key_hash(snapshot)
+    if not h:
+        return "virtual-live"
+    return "virtual-live:" + h
 
 
 def build_virtual_session(
@@ -527,6 +618,11 @@ def build_virtual_session(
     ``is_virtual`` is ``True``, ``source`` is ``"snapshot"``, and every
     edit / split / merge / hide / delete / restore button must be
     disabled. The DB is NEVER written.
+
+    ``session_id`` is ``"virtual-live:<stable_live_key_hash>"`` so the
+    frontend continuity key survives the virtual → persisted_open
+    transition (the persisted row uses its real DB id, but the stable
+    hash keeps the ticker continuity anchor stable).
     """
     if not is_live_eligible_for_normal(snapshot, report_date, today):
         return None
@@ -540,7 +636,7 @@ def build_virtual_session(
     project_name = _display_project_name(snapshot)
     start_time = str(snapshot.get("start_time") or "")
     return {
-        "session_id": "virtual-live",
+        "session_id": _virtual_session_id(snapshot),
         "project_name": project_name,
         "project_description": "",
         "project_id": 0,
@@ -561,6 +657,8 @@ def build_virtual_session(
         "first_activity_id": None,
         "session_note": "",
         "live_display_key": _live_display_key(snapshot),
+        "stable_live_key": _stable_live_key(snapshot),
+        "stable_live_key_hash": _stable_live_key_hash(snapshot),
         "edit_disabled": True,
         "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
     }
@@ -612,6 +710,8 @@ def build_virtual_detail_row(
         "live_state": "virtual",
         "source": "snapshot",
         "live_display_key": _live_display_key(snapshot),
+        "stable_live_key": _stable_live_key(snapshot),
+        "stable_live_key_hash": _stable_live_key_hash(snapshot),
         "edit_disabled": True,
         "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
     }
@@ -662,10 +762,23 @@ def build_persisted_open_overlay(
     persisted_id = snapshot_persisted_id(snapshot) or 0
     if persisted_id <= 0:
         return None
+    # Unified live clock (scheme A): the persisted open row's live seconds
+    # are anchored on the row's start_time so the frontend can compute
+    # ``display_seconds = carry_seconds + floor((Date.now() -
+    # live_started_at_epoch_ms) / 1000)``. For persisted_open rows
+    # carry_seconds is 0 (the carry is already folded into the row's
+    # stored duration via ``increment_activity_duration``).
+    live_started_at_epoch_ms = _start_time_epoch_ms(snapshot)
     return {
         "persisted_activity_id": int(persisted_id),
         "live_seconds": int(_snapshot_total_seconds(snapshot)),
         "live_display_key": _live_display_key(snapshot),
+        "stable_live_key": _stable_live_key(snapshot),
+        "stable_live_key_hash": _stable_live_key_hash(snapshot),
+        "live_started_at_epoch_ms": int(live_started_at_epoch_ms or 0),
+        "carry_seconds": 0,
+        # Kept for backward compat — frontend ticker now prefers the
+        # unified live_started_at_epoch_ms + carry_seconds fields.
         "baseline_epoch_ms": int(_time.time() * 1000),
     }
 
@@ -696,18 +809,22 @@ def compute_refresh_revision(
     - the carry / pending_short_seconds state changes (so a short
       activity that just crossed the threshold and persisted triggers a
       refresh);
-    - the latest visible activity id / updated_at for the report date
-      changes (covers manual project edit, time edit, split, merge,
-      hide, delete, restore, note edit, open row persisted, project
-      assignment);
-    - the open row's duration / project / status changes (covered by the
-      latest-activity check above plus the snapshot persisted_id check);
+    - ANY visible activity for the report date changes structurally
+      (covers manual project edit, time edit, split, merge, hide,
+      delete, restore, note edit, open row persisted, project
+      assignment, open-row close);
     - collector status / paused state changes;
     - the report date crosses midnight (``today`` changes).
 
     The revision MUST NOT change when only:
 
-    - elapsed_seconds / extra_seconds naturally increase;
+    - ``elapsed_seconds`` / ``extra_seconds`` naturally increase;
+    - ``duration_seconds`` naturally grows on an open row (the
+      ``set_activity_duration`` / ``increment_activity_duration``
+      writes are excluded from the per-row structural signature);
+    - ``updated_at`` advances on a duration-only write (the
+      ``updated_at`` column is excluded from the per-row structural
+      signature);
     - Date.now / snapshot_baseline_epoch_ms advance without any
       structural change;
     - snapshot_updated_at advances without any structural change.
@@ -732,28 +849,72 @@ def compute_refresh_revision(
             safe_int(carry.get("base_seconds")),
             safe_int(carry.get("completed_seconds")),
         )
-    # Latest visible activity for the report date (covers ALL structural
-    # DB writes: manual project edit, time edit, split, merge, hide,
-    # delete, restore, note edit, open row persisted, project
-    # assignment). Using the latest visible activity for the *report*
-    # date (not just latest closed auto normal) ensures historical-date
-    # edits also trigger a refresh when the user is viewing that date.
+    # Structural signature for EVERY visible activity on the report date.
+    # This covers ALL structural DB writes (manual project edit, time
+    # edit, split, merge, hide, delete, restore, note edit, open row
+    # persisted, project assignment, open-row close). The signature
+    # EXCLUDES ``duration_seconds`` and ``updated_at`` so a
+    # duration-only natural-growth write on an open row does NOT
+    # pollute the revision (verification items 5 and 7). The structural
+    # fields per row are: id, start_time, end_time (NULL vs not NULL is
+    # structural — open→close transition), status, project_id, source,
+    # is_deleted, is_hidden, note, app_name, process_name,
+    # file_path_hint, manual_override, auto_classified. We also include
+    # the row count so a new/removed row triggers a revision change even
+    # if its structural signature happens to collide.
     latest_id = 0
     latest_updated_at = ""
     latest_kind = ""
+    structural_signature = ""
+    row_count = 0
     try:
         rows = activity_service.get_activities_by_date(report_date)
-        if rows:
-            latest = rows[0]  # already sorted by start_time DESC, id DESC
-            latest_id = int(latest.get("id") or 0)
-            latest_updated_at = str(latest.get("updated_at") or "")
-            latest_kind = "{0}|{1}|{2}|{3}|{4}".format(
-                str(latest.get("status") or ""),
-                str(latest.get("project_name") or ""),
-                "1" if latest.get("end_time") is None else "0",
-                str(latest.get("is_deleted") or 0),
-                str(latest.get("is_hidden") or 0),
+        row_count = len(rows)
+        # Hash each row's structural fields together. Using a per-row
+        # signature (rather than concatenating raw values) keeps the
+        # overall string length bounded and avoids field-order
+        # ambiguity. We include the structural fields most likely to
+        # change on a user-initiated edit.
+        row_signatures: list[str] = []
+        for row in rows:
+            row_id = int(row.get("id") or 0)
+            if row_id > latest_id:
+                latest_id = row_id
+                latest_updated_at = str(row.get("updated_at") or "")
+                latest_kind = "{0}|{1}|{2}|{3}|{4}".format(
+                    str(row.get("status") or ""),
+                    str(row.get("project_name") or ""),
+                    "1" if row.get("end_time") is None else "0",
+                    str(row.get("is_deleted") or 0),
+                    str(row.get("is_hidden") or 0),
+                )
+            sig = "|".join(
+                [
+                    str(row.get("id") or 0),
+                    str(row.get("start_time") or ""),
+                    "1" if row.get("end_time") is None else "0",
+                    str(row.get("end_time") or ""),
+                    str(row.get("status") or ""),
+                    str(row.get("project_id") or 0),
+                    str(row.get("source") or ""),
+                    str(row.get("is_deleted") or 0),
+                    str(row.get("is_hidden") or 0),
+                    str(row.get("note") or ""),
+                    str(row.get("app_name") or ""),
+                    str(row.get("process_name") or ""),
+                    str(row.get("file_path_hint") or ""),
+                    str(row.get("manual_override") or 0),
+                    str(row.get("auto_classified") or 0),
+                ]
             )
+            row_signatures.append(sig)
+        # The structural signature is the hash of all row signatures +
+        # the row count. This way, any single row's structural change
+        # (including a new/removed row) changes the overall revision,
+        # but a duration-only write does not.
+        structural_signature = hashlib.sha1(
+            ("#".join(row_signatures) + "|count=" + str(row_count)).encode("utf-8")
+        ).hexdigest()
     except Exception:
         pass
     revision_input = "|".join(
@@ -768,9 +929,13 @@ def compute_refresh_revision(
             today,
             str(pending_short_seconds),
             carry_signature,
+            # Structural signature replaces the old ``latest_id`` /
+            # ``latest_updated_at`` / ``latest_kind`` triplet so a
+            # duration-only ``updated_at`` bump no longer triggers a
+            # heavy refresh.
+            structural_signature,
+            str(row_count),
             str(latest_id),
-            latest_updated_at,
-            latest_kind,
         ]
     )
     revision = hashlib.sha1(revision_input.encode("utf-8")).hexdigest()
@@ -785,7 +950,10 @@ def compute_refresh_revision(
         "today": today,
         "pending_short_seconds": pending_short_seconds,
         "carry_signature": carry_signature,
+        "structural_signature": structural_signature,
+        "row_count": row_count,
         "latest_id": latest_id,
+        # Kept for debug visibility only — NOT part of revision_input.
         "latest_updated_at": latest_updated_at,
         "latest_kind": latest_kind,
     }
@@ -802,5 +970,22 @@ __all__ = [
     "compute_refresh_revision",
     "is_live_eligible_for_normal",
     "persisted_open_live_seconds",
+    "stable_live_key",
+    "stable_live_key_hash",
     "sync_carry_state",
+    "virtual_session_id",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Public aliases for the stable live-identity helpers
+# ---------------------------------------------------------------------------
+
+# These aliases expose the underscore-prefixed helpers through the public
+# namespace so the bridge layer (via ``live_display_api``) can read the stable
+# live identity without reaching into the private helpers directly. The
+# private helpers remain the single source of truth.
+
+stable_live_key = _stable_live_key
+stable_live_key_hash = _stable_live_key_hash
+virtual_session_id = _virtual_session_id

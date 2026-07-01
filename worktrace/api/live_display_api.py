@@ -33,7 +33,10 @@ from ..services.live_display_service import (
     compute_refresh_revision,
     is_live_eligible_for_normal,
     persisted_open_live_seconds,
+    stable_live_key,
+    stable_live_key_hash,
     sync_carry_state,
+    virtual_session_id,
 )
 
 
@@ -47,5 +50,8 @@ __all__ = [
     "compute_refresh_revision",
     "is_live_eligible_for_normal",
     "persisted_open_live_seconds",
+    "stable_live_key",
+    "stable_live_key_hash",
     "sync_carry_state",
+    "virtual_session_id",
 ]

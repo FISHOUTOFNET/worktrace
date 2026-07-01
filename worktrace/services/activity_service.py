@@ -185,14 +185,59 @@ def close_activity(activity_id: int, end_time: str, duration_seconds: int | None
 
 
 def close_current_open_record(end_time: str | None = None) -> None:
+    """Close every open activity row (``end_time IS NULL``).
+
+    Converges project inference / automatic rules on every closed row so
+    the persisted project assignment matches the inference that would
+    have run if each row had been closed via ``close_activity``. This
+    keeps virtual → persisted_open → close transitions consistent: the
+    snapshot's inferred project is honored on close, and enabled folder
+    / keyword rules apply to the just-closed row.
+
+    Verification items 2 & 12: every open-row close path
+    (``close_current_open_record`` is called by the collector
+    state-machine on stop / pause / time-jump) now converges to the
+    same automatic-rules entry point as ``close_activity``.
+    """
     end = end_time or now_str()
+    closed_ids: list[int] = []
     with get_connection() as conn:
         rows = conn.execute("SELECT id FROM activity_log WHERE end_time IS NULL ORDER BY id").fetchall()
         for row in rows:
-            _close_activity_in_conn(conn, int(row["id"]), end)
+            aid = int(row["id"])
+            _close_activity_in_conn(conn, aid, end)
+            closed_ids.append(aid)
+    # Run project inference / automatic rules for each closed row so the
+    # persisted project assignment is consistent with the close_activity
+    # path. ``process_new_activity`` skips in-progress rows, so the
+    # inference only fires after the row is actually closed above.
+    from .project_inference_service import process_new_activity
+
+    for aid in closed_ids:
+        try:
+            process_new_activity(aid)
+        except Exception:
+            # Defensive: never let an inference failure on one row
+            # prevent the remaining rows from being closed. The row is
+            # already closed; its assignment simply stays at whatever
+            # was inferred at create time.
+            pass
 
 
 def increment_activity_duration(activity_id: int, seconds: int) -> None:
+    """Increment an open activity row's ``duration_seconds``.
+
+    Phase R3 verification item 7: this write is a *natural growth* update
+    on an open row — the duration is derived from
+    ``now - start_time`` and is NOT a structural change. The
+    ``updated_at`` column is therefore NOT bumped, so
+    ``compute_refresh_revision`` (which excludes ``updated_at`` from
+    the per-row structural signature) does not trigger a heavy refresh
+    on every collector tick.
+
+    A subsequent structural write (close, project edit, time edit, etc.)
+    will refresh ``updated_at`` as usual.
+    """
     seconds = max(0, int(seconds or 0))
     if seconds <= 0:
         return
@@ -207,14 +252,27 @@ def increment_activity_duration(activity_id: int, seconds: int) -> None:
         conn.execute(
             """
             UPDATE activity_log
-            SET duration_seconds = ?, updated_at = ?
+            SET duration_seconds = ?
             WHERE id = ?
             """,
-            (duration, now_str(), activity_id),
+            (duration, activity_id),
         )
 
 
 def set_activity_duration(activity_id: int, seconds: int) -> None:
+    """Set an open activity row's ``duration_seconds`` (monotonic max).
+
+    Phase R3 verification item 7: this write is a *natural growth* update
+    on an open row — the duration is derived from
+    ``now - start_time`` and is NOT a structural change. The
+    ``updated_at`` column is therefore NOT bumped, so
+    ``compute_refresh_revision`` (which excludes ``updated_at`` from
+    the per-row structural signature) does not trigger a heavy refresh
+    on every collector tick.
+
+    A subsequent structural write (close, project edit, time edit, etc.)
+    will refresh ``updated_at`` as usual.
+    """
     seconds = max(0, int(seconds or 0))
     with get_connection() as conn:
         row = conn.execute(
@@ -227,10 +285,10 @@ def set_activity_duration(activity_id: int, seconds: int) -> None:
         conn.execute(
             """
             UPDATE activity_log
-            SET duration_seconds = ?, updated_at = ?
+            SET duration_seconds = ?
             WHERE id = ?
             """,
-            (duration, now_str(), activity_id),
+            (duration, activity_id),
         )
 
 

@@ -477,6 +477,9 @@ def test_get_recent_activities_prepends_virtual_item_for_normal_snapshot(bridge)
     assert virtual["is_in_progress"] is True
     assert virtual["live_display_key"]
     assert virtual["duration_seconds"] > 0
+    # Verification item 12/16/21: stable_live_key / stable_live_key_hash
+    assert virtual["stable_live_key"]
+    assert virtual["stable_live_key_hash"]
 
 
 def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
@@ -487,7 +490,9 @@ def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     result = bridge.get_timeline()
     assert result["ok"] is True
-    assert result["live_projected_session_id"] == "virtual-live"
+    # Verification item 21: the virtual session id must include a stable
+    # live identity hash, not the fixed "virtual-live" string.
+    assert result["live_projected_session_id"].startswith("virtual-live:")
     assert result["live_projected_seconds"] > 0
     sessions = result["sessions"]
     assert len(sessions) >= 1, "virtual live session must be prepended"
@@ -498,6 +503,12 @@ def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
     assert virtual["edit_disabled"] is True
     assert virtual["is_in_progress"] is True
     assert virtual["live_display_key"]
+    # Verification item 12/16/21: stable_live_key / stable_live_key_hash
+    # must be present so the frontend continuity key survives the
+    # virtual → persisted_open transition.
+    assert virtual["stable_live_key"]
+    assert virtual["stable_live_key_hash"]
+    assert virtual["session_id"].startswith("virtual-live:")
     # Timeline total must not be 0 when a virtual session exists.
     assert int(result["today_total_seconds"]) > 0
     # The virtual session's duration must be included in the total.
@@ -524,6 +535,9 @@ def test_get_timeline_session_details_returns_virtual_detail_row(bridge):
     assert row["is_in_progress"] is True
     assert row["live_display_key"]
     assert row["duration_seconds"] > 0
+    # Verification item 12/16/21: stable_live_key / stable_live_key_hash
+    assert row["stable_live_key"]
+    assert row["stable_live_key_hash"]
     # The virtual row must use the snapshot's display-safe project, not a
     # stale DB row.
     assert row["project_name"] == "TestProject"

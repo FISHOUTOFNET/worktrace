@@ -666,3 +666,221 @@ def test_render_session_details_skips_rerender_when_editing():
         "renderSessionDetails must check isEditDirty / saving state before "
         "re-rendering so user input is not overwritten"
     )
+
+
+# --- Verification items: unified live clock + refresh orchestration -------
+
+
+def test_ticker_uses_unified_live_clock_scheme_a():
+    """Verification item 6: the ticker must use the unified live clock
+    (scheme A: ``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
+    instead of a response-time baseline. ``tickerDeltaSeconds`` must read
+    ``live_started_at_epoch_ms`` and ``carry_seconds`` from the payload."""
+    source = read_js("core.js")
+    body = func_body(source, "tickerDeltaSeconds")
+    assert "live_started_at_epoch_ms" in body, (
+        "tickerDeltaSeconds must read live_started_at_epoch_ms from the payload"
+    )
+    assert "carry_seconds" in body, (
+        "tickerDeltaSeconds must read carry_seconds from the payload"
+    )
+
+
+def test_ticker_uses_stable_live_key_hash_for_continuity():
+    """Verification item 12: ``liveContinuityKey`` must use
+    ``stable_live_key_hash`` as the continuity anchor so the same activity
+    survives the virtual → persisted_open transition without a false reset."""
+    source = read_js("core.js")
+    assert "function liveContinuityKey" in source, (
+        "core.js must define function liveContinuityKey"
+    )
+    body = func_body(source, "liveContinuityKey")
+    assert "stable_live_key_hash" in body, (
+        "liveContinuityKey must use stable_live_key_hash for continuity"
+    )
+
+
+def test_overview_has_request_token():
+    """Verification item 13: ``refreshOverview`` must use a request token
+    so stale responses cannot overwrite newer ones."""
+    source = read_js("init.js")
+    assert "App.overviewRequestToken" in source, (
+        "init.js must define App.overviewRequestToken state"
+    )
+    body = func_body(source, "refreshOverview")
+    assert "overviewRequestToken" in body, (
+        "refreshOverview must use overviewRequestToken for stale-response discard"
+    )
+
+
+def test_recent_has_request_token():
+    """Verification item 13/15: ``refreshRecent`` must use a request token
+    so stale responses cannot overwrite newer ones."""
+    source = read_js("init.js")
+    assert "App.recentRequestToken" in source, (
+        "init.js must define App.recentRequestToken state"
+    )
+    body = func_body(source, "refreshRecent")
+    assert "recentRequestToken" in body, (
+        "refreshRecent must use recentRequestToken for stale-response discard"
+    )
+
+
+def test_render_session_details_cache_after_guard():
+    """Verification item 14: ``renderSessionDetails`` must set
+    ``App.lastSessionDetailsData`` AFTER the dirty-editor / saving guard,
+    not before. When the DOM render is skipped, the cache must also be
+    skipped so they stay atomic."""
+    source = read_js("timeline.js")
+    body = func_body(source, "renderSessionDetails")
+    # The guard (isEditDirty / activityTimeSaving) must appear BEFORE the
+    # cache assignment in the function body.
+    guard_pos = body.find("isEditDirty")
+    cache_pos = body.find("App.lastSessionDetailsData = data")
+    assert guard_pos != -1, (
+        "renderSessionDetails must check isEditDirty before caching"
+    )
+    assert cache_pos != -1, (
+        "renderSessionDetails must set App.lastSessionDetailsData"
+    )
+    assert guard_pos < cache_pos, (
+        "renderSessionDetails must set the cache AFTER the dirty-editor guard "
+        "so cache/DOM stay atomic"
+    )
+
+
+def test_clear_sessions_invalidates_pending_detail_request():
+    """Verification item 22: when sessions are cleared (empty list),
+    ``detailsRequestToken`` must be incremented so a stale
+    ``get_timeline_session_details`` response does not backfill."""
+    source = read_js("timeline.js")
+    body = func_body(source, "showTimeline")
+    # The empty-sessions branch must increment detailsRequestToken.
+    empty_pos = body.find("当日暂无活动记录")
+    assert empty_pos != -1, "showTimeline must handle empty sessions"
+    # After the empty marker, detailsRequestToken must be incremented.
+    after_empty = body[empty_pos:]
+    assert "detailsRequestToken" in after_empty, (
+        "showTimeline must invalidate detailsRequestToken when sessions are empty"
+    )
+
+
+def test_date_switch_invalidates_pending_detail_request():
+    """Verification item 22: when switching dates (goPrevDay / goNextDay /
+    goToday), ``detailsRequestToken`` must be incremented so a stale
+    response from the previous date does not backfill."""
+    source = read_js("timeline.js")
+    for fn_name in ("goPrevDay", "goNextDay", "goToday"):
+        body = func_body(source, fn_name)
+        assert "detailsRequestToken" in body, (
+            fn_name + " must increment detailsRequestToken on date switch"
+        )
+        assert "lastSessionDetailsData" in body, (
+            fn_name + " must clear lastSessionDetailsData on date switch"
+        )
+
+
+def test_virtual_session_click_does_not_open_edit_panel():
+    """Verification item 4: ``selectTimelineSession`` must NOT call
+    ``populateEditPanel`` for virtual sessions (``edit_disabled`` /
+    ``is_virtual``). Instead, it must call ``clearEditPanel``."""
+    source = read_js("timeline.js")
+    body = func_body(source, "selectTimelineSession")
+    assert "edit_disabled" in body or "is_virtual" in body, (
+        "selectTimelineSession must check edit_disabled / is_virtual before "
+        "opening the edit panel"
+    )
+    assert "clearEditPanel" in body, (
+        "selectTimelineSession must call clearEditPanel for virtual sessions"
+    )
+
+
+def test_init_awaits_first_refresh_before_heartbeat():
+    """Verification item 18: ``init`` must await the first
+    ``refreshCurrentPageData()`` BEFORE reading ``get_refresh_state`` and
+    starting the heartbeat. This prevents the first heartbeat tick from
+    racing the initial heavy refresh."""
+    source = read_js("init.js")
+    # Use "function init(" to distinguish from "function initNav" / "initButtons".
+    init_start = source.find("function init(")
+    assert init_start != -1, "init.js must define function init()"
+    # Find the end of init() — the next function at the same indent level.
+    init_end = source.find("\n    App.init = init;", init_start)
+    if init_end == -1:
+        init_end = source.find("\n    function ", init_start + 1)
+    body = source[init_start:init_end] if init_end != -1 else source[init_start:]
+    refresh_pos = body.find("refreshCurrentPageData()")
+    state_pos = body.find("get_refresh_state")
+    heartbeat_pos = body.find("startHeartbeat()")
+    assert refresh_pos != -1, "init must call refreshCurrentPageData"
+    assert state_pos != -1, "init must call get_refresh_state"
+    assert heartbeat_pos != -1, "init must call startHeartbeat"
+    assert refresh_pos < state_pos, (
+        "init must call refreshCurrentPageData BEFORE get_refresh_state"
+    )
+    assert state_pos < heartbeat_pos, (
+        "init must call get_refresh_state BEFORE startHeartbeat"
+    )
+    # Must use .then() chaining to await the refresh, not fire-and-forget.
+    assert ".then" in body, (
+        "init must chain refreshCurrentPageData().then(...) to await completion"
+    )
+
+
+def test_init_initializes_last_reconcile_after_first_refresh():
+    """Verification item 19: ``lastReconcileAtEpochMs`` must be initialized
+    AFTER the first refresh completes, not left at 0. Without this, the
+    first heartbeat tick sees ``now - 0 >= RECONCILE_INTERVAL_MS`` and
+    immediately triggers low-frequency reconciliation."""
+    source = read_js("init.js")
+    init_start = source.find("function init(")
+    assert init_start != -1, "init.js must define function init()"
+    init_end = source.find("\n    App.init = init;", init_start)
+    if init_end == -1:
+        init_end = source.find("\n    function ", init_start + 1)
+    body = source[init_start:init_end] if init_end != -1 else source[init_start:]
+    assert "lastReconcileAtEpochMs" in body, (
+        "init must initialize lastReconcileAtEpochMs"
+    )
+    assert "Date.now()" in body, (
+        "init must set lastReconcileAtEpochMs to Date.now() after first refresh"
+    )
+
+
+def test_revision_check_skips_reconciliation_on_same_tick():
+    """Verification item 20: when a revision-change heavy refresh is
+    triggered, the low-frequency reconciliation must NOT also be triggered
+    on the same tick. The revision check must track whether a heavy refresh
+    was triggered and skip reconciliation if so."""
+    source = read_js("init.js")
+    body = func_body(source, "runRevisionCheck")
+    assert "triggeredHeavyRefresh" in body, (
+        "runRevisionCheck must track whether a heavy refresh was triggered "
+        "on this tick to skip concurrent reconciliation"
+    )
+
+
+def test_reconciliation_skips_when_page_refresh_inflight():
+    """Verification item 12: low-frequency reconciliation must NOT run when
+    ``activePageRefreshInFlight`` is true so it does not concurrently
+    re-pull the same data."""
+    source = read_js("init.js")
+    body = func_body(source, "runRevisionCheck")
+    assert "activePageRefreshInFlight" in body, (
+        "runRevisionCheck must check activePageRefreshInFlight before "
+        "triggering low-frequency reconciliation"
+    )
+
+
+def test_revision_check_passes_report_date():
+    """Verification item 8: ``runRevisionCheck`` must pass the current
+    Timeline date to ``get_refresh_state`` so the revision is scoped to
+    the viewed date."""
+    source = read_js("init.js")
+    body = func_body(source, "runRevisionCheck")
+    assert "reportDate" in body, (
+        "runRevisionCheck must compute reportDate from the current Timeline date"
+    )
+    assert "get_refresh_state" in body, (
+        "runRevisionCheck must call get_refresh_state"
+    )

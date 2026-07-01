@@ -615,7 +615,7 @@ def accept_first_run_notice_for_webview() -> dict[str, Any]:
 # --- Lightweight refresh-state (Phase 6H-followup heartbeat) -------------
 
 
-def get_refresh_state() -> dict[str, Any]:
+def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
     """Return a lightweight refresh-state payload for the frontend heartbeat.
 
     Unified live-display model. The ``refresh_revision`` is computed by
@@ -636,6 +636,19 @@ def get_refresh_state() -> dict[str, Any]:
     ``snapshot_updated_at`` / ``snapshot_baseline_epoch_ms`` advance
     without any structural change.
 
+    ``report_date`` scopes the structural signature to the currently
+    viewed Timeline date (verification item 8: ``get_refresh_state``
+    supports the current Timeline date, not just today). When
+    ``report_date`` is ``None`` it defaults to today, matching the
+    Overview / Recent default.
+
+    The payload also carries the unified live clock fields
+    (``live_started_at_epoch_ms``, ``carry_seconds``,
+    ``stable_live_key``, ``stable_live_key_hash``) from the same
+    snapshot sample so the frontend heartbeat ticker can compute
+    ``display_seconds = carry_seconds + floor((Date.now() -
+    live_started_at_epoch_ms) / 1000)`` without a separate bridge call.
+
     The payload is display-safe: no raw ``window_title``,
     ``file_path_hint``, ``note``, ``clipboard``, ``traceback`` or
     ``SQL`` is surfaced. The internal structural signature uses only
@@ -648,17 +661,19 @@ def get_refresh_state() -> dict[str, Any]:
         collector_status = get_collector_status()
         user_paused = is_user_paused()
         paused = bool(user_paused) or collector_status == "paused"
-        # Default report date (today). The bridge does NOT pass a date
-        # parameter so the facade uses the same default the bridge uses
-        # elsewhere.
+        # Default report date (today). When the frontend passes a
+        # Timeline date (historical or today), the structural signature
+        # is scoped to that date so structural changes on the viewed
+        # date trigger a heavy refresh.
         from . import timeline_api as _timeline_api
         today = _timeline_api.get_default_report_date()
+        scoped_report_date = report_date or today
         # Unified refresh-revision computation. Delegates to
         # ``live_display_service.compute_refresh_revision`` so the
         # revision covers ALL structural changes (snapshot identity,
         # carry state, latest visible activity, collector status, etc.).
         refresh_revision, debug_inputs = live_display_api.compute_refresh_revision(
-            snapshot, collector_status, user_paused, today, today
+            snapshot, collector_status, user_paused, today, scoped_report_date
         )
         current_activity_key = str(debug_inputs.get("current_activity_key") or "")
         current_activity_status = str(debug_inputs.get("current_status") or "")
@@ -666,6 +681,15 @@ def get_refresh_state() -> dict[str, Any]:
         persisted_activity_id = int(debug_inputs.get("persisted_id") or 0)
         inferred_project_name = str(debug_inputs.get("inferred_project") or "")
         latest_activity_id = int(debug_inputs.get("latest_id") or 0)
+        # Unified live clock (scheme A): build the current-activity
+        # summary from the SAME snapshot sample so the frontend ticker
+        # can use ``live_started_at_epoch_ms`` + ``carry_seconds``
+        # without a separate bridge call. The live clock fields come
+        # from the same snapshot as the refresh_revision, guaranteeing
+        # a single-sample contract (verification items 6, 9).
+        live_summary = live_display_api.build_current_activity_summary(
+            snapshot, report_date=scoped_report_date, today=today
+        )
         # Map collector_status + user_paused to a display label.
         if paused or collector_status == "paused":
             status_display = "已暂停"
@@ -687,9 +711,24 @@ def get_refresh_state() -> dict[str, Any]:
             "inferred_project_name": inferred_project_name,
             "refresh_revision": refresh_revision,
             "today": today,
+            "report_date": scoped_report_date,
             "latest_activity_id": latest_activity_id,
-            # The baseline epoch ms lets the frontend ticker compute the
-            # delta; it MUST NOT contribute to refresh_revision (see above).
+            # Unified live clock fields (scheme A). The frontend ticker
+            # computes ``carry_seconds + floor((Date.now() -
+            # live_started_at_epoch_ms) / 1000)``. These come from the
+            # SAME snapshot sample as ``refresh_revision`` so there is
+            # no clock drift between the revision check and the ticker
+            # (verification items 6, 9). The ``stable_live_key`` /
+            # ``stable_live_key_hash`` let the frontend bind its
+            # continuity key to a stable live identity that survives
+            # the virtual → persisted_open transition (item 12, 16).
+            "live_started_at_epoch_ms": int(live_summary.get("live_started_at_epoch_ms") or 0),
+            "carry_seconds": int(live_summary.get("carry_seconds") or 0),
+            "stable_live_key": str(live_summary.get("stable_live_key") or ""),
+            "stable_live_key_hash": str(live_summary.get("stable_live_key_hash") or ""),
+            "live_state": str(live_summary.get("live_state") or ""),
+            # Kept for backward compat — frontend ticker now prefers the
+            # unified ``live_started_at_epoch_ms`` + ``carry_seconds``.
             "snapshot_baseline_epoch_ms": int(_time.time() * 1000),
         }
     except Exception:

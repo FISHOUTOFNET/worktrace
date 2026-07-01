@@ -647,17 +647,23 @@ def _activity_summary_label(row: dict) -> str:
 
 
 def _display_duration(row: dict) -> int:
+    # Unified live-clock routing: open rows that match the current
+    # snapshot are routed through ``live_display_service.persisted_open_live_seconds``
+    # via ``_live_duration_for_row``. Closed rows use their stored
+    # ``duration_seconds``. The previous ``datetime.now() - start_time``
+    # fallback bypassed the unified live clock and could produce
+    # inconsistent durations that polluted both the live ticker and
+    # ``refresh_revision`` (verification item 17). It is removed; rows
+    # without a stored duration and without a live-duration match now
+    # return 0, which is a safe display value that does not affect the
+    # live ticker or refresh_revision.
     live_duration = _live_duration_for_row(row)
     if live_duration is not None:
         stored = int(row.get("duration_seconds") or 0)
         return max(stored, live_duration)
     if row.get("duration_seconds") is not None:
         return int(row.get("duration_seconds") or 0)
-    start = row.get("start_time")
-    if not start:
-        return 0
-    start_dt = datetime.strptime(start, TIME_FORMAT)
-    return max(0, int((datetime.now() - start_dt).total_seconds()))
+    return 0
 
 
 def _live_duration_for_row(row: dict) -> int | None:

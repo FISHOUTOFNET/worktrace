@@ -236,6 +236,11 @@ class OverviewBridgeMixin:
                             "is_virtual": True,
                             "is_virtual_live": True,
                             "live_display_key": str(virtual.get("live_display_key") or ""),
+                            # Stable live identity so the frontend continuity
+                            # key survives the virtual → persisted_open
+                            # transition (verification items 12, 16, 21).
+                            "stable_live_key": str(virtual.get("stable_live_key") or ""),
+                            "stable_live_key_hash": str(virtual.get("stable_live_key_hash") or ""),
                             "activity_id": 0,
                             "source": "snapshot",
                             "edit_disabled": True,
@@ -280,7 +285,7 @@ class OverviewBridgeMixin:
             logger.exception("webview bridge get_recent_activities failed")
             return dict(_GENERIC_ERROR)
 
-    def get_refresh_state(self) -> dict[str, Any]:
+    def get_refresh_state(self, report_date=None) -> dict[str, Any]:
         """Return a lightweight refresh-state snapshot for the heartbeat.
 
         Phase 6H-followup. The frontend heartbeat calls this once per second
@@ -290,6 +295,10 @@ class OverviewBridgeMixin:
         ``get_timeline``) is invoked. If changed, only the data needed by
         the current page is re-pulled.
 
+        ``report_date`` (optional) scopes the structural signature to the
+        currently viewed Timeline date (verification item 8). When omitted
+        the facade defaults to today.
+
         The payload is display-safe: no raw ``window_title``,
         ``file_path_hint``, ``note``, ``clipboard``, ``traceback`` or SQL
         is surfaced. ``refresh_revision`` is a structural-only signature
@@ -298,12 +307,18 @@ class OverviewBridgeMixin:
         ``Date.now()``) so natural time progression within the same
         activity does not trigger a heavy refresh.
 
+        The payload also carries the unified live clock fields
+        (``live_started_at_epoch_ms``, ``carry_seconds``,
+        ``stable_live_key``, ``stable_live_key_hash``) so the frontend
+        ticker can compute the live duration from a stable start-time
+        anchor instead of a response-time baseline (verification item 6).
+
         The bridge method only calls the ``settings_api.get_refresh_state``
         facade and wraps the result with a stable error payload. It does
         not import services / db / collector / runtime / config / security.
         """
         try:
-            return settings_api.get_refresh_state()
+            return settings_api.get_refresh_state(report_date)
         except Exception:
             logger.exception("webview bridge get_refresh_state failed")
             return dict(_GENERIC_ERROR)

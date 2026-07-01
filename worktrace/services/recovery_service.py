@@ -13,6 +13,7 @@ def recover_unclosed_records() -> None:
     heartbeat = get_setting("last_collector_heartbeat", "") or ""
     fallback_now = now_str()
     recovered_boundary_at: str | None = None
+    recovered_activity_ids: list[int] = []
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM activity_log WHERE end_time IS NULL ORDER BY id").fetchall()
     for row in rows:
@@ -48,11 +49,29 @@ def recover_unclosed_records() -> None:
                 (end_time, duration, status, now_str(), row["id"]),
             )
         recovered_boundary_at = end_time
+        recovered_activity_ids.append(int(row["id"]))
         logging.info("recovered unclosed record id=%s status=%s", row["id"], status)
     if recovered_boundary_at:
         session_boundary_service.record_boundary(recovered_boundary_at, "recovered")
         set_setting("current_activity_snapshot", "")
         set_setting("pending_short_seconds", "0")
+    # Verification item 9: converge project inference / automatic rules
+    # for every recovered row so the persisted project assignment matches
+    # the close_activity / close_current_open_record path. The direct
+    # UPDATE above previously bypassed project inference entirely, which
+    # left recovered rows in the "uncategorized" assignment even when a
+    # concrete inferred project was available.
+    from .project_inference_service import process_new_activity
+
+    for aid in recovered_activity_ids:
+        try:
+            process_new_activity(aid)
+        except Exception:
+            # Defensive: never let an inference failure on one row
+            # prevent the remaining rows from being processed. The row
+            # is already closed; its assignment simply stays at whatever
+            # was inferred at create time.
+            pass
     record_restart_boundary_if_needed()
 
 
@@ -61,6 +80,7 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
     first_midnight = datetime.combine(start_dt.date() + timedelta(days=1), datetime_time.min)
     first_midnight_text = first_midnight.strftime(TIME_FORMAT)
     original_project_id = row["project_id"] if project_service.is_concrete_project_id(row["project_id"]) else None
+    original_id = int(row["id"])
     with get_connection() as conn:
         conn.execute(
             """
@@ -72,9 +92,19 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
                 first_midnight_text,
                 max(0, int((first_midnight - start_dt).total_seconds())),
                 now_str(),
-                row["id"],
+                original_id,
             ),
         )
+    # Verification item 9: converge project inference / automatic rules
+    # for the recovered first-half row so its persisted project assignment
+    # matches the close_activity path. Previously this row was closed via
+    # a direct UPDATE that bypassed project inference entirely.
+    from .project_inference_service import process_new_activity
+
+    try:
+        process_new_activity(original_id)
+    except Exception:
+        pass
     current_start = first_midnight
     last_activity_id: int | None = None
     while current_start < end_dt:

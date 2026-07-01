@@ -214,6 +214,11 @@ class TimelineBridgeMixin:
                         "is_virtual": True,
                         "is_virtual_live": True,
                         "live_display_key": str(virtual_session.get("live_display_key") or ""),
+                        # Stable live identity so the frontend continuity
+                        # key survives the virtual → persisted_open
+                        # transition (verification items 12, 16, 21).
+                        "stable_live_key": str(virtual_session.get("stable_live_key") or ""),
+                        "stable_live_key_hash": str(virtual_session.get("stable_live_key_hash") or ""),
                         "activity_ids": [],
                         "first_activity_id": None,
                         "session_note": "",
@@ -323,6 +328,14 @@ class TimelineBridgeMixin:
             today = timeline_api.get_default_report_date()
             snapshot = settings_api.get_current_activity_snapshot()
             baseline_epoch_ms = int(time.time() * 1000)
+            # Build the unified live-display summary from the same snapshot
+            # sample so the detail ticker can compute its own live delta
+            # (verification item 8). This is built before the virtual-row
+            # branch so both the virtual-row return and the DB-row return
+            # carry the same ``live_display`` payload.
+            live_display = live_display_api.build_current_activity_summary(
+                snapshot, report_date=date, today=today
+            )
             activities: list[dict[str, Any]] = []
             # When the requested session is the virtual live session
             # (empty activity_ids) and the snapshot is eligible, return a
@@ -350,6 +363,11 @@ class TimelineBridgeMixin:
                             "is_virtual": True,
                             "is_virtual_live": True,
                             "live_display_key": str(virtual_row.get("live_display_key") or ""),
+                            # Stable live identity so the frontend continuity
+                            # key survives the virtual → persisted_open
+                            # transition (verification items 12, 16, 21).
+                            "stable_live_key": str(virtual_row.get("stable_live_key") or ""),
+                            "stable_live_key_hash": str(virtual_row.get("stable_live_key_hash") or ""),
                             "source": "snapshot",
                             "edit_disabled": True,
                             "disable_reason": str(virtual_row.get("disable_reason") or ""),
@@ -358,6 +376,10 @@ class TimelineBridgeMixin:
                 return {
                     "ok": True,
                     "activities": activities,
+                    # Unified live-display payload for the detail ticker
+                    # (verification item 8: detail ticker must not use
+                    # Timeline main payload delta).
+                    "live_display": live_display,
                     "baseline_epoch_ms": baseline_epoch_ms,
                     "snapshot_at_epoch_ms": baseline_epoch_ms,
                 }
@@ -399,6 +421,15 @@ class TimelineBridgeMixin:
             return {
                 "ok": True,
                 "activities": activities,
+                # Unified live-display payload so the detail ticker can
+                # compute its own live delta from ``live_started_at_epoch_ms``
+                # + ``carry_seconds`` instead of reusing the Timeline main
+                # payload's delta (verification item 8). The detail payload
+                # and the Timeline main payload are separate bridge calls
+                # that may arrive at different times; using the main
+                # payload's delta for the detail ticker caused the detail
+                # duration to drift relative to its own baseline.
+                "live_display": live_display,
                 "baseline_epoch_ms": baseline_epoch_ms,
                 "snapshot_at_epoch_ms": baseline_epoch_ms,
             }

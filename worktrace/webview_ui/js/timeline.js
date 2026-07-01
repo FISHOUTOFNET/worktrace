@@ -27,7 +27,12 @@
         App.currentSessions = sessions;
         if (sessions.length === 0) {
             listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
-            // Clear details when there are no sessions
+            // Verification item 22: invalidate any pending detail request so
+            // a stale ``get_timeline_session_details`` response does not
+            // backfill the cleared detail panel. Also clear the detail cache
+            // so the ticker does not project against a stale payload.
+            ++App.detailsRequestToken;
+            App.lastSessionDetailsData = null;
             document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
             document.getElementById("timeline-details-list").innerHTML = "";
             App.selectedSessionId = null;
@@ -156,6 +161,11 @@
             } else {
                 // Selected session disappeared (e.g. session ended and was
                 // re-grouped). Clear selection gracefully without throwing.
+                // Verification item 22: invalidate any pending detail request
+                // and clear the detail cache so a stale response does not
+                // backfill the cleared detail panel.
+                ++App.detailsRequestToken;
+                App.lastSessionDetailsData = null;
                 App.selectedSessionId = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
                 document.getElementById("timeline-details-list").innerHTML = "";
@@ -192,10 +202,19 @@
         if (found) {
             var dateEl = document.getElementById("timeline-date-display");
             loadSessionDetails(found.activity_ids, dateEl ? dateEl.textContent : null);
-            // Populate the edit panel with the selected session's fields.
-            // A manual click always repopulates, even if a prior auto-refresh
-            // had skipped repopulation due to unsaved edits.
-            populateEditPanel(found);
+            // Verification item 4: virtual live sessions are display-only.
+            // A manual click on a virtual session must NOT open the edit
+            // panel — it has no persisted activity_ids and cannot be
+            // edited. Clear the edit panel instead so any prior session's
+            // edit panel is dismissed.
+            if (found.edit_disabled === true || found.is_virtual === true) {
+                clearEditPanel();
+            } else {
+                // Populate the edit panel with the selected session's fields.
+                // A manual click always repopulates, even if a prior auto-refresh
+                // had skipped repopulation due to unsaved edits.
+                populateEditPanel(found);
+            }
         }
     }
     App.selectTimelineSession = selectTimelineSession;
@@ -229,18 +248,19 @@
     App.loadSessionDetails = loadSessionDetails;
 
     function renderSessionDetails(data) {
-        // Phase 6H-followup: cache the session-details payload so the
-        // 1-second heartbeat ticker can increment the live-projected
-        // detail row's duration without a bridge round-trip. The ticker
-        // only updates DOM text; it never re-renders the whole list so
-        // inline edit state is preserved across heartbeat refreshes.
-        App.lastSessionDetailsData = data;
         // Phase R3 issue 17: skip the full re-render when the user has
         // unsaved inline editor / split editor input or a save is in
         // progress. The heartbeat / revision refresh must not overwrite
         // user input by re-rendering the detail list (which would reset
         // inline editor inputs to backend values). After a successful
         // save, isEditDirty() returns false so the re-render proceeds.
+        //
+        // Verification item 14: when the DOM render is skipped, ALSO skip
+        // the cache update. Previously ``App.lastSessionDetailsData`` was set
+        // BEFORE the dirty-editor guard, so the ticker would project against
+        // a newer payload while the DOM still showed the old one, causing
+        // cache/DOM desync. Now the cache is updated only when the DOM is
+        // actually rendered, keeping them atomic.
         if ((App.editingActivityId !== null || App.editingSplitActivityId !== null)
             && typeof App.isEditDirty === "function" && App.isEditDirty()) {
             return;
@@ -248,6 +268,12 @@
         if (App.activityTimeSaving || App.activitySplitSaving) {
             return;
         }
+        // Phase 6H-followup: cache the session-details payload so the
+        // 1-second heartbeat ticker can increment the live-projected
+        // detail row's duration without a bridge round-trip. The ticker
+        // only updates DOM text; it never re-renders the whole list so
+        // inline edit state is preserved across heartbeat refreshes.
+        App.lastSessionDetailsData = data;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         var activities = data.activities || [];
@@ -2125,6 +2151,11 @@
         var current = App.timelineDate || (dateEl ? dateEl.textContent : null);
         App.timelineDate = App.shiftDate(current, -1);
         App.selectedSessionId = null;
+        // Verification item 22: invalidate pending detail requests and clear
+        // the detail cache on date switch so a stale response from the
+        // previous date does not backfill the new date's detail panel.
+        ++App.detailsRequestToken;
+        App.lastSessionDetailsData = null;
         // Phase 3B.5B: close the correction shell on date switch so the
         // shell context does not carry over to a different day.
         App.resetCorrectionShellState();
@@ -2137,6 +2168,10 @@
         var current = App.timelineDate || (dateEl ? dateEl.textContent : null);
         App.timelineDate = App.shiftDate(current, 1);
         App.selectedSessionId = null;
+        // Verification item 22: invalidate pending detail requests and clear
+        // the detail cache on date switch.
+        ++App.detailsRequestToken;
+        App.lastSessionDetailsData = null;
         // Phase 3B.5B: close the correction shell on date switch.
         App.resetCorrectionShellState();
         loadTimeline(App.timelineDate);
@@ -2146,6 +2181,10 @@
     function goToday() {
         App.timelineDate = null;
         App.selectedSessionId = null;
+        // Verification item 22: invalidate pending detail requests and clear
+        // the detail cache on date switch.
+        ++App.detailsRequestToken;
+        App.lastSessionDetailsData = null;
         // Phase 3B.5B: close the correction shell on date switch.
         App.resetCorrectionShellState();
         loadTimeline(null);

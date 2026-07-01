@@ -87,11 +87,16 @@
     App.selectedSessionId = null;  // currently selected session for detail view
 
     // Request tokens prevent stale bridge responses from overwriting newer
-    // data when the user rapidly switches dates. Each load increments the
-    // token; only the response whose token equals the current value is
-    // applied to the DOM.
+    // data when the user rapidly switches dates / pages. Each load
+    // increments the token; only the response whose token equals the
+    // current value is applied to the DOM (verification items 13, 15).
+    // Overview and Recent previously lacked tokens, so stale responses
+    // could overwrite newer ones when the user switched pages or a
+    // revision-change refresh raced a manual refresh.
     App.timelineRequestToken = 0;
     App.detailsRequestToken = 0;
+    App.overviewRequestToken = 0;
+    App.recentRequestToken = 0;
 
     // --- Phase 3A: Timeline editing state -------------------------------
     App.projectsCache = null;
@@ -599,18 +604,47 @@
     // been fetched yet. The heartbeat's second phase (revision check) runs
     // in init.js and calls heavy interfaces only when the structural
     // revision changes.
+    //
+    // Unified live clock (scheme A, verification items 6, 9, 10):
+    // The ticker computes the live delta from the activity's start_time
+    // (``live_started_at_epoch_ms``) instead of the backend response time
+    // (``snapshot_at_epoch_ms`` / ``baseline_epoch_ms``). This guarantees
+    // that the same current activity does not jump fast/slow across
+    // refreshes because the start_time anchor is stable across refreshes.
+    // The formula is:
+    //   display_seconds = carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
+    // and the KPI delta is:
+    //   delta = display_seconds - elapsed_seconds_at_response
     function tickerNowEpochMs() {
         return Date.now();
     }
 
-    function tickerDeltaSeconds(snapshot) {
-        if (!snapshot) return 0;
-        var snapshotAt = parseInt(snapshot.snapshot_at_epoch_ms, 10);
-        if (!snapshotAt) return 0;
-        var now = tickerNowEpochMs();
-        var delta = Math.floor((now - snapshotAt) / 1000);
+    // Unified live clock delta: returns the wall-clock increment to add to
+    // KPI totals and per-item durations. Uses the stable start-time anchor
+    // (``live_started_at_epoch_ms``) so the delta does not drift between
+    // refreshes. Returns 0 when the payload has no live clock fields or
+    // when the current activity is not live-eligible.
+    function tickerDeltaSeconds(payload) {
+        if (!payload) return 0;
+        var ld = payload.live_display || payload.current_activity;
+        if (!ld) return 0;
+        var startedAt = parseInt(ld.live_started_at_epoch_ms, 10);
+        if (!startedAt || isNaN(startedAt)) {
+            // Fall back to the legacy response-time baseline when the
+            // unified live clock is unavailable (e.g. older payload).
+            var snapshotAt = parseInt(payload.snapshot_at_epoch_ms, 10);
+            if (!snapshotAt) return 0;
+            var now = tickerNowEpochMs();
+            var legacyDelta = Math.floor((now - snapshotAt) / 1000);
+            return legacyDelta > 0 ? legacyDelta : 0;
+        }
+        var carry = parseInt(ld.carry_seconds, 10) || 0;
+        var elapsedAtResponse = parseInt(ld.elapsed_seconds, 10) || 0;
+        var displaySeconds = carry + Math.floor((tickerNowEpochMs() - startedAt) / 1000);
+        var delta = displaySeconds - elapsedAtResponse;
         return delta > 0 ? delta : 0;
     }
+    App.tickerDeltaSeconds = tickerDeltaSeconds;
 
     // Unified live-display eligibility: only virtual (unpersisted normal)
     // and persisted_open (real open normal row) increment normal project
@@ -635,6 +669,25 @@
     function tickerCurrentActivityRunning(snapshot) {
         return tickerLiveEligible(snapshot);
     }
+
+    // Stable continuity key for a live item. Uses ``stable_live_key_hash``
+    // when available so the continuity survives the virtual → persisted_open
+    // transition (verification items 12, 16). Falls back to the session /
+    // activity id for non-live items.
+    function liveContinuityKey(item, prefix) {
+        if (!item) return prefix;
+        if (item.stable_live_key_hash) {
+            return prefix + ":live:" + item.stable_live_key_hash;
+        }
+        if (item.session_id) {
+            return prefix + ":" + item.session_id;
+        }
+        if (item.activity_id) {
+            return prefix + ":" + item.activity_id;
+        }
+        return prefix;
+    }
+    App.liveContinuityKey = liveContinuityKey;
 
     function applyLocalTicker() {
         // Overview page: update KPI total + classified + uncategorized +
@@ -681,11 +734,24 @@
             var currentEl = document.getElementById("current-activity");
             if (currentEl) {
                 if (current.active) {
+                    // Unified live clock (scheme A): compute the display
+                    // seconds from the stable start-time anchor so the
+                    // current activity display does not drift between
+                    // refreshes (verification item 6).
+                    var ld = ov.live_display || current;
+                    var startedAt = parseInt(ld.live_started_at_epoch_ms, 10);
+                    var carry = parseInt(ld.carry_seconds, 10) || 0;
                     var elapsedSec = parseInt(current.elapsed_seconds, 10) || 0;
+                    var displaySec;
+                    if (startedAt && !isNaN(startedAt)) {
+                        displaySec = carry + Math.floor((Date.now() - startedAt) / 1000);
+                    } else {
+                        displaySec = elapsedSec + delta;
+                    }
                     var display = current.display || "";
                     var parts = display.split("｜");
                     if (parts.length >= 3) {
-                        parts[2] = App.formatDuration(elapsedSec + delta);
+                        parts[2] = App.formatDuration(displaySec);
                         currentEl.textContent = "当前活动：" + parts.join("｜");
                     }
                 } else {
@@ -698,6 +764,8 @@
         // ``duration_seconds``, NOT from DOM text. Issue 8 fix: both virtual
         // live items and real is_in_progress items are handled by flag,
         // replacing the single-scenario ``live_projected_recent_index``.
+        // Verification item 12: the continuity key uses stable_live_key_hash
+        // so the duration display does not reset when virtual → persisted.
         var recent = App.lastRecentSnapshot;
         if (recent && App.currentPage === "overview" && recent.activities) {
             var recentDelta = tickerLiveEligible(recent) ? tickerDeltaSeconds(recent) : 0;
@@ -709,8 +777,9 @@
                     );
                     if (rEl) {
                         var rBaseSec = parseInt(rItem.duration_seconds, 10) || 0;
+                        var rContinuity = liveContinuityKey(rItem, "recent");
                         App.renderDurationMonotonic(
-                            rEl, rBaseSec + recentDelta, "recent-" + ri, false
+                            rEl, rBaseSec + recentDelta, rContinuity, false
                         );
                     }
                 }
@@ -736,11 +805,22 @@
             if (tlCurrentEl) {
                 var tlCurrent = tl.current_activity || {};
                 if (tlCurrent.active) {
+                    // Unified live clock (scheme A) for Timeline current
+                    // activity display (verification item 6).
+                    var tlLd = tl.live_display || tlCurrent;
+                    var tlStartedAt = parseInt(tlLd.live_started_at_epoch_ms, 10);
+                    var tlCarry = parseInt(tlLd.carry_seconds, 10) || 0;
                     var tlElapsedSec = parseInt(tlCurrent.elapsed_seconds, 10) || 0;
+                    var tlDisplaySec;
+                    if (tlStartedAt && !isNaN(tlStartedAt)) {
+                        tlDisplaySec = tlCarry + Math.floor((Date.now() - tlStartedAt) / 1000);
+                    } else {
+                        tlDisplaySec = tlElapsedSec + tlDelta;
+                    }
                     var tlDisplay = tlCurrent.display || "";
                     var tlParts = tlDisplay.split("｜");
                     if (tlParts.length >= 3) {
-                        tlParts[2] = App.formatDuration(tlElapsedSec + tlDelta);
+                        tlParts[2] = App.formatDuration(tlDisplaySec);
                         tlCurrentEl.textContent = "当前活动：" + tlParts.join("｜");
                     }
                 } else {
@@ -751,6 +831,8 @@
             // Phase 6H-followup section 7.3: locate each session's DOM via
             // ``data-session-id`` instead of array index so a re-rendered
             // list (e.g. after a revision change) cannot mismatch sessions.
+            // Verification item 12: the continuity key uses stable_live_key_hash
+            // for live sessions so the duration does not reset on transition.
             if (isToday && tlDelta >= 0 && tl.sessions) {
                 for (var si = 0; si < tl.sessions.length; si++) {
                     var s = tl.sessions[si];
@@ -763,25 +845,30 @@
                             var durEl = itemEl.querySelector(".timeline-item-duration");
                             if (durEl) {
                                 var sSec = parseInt(s.duration_seconds, 10) || 0;
-                                var continuity = "session-" + sid;
-                                App.renderDurationMonotonic(durEl, sSec + tlDelta, continuity, false);
+                                var sContinuity = liveContinuityKey(s, "session");
+                                App.renderDurationMonotonic(durEl, sSec + tlDelta, sContinuity, false);
                             }
                         }
                     }
                 }
             }
-            // Unified detail-row projection. Issues 2 & 10 fix: locate the
-            // live detail row (virtual or in-progress) from the cached
-            // ``lastSessionDetailsData`` payload by flag, NOT by "last row".
-            // The detail list is newest-first, so the in-progress row is at
-            // index 0 — the old code used ``detailRows[length-1]`` (wrong).
-            // Virtual rows have ``activity_id=0`` and are never projected
-            // onto old DB rows. Baseline comes from the cached payload's
-            // ``duration_seconds``, NOT from DOM text.
-            if (isToday && tlDelta >= 0 && App.selectedSessionId
+            // Unified detail-row projection (verification item 8: detail
+            // ticker must NOT use the Timeline main payload delta).
+            // The detail payload carries its own ``live_display`` field so
+            // the detail ticker computes its delta from the same unified
+            // live clock, independent of when the Timeline main payload
+            // arrived. This prevents drift between the detail duration and
+            // its own baseline.
+            if (isToday && App.selectedSessionId
                 && App.lastSessionDetailsData && !App._timelineEditingActive()) {
                 var detailsList = document.getElementById("timeline-details-list");
                 if (detailsList) {
+                    // Use the detail payload's own live clock, not the
+                    // Timeline main payload's delta (verification item 8).
+                    var detailDelta = 0;
+                    if (tickerLiveEligible(App.lastSessionDetailsData)) {
+                        detailDelta = tickerDeltaSeconds(App.lastSessionDetailsData);
+                    }
                     var detailActs = App.lastSessionDetailsData.activities || [];
                     for (var dai = 0; dai < detailActs.length; dai++) {
                         var dAct = detailActs[dai];
@@ -792,8 +879,9 @@
                             );
                             if (dEl) {
                                 var dBaseSec = parseInt(dAct.duration_seconds, 10) || 0;
+                                var dContinuity = liveContinuityKey(dAct, "detail");
                                 App.renderDurationMonotonic(
-                                    dEl, dBaseSec + tlDelta, "detail-" + dAid, false
+                                    dEl, dBaseSec + detailDelta, dContinuity, false
                                 );
                             }
                             break;  // only one live row per session

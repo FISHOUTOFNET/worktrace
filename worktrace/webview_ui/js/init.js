@@ -59,23 +59,37 @@
     App.refreshStatusFromRefreshState = refreshStatusFromRefreshState;
 
     function refreshOverview() {
+        // Verification items 13, 15: request token prevents stale
+        // Overview responses from overwriting newer data when the user
+        // switches pages or a revision-change refresh races a manual
+        // refresh. Only the response whose token equals the current
+        // value is applied to the DOM.
+        var token = ++App.overviewRequestToken;
         return App.callBridge("get_overview").then(function (result) {
+            if (token !== App.overviewRequestToken) return;  // stale
             var overview = App.handleResult(result, function (msg) {
                 throw new Error(msg);
             });
             App.showOverview(overview);
         }).catch(function () {
+            if (token !== App.overviewRequestToken) return;  // stale
             App.showError("刷新失败");
         });
     }
 
     function refreshRecent() {
+        // Verification items 13, 15: request token prevents stale Recent
+        // responses from overwriting newer data. Same rationale as
+        // ``refreshOverview``.
+        var token = ++App.recentRequestToken;
         return App.callBridge("get_recent_activities").then(function (result) {
+            if (token !== App.recentRequestToken) return;  // stale
             var recent = App.handleResult(result, function (msg) {
                 throw new Error(msg);
             });
             App.showRecent(recent);
         }).catch(function () {
+            if (token !== App.recentRequestToken) return;  // stale
             App.showError("刷新失败");
         });
     }
@@ -481,7 +495,16 @@
     function runRevisionCheck() {
         if (App.refreshCheckInFlight) return;
         App.refreshCheckInFlight = true;
-        App.callBridge("get_refresh_state").then(function (result) {
+        // Verification item 8: pass the current Timeline date so the
+        // structural revision is scoped to the viewed date. When not on
+        // the Timeline page or no date is set, pass null to use the
+        // default (today). This ensures a structural change on a past
+        // date (edit / split / merge / hide / restore) triggers a heavy
+        // refresh even when today's revision is unchanged.
+        var reportDate = (App.currentPage === "timeline" && App.timelineLoaded && App.timelineDate)
+            ? App.timelineDate
+            : null;
+        App.callBridge("get_refresh_state", reportDate).then(function (result) {
             var state = App.handleResult(result, function () {
                 return null;
             });
@@ -490,11 +513,13 @@
             var newRevision = state.refresh_revision;
             var isFirstCheck = prevRevision === null || prevRevision === undefined;
             App.lastRefreshState = state;
+            var triggeredHeavyRefresh = false;
             // Phase 6H-followup section 10: when revision unchanged, only
             // update the sidebar status from the refresh_state payload
             // (no get_status call). When revision changed (or first
             // check), refresh the current page's heavy data.
             if (isFirstCheck || prevRevision !== newRevision) {
+                triggeredHeavyRefresh = true;
                 refreshCurrentPageData();
             } else {
                 refreshStatusFromRefreshState(state);
@@ -504,8 +529,20 @@
             // Overview + current Timeline so a missed revision signal cannot
             // freeze the UI. Guarded by ``reconcileInFlight`` and the
             // editing-active guard inside ``fullReconcileCollectionViews``.
+            //
+            // Verification item 20: skip when a revision-change heavy
+            // refresh was just triggered on this same tick — the heavy
+            // refresh already re-pulled all page data, so a concurrent
+            // reconciliation would be redundant and could race the
+            // in-flight refresh.
+            //
+            // Verification item 12: skip when a page refresh is already
+            // in-flight (``activePageRefreshInFlight``) so the
+            // reconciliation does not concurrently re-pull the same data.
             var now = Date.now();
-            if (!App.reconcileInFlight
+            if (!triggeredHeavyRefresh
+                && !App.activePageRefreshInFlight
+                && !App.reconcileInFlight
                 && now - App.lastReconcileAtEpochMs >= App.RECONCILE_INTERVAL_MS) {
                 fullReconcileCollectionViews("heartbeat-lowfreq");
             }
@@ -566,24 +603,29 @@
         // catch branch that unconditionally started refresh is removed.
         App.loadFirstRunNotice().then(function (noticeConfirmed) {
             if (!noticeConfirmed) return;
-            // Phase 6H-followup: the initial load uses the unified
-            // ``refreshCurrentPageData`` so the first heavy refresh is
-            // page-scoped. The unified heartbeat then takes over: every 1
-            // second it first applies the local ticker (DOM-only duration
-            // updates) and then runs the lightweight ``get_refresh_state``
-            // revision check, calling heavy interfaces only when the
-            // structural revision changes.
-            refreshCurrentPageData();
-            // Phase R3 issue 3: initialize ``lastRefreshState`` BEFORE
-            // starting the heartbeat. Without this, the first heartbeat
-            // tick sees ``prevRevision === null`` (isFirstCheck === true)
-            // and triggers a redundant heavy refresh on top of the one
-            // that just completed above. Using the two-arg Promise.then
-            // form (onFulfilled, onRejected) instead of a separate
-            // rejection handler so the init body stays flat. Both branches
-            // start the heartbeat so it begins regardless of whether the
-            // initial refresh-state read succeeded.
-            App.callBridge("get_refresh_state").then(function (result) {
+            // Verification item 18: await the first ``refreshCurrentPageData()``
+            // BEFORE reading ``get_refresh_state`` and starting the heartbeat.
+            // This ensures the initial heavy refresh completes first, so:
+            //   - the first heartbeat tick sees a real revision (not null,
+            //     which would trigger a redundant ``isFirstCheck`` heavy
+            //     refresh on top of the one that just completed);
+            //   - ``activePageRefreshInFlight`` is false when the first
+            //     heartbeat tick runs, so the revision check does not skip.
+            //
+            // Verification item 19: initialize ``lastReconcileAtEpochMs``
+            // AFTER the first refresh completes (not at 0). Without this,
+            // the first heartbeat tick sees ``now - 0 >= RECONCILE_INTERVAL_MS``
+            // and immediately triggers low-frequency reconciliation on top
+            // of the heavy refresh that just completed.
+            refreshCurrentPageData().then(function () {
+                App.lastReconcileAtEpochMs = Date.now();
+                // Phase R3 issue 3: initialize ``lastRefreshState`` BEFORE
+                // starting the heartbeat. Without this, the first heartbeat
+                // tick sees ``prevRevision === null`` (isFirstCheck === true)
+                // and triggers a redundant heavy refresh on top of the one
+                // that just completed above.
+                return App.callBridge("get_refresh_state");
+            }).then(function (result) {
                 var state = App.handleResult(result, function () { return null; });
                 if (state) {
                     App.lastRefreshState = state;
@@ -592,7 +634,9 @@
             }, function () {
                 // get_refresh_state failed: start the heartbeat anyway.
                 // The first tick's revision check will initialize
-                // lastRefreshState as a fallback.
+                // lastRefreshState as a fallback. ``lastReconcileAtEpochMs``
+                // was already initialized above so the first tick does not
+                // immediately trigger reconciliation.
                 startHeartbeat();
             });
         });
