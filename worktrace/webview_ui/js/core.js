@@ -15,14 +15,9 @@
     // durations with a wall-clock delta) and then runs a lightweight
     // ``get_refresh_state`` revision check. Heavy interfaces (get_overview /
     // get_recent_activities / get_timeline) are only called when the
-    // structural revision changes. ``REFRESH_INTERVAL_MS`` is kept for the
-    // manual refresh button fallback but is no longer used by any timer.
-    App.REFRESH_INTERVAL_MS = 8000;
+    // structural revision changes.
     App.HEARTBEAT_INTERVAL_MS = 1000;
-    App.LOCAL_TICKER_INTERVAL_MS = 1000;
     App.NOTE_MAX_LENGTH = 2000;
-    App.refreshTimer = null;
-    App.localTickerTimer = null;
     App.heartbeatTimer = null;
 
     // --- Phase 6G / 6H-followup: live display state -------------------
@@ -73,10 +68,11 @@
     App.reconcileInFlight = false;
 
     // --- Phase 6H-followup: monotonic duration render state ------------
-    // Maps a continuity key (e.g. ``"current-activity"``,
-    // ``"session-<id>"``, ``"recent-<index>"``) to the last rendered
-    // seconds. Used by ``renderDurationMonotonic`` to avoid visual rollback
-    // when the new projected seconds are 1-2s less than the DOM value.
+    // Maps a continuity key (e.g. ``"recent:live:<stable_hash>"``,
+    // ``"session:live:<stable_hash>"``, ``"detail:live:<stable_hash>"``,
+    // ``"overview-total"``) to the last rendered seconds. Used by
+    // ``renderDurationMonotonic`` to avoid visual rollback when the new
+    // projected seconds are 1-2s less than the DOM value.
     App._monotonicRenderState = {};
 
     // --- Timeline state -------------------------------------------------
@@ -607,11 +603,10 @@
     //
     // Unified live clock (scheme A, verification items 6, 9, 10):
     // The ticker computes the live delta from the activity's start_time
-    // (``live_started_at_epoch_ms``) instead of the backend response time
-    // (``snapshot_at_epoch_ms`` / ``baseline_epoch_ms``). This guarantees
-    // that the same current activity does not jump fast/slow across
-    // refreshes because the start_time anchor is stable across refreshes.
-    // The formula is:
+    // (``live_started_at_epoch_ms``) instead of the backend response time.
+    // This guarantees that the same current activity does not jump
+    // fast/slow across refreshes because the start_time anchor is stable
+    // across refreshes. The formula is:
     //   display_seconds = carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
     // and the KPI delta is:
     //   delta = display_seconds - elapsed_seconds_at_response
@@ -630,13 +625,8 @@
         if (!ld) return 0;
         var startedAt = parseInt(ld.live_started_at_epoch_ms, 10);
         if (!startedAt || isNaN(startedAt)) {
-            // Fall back to the legacy response-time baseline when the
-            // unified live clock is unavailable (e.g. older payload).
-            var snapshotAt = parseInt(payload.snapshot_at_epoch_ms, 10);
-            if (!snapshotAt) return 0;
-            var now = tickerNowEpochMs();
-            var legacyDelta = Math.floor((now - snapshotAt) / 1000);
-            return legacyDelta > 0 ? legacyDelta : 0;
+            // No unified live clock anchor available — no increment.
+            return 0;
         }
         var carry = parseInt(ld.carry_seconds, 10) || 0;
         var elapsedAtResponse = parseInt(ld.elapsed_seconds, 10) || 0;
@@ -680,10 +670,9 @@
     // (showRecent / showTimeline / renderSessionDetails), and any future
     // live-duration DOM update MUST all call App.liveContinuityKey(item,
     // prefix) to look up or seed the monotonic render state. Using the
-    // array index ("recent-" + i), the session id ("session-" + id), or
-    // the activity id ("detail-" + id) directly would break the virtual →
-    // persisted_open transition because those values change across the
-    // transition while stable_live_key_hash stays the same.
+    // array index, the session id, or the activity id directly would break
+    // the virtual → persisted_open transition because those values change
+    // across the transition while stable_live_key_hash stays the same.
     function liveContinuityKey(item, prefix) {
         if (!item) return prefix;
         if (item.stable_live_key_hash) {

@@ -24,11 +24,12 @@ transition in WorkTrace:
 - close-finalize convergence (project inference / automatic rules) on
   every row that transitions open → closed.
 
-``activity_service`` retains the low-level DB/CRUD helpers
-(``create_activity`` row insert, ``_close_activity_in_conn``,
-``set_activity_duration``, ``apply_midnight_anchor_assignment`` etc.) but
-is no longer the preferred business entry point. Production callers
-(collector, recovery, clipboard, shutdown) should route through this
+``activity_service`` is now a pure low-level CRUD helper
+(``insert_activity_row``, ``close_activity_row``, ``close_all_open_rows``,
+``create_activity`` / ``close_activity`` / ``close_current_open_record``
+as compat aliases). It does NOT close pre-existing open rows, does NOT
+run project inference, and does NOT import this module. Production
+callers (collector, recovery, clipboard, shutdown) route through this
 facade so the open-row state machine has exactly one owner.
 
 Design rules
@@ -70,8 +71,8 @@ def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
     """Run project inference / automatic rules on a batch of just-closed rows.
 
     This is the **single unified close-finalize helper**. Every code path
-    that closes an open row (``create_activity``'s built-in close-old-rows,
-    ``close_activity``, ``close_current_open_record``, recovery close,
+    that closes an open row (``start_activity``'s built-in close-old-rows,
+    ``close_activity``, ``close_all_open_activities``, recovery close,
     midnight split) must route the closed ids through this helper so the
     persisted project assignment converges consistently.
 
@@ -110,19 +111,28 @@ def start_activity(
     source: str,
     payload: dict[str, Any],
 ) -> int:
-    """Create a new open activity row.
+    """Create a new open activity row, closing pre-existing open rows first.
 
-    Any pre-existing open rows are closed first by
-    ``activity_service.create_activity`` (which collects the closed ids
-    and finalizes them via :func:`finalize_closed_activity_ids`). Returns
-    the new activity_id.
+    Steps (in order):
+
+    1. Close every pre-existing open row (``end_time IS NULL``) via the
+       low-level ``close_all_open_rows`` helper and collect the closed ids.
+    2. Finalize the closed ids (project inference / automatic rules)
+       **outside** the close transaction.
+    3. Insert the new open activity row via the low-level
+       ``insert_activity_row`` helper.
+
+    Returns the new activity_id.
 
     Use this for the collector's first observation of a brand-new activity
     signature that should be persisted immediately (rare — most collector
     activities go through :func:`persist_open_activity_if_ready` after the
     30-second threshold).
     """
-    return activity_service.create_activity(
+    closed_ids = activity_service.close_all_open_rows(start_time)
+    if closed_ids:
+        finalize_closed_activity_ids(closed_ids)
+    return activity_service.insert_activity_row(
         start_time=start_time,
         source=source,
         **payload,
@@ -143,9 +153,8 @@ def persist_open_activity_if_ready(
 
     Steps (in order):
 
-    1. ``create_activity`` — inserts the open row AND closes any
-       pre-existing open rows (finalizing each via
-       :func:`finalize_closed_activity_ids`).
+    1. ``insert_activity_row`` — inserts the open row (pure CRUD, no
+       close-old-rows, no finalize).
     2. ``finalize_created_activity`` — routes through
        ``process_new_activity``. For an open row this is effectively a
        no-op (``process_new_activity`` skips in-progress rows) but is kept
@@ -158,7 +167,7 @@ def persist_open_activity_if_ready(
 
     Returns the new activity_id.
     """
-    activity_id = activity_service.create_activity(
+    activity_id = activity_service.insert_activity_row(
         start_time=start_time,
         source=source,
         **payload,
@@ -199,34 +208,27 @@ def close_activity(
 ) -> None:
     """Close an open activity row and run project inference.
 
-    Delegates to ``activity_service.close_activity`` which closes the row
-    in a transaction and then calls ``process_new_activity`` so enabled
-    folder / keyword rules apply to the just-closed row. The inference
-    runs outside the close transaction.
+    Performs the low-level close via ``close_activity_row`` and then
+    calls ``finalize_closed_activity_ids`` so enabled folder / keyword
+    rules apply to the just-closed row. The inference runs outside the
+    close transaction.
     """
-    activity_service.close_activity(activity_id, end_time, duration_seconds=duration_seconds)
+    activity_service.close_activity_row(
+        activity_id, end_time, duration_seconds=duration_seconds
+    )
+    finalize_closed_activity_ids([activity_id])
 
 
 def close_all_open_activities(end_time: str | None = None) -> list[int]:
     """Close every open activity row (``end_time IS NULL``).
 
-    Delegates to ``activity_service.close_current_open_record`` which
-    collects the closed ids and finalizes each via
-    ``process_new_activity``. Returns the list of closed ids.
+    Performs the low-level close-all via ``close_all_open_rows`` and then
+    finalizes every closed id. Returns the list of closed ids.
 
     Used by shutdown / pause / time-jump / collector stop paths.
     """
-    # close_current_open_record finalizes internally; we re-query the
-    # closed ids for the caller's convenience (the helper does not yet
-    # return them).
-    from ..db import get_connection
-
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT id FROM activity_log WHERE end_time IS NULL ORDER BY id"
-        ).fetchall()
-    closed_ids = [int(r["id"]) for r in rows]
-    activity_service.close_current_open_record(end_time)
+    closed_ids = activity_service.close_all_open_rows(end_time)
+    finalize_closed_activity_ids(closed_ids)
     return closed_ids
 
 
@@ -239,14 +241,14 @@ def persist_midnight_anchor(
 ) -> int:
     """Persist a midnight-anchor open activity with a concrete project.
 
-    Creates the open row, finalizes it, and applies the
+    Creates the open row (pure CRUD), finalizes it, and applies the
     ``midnight_anchor`` assignment source (confidence 90, stronger than
     the open-row sync's ``uncategorized`` / ``suggested_project_name``
     sources). Used by the collector's midnight split path.
 
     Returns the new activity_id.
     """
-    activity_id = activity_service.create_activity(
+    activity_id = activity_service.insert_activity_row(
         start_time=start_time,
         source=source,
         **payload,
@@ -254,6 +256,31 @@ def persist_midnight_anchor(
     activity_service.finalize_created_activity(activity_id)
     activity_service.apply_midnight_anchor_assignment(activity_id, int(project_id))
     return activity_id
+
+
+def recover_close_activity(
+    activity_id: int,
+    end_time: str,
+    *,
+    duration_seconds: int | None = None,
+    status: str | None = None,
+) -> None:
+    """Recovery non-cross-midnight close + finalize.
+
+    Used by ``recovery_service.recover_unclosed_records`` for the
+    non-cross-midnight path. Performs the low-level close (with an
+    optional status override for STATUS_ERROR recovery) and then
+    finalizes so project inference / automatic rules converge on the
+    recovered row. ``recovery_service`` no longer directly SQL-closes
+    open rows.
+    """
+    activity_service.close_activity_row(
+        activity_id,
+        end_time,
+        duration_seconds=duration_seconds,
+        status=status,
+    )
+    finalize_closed_activity_ids([activity_id])
 
 
 def recover_cross_midnight_segment(
@@ -275,7 +302,7 @@ def recover_cross_midnight_segment(
 
     Returns the new activity_id (the segment is closed inside this call).
     """
-    activity_id = activity_service.create_activity(
+    activity_id = activity_service.insert_activity_row(
         start_time=start_time,
         source=source,
         status=status,
@@ -284,7 +311,7 @@ def recover_cross_midnight_segment(
     activity_service.finalize_created_activity(activity_id)
     if status == STATUS_NORMAL and project_id is not None:
         activity_service.apply_midnight_anchor_assignment(activity_id, int(project_id))
-    activity_service.close_activity(activity_id, end_time)
+    close_activity(activity_id, end_time)
     return activity_id
 
 
@@ -297,9 +324,9 @@ def recover_first_half_close(
 
     Delegates to :func:`close_activity` with an explicit ``duration_seconds``
     (computed from start_time to first_midnight). The inference runs via
-    ``close_activity`` → ``process_new_activity``.
+    ``close_activity`` → ``finalize_closed_activity_ids``.
     """
-    activity_service.close_activity(
+    close_activity(
         activity_id, end_time, duration_seconds=duration_seconds
     )
 
@@ -315,7 +342,7 @@ def _sync_open_row_project_safely(activity_id: int, *, status: str | None) -> No
     Only runs for ``STATUS_NORMAL`` rows (system-status rows are never
     project-inferred). Wrapped in try/except so an inference failure does
     not discard the just-persisted open row — the assignment simply stays
-    at whatever ``create_activity`` wrote (``uncategorized``).
+    at whatever ``insert_activity_row`` wrote (``uncategorized``).
     """
     if status != STATUS_NORMAL:
         return
@@ -337,6 +364,7 @@ __all__ = [
     "close_activity",
     "close_all_open_activities",
     "persist_midnight_anchor",
+    "recover_close_activity",
     "recover_cross_midnight_segment",
     "recover_first_half_close",
 ]

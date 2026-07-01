@@ -32,7 +32,7 @@ def _duration_seconds(start_time: str, end_time: str) -> tuple[int, bool]:
     return seconds, False
 
 
-def create_activity(
+def insert_activity_row(
     app_name: str,
     process_name: str,
     window_title: str,
@@ -48,43 +48,17 @@ def create_activity(
 ) -> int:
     """Low-level insert of a new open activity row.
 
-    .. warning::
-
-        Production business state transitions should prefer
-        ``activity_lifecycle_service`` (the ActivityLifecycle Command
-        Facade). This low-level helper is retained for compatibility /
-        fixtures / direct row insertion, but it is no longer the preferred
-        business entry point. The lifecycle facade ensures every open-row
-        transition (create / close / virtual → persisted_open / clipboard
-        force-persist / midnight split / recovery) goes through a single
-        command owner.
-
-    This helper closes every pre-existing open row (``end_time IS NULL``)
-    before inserting the new open row. The closed ids are collected and,
-    **after the DB transaction exits**, routed through
-    ``activity_lifecycle_service.finalize_closed_activity_ids`` so project
-    inference / automatic rules converge on each closed row — matching the
-    behaviour of ``close_activity`` / ``close_current_open_record``.
-    Previously the close happened inside the transaction but the inference
-    was never triggered, leaving closed rows in the ``uncategorized``
-    assignment even when a concrete folder / keyword rule could resolve a
-    project.
-
-    The inference runs outside the transaction to avoid nested-connection
-    / lock issues. An inference failure on one row is logged and never
-    blocks the remaining rows or the new activity creation.
+    This is a pure CRUD helper: it does NOT close pre-existing open rows
+    and does NOT run project inference / automatic rules. Production
+    open-row lifecycle must use ``activity_lifecycle_service`` (the
+    ActivityLifecycle Command Facade). Tests / fixtures may use this
+    helper to construct data directly.
     """
     ts = now_str()
     start = start_time or ts
     project = project_id if project_id is not None else get_or_create_uncategorized_project()
     manual_assignment = bool(manual_override or project_id is not None)
-    closed_ids: list[int] = []
     with get_connection() as conn:
-        open_rows = conn.execute("SELECT id FROM activity_log WHERE end_time IS NULL").fetchall()
-        for row in open_rows:
-            aid = int(row["id"])
-            _close_activity_in_conn(conn, aid, start)
-            closed_ids.append(aid)
         cur = conn.execute(
             """
             INSERT INTO activity_log(
@@ -131,24 +105,98 @@ def create_activity(
             ),
         )
         _write_resource_in_conn(conn, activity_id, app_name, process_name, window_title, file_path_hint, status, resource, start)
-    # Transaction has exited. Run the unified close-finalize helper on
-    # every closed row so project inference / automatic rules converge
-    # consistently with the close_activity / close_current_open_record
-    # path. Lazy import avoids a circular dependency
-    # (activity_lifecycle_service imports activity_service at module level).
-    from .activity_lifecycle_service import finalize_closed_activity_ids
-
-    try:
-        finalize_closed_activity_ids(closed_ids)
-    except Exception:
-        # Defensive: never let a finalize failure prevent the caller from
-        # receiving the new activity_id. The closed rows are already
-        # closed; their assignments simply stay at create-time inference.
-        logging.exception("create_activity close-finalize failed for closed_ids=%s", closed_ids)
     return activity_id
 
 
-def _close_activity_in_conn(conn, activity_id: int, end_time: str, duration_seconds: int | None = None) -> None:
+def close_activity_row(
+    activity_id: int,
+    end_time: str,
+    *,
+    duration_seconds: int | None = None,
+    status: str | None = None,
+) -> None:
+    """Low-level close of a single open activity row.
+
+    Pure CRUD: does NOT run project inference / automatic rules. Production
+    open-row lifecycle must use ``activity_lifecycle_service.close_activity``
+    which calls this helper and then finalizes. Tests / fixtures may use
+    this helper directly.
+    """
+    with get_connection() as conn:
+        _close_activity_in_conn(conn, activity_id, end_time, duration_seconds=duration_seconds, status=status)
+
+
+def close_all_open_rows(end_time: str | None = None) -> list[int]:
+    """Low-level close of every open activity row (``end_time IS NULL``).
+
+    Pure CRUD: does NOT run project inference / automatic rules. Returns
+    the list of closed activity ids so the caller (typically
+    ``activity_lifecycle_service``) can finalize them outside the
+    transaction. Production open-row lifecycle must use
+    ``activity_lifecycle_service.close_all_open_activities``.
+    """
+    end = end_time or now_str()
+    closed_ids: list[int] = []
+    with get_connection() as conn:
+        rows = conn.execute("SELECT id FROM activity_log WHERE end_time IS NULL ORDER BY id").fetchall()
+        for row in rows:
+            aid = int(row["id"])
+            _close_activity_in_conn(conn, aid, end)
+            closed_ids.append(aid)
+    return closed_ids
+
+
+def create_activity(
+    app_name: str,
+    process_name: str,
+    window_title: str,
+    status: str = STATUS_NORMAL,
+    source: str = SOURCE_AUTO,
+    start_time: str | None = None,
+    project_id: int | None = None,
+    file_path_hint: str | None = None,
+    note: str | None = None,
+    auto_classified: bool = False,
+    manual_override: bool = False,
+    resource: DetectedResource | None = None,
+) -> int:
+    """Low-level insert of a new open activity row (compat alias).
+
+    .. warning::
+
+        This is a **low-level CRUD helper**. It does NOT close pre-existing
+        open rows and does NOT run project inference / automatic rules.
+        Production open-row lifecycle must use
+        ``activity_lifecycle_service`` (the ActivityLifecycle Command
+        Facade). Tests / fixtures may use this helper to construct data
+        directly.
+
+    Equivalent to :func:`insert_activity_row`. Retained under the
+    historical name for test/fixture compatibility.
+    """
+    return insert_activity_row(
+        app_name=app_name,
+        process_name=process_name,
+        window_title=window_title,
+        status=status,
+        source=source,
+        start_time=start_time,
+        project_id=project_id,
+        file_path_hint=file_path_hint,
+        note=note,
+        auto_classified=auto_classified,
+        manual_override=manual_override,
+        resource=resource,
+    )
+
+
+def _close_activity_in_conn(
+    conn,
+    activity_id: int,
+    end_time: str,
+    duration_seconds: int | None = None,
+    status: str | None = None,
+) -> None:
     row = conn.execute(
         "SELECT start_time, status, duration_seconds FROM activity_log WHERE id = ?",
         (activity_id,),
@@ -160,7 +208,8 @@ def _close_activity_in_conn(conn, activity_id: int, end_time: str, duration_seco
     if duration_seconds is not None:
         duration = max(duration, int(duration_seconds or 0))
     duration = max(existing, duration)
-    status = STATUS_ERROR if is_error else row["status"]
+    if status is None:
+        status = STATUS_ERROR if is_error else row["status"]
     conn.execute(
         """
         UPDATE activity_log
@@ -216,55 +265,26 @@ def _detect_resource_for_activity(
 
 
 def close_activity(activity_id: int, end_time: str, duration_seconds: int | None = None) -> None:
-    with get_connection() as conn:
-        _close_activity_in_conn(conn, activity_id, end_time, duration_seconds=duration_seconds)
-    # Phase 5I.1 fix: when an activity transitions from in-progress to closed,
-    # re-run the automatic-rules entry point so enabled folder / keyword rules
-    # apply to the just-closed activity. ``finalize_created_activity`` runs
-    # ``process_new_activity`` at creation time, but the in-progress guard in
-    # ``process_new_activity`` skips activities whose ``end_time IS NULL``;
-    # without this re-trigger, activities created in-progress and later closed
-    # would never receive automatic rule application.
-    #
-    # Routed through the unified close-finalize helper
-    # (``activity_lifecycle_service.finalize_closed_activity_ids``) so every
-    # open → closed transition goes through a single command owner. Lazy
-    # import avoids a circular dependency.
-    from .activity_lifecycle_service import finalize_closed_activity_ids
+    """Low-level close of a single open activity row (compat alias).
 
-    finalize_closed_activity_ids([activity_id])
+    Pure CRUD: does NOT run project inference / automatic rules.
+    Production open-row lifecycle must use
+    ``activity_lifecycle_service.close_activity`` which calls this helper
+    and then finalizes. Tests / fixtures may use this helper directly.
+    """
+    close_activity_row(activity_id, end_time, duration_seconds=duration_seconds)
 
 
 def close_current_open_record(end_time: str | None = None) -> None:
-    """Close every open activity row (``end_time IS NULL``).
+    """Low-level close of every open activity row (``end_time IS NULL``).
 
-    Converges project inference / automatic rules on every closed row so
-    the persisted project assignment matches the inference that would
-    have run if each row had been closed via ``close_activity``. This
-    keeps virtual → persisted_open → close transitions consistent: the
-    snapshot's inferred project is honored on close, and enabled folder
-    / keyword rules apply to the just-closed row.
-
-    Verification items 2 & 12: every open-row close path
-    (``close_current_open_record`` is called by the collector
-    state-machine on stop / pause / time-jump) now converges to the
-    same automatic-rules entry point as ``close_activity``.
+    Pure CRUD: does NOT run project inference / automatic rules.
+    Production open-row lifecycle must use
+    ``activity_lifecycle_service.close_all_open_activities`` which calls
+    :func:`close_all_open_rows` and then finalizes. Tests / fixtures may
+    use this helper directly.
     """
-    end = end_time or now_str()
-    closed_ids: list[int] = []
-    with get_connection() as conn:
-        rows = conn.execute("SELECT id FROM activity_log WHERE end_time IS NULL ORDER BY id").fetchall()
-        for row in rows:
-            aid = int(row["id"])
-            _close_activity_in_conn(conn, aid, end)
-            closed_ids.append(aid)
-    # Run the unified close-finalize helper so project inference / automatic
-    # rules converge on each closed row, consistent with the close_activity
-    # path. Lazy import avoids a circular dependency
-    # (activity_lifecycle_service imports activity_service at module level).
-    from .activity_lifecycle_service import finalize_closed_activity_ids
-
-    finalize_closed_activity_ids(closed_ids)
+    close_all_open_rows(end_time)
 
 
 def increment_activity_duration(activity_id: int, seconds: int) -> None:

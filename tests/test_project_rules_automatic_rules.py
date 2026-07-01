@@ -40,6 +40,7 @@ import pytest
 from worktrace.api import rule_api
 from worktrace.db import get_connection, now_str
 from worktrace.services import (
+    activity_lifecycle_service,
     activity_service,
     folder_rule_service,
     project_inference_service,
@@ -359,7 +360,9 @@ def test_hidden_activity_is_not_touched(temp_db):
     )
     activity_service.finalize_created_activity(aid)
     _set_hidden(aid)
-    activity_service.close_activity(aid, "2026-06-25 09:10:00")
+    # Use the lifecycle facade so close-finalize runs; the hidden flag
+    # must prevent automatic rule application during close-finalize.
+    activity_lifecycle_service.close_activity(aid, "2026-06-25 09:10:00")
     activity = _activity_row(aid)
     # Hidden activities are not auto-classified to the rule's project.
     assert int(activity["project_id"]) != project
@@ -375,7 +378,9 @@ def test_deleted_activity_is_not_touched(temp_db):
     )
     activity_service.finalize_created_activity(aid)
     _set_deleted(aid)
-    activity_service.close_activity(aid, "2026-06-25 09:10:00")
+    # Use the lifecycle facade so close-finalize runs; the deleted flag
+    # must prevent automatic rule application during close-finalize.
+    activity_lifecycle_service.close_activity(aid, "2026-06-25 09:10:00")
     activity = _activity_row(aid)
     assert int(activity["project_id"]) != project
 
@@ -799,12 +804,13 @@ def test_close_activity_triggers_automatic_rules_for_in_progress_activity(temp_d
         "in-progress activity must not receive automatic rule application"
     )
     # close_activity transitions the activity from in-progress to closed;
-    # this must re-trigger process_new_activity so the folder rule applies.
-    activity_service.close_activity(aid, "2026-06-25 09:10:00")
+    # the lifecycle facade's close-finalize must re-trigger
+    # process_new_activity so the folder rule applies.
+    activity_lifecycle_service.close_activity(aid, "2026-06-25 09:10:00")
     activity = activity_service.get_activity(aid)
     assert activity["project_id"] == project, (
-        "close_activity must trigger automatic rules so the folder rule "
-        "applies to the just-closed activity"
+        "lifecycle close_activity must trigger automatic rules so the "
+        "folder rule applies to the just-closed activity"
     )
     assignment = _assignment_row(aid)
     assert assignment["source"] == "folder_rule"

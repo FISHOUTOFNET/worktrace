@@ -4,6 +4,10 @@ from worktrace.services import activity_service, project_service, session_bounda
 
 
 def _activity(app, process, title, start, project_id=None, status="normal"):
+    # create_activity no longer auto-closes old rows (lifecycle hard
+    # cutover); close any existing open activity using the new start
+    # time as the end time, mimicking the old create_activity behavior.
+    activity_service.close_current_open_record(f"2026-06-18 {start}")
     aid = activity_service.create_activity(
         app,
         process,
@@ -17,6 +21,7 @@ def _activity(app, process, title, start, project_id=None, status="normal"):
 
 
 def _activity_at(app, process, title, start_time, project_id=None, status="normal"):
+    activity_service.close_current_open_record(start_time)
     aid = activity_service.create_activity(
         app,
         process,

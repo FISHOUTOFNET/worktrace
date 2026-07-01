@@ -16,15 +16,20 @@ def test_create_close_and_manual_updates(temp_db):
     assert row["note"] == "done"
 
 
-def test_create_activity_closes_existing_open_record(temp_db):
+def test_create_activity_does_not_close_existing_open_record(temp_db):
+    """``create_activity`` is a pure low-level insert: it does NOT close
+    pre-existing open rows. Production open-row lifecycle must use
+    ``activity_lifecycle_service.start_activity`` which closes pre-existing
+    open rows + finalizes them + inserts the new row."""
     first = activity_service.create_activity(
         "A", "a.exe", "A", start_time="2026-06-18 09:00:00"
     )
     second = activity_service.create_activity(
         "B", "b.exe", "B", start_time="2026-06-18 09:10:00"
     )
-    assert activity_service.get_activity(first)["end_time"] == "2026-06-18 09:10:00"
-    assert activity_service.get_open_activity()["id"] == second
+    # Both rows remain open — create_activity is pure CRUD.
+    assert activity_service.get_activity(first)["end_time"] is None
+    assert activity_service.get_activity(second)["end_time"] is None
 
 
 def test_activity_duration_writes_are_monotonic(temp_db):

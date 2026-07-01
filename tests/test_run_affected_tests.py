@@ -1135,17 +1135,21 @@ def test_activity_lifecycle_service_py_selects_lifecycle_boundary_suite(runner):
     command facade. Changes must trigger the full lifecycle boundary
     suite so collector / state machine / recovery / clipboard / automatic
     rules / live display / timeline / statistics / boundary tests all
-    run."""
+    run. The static boundary test (test_activity_lifecycle_boundary.py)
+    and the app-runtime privacy gate test are included so architectural
+    invariants and the shutdown close-all path are verified."""
     sel = runner.select_targets([
         "worktrace/services/activity_lifecycle_service.py",
     ])
     for expected in (
         "tests/test_activity_lifecycle_service.py",
+        "tests/test_activity_lifecycle_boundary.py",
         "tests/test_activity_service.py",
         "tests/test_collector.py",
         "tests/test_state_machine.py",
         "tests/test_clipboard_service.py",
         "tests/test_recovery_service.py",
+        "tests/test_app_runtime_privacy_gate.py",
         "tests/test_project_rules_automatic_rules.py",
         "tests/test_live_display_contract.py",
         "tests/test_timeline_service.py",
@@ -1161,10 +1165,11 @@ def test_activity_lifecycle_service_py_selects_lifecycle_boundary_suite(runner):
 def test_recovery_service_py_selects_lifecycle_boundary_suite(runner):
     """N: recovery_service.py carries cross-midnight recovery that now
     routes through the lifecycle facade. Changes must trigger the
-    lifecycle boundary suite."""
+    lifecycle boundary suite including the static boundary test."""
     sel = runner.select_targets(["worktrace/services/recovery_service.py"])
     for expected in (
         "tests/test_activity_lifecycle_service.py",
+        "tests/test_activity_lifecycle_boundary.py",
         "tests/test_recovery_service.py",
         "tests/test_collector.py",
         "tests/test_state_machine.py",
@@ -1180,14 +1185,39 @@ def test_collector_directory_prefix_matches_lifecycle_boundary(runner):
     """N: collector/ changes must trigger the lifecycle boundary suite
     in addition to the H (collector / platform) suite. The lifecycle
     facade is the collector's write path, so collector changes must
-    run lifecycle + state machine + clipboard tests."""
+    run lifecycle + state machine + clipboard tests. The static
+    boundary test is included to verify architectural invariants."""
     sel = runner.select_targets(["worktrace/collector/auto_activity_recorder.py"])
     assert "tests/test_activity_lifecycle_service.py" in sel.pytest_targets, (
         "collector changes must select the lifecycle boundary test"
     )
+    assert "tests/test_activity_lifecycle_boundary.py" in sel.pytest_targets, (
+        "collector changes must select the static lifecycle boundary test"
+    )
     assert "tests/test_collector.py" in sel.pytest_targets
     assert "tests/test_state_machine.py" in sel.pytest_targets
     assert "tests/test_clipboard_service.py" in sel.pytest_targets
+
+
+def test_app_runtime_py_selects_lifecycle_boundary_suite(runner):
+    """N: app_runtime.py shutdown now routes close-all through the
+    lifecycle facade (activity_lifecycle_service.close_all_open_activities).
+    Changes must trigger the Rule N lifecycle boundary suite in addition
+    to the K2 startup/privacy-gate suite. This ensures the static
+    boundary test verifies the shutdown path does not call the old
+    activity_service.close_current_open_record entry."""
+    sel = runner.select_targets(["worktrace/runtime/app_runtime.py"])
+    for expected in (
+        "tests/test_activity_lifecycle_service.py",
+        "tests/test_activity_lifecycle_boundary.py",
+        "tests/test_activity_service.py",
+        "tests/test_app_runtime_privacy_gate.py",
+        "tests/test_run_affected_tests.py",
+        "tests/test_ui_backend_boundary.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"app_runtime.py must select N target: {expected}"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -762,7 +762,7 @@ def test_phase_r2_state_variables_only_accessed_via_app_namespace():
         "restoreSaving", "restoreSavingActivityId",
         "statisticsLoaded", "statisticsLoading",
         "statisticsRequestToken", "statisticsExportSaving",
-        "lastTimelineData", "refreshTimer",
+        "lastTimelineData",
     ]
     errors = []
     for varname in state_vars:
@@ -835,17 +835,20 @@ def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
 # --- Phase 6G: local ticker (1-second DOM-only refresh) ----------------
 
 
-def test_core_js_defines_local_ticker_interval() -> None:
-    """Phase 6G: core.js must define ``LOCAL_TICKER_INTERVAL_MS`` with
-    value ``1000`` (1-second ticker). The 8-second backend refresh is
-    still the source of truth; this ticker only re-renders already-fetched
-    durations with a locally-computed elapsed increment."""
+def test_core_js_does_not_define_legacy_ticker_interval() -> None:
+    """Static boundary test: core.js must NOT define the legacy
+    ``LOCAL_TICKER_INTERVAL_MS`` / ``REFRESH_INTERVAL_MS`` constants.
+    The unified heartbeat (``App.HEARTBEAT_INTERVAL_MS = 1000``) owns
+    the single 1-second timer; the legacy parallel-timer constants have
+    been removed entirely and must not regress."""
     source = read_js("core.js")
-    assert "App.LOCAL_TICKER_INTERVAL_MS" in source, (
-        "core.js must declare App.LOCAL_TICKER_INTERVAL_MS for Phase 6G"
+    assert "App.LOCAL_TICKER_INTERVAL_MS" not in source, (
+        "core.js must not define the removed App.LOCAL_TICKER_INTERVAL_MS "
+        "constant; the unified heartbeat owns the single timer"
     )
-    assert "App.LOCAL_TICKER_INTERVAL_MS = 1000;" in source, (
-        "core.js must set LOCAL_TICKER_INTERVAL_MS to 1000 (1 second)"
+    assert "App.REFRESH_INTERVAL_MS" not in source, (
+        "core.js must not define the removed App.REFRESH_INTERVAL_MS "
+        "constant; the unified heartbeat owns the single timer"
     )
 
 

@@ -40,7 +40,6 @@ Boundary rules:
 from __future__ import annotations
 
 import hashlib
-import time as _time
 from datetime import datetime
 from typing import Any
 
@@ -792,8 +791,9 @@ def build_persisted_open_overlay(
 
     When the snapshot is persisted_open AND the report date is today, this
     returns ``{persisted_activity_id, live_seconds, live_display_key,
-    baseline_epoch_ms}`` so the bridge can apply the live increment to
-    the matching real DB session/detail row.
+    stable_live_key, stable_live_key_hash, live_started_at_epoch_ms,
+    carry_seconds}`` so the bridge can apply the unified live clock
+    increment to the matching real DB session/detail row.
 
     Returns ``None`` when not applicable.
     """
@@ -819,9 +819,6 @@ def build_persisted_open_overlay(
         "stable_live_key_hash": _stable_live_key_hash(snapshot),
         "live_started_at_epoch_ms": int(live_started_at_epoch_ms or 0),
         "carry_seconds": 0,
-        # Kept for backward compat — frontend ticker now prefers the
-        # unified live_started_at_epoch_ms + carry_seconds fields.
-        "baseline_epoch_ms": int(_time.time() * 1000),
     }
 
 
@@ -867,8 +864,7 @@ def compute_refresh_revision(
     - ``updated_at`` advances on a duration-only write (the
       ``updated_at`` column is excluded from the per-row structural
       signature);
-    - Date.now / snapshot_baseline_epoch_ms advance without any
-      structural change;
+    - Date.now advances without any structural change;
     - snapshot_updated_at advances without any structural change.
     """
     if report_date is None:

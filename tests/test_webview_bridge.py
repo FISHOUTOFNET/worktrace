@@ -774,17 +774,15 @@ def test_accept_first_run_notice_succeeds_even_if_background_workers_start_fails
 
 
 def test_get_overview_returns_snapshot_and_seconds_fields(bridge):
-    """Phase 6G: ``get_overview`` must return ``snapshot_at_epoch_ms``,
-    ``today_total_seconds``, and ``current_activity_elapsed_seconds`` as
-    ints, and the ``current_activity`` dict must include
-    ``elapsed_seconds`` (int) and ``is_paused`` (bool) so the frontend
-    1-second ticker can increment the display without a bridge
-    round-trip."""
+    """Phase 6G: ``get_overview`` must return ``today_total_seconds`` and
+    ``current_activity_elapsed_seconds`` as ints, and the
+    ``current_activity`` dict must include ``elapsed_seconds`` (int) and
+    ``is_paused`` (bool) so the frontend 1-second ticker can increment
+    the display without a bridge round-trip."""
     settings_service.clear_settings_cache()
     result = bridge.get_overview()
 
     assert result["ok"] is True
-    assert isinstance(result["snapshot_at_epoch_ms"], int)
     assert isinstance(result["today_total_seconds"], int)
     assert isinstance(result["current_activity_elapsed_seconds"], int)
     current = result["current_activity"]
@@ -795,17 +793,16 @@ def test_get_overview_returns_snapshot_and_seconds_fields(bridge):
 
 def test_get_timeline_returns_total_seconds_and_snapshot_fields(bridge):
     """Phase 6G: ``get_timeline`` must return ``total_seconds``,
-    ``snapshot_at_epoch_ms``, ``today_total_seconds``, and
-    ``current_activity_elapsed_seconds`` as ints, and each session in
-    ``sessions`` must include ``duration_seconds`` (int) so the frontend
-    1-second ticker can increment the displayed total and in-progress
-    session duration without a bridge round-trip."""
+    ``today_total_seconds``, and ``current_activity_elapsed_seconds`` as
+    ints, and each session in ``sessions`` must include
+    ``duration_seconds`` (int) so the frontend 1-second ticker can
+    increment the displayed total and in-progress session duration
+    without a bridge round-trip."""
     settings_service.clear_settings_cache()
     result = bridge.get_timeline()
 
     assert result["ok"] is True
     assert isinstance(result["total_seconds"], int)
-    assert isinstance(result["snapshot_at_epoch_ms"], int)
     assert isinstance(result["today_total_seconds"], int)
     assert isinstance(result["current_activity_elapsed_seconds"], int)
     assert isinstance(result["sessions"], list)

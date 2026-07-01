@@ -16,7 +16,7 @@ from ..platforms.base import ActiveWindow, ClipboardTextEvent
 from ..resources.resource_builders import make_system_resource, resource_signature
 from ..resources.resource_identity import infer_resource_from_active_window
 from ..resources.types import DetectedResource
-from ..services import activity_service, clipboard_service, privacy_service, session_boundary_service
+from ..services import activity_service, activity_lifecycle_service, clipboard_service, privacy_service, session_boundary_service
 from .auto_activity_recorder import AutoActivityRecorder
 
 STATE_TO_STATUS = {
@@ -43,7 +43,7 @@ class CollectorStateMachine:
         transition_time = at_time or now_str()
         if state == "stopped":
             self._stop_recording_at_boundary(transition_time, "stopped")
-            activity_service.close_current_open_record(transition_time)
+            activity_lifecycle_service.close_all_open_activities(transition_time)
             self.state = "stopped"
             self.active_signature = None
             return
@@ -98,7 +98,7 @@ class CollectorStateMachine:
     def reset_for_time_jump(self, at_time: str | None = None) -> None:
         transition_time = at_time or now_str()
         self._stop_recording_at_boundary(transition_time, "time_jump")
-        activity_service.close_current_open_record(transition_time)
+        activity_lifecycle_service.close_all_open_activities(transition_time)
         self.state = "stopped"
         self.active_signature = None
 
@@ -114,7 +114,7 @@ class CollectorStateMachine:
         transition_time = at_time or now_str()
         if self.state != "paused" or self.recorder.current_payload is not None:
             self._stop_recording_at_boundary(transition_time, "paused")
-            activity_service.close_current_open_record(transition_time)
+            activity_lifecycle_service.close_all_open_activities(transition_time)
         self.state = "paused"
         self.active_signature = None
 

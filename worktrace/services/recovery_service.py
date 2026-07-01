@@ -5,7 +5,8 @@ from datetime import datetime, time as datetime_time, timedelta
 
 from ..constants import STATUS_ERROR, STATUS_NORMAL, TIME_FORMAT
 from ..db import get_connection, now_str
-from . import activity_service, project_service, session_boundary_service
+from . import project_service, session_boundary_service
+from .activity_lifecycle_service import recover_close_activity, recover_cross_midnight_segment, recover_first_half_close
 from .settings_service import get_setting, set_setting
 
 
@@ -13,7 +14,6 @@ def recover_unclosed_records() -> None:
     heartbeat = get_setting("last_collector_heartbeat", "") or ""
     fallback_now = now_str()
     recovered_boundary_at: str | None = None
-    recovered_activity_ids: list[int] = []
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM activity_log WHERE end_time IS NULL ORDER BY id").fetchall()
     for row in rows:
@@ -39,44 +39,28 @@ def recover_unclosed_records() -> None:
             recovered_boundary_at = _recover_cross_midnight_row(row, end_dt)
             logging.info("recovered cross-midnight unclosed record id=%s", row["id"])
             continue
-        with get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE activity_log
-                SET end_time = ?, duration_seconds = ?, status = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (end_time, duration, status, now_str(), row["id"]),
-            )
+        # Non-cross-midnight recovery: route through the lifecycle facade so
+        # the close-finalize helper converges project inference / automatic
+        # rules on the recovered row. Previously this was a direct SQL UPDATE
+        # that bypassed project inference entirely, leaving recovered rows in
+        # the "uncategorized" assignment even when a concrete inferred project
+        # was available.
+        recover_close_activity(
+            int(row["id"]),
+            end_time,
+            duration_seconds=duration,
+            status=status,
+        )
         recovered_boundary_at = end_time
-        recovered_activity_ids.append(int(row["id"]))
         logging.info("recovered unclosed record id=%s status=%s", row["id"], status)
     if recovered_boundary_at:
         session_boundary_service.record_boundary(recovered_boundary_at, "recovered")
         set_setting("current_activity_snapshot", "")
         set_setting("pending_short_seconds", "0")
-    # Verification item 9: converge project inference / automatic rules
-    # for every recovered row so the persisted project assignment matches
-    # the close_activity / close_current_open_record path. The direct
-    # UPDATE above previously bypassed project inference entirely, which
-    # left recovered rows in the "uncategorized" assignment even when a
-    # concrete inferred project was available.
-    #
-    # Routed through the unified close-finalize helper
-    # (``activity_lifecycle_service.finalize_closed_activity_ids``) so
-    # recovery no longer retains a second unconverged lifecycle path.
-    from .activity_lifecycle_service import finalize_closed_activity_ids
-
-    finalize_closed_activity_ids(recovered_activity_ids)
     record_restart_boundary_if_needed()
 
 
 def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
-    from .activity_lifecycle_service import (
-        recover_cross_midnight_segment,
-        recover_first_half_close,
-    )
-
     start_dt = datetime.strptime(row["start_time"], TIME_FORMAT)
     first_midnight = datetime.combine(start_dt.date() + timedelta(days=1), datetime_time.min)
     first_midnight_text = first_midnight.strftime(TIME_FORMAT)

@@ -3,9 +3,12 @@
 These static-contract tests verify the frontend pieces introduced by the
 Phase 6H-followup rewrite:
 
-- The fixed 8-second ``setInterval(refreshAll, REFRESH_INTERVAL_MS)`` and
-  the independent 1-second ``startLocalTicker`` / ``startAutoRefresh``
-  timers are replaced by a single 1-second ``startHeartbeat``.
+- A single 1-second ``startHeartbeat`` timer owns all periodic work.
+  The legacy ``REFRESH_INTERVAL_MS`` / ``LOCAL_TICKER_INTERVAL_MS``
+  constants, the ``App.refreshTimer`` / ``App.localTickerTimer`` state
+  vars, and the ``startAutoRefresh`` / ``startLocalTicker`` standalone
+  functions have all been removed entirely; ``startHeartbeat`` only
+  manages ``App.heartbeatTimer``.
 - The heartbeat first applies ``applyLocalTicker`` (DOM-only duration
   updates), then runs a lightweight ``get_refresh_state`` revision check
   under an in-flight guard; heavy interfaces are only invoked when the
@@ -46,40 +49,48 @@ from static_helpers import (
 def test_heartbeat_single_timer_replaces_parallel_timers():
     """Section 8: there must be exactly one 1-second timer
     (``App.heartbeatTimer``). The legacy ``App.refreshTimer`` /
-    ``App.localTickerTimer`` may still exist as state vars (for cleanup
-    in ``startHeartbeat``) but must NOT be re-armed with their own
-    ``setInterval``. The old ``startAutoRefresh`` / ``startLocalTicker``
-    standalone functions must NOT exist as parallel timer drivers."""
-    source = read_js("init.js")
+    ``App.localTickerTimer`` state vars, the legacy
+    ``REFRESH_INTERVAL_MS`` / ``LOCAL_TICKER_INTERVAL_MS`` constants,
+    and the ``startAutoRefresh`` / ``startLocalTicker`` standalone
+    functions have all been removed entirely. ``startHeartbeat`` is the
+    only timer driver and only manages ``App.heartbeatTimer``."""
+    init_source = read_js("init.js")
+    core_source = read_js("core.js")
     # The heartbeat starter must exist and arm App.heartbeatTimer.
-    assert "function startHeartbeat" in source, (
+    assert "function startHeartbeat" in init_source, (
         "init.js must define function startHeartbeat for the unified heartbeat"
     )
-    assert "App.heartbeatTimer = setInterval" in source, (
+    assert "App.heartbeatTimer = setInterval" in init_source, (
         "startHeartbeat must arm App.heartbeatTimer with setInterval"
     )
-    # startHeartbeat must clear legacy timers so re-init does not stack.
-    assert "App.refreshTimer" in source, (
-        "startHeartbeat must clear the legacy App.refreshTimer"
+    # App.heartbeatTimer is the ONLY timer state; the legacy timer
+    # state vars must NOT appear anywhere in init.js.
+    assert "App.refreshTimer" not in init_source, (
+        "init.js must not reference the removed App.refreshTimer state; "
+        "startHeartbeat only manages App.heartbeatTimer"
     )
-    assert "App.localTickerTimer" in source, (
-        "startHeartbeat must clear the legacy App.localTickerTimer"
+    assert "App.localTickerTimer" not in init_source, (
+        "init.js must not reference the removed App.localTickerTimer state; "
+        "startHeartbeat only manages App.heartbeatTimer"
     )
-    # The old standalone starter functions must NOT re-arm the legacy
-    # timers with their own setInterval (they would create parallel
-    # 1-second timers, violating section 8).
-    if "function startAutoRefresh" in source:
-        body = func_body(source, "startAutoRefresh")
-        assert "setInterval" not in body, (
-            "startAutoRefresh must not create its own setInterval; the "
-            "unified heartbeat owns the single timer"
-        )
-    if "function startLocalTicker" in source:
-        body = func_body(source, "startLocalTicker")
-        assert "setInterval" not in body, (
-            "startLocalTicker must not create its own setInterval; the "
-            "unified heartbeat owns the single timer"
-        )
+    # The legacy interval constants must NOT appear in core.js.
+    assert "REFRESH_INTERVAL_MS" not in core_source, (
+        "core.js must not define the removed REFRESH_INTERVAL_MS constant"
+    )
+    assert "LOCAL_TICKER_INTERVAL_MS" not in core_source, (
+        "core.js must not define the removed LOCAL_TICKER_INTERVAL_MS constant"
+    )
+    # The old standalone starter functions must NOT exist as function
+    # definitions in init.js (they would create parallel timers,
+    # violating section 8).
+    assert "function startAutoRefresh" not in init_source, (
+        "init.js must not define a startAutoRefresh function; the unified "
+        "heartbeat owns the single timer"
+    )
+    assert "function startLocalTicker" not in init_source, (
+        "init.js must not define a startLocalTicker function; the unified "
+        "heartbeat owns the single timer"
+    )
 
 
 def test_heartbeat_interval_is_one_second():
@@ -675,7 +686,9 @@ def test_ticker_uses_unified_live_clock_scheme_a():
     """Verification item 6: the ticker must use the unified live clock
     (scheme A: ``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
     instead of a response-time baseline. ``tickerDeltaSeconds`` must read
-    ``live_started_at_epoch_ms`` and ``carry_seconds`` from the payload."""
+    ``live_started_at_epoch_ms`` and ``carry_seconds`` from the payload.
+    It must NOT fall back to ``snapshot_at_epoch_ms``; when
+    ``live_started_at_epoch_ms`` is missing it returns 0."""
     source = read_js("core.js")
     body = func_body(source, "tickerDeltaSeconds")
     assert "live_started_at_epoch_ms" in body, (
@@ -683,6 +696,30 @@ def test_ticker_uses_unified_live_clock_scheme_a():
     )
     assert "carry_seconds" in body, (
         "tickerDeltaSeconds must read carry_seconds from the payload"
+    )
+    # The legacy snapshot_at_epoch_ms fallback has been removed; the
+    # function returns 0 when live_started_at_epoch_ms is missing.
+    assert "snapshot_at_epoch_ms" not in body, (
+        "tickerDeltaSeconds must not fall back to snapshot_at_epoch_ms; "
+        "it returns 0 when live_started_at_epoch_ms is missing"
+    )
+
+
+def test_frontend_js_does_not_contain_legacy_live_clock_fields():
+    """Static boundary test (spec §VIII Live clock boundary): the entire
+    frontend JS bundle must NOT contain the legacy response-time baseline
+    field names ``snapshot_at_epoch_ms`` or ``baseline_epoch_ms`` anywhere.
+    The unified live clock uses only ``live_started_at_epoch_ms`` +
+    ``carry_seconds``; the old baseline scheme has been removed entirely
+    and must not regress in comments, fallback logic, or payload parsing."""
+    all_js = read_all_js()
+    assert "snapshot_at_epoch_ms" not in all_js, (
+        "frontend JS must not contain the legacy snapshot_at_epoch_ms field; "
+        "the unified live clock uses live_started_at_epoch_ms + carry_seconds"
+    )
+    assert "baseline_epoch_ms" not in all_js, (
+        "frontend JS must not contain the legacy baseline_epoch_ms field; "
+        "the unified live clock uses live_started_at_epoch_ms + carry_seconds"
     )
 
 

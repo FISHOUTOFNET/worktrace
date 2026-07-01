@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-import time as _time
+
 from typing import Any
 
 from . import backup_api, live_display_api
@@ -633,8 +633,7 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
     - the report date crossing midnight.
 
     It MUST NOT change when only ``elapsed_seconds`` / ``extra_seconds`` /
-    ``snapshot_updated_at`` / ``snapshot_baseline_epoch_ms`` advance
-    without any structural change.
+    ``snapshot_updated_at`` advance without any structural change.
 
     ``report_date`` scopes the structural signature to the currently
     viewed Timeline date (verification item 8: ``get_refresh_state``
@@ -727,9 +726,6 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
             "stable_live_key": str(live_summary.get("stable_live_key") or ""),
             "stable_live_key_hash": str(live_summary.get("stable_live_key_hash") or ""),
             "live_state": str(live_summary.get("live_state") or ""),
-            # Kept for backward compat — frontend ticker now prefers the
-            # unified ``live_started_at_epoch_ms`` + ``carry_seconds``.
-            "snapshot_baseline_epoch_ms": int(_time.time() * 1000),
         }
     except Exception:
         return {"ok": False, "error": "刷新状态加载失败"}

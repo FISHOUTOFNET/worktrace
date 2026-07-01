@@ -481,9 +481,7 @@
     }
     App.initButtons = initButtons;
 
-    // Phase 6H-followup: unified 1-second heartbeat. Replaces the fixed
-    // 8-second full refresh (``startAutoRefresh``) and the independent
-    // 1-second ticker (``startLocalTicker``). Each tick:
+    // Phase 6H-followup: unified 1-second heartbeat. Each tick:
     //   1. Apply the local ticker (re-render already-fetched durations
     //      with a wall-clock delta). The ticker only updates DOM text.
     //   2. Run a lightweight ``get_refresh_state`` revision check. When the
@@ -556,9 +554,6 @@
 
     function startHeartbeat() {
         if (App.heartbeatTimer !== null) clearInterval(App.heartbeatTimer);
-        // Clear the legacy timers so a re-init does not stack old intervals.
-        if (App.refreshTimer !== null) { clearInterval(App.refreshTimer); App.refreshTimer = null; }
-        if (App.localTickerTimer !== null) { clearInterval(App.localTickerTimer); App.localTickerTimer = null; }
         App.heartbeatTimer = setInterval(function () {
             // Phase 1: local ticker (update DOM text with wall-clock delta).
             try {
@@ -585,7 +580,7 @@
         // Phase 6G: load the first-run privacy notice BEFORE refreshing
         // the main UI so the privacy gate is shown before any data
         // refresh begins. The notice load is awaited: refreshAll and
-        // startAutoRefresh only run after the notice state is known. If
+        // startHeartbeat only run after the notice state is known. If
         // the notice has not been accepted the blocking gate overlay is
         // shown and the collector must NOT start; the gate's accept
         // handler starts the collector after the user accepts. The
@@ -597,10 +592,10 @@
         // notice state was successfully confirmed. On failure (backend
         // ok:false or bridge rejection) it resolves ``false`` after
         // showing the blocking error overlay. The main UI refresh /
-        // auto-refresh / local ticker must NOT start on failure
-        // (fail-closed): the collector is not running and auto-refreshing
-        // the sidebar would imply data collection is active. The old
-        // catch branch that unconditionally started refresh is removed.
+        // heartbeat must NOT start on failure (fail-closed): the
+        // collector is not running and auto-refreshing the sidebar would
+        // imply data collection is active. The old catch branch that
+        // unconditionally started refresh is removed.
         App.loadFirstRunNotice().then(function (noticeConfirmed) {
             if (!noticeConfirmed) return;
             // Verification item 18: await the first ``refreshCurrentPageData()``

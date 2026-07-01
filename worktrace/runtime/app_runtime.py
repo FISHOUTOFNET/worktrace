@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from .. import db
 from ..collector.collector import run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
-from ..services import activity_service, folder_index_service, recovery_service
+from ..services import activity_lifecycle_service, folder_index_service, recovery_service
 from ..services.settings_service import set_setting
 
 if TYPE_CHECKING:
@@ -149,7 +149,7 @@ class AppRuntime:
             self._index_thread.join(timeout=5)
         if self._collector_thread:
             self._collector_thread.join(timeout=5)
-        activity_service.close_current_open_record()
+        activity_lifecycle_service.close_all_open_activities()
         set_setting("collector_status", "stopped")
         release_single_instance()
         logging.info("app shutdown")

@@ -19,7 +19,6 @@ tests see no API-surface change.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from ..api import (
@@ -163,10 +162,11 @@ class TimelineBridgeMixin:
 
         ``today_total_seconds`` includes the virtual live session's baseline
         so the displayed total matches the sum of session durations at
-        backend response time. The frontend ticker adds
-        ``(now - baseline_epoch_ms)`` only to the virtual / in-progress
-        session. Historical dates are never projected. idle / paused /
-        excluded / error snapshots never produce a virtual session.
+        backend response time. The frontend ticker adds the unified live
+        clock delta (``live_started_at_epoch_ms`` + ``carry_seconds``)
+        only to the virtual / in-progress session. Historical dates are
+        never projected. idle / paused / excluded / error snapshots never
+        produce a virtual session.
         """
         try:
             report_date = date or timeline_api.get_default_report_date()
@@ -179,7 +179,6 @@ class TimelineBridgeMixin:
             snapshot = settings_api.get_current_activity_snapshot()
             today = timeline_api.get_default_report_date()
             current = _snapshot_summary(snapshot)
-            baseline_epoch_ms = int(time.time() * 1000)
             live_display = live_display_api.build_current_activity_summary(
                 snapshot, report_date=report_date, today=today
             )
@@ -280,8 +279,8 @@ class TimelineBridgeMixin:
             # Include the virtual session baseline in the totals so the
             # displayed total matches the sum of session durations at
             # backend response time. The frontend ticker only adds the
-            # wall-clock delta since ``baseline_epoch_ms`` on top, so
-            # there is no double-counting.
+            # unified live clock delta on top, so there is no
+            # double-counting.
             display_total_seconds = total_seconds + target_projected_seconds
             return {
                 "ok": True,
@@ -291,11 +290,9 @@ class TimelineBridgeMixin:
                 "current_activity": current,
                 "live_display": live_display,
                 "sessions": sessions,
-                # Raw seconds + snapshot fields for the 1-second local
-                # ticker. The ticker only updates DOM text; it never
-                # calls a bridge method or writes the DB.
-                "snapshot_at_epoch_ms": baseline_epoch_ms,
-                "baseline_epoch_ms": baseline_epoch_ms,
+                # Raw seconds for the 1-second local ticker. The ticker
+                # only updates DOM text; it never calls a bridge method or
+                # writes the DB.
                 "today_total_seconds": display_total_seconds,
                 "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
                 # Live projection metadata (kept for backward compat). When
@@ -338,15 +335,15 @@ class TimelineBridgeMixin:
         baseline), ``is_in_progress``, ``is_virtual``, ``is_virtual_live``,
         ``live_display_key``, ``activity_id``, ``source``,
         ``edit_disabled``, and ``disable_reason`` so the frontend ticker
-        can locate the live row by flag and increment its duration by
-        ``(now - baseline_epoch_ms)``.
+        can locate the live row by flag and increment its duration by the
+        unified live clock delta (``live_started_at_epoch_ms`` +
+        ``carry_seconds``).
         """
         try:
             ids = [int(aid) for aid in (activity_ids or [])]
             date = report_date or timeline_api.get_default_report_date()
             today = timeline_api.get_default_report_date()
             snapshot = settings_api.get_current_activity_snapshot()
-            baseline_epoch_ms = int(time.time() * 1000)
             # Build the unified live-display summary from the same snapshot
             # sample so the detail ticker can compute its own live delta
             # (verification item 8). This is built before the virtual-row
@@ -410,8 +407,6 @@ class TimelineBridgeMixin:
                     # (verification item 8: detail ticker must not use
                     # Timeline main payload delta).
                     "live_display": live_display,
-                    "baseline_epoch_ms": baseline_epoch_ms,
-                    "snapshot_at_epoch_ms": baseline_epoch_ms,
                 }
             rows = timeline_api.get_session_activity_details(
                 ids,
@@ -468,8 +463,6 @@ class TimelineBridgeMixin:
                 # payload's delta for the detail ticker caused the detail
                 # duration to drift relative to its own baseline.
                 "live_display": live_display,
-                "baseline_epoch_ms": baseline_epoch_ms,
-                "snapshot_at_epoch_ms": baseline_epoch_ms,
             }
         except Exception:
             logger.exception("webview bridge get_timeline_session_details failed")

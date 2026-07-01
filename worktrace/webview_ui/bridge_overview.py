@@ -20,7 +20,6 @@ the frontend / tests see no API-surface change.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from ..api import (
@@ -135,8 +134,9 @@ class OverviewBridgeMixin:
         classification, display project, baseline seconds, and
         ``live_display_key``. The frontend ticker increments
         ``today_total_seconds`` / ``classified_seconds`` /
-        ``uncategorized_seconds`` by ``(now - snapshot_at_epoch_ms)``
-        only when ``current_activity.is_virtual_live`` or
+        ``uncategorized_seconds`` by the unified live clock delta
+        (``live_started_at_epoch_ms`` + ``carry_seconds``) only when
+        ``current_activity.is_virtual_live`` or
         ``current_activity.is_in_progress`` is true AND ``status ==
         "normal"``. idle / paused / excluded / error never increment the
         normal project live duration.
@@ -162,11 +162,9 @@ class OverviewBridgeMixin:
                 # decide eligibility (normal / virtual / persisted_open)
                 # without re-reading the raw snapshot.
                 "live_display": current,
-                # Raw seconds + snapshot fields for the 1-second local
-                # ticker. The ticker only updates DOM text; it never
-                # calls a bridge method or writes the DB.
-                "snapshot_at_epoch_ms": int(time.time() * 1000),
-                "baseline_epoch_ms": int(time.time() * 1000),
+                # Raw seconds for the 1-second local ticker. The ticker
+                # only updates DOM text; it never calls a bridge method or
+                # writes the DB.
                 "today_total_seconds": total_seconds,
                 "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
                 # Display-safe raw seconds for classified / uncategorized
@@ -200,7 +198,8 @@ class OverviewBridgeMixin:
         ``is_virtual_live``, ``live_display_key``, ``activity_id``,
         ``source``, and ``edit_disabled``. The frontend ticker locates the
         live item by flag (not by a single-scenario index) and increments
-        its ``duration_seconds`` by ``(now - baseline_epoch_ms)``.
+        its ``duration_seconds`` by the unified live clock delta
+        (``live_started_at_epoch_ms`` + ``carry_seconds``).
         """
         try:
             today = timeline_api.get_default_report_date()
@@ -210,7 +209,6 @@ class OverviewBridgeMixin:
                 ensure_context=True,
             )
             snapshot = settings_api.get_current_activity_snapshot()
-            baseline_epoch_ms = int(time.time() * 1000)
             live_display = live_display_api.build_current_activity_summary(
                 snapshot, report_date=today, today=today
             )
@@ -297,11 +295,6 @@ class OverviewBridgeMixin:
                 # Unified live-display payload so the frontend ticker can
                 # decide eligibility without re-reading the raw snapshot.
                 "live_display": live_display,
-                # Backend response-time baseline epoch ms. The frontend
-                # ticker adds (now - baseline_epoch_ms) to the live item's
-                # duration_seconds without a bridge round-trip.
-                "snapshot_at_epoch_ms": baseline_epoch_ms,
-                "baseline_epoch_ms": baseline_epoch_ms,
             }
         except Exception:
             logger.exception("webview bridge get_recent_activities failed")
@@ -325,9 +318,9 @@ class OverviewBridgeMixin:
         ``file_path_hint``, ``note``, ``clipboard``, ``traceback`` or SQL
         is surfaced. ``refresh_revision`` is a structural-only signature
         (it excludes ``elapsed_seconds`` / ``extra_seconds`` /
-        ``snapshot_updated_at`` / ``snapshot_baseline_epoch_ms`` /
-        ``Date.now()``) so natural time progression within the same
-        activity does not trigger a heavy refresh.
+        ``snapshot_updated_at`` / ``Date.now()``) so natural time
+        progression within the same activity does not trigger a heavy
+        refresh.
 
         The payload also carries the unified live clock fields
         (``live_started_at_epoch_ms``, ``carry_seconds``,

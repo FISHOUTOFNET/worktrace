@@ -869,7 +869,7 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
             set_collector_status("error")
             sleep_poll(stop_event)
 
-    close_current_open_record()
+    activity_lifecycle_service.close_all_open_activities()
     set_collector_status("stopped")
 ```
 
@@ -1128,14 +1128,22 @@ If the previous activity has no existing concrete project, do not create a sugge
 
 Responsible for low-level activity CRUD (insert / update / select / close
 helpers). It is **not** the business state-transition owner. Production
-callers (collector / recovery / clipboard / shutdown) should route open-row
+callers (collector / recovery / clipboard / shutdown) must route open-row
 lifecycle commands through `activity_lifecycle_service` (Section 23.9).
+
+`create_activity(...)` is a pure low-level insert: it does **not** close
+pre-existing open rows and does **not** run project inference / automatic
+rules. `close_activity(...)` and `close_current_open_record(...)` are
+compat aliases for tests / fixtures / manual closed-row operations: they
+do **not** run `finalize_closed_activity_ids` or
+`project_inference_service.process_new_activity`. All close-finalize
+semantics live exclusively in the lifecycle facade.
 
 Required functions:
 
 ```python
-create_activity(...)
-close_activity(activity_id: int, end_time: str) -> None
+create_activity(...)  # low-level insert only; does NOT close old rows
+close_activity(activity_id: int, end_time: str) -> None  # low-level close only
 get_open_activity() -> dict | None
 get_activities_by_date(date: str) -> list[dict]
 get_activities_by_range(start_date: str, end_date: str) -> list[dict]

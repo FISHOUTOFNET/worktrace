@@ -11,7 +11,7 @@ Phase R3 rewrite (``worktrace.services.live_display_service``):
   status / persisted / inferred_project_name / latest activity / carry
   state / collector status / user_paused changes.
 - ``get_recent_activities()`` returns the unified live-display payload
-  (``live_display``, ``baseline_epoch_ms``) and each item carries
+  (``live_display``) and each item carries
   ``duration_seconds``, ``is_in_progress``, ``is_virtual``,
   ``is_virtual_live``, ``live_display_key``, ``activity_id``,
   ``source``, ``edit_disabled``. A virtual live item is prepended when
@@ -123,9 +123,13 @@ def test_get_refresh_state_returns_dict_with_required_fields(bridge):
         "refresh_revision",
         "today",
         "latest_activity_id",
-        "snapshot_baseline_epoch_ms",
     ):
         assert field in result, "get_refresh_state missing field: " + field
+    # Legacy live clock fields have been removed from the refresh state
+    # payload; assert they are absent so a future regression is caught.
+    assert "snapshot_baseline_epoch_ms" not in result, (
+        "get_refresh_state must not return legacy snapshot_baseline_epoch_ms"
+    )
 
 
 def test_get_refresh_state_is_json_serializable(bridge):
@@ -295,14 +299,20 @@ def test_refresh_revision_changes_on_user_paused(bridge):
 
 def test_get_recent_activities_returns_required_fields(bridge):
     """Section 2: each recent item must carry the unified live-display
-    fields; the payload must carry ``live_display``,
-    ``baseline_epoch_ms``, and ``snapshot_at_epoch_ms``."""
+    fields; the payload must carry ``live_display``."""
     _set_snapshot(None)  # no current activity -> no virtual item
     result = bridge.get_recent_activities()
     assert result["ok"] is True
-    assert "snapshot_at_epoch_ms" in result
-    assert "baseline_epoch_ms" in result
     assert "live_display" in result
+    # Legacy live clock fields have been removed from the recent
+    # activities payload; assert they are absent so a future regression
+    # is caught.
+    assert "snapshot_at_epoch_ms" not in result, (
+        "get_recent_activities must not return legacy snapshot_at_epoch_ms"
+    )
+    assert "baseline_epoch_ms" not in result, (
+        "get_recent_activities must not return legacy baseline_epoch_ms"
+    )
     for item in result["activities"]:
         assert "duration_seconds" in item
         assert "is_in_progress" in item
@@ -366,7 +376,14 @@ def test_get_timeline_returns_required_projection_fields(bridge):
     assert result["ok"] is True
     assert "live_projected_session_id" in result
     assert "live_projected_seconds" in result
-    assert "snapshot_at_epoch_ms" in result
+    # Legacy live clock fields have been removed from the timeline
+    # payload; assert they are absent so a future regression is caught.
+    assert "snapshot_at_epoch_ms" not in result, (
+        "get_timeline must not return legacy snapshot_at_epoch_ms"
+    )
+    assert "baseline_epoch_ms" not in result, (
+        "get_timeline must not return legacy baseline_epoch_ms"
+    )
     for s in result["sessions"]:
         assert "duration_seconds" in s
         assert "is_in_progress" in s
@@ -423,6 +440,14 @@ def test_get_timeline_session_details_returns_duration_seconds(bridge):
     result = bridge.get_timeline_session_details([], None)
     assert result["ok"] is True
     assert result["activities"] == []
+    # Legacy live clock fields have been removed from the detail payload;
+    # assert they are absent so a future regression is caught.
+    assert "snapshot_at_epoch_ms" not in result, (
+        "get_timeline_session_details must not return legacy snapshot_at_epoch_ms"
+    )
+    assert "baseline_epoch_ms" not in result, (
+        "get_timeline_session_details must not return legacy baseline_epoch_ms"
+    )
 
 
 def test_get_timeline_session_details_no_sensitive_fields(bridge):

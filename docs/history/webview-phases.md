@@ -5976,6 +5976,11 @@ user-visible capability. It only:
   flow) never received automatic folder / keyword rule application.
   `close_activity` now calls `process_new_activity` after the end_time
   update so enabled rules apply to just-closed eligible activities.
+  **Note (lifecycle hard cutover):** this close-finalize behavior has since
+  moved to `activity_lifecycle_service.finalize_closed_activity_ids`;
+  `activity_service.close_activity` is now a low-level compat alias that
+  does NOT run project inference. Production open-row lifecycle must use
+  `activity_lifecycle_service`, not `activity_service.close_activity`.
 
 ## Phase 5I.1 Not Implemented
 

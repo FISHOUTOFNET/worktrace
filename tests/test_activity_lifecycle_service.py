@@ -5,10 +5,12 @@ machine (see architecture.md §"Write side"):
 
 - ``activity_lifecycle_service`` is the sole command owner for open-row
   lifecycle transitions.
-- ``activity_service.create_activity`` (the low-level helper) closes
-  pre-existing open rows AND finalizes them via the unified
-  ``finalize_closed_activity_ids`` helper so project inference / automatic
-  rules converge on every closed row.
+- ``activity_service`` is a pure low-level CRUD helper: ``create_activity``
+  does NOT close pre-existing open rows and does NOT run project inference.
+  Production open-row lifecycle must use ``activity_lifecycle_service``.
+- ``start_activity`` closes pre-existing open rows, finalizes them via
+  the unified ``finalize_closed_activity_ids`` helper, then inserts the
+  new open row.
 - Manual assignments / ``manual_override`` are never overridden.
 - Clipboard force-persist bypasses the 30-second threshold but is
   restricted to ``STATUS_NORMAL``; it does not pollute the normal
@@ -47,6 +49,7 @@ from worktrace.services.activity_lifecycle_service import (
     persist_midnight_anchor,
     persist_open_activity_if_ready,
     recover_cross_midnight_segment,
+    start_activity,
 )
 from worktrace.services.project_inference_service import (
     get_assignment_for_activity,
@@ -69,21 +72,21 @@ def temp_db_setup(temp_db):
 
 
 # ---------------------------------------------------------------------------
-# Bug fix: create_activity closes old open rows + triggers inference
+# start_activity closes old open rows + triggers inference
 # ---------------------------------------------------------------------------
 
 
-def test_create_activity_finalizes_closed_rows_with_folder_rule(temp_db_setup):
-    """Bug fix: ``create_activity`` used to close old open rows inside the
-    transaction but never trigger project inference on them. Now the
-    closed ids are collected and routed through
-    ``finalize_closed_activity_ids`` after the transaction exits.
+def test_start_activity_finalizes_closed_rows_with_folder_rule(temp_db_setup):
+    """``start_activity`` closes pre-existing open rows and finalizes them
+    via the unified ``finalize_closed_activity_ids`` helper so project
+    inference / automatic rules converge on every closed row.
 
     Setup: a folder rule that maps ``D:\\ProjA`` to a concrete project.
-    An open activity with ``file_path_hint`` under that folder is created.
-    A second ``create_activity`` call closes the first row via the
-    built-in close-old-open-rows path. The first row's assignment must
-    converge to the concrete project (not stay ``uncategorized``).
+    An open activity with ``file_path_hint`` under that folder is created
+    via the low-level ``create_activity`` helper. A subsequent
+    ``start_activity`` call closes the first row and finalizes it. The
+    first row's assignment must converge to the concrete project (not stay
+    ``uncategorized``).
     """
     pid = project_service.create_project("ProjA")
     folder_rule_service.create_or_update_folder_rule("D:\\ProjA", pid)
@@ -97,18 +100,24 @@ def test_create_activity_finalizes_closed_rows_with_folder_rule(temp_db_setup):
     # The open row is uncategorized (process_new_activity skips in-progress).
     assert activity_service.get_activity(first)["project_name"] == UNCATEGORIZED_PROJECT
 
-    # Create a second activity — this closes the first via the built-in path.
-    second = activity_service.create_activity(
-        "Mail", "mail.exe", "Inbox",
+    # start_activity closes the first row via the lifecycle facade.
+    second = start_activity(
         start_time="2026-07-01 09:10:00",
+        source=SOURCE_AUTO,
+        payload={
+            "app_name": "Mail",
+            "process_name": "mail.exe",
+            "window_title": "Inbox",
+            "status": STATUS_NORMAL,
+        },
     )
 
     # The first row must now be closed.
     first_row = activity_service.get_activity(first)
     assert first_row["end_time"] == "2026-07-01 09:10:00"
 
-    # Bug fix assertion: the first row's assignment must have converged
-    # to the concrete project via finalize_closed_activity_ids.
+    # The first row's assignment must have converged to the concrete
+    # project via finalize_closed_activity_ids.
     assignment = get_assignment_for_activity(first)
     assert int(assignment["project_id"]) == pid
     assert assignment["source"] == "folder_rule"
@@ -117,7 +126,7 @@ def test_create_activity_finalizes_closed_rows_with_folder_rule(temp_db_setup):
     assert activity_service.get_activity(second)["end_time"] is None
 
 
-def test_create_activity_finalizes_closed_rows_manual_not_overridden(temp_db_setup):
+def test_start_activity_finalizes_closed_rows_manual_not_overridden(temp_db_setup):
     """Manual assignments must NOT be overridden by the close-finalize
     inference. The ``process_new_activity`` guard skips manual rows."""
     manual_pid = project_service.create_project("ManualProj")
@@ -134,10 +143,16 @@ def test_create_activity_finalizes_closed_rows_manual_not_overridden(temp_db_set
     # The manual assignment is present.
     assert activity_service.get_activity(first)["project_name"] == "ManualProj"
 
-    # Create a second activity — closes the first.
-    activity_service.create_activity(
-        "Mail", "mail.exe", "Inbox",
+    # start_activity closes the first row via the lifecycle facade.
+    start_activity(
         start_time="2026-07-01 09:10:00",
+        source=SOURCE_AUTO,
+        payload={
+            "app_name": "Mail",
+            "process_name": "mail.exe",
+            "window_title": "Inbox",
+            "status": STATUS_NORMAL,
+        },
     )
 
     # The manual assignment must NOT be overridden by the folder rule.
@@ -354,13 +369,12 @@ def test_finalize_closed_activity_ids_inference_failure_does_not_block(temp_db_s
         start_time="2026-07-01 09:10:00",
         file_path_hint="D:\\ProjG\\b.docx",
     )
-    # Both are now closed (create_activity closed aid1 when creating aid2;
-    # aid2 is still open — close it).
+    # Close both rows explicitly via the lifecycle facade (create_activity
+    # is now a pure low-level insert and does NOT close pre-existing rows).
+    lifecycle_close_activity(aid1, "2026-07-01 09:05:00")
     lifecycle_close_activity(aid2, "2026-07-01 09:20:00")
 
-    # Reset aid1's assignment to uncategorized so we can verify re-inference.
-    # (It was already inferred by the create_activity finalize path.)
-    # We just verify that finalize_closed_activity_ids doesn't raise even
+    # We verify that finalize_closed_activity_ids doesn't raise even
     # if one row's inference fails.
 
     call_count = [0]
