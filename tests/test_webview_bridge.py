@@ -134,7 +134,7 @@ def test_get_timeline_session_details_is_json_serializable(bridge):
 
 def test_get_timeline_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.get_default_report_date",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_timeline()
@@ -146,7 +146,7 @@ def test_get_timeline_no_traceback_on_error(bridge):
 
 def test_get_timeline_session_details_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.get_default_report_date",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_timeline_session_details([1], None)
@@ -158,7 +158,7 @@ def test_get_timeline_session_details_no_traceback_on_error(bridge):
 
 def test_get_status_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge.settings_api.get_collector_status",
+        "worktrace.webview_ui.bridge_overview.settings_api.get_collector_status",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_status()
@@ -170,7 +170,7 @@ def test_get_status_no_traceback_on_error(bridge):
 
 def test_toggle_pause_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge.settings_api.get_collector_status",
+        "worktrace.webview_ui.bridge_overview.settings_api.get_collector_status",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.toggle_pause()
@@ -181,7 +181,7 @@ def test_toggle_pause_no_traceback_on_error(bridge):
 
 def test_get_overview_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_overview.timeline_api.get_default_report_date",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_overview()
@@ -192,7 +192,7 @@ def test_get_overview_no_traceback_on_error(bridge):
 
 def test_get_recent_activities_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_overview.timeline_api.get_default_report_date",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_recent_activities()
@@ -442,7 +442,7 @@ def test_get_timeline_session_details_error_returns_generic_message(bridge):
     ``操作失败`` error and must not leak the underlying exception type,
     message, or any traceback."""
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.get_default_report_date",
         side_effect=ValueError("internal secret value"),
     ):
         result = bridge.get_timeline_session_details([1, 2, 3], None)
@@ -492,35 +492,35 @@ def test_toggle_pause_starts_background_workers_and_collector_when_resuming(
     ``start_collector`` so the folder index is warm before the collector
     starts matching activities."""
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.first_run_notice_accepted",
+        "worktrace.webview_ui.bridge_overview.settings_api.first_run_notice_accepted",
         lambda: True,
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.get_collector_status",
+        "worktrace.webview_ui.bridge_overview.settings_api.get_collector_status",
         lambda: "paused",
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.is_user_paused", lambda: True
+        "worktrace.webview_ui.bridge_overview.settings_api.is_user_paused", lambda: True
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.set_user_paused", lambda x: None
+        "worktrace.webview_ui.bridge_overview.settings_api.set_user_paused", lambda x: None
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.set_collector_status",
+        "worktrace.webview_ui.bridge_overview.settings_api.set_collector_status",
         lambda x: None,
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.set_current_activity_snapshot",
+        "worktrace.webview_ui.bridge_overview.settings_api.set_current_activity_snapshot",
         lambda x: None,
     )
 
     calls: list[str] = []
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_background_workers",
+        "worktrace.webview_ui.bridge_overview.app_api.start_background_workers",
         lambda: calls.append("background_workers"),
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_collector",
+        "worktrace.webview_ui.bridge_overview.app_api.start_collector",
         lambda: calls.append("collector"),
     )
 
@@ -536,25 +536,25 @@ def test_toggle_pause_starts_background_workers_before_collector(bridge, monkeyp
     BEFORE ``start_collector`` so the folder index worker is running by
     the time the collector starts matching activities."""
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.first_run_notice_accepted",
+        "worktrace.webview_ui.bridge_overview.settings_api.first_run_notice_accepted",
         lambda: True,
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.get_collector_status",
+        "worktrace.webview_ui.bridge_overview.settings_api.get_collector_status",
         lambda: "paused",
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.is_user_paused", lambda: True
+        "worktrace.webview_ui.bridge_overview.settings_api.is_user_paused", lambda: True
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.set_user_paused", lambda x: None
+        "worktrace.webview_ui.bridge_overview.settings_api.set_user_paused", lambda x: None
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.set_collector_status",
+        "worktrace.webview_ui.bridge_overview.settings_api.set_collector_status",
         lambda x: None,
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.set_current_activity_snapshot",
+        "worktrace.webview_ui.bridge_overview.settings_api.set_current_activity_snapshot",
         lambda x: None,
     )
 
@@ -567,11 +567,11 @@ def test_toggle_pause_starts_background_workers_before_collector(bridge, monkeyp
         order.append("collector")
 
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_background_workers",
+        "worktrace.webview_ui.bridge_overview.app_api.start_background_workers",
         fake_start_background_workers,
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_collector",
+        "worktrace.webview_ui.bridge_overview.app_api.start_collector",
         fake_start_collector,
     )
 
@@ -587,18 +587,18 @@ def test_toggle_pause_does_not_start_background_workers_when_gate_closed(
     must fail closed and must NOT call ``start_background_workers`` or
     ``start_collector``."""
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.first_run_notice_accepted",
+        "worktrace.webview_ui.bridge_overview.settings_api.first_run_notice_accepted",
         lambda: False,
     )
 
     bg_calls: list[bool] = []
     collector_calls: list[bool] = []
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_background_workers",
+        "worktrace.webview_ui.bridge_overview.app_api.start_background_workers",
         lambda: bg_calls.append(True),
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_collector",
+        "worktrace.webview_ui.bridge_overview.app_api.start_collector",
         lambda: collector_calls.append(True),
     )
 
@@ -621,18 +621,18 @@ def test_toggle_pause_does_not_start_background_workers_when_gate_read_raises(
         raise RuntimeError("settings read failed")
 
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.first_run_notice_accepted",
+        "worktrace.webview_ui.bridge_overview.settings_api.first_run_notice_accepted",
         raise_on_read,
     )
 
     bg_calls: list[bool] = []
     collector_calls: list[bool] = []
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_background_workers",
+        "worktrace.webview_ui.bridge_overview.app_api.start_background_workers",
         lambda: bg_calls.append(True),
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_collector",
+        "worktrace.webview_ui.bridge_overview.app_api.start_collector",
         lambda: collector_calls.append(True),
     )
 
@@ -654,18 +654,18 @@ def test_accept_first_run_notice_starts_background_workers_and_collector_on_succ
     ``start_background_workers`` AND ``start_collector`` so recording
     begins immediately after the user accepts the privacy notice."""
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.accept_first_run_notice_for_webview",
+        "worktrace.webview_ui.bridge_settings.settings_api.accept_first_run_notice_for_webview",
         lambda: {"ok": True, "accepted": True},
     )
 
     bg_calls: list[bool] = []
     collector_calls: list[bool] = []
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_background_workers",
+        "worktrace.webview_ui.bridge_settings.app_api.start_background_workers",
         lambda: bg_calls.append(True),
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_collector",
+        "worktrace.webview_ui.bridge_settings.app_api.start_collector",
         lambda: collector_calls.append(True),
     )
 
@@ -683,7 +683,7 @@ def test_accept_first_run_notice_starts_background_workers_before_collector(
     BEFORE ``start_collector`` so the folder index is warm before the
     collector starts matching activities."""
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.accept_first_run_notice_for_webview",
+        "worktrace.webview_ui.bridge_settings.settings_api.accept_first_run_notice_for_webview",
         lambda: {"ok": True, "accepted": True},
     )
 
@@ -696,11 +696,11 @@ def test_accept_first_run_notice_starts_background_workers_before_collector(
         order.append("collector")
 
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_background_workers",
+        "worktrace.webview_ui.bridge_settings.app_api.start_background_workers",
         fake_start_background_workers,
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_collector",
+        "worktrace.webview_ui.bridge_settings.app_api.start_collector",
         fake_start_collector,
     )
 
@@ -716,18 +716,18 @@ def test_accept_first_run_notice_does_not_start_background_workers_on_api_failur
     ``start_background_workers`` or ``start_collector``; it forwards the
     API's error payload unchanged."""
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.accept_first_run_notice_for_webview",
+        "worktrace.webview_ui.bridge_settings.settings_api.accept_first_run_notice_for_webview",
         lambda: {"ok": False, "error": "写入失败"},
     )
 
     bg_calls: list[bool] = []
     collector_calls: list[bool] = []
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_background_workers",
+        "worktrace.webview_ui.bridge_settings.app_api.start_background_workers",
         lambda: bg_calls.append(True),
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_collector",
+        "worktrace.webview_ui.bridge_settings.app_api.start_collector",
         lambda: collector_calls.append(True),
     )
 
@@ -749,15 +749,15 @@ def test_accept_first_run_notice_succeeds_even_if_background_workers_start_fails
         raise RuntimeError("worker start failed")
 
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.settings_api.accept_first_run_notice_for_webview",
+        "worktrace.webview_ui.bridge_settings.settings_api.accept_first_run_notice_for_webview",
         lambda: {"ok": True, "accepted": True},
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_background_workers", raise_bg
+        "worktrace.webview_ui.bridge_settings.app_api.start_background_workers", raise_bg
     )
     collector_calls: list[bool] = []
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge.app_api.start_collector",
+        "worktrace.webview_ui.bridge_settings.app_api.start_collector",
         lambda: collector_calls.append(True),
     )
 

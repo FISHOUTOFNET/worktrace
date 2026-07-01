@@ -131,7 +131,7 @@ class OverviewBridgeMixin:
         The ``current_activity`` payload is built by the unified
         live-display model (``live_display_api.build_current_activity_summary``)
         so Overview / Recent / Timeline share the same live-state
-        classification, display project, baseline seconds, and
+        classification, display project, fetched snapshot duration, and
         ``live_display_key``. The frontend ticker increments
         ``today_total_seconds`` / ``classified_seconds`` /
         ``uncategorized_seconds`` by the unified live clock delta

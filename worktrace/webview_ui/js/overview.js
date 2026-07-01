@@ -81,7 +81,7 @@
                 + '<div class="recent-item-duration">' + App.escapeHtml(durText) + '</div>'
                 + '</div>';
             // Phase 6H-followup: reset the monotonic render state for this
-            // recent row so the backend baseline can replace any prior
+            // recent row so the fresh backend snapshot duration can replace any prior
             // ticker-projected value without a false "rollback" guard.
             // The continuity key MUST use App.liveContinuityKey() so the
             // ticker (which also uses liveContinuityKey) can locate the
@@ -90,7 +90,7 @@
             // ticker key is based on stable_live_key_hash, not the index.
             var recentKey = App.liveContinuityKey(item, "recent");
             App.resetMonotonicRenderState(recentKey);
-            // Seed the monotonic state with the backend baseline so the
+            // Seed the monotonic state with the fresh backend snapshot duration so the
             // ticker's first projection does not appear to roll back.
             App._monotonicRenderState[recentKey] = { lastSeconds: isNaN(durSec) ? 0 : durSec };
         }

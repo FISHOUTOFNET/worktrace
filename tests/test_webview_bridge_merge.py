@@ -304,7 +304,7 @@ def test_merge_operation_failed_returns_generic(bridge):
     message without exposing that a race occurred or any internal detail."""
     ids = _seed_two_adjacent_activities()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.merge_timeline_activities",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.merge_timeline_activities",
         side_effect=TimelineMergeError("operation_failed"),
     ):
         result = bridge.merge_timeline_activities(ids)
@@ -322,7 +322,7 @@ def test_merge_no_traceback_on_error(bridge):
     surfacing the exception string."""
     ids = _seed_two_adjacent_activities()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.merge_timeline_activities",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.merge_timeline_activities",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.merge_timeline_activities(ids)
@@ -335,7 +335,7 @@ def test_merge_no_traceback_on_error(bridge):
 def test_merge_error_has_no_sensitive_keys(bridge):
     ids = _seed_two_adjacent_activities()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.merge_timeline_activities",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.merge_timeline_activities",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.merge_timeline_activities(ids)

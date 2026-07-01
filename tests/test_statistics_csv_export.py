@@ -742,7 +742,7 @@ def test_bridge_export_cancel_does_not_call_api(temp_db, tmp_path, bridge):
     out_dir.mkdir()
     bridge.set_window(_stub_window(None))
     with patch(
-        "worktrace.webview_ui.bridge.export_api.export_statistics_csv",
+        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv",
     ) as fake_write:
         result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False
@@ -1036,7 +1036,7 @@ def test_bridge_export_dialog_returns_empty_tuple(temp_db, tmp_path, bridge):
     out_dir.mkdir()
     bridge.set_window(_FakeDialogWindow(return_value=()))
     with patch(
-        "worktrace.webview_ui.bridge.export_api.export_statistics_csv",
+        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv",
     ) as fake_write:
         result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False
@@ -1053,7 +1053,7 @@ def test_bridge_export_dialog_returns_empty_list(temp_db, tmp_path, bridge):
     out_dir.mkdir()
     bridge.set_window(_FakeDialogWindow(return_value=[]))
     with patch(
-        "worktrace.webview_ui.bridge.export_api.export_statistics_csv",
+        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv",
     ) as fake_write:
         result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False

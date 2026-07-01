@@ -1416,3 +1416,138 @@ def test_webview_bridge_exposes_expected_fixed_public_api_surface() -> None:
         "EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS explicitly. Missing: "
         + ", ".join(sorted(missing))
     )
+
+
+# ---------------------------------------------------------------------------
+# Legacy compat cleanup: ``bridge.py`` must NOT expose API facade module
+# symbols. Before the Phase M4 page-level split cleanup, ``bridge.py``
+# imported ``app_api`` / ``export_api`` / ``project_api`` / ``rule_api`` /
+# ``settings_api`` / ``statistics_api`` / ``timeline_api`` at module level
+# so tests that monkeypatched ``bridge_module.<api>`` would resolve. After
+# the cleanup, each page-level mixin imports its own API facades and
+# ``bridge.py`` is a thin composition class. These tests lock the cleanup
+# so the compat imports cannot regress.
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_module_does_not_expose_api_facade_symbols() -> None:
+    """``worktrace.webview_ui.bridge`` must NOT expose any API facade module
+    as a module-level attribute.
+
+    After the Phase M4 page-level split cleanup, ``bridge.py`` only imports
+    the six mixin classes (``BridgeDialogMixin``, ``OverviewBridgeMixin``,
+    ``SettingsBridgeMixin``, ``StatisticsBridgeMixin``, ``TimelineBridgeMixin``,
+    ``ProjectRulesBridgeMixin``) and stdlib (``logging``, ``typing``). Each
+    mixin imports the API facades it needs from its own module namespace.
+    Tests must monkeypatch the owning mixin module (e.g.
+    ``bridge_overview.settings_api``) rather than the old
+    ``bridge``-level compat path.
+    """
+    import worktrace.webview_ui.bridge as bridge_mod
+
+    forbidden_symbols = (
+        "app_api",
+        "export_api",
+        "project_api",
+        "rule_api",
+        "settings_api",
+        "statistics_api",
+        "timeline_api",
+    )
+    for symbol in forbidden_symbols:
+        assert not hasattr(bridge_mod, symbol), (
+            f"worktrace.webview_ui.bridge must not expose API facade symbol "
+            f"{symbol!r}; each page-level mixin should import its own API "
+            f"facades. Tests must monkeypatch the owning mixin module."
+        )
+
+
+def test_bridge_module_all_equals_webview_bridge_only() -> None:
+    """``worktrace.webview_ui.bridge.__all__`` must be exactly
+    ``["WebViewBridge"]``.
+
+    ``bridge.py`` is a thin composition module: it defines / exposes only
+    the ``WebViewBridge`` class. API facades, helpers, and constants live
+    in the mixin modules or ``bridge_common.py``.
+    """
+    import worktrace.webview_ui.bridge as bridge_mod
+
+    assert hasattr(bridge_mod, "__all__"), (
+        "worktrace.webview_ui.bridge must define __all__"
+    )
+    assert bridge_mod.__all__ == ["WebViewBridge"], (
+        f"worktrace.webview_ui.bridge.__all__ must be ['WebViewBridge'], "
+        f"got {bridge_mod.__all__!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy live-clock field / function name cleanup: ``carry_baseline_seconds``
+# was renamed to ``short_activity_carry_seconds`` to remove the old
+# "baseline" terminology from the live-clock context. These tests lock the
+# new name so the old name cannot regress.
+# ---------------------------------------------------------------------------
+
+
+def test_short_activity_carry_seconds_exists_under_new_name() -> None:
+    """``short_activity_carry_seconds`` must exist in both
+    ``live_display_service`` and ``live_display_api`` under the new name.
+
+    The function was renamed from ``carry_baseline_seconds`` to
+    ``short_activity_carry_seconds`` to remove the old "baseline"
+    terminology from the live-clock context. The function's business
+    behavior is unchanged: it returns the carry-over seconds from
+    consecutive sub-30s short activities that should be added to the
+    unified live-display duration.
+    """
+    from worktrace.api import live_display_api
+    from worktrace.services import live_display_service
+
+    # The new name must exist in the service module.
+    assert hasattr(live_display_service, "short_activity_carry_seconds"), (
+        "live_display_service must define short_activity_carry_seconds "
+        "(renamed from carry_baseline_seconds)"
+    )
+    assert callable(live_display_service.short_activity_carry_seconds), (
+        "live_display_service.short_activity_carry_seconds must be callable"
+    )
+    # The new name must be re-exported by the API facade.
+    assert hasattr(live_display_api, "short_activity_carry_seconds"), (
+        "live_display_api must re-export short_activity_carry_seconds"
+    )
+    assert callable(live_display_api.short_activity_carry_seconds), (
+        "live_display_api.short_activity_carry_seconds must be callable"
+    )
+    # The old name must NOT exist in either module.
+    assert not hasattr(live_display_service, "carry_baseline_seconds"), (
+        "live_display_service must not retain the old name carry_baseline_seconds"
+    )
+    assert not hasattr(live_display_api, "carry_baseline_seconds"), (
+        "live_display_api must not retain the old name carry_baseline_seconds"
+    )
+    # The new name must appear in __all__ for both modules.
+    assert "short_activity_carry_seconds" in live_display_service.__all__, (
+        "live_display_service.__all__ must include short_activity_carry_seconds"
+    )
+    assert "short_activity_carry_seconds" in live_display_api.__all__, (
+        "live_display_api.__all__ must include short_activity_carry_seconds"
+    )
+    # The old name must NOT appear in __all__ for either module.
+    assert "carry_baseline_seconds" not in live_display_service.__all__, (
+        "live_display_service.__all__ must not include carry_baseline_seconds"
+    )
+    assert "carry_baseline_seconds" not in live_display_api.__all__, (
+        "live_display_api.__all__ must not include carry_baseline_seconds"
+    )
+
+
+def test_short_activity_carry_seconds_returns_zero_for_none_snapshot() -> None:
+    """``short_activity_carry_seconds`` must return ``0`` for a ``None``
+    snapshot, confirming the renamed function preserves the original
+    fail-safe behavior."""
+    from worktrace.api import live_display_api
+
+    result = live_display_api.short_activity_carry_seconds(None, None)
+    assert result == 0, (
+        f"short_activity_carry_seconds(None, None) must return 0, got {result}"
+    )

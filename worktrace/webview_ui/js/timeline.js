@@ -43,7 +43,7 @@
         // Build the full HTML string before replacing to avoid flicker.
         var html = "";
         // Phase 6H-followup: collect continuity keys to reset after the
-        // innerHTML swap so the backend baseline replaces any prior ticker
+        // innerHTML swap so the fresh backend snapshot duration replaces any prior ticker
         // projection without a false "rollback" guard.
         var sessionContinuityKeys = [];
         for (var i = 0; i < sessions.length; i++) {
@@ -89,7 +89,7 @@
         }
         listEl.innerHTML = html;
         // Phase 6H-followup: reset + seed the monotonic render state for
-        // each session so the backend baseline replaces any prior ticker
+        // each session so the fresh backend snapshot duration replaces any prior ticker
         // projection and the ticker's first delta does not appear to roll back.
         for (var ci = 0; ci < sessionContinuityKeys.length; ci++) {
             var ck = sessionContinuityKeys[ci];

@@ -151,12 +151,12 @@ def _live_projection(start_date: str, end_date: str) -> dict | None:
     because their real DB row already carries the live seconds via
     ``timeline_service._live_duration_for_row`` (avoiding double count).
 
-    The projected duration includes the short-activity carry baseline so
+    The projected duration includes the short-activity carry seconds so
     consecutive <30s activities do not first lose seconds and then
     suddenly jump when the next activity persists.
     """
     from .live_display_service import (
-        carry_baseline_seconds,
+        short_activity_carry_seconds,
         classify_live_state,
         is_live_eligible_for_normal,
     )
@@ -177,9 +177,9 @@ def _live_projection(start_date: str, end_date: str) -> dict | None:
     duration = snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
     if duration <= 0:
         return None
-    # Include the short-activity carry baseline so consecutive <30s
+    # Include the short-activity carry seconds so consecutive <30s
     # activities do not first lose seconds and then suddenly jump.
-    duration = duration + carry_baseline_seconds(snapshot, report_date)
+    duration = duration + short_activity_carry_seconds(snapshot, report_date)
     project = str(snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
     description = ""
     if project != UNCATEGORIZED_PROJECT:

@@ -197,7 +197,7 @@ def test_update_activity_time_in_progress(bridge):
 def test_update_activity_time_no_traceback_on_error(bridge):
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.update_timeline_activity_time",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_activity_time",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.update_timeline_activity_time(
@@ -212,7 +212,7 @@ def test_update_activity_time_no_traceback_on_error(bridge):
 def test_update_activity_time_error_has_no_sensitive_keys(bridge):
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.update_timeline_activity_time",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_activity_time",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.update_timeline_activity_time(
@@ -233,7 +233,7 @@ def test_update_activity_time_race_condition_returns_generic_error(bridge):
 
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.update_timeline_activity_time",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_activity_time",
         side_effect=TimelineTimeEditError("invalid_id"),
     ):
         result = bridge.update_timeline_activity_time(
@@ -254,7 +254,7 @@ def test_update_session_time_race_condition_returns_generic_error(bridge):
 
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.update_timeline_session_time",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_session_time",
         side_effect=TimelineTimeEditError("invalid_id"),
     ):
         result = bridge.update_timeline_session_time(
@@ -334,7 +334,7 @@ def test_update_session_time_in_progress(bridge):
 def test_update_session_time_no_traceback_on_error(bridge):
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.update_timeline_session_time",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_session_time",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.update_timeline_session_time(
@@ -349,7 +349,7 @@ def test_update_session_time_no_traceback_on_error(bridge):
 def test_update_session_time_error_has_no_sensitive_keys(bridge):
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.update_timeline_session_time",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_session_time",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.update_timeline_session_time(

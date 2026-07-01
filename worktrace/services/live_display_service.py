@@ -364,7 +364,7 @@ def _read_pending_short_seconds() -> int:
 
     The collector writes this value whenever a normal short activity ends
     without crossing the 30-second persistence threshold. The unified
-    live-display baseline must include it so the UI does not lose seconds
+    live-display carry seconds must include it so the UI does not lose seconds
     between short activities and then suddenly jump when the next
     activity persists.
     """
@@ -382,7 +382,7 @@ def _read_short_activity_carry() -> dict[str, Any] | None:
     """Read the serialized short-activity carry state (if any).
 
     The collector writes a JSON object describing the carry-over context
-    so the unified live-display baseline can incorporate consecutive
+    so the unified live-display carry seconds can incorporate consecutive
     short activities that belong to the same logical session.
     """
     import json
@@ -397,12 +397,12 @@ def _read_short_activity_carry() -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def carry_baseline_seconds(
+def short_activity_carry_seconds(
     snapshot: dict[str, Any] | None,
     report_date: str | None,
 ) -> int:
     """Return the carry-over seconds that should be added to the unified
-    live-display baseline.
+    live-display carry seconds.
 
     Wires the previously-dead ``sync_short_activity_carry`` /
     ``short_activity_carry_duration`` helpers into the unified live
@@ -561,13 +561,13 @@ def build_current_activity_summary(
     is_uncategorized = (
         not project_name or project_name == UNCATEGORIZED_PROJECT
     )
-    # The carry baseline is added to the elapsed seconds so the UI does
+    # The carry seconds are added to the elapsed seconds so the UI does
     # not lose seconds between consecutive short activities. Only applies
     # to virtual (unpersisted) snapshots; persisted_open rows already
     # have the carry folded into their stored duration.
     carry_seconds = 0
     if is_virtual_live:
-        carry_seconds = carry_baseline_seconds(snapshot, report_date)
+        carry_seconds = short_activity_carry_seconds(snapshot, report_date)
     display_seconds = elapsed_seconds + carry_seconds
     # Unified live clock (scheme A): the frontend computes
     # ``display_seconds = carry_seconds + floor((Date.now() -
@@ -664,7 +664,7 @@ def build_virtual_session(
     from ..formatters import format_duration
 
     elapsed = _snapshot_total_seconds(snapshot)
-    carry = carry_baseline_seconds(snapshot, report_date)
+    carry = short_activity_carry_seconds(snapshot, report_date)
     duration_seconds = elapsed + carry
     project_name = _display_project_name(snapshot)
     start_time = str(snapshot.get("start_time") or "")
@@ -723,7 +723,7 @@ def build_virtual_detail_row(
     from ..formatters import format_duration, format_resource_type
 
     elapsed = _snapshot_total_seconds(snapshot)
-    carry = carry_baseline_seconds(snapshot, report_date)
+    carry = short_activity_carry_seconds(snapshot, report_date)
     duration_seconds = elapsed + carry
     project_name = _display_project_name(snapshot)
     resource_name = _display_resource_name(snapshot)
@@ -1214,7 +1214,7 @@ __all__ = [
     "build_persisted_open_overlay",
     "build_virtual_detail_row",
     "build_virtual_session",
-    "carry_baseline_seconds",
+    "short_activity_carry_seconds",
     "classify_live_state",
     "compute_refresh_revision",
     "is_live_eligible_for_normal",

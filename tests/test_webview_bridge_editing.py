@@ -103,7 +103,7 @@ def test_list_projects_for_timeline_has_safe_fields_only(bridge):
 
 def test_list_projects_for_timeline_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge.project_api.list_selectable_projects",
+        "worktrace.webview_ui.bridge_timeline.project_api.list_selectable_projects",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.list_projects_for_timeline()
@@ -164,7 +164,7 @@ def test_update_timeline_project_invalid_project_id(bridge):
 def test_update_timeline_project_no_traceback_on_error(bridge):
     ids = _seed_session()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.reclassify_timeline_session_project",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.reclassify_timeline_session_project",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.update_timeline_project(ids, 1)
@@ -178,7 +178,7 @@ def test_update_timeline_project_error_has_no_sensitive_keys(bridge):
     """Error results must not leak sensitive raw fields at any level."""
     ids = _seed_session()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.reclassify_timeline_session_project",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.reclassify_timeline_session_project",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.update_timeline_project(ids, 1)
@@ -261,7 +261,7 @@ def test_update_timeline_note_invalid_date(bridge):
 def test_update_timeline_note_no_traceback_on_error(bridge):
     ids = _seed_session()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.update_timeline_session_note",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_session_note",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.update_timeline_note(ids, "note", "2026-06-25")
@@ -274,7 +274,7 @@ def test_update_timeline_note_no_traceback_on_error(bridge):
 def test_update_timeline_note_error_has_no_sensitive_keys(bridge):
     ids = _seed_session()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.update_timeline_session_note",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_session_note",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.update_timeline_note(ids, "note", "2026-06-25")
@@ -364,7 +364,7 @@ def test_bridge_does_not_log_note_content(bridge, caplog):
     ids = _seed_session()
     secret_note = "THIS_IS_A_SECRET_NOTE_THAT_MUST_NOT_APPEAR_IN_LOGS"
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.update_timeline_session_note",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_session_note",
         side_effect=RuntimeError("boom"),
     ):
         with caplog.at_level("ERROR"):
@@ -381,7 +381,7 @@ def test_bridge_update_project_does_not_log_sensitive_data(bridge, caplog):
     ids = _seed_session()
     sensitive_markers = ["window_title", "file_path_hint", "clipboard", "traceback"]
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.reclassify_timeline_session_project",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.reclassify_timeline_session_project",
         side_effect=RuntimeError("boom with window_title and file_path_hint"),
     ):
         with caplog.at_level("ERROR"):

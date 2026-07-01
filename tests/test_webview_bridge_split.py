@@ -193,7 +193,7 @@ def test_split_activity_deleted(bridge):
 def test_split_activity_no_traceback_on_error(bridge):
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.split_timeline_activity",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.split_timeline_activity",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.split_timeline_activity(aid, "2026-06-25 09:15:00")
@@ -206,7 +206,7 @@ def test_split_activity_no_traceback_on_error(bridge):
 def test_split_activity_error_has_no_sensitive_keys(bridge):
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.split_timeline_activity",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.split_timeline_activity",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.split_timeline_activity(aid, "2026-06-25 09:15:00")
@@ -219,7 +219,7 @@ def test_split_activity_race_condition_returns_generic_error(bridge):
     message without exposing that a race occurred or any internal detail."""
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.split_timeline_activity",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.split_timeline_activity",
         side_effect=TimelineSplitError("operation_failed"),
     ):
         result = bridge.split_timeline_activity(aid, "2026-06-25 09:15:00")
@@ -288,7 +288,7 @@ def test_split_session_in_progress(bridge):
 def test_split_session_no_traceback_on_error(bridge):
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.split_timeline_session",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.split_timeline_session",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.split_timeline_session([aid], "2026-06-25 09:15:00")
@@ -301,7 +301,7 @@ def test_split_session_no_traceback_on_error(bridge):
 def test_split_session_error_has_no_sensitive_keys(bridge):
     aid = _seed_closed_activity()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.split_timeline_session",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.split_timeline_session",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.split_timeline_session([aid], "2026-06-25 09:15:00")

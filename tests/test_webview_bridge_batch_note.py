@@ -282,7 +282,7 @@ def test_batch_operation_failed_returns_generic(bridge):
     the bridge must return the generic ``操作失败`` message."""
     ids = _seed_two_closed_activities()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.batch_update_timeline_activities_note",
         side_effect=TimelineBatchNoteError("operation_failed"),
     ):
         result = bridge.batch_update_timeline_activities_note(ids, "note")
@@ -295,7 +295,7 @@ def test_batch_unknown_error_code_returns_generic(bridge):
     """Unknown error codes must collapse to ``操作失败``."""
     ids = _seed_two_closed_activities()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.batch_update_timeline_activities_note",
         side_effect=TimelineBatchNoteError("unknown_code"),
     ):
         result = bridge.batch_update_timeline_activities_note(ids, "note")
@@ -310,7 +310,7 @@ def test_batch_no_traceback_on_error(bridge):
     """Unexpected exceptions must collapse to the generic message."""
     ids = _seed_two_closed_activities()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.batch_update_timeline_activities_note",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.batch_update_timeline_activities_note(ids, "note")
@@ -323,7 +323,7 @@ def test_batch_no_traceback_on_error(bridge):
 def test_batch_error_has_no_sensitive_keys(bridge):
     ids = _seed_two_closed_activities()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.batch_update_timeline_activities_note",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.batch_update_timeline_activities_note(ids, "note")
@@ -441,7 +441,7 @@ def test_batch_all_chinese_error_messages_present(bridge):
     ]
     for code, expected_msg in cases:
         with patch(
-            "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+            "worktrace.webview_ui.bridge_timeline.timeline_api.batch_update_timeline_activities_note",
             side_effect=TimelineBatchNoteError(code),
         ):
             result = bridge.batch_update_timeline_activities_note(ids, "note")
@@ -457,7 +457,7 @@ def test_batch_unknown_code_converges_to_generic(bridge):
     ``操作失败`` so internal details are never surfaced."""
     ids = _seed_two_closed_activities()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.batch_update_timeline_activities_note",
         side_effect=TimelineBatchNoteError("unexpected_new_code_xyz"),
     ):
         result = bridge.batch_update_timeline_activities_note(ids, "note")
@@ -480,7 +480,7 @@ def test_batch_error_payload_has_only_ok_and_error(bridge):
     ``error`` — no extra keys that could leak internal data."""
     ids = _seed_two_closed_activities()
     with patch(
-        "worktrace.webview_ui.bridge.timeline_api.batch_update_timeline_activities_note",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.batch_update_timeline_activities_note",
         side_effect=TimelineBatchNoteError("operation_failed"),
     ):
         result = bridge.batch_update_timeline_activities_note(ids, "note")

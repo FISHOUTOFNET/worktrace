@@ -515,11 +515,11 @@ def test_render_duration_monotonic_allows_overwrite_on_state_change():
     implemented by seeding ``_monotonicRenderState`` from the backend
     refresh (in showOverview / showRecent / showTimeline /
     renderSessionDetails) so the next tick's monotonic guard starts from
-    the new baseline instead of the old one."""
+    the new fetched value instead of the old one."""
     for module in ("overview.js", "timeline.js"):
         source = read_js(module)
         # Each renderer must seed the monotonic state after innerHTML swap
-        # so the backend baseline replaces the ticker's projected value.
+        # so the fresh backend snapshot duration replaces the ticker's projected value.
         assert "_monotonicRenderState" in source, (
             module + " must seed App._monotonicRenderState after re-render "
             "so backend truth overrides the ticker's projection"

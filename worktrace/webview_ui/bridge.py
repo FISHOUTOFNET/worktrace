@@ -2,10 +2,11 @@
 
 Boundary rules (enforced by tests/test_ui_backend_boundary.py):
 
-- This module may import ``worktrace.api`` and nothing else from the backend.
-  It must not import ``worktrace.services``, ``worktrace.db``,
-  ``worktrace.collector``, ``worktrace.security``, ``worktrace.runtime``, or
-  ``worktrace.config``.
+- This module composes the page-level bridge mixins and does NOT import
+  ``worktrace.api`` directly; each mixin imports the API facades it needs
+  from its own module namespace. It must not import ``worktrace.services``,
+  ``worktrace.db``, ``worktrace.collector``, ``worktrace.security``,
+  ``worktrace.runtime``, or ``worktrace.config``.
 - Methods return JSON-serializable dicts/lists only.
 - Methods catch exceptions and return ``{"ok": false, "error": "操作失败"}``
   without tracebacks.
@@ -207,21 +208,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-# API facades are imported at module level so tests that monkeypatch
-# ``bridge_module.project_api`` / ``bridge_module.rule_api`` continue to
-# resolve after the Phase M4 page-level split. The mixin methods look up
-# these modules in their own module namespace (not here), but because
-# Python ``import`` binds to the same module object, monkeypatching an
-# attribute on the module object affects every reference.
-from ..api import (
-    app_api,
-    export_api,
-    project_api,
-    rule_api,
-    settings_api,
-    statistics_api,
-    timeline_api,
-)
 from .bridge_dialogs import BridgeDialogMixin
 from .bridge_overview import OverviewBridgeMixin
 from .bridge_rules import ProjectRulesBridgeMixin

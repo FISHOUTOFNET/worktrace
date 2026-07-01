@@ -13,7 +13,7 @@ from worktrace.webview_ui.bridge import WebViewBridge
 
 def test_get_project_rules_success_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -133,7 +133,7 @@ def test_get_project_rules_success_payload(monkeypatch):
 
 def test_get_project_rules_empty_projects(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [],
     )
@@ -145,7 +145,7 @@ def test_get_project_rules_empty_projects(monkeypatch):
 
 def test_get_project_rules_malformed_rows_are_safe_and_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -212,7 +212,7 @@ def test_get_project_rules_malformed_rows_are_safe_and_json_serializable(monkeyp
 
 def test_get_project_rules_missing_rule_lists_and_description(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [{"id": 1, "name": "Client", "enabled": 1, "created_by": "user"}],
     )
@@ -230,7 +230,7 @@ def test_get_project_rules_missing_rule_lists_and_description(monkeypatch):
 
 def test_get_project_rules_bool_type_normalization(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -299,7 +299,7 @@ def test_get_project_rules_bool_type_normalization(monkeypatch):
 
 def test_get_project_rules_missing_targets_use_safe_empty_fallback(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -322,7 +322,7 @@ def test_get_project_rules_missing_targets_use_safe_empty_fallback(monkeypatch):
 
 def test_get_project_rules_sensitive_tokens_absent_from_success_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -364,7 +364,7 @@ def test_get_project_rules_exception_collapses_without_sensitive_text(monkeypatc
             "boom SELECT * FROM activity_log traceback window_title clipboard note"
         )
 
-    monkeypatch.setattr(bridge_module.project_api, "list_project_bindings", fail)
+    monkeypatch.setattr(bridge_rules_module.project_api, "list_project_bindings", fail)
 
     result = WebViewBridge().get_project_rules()
 
@@ -389,7 +389,7 @@ def test_get_project_rules_exception_collapses_without_sensitive_text(monkeypatc
 
 def test_set_project_rule_enabled_keyword_success(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": True,
@@ -415,7 +415,7 @@ def test_set_project_rule_enabled_keyword_success(monkeypatch):
 
 def test_set_project_rule_enabled_folder_success(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": True,
@@ -547,7 +547,7 @@ def test_set_project_rule_enabled_success_payload_does_not_return_full_project_l
     # echo the full refreshed Project Rules list back to JS — the frontend
     # re-fetches via ``get_project_rules`` after success.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": True,
@@ -578,7 +578,7 @@ def test_set_project_rule_enabled_never_calls_create_edit_delete_or_project_togg
     # other Project Rules write APIs (project enable/disable, project /
     # rule create / edit / delete, conflict preview, backfill).
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": True,
@@ -606,7 +606,7 @@ def test_set_project_rule_enabled_never_calls_create_edit_delete_or_project_togg
         "preview_folder_rule_conflicts",
         "backfill_project_rule",
     ):
-        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
 
     forbidden_project_calls: list[str] = []
 
@@ -623,8 +623,8 @@ def test_set_project_rule_enabled_never_calls_create_edit_delete_or_project_togg
         "archive_project",
         "set_project_enabled",
     ):
-        if hasattr(bridge_module.project_api, name):
-            monkeypatch.setattr(bridge_module.project_api, name, make_project_forbidden(name))
+        if hasattr(bridge_rules_module.project_api, name):
+            monkeypatch.setattr(bridge_rules_module.project_api, name, make_project_forbidden(name))
 
     result = WebViewBridge().set_project_rule_enabled("folder", 10, False)
     assert result["ok"] is True
@@ -637,7 +637,7 @@ def test_set_project_rule_enabled_not_found_payload_excludes_sensitive_text(monk
     # surfaces SQL / traceback / path / note / clipboard / window_title even
     # when the underlying service raises a verbose exception.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": False,
@@ -669,7 +669,7 @@ def test_set_project_rule_enabled_invalid_input_payload_excludes_backend_codes(m
     # surfaces only the stable Chinese message, not the underlying code or
     # any backend-internal fields the API might have attached.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": False,
@@ -692,7 +692,7 @@ def test_set_project_rule_enabled_success_payload_types_are_stable(monkeypatch):
     # ``str`` / ``int`` / ``bool`` so JS consumers can rely on the contract
     # even when the backend returns loose numeric / string variants.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": True,
@@ -716,7 +716,7 @@ def test_set_project_rule_enabled_get_project_rules_payload_is_unchanged(monkeyp
     # and is not affected by the toggle hardening. Its payload shape and
     # display-safe projection stay stable.
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -749,7 +749,7 @@ def test_set_project_rule_enabled_get_project_rules_payload_is_unchanged(monkeyp
 
 def test_set_project_rule_enabled_not_found(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {"ok": False, "error": "not_found"},
     )
@@ -766,7 +766,7 @@ def test_set_project_rule_enabled_unknown_api_exception_collapses(monkeypatch):
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
 
-    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", fail)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "set_project_rule_enabled", fail)
 
     result = WebViewBridge().set_project_rule_enabled("folder", 10, False)
 
@@ -795,7 +795,7 @@ def test_set_project_rule_enabled_api_error_codes_are_stable(monkeypatch):
 
     for code, message in messages.items():
         monkeypatch.setattr(
-            bridge_module.rule_api,
+            bridge_rules_module.rule_api,
             "set_project_rule_enabled",
             lambda rule_type, rule_id, enabled, code=code: {"ok": False, "error": code},
         )
@@ -805,7 +805,7 @@ def test_set_project_rule_enabled_api_error_codes_are_stable(monkeypatch):
 
 def test_set_project_rule_enabled_payload_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": True,
@@ -874,7 +874,7 @@ def test_create_project_keyword_rule_success_payload(monkeypatch):
     # back to JS — the frontend re-fetches via ``get_project_rules`` after
     # success.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {
             "ok": True,
@@ -973,7 +973,7 @@ def test_create_project_keyword_rule_invalid_input_payload_excludes_sensitive_te
 
 def test_create_project_keyword_rule_project_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {"ok": False, "error": "project_not_found"},
     )
@@ -985,7 +985,7 @@ def test_create_project_keyword_rule_project_not_found_maps_to_chinese(monkeypat
 
 def test_create_project_keyword_rule_duplicate_rule_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {"ok": False, "error": "duplicate_rule"},
     )
@@ -997,7 +997,7 @@ def test_create_project_keyword_rule_duplicate_rule_maps_to_chinese(monkeypatch)
 
 def test_create_project_keyword_rule_invalid_input_code_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {"ok": False, "error": "invalid_input"},
     )
@@ -1009,7 +1009,7 @@ def test_create_project_keyword_rule_invalid_input_code_maps_to_chinese(monkeypa
 
 def test_create_project_keyword_rule_operation_failed_code_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {"ok": False, "error": "operation_failed"},
     )
@@ -1023,7 +1023,7 @@ def test_create_project_keyword_rule_unknown_error_code_collapses_to_create_fail
     # Phase 5C regression lock: unknown API error codes collapse to the
     # generic create-failed message so internal details are never surfaced.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {"ok": False, "error": "unexpected raw code"},
     )
@@ -1039,7 +1039,7 @@ def test_create_project_keyword_rule_unknown_exception_collapses(monkeypatch):
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
 
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", fail)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_keyword_rule", fail)
 
     result = WebViewBridge().create_project_keyword_rule(1, "Spec")
 
@@ -1064,7 +1064,7 @@ def test_create_project_keyword_rule_failure_payload_excludes_backend_codes(monk
     # Chinese message, not the underlying code or any backend-internal fields
     # the API might have attached.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {
             "ok": False,
@@ -1102,7 +1102,7 @@ def test_create_project_keyword_rule_success_payload_types_are_stable(monkeypatc
     # ``str`` / ``int`` / ``bool`` so JS consumers can rely on the contract
     # even when the backend returns loose numeric / string variants.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {
             "ok": True,
@@ -1129,7 +1129,7 @@ def test_create_project_keyword_rule_success_payload_types_are_stable(monkeypatc
 
 def test_create_project_keyword_rule_payload_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {
             "ok": True,
@@ -1157,7 +1157,7 @@ def test_create_project_keyword_rule_never_calls_other_project_rules_write_apis(
     # folder create / edit / delete, rule edit / delete, conflict preview,
     # backfill).
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {
             "ok": True,
@@ -1189,7 +1189,7 @@ def test_create_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "preview_folder_rule_conflicts",
         "backfill_project_rule",
     ):
-        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
 
     forbidden_project_calls: list[str] = []
 
@@ -1206,8 +1206,8 @@ def test_create_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "archive_project",
         "set_project_enabled",
     ):
-        if hasattr(bridge_module.project_api, name):
-            monkeypatch.setattr(bridge_module.project_api, name, make_project_forbidden(name))
+        if hasattr(bridge_rules_module.project_api, name):
+            monkeypatch.setattr(bridge_rules_module.project_api, name, make_project_forbidden(name))
 
     result = WebViewBridge().create_project_keyword_rule(1, "Spec")
     assert result["ok"] is True
@@ -1219,7 +1219,7 @@ def test_create_project_keyword_rule_does_not_regress_get_project_rules(monkeypa
     # Phase 5C regression lock: ``get_project_rules`` remains the read path
     # and is not affected by the keyword-create addition.
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -1252,7 +1252,7 @@ def test_create_project_keyword_rule_does_not_regress_set_project_rule_enabled(m
     # Phase 5C regression lock: the existing Phase 5B toggle path remains
     # intact after the Phase 5C create-keyword addition.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": True,
@@ -1296,7 +1296,7 @@ def test_create_project_keyword_rule_bridge_passes_trimmed_keyword_to_api(monkey
             },
         }
 
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", capture)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_keyword_rule", capture)
 
     result = WebViewBridge().create_project_keyword_rule(1, "  Spec  ")
 
@@ -1315,7 +1315,7 @@ def test_create_project_keyword_rule_bridge_html_script_keyword_safe(monkeypatch
     html_keyword = "<script>alert('xss')</script>"
 
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {
             "ok": True,
@@ -1361,7 +1361,7 @@ def test_delete_project_keyword_rule_success_payload(monkeypatch):
     # NOT echo the full refreshed Project Rules list back to JS — the
     # frontend re-fetches via ``get_project_rules`` after success.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {
             "ok": True,
@@ -1424,7 +1424,7 @@ def test_delete_project_keyword_rule_invalid_input_payload_excludes_sensitive_te
 
 def test_delete_project_keyword_rule_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {"ok": False, "error": "not_found"},
     )
@@ -1436,7 +1436,7 @@ def test_delete_project_keyword_rule_not_found_maps_to_chinese(monkeypatch):
 
 def test_delete_project_keyword_rule_invalid_input_code_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {"ok": False, "error": "invalid_input"},
     )
@@ -1448,7 +1448,7 @@ def test_delete_project_keyword_rule_invalid_input_code_maps_to_chinese(monkeypa
 
 def test_delete_project_keyword_rule_operation_failed_code_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {"ok": False, "error": "operation_failed"},
     )
@@ -1462,7 +1462,7 @@ def test_delete_project_keyword_rule_unknown_error_code_collapses_to_delete_fail
     # Phase 5D regression lock: unknown API error codes collapse to the
     # generic delete-failed message so internal details are never surfaced.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {"ok": False, "error": "unexpected raw code"},
     )
@@ -1478,7 +1478,7 @@ def test_delete_project_keyword_rule_unknown_exception_collapses(monkeypatch):
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
 
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", fail)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", fail)
 
     result = WebViewBridge().delete_project_keyword_rule(1)
 
@@ -1503,7 +1503,7 @@ def test_delete_project_keyword_rule_failure_payload_excludes_backend_codes(monk
     # Chinese message, not the underlying code or any backend-internal fields
     # the API might have attached.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {
             "ok": False,
@@ -1541,7 +1541,7 @@ def test_delete_project_keyword_rule_success_payload_types_are_stable(monkeypatc
     # ``str`` / ``int`` / ``bool`` so JS consumers can rely on the contract
     # even when the backend returns loose numeric / string variants.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {
             "ok": True,
@@ -1564,7 +1564,7 @@ def test_delete_project_keyword_rule_success_payload_types_are_stable(monkeypatc
 
 def test_delete_project_keyword_rule_payload_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {
             "ok": True,
@@ -1590,7 +1590,7 @@ def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(
     # folder create / edit / delete, rule create / edit / toggle, conflict
     # preview, backfill).
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {
             "ok": True,
@@ -1621,7 +1621,7 @@ def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "preview_folder_rule_conflicts",
         "backfill_project_rule",
     ):
-        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
 
     forbidden_project_calls: list[str] = []
 
@@ -1638,8 +1638,8 @@ def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "archive_project",
         "set_project_enabled",
     ):
-        if hasattr(bridge_module.project_api, name):
-            monkeypatch.setattr(bridge_module.project_api, name, make_project_forbidden(name))
+        if hasattr(bridge_rules_module.project_api, name):
+            monkeypatch.setattr(bridge_rules_module.project_api, name, make_project_forbidden(name))
 
     result = WebViewBridge().delete_project_keyword_rule(1)
     assert result["ok"] is True
@@ -1651,7 +1651,7 @@ def test_delete_project_keyword_rule_does_not_regress_get_project_rules(monkeypa
     # Phase 5D regression lock: ``get_project_rules`` remains the read path
     # and is not affected by the keyword-delete addition.
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -1684,7 +1684,7 @@ def test_delete_project_keyword_rule_does_not_regress_set_project_rule_enabled(m
     # Phase 5D regression lock: the existing Phase 5B toggle path remains
     # intact after the Phase 5D delete-keyword addition.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {
             "ok": True,
@@ -1708,7 +1708,7 @@ def test_delete_project_keyword_rule_does_not_regress_create_project_keyword_rul
     # Phase 5D regression lock: the existing Phase 5C create path remains
     # intact after the Phase 5D delete-keyword addition.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {
             "ok": True,
@@ -1740,7 +1740,7 @@ def test_delete_project_keyword_rule_success_payload_strips_extra_api_keys(monke
     # frontend re-fetches the full Project Rules list via
     # ``get_project_rules`` after success.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {
             "ok": True,
@@ -1813,7 +1813,7 @@ def test_delete_project_keyword_rule_folder_rule_id_maps_to_stable_not_found(mon
             "details": "C:\\Secret folder path window_title clipboard note",
         }
 
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", fake_delete)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", fake_delete)
 
     result = WebViewBridge().delete_project_keyword_rule(55)
 
@@ -1859,7 +1859,7 @@ def test_create_project_folder_rule_success_payload(monkeypatch):
     # Project Rules list back to JS — the frontend re-fetches via
     # ``get_project_rules`` after success.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": True,
@@ -1944,7 +1944,7 @@ def test_create_project_folder_rule_invalid_input_payload_excludes_sensitive_tex
 
 def test_create_project_folder_rule_project_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {"ok": False, "error": "project_not_found"},
     )
@@ -1956,7 +1956,7 @@ def test_create_project_folder_rule_project_not_found_maps_to_chinese(monkeypatc
 
 def test_create_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {"ok": False, "error": "operation_failed"},
     )
@@ -1968,7 +1968,7 @@ def test_create_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch
 
 def test_create_project_folder_rule_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {"ok": False, "error": "unknown_code"},
     )
@@ -1982,7 +1982,7 @@ def test_create_project_folder_rule_unknown_exception_collapses(monkeypatch):
     def _boom(*args, **kwargs):
         raise RuntimeError("boom: sensitive SQL SELECT * FROM ...")
 
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _boom)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", _boom)
 
     result = WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
 
@@ -1994,7 +1994,7 @@ def test_create_project_folder_rule_unknown_exception_collapses(monkeypatch):
 
 def test_create_project_folder_rule_failure_payload_excludes_backend_codes(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": False,
@@ -2015,7 +2015,7 @@ def test_create_project_folder_rule_failure_payload_excludes_backend_codes(monke
 
 def test_create_project_folder_rule_success_payload_types_are_stable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": True,
@@ -2044,7 +2044,7 @@ def test_create_project_folder_rule_success_payload_types_are_stable(monkeypatch
 
 def test_create_project_folder_rule_payload_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": True,
@@ -2082,7 +2082,7 @@ def test_create_project_folder_rule_bridge_passes_trimmed_path_to_api(monkeypatc
             },
         }
 
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", fake_create)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", fake_create)
 
     WebViewBridge().create_project_folder_rule(1, "  D:\\Work  ", True)
 
@@ -2091,7 +2091,7 @@ def test_create_project_folder_rule_bridge_passes_trimmed_path_to_api(monkeypatc
 
 def test_create_project_folder_rule_success_payload_strips_extra_api_keys(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": True,
@@ -2133,12 +2133,12 @@ def test_create_project_folder_rule_never_calls_other_project_rules_write_apis(m
 
         return _impl
 
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
 
     WebViewBridge().create_project_folder_rule(1, r"D:\Work", True)
 
@@ -2152,9 +2152,9 @@ def test_create_project_folder_rule_does_not_regress_get_project_rules(monkeypat
         called["get_project_rules"] += 1
         return []
 
-    monkeypatch.setattr(bridge_module.project_api, "list_project_bindings", _track)
+    monkeypatch.setattr(bridge_rules_module.project_api, "list_project_bindings", _track)
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": True,
@@ -2172,7 +2172,7 @@ def test_create_project_folder_rule_does_not_regress_get_project_rules(monkeypat
 
 def test_create_project_folder_rule_does_not_regress_set_project_rule_enabled(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": True,
@@ -2180,7 +2180,7 @@ def test_create_project_folder_rule_does_not_regress_set_project_rule_enabled(mo
         },
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {"ok": True, "rule": {"kind": rule_type, "id": rule_id, "enabled": enabled}},
     )
@@ -2195,7 +2195,7 @@ def test_create_project_folder_rule_does_not_regress_set_project_rule_enabled(mo
 
 def test_create_project_folder_rule_does_not_regress_create_project_keyword_rule(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": True,
@@ -2203,7 +2203,7 @@ def test_create_project_folder_rule_does_not_regress_create_project_keyword_rule
         },
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {
             "ok": True,
@@ -2221,7 +2221,7 @@ def test_create_project_folder_rule_does_not_regress_create_project_keyword_rule
 
 def test_create_project_folder_rule_does_not_regress_delete_project_keyword_rule(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": True,
@@ -2229,7 +2229,7 @@ def test_create_project_folder_rule_does_not_regress_delete_project_keyword_rule
         },
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
     )
@@ -2247,7 +2247,7 @@ def test_create_project_folder_rule_does_not_regress_delete_project_keyword_rule
 
 def test_update_project_folder_rule_success_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {
             "ok": True,
@@ -2298,7 +2298,7 @@ def test_update_project_folder_rule_rejects_non_bool_recursive(bad_recursive):
 
 def test_update_project_folder_rule_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {"ok": False, "error": "not_found"},
     )
@@ -2310,7 +2310,7 @@ def test_update_project_folder_rule_not_found_maps_to_chinese(monkeypatch):
 
 def test_update_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {"ok": False, "error": "operation_failed"},
     )
@@ -2322,7 +2322,7 @@ def test_update_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch
 
 def test_update_project_folder_rule_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {"ok": False, "error": "unknown_code"},
     )
@@ -2336,7 +2336,7 @@ def test_update_project_folder_rule_unknown_exception_collapses(monkeypatch):
     def _boom(*args, **kwargs):
         raise RuntimeError("boom: sensitive SQL UPDATE ...")
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _boom)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", _boom)
 
     result = WebViewBridge().update_project_folder_rule(1, r"D:\New", True)
 
@@ -2348,7 +2348,7 @@ def test_update_project_folder_rule_unknown_exception_collapses(monkeypatch):
 
 def test_update_project_folder_rule_failure_payload_excludes_backend_codes(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {
             "ok": False,
@@ -2369,7 +2369,7 @@ def test_update_project_folder_rule_failure_payload_excludes_backend_codes(monke
 
 def test_update_project_folder_rule_success_payload_types_are_stable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {
             "ok": True,
@@ -2398,7 +2398,7 @@ def test_update_project_folder_rule_success_payload_types_are_stable(monkeypatch
 
 def test_update_project_folder_rule_payload_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {
             "ok": True,
@@ -2436,7 +2436,7 @@ def test_update_project_folder_rule_bridge_passes_trimmed_path_to_api(monkeypatc
             },
         }
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", fake_update)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", fake_update)
 
     WebViewBridge().update_project_folder_rule(10, "  D:\\New  ", True)
 
@@ -2446,7 +2446,7 @@ def test_update_project_folder_rule_bridge_passes_trimmed_path_to_api(monkeypatc
 
 def test_update_project_folder_rule_success_payload_strips_extra_api_keys(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {
             "ok": True,
@@ -2484,12 +2484,12 @@ def test_update_project_folder_rule_never_calls_other_project_rules_write_apis(m
 
         return _impl
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
 
     WebViewBridge().update_project_folder_rule(1, r"D:\New", True)
 
@@ -2501,7 +2501,7 @@ def test_update_project_folder_rule_never_calls_other_project_rules_write_apis(m
 
 def test_delete_project_folder_rule_success_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {
             "ok": True,
@@ -2536,7 +2536,7 @@ def test_delete_project_folder_rule_invalid_input_payload_excludes_sensitive_tex
 
 def test_delete_project_folder_rule_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": False, "error": "not_found"},
     )
@@ -2548,7 +2548,7 @@ def test_delete_project_folder_rule_not_found_maps_to_chinese(monkeypatch):
 
 def test_delete_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": False, "error": "operation_failed"},
     )
@@ -2560,7 +2560,7 @@ def test_delete_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch
 
 def test_delete_project_folder_rule_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": False, "error": "unknown_code"},
     )
@@ -2574,7 +2574,7 @@ def test_delete_project_folder_rule_unknown_exception_collapses(monkeypatch):
     def _boom(*args, **kwargs):
         raise RuntimeError("boom: sensitive SQL DELETE FROM ...")
 
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _boom)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", _boom)
 
     result = WebViewBridge().delete_project_folder_rule(1)
 
@@ -2586,7 +2586,7 @@ def test_delete_project_folder_rule_unknown_exception_collapses(monkeypatch):
 
 def test_delete_project_folder_rule_failure_payload_excludes_backend_codes(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {
             "ok": False,
@@ -2607,7 +2607,7 @@ def test_delete_project_folder_rule_failure_payload_excludes_backend_codes(monke
 
 def test_delete_project_folder_rule_success_payload_types_are_stable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {
             "ok": True,
@@ -2626,7 +2626,7 @@ def test_delete_project_folder_rule_success_payload_types_are_stable(monkeypatch
 
 def test_delete_project_folder_rule_payload_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {
             "ok": True,
@@ -2640,7 +2640,7 @@ def test_delete_project_folder_rule_payload_json_serializable(monkeypatch):
 
 def test_delete_project_folder_rule_success_payload_strips_extra_api_keys(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {
             "ok": True,
@@ -2675,12 +2675,12 @@ def test_delete_project_folder_rule_never_calls_other_project_rules_write_apis(m
 
         return _impl
 
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", _track("update_folder"))
 
     WebViewBridge().delete_project_folder_rule(1)
 
@@ -2703,7 +2703,7 @@ def test_delete_project_folder_rule_keyword_rule_id_maps_to_stable_not_found(mon
             "details": "Spec keyword window_title clipboard note",
         }
 
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", fake_delete)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", fake_delete)
 
     result = WebViewBridge().delete_project_folder_rule(77)
 
@@ -2732,9 +2732,9 @@ def test_delete_project_folder_rule_does_not_regress_get_project_rules(monkeypat
         called["get_project_rules"] += 1
         return []
 
-    monkeypatch.setattr(bridge_module.project_api, "list_project_bindings", _track)
+    monkeypatch.setattr(bridge_rules_module.project_api, "list_project_bindings", _track)
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
@@ -2749,12 +2749,12 @@ def test_delete_project_folder_rule_does_not_regress_get_project_rules(monkeypat
 
 def test_delete_project_folder_rule_does_not_regress_set_project_rule_enabled(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {"ok": True, "rule": {"kind": rule_type, "id": rule_id, "enabled": enabled}},
     )
@@ -2769,12 +2769,12 @@ def test_delete_project_folder_rule_does_not_regress_set_project_rule_enabled(mo
 
 def test_delete_project_folder_rule_does_not_regress_create_project_keyword_rule(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {
             "ok": True,
@@ -2792,12 +2792,12 @@ def test_delete_project_folder_rule_does_not_regress_create_project_keyword_rule
 
 def test_delete_project_folder_rule_does_not_regress_delete_project_keyword_rule(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
     )
@@ -2877,7 +2877,7 @@ def test_create_project_folder_rule_never_forwards_bool_project_id_to_api(monkey
         called.append(args)
         return {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": 1, "folder_path": "x", "recursive": True, "enabled": True}}
 
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _spy)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", _spy)
     WebViewBridge().create_project_folder_rule(True, r"D:\Work", True)
     assert called == []
 
@@ -2889,7 +2889,7 @@ def test_update_project_folder_rule_never_forwards_bool_rule_id_to_api(monkeypat
         called.append(args)
         return {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": 1, "folder_path": "x", "recursive": True, "enabled": True}}
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _spy)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", _spy)
     WebViewBridge().update_project_folder_rule(True, r"D:\New", True)
     assert called == []
 
@@ -2901,7 +2901,7 @@ def test_delete_project_folder_rule_never_forwards_bool_rule_id_to_api(monkeypat
         called.append(args)
         return {"ok": True, "rule": {"kind": "folder", "id": 1, "deleted": True}}
 
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _spy)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", _spy)
     WebViewBridge().delete_project_folder_rule(True)
     assert called == []
 
@@ -2915,7 +2915,7 @@ def test_create_project_folder_rule_never_forwards_non_bool_recursive_to_api(mon
         called.append(args)
         return {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": 1, "folder_path": "x", "recursive": True, "enabled": True}}
 
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _spy)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", _spy)
     for bad_recursive in (1, 0, "true", None, 1.0):
         WebViewBridge().create_project_folder_rule(1, r"D:\Work", bad_recursive)
     assert called == []
@@ -2928,7 +2928,7 @@ def test_update_project_folder_rule_never_forwards_non_bool_recursive_to_api(mon
         called.append(args)
         return {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": 1, "folder_path": "x", "recursive": True, "enabled": True}}
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _spy)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", _spy)
     for bad_recursive in (1, 0, "true", None, 1.0):
         WebViewBridge().update_project_folder_rule(1, r"D:\New", bad_recursive)
     assert called == []
@@ -2939,17 +2939,17 @@ def test_folder_bridge_failure_payloads_are_json_serializable(monkeypatch):
     # so pywebview can deliver them to JS. Covers both invalid-input and
     # API-error-code paths for all three folder methods.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {"ok": False, "error": "operation_failed"},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {"ok": False, "error": "not_found"},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": False, "error": "operation_failed"},
     )
@@ -2974,12 +2974,12 @@ def test_folder_bridge_methods_do_not_cross_pollute_keyword_or_toggle(monkeypatc
 
         return _impl
 
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "set_project_rule_enabled", _track("toggle"))
 
     bridge = WebViewBridge()
     bridge.create_project_folder_rule(1, r"D:\Work", True)
@@ -3005,7 +3005,7 @@ def test_folder_bridge_success_payloads_never_include_api_error_keys(monkeypatch
     # ``error`` key or any API-internal key. This complements the existing
     # strip-extra-keys tests by asserting the full key set in one place.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {
             "ok": True,
@@ -3013,7 +3013,7 @@ def test_folder_bridge_success_payloads_never_include_api_error_keys(monkeypatch
         },
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {
             "ok": True,
@@ -3021,7 +3021,7 @@ def test_folder_bridge_success_payloads_never_include_api_error_keys(monkeypatch
         },
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
@@ -3047,7 +3047,7 @@ def test_folder_bridge_success_payloads_never_include_api_error_keys(monkeypatch
 
 def test_update_project_keyword_rule_success_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {
             "ok": True,
@@ -3116,7 +3116,7 @@ def test_update_project_keyword_rule_bridge_passes_trimmed_keyword_to_api(monkey
             },
         }
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", _spy)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_keyword_rule", _spy)
 
     WebViewBridge().update_project_keyword_rule(5, "  NewSpec  ")
 
@@ -3125,7 +3125,7 @@ def test_update_project_keyword_rule_bridge_passes_trimmed_keyword_to_api(monkey
 
 def test_update_project_keyword_rule_invalid_input_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {"ok": False, "error": "invalid_input"},
     )
@@ -3137,7 +3137,7 @@ def test_update_project_keyword_rule_invalid_input_maps_to_chinese(monkeypatch):
 
 def test_update_project_keyword_rule_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {"ok": False, "error": "not_found"},
     )
@@ -3149,7 +3149,7 @@ def test_update_project_keyword_rule_not_found_maps_to_chinese(monkeypatch):
 
 def test_update_project_keyword_rule_duplicate_rule_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {"ok": False, "error": "duplicate_rule"},
     )
@@ -3161,7 +3161,7 @@ def test_update_project_keyword_rule_duplicate_rule_maps_to_chinese(monkeypatch)
 
 def test_update_project_keyword_rule_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {"ok": False, "error": "operation_failed"},
     )
@@ -3173,7 +3173,7 @@ def test_update_project_keyword_rule_operation_failed_maps_to_chinese(monkeypatc
 
 def test_update_project_keyword_rule_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {"ok": False, "error": "unexpected raw code"},
     )
@@ -3189,7 +3189,7 @@ def test_update_project_keyword_rule_unknown_exception_collapses(monkeypatch):
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", fail)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_keyword_rule", fail)
 
     result = WebViewBridge().update_project_keyword_rule(1, "Spec")
 
@@ -3211,7 +3211,7 @@ def test_update_project_keyword_rule_unknown_exception_collapses(monkeypatch):
 
 def test_update_project_keyword_rule_failure_payload_excludes_backend_codes(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {
             "ok": False,
@@ -3246,7 +3246,7 @@ def test_update_project_keyword_rule_failure_payload_excludes_backend_codes(monk
 
 def test_update_project_keyword_rule_success_payload_types_are_stable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {
             "ok": True,
@@ -3273,7 +3273,7 @@ def test_update_project_keyword_rule_success_payload_types_are_stable(monkeypatc
 
 def test_update_project_keyword_rule_payload_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {
             "ok": True,
@@ -3296,7 +3296,7 @@ def test_update_project_keyword_rule_payload_json_serializable(monkeypatch):
 
 def test_update_project_keyword_rule_success_payload_strips_extra_api_keys(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {
             "ok": True,
@@ -3353,13 +3353,13 @@ def test_update_project_keyword_rule_never_calls_other_project_rules_write_apis(
 
         return _impl
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", _track("update_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "set_project_rule_enabled", _track("toggle"))
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
-    monkeypatch.setattr(bridge_module.rule_api, "create_project_folder_rule", _track("create_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_folder_rule", _track("update_folder"))
-    monkeypatch.setattr(bridge_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_keyword_rule", _track("update_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "set_project_rule_enabled", _track("toggle"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_keyword_rule", _track("create_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", _track("create_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", _track("update_folder"))
+    monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", _track("delete_folder"))
 
     WebViewBridge().update_project_keyword_rule(1, "NewSpec")
 
@@ -3373,7 +3373,7 @@ def test_update_project_keyword_rule_never_forwards_bool_rule_id_to_api(monkeypa
         called.append(args)
         return {"ok": True, "rule": {"kind": "keyword", "id": 1, "project_id": 1, "keyword": "x", "enabled": True}}
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", _spy)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_keyword_rule", _spy)
     WebViewBridge().update_project_keyword_rule(True, "NewSpec")
     assert called == []
 
@@ -3387,34 +3387,34 @@ def test_other_write_apis_do_not_call_update_project_keyword_rule(monkeypatch):
         called.append(args)
         return {"ok": True, "rule": {"kind": "keyword", "id": 1, "keyword": "x", "enabled": True}}
 
-    monkeypatch.setattr(bridge_module.rule_api, "update_project_keyword_rule", _spy)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_keyword_rule", _spy)
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_keyword_rule",
         lambda project_id, keyword: {"ok": True, "rule": {"kind": "keyword", "id": 1, "project_id": project_id, "keyword": keyword, "enabled": True}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
         lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {"ok": True, "rule_type": rule_type, "rule_id": rule_id, "enabled": enabled},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_project_folder_rule",
         lambda project_id, folder_path, recursive: {"ok": True, "rule": {"kind": "folder", "id": 1, "project_id": project_id, "folder_path": folder_path, "recursive": recursive, "enabled": True}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_folder_rule",
         lambda rule_id, folder_path, recursive: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "project_id": 1, "folder_path": folder_path, "recursive": recursive, "enabled": True}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "delete_project_folder_rule",
         lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
@@ -3448,7 +3448,7 @@ def test_update_project_keyword_rule_invalid_input_payload_excludes_sensitive_te
 
 def test_update_project_keyword_rule_failure_payloads_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "update_project_keyword_rule",
         lambda rule_id, keyword: {"ok": False, "error": "operation_failed"},
     )
@@ -3464,7 +3464,7 @@ def test_update_project_keyword_rule_failure_payloads_json_serializable(monkeypa
     # API error code failures.
     for code in ("invalid_input", "not_found", "duplicate_rule", "operation_failed", "unknown"):
         monkeypatch.setattr(
-            bridge_module.rule_api,
+            bridge_rules_module.rule_api,
             "update_project_keyword_rule",
             lambda rule_id, keyword, c=code: {"ok": False, "error": c},
         )
@@ -3486,7 +3486,7 @@ _PROJECT_LIFECYCLE_SUMMARY = {
 
 
 def _patch_project_api(monkeypatch, method_name, result):
-    """Patch ``bridge_module.project_api.<method_name>`` to return ``result``.
+    """Patch ``bridge_rules_module.project_api.<method_name>`` to return ``result``.
 
     Returns a list that the test can inspect to assert the bridge forwarded
     the expected (trimmed / coerced) arguments.
@@ -3497,7 +3497,7 @@ def _patch_project_api(monkeypatch, method_name, result):
         calls.append((args, kwargs))
         return result
 
-    monkeypatch.setattr(bridge_module.project_api, method_name, _spy)
+    monkeypatch.setattr(bridge_rules_module.project_api, method_name, _spy)
     return calls
 
 
@@ -3555,7 +3555,7 @@ def test_create_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
         ("unknown_code", "新增项目失败"),
     ):
         monkeypatch.setattr(
-            bridge_module.project_api,
+            bridge_rules_module.project_api,
             "create_project_for_rules",
             lambda name, description, c=code: {"ok": False, "error": c},
         )
@@ -3571,7 +3571,7 @@ def test_create_project_for_rules_unknown_exception_collapses(monkeypatch):
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
 
-    monkeypatch.setattr(bridge_module.project_api, "create_project_for_rules", boom)
+    monkeypatch.setattr(bridge_rules_module.project_api, "create_project_for_rules", boom)
 
     result = WebViewBridge().create_project_for_rules("Client", "desc")
 
@@ -3609,10 +3609,10 @@ def test_create_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypat
         "delete_project_folder_rule",
         "set_project_rule_enabled",
     ):
-        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
 
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "create_project_for_rules",
         lambda name, description="": {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
     )
@@ -3647,7 +3647,7 @@ def test_update_project_for_rules_rejects_bool_as_int_project_id(monkeypatch):
         forwarded.append(args)
         return {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)}
 
-    monkeypatch.setattr(bridge_module.project_api, "update_project_for_rules", _spy)
+    monkeypatch.setattr(bridge_rules_module.project_api, "update_project_for_rules", _spy)
 
     bridge = WebViewBridge()
     for bad_id in (True, False):
@@ -3705,7 +3705,7 @@ def test_update_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
         ("unknown_code", "保存项目失败"),
     ):
         monkeypatch.setattr(
-            bridge_module.project_api,
+            bridge_rules_module.project_api,
             "update_project_for_rules",
             lambda project_id, name, description, c=code: {"ok": False, "error": c},
         )
@@ -3721,7 +3721,7 @@ def test_update_project_for_rules_unknown_exception_collapses(monkeypatch):
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
 
-    monkeypatch.setattr(bridge_module.project_api, "update_project_for_rules", boom)
+    monkeypatch.setattr(bridge_rules_module.project_api, "update_project_for_rules", boom)
 
     result = WebViewBridge().update_project_for_rules(1, "Renamed", "new")
 
@@ -3759,10 +3759,10 @@ def test_update_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypat
         "delete_project_folder_rule",
         "set_project_rule_enabled",
     ):
-        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
 
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "update_project_for_rules",
         lambda project_id, name, description="": {
             "ok": True,
@@ -3796,7 +3796,7 @@ def test_set_project_enabled_for_rules_rejects_bool_as_int_project_id(monkeypatc
         forwarded.append(args)
         return {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)}
 
-    monkeypatch.setattr(bridge_module.project_api, "set_project_enabled_for_rules", _spy)
+    monkeypatch.setattr(bridge_rules_module.project_api, "set_project_enabled_for_rules", _spy)
 
     bridge = WebViewBridge()
     for bad_id in (True, False):
@@ -3835,7 +3835,7 @@ def test_set_project_enabled_for_rules_maps_error_codes_to_chinese(monkeypatch):
         ("unknown_code", "更新项目状态失败"),
     ):
         monkeypatch.setattr(
-            bridge_module.project_api,
+            bridge_rules_module.project_api,
             "set_project_enabled_for_rules",
             lambda project_id, enabled, c=code: {"ok": False, "error": c},
         )
@@ -3851,7 +3851,7 @@ def test_set_project_enabled_for_rules_unknown_exception_collapses(monkeypatch):
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
 
-    monkeypatch.setattr(bridge_module.project_api, "set_project_enabled_for_rules", boom)
+    monkeypatch.setattr(bridge_rules_module.project_api, "set_project_enabled_for_rules", boom)
 
     result = WebViewBridge().set_project_enabled_for_rules(1, False)
 
@@ -3891,10 +3891,10 @@ def test_set_project_enabled_for_rules_does_not_call_keyword_or_folder_apis(
         "delete_project_folder_rule",
         "set_project_rule_enabled",
     ):
-        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
 
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "set_project_enabled_for_rules",
         lambda project_id, enabled: {
             "ok": True,
@@ -3928,7 +3928,7 @@ def test_archive_project_for_rules_rejects_bool_as_int_project_id(monkeypatch):
         forwarded.append(args)
         return {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)}
 
-    monkeypatch.setattr(bridge_module.project_api, "archive_project_for_rules", _spy)
+    monkeypatch.setattr(bridge_rules_module.project_api, "archive_project_for_rules", _spy)
 
     bridge = WebViewBridge()
     for bad_id in (True, False):
@@ -3958,7 +3958,7 @@ def test_archive_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
         ("unknown_code", "归档项目失败"),
     ):
         monkeypatch.setattr(
-            bridge_module.project_api,
+            bridge_rules_module.project_api,
             "archive_project_for_rules",
             lambda project_id, c=code: {"ok": False, "error": c},
         )
@@ -3974,7 +3974,7 @@ def test_archive_project_for_rules_unknown_exception_collapses(monkeypatch):
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
 
-    monkeypatch.setattr(bridge_module.project_api, "archive_project_for_rules", boom)
+    monkeypatch.setattr(bridge_rules_module.project_api, "archive_project_for_rules", boom)
 
     result = WebViewBridge().archive_project_for_rules(1)
 
@@ -4012,10 +4012,10 @@ def test_archive_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypa
         "delete_project_folder_rule",
         "set_project_rule_enabled",
     ):
-        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
 
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "archive_project_for_rules",
         lambda project_id: {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
     )
@@ -4036,15 +4036,15 @@ def test_lifecycle_methods_never_call_delete_project(monkeypatch):
         forbidden_calls.append("delete_project")
         raise AssertionError("delete_project must not be called by lifecycle path")
 
-    monkeypatch.setattr(bridge_module.project_api, "delete_project", _fail)
+    monkeypatch.setattr(bridge_rules_module.project_api, "delete_project", _fail)
 
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "create_project_for_rules",
         lambda name, description="": {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
     )
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "update_project_for_rules",
         lambda project_id, name, description="": {
             "ok": True,
@@ -4052,7 +4052,7 @@ def test_lifecycle_methods_never_call_delete_project(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "set_project_enabled_for_rules",
         lambda project_id, enabled: {
             "ok": True,
@@ -4060,7 +4060,7 @@ def test_lifecycle_methods_never_call_delete_project(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "archive_project_for_rules",
         lambda project_id: {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
     )
@@ -4079,7 +4079,7 @@ def test_get_project_rules_payload_includes_display_safe_lifecycle_flags(monkeyp
     # lifecycle flags so the frontend can decide whether to render edit /
     # toggle / archive buttons WITHOUT leaking the raw ``created_by`` value.
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -4126,7 +4126,7 @@ def test_get_project_rules_read_payload_excludes_sensitive_internal_fields(monke
     # ``editable`` / ``can_toggle`` / ``can_archive`` / ``is_excluded``)
     # carry the frontend decision logic.
     monkeypatch.setattr(
-        bridge_module.project_api,
+        bridge_rules_module.project_api,
         "list_project_bindings",
         lambda: [
             {
@@ -4220,7 +4220,7 @@ def test_preview_project_rule_impact_success_returns_narrow_impact_payload(monke
     # ``{"ok": True, "impact": {...}}``. The bridge must project the API
     # result to a narrow ``impact`` key and never echo the full API dict.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": True,
@@ -4290,7 +4290,7 @@ def test_preview_project_rule_impact_invalid_rule_type_does_not_call_api(monkeyp
         calls.append(args)
         raise AssertionError("preview API must not be called for invalid rule_type")
 
-    monkeypatch.setattr(bridge_module.rule_api, "preview_project_rule_impact", _fail)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "preview_project_rule_impact", _fail)
 
     for bad_type in (None, 123, True, False, [], {}, "invalid", "Folder", "KEYWORD", ""):
         result = WebViewBridge().preview_project_rule_impact(bad_type, 10)
@@ -4309,7 +4309,7 @@ def test_preview_project_rule_impact_invalid_rule_id_does_not_call_api(monkeypat
         calls.append(args)
         raise AssertionError("preview API must not be called for invalid rule_id")
 
-    monkeypatch.setattr(bridge_module.rule_api, "preview_project_rule_impact", _fail)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "preview_project_rule_impact", _fail)
 
     for bad_id in (True, False, 0, -1, -100, "10", 10.0, None, [], {}):
         result = WebViewBridge().preview_project_rule_impact("folder", bad_id)
@@ -4321,7 +4321,7 @@ def test_preview_project_rule_impact_invalid_rule_id_does_not_call_api(monkeypat
 
 def test_preview_project_rule_impact_not_found_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4339,7 +4339,7 @@ def test_preview_project_rule_impact_not_found_maps_to_chinese_message(monkeypat
 
 def test_preview_project_rule_impact_operation_failed_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4360,7 +4360,7 @@ def test_preview_project_rule_impact_unknown_error_code_collapses_to_generic_mes
     # Phase 5H regression lock: unknown error codes must collapse to the
     # generic preview failure message so internal details are never surfaced.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4384,7 +4384,7 @@ def test_preview_project_rule_impact_unknown_exception_collapses_to_generic_mess
     def _raise(*args, **kwargs):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
-    monkeypatch.setattr(bridge_module.rule_api, "preview_project_rule_impact", _raise)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "preview_project_rule_impact", _raise)
 
     result = WebViewBridge().preview_project_rule_impact("folder", 10)
 
@@ -4397,7 +4397,7 @@ def test_backfill_project_rule_success_returns_narrow_result_payload(monkeypatch
     # ``{"ok": True, "result": {...}}``. The bridge must project the API
     # result to a narrow ``result`` key and never echo the full API dict.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": True,
@@ -4449,7 +4449,7 @@ def test_backfill_project_rule_invalid_rule_type_does_not_call_api(monkeypatch):
         calls.append(args)
         raise AssertionError("backfill API must not be called for invalid rule_type")
 
-    monkeypatch.setattr(bridge_module.rule_api, "backfill_project_rule", _fail)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "backfill_project_rule", _fail)
 
     for bad_type in (None, 123, True, False, [], {}, "invalid", "Folder", ""):
         result = WebViewBridge().backfill_project_rule(bad_type, 10)
@@ -4466,7 +4466,7 @@ def test_backfill_project_rule_invalid_rule_id_does_not_call_api(monkeypatch):
         calls.append(args)
         raise AssertionError("backfill API must not be called for invalid rule_id")
 
-    monkeypatch.setattr(bridge_module.rule_api, "backfill_project_rule", _fail)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "backfill_project_rule", _fail)
 
     for bad_id in (True, False, 0, -1, "10", 10.0, None, [], {}):
         result = WebViewBridge().backfill_project_rule("keyword", bad_id)
@@ -4478,7 +4478,7 @@ def test_backfill_project_rule_invalid_rule_id_does_not_call_api(monkeypatch):
 
 def test_backfill_project_rule_not_found_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4496,7 +4496,7 @@ def test_backfill_project_rule_not_found_maps_to_chinese_message(monkeypatch):
 
 def test_backfill_project_rule_rule_disabled_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4515,7 +4515,7 @@ def test_backfill_project_rule_rule_disabled_maps_to_chinese_message(monkeypatch
 
 def test_backfill_project_rule_project_not_available_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4534,7 +4534,7 @@ def test_backfill_project_rule_project_not_available_maps_to_chinese_message(mon
 
 def test_backfill_project_rule_too_many_matches_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4553,7 +4553,7 @@ def test_backfill_project_rule_too_many_matches_maps_to_chinese_message(monkeypa
 
 def test_backfill_project_rule_operation_failed_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4572,7 +4572,7 @@ def test_backfill_project_rule_operation_failed_maps_to_chinese_message(monkeypa
 
 def test_backfill_project_rule_unknown_error_code_collapses_to_generic_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4593,7 +4593,7 @@ def test_backfill_project_rule_unknown_exception_collapses_to_generic_message(mo
     def _raise(*args, **kwargs):
         raise RuntimeError("C:\\Secret window_title clipboard note UPDATE activity_log")
 
-    monkeypatch.setattr(bridge_module.rule_api, "backfill_project_rule", _raise)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "backfill_project_rule", _raise)
 
     result = WebViewBridge().backfill_project_rule("folder", 10)
 
@@ -4607,12 +4607,12 @@ def test_preview_and_backfill_do_not_cross_call_other_project_rules_apis(monkeyp
     # Project Rules write APIs (project enable/disable, project / rule
     # create / edit / delete, toggle, lifecycle).
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {"ok": True, "impact": {"rule": {}, "counts": {}, "samples": []}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {"ok": True, "result": {"updated_count": 0}},
     )
@@ -4636,7 +4636,7 @@ def test_preview_and_backfill_do_not_cross_call_other_project_rules_apis(monkeyp
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
     ):
-        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
 
     for name in (
         "create_project",
@@ -4645,8 +4645,8 @@ def test_preview_and_backfill_do_not_cross_call_other_project_rules_apis(monkeyp
         "archive_project",
         "set_project_enabled",
     ):
-        if hasattr(bridge_module.project_api, name):
-            monkeypatch.setattr(bridge_module.project_api, name, make_forbidden(name))
+        if hasattr(bridge_rules_module.project_api, name):
+            monkeypatch.setattr(bridge_rules_module.project_api, name, make_forbidden(name))
 
     # Preview path
     result = WebViewBridge().preview_project_rule_impact("folder", 10)
@@ -4661,7 +4661,7 @@ def test_preview_and_backfill_payloads_are_json_serializable(monkeypatch):
     # Phase 5H regression lock: all bridge payloads must be JSON-serializable
     # so the WebView bridge can pass them to JS.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": True,
@@ -4676,7 +4676,7 @@ def test_preview_and_backfill_payloads_are_json_serializable(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": True,
@@ -4737,7 +4737,7 @@ def test_preview_project_rules_batch_impact_success_returns_narrow_payload(monke
     # ``{"ok": True, "impact": {...}}``. The bridge must project the API
     # result to a narrow ``impact`` key and never echo extra API fields.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rules_batch_impact",
         lambda rules: {
             "ok": True,
@@ -4798,7 +4798,7 @@ def test_preview_project_rules_batch_impact_invalid_input_does_not_call_api(monk
         raise AssertionError("batch preview API must not be called for invalid input")
 
     monkeypatch.setattr(
-        bridge_module.rule_api, "preview_project_rules_batch_impact", _fail
+        bridge_rules_module.rule_api, "preview_project_rules_batch_impact", _fail
     )
 
     bad_inputs = [
@@ -4824,7 +4824,7 @@ def test_preview_project_rules_batch_impact_invalid_input_does_not_call_api(monk
 
 def test_preview_project_rules_batch_impact_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rules_batch_impact",
         lambda rules: {
             "ok": False,
@@ -4844,7 +4844,7 @@ def test_preview_project_rules_batch_impact_not_found_maps_to_chinese(monkeypatc
 
 def test_preview_project_rules_batch_impact_too_many_rules_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": False, "error": "too_many_rules"},
     )
@@ -4858,7 +4858,7 @@ def test_preview_project_rules_batch_impact_too_many_rules_maps_to_chinese(monke
 
 def test_preview_project_rules_batch_impact_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": False, "error": "operation_failed"},
     )
@@ -4872,7 +4872,7 @@ def test_preview_project_rules_batch_impact_operation_failed_maps_to_chinese(mon
 
 def test_preview_project_rules_batch_impact_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": False, "error": "some_new_unknown_code"},
     )
@@ -4889,7 +4889,7 @@ def test_preview_project_rules_batch_impact_exception_collapses(monkeypatch):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
     monkeypatch.setattr(
-        bridge_module.rule_api, "preview_project_rules_batch_impact", _raise
+        bridge_rules_module.rule_api, "preview_project_rules_batch_impact", _raise
     )
 
     result = WebViewBridge().preview_project_rules_batch_impact(
@@ -4902,7 +4902,7 @@ def test_preview_project_rules_batch_impact_exception_collapses(monkeypatch):
 
 def test_backfill_project_rules_batch_success_returns_narrow_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {
             "ok": True,
@@ -4943,7 +4943,7 @@ def test_backfill_project_rules_batch_invalid_input_does_not_call_api(monkeypatc
         raise AssertionError("batch apply API must not be called for invalid input")
 
     monkeypatch.setattr(
-        bridge_module.rule_api, "backfill_project_rules_batch", _fail
+        bridge_rules_module.rule_api, "backfill_project_rules_batch", _fail
     )
 
     for bad in ("not a list", [], [None], [{"rule_type": "folder", "rule_id": True}]):
@@ -4954,7 +4954,7 @@ def test_backfill_project_rules_batch_invalid_input_does_not_call_api(monkeypatc
 
 def test_backfill_project_rules_batch_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "not_found"},
     )
@@ -4968,7 +4968,7 @@ def test_backfill_project_rules_batch_not_found_maps_to_chinese(monkeypatch):
 
 def test_backfill_project_rules_batch_too_many_rules_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "too_many_rules"},
     )
@@ -4982,7 +4982,7 @@ def test_backfill_project_rules_batch_too_many_rules_maps_to_chinese(monkeypatch
 
 def test_backfill_project_rules_batch_rule_disabled_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "rule_disabled"},
     )
@@ -4996,7 +4996,7 @@ def test_backfill_project_rules_batch_rule_disabled_maps_to_chinese(monkeypatch)
 
 def test_backfill_project_rules_batch_project_not_available_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "project_not_available"},
     )
@@ -5010,7 +5010,7 @@ def test_backfill_project_rules_batch_project_not_available_maps_to_chinese(monk
 
 def test_backfill_project_rules_batch_too_many_matches_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "too_many_matches"},
     )
@@ -5024,7 +5024,7 @@ def test_backfill_project_rules_batch_too_many_matches_maps_to_chinese(monkeypat
 
 def test_backfill_project_rules_batch_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "operation_failed"},
     )
@@ -5038,7 +5038,7 @@ def test_backfill_project_rules_batch_operation_failed_maps_to_chinese(monkeypat
 
 def test_backfill_project_rules_batch_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "some_new_unknown_code"},
     )
@@ -5055,7 +5055,7 @@ def test_backfill_project_rules_batch_exception_collapses(monkeypatch):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
     monkeypatch.setattr(
-        bridge_module.rule_api, "backfill_project_rules_batch", _raise
+        bridge_rules_module.rule_api, "backfill_project_rules_batch", _raise
     )
 
     result = WebViewBridge().backfill_project_rules_batch(
@@ -5068,7 +5068,7 @@ def test_backfill_project_rules_batch_exception_collapses(monkeypatch):
 
 def test_set_project_rules_batch_enabled_success_returns_narrow_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {
             "ok": True,
@@ -5107,7 +5107,7 @@ def test_set_project_rules_batch_enabled_invalid_input_does_not_call_api(monkeyp
         raise AssertionError("batch toggle API must not be called for invalid input")
 
     monkeypatch.setattr(
-        bridge_module.rule_api, "set_project_rules_batch_enabled", _fail
+        bridge_rules_module.rule_api, "set_project_rules_batch_enabled", _fail
     )
 
     # Invalid rules
@@ -5124,7 +5124,7 @@ def test_set_project_rules_batch_enabled_invalid_input_does_not_call_api(monkeyp
 
 def test_set_project_rules_batch_enabled_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": False, "error": "not_found"},
     )
@@ -5138,7 +5138,7 @@ def test_set_project_rules_batch_enabled_not_found_maps_to_chinese(monkeypatch):
 
 def test_set_project_rules_batch_enabled_too_many_rules_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": False, "error": "too_many_rules"},
     )
@@ -5152,7 +5152,7 @@ def test_set_project_rules_batch_enabled_too_many_rules_maps_to_chinese(monkeypa
 
 def test_set_project_rules_batch_enabled_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": False, "error": "operation_failed"},
     )
@@ -5166,7 +5166,7 @@ def test_set_project_rules_batch_enabled_operation_failed_maps_to_chinese(monkey
 
 def test_set_project_rules_batch_enabled_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": False, "error": "some_new_unknown_code"},
     )
@@ -5183,7 +5183,7 @@ def test_set_project_rules_batch_enabled_exception_collapses(monkeypatch):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
     monkeypatch.setattr(
-        bridge_module.rule_api, "set_project_rules_batch_enabled", _raise
+        bridge_rules_module.rule_api, "set_project_rules_batch_enabled", _raise
     )
 
     result = WebViewBridge().set_project_rules_batch_enabled(
@@ -5196,7 +5196,7 @@ def test_set_project_rules_batch_enabled_exception_collapses(monkeypatch):
 
 def test_automatic_rules_status_success_returns_narrow_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "automatic_rules_status",
         lambda: {
             "ok": True,
@@ -5227,7 +5227,7 @@ def test_automatic_rules_status_exception_collapses(monkeypatch):
     def _raise(*args, **kwargs):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
-    monkeypatch.setattr(bridge_module.rule_api, "automatic_rules_status", _raise)
+    monkeypatch.setattr(bridge_rules_module.rule_api, "automatic_rules_status", _raise)
 
     result = WebViewBridge().automatic_rules_status()
 
@@ -5239,22 +5239,22 @@ def test_batch_bridge_methods_do_not_cross_call_other_apis(monkeypatch):
     # Phase 5I regression lock: each batch bridge method must only call its
     # own API facade. They must not invoke other Project Rules APIs.
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": True, "impact": {"rules": [], "counts": {}, "samples": []}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": True, "result": {"rules": [], "counts": {"updated_count": 0}}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": True, "result": {"rules": [], "enabled": True, "count": 0}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "automatic_rules_status",
         lambda: {"ok": True, "status": {"supported": True}},
     )
@@ -5280,7 +5280,7 @@ def test_batch_bridge_methods_do_not_cross_call_other_apis(monkeypatch):
         "preview_project_rule_impact",
         "backfill_project_rule",
     ):
-        monkeypatch.setattr(bridge_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
 
     valid_rules = [{"rule_type": "folder", "rule_id": 1}]
     assert WebViewBridge().preview_project_rules_batch_impact(valid_rules)["ok"] is True
@@ -5292,22 +5292,22 @@ def test_batch_bridge_methods_do_not_cross_call_other_apis(monkeypatch):
 
 def test_batch_bridge_payloads_are_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": True, "impact": {"rules": [], "counts": {}, "samples": []}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": True, "result": {"rules": [], "counts": {"updated_count": 0}}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": True, "result": {"rules": [], "enabled": True, "count": 0}},
     )
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "automatic_rules_status",
         lambda: {"ok": True, "status": {"supported": True}},
     )
@@ -5383,7 +5383,7 @@ def test_create_excluded_keyword_rule_success_returns_narrow_payload(monkeypatch
         }
 
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_excluded_keyword_rule_for_webview",
         _fake,
     )
@@ -5424,7 +5424,7 @@ def test_create_excluded_keyword_rule_rejects_invalid_keyword_does_not_call_api(
         return {"ok": True, "rule": {}}
 
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_excluded_keyword_rule_for_webview",
         _spy,
     )
@@ -5447,7 +5447,7 @@ def test_create_excluded_keyword_rule_maps_error_codes_to_chinese(monkeypatch):
     ]
     for code, expected in cases:
         monkeypatch.setattr(
-            bridge_module.rule_api,
+            bridge_rules_module.rule_api,
             "create_excluded_keyword_rule_for_webview",
             lambda keyword, _code=code: {
                 "ok": False,
@@ -5467,7 +5467,7 @@ def test_create_excluded_keyword_rule_exception_collapses(monkeypatch):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_excluded_keyword_rule_for_webview",
         _raise,
     )
@@ -5502,7 +5502,7 @@ def test_create_excluded_folder_rule_success_returns_narrow_payload(monkeypatch)
         }
 
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_excluded_folder_rule_for_webview",
         _fake,
     )
@@ -5560,7 +5560,7 @@ def test_create_excluded_folder_rule_rejects_invalid_input_does_not_call_api(
         return {"ok": True, "rule": {}}
 
     monkeypatch.setattr(
-        bridge_module.rule_api,
+        bridge_rules_module.rule_api,
         "create_excluded_folder_rule_for_webview",
         _spy,
     )
