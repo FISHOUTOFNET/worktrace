@@ -183,6 +183,13 @@ class TimelineBridgeMixin:
             live_display = live_display_api.build_current_activity_summary(
                 snapshot, report_date=report_date, today=today
             )
+            # Build the persisted-open overlay once so every DB session
+            # that matches the persisted_activity_id can carry the same
+            # stable live fields as the virtual session (verification
+            # items 12, 16, 21).
+            persisted_overlay = live_display_api.build_persisted_open_overlay(
+                snapshot, report_date=report_date, today=today
+            )
             sessions: list[dict[str, Any]] = []
             target_session_id = ""
             target_projected_seconds = 0
@@ -219,6 +226,10 @@ class TimelineBridgeMixin:
                         # transition (verification items 12, 16, 21).
                         "stable_live_key": str(virtual_session.get("stable_live_key") or ""),
                         "stable_live_key_hash": str(virtual_session.get("stable_live_key_hash") or ""),
+                        # Unified live clock fields (scheme A).
+                        "live_state": "virtual",
+                        "live_started_at_epoch_ms": int(virtual_session.get("live_started_at_epoch_ms") or 0),
+                        "carry_seconds": int(virtual_session.get("carry_seconds") or 0),
                         "activity_ids": [],
                         "first_activity_id": None,
                         "session_note": "",
@@ -232,32 +243,40 @@ class TimelineBridgeMixin:
                 end_time = str(session.get("end_time") or "")
                 session_seconds = int(session.get("duration_seconds") or 0)
                 is_in_progress = bool(session.get("is_in_progress"))
-                sessions.append(
-                    {
-                        "session_id": str(session.get("session_id") or ""),
-                        "project_name": str(session.get("project_name") or "未归类"),
-                        "project_description": str(session.get("project_description") or ""),
-                        "project_id": int(session.get("project_id") or 0),
-                        "start_time": start_time,
-                        "end_time": end_time,
-                        "duration": format_duration(session_seconds),
-                        "duration_seconds": session_seconds,
-                        "status": str(session.get("status_summary") or session.get("status") or ""),
-                        "event_count": int(session.get("event_count") or 0),
-                        "is_uncategorized": bool(session.get("is_uncategorized")),
-                        "is_in_progress": is_in_progress,
-                        "is_live_projected": is_in_progress,
-                        "is_virtual": False,
-                        "is_virtual_live": False,
-                        "live_display_key": "",
-                        "activity_ids": list(session.get("activity_ids") or []),
-                        "first_activity_id": int(session.get("first_activity_id") or 0) or None,
-                        "session_note": str(session.get("session_note") or ""),
-                        "edit_disabled": False,
-                        "disable_reason": "",
-                        "source": "db",
-                    }
-                )
+                row = {
+                    "session_id": str(session.get("session_id") or ""),
+                    "project_name": str(session.get("project_name") or "未归类"),
+                    "project_description": str(session.get("project_description") or ""),
+                    "project_id": int(session.get("project_id") or 0),
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "duration": format_duration(session_seconds),
+                    "duration_seconds": session_seconds,
+                    "status": str(session.get("status_summary") or session.get("status") or ""),
+                    "event_count": int(session.get("event_count") or 0),
+                    "is_uncategorized": bool(session.get("is_uncategorized")),
+                    "is_in_progress": is_in_progress,
+                    "is_live_projected": is_in_progress,
+                    "is_virtual": False,
+                    "is_virtual_live": False,
+                    "live_display_key": "",
+                    "live_state": "",
+                    "stable_live_key": "",
+                    "stable_live_key_hash": "",
+                    "live_started_at_epoch_ms": 0,
+                    "carry_seconds": 0,
+                    "activity_ids": list(session.get("activity_ids") or []),
+                    "first_activity_id": int(session.get("first_activity_id") or 0) or None,
+                    "session_note": str(session.get("session_note") or ""),
+                    "edit_disabled": False,
+                    "disable_reason": "",
+                    "source": "db",
+                }
+                # Apply the persisted-open overlay so the matching DB
+                # session carries the same stable live fields as the
+                # virtual session. No-op for closed / non-matching rows.
+                live_display_api.apply_persisted_open_overlay_to_row(row, persisted_overlay)
+                sessions.append(row)
             # Include the virtual session baseline in the totals so the
             # displayed total matches the sum of session durations at
             # backend response time. The frontend ticker only adds the
@@ -336,6 +355,13 @@ class TimelineBridgeMixin:
             live_display = live_display_api.build_current_activity_summary(
                 snapshot, report_date=date, today=today
             )
+            # Build the persisted-open overlay once so every DB detail row
+            # that matches the persisted_activity_id can carry the same
+            # stable live fields as the virtual detail row (verification
+            # items 12, 16, 21).
+            persisted_overlay = live_display_api.build_persisted_open_overlay(
+                snapshot, report_date=date, today=today
+            )
             activities: list[dict[str, Any]] = []
             # When the requested session is the virtual live session
             # (empty activity_ids) and the snapshot is eligible, return a
@@ -368,6 +394,10 @@ class TimelineBridgeMixin:
                             # transition (verification items 12, 16, 21).
                             "stable_live_key": str(virtual_row.get("stable_live_key") or ""),
                             "stable_live_key_hash": str(virtual_row.get("stable_live_key_hash") or ""),
+                            # Unified live clock fields (scheme A).
+                            "live_state": "virtual",
+                            "live_started_at_epoch_ms": int(virtual_row.get("live_started_at_epoch_ms") or 0),
+                            "carry_seconds": int(virtual_row.get("carry_seconds") or 0),
                             "source": "snapshot",
                             "edit_disabled": True,
                             "disable_reason": str(virtual_row.get("disable_reason") or ""),
@@ -393,31 +423,39 @@ class TimelineBridgeMixin:
                 end_time = str(row.get("end_time") or "")
                 row_seconds = int(row.get("duration_seconds") or 0)
                 is_in_progress = bool(row.get("is_in_progress"))
-                activities.append(
-                    {
-                        "activity_id": int(row.get("id") or 0),
-                        "start_time": start_time,
-                        "end_time": end_time,
-                        "duration": format_duration(row_seconds),
-                        "duration_seconds": row_seconds,
-                        "app_name": str(row.get("app_name") or ""),
-                        "resource_type": format_resource_type(
-                            row.get("resource_kind"),
-                            row.get("resource_subtype"),
-                        ),
-                        "resource_name": _safe_resource_display_name(row),
-                        "project_name": str(row.get("project_name") or "未归类"),
-                        "status": str(row.get("status") or ""),
-                        "is_in_progress": is_in_progress,
-                        "is_live_projected": is_in_progress,
-                        "is_virtual": False,
-                        "is_virtual_live": False,
-                        "live_display_key": "",
-                        "source": "db",
-                        "edit_disabled": False,
-                        "disable_reason": "",
-                    }
-                )
+                detail_row = {
+                    "activity_id": int(row.get("id") or 0),
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "duration": format_duration(row_seconds),
+                    "duration_seconds": row_seconds,
+                    "app_name": str(row.get("app_name") or ""),
+                    "resource_type": format_resource_type(
+                        row.get("resource_kind"),
+                        row.get("resource_subtype"),
+                    ),
+                    "resource_name": _safe_resource_display_name(row),
+                    "project_name": str(row.get("project_name") or "未归类"),
+                    "status": str(row.get("status") or ""),
+                    "is_in_progress": is_in_progress,
+                    "is_live_projected": is_in_progress,
+                    "is_virtual": False,
+                    "is_virtual_live": False,
+                    "live_display_key": "",
+                    "live_state": "",
+                    "stable_live_key": "",
+                    "stable_live_key_hash": "",
+                    "live_started_at_epoch_ms": 0,
+                    "carry_seconds": 0,
+                    "source": "db",
+                    "edit_disabled": False,
+                    "disable_reason": "",
+                }
+                # Apply the persisted-open overlay so the matching DB
+                # detail row carries the same stable live fields as the
+                # virtual detail row. No-op for closed / non-matching rows.
+                live_display_api.apply_persisted_open_overlay_to_row(detail_row, persisted_overlay)
+                activities.append(detail_row)
             return {
                 "ok": True,
                 "activities": activities,

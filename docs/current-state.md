@@ -122,24 +122,25 @@
 ## Architecture Boundary
 
 ```
-WebView (index.html / js/*.js / styles.css)
-   └─> Python bridge (worktrace.webview_ui.bridge)
-         └─> worktrace.api  (the ONLY backend layer the bridge may import)
-               └─> worktrace.services
-                     └─> worktrace.db   (schema.sql is the single source of truth)
-   (collector thread ──> worktrace.collector)
+WebView ──> bridge ──> worktrace.api ──> worktrace.services
+  activity_lifecycle_service (open-row command facade)
+  live_display_service (live projection contract) + activity_service (CRUD)
+  collector ──> activity_lifecycle_service
 ```
 
-Frontend JS layout: feature-split local classic scripts under
-`worktrace/webview_ui/js/` (`core.js`, `overview.js`, `timeline*.js`,
-`statistics.js`, `settings.js`, `rules*.js`, `init.js`) loaded via plain
-`<script src="js/...">` tags. No ES modules, no bundler, no Node/build
-step, no browser storage, no network requests.
+Frontend JS: local classic scripts under `worktrace/webview_ui/js/` via
+plain `<script src>` tags. No ES modules, bundler, Node/build step,
+browser storage, or network requests. Bridge imports `worktrace.api` only
+(enforced by `tests/test_ui_backend_boundary.py`).
 
-- The bridge may import `worktrace.api` and nothing else from the backend.
-- The bridge returns `{"ok": false, "error": "<chinese>"}` on failure; it
-  never returns tracebacks, SQL, or sensitive raw fields.
-- Enforced by `tests/test_ui_backend_boundary.py`.
+- **`activity_lifecycle_service`** is the sole open-row command facade
+  (collector / recovery / clipboard / midnight / shutdown); post-close
+  inference is centralised in `finalize_closed_activity_ids`.
+- **`live_display_service`** is the live projection contract owner. Every
+  live row (virtual or persisted_open) carries `stable_live_key_hash`,
+  `live_started_at_epoch_ms`, `carry_seconds`, `live_state`, etc.
+- **`App.liveContinuityKey`** is the single source of truth for frontend
+  ticker / render / seeding keys. Statistics / Export remain closed-only.
 
 ## Privacy Boundary
 

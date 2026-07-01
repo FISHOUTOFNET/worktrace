@@ -748,3 +748,180 @@ def test_timeline_service_no_datetime_now_fallback():
         "Open row without stored duration or live match must return 0, "
         "not a datetime.now() - start_time calculation"
     )
+
+
+# --- Verification items 12/16/21: persisted_open contract fields ----------
+
+
+def test_persisted_open_recent_item_carries_stable_live_fields(bridge):
+    """Verification items 12, 16, 21: persisted_open DB rows in
+    ``get_recent_activities`` must carry the same stable live fields
+    (``stable_live_key_hash``, ``live_started_at_epoch_ms``,
+    ``carry_seconds``, ``live_state``) as virtual rows so the frontend
+    continuity key survives the virtual → persisted_open transition."""
+    from worktrace.services.live_display_service import (
+        LIVE_ROW_CONTRACT_FIELDS,
+        assert_live_row_contract,
+    )
+
+    aid, start_time = _create_real_open_activity(
+        app_name="AppA",
+        process_name="AppA.exe",
+        elapsed_seconds=60,
+    )
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=60,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+    recent = bridge.get_recent_activities()
+    assert recent["ok"] is True
+
+    # Find the persisted_open DB item (it has activity_id == aid).
+    persisted_item = None
+    for item in recent["activities"]:
+        if int(item.get("activity_id") or 0) == aid:
+            persisted_item = item
+            break
+    assert persisted_item is not None, "persisted_open DB row not found in recent activities"
+
+    # The persisted_open row must carry stable_live_key_hash.
+    assert persisted_item["stable_live_key_hash"], (
+        "persisted_open recent item must carry stable_live_key_hash"
+    )
+    assert persisted_item["live_state"] == "persisted_open"
+    assert int(persisted_item["live_started_at_epoch_ms"]) > 0
+
+    # All contract fields must be present.
+    assert_live_row_contract(persisted_item)
+
+
+def test_persisted_open_timeline_session_carries_stable_live_fields(bridge):
+    """Verification items 12, 16, 21: persisted_open DB sessions in
+    ``get_timeline`` must carry the same stable live fields as virtual
+    sessions."""
+    from worktrace.services.live_display_service import assert_live_row_contract
+
+    aid, start_time = _create_real_open_activity(
+        app_name="AppA",
+        process_name="AppA.exe",
+        elapsed_seconds=60,
+    )
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=60,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+    timeline = bridge.get_timeline()
+    assert timeline["ok"] is True
+
+    # Find the persisted_open DB session (it has first_activity_id == aid).
+    persisted_session = None
+    for s in timeline["sessions"]:
+        if int(s.get("first_activity_id") or 0) == aid:
+            persisted_session = s
+            break
+    assert persisted_session is not None, "persisted_open DB session not found in timeline"
+
+    assert persisted_session["stable_live_key_hash"], (
+        "persisted_open timeline session must carry stable_live_key_hash"
+    )
+    assert persisted_session["live_state"] == "persisted_open"
+    assert_live_row_contract(persisted_session)
+
+
+def test_persisted_open_detail_row_carries_stable_live_fields(bridge):
+    """Verification items 12, 16, 21: persisted_open DB detail rows in
+    ``get_timeline_session_details`` must carry the same stable live
+    fields as virtual detail rows."""
+    from worktrace.services.live_display_service import assert_live_row_contract
+
+    aid, start_time = _create_real_open_activity(
+        app_name="AppA",
+        process_name="AppA.exe",
+        elapsed_seconds=60,
+    )
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=60,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+    details = bridge.get_timeline_session_details([aid], None)
+    assert details["ok"] is True
+
+    # Find the persisted_open DB detail row.
+    persisted_detail = None
+    for a in details["activities"]:
+        if int(a.get("activity_id") or 0) == aid:
+            persisted_detail = a
+            break
+    assert persisted_detail is not None, "persisted_open DB detail row not found"
+
+    assert persisted_detail["stable_live_key_hash"], (
+        "persisted_open detail row must carry stable_live_key_hash"
+    )
+    assert persisted_detail["live_state"] == "persisted_open"
+    assert_live_row_contract(persisted_detail)
+
+
+def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
+    """Verification items 12, 16: the stable_live_key_hash must be
+    identical for the virtual row and the persisted_open DB row when
+    only ``is_persisted`` / ``persisted_activity_id`` change. This is
+    the bridge-level version of ``test_stable_live_key_survives_virtual_to_persisted_transition``.
+    """
+    aid, start_time = _create_real_open_activity(
+        app_name="AppA",
+        process_name="AppA.exe",
+        elapsed_seconds=45,
+    )
+    # Virtual snapshot (unpersisted).
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=45,
+            is_persisted=False,
+            start_time=start_time,
+        )
+    )
+    recent_virtual = bridge.get_recent_activities()
+    virtual_item = None
+    for item in recent_virtual["activities"]:
+        if item.get("is_virtual_live"):
+            virtual_item = item
+            break
+    assert virtual_item is not None
+    virtual_hash = virtual_item["stable_live_key_hash"]
+    assert virtual_hash
+
+    # Persisted_open snapshot (same activity identity).
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=45,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+    recent_persisted = bridge.get_recent_activities()
+    persisted_item = None
+    for item in recent_persisted["activities"]:
+        if int(item.get("activity_id") or 0) == aid:
+            persisted_item = item
+            break
+    assert persisted_item is not None
+    persisted_hash = persisted_item["stable_live_key_hash"]
+    assert persisted_hash
+
+    # The stable_live_key_hash must be identical.
+    assert virtual_hash == persisted_hash, (
+        "stable_live_key_hash must not change across virtual → persisted_open"
+    )

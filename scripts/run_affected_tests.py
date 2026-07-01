@@ -76,7 +76,7 @@ CONFTEST_BROAD_SUITE: list[str] = [
 
 
 # ---------------------------------------------------------------------------
-# Path -> tests mapping (sections A..L; C refined into C1..C9 in Phase TG2/5H/5I).
+# Path -> tests mapping (sections A..N; C refined into C1..C9 in Phase TG2/5H/5I).
 #
 # Each rule is a dict with:
 #   id        : human label
@@ -150,6 +150,7 @@ RULES: list[dict] = [
             "tests/test_app_runtime_privacy_gate.py",
             "tests/test_ui_backend_boundary.py",
             "tests/test_bridge_refresh_state_and_projection.py",
+            "tests/test_live_display_contract.py",
         ],
         "smoke": [],
         "warnings": [],
@@ -522,6 +523,8 @@ RULES: list[dict] = [
             "worktrace/services/live_display_service.py",
             "worktrace/api/live_display_api.py",
             "worktrace/services/activity_service.py",
+            "worktrace/webview_ui/bridge_overview.py",
+            "worktrace/webview_ui/bridge_timeline.py",
         ],
         "tests": [
             "tests/test_bridge_refresh_state_and_projection.py",
@@ -534,8 +537,35 @@ RULES: list[dict] = [
             "tests/test_ui_backend_boundary.py",
             "tests/test_live_display_contract.py",
             "tests/test_activity_service.py",
+            "tests/webview/test_timeline_static_contract.py",
+            "tests/test_run_affected_tests.py",
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
+        "warnings": [],
+    },
+    {
+        "id": "N. Activity lifecycle boundary",
+        "triggers": [
+            "worktrace/services/activity_lifecycle_service.py",
+            "worktrace/services/activity_service.py",
+            "worktrace/services/recovery_service.py",
+            "worktrace/collector/",
+        ],
+        "tests": [
+            "tests/test_activity_lifecycle_service.py",
+            "tests/test_activity_service.py",
+            "tests/test_collector.py",
+            "tests/test_state_machine.py",
+            "tests/test_clipboard_service.py",
+            "tests/test_recovery_service.py",
+            "tests/test_project_rules_automatic_rules.py",
+            "tests/test_live_display_contract.py",
+            "tests/test_timeline_service.py",
+            "tests/test_statistics_service.py",
+            "tests/test_run_affected_tests.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [],
         "warnings": [],
     },
 ]
@@ -586,7 +616,7 @@ def _matches_trigger(changed: str, trigger: str) -> bool:
 def select_targets(changed_files: Iterable[str]) -> Selection:
     """Map changed files to a conservative, ordered, de-duplicated test set.
 
-    Sections A..L (C refined into C1..C9 in Phase TG2/5H/5I) are matched against
+    Sections A..N (C refined into C1..C9 in Phase TG2/5H/5I) are matched against
     every non-test changed file. Test-file
     changes (section L) are matched first so the most directly-affected test
     runs first. Unknown ``worktrace/`` source changes (section K) fall back

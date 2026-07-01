@@ -147,7 +147,7 @@ Use:
 ```text
 Python 3.11+
 SQLite
-CustomTkinter
+pywebview + Microsoft Edge WebView2 Runtime
 pywin32
 psutil
 openpyxl
@@ -157,9 +157,17 @@ pytest
 
 ### 4.2 UI Choice
 
-Use `CustomTkinter` for v0.1 Lite.
+The shipping UI is **WebView-only** (`pywebview` + Microsoft Edge WebView2
+Runtime). There is no Tkinter / CustomTkinter fallback. The legacy
+`worktrace/ui` package has been deleted. Start with
+`python -m worktrace.main`.
 
-Do not use Streamlit as the final UI. Streamlit may be used only for throwaway demos, not for the architecture implemented from this document.
+Frontend resources are classic local scripts under
+`worktrace/webview_ui/` (`index.html`, `styles.css`, `js/*.js`) loaded via
+plain `<script src>` tags. No ES modules, no bundler, no Node / build step,
+no browser storage, no network requests.
+
+Do not use Streamlit, Tkinter, or CustomTkinter as the final UI.
 
 ### 4.3 Windows API Isolation
 
@@ -190,7 +198,7 @@ Runtime model:
 
 ```text
 Main process
-├── UI thread: CustomTkinter main loop
+├── UI thread: WebView (pywebview) main loop
 └── Collector thread: background collector loop
 ```
 
@@ -205,18 +213,16 @@ The collector runs only while the WorkTrace app is running.
 
 ### 5.2 Thread Boundaries
 
-The UI thread owns all UI widgets.
+The UI thread owns the WebView window and all DOM rendering.
 
 The collector thread must not directly update UI widgets.
 
-UI must refresh by polling database and collector status using Tkinter `after()`.
-
-Default UI refresh interval:
-
-```text
-10 seconds for full page data refresh
-1 second for current-activity label and live duration refresh
-```
+UI refreshes via a 1-second JavaScript heartbeat
+(`App.applyLocalTicker` + `runRevisionCheck`). The ticker updates DOM
+text only (no bridge call); a lightweight `get_refresh_state` revision
+check triggers a heavy refresh only when the structural
+`refresh_revision` changes. There is no legacy `Tkinter after()` polling
+loop and no parallel auto-refresh timer.
 
 Collector thread communicates state through:
 
@@ -371,6 +377,7 @@ Create this structure:
 worktrace/
 │
 ├── main.py
+├── webview_main.py
 ├── config.py
 ├── constants.py
 ├── db.py
@@ -383,6 +390,7 @@ worktrace/
 ├── collector/
 │   ├── __init__.py
 │   ├── collector.py
+│   ├── auto_activity_recorder.py
 │   ├── state_machine.py
 │   ├── heartbeat.py
 │   └── single_instance.py
@@ -395,36 +403,76 @@ worktrace/
 │
 ├── services/
 │   ├── __init__.py
-│   ├── activity_service.py
+│   ├── activity_service.py          (low-level DB/CRUD helper)
+│   ├── activity_lifecycle_service.py (open-row command facade)
+│   ├── live_display_service.py       (live projection contract owner)
 │   ├── project_service.py
+│   ├── project_inference_service.py
 │   ├── rule_service.py
+│   ├── folder_rule_service.py
 │   ├── settings_service.py
 │   ├── statistics_service.py
+│   ├── timeline_service.py
 │   ├── recovery_service.py
 │   ├── privacy_service.py
 │   └── export_service.py
 │
-├── ui/
+├── api/                              (the ONLY backend layer the bridge may import)
 │   ├── __init__.py
-│   ├── app.py
-│   ├── timeline_view.py
-│   ├── statistics_view.py
-│   ├── settings_view.py
-│   └── first_run_dialog.py
+│   ├── activity_api.py
+│   ├── app_api.py
+│   ├── live_display_api.py
+│   ├── project_api.py
+│   ├── rule_api.py
+│   ├── settings_api.py
+│   ├── statistics_api.py
+│   ├── timeline_api.py
+│   └── export_api.py
 │
-├── exports/
-│   ├── __init__.py
-│   └── excel_exporter.py
+├── webview_ui/                       (WebView-only shipping UI)
+│   ├── bridge.py
+│   ├── bridge_common.py
+│   ├── bridge_overview.py
+│   ├── bridge_timeline.py
+│   ├── bridge_statistics.py
+│   ├── bridge_settings.py
+│   ├── bridge_rules.py
+│   ├── bridge_dialogs.py
+│   ├── index.html
+│   ├── styles.css
+│   └── js/
+│       ├── core.js
+│       ├── overview.js
+│       ├── timeline.js
+│       ├── timeline_correction.js
+│       ├── statistics.js
+│       ├── settings.js
+│       ├── rules*.js
+│       └── init.js
 │
 └── tests/
-    ├── test_state_machine.py
-    ├── test_activity_service.py
-    ├── test_rule_service.py
-    ├── test_privacy_service.py
-    ├── test_statistics_service.py
-    ├── test_recovery_service.py
-    └── test_export_service.py
+    └── ...
 ```
+
+**Architecture boundary (enforced by `tests/test_ui_backend_boundary.py`):**
+
+```text
+WebView (index.html / js/*.js / styles.css)
+   └─> Python bridge (worktrace.webview_ui.bridge)
+         └─> worktrace.api  (the ONLY backend layer the bridge may import)
+               └─> worktrace.services
+                     ├─> activity_lifecycle_service  (open-row command facade)
+                     │     └─> activity_service + project_inference_service
+                     │           + resource_service + session_boundary_service
+                     ├─> live_display_service  (live projection contract)
+                     └─> worktrace.db  (schema.sql is the single source of truth)
+   (collector thread ──> worktrace.collector ──> activity_lifecycle_service)
+```
+
+The bridge may import `worktrace.api` and nothing else from the backend.
+The bridge must NOT import `worktrace.services`, `worktrace.db`,
+`worktrace.collector`, `worktrace.security`, `worktrace.runtime`, or
+`worktrace.config` directly.
 
 ---
 
@@ -1078,7 +1126,10 @@ If the previous activity has no existing concrete project, do not create a sugge
 
 ### 23.1 activity_service.py
 
-Responsible for activity CRUD.
+Responsible for low-level activity CRUD (insert / update / select / close
+helpers). It is **not** the business state-transition owner. Production
+callers (collector / recovery / clipboard / shutdown) should route open-row
+lifecycle commands through `activity_lifecycle_service` (Section 23.9).
 
 Required functions:
 
@@ -1181,6 +1232,57 @@ export_all_local_data(path: str) -> str
 clear_all_local_data(confirm: bool) -> None
 ```
 
+### 23.9 activity_lifecycle_service.py
+
+**Open-row state transition command facade.** This service is the sole
+owner of all open-row lifecycle commands. The collector, recovery,
+clipboard force-persist, midnight split, and shutdown paths must route
+through it rather than hand-rolling `create_activity` →
+`finalize_created_activity` → `close_activity` sequences.
+
+Responsibilities:
+
+- create / start a new open activity (closing old open rows first);
+- virtual → persisted_open persistence (30-second threshold gate);
+- clipboard force persist (bypasses elapsed-time gate, `STATUS_NORMAL`
+  only);
+- close a single open activity;
+- close all open activities (shutdown / pause);
+- midnight anchor persist + split;
+- recovery cross-midnight segment creation + first-half close;
+- post-close project inference / automatic-rules convergence via the
+  unified `finalize_closed_activity_ids` helper;
+- persisted_open creation followed by open-row project sync.
+
+`activity_service.py` retains low-level DB / CRUD helpers
+(`_close_activity_in_conn`, `insert` / `update` / `select`) but is no
+longer the preferred business entry point.
+
+### 23.10 live_display_service.py
+
+**Live projection contract owner.** This service is the unified
+live-display model. There is no second projection builder. Every live
+row exposed to Recent / Timeline session / Timeline detail / current
+activity — whether virtual (snapshot) or persisted_open (DB row) —
+must carry the same set of display-safe fields:
+
+```text
+live_state stable_live_key stable_live_key_hash live_display_key
+live_started_at_epoch_ms carry_seconds duration_seconds
+is_virtual_live is_in_progress is_live_projected
+edit_disabled disable_reason source
+```
+
+The bridge applies the persisted-open overlay
+(`apply_persisted_open_overlay_to_row`) so DB rows that match the
+current snapshot carry the same `stable_live_key_hash` as the virtual
+row. This lets the frontend ticker use a single continuity key
+(`App.liveContinuityKey`) across the virtual → persisted_open
+transition.
+
+Statistics / Export remain closed-only; the live overlay must not
+alter closed-only semantics.
+
 ---
 
 ## 24. UI Requirements
@@ -1193,16 +1295,16 @@ Use 5 pages:
 4. Project Rules
 5. Settings and Privacy
 
-The collector thread must not directly update UI widgets. UI must refresh via Tkinter `after()` polling.
-Pages are created lazily on first visit, then stay mounted in the shell and switch with `tkraise()` to avoid visible re-creation flicker. Full data refreshes should be incremental where possible; live current-activity labels and visible durations are refreshed by the app shell every 1 second without rebuilding page content. Time Details must use value-only Treeview updates while session/detail structure is stable, falling back to one full refresh when rows are added, removed, or reordered. Resize and restore use separate visual-suspend strategies: resize may temporarily unmap the content area under a content cover, while restore keeps content mounted under a full-window cover and defers heavy refresh until after reveal.
+The collector thread must not directly update UI widgets. UI refreshes via a 1-second JavaScript heartbeat.
+Pages are created lazily on first visit, then stay mounted in the shell and switch with CSS visibility. Full data refreshes should be incremental where possible; live current-activity labels and visible durations are refreshed by the heartbeat ticker every 1 second without rebuilding page content. The Timeline detail list uses monotonic render state seeding so natural duration growth does not trigger a structural refresh.
 
 Displayed UI text must be copyable. Labels, buttons, checkboxes, option menus, and segmented controls provide right-click copy menus for their visible text. Text fields and text boxes keep native copy behavior. Time Details tables provide right-click copy for the current cell, current row, and current page text; global `Ctrl+C` copies selected table rows before falling back to the active page text.
 
 Default refresh interval:
 
 ```text
-10 seconds
-1 second for live current-activity and duration values
+1-second heartbeat (ticker + lightweight revision check)
+Heavy page refresh only when structural refresh_revision changes
 ```
 
 ### 24.1 Overview Page
@@ -1405,8 +1507,8 @@ Rules:
 8. Persisted activity durations must be monotonic: live projections, `extra_seconds`, close operations, and recovery must never reduce an already stored duration.
 9. Update visible Overview KPI durations, Time Details session/detail durations, and Statistics durations every second from the current activity snapshot without requiring a full page refresh.
 10. While a new current activity is still below the 30-second history threshold, only the Overview recent-project row and Time Details project/session row temporarily carry those seconds on the previous confirmed project. The current-activity label, KPI summaries, Statistics, and activity details keep using the real current snapshot, and that snapshot must preview folder/keyword project rules before falling back to parent-folder suggestions.
-11. Suspend heavy page refresh and live duration updates while the root window is actively resizing or minimized. Resize uses a stable content-area cover and can run one catch-up refresh before reveal. Restore uses a full-window cover, keeps the content tree mounted, reveals the complete UI first, then runs one delayed merged refresh.
-12. On Windows, rely on Tk `<Unmap>`, `<Map>`, and `<Configure>` events for minimize/restore handling. Native WndProc subclassing is disabled to avoid Python runtime/GIL crashes.
+11. Suspend heavy page refresh and live duration updates while the WebView window is actively resizing or minimized. Resize uses a stable content-area cover and can run one catch-up refresh before reveal. Restore uses a full-window cover, keeps the content tree mounted, reveals the complete UI first, then runs one delayed merged refresh.
+12. On Windows, rely on the WebView window-state events for minimize/restore handling. Native WndProc subclassing is disabled to avoid Python runtime/GIL crashes.
 
 ---
 

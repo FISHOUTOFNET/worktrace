@@ -83,10 +83,16 @@
             // Phase 6H-followup: reset the monotonic render state for this
             // recent row so the backend baseline can replace any prior
             // ticker-projected value without a false "rollback" guard.
-            App.resetMonotonicRenderState("recent-" + i);
+            // The continuity key MUST use App.liveContinuityKey() so the
+            // ticker (which also uses liveContinuityKey) can locate the
+            // seeded state. Using the array index ("recent-" + i) would
+            // break the virtual → persisted_open transition because the
+            // ticker key is based on stable_live_key_hash, not the index.
+            var recentKey = App.liveContinuityKey(item, "recent");
+            App.resetMonotonicRenderState(recentKey);
             // Seed the monotonic state with the backend baseline so the
             // ticker's first projection does not appear to roll back.
-            App._monotonicRenderState["recent-" + i] = { lastSeconds: isNaN(durSec) ? 0 : durSec };
+            App._monotonicRenderState[recentKey] = { lastSeconds: isNaN(durSec) ? 0 : durSec };
         }
         listEl.innerHTML = html;
     }

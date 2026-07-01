@@ -80,7 +80,12 @@
                 + '<div class="timeline-item-count">' + App.escapeHtml(String(s.event_count || 0) + " 条") + '</div>'
                 + '</div>'
                 + '</div>';
-            sessionContinuityKeys.push({ key: "session-" + s.session_id, sec: isNaN(sDurSec) ? 0 : sDurSec });
+            // The continuity key MUST use App.liveContinuityKey() so the
+            // ticker (which also uses liveContinuityKey) can locate the
+            // seeded state. Using "session-" + session_id would break the
+            // virtual → persisted_open transition because the ticker key
+            // is based on stable_live_key_hash, not session_id.
+            sessionContinuityKeys.push({ key: App.liveContinuityKey(s, "session"), sec: isNaN(sDurSec) ? 0 : sDurSec });
         }
         listEl.innerHTML = html;
         // Phase 6H-followup: reset + seed the monotonic render state for
@@ -443,13 +448,17 @@
         detailsList.innerHTML = html;
         // Phase 6H-followup: seed the monotonic render state for each detail
         // row so the ticker's first projection does not appear to roll back.
-        // The continuity key is per-activity-id so re-renders of the same
-        // session (same activity ids) stay monotonic across heartbeat refreshes.
+        // The continuity key MUST use App.liveContinuityKey() so the ticker
+        // (which also uses liveContinuityKey) can locate the seeded state.
+        // Using "detail-" + activity_id would break the virtual →
+        // persisted_open transition because the ticker key is based on
+        // stable_live_key_hash, not activity_id.
         for (var di = 0; di < detailContinuityKeys.length; di++) {
             var dk = detailContinuityKeys[di];
             var activitiesRef = data.activities || [];
-            var aidFor = activitiesRef[dk.index] ? (activitiesRef[dk.index].activity_id || 0) : 0;
-            App._monotonicRenderState["detail-" + aidFor] = { lastSeconds: dk.sec };
+            var detailItem = activitiesRef[dk.index] || {};
+            var detailKey = App.liveContinuityKey(detailItem, "detail");
+            App._monotonicRenderState[detailKey] = { lastSeconds: dk.sec };
         }
 
         // Bind per-activity "编辑时间" button handlers. Event delegation is

@@ -24,7 +24,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..services.live_display_service import (
+    LIVE_ROW_CONTRACT_FIELDS,
+    apply_live_row_contract,
+    apply_persisted_open_overlay_to_row,
+    assert_live_row_contract,
     build_current_activity_summary,
+    build_live_row_contract,
     build_persisted_open_overlay,
     build_virtual_detail_row,
     build_virtual_session,
@@ -41,7 +46,12 @@ from ..services.live_display_service import (
 
 
 __all__ = [
+    "LIVE_ROW_CONTRACT_FIELDS",
+    "apply_live_row_contract",
+    "apply_persisted_open_overlay_to_row",
+    "assert_live_row_contract",
     "build_current_activity_summary",
+    "build_live_row_contract",
     "build_persisted_open_overlay",
     "build_virtual_detail_row",
     "build_virtual_session",

@@ -20,6 +20,12 @@ from ..constants import (
 from ..resources.resource_builders import resource_signature
 from ..resources.types import DetectedResource
 from ..services import activity_service, project_service, session_boundary_service
+from ..services.activity_lifecycle_service import (
+    close_activity as lifecycle_close_activity,
+    force_persist_open_activity_for_clipboard,
+    persist_midnight_anchor,
+    persist_open_activity_if_ready,
+)
 from ..services.settings_service import get_setting, set_setting
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
@@ -76,7 +82,10 @@ class AutoActivityRecorder:
         status = self.current_payload.get("status")
         self._ensure_persisted_if_ready(end_time)
         if self.persisted_activity_id is not None:
-            activity_service.close_activity(
+            # Close via the ActivityLifecycle Command Facade so the
+            # open → closed transition goes through the unified
+            # close-finalize helper (project inference / automatic rules).
+            lifecycle_close_activity(
                 self.persisted_activity_id,
                 end_time,
                 duration_seconds=elapsed + self.current_extra_seconds,
@@ -147,42 +156,28 @@ class AutoActivityRecorder:
             return
 
         source = SOURCE_AUTO if status == STATUS_NORMAL else SOURCE_SYSTEM
-        activity_id = activity_service.create_activity(
-            start_time=self.current_start_time,
-            source=source,
-            **self.current_payload,
-        )
-        activity_service.finalize_created_activity(activity_id)
+        # Persist via the ActivityLifecycle Command Facade so the open-row
+        # state machine has a single owner. The facade handles create +
+        # finalize + open-row project sync (for STATUS_NORMAL). The
+        # 30-second threshold gate stays here (the facade does not
+        # re-check it); clipboard force-persist bypasses the threshold
+        # but is restricted to STATUS_NORMAL by the ``allowed_statuses``
+        # set above.
+        if force:
+            activity_id = force_persist_open_activity_for_clipboard(
+                start_time=self.current_start_time,
+                source=source,
+                payload=self.current_payload,
+            )
+        else:
+            activity_id = persist_open_activity_if_ready(
+                start_time=self.current_start_time,
+                source=source,
+                payload=self.current_payload,
+            )
         self.persisted_activity_id = activity_id
 
         if status == STATUS_NORMAL:
-            # Converge the freshly-persisted open row's project assignment
-            # before any snapshot / display read. ``finalize_created_activity``
-            # routes through ``process_new_activity`` which skips in-progress
-            # rows, so without this call the open row would keep the
-            # ``uncategorized`` assignment written by ``create_activity``
-            # even when resource-first inference had already resolved a
-            # concrete project. This re-uses the existing inference
-            # (``assign_project_for_activity``) via the narrow
-            # ``sync_persisted_open_activity_project`` helper and never
-            # creates a new project. The helper is a no-op for rows that
-            # are already concrete (folder_rule / keyword_rule /
-            # midnight_anchor) or manually assigned, so it does not flap
-            # an in-flight assignment.
-            from ..services.project_inference_service import (
-                sync_persisted_open_activity_project,
-            )
-
-            try:
-                sync_persisted_open_activity_project(activity_id)
-            except Exception:
-                # Defensive: an inference failure must not discard the
-                # just-persisted open row. The assignment simply stays at
-                # whatever ``create_activity`` wrote (``uncategorized``).
-                logging.exception(
-                    "open-row project sync failed for activity_id=%s",
-                    activity_id,
-                )
             pending = self._get_pending_short_seconds()
             if pending > 0:
                 self.current_extra_seconds += pending
@@ -191,13 +186,15 @@ class AutoActivityRecorder:
     def _persist_midnight_anchor(self, project_id: int, at_time: str) -> None:
         if self.current_payload is None or self.current_start_time is None or self.persisted_activity_id is not None:
             return
-        activity_id = activity_service.create_activity(
+        # Persist the midnight-anchor open activity via the lifecycle
+        # facade so create + finalize + midnight_anchor assignment go
+        # through a single command owner.
+        activity_id = persist_midnight_anchor(
             start_time=self.current_start_time,
             source=SOURCE_AUTO,
-            **self.current_payload,
+            payload=self.current_payload,
+            project_id=project_id,
         )
-        activity_service.finalize_created_activity(activity_id)
-        activity_service.apply_midnight_anchor_assignment(activity_id, project_id)
         self.persisted_activity_id = activity_id
         self.current_extra_seconds = 0
         self._update_persisted_progress(at_time)

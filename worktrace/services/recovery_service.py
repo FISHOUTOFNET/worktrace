@@ -61,69 +61,62 @@ def recover_unclosed_records() -> None:
     # UPDATE above previously bypassed project inference entirely, which
     # left recovered rows in the "uncategorized" assignment even when a
     # concrete inferred project was available.
-    from .project_inference_service import process_new_activity
+    #
+    # Routed through the unified close-finalize helper
+    # (``activity_lifecycle_service.finalize_closed_activity_ids``) so
+    # recovery no longer retains a second unconverged lifecycle path.
+    from .activity_lifecycle_service import finalize_closed_activity_ids
 
-    for aid in recovered_activity_ids:
-        try:
-            process_new_activity(aid)
-        except Exception:
-            # Defensive: never let an inference failure on one row
-            # prevent the remaining rows from being processed. The row
-            # is already closed; its assignment simply stays at whatever
-            # was inferred at create time.
-            pass
+    finalize_closed_activity_ids(recovered_activity_ids)
     record_restart_boundary_if_needed()
 
 
 def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
+    from .activity_lifecycle_service import (
+        recover_cross_midnight_segment,
+        recover_first_half_close,
+    )
+
     start_dt = datetime.strptime(row["start_time"], TIME_FORMAT)
     first_midnight = datetime.combine(start_dt.date() + timedelta(days=1), datetime_time.min)
     first_midnight_text = first_midnight.strftime(TIME_FORMAT)
     original_project_id = row["project_id"] if project_service.is_concrete_project_id(row["project_id"]) else None
     original_id = int(row["id"])
-    with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE activity_log
-            SET end_time = ?, duration_seconds = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                first_midnight_text,
-                max(0, int((first_midnight - start_dt).total_seconds())),
-                now_str(),
-                original_id,
-            ),
-        )
-    # Verification item 9: converge project inference / automatic rules
-    # for the recovered first-half row so its persisted project assignment
-    # matches the close_activity path. Previously this row was closed via
-    # a direct UPDATE that bypassed project inference entirely.
-    from .project_inference_service import process_new_activity
-
-    try:
-        process_new_activity(original_id)
-    except Exception:
-        pass
+    # Close the first half of the original row at first_midnight via the
+    # lifecycle facade so the close-finalize helper converges project
+    # inference / automatic rules on it (verification item 9). Previously
+    # this was a direct SQL UPDATE that bypassed project inference entirely,
+    # leaving the first-half row in the "uncategorized" assignment.
+    recover_first_half_close(
+        original_id,
+        first_midnight_text,
+        duration_seconds=max(0, int((first_midnight - start_dt).total_seconds())),
+    )
     current_start = first_midnight
     last_activity_id: int | None = None
     while current_start < end_dt:
         next_midnight = datetime.combine(current_start.date() + timedelta(days=1), datetime_time.min)
         current_end = min(end_dt, next_midnight)
-        activity_id = activity_service.create_activity(
-            row["app_name"],
-            row["process_name"],
-            row["window_title"],
-            status=row["status"],
-            source=row["source"],
+        # Create + close each recovered cross-midnight segment via the
+        # lifecycle facade so the open-row state machine has a single
+        # owner (no second hand-rolled create/finalize/close sequence).
+        # The midnight_anchor assignment is applied inside the facade when
+        # status is NORMAL and a concrete project_id is available.
+        payload = {
+            "app_name": row["app_name"],
+            "process_name": row["process_name"],
+            "window_title": row["window_title"],
+            "file_path_hint": row["file_path_hint"],
+            "note": row["note"],
+        }
+        activity_id = recover_cross_midnight_segment(
             start_time=current_start.strftime(TIME_FORMAT),
-            file_path_hint=row["file_path_hint"],
-            note=row["note"],
+            end_time=current_end.strftime(TIME_FORMAT),
+            source=row["source"],
+            status=row["status"],
+            payload=payload,
+            project_id=original_project_id,
         )
-        activity_service.finalize_created_activity(activity_id)
-        if row["status"] == STATUS_NORMAL and original_project_id is not None:
-            activity_service.apply_midnight_anchor_assignment(activity_id, int(original_project_id))
-        activity_service.close_activity(activity_id, current_end.strftime(TIME_FORMAT))
         session_boundary_service.record_boundary(current_start.strftime(TIME_FORMAT), "midnight")
         last_activity_id = activity_id
         current_start = current_end

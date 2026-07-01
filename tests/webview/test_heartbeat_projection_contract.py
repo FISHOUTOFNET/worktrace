@@ -884,3 +884,85 @@ def test_revision_check_passes_report_date():
     assert "get_refresh_state" in body, (
         "runRevisionCheck must call get_refresh_state"
     )
+
+
+# --- Architecture contract: unified live continuity key for seeding --------
+
+
+def _strip_js_comments(src: str) -> str:
+    """Remove block comments and line comments so the forbidden-pattern
+    scan does not false-positive on documentation that mentions the old
+    patterns."""
+    import re
+
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
+    src = re.sub(r"//[^\n]*", "", src)
+    return src
+
+
+def test_show_recent_seeds_via_live_continuity_key():
+    """Architecture contract: ``showRecent`` must seed the monotonic
+    render state via ``App.liveContinuityKey(item, "recent")``. The array
+    index (``"recent-" + i``) MUST NOT be used as the seeding key because
+    it changes across the virtual → persisted_open transition while
+    ``stable_live_key_hash`` stays the same."""
+    src = _strip_js_comments(read_js("overview.js"))
+    body = func_body(src, "showRecent")
+    assert "liveContinuityKey" in body, (
+        "showRecent must call App.liveContinuityKey to build the seeding key"
+    )
+    # The old index-based concatenation must not appear in the code.
+    for forbidden in ('"recent-" +', "'recent-' +"):
+        assert forbidden not in body, (
+            "showRecent must not use " + forbidden + " as a live row key; "
+            "use App.liveContinuityKey(item, 'recent') instead"
+        )
+
+
+def test_show_timeline_seeds_via_live_continuity_key():
+    """Architecture contract: ``showTimeline`` must seed the monotonic
+    render state via ``App.liveContinuityKey(s, "session")``. The session
+    id (``"session-" + session_id``) MUST NOT be used as the seeding key."""
+    src = _strip_js_comments(read_js("timeline.js"))
+    body = func_body(src, "showTimeline")
+    assert "liveContinuityKey" in body, (
+        "showTimeline must call App.liveContinuityKey to build the seeding key"
+    )
+    for forbidden in ('"session-" +', "'session-' +"):
+        assert forbidden not in body, (
+            "showTimeline must not use " + forbidden + " as a live row key; "
+            "use App.liveContinuityKey(s, 'session') instead"
+        )
+
+
+def test_render_session_details_seeds_via_live_continuity_key():
+    """Architecture contract: ``renderSessionDetails`` must seed the
+    monotonic render state via ``App.liveContinuityKey(item, "detail")``.
+    The activity id (``"detail-" + activity_id``) MUST NOT be used as the
+    seeding key."""
+    src = _strip_js_comments(read_js("timeline.js"))
+    body = func_body(src, "renderSessionDetails")
+    assert "liveContinuityKey" in body, (
+        "renderSessionDetails must call App.liveContinuityKey to build the "
+        "seeding key"
+    )
+    for forbidden in ('"detail-" +', "'detail-' +"):
+        assert forbidden not in body, (
+            "renderSessionDetails must not use " + forbidden + " as a live "
+            "row key; use App.liveContinuityKey(item, 'detail') instead"
+        )
+
+
+def test_live_continuity_key_is_single_source_of_truth():
+    """Architecture contract: ``liveContinuityKey`` in core.js must be the
+    ONLY place that constructs a live-row continuity key. The function
+    must use ``stable_live_key_hash`` as the primary anchor so the
+    continuity survives the virtual → persisted_open transition."""
+    src = _strip_js_comments(read_js("core.js"))
+    assert "function liveContinuityKey" in src, (
+        "core.js must define function liveContinuityKey"
+    )
+    body = func_body(src, "liveContinuityKey")
+    assert "stable_live_key_hash" in body, (
+        "liveContinuityKey must use stable_live_key_hash for continuity"
+    )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -45,14 +46,45 @@ def create_activity(
     manual_override: bool = False,
     resource: DetectedResource | None = None,
 ) -> int:
+    """Low-level insert of a new open activity row.
+
+    .. warning::
+
+        Production business state transitions should prefer
+        ``activity_lifecycle_service`` (the ActivityLifecycle Command
+        Facade). This low-level helper is retained for compatibility /
+        fixtures / direct row insertion, but it is no longer the preferred
+        business entry point. The lifecycle facade ensures every open-row
+        transition (create / close / virtual → persisted_open / clipboard
+        force-persist / midnight split / recovery) goes through a single
+        command owner.
+
+    This helper closes every pre-existing open row (``end_time IS NULL``)
+    before inserting the new open row. The closed ids are collected and,
+    **after the DB transaction exits**, routed through
+    ``activity_lifecycle_service.finalize_closed_activity_ids`` so project
+    inference / automatic rules converge on each closed row — matching the
+    behaviour of ``close_activity`` / ``close_current_open_record``.
+    Previously the close happened inside the transaction but the inference
+    was never triggered, leaving closed rows in the ``uncategorized``
+    assignment even when a concrete folder / keyword rule could resolve a
+    project.
+
+    The inference runs outside the transaction to avoid nested-connection
+    / lock issues. An inference failure on one row is logged and never
+    blocks the remaining rows or the new activity creation.
+    """
     ts = now_str()
     start = start_time or ts
     project = project_id if project_id is not None else get_or_create_uncategorized_project()
     manual_assignment = bool(manual_override or project_id is not None)
+    closed_ids: list[int] = []
     with get_connection() as conn:
         open_rows = conn.execute("SELECT id FROM activity_log WHERE end_time IS NULL").fetchall()
         for row in open_rows:
-            _close_activity_in_conn(conn, int(row["id"]), start)
+            aid = int(row["id"])
+            _close_activity_in_conn(conn, aid, start)
+            closed_ids.append(aid)
         cur = conn.execute(
             """
             INSERT INTO activity_log(
@@ -99,7 +131,21 @@ def create_activity(
             ),
         )
         _write_resource_in_conn(conn, activity_id, app_name, process_name, window_title, file_path_hint, status, resource, start)
-        return activity_id
+    # Transaction has exited. Run the unified close-finalize helper on
+    # every closed row so project inference / automatic rules converge
+    # consistently with the close_activity / close_current_open_record
+    # path. Lazy import avoids a circular dependency
+    # (activity_lifecycle_service imports activity_service at module level).
+    from .activity_lifecycle_service import finalize_closed_activity_ids
+
+    try:
+        finalize_closed_activity_ids(closed_ids)
+    except Exception:
+        # Defensive: never let a finalize failure prevent the caller from
+        # receiving the new activity_id. The closed rows are already
+        # closed; their assignments simply stay at create-time inference.
+        logging.exception("create_activity close-finalize failed for closed_ids=%s", closed_ids)
+    return activity_id
 
 
 def _close_activity_in_conn(conn, activity_id: int, end_time: str, duration_seconds: int | None = None) -> None:
@@ -179,9 +225,14 @@ def close_activity(activity_id: int, end_time: str, duration_seconds: int | None
     # ``process_new_activity`` skips activities whose ``end_time IS NULL``;
     # without this re-trigger, activities created in-progress and later closed
     # would never receive automatic rule application.
-    from .project_inference_service import process_new_activity
+    #
+    # Routed through the unified close-finalize helper
+    # (``activity_lifecycle_service.finalize_closed_activity_ids``) so every
+    # open → closed transition goes through a single command owner. Lazy
+    # import avoids a circular dependency.
+    from .activity_lifecycle_service import finalize_closed_activity_ids
 
-    process_new_activity(activity_id)
+    finalize_closed_activity_ids([activity_id])
 
 
 def close_current_open_record(end_time: str | None = None) -> None:
@@ -207,21 +258,13 @@ def close_current_open_record(end_time: str | None = None) -> None:
             aid = int(row["id"])
             _close_activity_in_conn(conn, aid, end)
             closed_ids.append(aid)
-    # Run project inference / automatic rules for each closed row so the
-    # persisted project assignment is consistent with the close_activity
-    # path. ``process_new_activity`` skips in-progress rows, so the
-    # inference only fires after the row is actually closed above.
-    from .project_inference_service import process_new_activity
+    # Run the unified close-finalize helper so project inference / automatic
+    # rules converge on each closed row, consistent with the close_activity
+    # path. Lazy import avoids a circular dependency
+    # (activity_lifecycle_service imports activity_service at module level).
+    from .activity_lifecycle_service import finalize_closed_activity_ids
 
-    for aid in closed_ids:
-        try:
-            process_new_activity(aid)
-        except Exception:
-            # Defensive: never let an inference failure on one row
-            # prevent the remaining rows from being closed. The row is
-            # already closed; its assignment simply stays at whatever
-            # was inferred at create time.
-            pass
+    finalize_closed_activity_ids(closed_ids)
 
 
 def increment_activity_duration(activity_id: int, seconds: int) -> None:

@@ -1122,3 +1122,112 @@ def test_context_service_py_selects_l1_targets(runner):
         assert expected in sel.pytest_targets, (
             f"context_service.py must trigger L1 target: {expected}"
         )
+
+
+# ---------------------------------------------------------------------------
+# N. Activity lifecycle boundary -> lifecycle + collector + recovery + state
+# machine + clipboard + automatic rules + live display + timeline + statistics
+# ---------------------------------------------------------------------------
+
+
+def test_activity_lifecycle_service_py_selects_lifecycle_boundary_suite(runner):
+    """N: activity_lifecycle_service.py is the open-row state transition
+    command facade. Changes must trigger the full lifecycle boundary
+    suite so collector / state machine / recovery / clipboard / automatic
+    rules / live display / timeline / statistics / boundary tests all
+    run."""
+    sel = runner.select_targets([
+        "worktrace/services/activity_lifecycle_service.py",
+    ])
+    for expected in (
+        "tests/test_activity_lifecycle_service.py",
+        "tests/test_activity_service.py",
+        "tests/test_collector.py",
+        "tests/test_state_machine.py",
+        "tests/test_clipboard_service.py",
+        "tests/test_recovery_service.py",
+        "tests/test_project_rules_automatic_rules.py",
+        "tests/test_live_display_contract.py",
+        "tests/test_timeline_service.py",
+        "tests/test_statistics_service.py",
+        "tests/test_run_affected_tests.py",
+        "tests/test_ui_backend_boundary.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"activity_lifecycle_service.py must select N target: {expected}"
+        )
+
+
+def test_recovery_service_py_selects_lifecycle_boundary_suite(runner):
+    """N: recovery_service.py carries cross-midnight recovery that now
+    routes through the lifecycle facade. Changes must trigger the
+    lifecycle boundary suite."""
+    sel = runner.select_targets(["worktrace/services/recovery_service.py"])
+    for expected in (
+        "tests/test_activity_lifecycle_service.py",
+        "tests/test_recovery_service.py",
+        "tests/test_collector.py",
+        "tests/test_state_machine.py",
+        "tests/test_live_display_contract.py",
+        "tests/test_ui_backend_boundary.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"recovery_service.py must select N target: {expected}"
+        )
+
+
+def test_collector_directory_prefix_matches_lifecycle_boundary(runner):
+    """N: collector/ changes must trigger the lifecycle boundary suite
+    in addition to the H (collector / platform) suite. The lifecycle
+    facade is the collector's write path, so collector changes must
+    run lifecycle + state machine + clipboard tests."""
+    sel = runner.select_targets(["worktrace/collector/auto_activity_recorder.py"])
+    assert "tests/test_activity_lifecycle_service.py" in sel.pytest_targets, (
+        "collector changes must select the lifecycle boundary test"
+    )
+    assert "tests/test_collector.py" in sel.pytest_targets
+    assert "tests/test_state_machine.py" in sel.pytest_targets
+    assert "tests/test_clipboard_service.py" in sel.pytest_targets
+
+
+# ---------------------------------------------------------------------------
+# M (strengthened). Bridge overview / timeline -> live display contract
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_overview_py_selects_live_display_contract(runner):
+    """M (strengthened): bridge_overview.py applies the persisted-open
+    overlay to recent items, so changes must trigger the live display
+    contract test in addition to the B (bridge) suite."""
+    sel = runner.select_targets(["worktrace/webview_ui/bridge_overview.py"])
+    assert "tests/test_live_display_contract.py" in sel.pytest_targets, (
+        "bridge_overview.py must select the live display contract test"
+    )
+    assert "tests/test_bridge_refresh_state_and_projection.py" in sel.pytest_targets
+
+
+def test_bridge_timeline_py_selects_live_display_contract(runner):
+    """M (strengthened): bridge_timeline.py applies the persisted-open
+    overlay to timeline sessions and detail rows, so changes must
+    trigger the live display contract test in addition to the B / D
+    suites."""
+    sel = runner.select_targets(["worktrace/webview_ui/bridge_timeline.py"])
+    assert "tests/test_live_display_contract.py" in sel.pytest_targets, (
+        "bridge_timeline.py must select the live display contract test"
+    )
+    assert "tests/test_bridge_refresh_state_and_projection.py" in sel.pytest_targets
+
+
+def test_live_display_service_py_selects_run_affected_and_timeline_static(runner):
+    """M (strengthened): live_display_service.py changes must also select
+    the affected-runner self-test and the Timeline static contract so a
+    contract helper change is caught by the static scan."""
+    sel = runner.select_targets([
+        "worktrace/services/live_display_service.py",
+    ])
+    assert "tests/test_run_affected_tests.py" in sel.pytest_targets, (
+        "live_display_service.py must select the affected-runner self-test"
+    )
+    assert (
+        "tests/webview/test_timeline_static_contract.py" in sel.pytest_targets
+    ), "live_display_service.py must select the Timeline static contract"

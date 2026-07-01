@@ -693,6 +693,11 @@ def build_virtual_session(
         "live_display_key": _live_display_key(snapshot),
         "stable_live_key": _stable_live_key(snapshot),
         "stable_live_key_hash": _stable_live_key_hash(snapshot),
+        # Unified live clock fields (scheme A) so the frontend ticker can
+        # compute ``display_seconds = carry_seconds + floor((Date.now() -
+        # live_started_at_epoch_ms) / 1000)`` from a single stable anchor.
+        "live_started_at_epoch_ms": _start_time_epoch_ms(snapshot),
+        "carry_seconds": int(carry),
         "edit_disabled": True,
         "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
     }
@@ -746,6 +751,9 @@ def build_virtual_detail_row(
         "live_display_key": _live_display_key(snapshot),
         "stable_live_key": _stable_live_key(snapshot),
         "stable_live_key_hash": _stable_live_key_hash(snapshot),
+        # Unified live clock fields (scheme A).
+        "live_started_at_epoch_ms": _start_time_epoch_ms(snapshot),
+        "carry_seconds": int(carry),
         "edit_disabled": True,
         "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
     }
@@ -994,8 +1002,219 @@ def compute_refresh_revision(
     return revision, debug_inputs
 
 
+# ---------------------------------------------------------------------------
+# Live-row contract helpers (verification items 12, 16, 21)
+# ---------------------------------------------------------------------------
+
+#: The display-safe fields every live row exposed to the frontend MUST
+#: carry, regardless of whether the row is virtual (unpersisted snapshot)
+#: or persisted_open (real DB row). Raw ``window_title`` /
+#: ``file_path_hint`` / ``note`` / ``clipboard`` are NEVER included.
+LIVE_ROW_CONTRACT_FIELDS = (
+    "live_state",
+    "stable_live_key",
+    "stable_live_key_hash",
+    "live_display_key",
+    "live_started_at_epoch_ms",
+    "carry_seconds",
+    "duration_seconds",
+    "is_virtual_live",
+    "is_in_progress",
+    "is_live_projected",
+    "edit_disabled",
+    "disable_reason",
+    "source",
+)
+
+
+def apply_persisted_open_overlay_to_row(
+    row: dict[str, Any],
+    overlay: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge persisted-open live overlay fields into a DB row payload.
+
+    Mutates and returns ``row``. When ``overlay`` is None or the row does
+    not match the overlay's ``persisted_activity_id``, the row is
+    unchanged (it is a closed/historical row or a different open row).
+
+    Matching supports two row shapes:
+
+    - **Detail rows** — matched by ``activity_id`` / ``id``.
+    - **Session rows** — matched by ``first_activity_id`` or membership
+      in ``activity_ids``. A session is marked persisted_open when the
+      in-progress persisted activity is one of its activities (typically
+      the last one).
+
+    The merged fields are display-safe only:
+    ``live_state`` / ``stable_live_key`` / ``stable_live_key_hash`` /
+    ``live_display_key`` / ``live_started_at_epoch_ms`` /
+    ``carry_seconds``. The DB row itself is never changed — this is a
+    read-side projection only.
+    """
+    if not overlay:
+        return row
+    persisted_id = int(overlay.get("persisted_activity_id") or 0)
+    if persisted_id <= 0:
+        return row
+    # Match detail rows (activity_id / id) and session rows
+    # (first_activity_id / activity_ids). A session row matches when the
+    # persisted_open activity is one of its activities — typically the
+    # in-progress last activity.
+    row_id = int(row.get("activity_id") or row.get("id") or 0)
+    first_activity_id = int(row.get("first_activity_id") or 0)
+    activity_ids = row.get("activity_ids")
+    matches = row_id == persisted_id or first_activity_id == persisted_id
+    if not matches and isinstance(activity_ids, list):
+        matches = persisted_id in {
+            int(aid) for aid in activity_ids if aid
+        }
+    if not matches:
+        return row
+    row["live_state"] = "persisted_open"
+    row["stable_live_key"] = str(overlay.get("stable_live_key") or "")
+    row["stable_live_key_hash"] = str(overlay.get("stable_live_key_hash") or "")
+    row["live_display_key"] = str(overlay.get("live_display_key") or "")
+    row["live_started_at_epoch_ms"] = int(overlay.get("live_started_at_epoch_ms") or 0)
+    row["carry_seconds"] = int(overlay.get("carry_seconds") or 0)
+    # Mark the row as a live projected persisted-open row.
+    row["is_virtual_live"] = False
+    row["is_in_progress"] = True
+    row["is_live_projected"] = True
+    return row
+
+
+def build_live_row_contract(
+    snapshot: dict[str, Any] | None,
+    row: dict[str, Any] | None,
+    row_kind: str,
+    report_date: str,
+    today: str,
+) -> dict[str, Any]:
+    """Build the unified live-row contract for any live row.
+
+    ``row_kind`` is one of ``"virtual_session"``, ``"virtual_detail"``,
+    ``"persisted_open"``, or ``"current"``. Returns a dict with all
+    :data:`LIVE_ROW_CONTRACT_FIELDS` fields populated from the snapshot
+    and/or the DB row.
+
+    For virtual rows, the contract is derived from the snapshot via the
+    existing ``build_virtual_session`` / ``build_virtual_detail_row``
+    helpers. For persisted_open rows, the contract is derived from
+    :func:`build_persisted_open_overlay`. For current activity, it is
+    derived from :func:`build_current_activity_summary`.
+
+    Returns an empty dict when the row is not live-eligible (closed
+    historical rows, non-normal statuses on past dates, etc.).
+    """
+    if row_kind == "persisted_open":
+        overlay = build_persisted_open_overlay(snapshot, report_date, today)
+        if not overlay:
+            return {}
+        return {
+            "live_state": "persisted_open",
+            "stable_live_key": str(overlay.get("stable_live_key") or ""),
+            "stable_live_key_hash": str(overlay.get("stable_live_key_hash") or ""),
+            "live_display_key": str(overlay.get("live_display_key") or ""),
+            "live_started_at_epoch_ms": int(overlay.get("live_started_at_epoch_ms") or 0),
+            "carry_seconds": int(overlay.get("carry_seconds") or 0),
+            "duration_seconds": int(row.get("duration_seconds") or 0) if row else 0,
+            "is_virtual_live": False,
+            "is_in_progress": True,
+            "is_live_projected": True,
+            "edit_disabled": False,
+            "disable_reason": "",
+            "source": str(row.get("source") or "db") if row else "db",
+        }
+    if row_kind == "virtual_session":
+        virtual = build_virtual_session(snapshot, report_date, today)
+        if not virtual:
+            return {}
+        return _contract_from_virtual(virtual)
+    if row_kind == "virtual_detail":
+        virtual = build_virtual_detail_row(snapshot, report_date, today)
+        if not virtual:
+            return {}
+        return _contract_from_virtual(virtual)
+    if row_kind == "current":
+        summary = build_current_activity_summary(snapshot, report_date, today)
+        if not summary:
+            return {}
+        return {
+            "live_state": str(summary.get("live_state") or ""),
+            "stable_live_key": str(summary.get("stable_live_key") or ""),
+            "stable_live_key_hash": str(summary.get("stable_live_key_hash") or ""),
+            "live_display_key": str(summary.get("live_display_key") or ""),
+            "live_started_at_epoch_ms": int(summary.get("live_started_at_epoch_ms") or 0),
+            "carry_seconds": int(summary.get("carry_seconds") or 0),
+            "duration_seconds": int(summary.get("duration_seconds") or 0),
+            "is_virtual_live": bool(summary.get("is_virtual_live")),
+            "is_in_progress": bool(summary.get("is_in_progress")),
+            "is_live_projected": bool(summary.get("is_live_projected")),
+            "edit_disabled": bool(summary.get("edit_disabled")),
+            "disable_reason": str(summary.get("disable_reason") or ""),
+            "source": str(summary.get("source") or ""),
+        }
+    return {}
+
+
+def _contract_from_virtual(virtual: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "live_state": str(virtual.get("live_state") or "virtual"),
+        "stable_live_key": str(virtual.get("stable_live_key") or ""),
+        "stable_live_key_hash": str(virtual.get("stable_live_key_hash") or ""),
+        "live_display_key": str(virtual.get("live_display_key") or ""),
+        "live_started_at_epoch_ms": int(virtual.get("live_started_at_epoch_ms") or 0),
+        "carry_seconds": int(virtual.get("carry_seconds") or 0),
+        "duration_seconds": int(virtual.get("duration_seconds") or 0),
+        "is_virtual_live": True,
+        "is_in_progress": True,
+        "is_live_projected": bool(virtual.get("is_live_projected")),
+        "edit_disabled": bool(virtual.get("edit_disabled")),
+        "disable_reason": str(virtual.get("disable_reason") or ""),
+        "source": str(virtual.get("source") or "snapshot"),
+    }
+
+
+def apply_live_row_contract(
+    row: dict[str, Any],
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge a live-row contract into a bridge row payload.
+
+    Mutates and returns ``row``. When ``contract`` is empty, the row is
+    unchanged. Only :data:`LIVE_ROW_CONTRACT_FIELDS` are merged; no raw
+    fields (window_title / file_path_hint / note / clipboard) are ever
+    introduced.
+    """
+    if not contract:
+        return row
+    for field in LIVE_ROW_CONTRACT_FIELDS:
+        if field in contract:
+            row[field] = contract[field]
+    return row
+
+
+def assert_live_row_contract(row: dict[str, Any]) -> None:
+    """Assert that ``row`` carries every :data:`LIVE_ROW_CONTRACT_FIELDS`.
+
+    Used by contract tests to verify that both virtual and persisted_open
+    rows exposed to the frontend carry the complete set of display-safe
+    live fields. Raises ``AssertionError`` with the missing field names.
+    """
+    missing = [f for f in LIVE_ROW_CONTRACT_FIELDS if f not in row]
+    if missing:
+        raise AssertionError(
+            "live row contract missing fields: " + ", ".join(missing)
+        )
+
+
 __all__ = [
+    "LIVE_ROW_CONTRACT_FIELDS",
+    "apply_live_row_contract",
+    "apply_persisted_open_overlay_to_row",
+    "assert_live_row_contract",
     "build_current_activity_summary",
+    "build_live_row_contract",
     "build_persisted_open_overlay",
     "build_virtual_detail_row",
     "build_virtual_session",

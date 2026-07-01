@@ -674,6 +674,16 @@
     // when available so the continuity survives the virtual → persisted_open
     // transition (verification items 12, 16). Falls back to the session /
     // activity id for non-live items.
+    //
+    // SINGLE SOURCE OF TRUTH: This function is the ONLY place that should
+    // construct a live-row continuity key. The ticker, the render seed
+    // (showRecent / showTimeline / renderSessionDetails), and any future
+    // live-duration DOM update MUST all call App.liveContinuityKey(item,
+    // prefix) to look up or seed the monotonic render state. Using the
+    // array index ("recent-" + i), the session id ("session-" + id), or
+    // the activity id ("detail-" + id) directly would break the virtual →
+    // persisted_open transition because those values change across the
+    // transition while stable_live_key_hash stays the same.
     function liveContinuityKey(item, prefix) {
         if (!item) return prefix;
         if (item.stable_live_key_hash) {

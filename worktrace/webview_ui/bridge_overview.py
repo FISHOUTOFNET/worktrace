@@ -214,6 +214,14 @@ class OverviewBridgeMixin:
             live_display = live_display_api.build_current_activity_summary(
                 snapshot, report_date=today, today=today
             )
+            # Build the persisted-open overlay once so every DB session
+            # item that matches the persisted_activity_id can carry the
+            # same stable live fields as the virtual item (verification
+            # items 12, 16, 21). The overlay is None when the snapshot is
+            # not persisted_open.
+            persisted_overlay = live_display_api.build_persisted_open_overlay(
+                snapshot, report_date=today, today=today
+            )
             items: list[dict[str, Any]] = []
             # Prepend a virtual live item when the current snapshot is a
             # normal unpersisted activity. This is display-only; the DB is
@@ -241,6 +249,11 @@ class OverviewBridgeMixin:
                             # transition (verification items 12, 16, 21).
                             "stable_live_key": str(virtual.get("stable_live_key") or ""),
                             "stable_live_key_hash": str(virtual.get("stable_live_key_hash") or ""),
+                            # Unified live clock fields (scheme A).
+                            "live_state": "virtual",
+                            "live_started_at_epoch_ms": int(virtual.get("live_started_at_epoch_ms") or 0),
+                            "carry_seconds": int(virtual.get("carry_seconds") or 0),
+                            "disable_reason": str(virtual.get("disable_reason") or ""),
                             "activity_id": 0,
                             "source": "snapshot",
                             "edit_disabled": True,
@@ -251,24 +264,33 @@ class OverviewBridgeMixin:
             for session in limited:
                 base_seconds = int(session.get("duration_seconds") or 0)
                 is_in_progress = bool(session.get("is_in_progress"))
-                items.append(
-                    {
-                        "project_name": str(session.get("project_name") or "未归类"),
-                        "start_time": str(session.get("start_time") or ""),
-                        "end_time": str(session.get("end_time") or ""),
-                        "duration": format_duration(base_seconds),
-                        "duration_seconds": base_seconds,
-                        "is_in_progress": is_in_progress,
-                        "is_live_projected": is_in_progress,
-                        "is_virtual": False,
-                        "is_virtual_live": False,
-                        "live_display_key": "",
-                        "activity_id": int(session.get("first_activity_id") or 0) or 0,
-                        "source": "db",
-                        "edit_disabled": False,
-                        "status": str(session.get("status_summary") or session.get("status") or ""),
-                    }
-                )
+                row = {
+                    "project_name": str(session.get("project_name") or "未归类"),
+                    "start_time": str(session.get("start_time") or ""),
+                    "end_time": str(session.get("end_time") or ""),
+                    "duration": format_duration(base_seconds),
+                    "duration_seconds": base_seconds,
+                    "is_in_progress": is_in_progress,
+                    "is_live_projected": is_in_progress,
+                    "is_virtual": False,
+                    "is_virtual_live": False,
+                    "live_display_key": "",
+                    "live_state": "",
+                    "stable_live_key": "",
+                    "stable_live_key_hash": "",
+                    "live_started_at_epoch_ms": 0,
+                    "carry_seconds": 0,
+                    "activity_id": int(session.get("first_activity_id") or 0) or 0,
+                    "source": "db",
+                    "edit_disabled": False,
+                    "disable_reason": "",
+                    "status": str(session.get("status_summary") or session.get("status") or ""),
+                }
+                # Apply the persisted-open overlay so the matching DB row
+                # carries the same stable live fields as the virtual item.
+                # This is a no-op for closed / non-matching rows.
+                live_display_api.apply_persisted_open_overlay_to_row(row, persisted_overlay)
+                items.append(row)
             return {
                 "ok": True,
                 "activities": items,
