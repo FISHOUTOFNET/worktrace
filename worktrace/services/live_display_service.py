@@ -1,0 +1,806 @@
+"""Unified live-display model (single source of truth).
+
+This service consolidates every live-projection decision that was previously
+scattered across:
+
+- ``bridge_common._can_live_project_snapshot`` / ``_find_live_projection_target``
+- ``bridge_common._snapshot_live_projected_seconds``
+- ``bridge_common._snapshot_summary`` (live bits)
+- ``timeline_service._live_duration_for_row``
+- ``statistics_service._live_projection``
+- ``settings_api._build_current_activity_display_key`` (live bits)
+- ``live_time_service.sync_short_activity_carry`` /
+  ``live_time_service.short_activity_carry_duration`` (previously dead code)
+
+The service is the ONLY place that decides:
+
+- whether the current snapshot is eligible for live display;
+- whether the live display is a *virtual* (unpersisted) item, a *persisted
+  open* item, or a *non-normal* status item (idle / paused / excluded / error);
+- the display project, display resource, baseline seconds, baseline epoch,
+  pending/carry seconds, virtual session, virtual detail row, live row
+  identity, and refresh-revision inputs.
+
+Display projection is purely a UI overlay. It NEVER writes the DB, NEVER
+changes the 30-second collector persistence threshold, and NEVER persists
+a <30s activity early.
+
+Boundary rules:
+
+- This service lives in ``worktrace.services`` so it may import other
+  services (``activity_service``, ``live_time_service``, ``project_service``,
+  ``settings_service``, ``timeline_service``) and stdlib only. It MUST NOT
+  be imported by ``worktrace.webview_ui.*`` directly — the bridge layer
+  reaches it through ``worktrace.api.live_display_api``.
+- The service returns display-safe JSON-serializable payloads only. Raw
+  ``window_title``, ``file_path_hint``, ``note``, ``clipboard`` and any
+  traceback / SQL are NEVER surfaced.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import time as _time
+from datetime import datetime
+from typing import Any
+
+from ..constants import (
+    STATUS_ERROR,
+    STATUS_EXCLUDED,
+    STATUS_IDLE,
+    STATUS_NORMAL,
+    STATUS_PAUSED,
+    UNCATEGORIZED_PROJECT,
+)
+from . import activity_service, timeline_service
+from .live_time_service import (
+    safe_int,
+    snapshot_elapsed_seconds,
+    snapshot_extra_seconds,
+    snapshot_persisted_id,
+    snapshot_seconds_for_date_range,
+    snapshot_start_time,
+    sync_short_activity_carry,
+)
+from .settings_service import get_setting
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Maximum look-back for the open-row live-duration recompute. Prevents a
+# stale snapshot start_time from producing an absurd 100-hour live value
+# when the wall clock has drifted (e.g. system sleep).
+_MAX_LIVE_DURATION_SECONDS = 36 * 60 * 60
+
+# Stable disable-reason text surfaced on virtual session / detail rows so
+# the frontend can show a tooltip explaining why edit / split / merge /
+# hide / delete / restore are disabled.
+_VIRTUAL_EDIT_DISABLE_REASON = "当前活动尚未进入历史，暂不能编辑"
+
+# Sentinel activity id used for virtual (display-only) rows. Real DB rows
+# always carry a positive int id; ``0`` / ``None`` is reserved for virtual.
+_VIRTUAL_ACTIVITY_ID = 0
+
+
+# ---------------------------------------------------------------------------
+# Live-state classification
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_status(snapshot: dict[str, Any] | None) -> str:
+    if not snapshot:
+        return ""
+    return str(snapshot.get("status") or "")
+
+
+def classify_live_state(snapshot: dict[str, Any] | None) -> str:
+    """Return the unified live-state label for a snapshot.
+
+    Returns one of:
+
+    - ``"none"``         — no snapshot / no elapsed seconds.
+    - ``"virtual"``      — normal, not persisted, no persisted_activity_id;
+                            eligible for virtual live display.
+    - ``"persisted_open"`` — normal, persisted with a real open DB row.
+    - ``"paused"``       — status == paused.
+    - ``"idle"``         — status == idle.
+    - ``"excluded"``     — status == excluded.
+    - ``"error"``        — status == error.
+
+    Only ``"virtual"`` and ``"persisted_open"`` are eligible to increment
+    the normal project live duration. ``"paused"`` / ``"idle"`` /
+    ``"excluded"`` / ``"error"`` may still render a status line but MUST
+    NOT contribute to normal project live duration.
+    """
+    if not snapshot:
+        return "none"
+    status = _snapshot_status(snapshot)
+    if status == STATUS_PAUSED:
+        return "paused"
+    if status == STATUS_IDLE:
+        return "idle"
+    if status == STATUS_EXCLUDED:
+        return "excluded"
+    if status == STATUS_ERROR:
+        return "error"
+    if status != STATUS_NORMAL:
+        return "none"
+    elapsed = _snapshot_total_seconds(snapshot)
+    if elapsed <= 0:
+        return "none"
+    if bool(snapshot.get("is_persisted")) or snapshot_persisted_id(snapshot):
+        return "persisted_open"
+    return "virtual"
+
+
+def is_live_eligible_for_normal(
+    snapshot: dict[str, Any] | None,
+    report_date: str | None,
+    today: str | None,
+) -> bool:
+    """Return ``True`` iff the snapshot should drive the *normal* live
+    display (virtual session / virtual detail / recent live item /
+    Overview KPI increment).
+
+    Eligibility (all must hold):
+
+    - snapshot exists;
+    - snapshot ``status == "normal"`` (excludes idle / paused / excluded /
+      error);
+    - elapsed + extra seconds > 0;
+    - report_date == today (historical dates are not projected).
+
+    Persisted-open rows are ALSO eligible: they need the same continuous
+    live increment, just sourced from the real DB row instead of a virtual
+    row. The caller distinguishes the two via ``classify_live_state``.
+    """
+    if not snapshot:
+        return False
+    if _snapshot_status(snapshot) != STATUS_NORMAL:
+        return False
+    if _snapshot_total_seconds(snapshot) <= 0:
+        return False
+    if not report_date or not today:
+        return False
+    return report_date == today
+
+
+def _snapshot_total_seconds(snapshot: dict[str, Any] | None) -> int:
+    if not snapshot:
+        return 0
+    return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Display-safe field extraction
+# ---------------------------------------------------------------------------
+
+
+def _display_resource_name(snapshot: dict[str, Any] | None) -> str:
+    """Return a display-safe resource name from the snapshot.
+
+    Falls back through ``resource_display_name`` →
+    ``activity_display_name`` → ``app_name`` → ``process_name`` → ``未知``.
+    Raw ``window_title`` / ``file_path_hint`` are NEVER surfaced.
+    """
+    if not snapshot:
+        return "未知"
+    name = (
+        snapshot.get("resource_display_name")
+        or snapshot.get("activity_display_name")
+        or snapshot.get("app_name")
+        or snapshot.get("process_name")
+    )
+    return str(name or "未知").strip() or "未知"
+
+
+def _display_app_name(snapshot: dict[str, Any] | None) -> str:
+    if not snapshot:
+        return ""
+    return str(snapshot.get("app_name") or "").strip()
+
+
+def _display_project_name(snapshot: dict[str, Any] | None) -> str:
+    """Return the unified display project name for a snapshot.
+
+    - For persisted_open snapshots, the real DB row's project name is the
+      authoritative display project (the snapshot's inferred_project_name
+      is stale once the row has been re-classified by a manual edit).
+    - For virtual (unpersisted) snapshots, the snapshot's
+      ``inferred_project_name`` is the display project (it already
+      reflects folder / keyword / suggested-project inference).
+    - Empty / whitespace-only maps to ``UNCATEGORIZED_PROJECT`` so an
+      unnamed current activity aligns with the ``未归类`` session row.
+    """
+    if not snapshot:
+        return UNCATEGORIZED_PROJECT
+    persisted_id = snapshot_persisted_id(snapshot)
+    if persisted_id:
+        try:
+            row = activity_service.get_activity(int(persisted_id))
+        except Exception:
+            row = None
+        if row and row.get("project_name"):
+            name = str(row["project_name"]).strip()
+            if name:
+                return name
+    name = str(snapshot.get("inferred_project_name") or "").strip()
+    return name if name else UNCATEGORIZED_PROJECT
+
+
+def _live_display_key(snapshot: dict[str, Any] | None) -> str:
+    """Build a display-safe live-display identity for the current activity.
+
+    The key is constructed ONLY from sanitized display fields
+    (``resource_display_name`` / ``activity_display_name`` / ``app_name`` /
+    ``process_name`` / ``inferred_project_name`` / ``start_time`` /
+    ``status`` / ``is_persisted`` / ``persisted_activity_id``). Raw
+    ``window_title``, ``file_path_hint``, ``note`` and ``clipboard`` are
+    NEVER included.
+
+    The returned value is used as the JS-side ``live_display_key`` so the
+    ticker can decide when a continuity-key reset is allowed (e.g. activity
+    switched, status switched, persisted state switched). It is also part
+    of ``refresh_revision`` so a structural identity change triggers a
+    heavy refresh.
+    """
+    if not snapshot:
+        return ""
+    parts = [
+        str(snapshot.get("resource_display_name") or ""),
+        str(snapshot.get("activity_display_name") or ""),
+        str(snapshot.get("app_name") or ""),
+        str(snapshot.get("process_name") or ""),
+        str(snapshot.get("inferred_project_name") or ""),
+        str(snapshot.get("start_time") or ""),
+        str(snapshot.get("status") or ""),
+        "1" if bool(snapshot.get("is_persisted")) else "0",
+        str(int(snapshot.get("persisted_activity_id") or 0)),
+    ]
+    return "|".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Short-activity carry integration (wires the previously-dead helpers)
+# ---------------------------------------------------------------------------
+
+
+def _read_pending_short_seconds() -> int:
+    """Read the pending_short_seconds setting (carry-over from sub-30s
+    short activities that have not yet been persisted).
+
+    The collector writes this value whenever a normal short activity ends
+    without crossing the 30-second persistence threshold. The unified
+    live-display baseline must include it so the UI does not lose seconds
+    between short activities and then suddenly jump when the next
+    activity persists.
+    """
+    raw = get_setting("pending_short_seconds", "") or ""
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, value)
+
+
+def _read_short_activity_carry() -> dict[str, Any] | None:
+    """Read the serialized short-activity carry state (if any).
+
+    The collector writes a JSON object describing the carry-over context
+    so the unified live-display baseline can incorporate consecutive
+    short activities that belong to the same logical session.
+    """
+    import json
+
+    raw = get_setting("short_activity_carry", "") or ""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def carry_baseline_seconds(
+    snapshot: dict[str, Any] | None,
+    report_date: str | None,
+) -> int:
+    """Return the carry-over seconds that should be added to the unified
+    live-display baseline.
+
+    Wires the previously-dead ``sync_short_activity_carry`` /
+    ``short_activity_carry_duration`` helpers into the unified live
+    display model. The carry seconds represent consecutive short
+    activities (<30s each) that have not been persisted individually but
+    should still contribute to the current normal live display so the UI
+    does not first lose seconds and then suddenly jump when the next
+    activity crosses the persistence threshold.
+
+    Returns ``0`` when:
+
+    - the snapshot is None / not normal / not unconfirmed;
+    - there is no carry state;
+    - the carry's anchor activity id is no longer visible in the
+      report date's activity ids.
+    """
+    if not snapshot or _snapshot_status(snapshot) != STATUS_NORMAL:
+        return 0
+    if bool(snapshot.get("is_persisted")) or snapshot_persisted_id(snapshot):
+        return 0
+    carry = _read_short_activity_carry()
+    if not carry:
+        # Fall back to the simple pending_short_seconds accumulator when
+        # no structured carry state exists. This covers the common case
+        # of a single short activity ending below the threshold.
+        return _read_pending_short_seconds()
+    # Use the existing helper to compute the carry duration against the
+    # current report date's activity ids. The helper returns ``None`` when
+    # the carry's anchor activity is no longer visible, in which case we
+    # fall back to the pending accumulator.
+    try:
+        if report_date:
+            activity_ids = [
+                int(a.get("id") or 0)
+                for a in activity_service.get_activities_by_date(report_date)
+                if int(a.get("id") or 0) > 0
+            ]
+            base_duration = 0
+            anchor_id = safe_int(carry.get("activity_id"))
+            if anchor_id and anchor_id in activity_ids:
+                # The anchor activity's stored duration is the confirmed
+                # base; carry.completed_seconds holds subsequent short
+                # activities that have already ended.
+                anchor = activity_service.get_activity(anchor_id)
+                if anchor:
+                    base_duration = safe_int(anchor.get("duration_seconds"))
+            duration = _short_activity_carry_duration_helper(
+                carry, activity_ids, base_duration, report_date, snapshot
+            )
+            if duration is not None:
+                return max(0, duration)
+    except Exception:
+        pass
+    return _read_pending_short_seconds()
+
+
+def _short_activity_carry_duration_helper(
+    carry: dict[str, Any] | None,
+    activity_ids: list[int],
+    base_duration_seconds: int,
+    report_date: str,
+    snapshot: dict[str, Any] | None,
+) -> int | None:
+    """Thin wrapper around ``live_time_service.short_activity_carry_duration``
+    so the import boundary is explicit and the helper is exercised by the
+    unified live-display code path (no longer dead code).
+    """
+    from .live_time_service import short_activity_carry_duration
+
+    return short_activity_carry_duration(
+        carry,
+        activity_ids,
+        base_duration_seconds,
+        report_date,
+        snapshot,
+    )
+
+
+def sync_carry_state(
+    previous_snapshot: dict[str, Any] | None,
+    snapshot: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Sync the short-activity carry state when the snapshot changes.
+
+    Wraps ``live_time_service.sync_short_activity_carry`` so the unified
+    live-display model can advance the carry state alongside the snapshot
+    without each consumer re-implementing the signature-comparison logic.
+    """
+    carry = _read_short_activity_carry()
+    return sync_short_activity_carry(carry, previous_snapshot, snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Unified live-display payload builders
+# ---------------------------------------------------------------------------
+
+
+def build_current_activity_summary(
+    snapshot: dict[str, Any] | None,
+    report_date: str | None = None,
+    today: str | None = None,
+) -> dict[str, Any]:
+    """Build the unified current-activity summary consumed by Overview,
+    Timeline header, and the heartbeat revision check.
+
+    The payload is display-safe: no raw ``window_title``,
+    ``file_path_hint``, ``note``, ``clipboard``, ``traceback``, or SQL.
+    """
+    if not snapshot:
+        return {
+            "active": False,
+            "display": "无",
+            "elapsed_seconds": 0,
+            "is_paused": False,
+            "status": "",
+            "is_persisted": False,
+            "project_name": "",
+            "persisted_activity_id": 0,
+            "live_state": "none",
+            "is_in_progress": False,
+            "is_virtual_live": False,
+            "live_display_key": "",
+            "resource_name": "",
+            "app_name": "",
+            "start_time": "",
+            "end_time": None,
+            "activity_id": None,
+            "source": "none",
+            "is_uncategorized": True,
+            "is_classified": False,
+        }
+    if today is None:
+        today = timeline_service.get_default_report_date()
+    if report_date is None:
+        report_date = today
+    live_state = classify_live_state(snapshot)
+    elapsed_seconds = _snapshot_total_seconds(snapshot)
+    project_name = _display_project_name(snapshot)
+    resource_name = _display_resource_name(snapshot)
+    app_name = _display_app_name(snapshot)
+    start_time = str(snapshot.get("start_time") or "")
+    status = _snapshot_status(snapshot)
+    is_paused = status == STATUS_PAUSED
+    is_persisted = bool(snapshot.get("is_persisted"))
+    persisted_id = snapshot_persisted_id(snapshot) or 0
+    # is_in_progress is True only when the snapshot represents a real
+    # persisted open DB row. Virtual (unpersisted) rows carry
+    # ``is_virtual_live = True`` instead so the frontend can distinguish
+    # the two rendering paths.
+    is_in_progress = live_state == "persisted_open"
+    is_virtual_live = live_state == "virtual"
+    is_uncategorized = (
+        not project_name or project_name == UNCATEGORIZED_PROJECT
+    )
+    # The carry baseline is added to the elapsed seconds so the UI does
+    # not lose seconds between consecutive short activities. Only applies
+    # to virtual (unpersisted) snapshots; persisted_open rows already
+    # have the carry folded into their stored duration.
+    carry_seconds = 0
+    if is_virtual_live:
+        carry_seconds = carry_baseline_seconds(snapshot, report_date)
+    display_seconds = elapsed_seconds + carry_seconds
+    from ..formatters import format_duration
+
+    state_label = "已进入历史" if is_persisted else "暂不入历史"
+    if status == STATUS_IDLE:
+        resource_name = "空闲中"
+        state_label = "空闲"
+    elif status == STATUS_PAUSED:
+        state_label = "已暂停"
+    elif status == STATUS_EXCLUDED:
+        state_label = "已排除"
+    elif status == STATUS_ERROR:
+        state_label = "异常"
+    display = f"{resource_name}｜{project_name}｜{format_duration(display_seconds)}｜{state_label}"
+    return {
+        "active": True,
+        "display": display,
+        "elapsed_seconds": int(display_seconds),
+        "is_paused": bool(is_paused),
+        "status": status,
+        "is_persisted": is_persisted,
+        "project_name": project_name,
+        "persisted_activity_id": int(persisted_id or 0),
+        "live_state": live_state,
+        "is_in_progress": bool(is_in_progress),
+        "is_virtual_live": bool(is_virtual_live),
+        "live_display_key": _live_display_key(snapshot),
+        "resource_name": resource_name,
+        "app_name": app_name,
+        "start_time": start_time,
+        "end_time": None,
+        "activity_id": int(persisted_id or 0) or None,
+        "source": "db" if is_in_progress else ("snapshot" if is_virtual_live else "none"),
+        "is_uncategorized": bool(is_uncategorized),
+        "is_classified": not bool(is_uncategorized),
+    }
+
+
+def build_virtual_session(
+    snapshot: dict[str, Any] | None,
+    report_date: str,
+    today: str,
+) -> dict[str, Any] | None:
+    """Build a display-only virtual session for an unpersisted normal
+    snapshot.
+
+    Returns ``None`` when the snapshot is not eligible for virtual live
+    display (not normal, persisted, no elapsed seconds, or historical
+    date).
+
+    The virtual session is display-only: ``activity_id`` is ``0``,
+    ``is_virtual`` is ``True``, ``source`` is ``"snapshot"``, and every
+    edit / split / merge / hide / delete / restore button must be
+    disabled. The DB is NEVER written.
+    """
+    if not is_live_eligible_for_normal(snapshot, report_date, today):
+        return None
+    if classify_live_state(snapshot) != "virtual":
+        return None
+    from ..formatters import format_duration
+
+    elapsed = _snapshot_total_seconds(snapshot)
+    carry = carry_baseline_seconds(snapshot, report_date)
+    duration_seconds = elapsed + carry
+    project_name = _display_project_name(snapshot)
+    start_time = str(snapshot.get("start_time") or "")
+    return {
+        "session_id": "virtual-live",
+        "project_name": project_name,
+        "project_description": "",
+        "project_id": 0,
+        "start_time": start_time,
+        "end_time": None,
+        "duration": format_duration(duration_seconds),
+        "duration_seconds": int(duration_seconds),
+        "status": "进行中",
+        "event_count": 1,
+        "is_uncategorized": project_name == UNCATEGORIZED_PROJECT,
+        "is_in_progress": True,
+        "is_live_projected": False,
+        "is_virtual": True,
+        "is_virtual_live": True,
+        "live_state": "virtual",
+        "source": "snapshot",
+        "activity_ids": [],
+        "first_activity_id": None,
+        "session_note": "",
+        "live_display_key": _live_display_key(snapshot),
+        "edit_disabled": True,
+        "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
+    }
+
+
+def build_virtual_detail_row(
+    snapshot: dict[str, Any] | None,
+    report_date: str,
+    today: str,
+) -> dict[str, Any] | None:
+    """Build a display-only virtual detail row for an unpersisted normal
+    snapshot.
+
+    Returns ``None`` when the snapshot is not eligible for virtual live
+    display. The row is display-only: ``activity_id`` is ``0``,
+    ``is_virtual`` is ``True``, ``source`` is ``"snapshot"``, and every
+    edit / split / merge / hide / delete / restore button must be
+    disabled.
+    """
+    if not is_live_eligible_for_normal(snapshot, report_date, today):
+        return None
+    if classify_live_state(snapshot) != "virtual":
+        return None
+    from ..formatters import format_duration, format_resource_type
+
+    elapsed = _snapshot_total_seconds(snapshot)
+    carry = carry_baseline_seconds(snapshot, report_date)
+    duration_seconds = elapsed + carry
+    project_name = _display_project_name(snapshot)
+    resource_name = _display_resource_name(snapshot)
+    app_name = _display_app_name(snapshot)
+    start_time = str(snapshot.get("start_time") or "")
+    resource_kind = str(snapshot.get("resource_kind") or "")
+    resource_subtype = str(snapshot.get("resource_subtype") or "")
+    return {
+        "activity_id": _VIRTUAL_ACTIVITY_ID,
+        "start_time": start_time,
+        "end_time": None,
+        "duration": format_duration(duration_seconds),
+        "duration_seconds": int(duration_seconds),
+        "app_name": app_name,
+        "resource_type": format_resource_type(resource_kind, resource_subtype),
+        "resource_name": resource_name,
+        "project_name": project_name,
+        "status": STATUS_NORMAL,
+        "is_in_progress": True,
+        "is_virtual": True,
+        "is_virtual_live": True,
+        "live_state": "virtual",
+        "source": "snapshot",
+        "live_display_key": _live_display_key(snapshot),
+        "edit_disabled": True,
+        "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
+    }
+
+
+def persisted_open_live_seconds(
+    snapshot: dict[str, Any] | None,
+    row: dict[str, Any] | None,
+) -> int:
+    """Return the live seconds for a persisted open DB row.
+
+    Matches the snapshot's ``persisted_activity_id`` to the row's id and
+    returns ``snapshot_elapsed + snapshot_extra``. Returns ``0`` when the
+    snapshot / row mismatch or when no snapshot exists.
+    """
+    if not snapshot or not row:
+        return 0
+    try:
+        row_id = int(row.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+    if row_id <= 0:
+        return 0
+    snapshot_id = snapshot_persisted_id(snapshot)
+    if not snapshot_id or int(snapshot_id) != row_id:
+        return 0
+    return _snapshot_total_seconds(snapshot)
+
+
+def build_persisted_open_overlay(
+    snapshot: dict[str, Any] | None,
+    report_date: str,
+    today: str,
+) -> dict[str, Any] | None:
+    """Return the persisted-open live overlay metadata for bridge consumers.
+
+    When the snapshot is persisted_open AND the report date is today, this
+    returns ``{persisted_activity_id, live_seconds, live_display_key,
+    baseline_epoch_ms}`` so the bridge can apply the live increment to
+    the matching real DB session/detail row.
+
+    Returns ``None`` when not applicable.
+    """
+    if not is_live_eligible_for_normal(snapshot, report_date, today):
+        return None
+    if classify_live_state(snapshot) != "persisted_open":
+        return None
+    persisted_id = snapshot_persisted_id(snapshot) or 0
+    if persisted_id <= 0:
+        return None
+    return {
+        "persisted_activity_id": int(persisted_id),
+        "live_seconds": int(_snapshot_total_seconds(snapshot)),
+        "live_display_key": _live_display_key(snapshot),
+        "baseline_epoch_ms": int(_time.time() * 1000),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Unified refresh-revision computation
+# ---------------------------------------------------------------------------
+
+
+def compute_refresh_revision(
+    snapshot: dict[str, Any] | None,
+    collector_status: str,
+    user_paused: bool,
+    today: str,
+    report_date: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Compute the unified refresh-revision signature.
+
+    Returns ``(revision_sha1, debug_inputs)`` where ``debug_inputs`` is a
+    display-safe dict of the structural fields that contributed to the
+    signature. The debug dict is safe to log internally but MUST NOT be
+    surfaced to the frontend (only the sha1 is surfaced).
+
+    The revision MUST change when:
+
+    - the current snapshot identity / status / persisted state /
+      persisted id / inferred project changes;
+    - the carry / pending_short_seconds state changes (so a short
+      activity that just crossed the threshold and persisted triggers a
+      refresh);
+    - the latest visible activity id / updated_at for the report date
+      changes (covers manual project edit, time edit, split, merge,
+      hide, delete, restore, note edit, open row persisted, project
+      assignment);
+    - the open row's duration / project / status changes (covered by the
+      latest-activity check above plus the snapshot persisted_id check);
+    - collector status / paused state changes;
+    - the report date crosses midnight (``today`` changes).
+
+    The revision MUST NOT change when only:
+
+    - elapsed_seconds / extra_seconds naturally increase;
+    - Date.now / snapshot_baseline_epoch_ms advance without any
+      structural change;
+    - snapshot_updated_at advances without any structural change.
+    """
+    if report_date is None:
+        report_date = today
+    # Current snapshot structural identity (display-safe).
+    current_activity_key = _live_display_key(snapshot)
+    current_status = _snapshot_status(snapshot)
+    is_persisted = bool(snapshot and snapshot.get("is_persisted"))
+    persisted_id = int(snapshot_persisted_id(snapshot) or 0) if snapshot else 0
+    inferred_project = ""
+    if snapshot:
+        inferred_project = str(snapshot.get("inferred_project_name") or "")
+    # Carry / pending state.
+    pending_short_seconds = _read_pending_short_seconds()
+    carry_signature = ""
+    carry = _read_short_activity_carry()
+    if carry:
+        carry_signature = "{0}|{1}|{2}".format(
+            safe_int(carry.get("activity_id")),
+            safe_int(carry.get("base_seconds")),
+            safe_int(carry.get("completed_seconds")),
+        )
+    # Latest visible activity for the report date (covers ALL structural
+    # DB writes: manual project edit, time edit, split, merge, hide,
+    # delete, restore, note edit, open row persisted, project
+    # assignment). Using the latest visible activity for the *report*
+    # date (not just latest closed auto normal) ensures historical-date
+    # edits also trigger a refresh when the user is viewing that date.
+    latest_id = 0
+    latest_updated_at = ""
+    latest_kind = ""
+    try:
+        rows = activity_service.get_activities_by_date(report_date)
+        if rows:
+            latest = rows[0]  # already sorted by start_time DESC, id DESC
+            latest_id = int(latest.get("id") or 0)
+            latest_updated_at = str(latest.get("updated_at") or "")
+            latest_kind = "{0}|{1}|{2}|{3}|{4}".format(
+                str(latest.get("status") or ""),
+                str(latest.get("project_name") or ""),
+                "1" if latest.get("end_time") is None else "0",
+                str(latest.get("is_deleted") or 0),
+                str(latest.get("is_hidden") or 0),
+            )
+    except Exception:
+        pass
+    revision_input = "|".join(
+        [
+            current_activity_key,
+            current_status,
+            "1" if is_persisted else "0",
+            str(persisted_id),
+            inferred_project,
+            collector_status,
+            "1" if user_paused else "0",
+            today,
+            str(pending_short_seconds),
+            carry_signature,
+            str(latest_id),
+            latest_updated_at,
+            latest_kind,
+        ]
+    )
+    revision = hashlib.sha1(revision_input.encode("utf-8")).hexdigest()
+    debug_inputs = {
+        "current_activity_key": current_activity_key,
+        "current_status": current_status,
+        "is_persisted": is_persisted,
+        "persisted_id": persisted_id,
+        "inferred_project": inferred_project,
+        "collector_status": collector_status,
+        "user_paused": user_paused,
+        "today": today,
+        "pending_short_seconds": pending_short_seconds,
+        "carry_signature": carry_signature,
+        "latest_id": latest_id,
+        "latest_updated_at": latest_updated_at,
+        "latest_kind": latest_kind,
+    }
+    return revision, debug_inputs
+
+
+__all__ = [
+    "build_current_activity_summary",
+    "build_persisted_open_overlay",
+    "build_virtual_detail_row",
+    "build_virtual_session",
+    "carry_baseline_seconds",
+    "classify_live_state",
+    "compute_refresh_revision",
+    "is_live_eligible_for_normal",
+    "persisted_open_live_seconds",
+    "sync_carry_state",
+]

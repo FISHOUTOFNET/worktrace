@@ -1,24 +1,30 @@
-"""Phase 6H-followup backend tests: ``get_refresh_state`` + live projection.
+"""Phase 6H-followup / Phase R3 backend tests: unified live display model.
 
-These tests cover the backend pieces introduced by the Phase 6H-followup
-rewrite:
+These tests cover the unified live-display contract introduced by the
+Phase R3 rewrite (``worktrace.services.live_display_service``):
 
 - ``bridge.get_refresh_state()`` is attached to ``WebViewBridge`` and
   returns a display-safe lightweight payload (no raw window title / file
   path / clipboard / note / SQL / traceback).
 - ``refresh_revision`` is structural-only: it does NOT change when only
   ``elapsed_seconds`` / ``extra_seconds`` advance, but DOES change on
-  status / persisted / inferred_project_name / latest activity changes.
-- ``get_recent_activities()`` returns ``duration_seconds``,
-  ``is_in_progress``, ``is_live_projected``, ``snapshot_at_epoch_ms`` and
-  applies projection to the most recent normal session when the current
-  snapshot is live-projectable.
-- ``get_timeline()`` returns ``live_projected_session_id`` for today's
-  unpersisted current snapshot and never projects historical dates.
-- ``get_timeline_session_details()`` returns ``duration_seconds``.
+  status / persisted / inferred_project_name / latest activity / carry
+  state / collector status / user_paused changes.
+- ``get_recent_activities()`` returns the unified live-display payload
+  (``live_display``, ``baseline_epoch_ms``) and each item carries
+  ``duration_seconds``, ``is_in_progress``, ``is_virtual``,
+  ``is_virtual_live``, ``live_display_key``, ``activity_id``,
+  ``source``, ``edit_disabled``. A virtual live item is prepended when
+  the current snapshot is a normal unpersisted activity.
+- ``get_timeline()`` prepends a virtual live session for today's
+  unpersisted normal snapshot and never projects historical dates.
+- ``get_timeline_session_details()`` returns a virtual detail row when
+  ``activity_ids`` is empty and the snapshot is eligible; real DB rows
+  carry the unified flags.
 - Projection is purely a UI overlay: paused / idle / excluded / error
-  snapshots never receive projection, persisted snapshots never
-  double-count, and the DB / collector are untouched.
+  snapshots never produce virtual items / sessions / detail rows,
+  persisted snapshots never double-count, and the DB / collector are
+  untouched.
 """
 
 from __future__ import annotations
@@ -288,57 +294,65 @@ def test_refresh_revision_changes_on_user_paused(bridge):
 
 
 def test_get_recent_activities_returns_required_fields(bridge):
-    """Section 2: each recent item must carry ``duration_seconds``,
-    ``is_in_progress``, ``is_live_projected``; the payload must carry
-    ``snapshot_at_epoch_ms``."""
-    _set_snapshot(None)  # no current activity -> no projection
+    """Section 2: each recent item must carry the unified live-display
+    fields; the payload must carry ``live_display``,
+    ``baseline_epoch_ms``, and ``snapshot_at_epoch_ms``."""
+    _set_snapshot(None)  # no current activity -> no virtual item
     result = bridge.get_recent_activities()
     assert result["ok"] is True
     assert "snapshot_at_epoch_ms" in result
-    assert "live_projected_recent_index" in result
-    assert "live_projected_seconds" in result
+    assert "baseline_epoch_ms" in result
+    assert "live_display" in result
     for item in result["activities"]:
         assert "duration_seconds" in item
         assert "is_in_progress" in item
         assert "is_live_projected" in item
+        assert "is_virtual" in item
+        assert "is_virtual_live" in item
+        assert "live_display_key" in item
+        assert "activity_id" in item
+        assert "source" in item
+        assert "edit_disabled" in item
 
 
 def test_get_recent_activities_no_projection_without_snapshot(bridge):
-    """Section 2: when no current snapshot exists, no item is marked
-    ``is_live_projected`` and ``live_projected_recent_index`` is -1."""
+    """Section 2: when no current snapshot exists, no virtual item is
+    prepended and ``live_display.is_virtual_live`` is False."""
     _set_snapshot(None)
     result = bridge.get_recent_activities()
-    assert result["live_projected_recent_index"] == -1
-    assert result["live_projected_seconds"] == 0
+    assert result["live_display"]["is_virtual_live"] is False
     for item in result["activities"]:
-        assert item["is_live_projected"] is False
+        assert item["is_virtual_live"] is False
+        assert item["is_virtual"] is False
 
 
 def test_get_recent_activities_no_projection_for_paused_snapshot(bridge):
     """Section 12: paused / idle / excluded / error snapshots must NOT
-    produce recent projection."""
+    produce a virtual recent item."""
     for status in ("idle", "paused", "excluded", "error"):
         _set_snapshot(_normal_snapshot(status=status))
         result = bridge.get_recent_activities()
-        assert result["live_projected_recent_index"] == -1, (
-            "paused/idle/excluded/error snapshot must not produce recent "
-            "projection (status=" + status + ")"
+        assert result["live_display"]["is_virtual_live"] is False, (
+            "paused/idle/excluded/error snapshot must not produce a "
+            "virtual recent item (status=" + status + ")"
         )
         for item in result["activities"]:
-            assert item["is_live_projected"] is False
+            assert item["is_virtual_live"] is False
+            assert item["is_virtual"] is False
 
 
 def test_get_recent_activities_no_projection_for_persisted_snapshot(bridge):
     """Section 12: when the current snapshot is already persisted, no
-    short-activity projection is applied (avoid double counting)."""
+    virtual item is prepended (avoid double counting). The real
+    persisted-open DB row (if any) carries ``is_in_progress``."""
     _set_snapshot(
         _normal_snapshot(is_persisted=True, persisted_activity_id=123)
     )
     result = bridge.get_recent_activities()
-    assert result["live_projected_recent_index"] == -1
-    assert result["live_projected_seconds"] == 0
+    assert result["live_display"]["is_virtual_live"] is False
     for item in result["activities"]:
-        assert item["is_live_projected"] is False
+        assert item["is_virtual_live"] is False
+        assert item["is_virtual"] is False
 
 
 # --- get_timeline: projection ---------------------------------------------
@@ -401,15 +415,13 @@ def test_get_timeline_no_projection_for_paused_snapshot(bridge):
 
 
 def test_get_timeline_session_details_returns_duration_seconds(bridge):
-    """Section 2: each detail row must carry ``duration_seconds``."""
+    """Section 2: each detail row must carry ``duration_seconds`` and the
+    unified live-display fields. With no snapshot, no virtual row is
+    produced so the list is empty (the per-row schema is exercised by the
+    virtual-row test below)."""
     _set_snapshot(None)
     result = bridge.get_timeline_session_details([], None)
     assert result["ok"] is True
-    # Empty activity_ids returns empty list (covered by existing tests).
-    # The contract is that whenever rows are returned, each has
-    # ``duration_seconds``. We verify the field is part of the row schema
-    # by checking the bridge code path with a real activity is exercised
-    # elsewhere; here we only assert the empty-list contract.
     assert result["activities"] == []
 
 
@@ -439,3 +451,149 @@ def test_get_refresh_state_is_json_serializable_with_snapshot(bridge):
     _set_snapshot(_normal_snapshot())
     import json
     json.dumps(bridge.get_refresh_state())
+
+
+# --- Phase R3: unified virtual live display contract --------------------
+
+
+def test_get_recent_activities_prepends_virtual_item_for_normal_snapshot(bridge):
+    """Phase R3: when the current snapshot is a normal unpersisted
+    activity, ``get_recent_activities`` must prepend a virtual live item
+    with ``is_virtual`` / ``is_virtual_live`` True, ``activity_id`` 0,
+    ``source`` "snapshot", ``edit_disabled`` True, and a non-empty
+    ``live_display_key``. The DB is never written."""
+    _set_snapshot(_normal_snapshot(elapsed_seconds=120))
+    result = bridge.get_recent_activities()
+    assert result["ok"] is True
+    assert result["live_display"]["is_virtual_live"] is True
+    items = result["activities"]
+    assert len(items) >= 1, "virtual live item must be prepended"
+    virtual = items[0]
+    assert virtual["is_virtual"] is True
+    assert virtual["is_virtual_live"] is True
+    assert virtual["activity_id"] == 0
+    assert virtual["source"] == "snapshot"
+    assert virtual["edit_disabled"] is True
+    assert virtual["is_in_progress"] is True
+    assert virtual["live_display_key"]
+    assert virtual["duration_seconds"] > 0
+
+
+def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
+    """Phase R3: when the current snapshot is a normal unpersisted
+    activity, ``get_timeline`` must prepend a virtual live session.
+    ``today_total_seconds`` must include the virtual session's baseline so
+    the displayed total is non-zero even when there are no DB sessions."""
+    _set_snapshot(_normal_snapshot(elapsed_seconds=120))
+    result = bridge.get_timeline()
+    assert result["ok"] is True
+    assert result["live_projected_session_id"] == "virtual-live"
+    assert result["live_projected_seconds"] > 0
+    sessions = result["sessions"]
+    assert len(sessions) >= 1, "virtual live session must be prepended"
+    virtual = sessions[0]
+    assert virtual["is_virtual"] is True
+    assert virtual["is_virtual_live"] is True
+    assert virtual["source"] == "snapshot"
+    assert virtual["edit_disabled"] is True
+    assert virtual["is_in_progress"] is True
+    assert virtual["live_display_key"]
+    # Timeline total must not be 0 when a virtual session exists.
+    assert int(result["today_total_seconds"]) > 0
+    # The virtual session's duration must be included in the total.
+    assert int(result["today_total_seconds"]) >= int(virtual["duration_seconds"])
+
+
+def test_get_timeline_session_details_returns_virtual_detail_row(bridge):
+    """Phase R3: when ``activity_ids`` is empty and the current snapshot
+    is a normal unpersisted activity, ``get_timeline_session_details``
+    must return a single virtual detail row. The row uses the snapshot's
+    display-safe resource/app/project — it is NEVER projected onto an old
+    DB row. ``activity_id`` must be 0 and ``edit_disabled`` must be True."""
+    _set_snapshot(_normal_snapshot(elapsed_seconds=120))
+    result = bridge.get_timeline_session_details([], None)
+    assert result["ok"] is True
+    rows = result["activities"]
+    assert len(rows) == 1, "exactly one virtual detail row must be returned"
+    row = rows[0]
+    assert row["is_virtual"] is True
+    assert row["is_virtual_live"] is True
+    assert row["activity_id"] == 0
+    assert row["source"] == "snapshot"
+    assert row["edit_disabled"] is True
+    assert row["is_in_progress"] is True
+    assert row["live_display_key"]
+    assert row["duration_seconds"] > 0
+    # The virtual row must use the snapshot's display-safe project, not a
+    # stale DB row.
+    assert row["project_name"] == "TestProject"
+
+
+def test_virtual_items_do_not_leak_sensitive_fields(bridge):
+    """Phase R3: virtual items / sessions / detail rows must NOT leak raw
+    window_title / file_path_hint / clipboard / note VALUES / SQL /
+    traceback. Note: ``session_note`` is a legitimate display-safe field
+    name; the check targets the raw ``note`` KEY and the sensitive VALUES."""
+    _set_snapshot(
+        {
+            **_normal_snapshot(elapsed_seconds=120),
+            "window_title": "secret.docx - Microsoft Word",
+            "file_path_hint": "C:\\Users\\secret\\file.docx",
+            "clipboard": "secret clipboard",
+            "note": "secret note",
+        }
+    )
+    serialized = json.dumps(bridge.get_recent_activities())
+    serialized += json.dumps(bridge.get_timeline())
+    serialized += json.dumps(bridge.get_timeline_session_details([], None))
+    for forbidden in (
+        "secret.docx",
+        "Microsoft Word",
+        "C:\\Users\\secret",
+        "file.docx",
+        "secret clipboard",
+        "secret note",
+        "window_title",
+        "file_path_hint",
+        "clipboard",
+        "traceback",
+    ):
+        assert forbidden not in serialized, (
+            "virtual item leaked sensitive field: " + forbidden
+        )
+    # The raw "note" KEY (as opposed to "session_note") must not appear.
+    # Use a word-boundary check so "session_note" does not match.
+    import re
+    assert not re.search(r'(?<!session_)"note":', serialized), (
+        "virtual item leaked raw note key (not session_note)"
+    )
+
+
+def test_refresh_revision_changes_on_pending_short_seconds(bridge):
+    """Phase R3: ``refresh_revision`` must change when
+    ``pending_short_seconds`` changes (the carry state advances so a
+    short activity that just crossed the threshold triggers a refresh)."""
+    _set_snapshot(_normal_snapshot(elapsed_seconds=120))
+    settings_service.set_setting("pending_short_seconds", "0")
+    settings_service.clear_settings_cache()
+    r1 = bridge.get_refresh_state()
+    settings_service.set_setting("pending_short_seconds", "45")
+    settings_service.clear_settings_cache()
+    r2 = bridge.get_refresh_state()
+    assert r1["refresh_revision"] != r2["refresh_revision"], (
+        "refresh_revision must change on pending_short_seconds change"
+    )
+
+
+def test_refresh_revision_changes_on_date_rollover(bridge):
+    """Phase R3: ``refresh_revision`` must change when ``today`` changes
+    (date rollover at midnight)."""
+    _set_snapshot(_normal_snapshot(elapsed_seconds=120))
+    from worktrace.api import timeline_api
+    with patch.object(timeline_api, "get_default_report_date", return_value="2026-06-30"):
+        r1 = bridge.get_refresh_state()
+    with patch.object(timeline_api, "get_default_report_date", return_value="2026-07-01"):
+        r2 = bridge.get_refresh_state()
+    assert r1["refresh_revision"] != r2["refresh_revision"], (
+        "refresh_revision must change on date rollover"
+    )

@@ -22,7 +22,12 @@ import logging
 import time
 from typing import Any
 
-from ..api import project_api, settings_api, timeline_api
+from ..api import (
+    live_display_api,
+    project_api,
+    settings_api,
+    timeline_api,
+)
 from ..api.timeline_api import (
     TimelineBatchNoteError,
     TimelineBatchProjectError,
@@ -37,7 +42,6 @@ from .bridge_common import (
     _DATE_SHAPE_RE,
     _GENERIC_ERROR,
     _coerce_activity_ids,
-    _find_live_projection_target,
     _safe_resource_display_name,
     _snapshot_summary,
     _validate_datetime_inputs,
@@ -145,31 +149,24 @@ class TimelineBridgeMixin:
     def get_timeline(self, date: str | None = None) -> dict[str, Any]:
         """Return read-only timeline data for a single date.
 
-        Returns the date, total duration, current activity summary, and a
-        list of project sessions. Each session includes the ``activity_ids``
-        list needed to load detail rows via ``get_timeline_session_details``.
-        No editing, correction, or write operations are exposed.
+        Unified live-display model. The payload supports three session kinds:
 
-        Phase 6G: also returns raw seconds + snapshot fields so the
-        frontend 1-second ticker can increment the displayed total and
-        in-progress session duration without a bridge round-trip. Each
-        session includes ``duration_seconds``; the in-progress session's
-        ``duration_seconds`` already includes the live projection.
-        ``today_total_seconds`` only reflects this date's sessions; the
-        ticker only increments it when the viewed date is today AND the
-        current activity is running.
+        - **virtual live session** — prepended when the viewed date is today
+          AND the current snapshot is a normal unpersisted <30s activity.
+          ``is_virtual`` / ``is_virtual_live`` are true, ``activity_id`` is
+          ``0``, ``source`` is ``"snapshot"``, ``edit_disabled`` is true,
+          and the time range shows "进行中". The DB is NEVER written.
+        - **persisted open session** — a real DB session whose
+          ``is_in_progress`` is true. ``duration_seconds`` already includes
+          the live seconds from ``timeline_service._live_duration_for_row``.
+        - **closed DB session** — a finalized session row.
 
-        Phase 6H-followup: each session now carries an explicit
-        ``is_live_projected`` flag. When the viewed date is today AND the
-        current snapshot is live-projectable AND no real ``is_in_progress``
-        session exists, the most recent *normal* session receives the
-        projection baseline in ``duration_seconds`` / ``duration`` and is
-        marked ``is_live_projected = true``. The top-level payload carries
-        ``live_projected_session_id`` and ``live_projected_seconds`` so the
-        frontend heartbeat can append the wall-clock delta without a
-        bridge round-trip. Historical dates are never projected. The DB
-        and collector are untouched; the 30-second persistence threshold
-        is preserved.
+        ``today_total_seconds`` includes the virtual live session's baseline
+        so the displayed total matches the sum of session durations at
+        backend response time. The frontend ticker adds
+        ``(now - baseline_epoch_ms)`` only to the virtual / in-progress
+        session. Historical dates are never projected. idle / paused /
+        excluded / error snapshots never produce a virtual session.
         """
         try:
             report_date = date or timeline_api.get_default_report_date()
@@ -180,23 +177,56 @@ class TimelineBridgeMixin:
             )
             total_seconds = sum(s.get("duration_seconds") or 0 for s in sessions_raw)
             snapshot = settings_api.get_current_activity_snapshot()
-            current = _snapshot_summary(snapshot)
-            # Phase 6H-followup: live projection for today only.
             today = timeline_api.get_default_report_date()
-            target = _find_live_projection_target(sessions_raw, snapshot, report_date, today)
+            current = _snapshot_summary(snapshot)
+            baseline_epoch_ms = int(time.time() * 1000)
+            live_display = live_display_api.build_current_activity_summary(
+                snapshot, report_date=report_date, today=today
+            )
+            sessions: list[dict[str, Any]] = []
             target_session_id = ""
             target_projected_seconds = 0
-            sessions: list[dict[str, Any]] = []
-            for idx, session in enumerate(sessions_raw):
+            # Prepend a virtual live session when the current snapshot is a
+            # normal unpersisted activity on today's date. This is
+            # display-only; the DB is never written.
+            virtual_session = live_display_api.build_virtual_session(
+                snapshot, report_date=report_date, today=today
+            )
+            if virtual_session is not None:
+                vseconds = int(virtual_session.get("duration_seconds") or 0)
+                target_projected_seconds = vseconds
+                target_session_id = str(virtual_session.get("session_id") or "")
+                sessions.append(
+                    {
+                        "session_id": str(virtual_session.get("session_id") or "virtual-live"),
+                        "project_name": str(virtual_session.get("project_name") or "未归类"),
+                        "project_description": str(virtual_session.get("project_description") or ""),
+                        "project_id": int(virtual_session.get("project_id") or 0),
+                        "start_time": str(virtual_session.get("start_time") or ""),
+                        "end_time": "",
+                        "duration": str(virtual_session.get("duration") or "00:00:00"),
+                        "duration_seconds": vseconds,
+                        "status": "进行中",
+                        "event_count": int(virtual_session.get("event_count") or 0),
+                        "is_uncategorized": bool(virtual_session.get("is_uncategorized")),
+                        "is_in_progress": True,
+                        "is_live_projected": True,
+                        "is_virtual": True,
+                        "is_virtual_live": True,
+                        "live_display_key": str(virtual_session.get("live_display_key") or ""),
+                        "activity_ids": [],
+                        "first_activity_id": None,
+                        "session_note": "",
+                        "edit_disabled": True,
+                        "disable_reason": str(virtual_session.get("disable_reason") or ""),
+                        "source": "snapshot",
+                    }
+                )
+            for session in sessions_raw:
                 start_time = str(session.get("start_time") or "")
                 end_time = str(session.get("end_time") or "")
                 session_seconds = int(session.get("duration_seconds") or 0)
-                is_live_projected = False
-                if target is not None and idx == target[0]:
-                    target_projected_seconds = int(target[1])
-                    session_seconds = session_seconds + target_projected_seconds
-                    is_live_projected = True
-                    target_session_id = str(session.get("session_id") or "")
+                is_in_progress = bool(session.get("is_in_progress"))
                 sessions.append(
                     {
                         "session_id": str(session.get("session_id") or ""),
@@ -210,17 +240,23 @@ class TimelineBridgeMixin:
                         "status": str(session.get("status_summary") or session.get("status") or ""),
                         "event_count": int(session.get("event_count") or 0),
                         "is_uncategorized": bool(session.get("is_uncategorized")),
-                        "is_in_progress": bool(session.get("is_in_progress")),
-                        "is_live_projected": is_live_projected,
+                        "is_in_progress": is_in_progress,
+                        "is_live_projected": is_in_progress,
+                        "is_virtual": False,
+                        "is_virtual_live": False,
+                        "live_display_key": "",
                         "activity_ids": list(session.get("activity_ids") or []),
                         "first_activity_id": int(session.get("first_activity_id") or 0) or None,
                         "session_note": str(session.get("session_note") or ""),
+                        "edit_disabled": False,
+                        "disable_reason": "",
+                        "source": "db",
                     }
                 )
-            # Include the projection baseline in the totals so the
+            # Include the virtual session baseline in the totals so the
             # displayed total matches the sum of session durations at
             # backend response time. The frontend ticker only adds the
-            # wall-clock delta since ``snapshot_at_epoch_ms`` on top, so
+            # wall-clock delta since ``baseline_epoch_ms`` on top, so
             # there is no double-counting.
             display_total_seconds = total_seconds + target_projected_seconds
             return {
@@ -229,23 +265,21 @@ class TimelineBridgeMixin:
                 "total_duration": format_duration(display_total_seconds),
                 "total_seconds": display_total_seconds,
                 "current_activity": current,
+                "live_display": live_display,
                 "sessions": sessions,
-                # Phase 6G raw seconds + snapshot fields for the 1-second
-                # local ticker. The ticker only updates DOM text; it
-                # never calls a bridge method or writes the DB.
-                "snapshot_at_epoch_ms": int(time.time() * 1000),
+                # Raw seconds + snapshot fields for the 1-second local
+                # ticker. The ticker only updates DOM text; it never
+                # calls a bridge method or writes the DB.
+                "snapshot_at_epoch_ms": baseline_epoch_ms,
+                "baseline_epoch_ms": baseline_epoch_ms,
                 "today_total_seconds": display_total_seconds,
                 "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
-                # Phase 6H-followup: live projection metadata. When the
-                # viewed date is today AND a target session was found,
-                # ``live_projected_session_id`` is that session's id and
-                # ``live_projected_seconds`` is the backend response-time
-                # baseline. The frontend ticker adds
-                # (now - snapshot_at_epoch_ms) to this baseline and updates
-                # only that session's duration text. Historical dates and
-                # sessions without a projection target get empty / zero
-                # values so the frontend falls back to the real
-                # ``duration_seconds``.
+                # Live projection metadata (kept for backward compat). When
+                # a virtual session was prepended, ``live_projected_session_id``
+                # is ``"virtual-live"`` and ``live_projected_seconds`` is the
+                # backend response-time baseline. Persisted-open sessions do
+                # not need this field (their ``duration_seconds`` already
+                # includes the live seconds).
                 "live_projected_session_id": target_session_id,
                 "live_projected_seconds": target_projected_seconds,
             }
@@ -260,38 +294,83 @@ class TimelineBridgeMixin:
     ) -> dict[str, Any]:
         """Return read-only activity detail rows for a session.
 
-        Each row exposes display-safe fields only: time range, duration,
-        app name, resource type, resource display name, project name, and
-        status. The ``resource_name`` is built from sanitized display fields
-        (``resource_display_name`` → ``activity_display_name`` → ``app_name``
-        → ``process_name``) and **never** falls back to the raw
-        ``window_title`` column, which can contain file paths, URLs, or email
-        subjects. Raw window titles, file paths, and notes are not surfaced.
+        Unified live-display model. When ``activity_ids`` is empty AND the
+        viewed date is today AND the current snapshot is a normal
+        unpersisted <30s activity, the bridge returns a single display-only
+        **virtual detail row** (``is_virtual`` / ``is_virtual_live`` true,
+        ``activity_id`` ``0``, ``source`` ``"snapshot"``,
+        ``edit_disabled`` true). The virtual row uses the snapshot's
+        display-safe resource / app / project — it is NEVER projected onto
+        an old DB row. The DB is never written.
 
-        Phase 6H-followup: each detail row now carries the raw
-        ``duration_seconds`` baseline so the frontend heartbeat can apply
-        the monotonic projection helper without parsing the formatted
-        ``duration`` string. The bridge deliberately does NOT manufacture a
-        fake activity row for the unpersisted <30s current activity; the
-        frontend temporarily updates the latest detail row's duration text
-        in place using ``live_projected_session_id`` /
-        ``live_projected_seconds`` from ``get_timeline``.
+        For real DB activity ids, each row exposes display-safe fields
+        only: time range, duration, app name, resource type, resource
+        display name, project name, and status. The ``resource_name`` is
+        built from sanitized display fields and **never** falls back to
+        the raw ``window_title`` column. Raw window titles, file paths,
+        and notes are not surfaced.
+
+        Each row carries ``duration_seconds`` (backend response-time
+        baseline), ``is_in_progress``, ``is_virtual``, ``is_virtual_live``,
+        ``live_display_key``, ``activity_id``, ``source``,
+        ``edit_disabled``, and ``disable_reason`` so the frontend ticker
+        can locate the live row by flag and increment its duration by
+        ``(now - baseline_epoch_ms)``.
         """
         try:
             ids = [int(aid) for aid in (activity_ids or [])]
-            if not ids:
-                return {"ok": True, "activities": []}
             date = report_date or timeline_api.get_default_report_date()
+            today = timeline_api.get_default_report_date()
+            snapshot = settings_api.get_current_activity_snapshot()
+            baseline_epoch_ms = int(time.time() * 1000)
+            activities: list[dict[str, Any]] = []
+            # When the requested session is the virtual live session
+            # (empty activity_ids) and the snapshot is eligible, return a
+            # single virtual detail row. This avoids projecting the
+            # unpersisted activity onto an old DB row.
+            if not ids:
+                virtual_row = live_display_api.build_virtual_detail_row(
+                    snapshot, report_date=date, today=today
+                )
+                if virtual_row is not None:
+                    activities.append(
+                        {
+                            "activity_id": 0,
+                            "start_time": str(virtual_row.get("start_time") or ""),
+                            "end_time": "",
+                            "duration": str(virtual_row.get("duration") or "00:00:00"),
+                            "duration_seconds": int(virtual_row.get("duration_seconds") or 0),
+                            "app_name": str(virtual_row.get("app_name") or ""),
+                            "resource_type": str(virtual_row.get("resource_type") or ""),
+                            "resource_name": str(virtual_row.get("resource_name") or "未知"),
+                            "project_name": str(virtual_row.get("project_name") or "未归类"),
+                            "status": str(virtual_row.get("status") or ""),
+                            "is_in_progress": True,
+                            "is_live_projected": True,
+                            "is_virtual": True,
+                            "is_virtual_live": True,
+                            "live_display_key": str(virtual_row.get("live_display_key") or ""),
+                            "source": "snapshot",
+                            "edit_disabled": True,
+                            "disable_reason": str(virtual_row.get("disable_reason") or ""),
+                        }
+                    )
+                return {
+                    "ok": True,
+                    "activities": activities,
+                    "baseline_epoch_ms": baseline_epoch_ms,
+                    "snapshot_at_epoch_ms": baseline_epoch_ms,
+                }
             rows = timeline_api.get_session_activity_details(
                 ids,
                 report_date=date,
                 ensure_context=True,
             )
-            activities: list[dict[str, Any]] = []
             for row in rows:
                 start_time = str(row.get("start_time") or "")
                 end_time = str(row.get("end_time") or "")
                 row_seconds = int(row.get("duration_seconds") or 0)
+                is_in_progress = bool(row.get("is_in_progress"))
                 activities.append(
                     {
                         "activity_id": int(row.get("id") or 0),
@@ -307,10 +386,22 @@ class TimelineBridgeMixin:
                         "resource_name": _safe_resource_display_name(row),
                         "project_name": str(row.get("project_name") or "未归类"),
                         "status": str(row.get("status") or ""),
-                        "is_in_progress": bool(row.get("is_in_progress")),
+                        "is_in_progress": is_in_progress,
+                        "is_live_projected": is_in_progress,
+                        "is_virtual": False,
+                        "is_virtual_live": False,
+                        "live_display_key": "",
+                        "source": "db",
+                        "edit_disabled": False,
+                        "disable_reason": "",
                     }
                 )
-            return {"ok": True, "activities": activities}
+            return {
+                "ok": True,
+                "activities": activities,
+                "baseline_epoch_ms": baseline_epoch_ms,
+                "snapshot_at_epoch_ms": baseline_epoch_ms,
+            }
         except Exception:
             logger.exception("webview bridge get_timeline_session_details failed")
             return dict(_GENERIC_ERROR)

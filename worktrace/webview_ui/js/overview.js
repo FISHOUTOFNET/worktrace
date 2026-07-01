@@ -69,6 +69,7 @@
             var cls = "recent-item";
             if (inProgress) cls += " in-progress";
             if (item.is_live_projected === true) cls += " live-projected";
+            if (item.is_virtual === true) cls += " virtual-live";
             html += '<div class="' + cls + '" data-recent-index="' + i + '"'
                 + ' data-duration-seconds="' + (isNaN(durSec) ? 0 : durSec) + '"'
                 + '>'

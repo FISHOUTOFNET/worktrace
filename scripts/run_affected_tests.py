@@ -114,6 +114,8 @@ RULES: list[dict] = [
         ],
         "tests": [
             "tests/webview/",
+            "tests/webview/test_heartbeat_projection_contract.py",
+            "tests/webview/test_frontend_global_boundaries.py",
             "tests/test_webview_bridge.py",
             "tests/test_ui_backend_boundary.py",
         ],
@@ -507,6 +509,25 @@ RULES: list[dict] = [
             "tests/test_ui_backend_boundary.py",
         ],
         "smoke": [],
+        "warnings": [],
+    },
+    {
+        "id": "M. Live display service / API",
+        "triggers": [
+            "worktrace/services/live_display_service.py",
+            "worktrace/api/live_display_api.py",
+        ],
+        "tests": [
+            "tests/test_bridge_refresh_state_and_projection.py",
+            "tests/webview/test_heartbeat_projection_contract.py",
+            "tests/webview/test_frontend_global_boundaries.py",
+            "tests/test_statistics_service.py",
+            "tests/test_timeline_service.py",
+            "tests/test_live_time_service.py",
+            "tests/test_webview_bridge.py",
+            "tests/test_ui_backend_boundary.py",
+        ],
+        "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
     },
 ]

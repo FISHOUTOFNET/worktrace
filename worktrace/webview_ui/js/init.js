@@ -106,14 +106,32 @@
     }
 
     function refreshCurrentPageData() {
-        if (App.activePageRefreshInFlight) return Promise.resolve();
+        // Phase R3 issue 14: when a refresh is already in-flight, record
+        // a pending request instead of silently skipping. After the
+        // in-flight refresh completes, if ``pendingPageRefresh`` is true
+        // a new refresh is triggered for the CURRENT page so page-switch
+        // immediate refresh is never lost. Stale-response protection is
+        // already handled by per-page request tokens (timelineRequestToken
+        // etc.), so a pending refresh always targets the latest page.
+        if (App.activePageRefreshInFlight) {
+            App.pendingPageRefresh = true;
+            return Promise.resolve();
+        }
         App.activePageRefreshInFlight = true;
+        App.pendingPageRefresh = false;
         var promises = [refreshStatus()];
         if (App.currentPage === "overview") {
             promises.push(refreshOverview());
             promises.push(refreshRecent());
         } else if (App.currentPage === "timeline" && App.timelineLoaded) {
-            promises.push(refreshTimeline());
+            // Phase R3 issue 11: skip Timeline refresh when an editor /
+            // split editor / dirty session edit / correction shell is
+            // active. The heartbeat revision-change refresh and manual
+            // refresh must not overwrite user input. The next heartbeat
+            // tick after the editor closes will catch up.
+            if (typeof App._timelineEditingActive !== "function" || !App._timelineEditingActive()) {
+                promises.push(refreshTimeline());
+            }
         }
         // Rules / Settings / Statistics are intentionally NOT auto-refreshed
         // by the heartbeat; they keep their own page-level refresh buttons.
@@ -129,6 +147,15 @@
             }
             if (!anyError) {
                 App.clearError();
+            }
+            // Phase R3 issue 14: if a page switch (or other caller)
+            // requested a refresh while this one was in-flight, trigger a
+            // new refresh now for whatever the current page is. This
+            // ensures the page-switch immediate refresh is never silently
+            // skipped.
+            if (App.pendingPageRefresh) {
+                App.pendingPageRefresh = false;
+                refreshCurrentPageData();
             }
         });
     }
@@ -547,7 +574,27 @@
             // revision check, calling heavy interfaces only when the
             // structural revision changes.
             refreshCurrentPageData();
-            startHeartbeat();
+            // Phase R3 issue 3: initialize ``lastRefreshState`` BEFORE
+            // starting the heartbeat. Without this, the first heartbeat
+            // tick sees ``prevRevision === null`` (isFirstCheck === true)
+            // and triggers a redundant heavy refresh on top of the one
+            // that just completed above. Using the two-arg Promise.then
+            // form (onFulfilled, onRejected) instead of a separate
+            // rejection handler so the init body stays flat. Both branches
+            // start the heartbeat so it begins regardless of whether the
+            // initial refresh-state read succeeded.
+            App.callBridge("get_refresh_state").then(function (result) {
+                var state = App.handleResult(result, function () { return null; });
+                if (state) {
+                    App.lastRefreshState = state;
+                }
+                startHeartbeat();
+            }, function () {
+                // get_refresh_state failed: start the heartbeat anyway.
+                // The first tick's revision check will initialize
+                // lastRefreshState as a fallback.
+                startHeartbeat();
+            });
         });
     }
     App.init = init;

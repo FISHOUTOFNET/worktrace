@@ -53,6 +53,13 @@
     App.lastRefreshState = null;
     App.refreshCheckInFlight = false;
     App.activePageRefreshInFlight = false;
+    // Phase R3 issue 14: pending page refresh. When ``refreshCurrentPageData``
+    // is called while a refresh is already in-flight (e.g. a page switch
+    // during a heartbeat refresh), the request is recorded here. After the
+    // in-flight refresh completes, if ``pendingPageRefresh`` is true a new
+    // refresh is triggered so page-switch immediate refresh is never
+    // silently skipped by the global in-flight guard.
+    App.pendingPageRefresh = false;
     App.lastFullRefreshAtEpochMs = 0;
     // Phase 6H-followup section 8/10: low-frequency collection reconciliation.
     // Every ``RECONCILE_INTERVAL_MS`` the heartbeat triggers a guarded
@@ -605,11 +612,28 @@
         return delta > 0 ? delta : 0;
     }
 
-    function tickerCurrentActivityRunning(snapshot) {
-        var current = snapshot && snapshot.current_activity;
+    // Unified live-display eligibility: only virtual (unpersisted normal)
+    // and persisted_open (real open normal row) increment normal project
+    // duration. paused / idle / excluded / error / none never do. This
+    // fixes issue 1: idle / excluded / error were previously still
+    // locally timed because only active + !is_paused was checked.
+    function tickerLiveEligible(payload) {
+        if (!payload) return false;
+        var ld = payload.live_display;
+        if (ld) {
+            return ld.live_state === "virtual" || ld.live_state === "persisted_open";
+        }
+        // Fallback for payloads without live_display: use current_activity.
+        var current = payload.current_activity;
         if (!current || !current.active) return false;
         if (current.is_paused) return false;
+        if (current.status !== "normal") return false;
         return true;
+    }
+    App.tickerLiveEligible = tickerLiveEligible;
+
+    function tickerCurrentActivityRunning(snapshot) {
+        return tickerLiveEligible(snapshot);
     }
 
     function applyLocalTicker() {
@@ -622,7 +646,7 @@
         if (ov && App.currentPage === "overview") {
             var delta = 0;
             var currentIsUncategorized = true;
-            if (tickerCurrentActivityRunning(ov)) {
+            if (tickerLiveEligible(ov)) {
                 delta = tickerDeltaSeconds(ov);
             }
             var current = ov.current_activity || {};
@@ -669,24 +693,26 @@
                 }
             }
         }
-        // Recent list: update the live-projected recent item's duration.
-        // Only when the overview page is active and a recent snapshot with a
-        // live projection target is available.
+        // Recent list: update live (virtual or persisted-open) recent items.
+        // Issue 6 fix: the baseline comes from the cached payload's
+        // ``duration_seconds``, NOT from DOM text. Issue 8 fix: both virtual
+        // live items and real is_in_progress items are handled by flag,
+        // replacing the single-scenario ``live_projected_recent_index``.
         var recent = App.lastRecentSnapshot;
-        if (recent && App.currentPage === "overview") {
-            var recentDelta = tickerDeltaSeconds(recent);
-            var projectedIndex = parseInt(recent.live_projected_recent_index, 10);
-            if (projectedIndex >= 0 && recentDelta >= 0) {
-                var recentEl = document.querySelector('.recent-item[data-recent-index="' + projectedIndex + '"] .recent-item-duration');
-                if (recentEl) {
-                    var baseSec = App.readDurationSecondsFromText(recentEl);
-                    // ``live_projected_seconds`` is the backend baseline; add
-                    // the wall-clock delta on top. ``baseSec`` already
-                    // includes the projection baseline (the backend added it
-                    // to the target item's ``duration_seconds``), so we only
-                    // add the delta here.
-                    var projectedSec = baseSec + recentDelta;
-                    App.renderDurationMonotonic(recentEl, projectedSec, "recent-" + projectedIndex, false);
+        if (recent && App.currentPage === "overview" && recent.activities) {
+            var recentDelta = tickerLiveEligible(recent) ? tickerDeltaSeconds(recent) : 0;
+            for (var ri = 0; ri < recent.activities.length; ri++) {
+                var rItem = recent.activities[ri];
+                if (rItem.is_virtual_live || rItem.is_in_progress) {
+                    var rEl = document.querySelector(
+                        '.recent-item[data-recent-index="' + ri + '"] .recent-item-duration'
+                    );
+                    if (rEl) {
+                        var rBaseSec = parseInt(rItem.duration_seconds, 10) || 0;
+                        App.renderDurationMonotonic(
+                            rEl, rBaseSec + recentDelta, "recent-" + ri, false
+                        );
+                    }
                 }
             }
         }
@@ -698,7 +724,7 @@
             var todayStr = App.localTodayStr();
             var isToday = !tl.date || tl.date === todayStr || tl.date === "--";
             var tlDelta = 0;
-            if (isToday && tickerCurrentActivityRunning(tl)) {
+            if (isToday && tickerLiveEligible(tl)) {
                 tlDelta = tickerDeltaSeconds(tl);
             }
             var tlTotalEl = document.getElementById("timeline-total");
@@ -744,59 +770,33 @@
                     }
                 }
             }
-            // Phase 6H-followup section 7.4: detail-row projection. Two
-            // cases are handled:
-            //   (a) selected session is a real ``is_in_progress`` session:
-            //       update that session's ``a.is_in_progress`` detail row.
-            //   (b) selected session equals ``live_projected_session_id`` and
-            //       the current activity is not yet persisted: temporarily
-            //       update the latest detail row.
-            // In both cases, skip when an editor / split editor / correction
-            // shell write is in progress so the user's input focus and
-            // button state are never disturbed.
+            // Unified detail-row projection. Issues 2 & 10 fix: locate the
+            // live detail row (virtual or in-progress) from the cached
+            // ``lastSessionDetailsData`` payload by flag, NOT by "last row".
+            // The detail list is newest-first, so the in-progress row is at
+            // index 0 — the old code used ``detailRows[length-1]`` (wrong).
+            // Virtual rows have ``activity_id=0`` and are never projected
+            // onto old DB rows. Baseline comes from the cached payload's
+            // ``duration_seconds``, NOT from DOM text.
             if (isToday && tlDelta >= 0 && App.selectedSessionId
                 && App.lastSessionDetailsData && !App._timelineEditingActive()) {
                 var detailsList = document.getElementById("timeline-details-list");
                 if (detailsList) {
-                    // Case (a): real is_in_progress session. Find the
-                    // detail row whose activity_id matches the in-progress
-                    // activity and update its duration.
-                    var selectedSessionObj = null;
-                    for (var ssi = 0; ssi < tl.sessions.length; ssi++) {
-                        if (tl.sessions[ssi].session_id === App.selectedSessionId) {
-                            selectedSessionObj = tl.sessions[ssi];
-                            break;
-                        }
-                    }
-                    if (selectedSessionObj && selectedSessionObj.is_in_progress) {
-                        var inProgressRows = detailsList.querySelectorAll(
-                            '.detail-item.in-progress .detail-item-duration'
-                        );
-                        if (inProgressRows.length > 0) {
-                            var ipDurEl = inProgressRows[inProgressRows.length - 1];
-                            var ipBaseSec = App.readDurationSecondsFromText(ipDurEl);
-                            var ipAid = ipDurEl.closest(".detail-item").getAttribute("data-activity-id") || "0";
-                            App.renderDurationMonotonic(
-                                ipDurEl, ipBaseSec + tlDelta, "detail-" + ipAid, false
+                    var detailActs = App.lastSessionDetailsData.activities || [];
+                    for (var dai = 0; dai < detailActs.length; dai++) {
+                        var dAct = detailActs[dai];
+                        if (dAct.is_virtual_live || dAct.is_in_progress) {
+                            var dAid = dAct.activity_id || 0;
+                            var dEl = detailsList.querySelector(
+                                '.detail-item[data-activity-id="' + dAid + '"] .detail-item-duration'
                             );
-                        }
-                    }
-                    // Case (b): live-projected session. The current activity
-                    // is not yet persisted, so the latest detail row gets
-                    // projection baseline + delta on top of its real duration.
-                    var projectedSessionId = tl.live_projected_session_id || "";
-                    if (projectedSessionId && App.selectedSessionId === projectedSessionId) {
-                        var detailRows = detailsList.querySelectorAll(".detail-item");
-                        if (detailRows.length > 0) {
-                            var latestRow = detailRows[detailRows.length - 1];
-                            var detailDurEl = latestRow.querySelector(".detail-item-duration");
-                            if (detailDurEl) {
-                                var detailBaseSec = App.readDurationSecondsFromText(detailDurEl);
-                                var projectedBaseSec = parseInt(tl.live_projected_seconds, 10) || 0;
-                                var detailProjectedSec = detailBaseSec + projectedBaseSec + tlDelta;
-                                var latestAid = latestRow.getAttribute("data-activity-id") || "0";
-                                App.renderDurationMonotonic(detailDurEl, detailProjectedSec, "detail-" + latestAid, false);
+                            if (dEl) {
+                                var dBaseSec = parseInt(dAct.duration_seconds, 10) || 0;
+                                App.renderDurationMonotonic(
+                                    dEl, dBaseSec + tlDelta, "detail-" + dAid, false
+                                );
                             }
+                            break;  // only one live row per session
                         }
                     }
                 }
@@ -805,14 +805,14 @@
     }
     App.applyLocalTicker = applyLocalTicker;
 
-    // Phase 6H-followup section 7.4: helper that reports whether any
-    // Timeline editing / split / correction-shell write is in progress.
-    // The ticker uses this to skip detail-row duration updates that could
-    // race with the user's input or with a save / split / restore operation.
-    // The ticker only ever modifies ``.detail-item-duration`` text, so when
-    // an editor is open the row's text is intentionally left untouched.
+    // Unified Timeline editing guard. Issue 12 fix: the old helper only
+    // checked saving flags + correctionShellOpen. It missed editors that
+    // are OPEN BUT NOT YET SAVED (editingActivityId / editingSplitActivityId)
+    // and dirty session edits (editingSession + isEditDirty). The ticker,
+    // revision-change refresh, low-frequency reconciliation, and page-switch
+    // refresh all respect this guard so user input is never overwritten.
     function timelineEditingActive() {
-        return !!(
+        if (
             App.editSaving ||
             App.timeSaving ||
             App.activityTimeSaving ||
@@ -825,7 +825,20 @@
             App.batchNoteSaving ||
             App.restoreSaving ||
             App.correctionShellOpen
-        );
+        ) {
+            return true;
+        }
+        // Inline time / split editors are open (even without unsaved
+        // changes) — protect them so a ticker / refresh does not disturb
+        // the editor DOM.
+        if (App.editingActivityId !== null) return true;
+        if (App.editingSplitActivityId !== null) return true;
+        // Dirty session edit (project / note / session-level time changed
+        // but not yet saved).
+        if (App.editingSession && typeof App.isEditDirty === "function" && App.isEditDirty()) {
+            return true;
+        }
+        return false;
     }
     App._timelineEditingActive = timelineEditingActive;
 

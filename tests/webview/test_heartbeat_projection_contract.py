@@ -283,7 +283,9 @@ def test_overview_js_stores_last_recent_snapshot():
 def test_recent_item_renders_data_index_and_progress_flags():
     """Section 5: each recent item must render a stable ``data-recent-index``
     attribute and use ``is_in_progress || is_live_projected`` to mark
-    in-progress / live-projected rows with CSS classes."""
+    in-progress / live-projected rows with CSS classes. Phase R3: the
+    unified live-display model also adds ``is_virtual`` / ``virtual-live``
+    so virtual live items are visually distinct from real in-progress rows."""
     source = read_js("overview.js")
     assert 'data-recent-index' in source, (
         "overview.js must render data-recent-index on each recent item"
@@ -294,11 +296,17 @@ def test_recent_item_renders_data_index_and_progress_flags():
     assert "is_live_projected" in source, (
         "overview.js must check is_live_projected on recent items"
     )
+    assert "is_virtual" in source, (
+        "overview.js must check is_virtual on recent items (unified model)"
+    )
     assert "in-progress" in source, (
         "overview.js must add the in-progress CSS class to live recent rows"
     )
     assert "live-projected" in source, (
         "overview.js must add the live-projected CSS class to projected rows"
+    )
+    assert "virtual-live" in source, (
+        "overview.js must add the virtual-live CSS class to virtual items"
     )
 
 
@@ -534,4 +542,127 @@ def test_statistics_page_has_closed_only_hint_css():
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".stats-closed-only-hint" in source, (
         "styles.css must define the .stats-closed-only-hint class"
+    )
+
+
+# --- Phase R3: unified live display eligibility + page-switch guard -------
+
+
+def test_ticker_live_eligible_checks_live_state():
+    """Phase R3 issue 1: the ticker must only increment normal project
+    duration when ``live_display.live_state`` is ``"virtual"`` or
+    ``"persisted_open"``. idle / paused / excluded / error must NOT be
+    eligible. The ``tickerLiveEligible`` helper centralises this check so
+    Overview / Recent / Timeline all use the same eligibility decision."""
+    source = read_js("core.js")
+    assert "function tickerLiveEligible" in source, (
+        "core.js must define function tickerLiveEligible for unified eligibility"
+    )
+    assert "App.tickerLiveEligible" in source, (
+        "core.js must expose App.tickerLiveEligible"
+    )
+    body = func_body(source, "tickerLiveEligible")
+    # Must check live_display.live_state for "virtual" and "persisted_open".
+    assert "live_state" in body, (
+        "tickerLiveEligible must check live_display.live_state"
+    )
+    assert "virtual" in body, (
+        "tickerLiveEligible must accept live_state === 'virtual'"
+    )
+    assert "persisted_open" in body, (
+        "tickerLiveEligible must accept live_state === 'persisted_open'"
+    )
+
+
+def test_ticker_does_not_read_dom_text_as_baseline():
+    """Phase R3 issue 6: the ticker must NOT use DOM current text as the
+    duration baseline. The baseline must come from the cached payload's
+    ``duration_seconds`` field. This prevents the duration from
+    accelerating growth on each tick."""
+    source = read_js("core.js")
+    pos = source.find("function applyLocalTicker")
+    assert pos != -1
+    end_func = source.find("\n    function ", pos + 1)
+    if end_func == -1:
+        end_func = source.find("\n    App.applyLocalTicker", pos + 1)
+    body = source[pos:end_func] if end_func != -1 else source[pos:]
+    # The recent section must use parseInt(rItem.duration_seconds) from the
+    # cached payload, not readDurationSecondsFromText(DOM element).
+    assert "rItem.duration_seconds" in body, (
+        "applyLocalTicker recent section must use rItem.duration_seconds "
+        "from the cached payload as the baseline"
+    )
+
+
+def test_ticker_locates_live_detail_by_flag_not_last_row():
+    """Phase R3 issues 2 & 10: the ticker must locate the live detail row
+    by flag (``is_virtual_live || is_in_progress``) from the cached
+    payload, NOT by using the last row of the detail list. The detail list
+    is newest-first so the old ``detailRows[length-1]`` was wrong."""
+    source = read_js("core.js")
+    pos = source.find("function applyLocalTicker")
+    assert pos != -1
+    end_func = source.find("\n    function ", pos + 1)
+    if end_func == -1:
+        end_func = source.find("\n    App.applyLocalTicker", pos + 1)
+    body = source[pos:end_func] if end_func != -1 else source[pos:]
+    assert "is_virtual_live" in body, (
+        "applyLocalTicker detail section must check is_virtual_live flag"
+    )
+    assert "is_in_progress" in body, (
+        "applyLocalTicker detail section must check is_in_progress flag"
+    )
+
+
+def test_page_switch_refresh_uses_pending_token_mechanism():
+    """Phase R3 issue 14: page-switch immediate refresh must NOT be
+    silently skipped by the global in-flight guard. When a refresh is
+    in-flight and a page switch occurs, ``pendingPageRefresh`` must be
+    set so the refresh is re-triggered after the in-flight one completes."""
+    source = read_js("init.js")
+    assert "App.pendingPageRefresh" in source, (
+        "init.js must define App.pendingPageRefresh state for the pending "
+        "page-refresh mechanism"
+    )
+    body = func_body(source, "refreshCurrentPageData")
+    assert "pendingPageRefresh" in body, (
+        "refreshCurrentPageData must use pendingPageRefresh to defer "
+        "page-switch refreshes that arrive while a refresh is in-flight"
+    )
+
+
+def test_timeline_editing_guard_covers_open_editors():
+    """Phase R3 issue 12: ``_timelineEditingActive`` must cover not just
+    saving states but also editors that are OPEN BUT NOT YET SAVED
+    (``editingActivityId`` / ``editingSplitActivityId``) and dirty session
+    edits (``editingSession`` + ``isEditDirty()``)."""
+    source = read_js("core.js")
+    body = func_body(source, "timelineEditingActive")
+    # Must check open editor IDs (not just saving flags).
+    assert "editingActivityId" in body, (
+        "timelineEditingActive must check editingActivityId (open editor)"
+    )
+    assert "editingSplitActivityId" in body, (
+        "timelineEditingActive must check editingSplitActivityId (open split)"
+    )
+    assert "editingSession" in body, (
+        "timelineEditingActive must check editingSession + isEditDirty()"
+    )
+    assert "isEditDirty" in body, (
+        "timelineEditingActive must call isEditDirty() for unsaved edits"
+    )
+
+
+def test_render_session_details_skips_rerender_when_editing():
+    """Phase R3 issue 17: ``renderSessionDetails`` must NOT re-render the
+    detail list (which would overwrite user input) when an inline editor /
+    split editor is open and dirty or a save is in progress."""
+    source = read_js("timeline.js")
+    body = func_body(source, "renderSessionDetails")
+    assert "editingActivityId" in body or "editingSplitActivityId" in body, (
+        "renderSessionDetails must check open editor IDs before re-rendering"
+    )
+    assert "isEditDirty" in body or "activityTimeSaving" in body, (
+        "renderSessionDetails must check isEditDirty / saving state before "
+        "re-rendering so user input is not overwritten"
     )

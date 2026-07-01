@@ -60,6 +60,7 @@
             if (s.is_uncategorized) cls += " uncategorized";
             if (s.is_in_progress) cls += " in-progress";
             if (s.is_live_projected === true) cls += " live-projected";
+            if (s.is_virtual === true) cls += " virtual-live";
             if (s.session_id === App.selectedSessionId) cls += " selected";
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
                 + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(timeRange) + '｜' + App.escapeHtml(sDurText) + '"'
@@ -110,22 +111,28 @@
                 }
             }
             if (found) {
-                // Phase 3B.1: skip the detail reload when the user has
-                // unsaved edits (project, note, session-level time, or
-                // per-activity inline time editor). Auto-refresh must not
-                // wipe in-progress edits. After a successful save the
-                // baseline is updated so isEditDirty() returns false and
-                // the reload proceeds normally.
-                var skipDetailReload = App.editingSession
-                    && App.editingSession.session_id === found.session_id
-                    && isEditDirty();
+                // Phase R3 issues 11/17: skip the detail reload when any
+                // Timeline editing is active — unsaved session edits, open
+                // inline time/split editors, saving states, or correction
+                // shell. Auto-refresh / revision-change refresh must never
+                // wipe in-progress edits or overwrite user input. After a
+                // successful save the baseline is updated so isEditDirty()
+                // returns false and the reload proceeds normally.
+                var skipDetailReload = (typeof App._timelineEditingActive === "function"
+                    && App._timelineEditingActive());
                 if (!skipDetailReload) {
                     loadSessionDetails(found.activity_ids, data.date);
                 }
-                // Only re-populate the edit panel if the user is not mid-edit.
+                // Only re-populate the edit panel if the user is not mid-edit
+                // AND the session is not edit-disabled (virtual live session).
                 // Auto-refresh must not overwrite unsaved edits.
-                if (!App.editingSession || App.editingSession.session_id !== found.session_id || !isEditDirty()) {
+                if (!found.edit_disabled
+                    && (!App.editingSession || App.editingSession.session_id !== found.session_id || !isEditDirty())) {
                     populateEditPanel(found);
+                } else if (found.edit_disabled) {
+                    // Virtual live session: clear the edit panel since it
+                    // cannot be edited.
+                    clearEditPanel();
                 }
                 // Phase 3B.5B: if the correction shell is open for this
                 // session, refresh its context summary from the updated
@@ -228,6 +235,19 @@
         // only updates DOM text; it never re-renders the whole list so
         // inline edit state is preserved across heartbeat refreshes.
         App.lastSessionDetailsData = data;
+        // Phase R3 issue 17: skip the full re-render when the user has
+        // unsaved inline editor / split editor input or a save is in
+        // progress. The heartbeat / revision refresh must not overwrite
+        // user input by re-rendering the detail list (which would reset
+        // inline editor inputs to backend values). After a successful
+        // save, isEditDirty() returns false so the re-render proceeds.
+        if ((App.editingActivityId !== null || App.editingSplitActivityId !== null)
+            && typeof App.isEditDirty === "function" && App.isEditDirty()) {
+            return;
+        }
+        if (App.activityTimeSaving || App.activitySplitSaving) {
+            return;
+        }
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         var activities = data.activities || [];
@@ -254,6 +274,7 @@
                 : (a.duration || "00:00:00");
             var cls = "detail-item";
             if (a.is_in_progress) cls += " in-progress";
+            if (a.is_virtual === true) cls += " virtual-live";
             // Per-activity inline time editor (Phase 3B.1). The button is
             // disabled for in-progress activities because their displayed
             // end_time may be a projected value. The editor container is
@@ -261,14 +282,21 @@
             // button. Only one inline editor can be open at a time.
             // Phase 3B.2 also adds an inline split editor with the same
             // in-progress/missing-id disable rules.
+            // Phase R3: virtual detail rows (edit_disabled) also disable
+            // all action buttons since the activity is not yet persisted.
             var aid = a.activity_id || 0;
-            var editBtnDisabled = a.is_in_progress || !aid;
-            var editBtnTitle = a.is_in_progress
-                ? "进行中记录无法修改时间"
-                : (aid ? "编辑该活动时间" : "活动 ID 缺失，无法编辑");
-            var splitBtnTitle = a.is_in_progress
-                ? "进行中记录无法拆分"
-                : (aid ? "在该时间点拆分此活动" : "活动 ID 缺失，无法拆分");
+            var editBtnDisabled = a.is_in_progress || !aid || a.edit_disabled === true;
+            var disableReason = a.disable_reason || "";
+            var editBtnTitle = disableReason
+                ? disableReason
+                : (a.is_in_progress
+                    ? "进行中记录无法修改时间"
+                    : (aid ? "编辑该活动时间" : "活动 ID 缺失，无法编辑"));
+            var splitBtnTitle = disableReason
+                ? disableReason
+                : (a.is_in_progress
+                    ? "进行中记录无法拆分"
+                    : (aid ? "在该时间点拆分此活动" : "活动 ID 缺失，无法拆分"));
             // Phase 3B.3: per-activity "与下一条合并" button. The button is
             // disabled when there is no next activity, when either the
             // current or next activity is in-progress, or when the current
@@ -276,24 +304,28 @@
             // preconditions (project, resource, status, adjacency).
             var hasNext = i < activities.length - 1;
             var nextInProgress = hasNext && activities[i + 1].is_in_progress;
-            var mergeBtnDisabled = !aid || a.is_in_progress || !hasNext || nextInProgress;
-            var mergeBtnTitle = !aid
-                ? "活动 ID 缺失，无法合并"
-                : (a.is_in_progress
-                    ? "进行中记录无法合并"
-                    : (!hasNext
-                        ? "已是最后一条活动，没有下一条可合并"
-                        : (nextInProgress
-                            ? "下一条活动进行中，无法合并"
-                            : "将此活动与下一条活动合并")));
+            var mergeBtnDisabled = !aid || a.is_in_progress || !hasNext || nextInProgress || a.edit_disabled === true;
+            var mergeBtnTitle = disableReason
+                ? disableReason
+                : (!aid
+                    ? "活动 ID 缺失，无法合并"
+                    : (a.is_in_progress
+                        ? "进行中记录无法合并"
+                        : (!hasNext
+                            ? "已是最后一条活动，没有下一条可合并"
+                            : (nextInProgress
+                                ? "下一条活动进行中，无法合并"
+                                : "将此活动与下一条活动合并"))));
             // Phase 3B.4: per-activity "隐藏" and "删除" buttons. Both are
             // disabled for in-progress activities (raw end_time IS NULL) and
             // when the activity id is missing. The delete button uses a
             // confirmation dialog (window.confirm) before calling the bridge.
-            var visibilityBtnDisabled = a.is_in_progress || !aid;
-            var visibilityBtnTitle = a.is_in_progress
-                ? "进行中记录无法隐藏或删除"
-                : (aid ? "从 Timeline 隐藏或删除此活动" : "活动 ID 缺失，无法操作");
+            var visibilityBtnDisabled = a.is_in_progress || !aid || a.edit_disabled === true;
+            var visibilityBtnTitle = disableReason
+                ? disableReason
+                : (a.is_in_progress
+                    ? "进行中记录无法隐藏或删除"
+                    : (aid ? "从 Timeline 隐藏或删除此活动" : "活动 ID 缺失，无法操作"));
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
                 + ' data-detail-index="' + i + '"'
                 + '>'

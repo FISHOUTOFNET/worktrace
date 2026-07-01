@@ -7,15 +7,14 @@ previously lived inside each UI view.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time as _time
 from typing import Any
 
-from . import backup_api
+from . import backup_api, live_display_api
 from ..constants import PRIVACY_NOTICE_TEXT
-from ..services import activity_service, export_service
+from ..services import export_service
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -616,65 +615,26 @@ def accept_first_run_notice_for_webview() -> dict[str, Any]:
 # --- Lightweight refresh-state (Phase 6H-followup heartbeat) -------------
 
 
-def _build_current_activity_display_key(snapshot: dict[str, Any] | None) -> str:
-    """Build a display-safe structural identity for the current activity.
-
-    The key is constructed ONLY from sanitized display fields
-    (``resource_display_name`` / ``activity_display_name`` / ``app_name`` /
-    ``process_name`` / ``inferred_project_name`` / ``start_time`` /
-    ``status`` / ``is_persisted`` / ``persisted_activity_id``). Raw
-    ``window_title``, ``file_path_hint``, ``note`` and ``clipboard`` are
-    NEVER included.
-
-    The returned value is used to derive ``refresh_revision`` so the
-    frontend heartbeat can decide whether to re-pull Overview / Recent /
-    Timeline data. It MUST NOT change when only time-elapsed fields
-    (``elapsed_seconds``, ``extra_seconds``, ``snapshot_updated_at``,
-    ``snapshot_baseline_epoch_ms``) change.
-    """
-    if not snapshot:
-        return ""
-    parts = [
-        str(snapshot.get("resource_display_name") or ""),
-        str(snapshot.get("activity_display_name") or ""),
-        str(snapshot.get("app_name") or ""),
-        str(snapshot.get("process_name") or ""),
-        str(snapshot.get("inferred_project_name") or ""),
-        str(snapshot.get("start_time") or ""),
-        str(snapshot.get("status") or ""),
-        "1" if bool(snapshot.get("is_persisted")) else "0",
-        str(int(snapshot.get("persisted_activity_id") or 0)),
-    ]
-    return "|".join(parts)
-
-
 def get_refresh_state() -> dict[str, Any]:
     """Return a lightweight refresh-state payload for the frontend heartbeat.
 
-    Phase 6H-followup. The frontend runs a single 1-second heartbeat that:
-      1. Runs the local ticker (re-renders already-fetched durations with
-         a locally-computed elapsed increment).
-      2. Calls this method to fetch a tiny structural snapshot.
-      3. Compares ``refresh_revision`` with the previous tick's value.
-         If unchanged, no heavy interface (``get_overview`` /
-         ``get_recent_activities`` / ``get_timeline``) is invoked. If
-         changed, only the data needed by the current page is re-pulled.
+    Unified live-display model. The ``refresh_revision`` is computed by
+    ``live_display_api.compute_refresh_revision`` so it covers ALL
+    structural changes affecting Overview / Recent / Timeline display:
 
-    ``refresh_revision`` is a structural signature. It MUST change when:
-      - the current activity identity changes;
-      - the current activity status changes;
-      - the current activity persisted state changes;
-      - ``persisted_activity_id`` changes;
-      - ``inferred_project_name`` changes;
-      - collector status / paused state changes;
-      - the report date crosses midnight;
-      - a new persisted/closed activity appears (latest id / updated_at).
+    - current snapshot identity / status / persisted state /
+      persisted_activity_id / inferred_project_name;
+    - pending_short_seconds / short-activity carry state;
+    - the latest visible activity id / updated_at / structural kind for
+      the report date (covers manual project edit, time edit, split,
+      merge, hide, delete, restore, note edit, open row persisted,
+      project assignment);
+    - collector status / paused state;
+    - the report date crossing midnight.
 
-    It MUST NOT change when only:
-      - ``elapsed_seconds`` / ``extra_seconds`` increase (natural time
-        progression within the same activity);
-      - ``snapshot_updated_at`` / ``snapshot_baseline_epoch_ms`` advance
-        without any structural change.
+    It MUST NOT change when only ``elapsed_seconds`` / ``extra_seconds`` /
+    ``snapshot_updated_at`` / ``snapshot_baseline_epoch_ms`` advance
+    without any structural change.
 
     The payload is display-safe: no raw ``window_title``,
     ``file_path_hint``, ``note``, ``clipboard``, ``traceback`` or
@@ -693,36 +653,19 @@ def get_refresh_state() -> dict[str, Any]:
         # elsewhere.
         from . import timeline_api as _timeline_api
         today = _timeline_api.get_default_report_date()
-        # Latest persisted/closed normal activity. ``id`` and ``updated_at``
-        # are display-safe scalars; surfacing them lets the heartbeat
-        # detect "a new row landed in the DB" without re-reading the full
-        # activity log.
-        try:
-            latest_closed = activity_service.get_latest_closed_auto_normal_activity()
-        except Exception:
-            latest_closed = None
-        latest_activity_id = 0
-        latest_updated_at = ""
-        if latest_closed:
-            try:
-                latest_activity_id = int(latest_closed.get("id") or 0)
-            except (TypeError, ValueError):
-                latest_activity_id = 0
-            latest_updated_at = str(latest_closed.get("updated_at") or "")
-        # Build display-safe structural fields.
-        current_activity_key = _build_current_activity_display_key(snapshot)
-        current_activity_status = ""
-        is_persisted = False
-        persisted_activity_id = 0
-        inferred_project_name = ""
-        if snapshot:
-            current_activity_status = str(snapshot.get("status") or "")
-            is_persisted = bool(snapshot.get("is_persisted"))
-            try:
-                persisted_activity_id = int(snapshot.get("persisted_activity_id") or 0)
-            except (TypeError, ValueError):
-                persisted_activity_id = 0
-            inferred_project_name = str(snapshot.get("inferred_project_name") or "")
+        # Unified refresh-revision computation. Delegates to
+        # ``live_display_service.compute_refresh_revision`` so the
+        # revision covers ALL structural changes (snapshot identity,
+        # carry state, latest visible activity, collector status, etc.).
+        refresh_revision, debug_inputs = live_display_api.compute_refresh_revision(
+            snapshot, collector_status, user_paused, today, today
+        )
+        current_activity_key = str(debug_inputs.get("current_activity_key") or "")
+        current_activity_status = str(debug_inputs.get("current_status") or "")
+        is_persisted = bool(debug_inputs.get("is_persisted"))
+        persisted_activity_id = int(debug_inputs.get("persisted_id") or 0)
+        inferred_project_name = str(debug_inputs.get("inferred_project") or "")
+        latest_activity_id = int(debug_inputs.get("latest_id") or 0)
         # Map collector_status + user_paused to a display label.
         if paused or collector_status == "paused":
             status_display = "已暂停"
@@ -732,28 +675,6 @@ def get_refresh_state() -> dict[str, Any]:
             status_display = "状态异常"
         else:
             status_display = "采集器未运行"
-        # Build the refresh_revision. Only structural fields are hashed;
-        # time-elapsed fields (elapsed_seconds, extra_seconds,
-        # snapshot_updated_at, snapshot_baseline_epoch_ms, Date.now()) are
-        # deliberately excluded so natural time progression within the same
-        # activity does not trigger a heavy refresh.
-        revision_input = "|".join(
-            [
-                current_activity_key,
-                current_activity_status,
-                "1" if is_persisted else "0",
-                str(persisted_activity_id),
-                inferred_project_name,
-                collector_status,
-                "1" if user_paused else "0",
-                today,
-                str(latest_activity_id),
-                latest_updated_at,
-            ]
-        )
-        refresh_revision = hashlib.sha1(
-            revision_input.encode("utf-8")
-        ).hexdigest()
         return {
             "ok": True,
             "collector_status": collector_status,

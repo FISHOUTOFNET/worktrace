@@ -22,7 +22,6 @@ from . import folder_rule_service, session_boundary_service, session_note_servic
 from .activity_service import update_activities_project
 from .anchor_predicates import is_file_context_anchor
 from .context_service import recompute_context_assignments_for_date
-from .live_time_service import snapshot_elapsed_seconds, snapshot_extra_seconds
 from .project_service import get_or_create_uncategorized_project
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
@@ -662,22 +661,30 @@ def _display_duration(row: dict) -> int:
 
 
 def _live_duration_for_row(row: dict) -> int | None:
+    """Return the live seconds for a persisted open DB row.
+
+    Routes through the unified live-display model
+    (``live_display_service.persisted_open_live_seconds``) so the
+    persisted-open live duration uses the same snapshot matching and
+    elapsed-seconds computation as the rest of the live-display
+    pipeline. Returns ``None`` when the row is closed or does not match
+    the current snapshot's ``persisted_activity_id``.
+    """
     if row.get("end_time") is not None:
         return None
     try:
         row_id = int(row.get("id") or 0)
     except (TypeError, ValueError):
         return None
+    if row_id <= 0:
+        return None
     snapshot = _read_current_activity_snapshot()
     if not snapshot:
         return None
-    try:
-        snapshot_id = int(snapshot.get("persisted_activity_id") or 0)
-    except (TypeError, ValueError):
-        return None
-    if snapshot_id != row_id:
-        return None
-    return _snapshot_elapsed_seconds(snapshot) + _snapshot_extra_seconds(snapshot)
+    from .live_display_service import persisted_open_live_seconds
+
+    live = persisted_open_live_seconds(snapshot, row)
+    return live if live > 0 else None
 
 
 def _read_current_activity_snapshot() -> dict | None:
@@ -693,14 +700,6 @@ def _read_current_activity_snapshot() -> dict | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def _snapshot_elapsed_seconds(snapshot: dict) -> int:
-    return snapshot_elapsed_seconds(snapshot)
-
-
-def _snapshot_extra_seconds(snapshot: dict) -> int:
-    return snapshot_extra_seconds(snapshot)
 
 
 def _parse_row_time(value: str | None) -> datetime | None:

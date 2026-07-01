@@ -62,16 +62,12 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True, inc
     )
     live = _live_projection(start_date, end_date) if include_live else None
     if live is not None:
+        # ``_live_projection`` only returns a virtual (unpersisted normal)
+        # snapshot, so ``live["status"]`` is always STATUS_NORMAL. idle /
+        # paused / excluded / error snapshots are never projected (item 13).
         live_duration = int(live["duration_seconds"])
         total += live_duration
-        if live["status"] == STATUS_NORMAL:
-            effective += live_duration
-        elif live["status"] == STATUS_IDLE:
-            idle += live_duration
-        elif live["status"] == STATUS_PAUSED:
-            paused += live_duration
-        elif live["status"] == STATUS_EXCLUDED:
-            excluded += live_duration
+        effective += live_duration
     project_stats = get_project_stats(start_date, end_date, ensure_context=False, include_live=False)
     uncategorized = sum(
         int(row["total_duration"])
@@ -146,16 +142,44 @@ def _ensure_context_range(start_date: str, end_date: str) -> None:
 
 
 def _live_projection(start_date: str, end_date: str) -> dict | None:
+    """Project the current unpersisted normal snapshot as live time.
+
+    Unified live-display model. Only a *virtual* snapshot (normal,
+    unpersisted, no persisted_activity_id) is projected. idle / paused /
+    excluded / error snapshots are NEVER projected as normal project
+    live duration. persisted_open snapshots are NEVER projected here
+    because their real DB row already carries the live seconds via
+    ``timeline_service._live_duration_for_row`` (avoiding double count).
+
+    The projected duration includes the short-activity carry baseline so
+    consecutive <30s activities do not first lose seconds and then
+    suddenly jump when the next activity persists.
+    """
+    from .live_display_service import (
+        carry_baseline_seconds,
+        classify_live_state,
+        is_live_eligible_for_normal,
+    )
+
     snapshot = _read_current_activity_snapshot()
-    if not snapshot or bool(snapshot.get("is_persisted")) or safe_int(snapshot.get("persisted_activity_id")):
+    if not snapshot:
+        return None
+    report_date = timeline_service.get_default_report_date()
+    # Only virtual (unpersisted normal) snapshots are eligible. This
+    # excludes idle / paused / excluded / error (item 13) and
+    # persisted_open (avoid double count with the real DB row).
+    if classify_live_state(snapshot) != "virtual":
+        return None
+    if not is_live_eligible_for_normal(snapshot, report_date, report_date):
+        return None
+    if not (start_date <= report_date <= end_date):
         return None
     duration = snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
     if duration <= 0:
         return None
-    report_date = timeline_service.get_default_report_date()
-    if not (start_date <= report_date <= end_date):
-        return None
-    status = str(snapshot.get("status") or STATUS_NORMAL)
+    # Include the short-activity carry baseline so consecutive <30s
+    # activities do not first lose seconds and then suddenly jump.
+    duration = duration + carry_baseline_seconds(snapshot, report_date)
     project = str(snapshot.get("inferred_project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
     description = ""
     if project != UNCATEGORIZED_PROJECT:
@@ -164,7 +188,7 @@ def _live_projection(start_date: str, end_date: str) -> dict | None:
         existing = project_service.get_project_by_name(project)
         description = str((existing or {}).get("description") or "")
     return {
-        "status": status,
+        "status": STATUS_NORMAL,
         "duration_seconds": duration,
         "project": project,
         "project_description": description,
