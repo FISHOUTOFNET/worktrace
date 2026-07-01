@@ -95,8 +95,8 @@
             var ck = sessionContinuityKeys[ci];
             App._monotonicRenderState[ck.key] = { lastSeconds: ck.sec };
         }
-        // Also reset the timeline-total continuity so the backend total
-        // baseline replaces any prior ticker projection.
+        // Also reset the timeline-total continuity so the fresh backend total
+        // duration replaces any prior ticker projection.
         var tlTotalSec = parseInt(data.today_total_seconds, 10) || 0;
         App._monotonicRenderState["timeline-total"] = { lastSeconds: tlTotalSec };
 
