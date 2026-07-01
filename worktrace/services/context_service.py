@@ -86,6 +86,15 @@ def recompute_context_assignments_for_date(date: str) -> None:
             rows, index, carry_minutes, uncategorized_id
         )
         if target_project_id == uncategorized_id or target_project_id <= 0:
+            # Context inference found no concrete project. Preserve an
+            # existing ``suggested_project_name`` assignment instead of
+            # overwriting it with bare ``uncategorized`` — the suggested
+            # name is a higher-quality inference (resource-first anchor
+            # detection) than "no context found", and clearing it would
+            # cause Timeline / Recent / Detail displays to revert to
+            # ``未归类`` for the remainder of the activity.
+            if source == "suggested_project_name":
+                continue
             source = "uncategorized"
             confidence = 0
             target_project_id = uncategorized_id

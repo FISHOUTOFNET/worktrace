@@ -157,6 +157,83 @@ def process_new_activity(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
+# Sources that indicate the open row is still effectively uncategorized and
+# therefore eligible for re-inference during the virtual → persisted_open
+# transition. Concrete automatic sources (``folder_rule`` / ``keyword_rule`` /
+# ``midnight_anchor``) and manual sources are intentionally excluded so the
+# open-row sync does not flap an already-concrete assignment mid-activity.
+_OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
+
+
+def sync_persisted_open_activity_project(activity_id: int) -> dict:
+    """Converge an open persisted row's project assignment before display.
+
+    This is the narrow entry point invoked by the collector's
+    ``_ensure_persisted_if_ready`` path right after a virtual activity
+    crosses the 30-second persistence threshold and becomes a real open
+    DB row. ``process_new_activity`` (the regular automatic-rules entry
+    point) skips rows whose ``end_time IS NULL``, so without this helper
+    the freshly-persisted open row would keep the ``uncategorized``
+    assignment written by ``create_activity`` even when the snapshot's
+    resource-first inference had already resolved a concrete project —
+    causing Timeline / Recent / Detail / Overview KPI displays to revert
+    to ``未归类`` for the remainder of the activity.
+
+    The helper ONLY delegates to the existing resource-first inference
+    (``assign_project_for_activity``); it never re-implements folder /
+    keyword / suggested-project logic and never creates a new project.
+
+    Guards (all must hold; otherwise the helper is a no-op and returns
+    the current assignment):
+
+    - the activity exists;
+    - ``end_time IS NULL`` (still open);
+    - ``status == STATUS_NORMAL``;
+    - ``is_deleted = 0`` and ``is_hidden = 0``;
+    - ``manual_override = 0`` on the activity row;
+    - the assignment is not manual (``is_manual = 0``);
+    - the current assignment source is in
+      ``{"uncategorized", "suggested_project_name"}`` (i.e. the row is
+      still effectively uncategorized). Concrete automatic sources
+      (``folder_rule`` / ``keyword_rule`` / ``midnight_anchor``) are
+      left untouched so the open-row sync does not re-run inference on
+      an already-classified activity mid-flight.
+
+    Returns the (possibly updated) assignment dict for the activity. If
+    the activity is missing, returns ``{}`` for parity with
+    ``_assignment_dict``.
+    """
+    with get_connection() as conn:
+        activity = conn.execute(
+            """
+            SELECT is_hidden, is_deleted, end_time, status, manual_override
+            FROM activity_log
+            WHERE id = ?
+            """,
+            (activity_id,),
+        ).fetchone()
+        if not activity:
+            return {}
+        if int(activity["is_hidden"] or 0) or int(activity["is_deleted"] or 0):
+            return _assignment_dict(conn, activity_id)
+        if activity["end_time"] is not None:
+            return _assignment_dict(conn, activity_id)
+        if activity["status"] != STATUS_NORMAL:
+            return _assignment_dict(conn, activity_id)
+        if int(activity["manual_override"] or 0):
+            return _assignment_dict(conn, activity_id)
+        existing = conn.execute(
+            "SELECT source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+        if existing and int(existing["is_manual"] or 0):
+            return _assignment_dict(conn, activity_id)
+        source = str(existing["source"] or "") if existing else ""
+        if source and source not in _OPEN_ROW_UNCLASSIFIED_SOURCES:
+            return _assignment_dict(conn, activity_id)
+    return assign_project_for_activity(activity_id)
+
+
 # ---------------------------------------------------------------------------
 # Resource-first inference
 # ---------------------------------------------------------------------------
@@ -444,6 +521,18 @@ def _assignment_dict(conn, activity_id: int) -> dict:
         (activity_id,),
     ).fetchone()
     return dict(row) if row else {}
+
+
+def get_assignment_for_activity(activity_id: int) -> dict:
+    """Return the current ``activity_project_assignment`` row for an activity.
+
+    Public conn-less accessor used by display layers (e.g.
+    ``live_display_service._display_project_name``) to read the
+    ``suggested_project_name`` / ``source`` / ``is_manual`` fields without
+    re-implementing the SQL. Returns ``{}`` when no assignment row exists.
+    """
+    with get_connection() as conn:
+        return _assignment_dict(conn, activity_id)
 
 
 def _get_uncategorized_project_id(conn) -> int:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -155,6 +156,33 @@ class AutoActivityRecorder:
         self.persisted_activity_id = activity_id
 
         if status == STATUS_NORMAL:
+            # Converge the freshly-persisted open row's project assignment
+            # before any snapshot / display read. ``finalize_created_activity``
+            # routes through ``process_new_activity`` which skips in-progress
+            # rows, so without this call the open row would keep the
+            # ``uncategorized`` assignment written by ``create_activity``
+            # even when resource-first inference had already resolved a
+            # concrete project. This re-uses the existing inference
+            # (``assign_project_for_activity``) via the narrow
+            # ``sync_persisted_open_activity_project`` helper and never
+            # creates a new project. The helper is a no-op for rows that
+            # are already concrete (folder_rule / keyword_rule /
+            # midnight_anchor) or manually assigned, so it does not flap
+            # an in-flight assignment.
+            from ..services.project_inference_service import (
+                sync_persisted_open_activity_project,
+            )
+
+            try:
+                sync_persisted_open_activity_project(activity_id)
+            except Exception:
+                # Defensive: an inference failure must not discard the
+                # just-persisted open row. The assignment simply stays at
+                # whatever ``create_activity`` wrote (``uncategorized``).
+                logging.exception(
+                    "open-row project sync failed for activity_id=%s",
+                    activity_id,
+                )
             pending = self._get_pending_short_seconds()
             if pending > 0:
                 self.current_extra_seconds += pending

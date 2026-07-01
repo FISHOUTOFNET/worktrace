@@ -205,14 +205,33 @@ def _display_app_name(snapshot: dict[str, Any] | None) -> str:
 def _display_project_name(snapshot: dict[str, Any] | None) -> str:
     """Return the unified display project name for a snapshot.
 
-    - For persisted_open snapshots, the real DB row's project name is the
-      authoritative display project (the snapshot's inferred_project_name
-      is stale once the row has been re-classified by a manual edit).
-    - For virtual (unpersisted) snapshots, the snapshot's
-      ``inferred_project_name`` is the display project (it already
-      reflects folder / keyword / suggested-project inference).
-    - Empty / whitespace-only maps to ``UNCATEGORIZED_PROJECT`` so an
-      unnamed current activity aligns with the ``未归类`` session row.
+    Resolution order for persisted_open snapshots:
+
+    1. The real DB row's concrete ``project_name`` (i.e. NOT
+       ``UNCATEGORIZED_PROJECT``). This is the authoritative display
+       project once the row has been classified — either by the
+       open-row sync helper (``sync_persisted_open_activity_project``)
+       at the virtual → persisted_open transition, or by a subsequent
+       manual / rule reassignment.
+    2. The DB row is uncategorized BUT the assignment carries a
+       ``suggested_project_name`` (source = ``suggested_project_name``).
+       The suggested name is surfaced so the user sees the inferred
+       project instead of ``未归类`` even when no concrete project row
+       exists yet. This mirrors ``timeline_service._attach_display_project``.
+    3. The snapshot's ``inferred_project_name`` — defensive fallback for
+       the window between ``create_activity`` and the open-row sync, and
+       for any future caller that writes a persisted_activity_id without
+       running the sync. Without this fallback the display would briefly
+       revert to ``未归类`` even though the snapshot already carries the
+       inferred concrete / suggested name.
+    4. ``UNCATEGORIZED_PROJECT``.
+
+    For virtual (unpersisted) snapshots, only step 3 / 4 apply: the
+    snapshot's ``inferred_project_name`` is the display project (it
+    already reflects folder / keyword / suggested-project inference).
+
+    Empty / whitespace-only maps to ``UNCATEGORIZED_PROJECT`` so an
+    unnamed current activity aligns with the ``未归类`` session row.
     """
     if not snapshot:
         return UNCATEGORIZED_PROJECT
@@ -222,10 +241,25 @@ def _display_project_name(snapshot: dict[str, Any] | None) -> str:
             row = activity_service.get_activity(int(persisted_id))
         except Exception:
             row = None
-        if row and row.get("project_name"):
-            name = str(row["project_name"]).strip()
-            if name:
-                return name
+        if row:
+            db_name = str(row.get("project_name") or "").strip()
+            if db_name and db_name != UNCATEGORIZED_PROJECT:
+                return db_name
+            # DB row is uncategorized — check the assignment for a
+            # suggested_project_name before falling back to the
+            # snapshot's inferred name. This keeps the persisted_open
+            # display consistent with Timeline sessions / detail rows
+            # (which already honor suggested_project_name via
+            # ``_attach_display_project``).
+            try:
+                from .project_inference_service import get_assignment_for_activity
+
+                assignment = get_assignment_for_activity(int(persisted_id))
+            except Exception:
+                assignment = {}
+            suggested = str(assignment.get("suggested_project_name") or "").strip()
+            if suggested:
+                return suggested
     name = str(snapshot.get("inferred_project_name") or "").strip()
     return name if name else UNCATEGORIZED_PROJECT
 
