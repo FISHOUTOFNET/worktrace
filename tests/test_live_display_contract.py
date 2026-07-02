@@ -930,3 +930,231 @@ def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
     assert virtual_hash == persisted_hash, (
         "stable_live_key_hash must not change across virtual → persisted_open"
     )
+
+
+# --- Section 六.1: apply_persisted_open_overlay_to_row overlays ALL project fields ---
+
+
+def _pending_persisted_open_snapshot(
+    *,
+    aid: int,
+    start_time: str,
+    display_name: str = "ProjectA",
+    candidate_name: str = "ProjectB",
+    display_is_uncategorized: bool = False,
+) -> dict:
+    """Build a pending persisted_open snapshot with display_project /
+    candidate_project blocks.
+
+    ``display_project`` is the inherited last-confirmed project;
+    ``candidate_project`` is the new resource's inferred project. During
+    the 30-second pending window the live UI must show
+    ``display_project``, NOT ``candidate_project``.
+    """
+    display = {
+        "id": 12 if not display_is_uncategorized else None,
+        "name": display_name,
+        "description": display_name + " description",
+        "source": "inherited" if not display_is_uncategorized else "uncategorized",
+        "is_uncategorized": display_is_uncategorized,
+        "is_suggested_project": False,
+    }
+    candidate = {
+        "id": 18,
+        "name": candidate_name,
+        "description": candidate_name + " description",
+        "source": "folder_rule",
+        "is_uncategorized": False,
+        "is_suggested_project": False,
+    }
+    snap = _normal_snapshot(
+        elapsed_seconds=60,
+        is_persisted=True,
+        persisted_activity_id=aid,
+        inferred_project_name=display_name,
+        start_time=start_time,
+    )
+    snap["display_project"] = display
+    snap["candidate_project"] = candidate
+    snap["project_transition"] = {
+        "pending": True,
+        "started_at": "",
+        "elapsed_seconds": 12,
+        "threshold_seconds": 30,
+        "from_project_id": 12 if not display_is_uncategorized else None,
+        "to_project_id": 18,
+    }
+    snap["project_transition_pending"] = True
+    return snap
+
+
+def test_apply_persisted_open_overlay_to_row_overlays_all_project_fields(bridge):
+    """Section 一.3 / 六.1: ``apply_persisted_open_overlay_to_row`` must
+    overlay BOTH the unified live clock fields AND the display-facing
+    project fields. Matching a persisted open row must override
+    ``project_id`` / ``project_name`` / ``project_description`` /
+    ``display_project`` / ``candidate_project`` / ``project_transition`` /
+    ``project_transition_pending`` / ``is_uncategorized`` /
+    ``is_classified`` — not just the live clock fields.
+    """
+    from worktrace.services.live_display_service import (
+        apply_persisted_open_overlay_to_row,
+        build_persisted_open_overlay,
+    )
+
+    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
+    snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
+    _set_snapshot(snapshot)
+    today = timeline_service.get_default_report_date()
+
+    overlay = build_persisted_open_overlay(snapshot, today, today)
+    assert overlay is not None, "overlay must be built for a persisted_open snapshot"
+
+    # Build a session row that matches the persisted_activity_id. The row
+    # starts with DB candidate project fields that MUST be overlaid.
+    session_row = {
+        "activity_id": aid,
+        "first_activity_id": aid,
+        "activity_ids": [aid],
+        "project_id": 999,
+        "project_name": "DB_Candidate_Project",
+        "project_description": "DB candidate desc",
+        "is_uncategorized": False,
+        "is_classified": True,
+        "live_state": "",
+        "stable_live_key": "",
+        "stable_live_key_hash": "",
+        "live_display_key": "",
+        "live_started_at_epoch_ms": 0,
+        "carry_seconds": 0,
+        "is_virtual_live": False,
+        "is_in_progress": False,
+        "is_live_projected": False,
+        "edit_disabled": False,
+        "disable_reason": "",
+        "source": "db",
+        "display_project": None,
+        "candidate_project": None,
+        "project_transition": None,
+        "project_transition_pending": False,
+        "status": "",
+        "start_time": "",
+    }
+    apply_persisted_open_overlay_to_row(session_row, overlay)
+
+    # Unified live clock fields must be overlaid.
+    assert session_row["live_state"] == "persisted_open"
+    assert session_row["stable_live_key_hash"]
+    assert session_row["live_started_at_epoch_ms"] > 0
+    # Display-facing project fields must be overlaid from display_project.
+    assert session_row["project_name"] == "ProjectA"
+    assert session_row["project_description"] == "ProjectA description"
+    assert session_row["display_project"]["name"] == "ProjectA"
+    assert session_row["candidate_project"]["name"] == "ProjectB"
+    assert session_row["project_transition_pending"] is True
+    assert session_row["is_uncategorized"] is False
+    assert session_row["is_classified"] is True
+    # Edit controls must be disabled for in-progress rows.
+    assert session_row["edit_disabled"] is True
+    assert session_row["disable_reason"]
+
+
+def test_apply_persisted_open_overlay_to_row_candidate_does_not_override_project_name(bridge):
+    """Section 一.5 / 六.1: ``candidate_project`` must NEVER override
+    ``project_name`` / ``project_description`` / ``project_id``. Even
+    when the candidate is a concrete project and the display is
+    uncategorized, the overlay keeps ``project_name`` aligned with
+    ``display_project.name``.
+    """
+    from worktrace.services.live_display_service import (
+        apply_persisted_open_overlay_to_row,
+        build_persisted_open_overlay,
+    )
+
+    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
+    snapshot = _pending_persisted_open_snapshot(
+        aid=aid,
+        start_time=start_time,
+        display_name=UNCATEGORIZED_PROJECT,
+        candidate_name="ProjectB",
+        display_is_uncategorized=True,
+    )
+    _set_snapshot(snapshot)
+    today = timeline_service.get_default_report_date()
+
+    overlay = build_persisted_open_overlay(snapshot, today, today)
+    session_row = {
+        "activity_id": aid,
+        "first_activity_id": aid,
+        "activity_ids": [aid],
+        "project_id": 999,
+        "project_name": "DB_Candidate",
+        "project_description": "",
+        "is_uncategorized": False,
+        "is_classified": True,
+        "live_state": "",
+        "stable_live_key": "",
+        "stable_live_key_hash": "",
+        "live_display_key": "",
+        "live_started_at_epoch_ms": 0,
+        "carry_seconds": 0,
+        "is_virtual_live": False,
+        "is_in_progress": False,
+        "is_live_projected": False,
+        "edit_disabled": False,
+        "disable_reason": "",
+        "source": "db",
+        "display_project": None,
+        "candidate_project": None,
+        "project_transition": None,
+        "project_transition_pending": False,
+        "status": "",
+        "start_time": "",
+    }
+    apply_persisted_open_overlay_to_row(session_row, overlay)
+
+    # project_name follows display_project (uncategorized), NOT candidate.
+    assert session_row["project_name"] == UNCATEGORIZED_PROJECT
+    assert session_row["is_uncategorized"] is True
+    assert session_row["is_classified"] is False
+    # candidate_project is exposed as a separate field only.
+    assert session_row["candidate_project"]["name"] == "ProjectB"
+    # project_id follows display_project.id (None -> 0), NOT candidate.id.
+    assert session_row["project_id"] == 0
+
+
+def test_apply_persisted_open_overlay_to_row_does_not_overlay_non_matching_row(bridge):
+    """Section 一.3: ``apply_persisted_open_overlay_to_row`` must NOT
+    overlay a row whose ``activity_id`` / ``first_activity_id`` /
+    ``activity_ids`` do NOT contain the persisted_activity_id. Closed
+    historical rows must remain untouched.
+    """
+    from worktrace.services.live_display_service import (
+        apply_persisted_open_overlay_to_row,
+        build_persisted_open_overlay,
+    )
+
+    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
+    snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
+    _set_snapshot(snapshot)
+    today = timeline_service.get_default_report_date()
+
+    overlay = build_persisted_open_overlay(snapshot, today, today)
+    # A closed historical row with a different activity_id.
+    closed_row = {
+        "activity_id": 8888,
+        "first_activity_id": 8888,
+        "activity_ids": [8888],
+        "project_id": 555,
+        "project_name": "ClosedProject",
+        "project_description": "closed desc",
+        "live_state": "",
+        "stable_live_key_hash": "",
+        "edit_disabled": False,
+        "source": "db",
+    }
+    apply_persisted_open_overlay_to_row(closed_row, overlay)
+    # The closed row is NOT overlaid.
+    assert closed_row["project_name"] == "ClosedProject"
+    assert closed_row["live_state"] == ""
+    assert closed_row["edit_disabled"] is False

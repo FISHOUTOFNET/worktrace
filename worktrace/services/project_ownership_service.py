@@ -40,12 +40,13 @@ ownership*, however, enters a 30-second confirmation period:
   elapse (candidate is confirmed) or a newer resource produces a
   candidate that matches the display project (pending is cancelled).
 
-The 30-second history-persistence threshold
-(``HISTORY_PERSIST_THRESHOLD_SECONDS``) is **orthogonal** to this
-pending state. A clipboard force-persist can turn a virtual activity
-into ``persisted_open`` before the 30-second ownership threshold, but
-the live display still follows ``display_project`` until the pending
-window elapses or the activity ends.
+The 30-second project-ownership confirmation threshold
+(``PROJECT_OWNERSHIP_CONFIRM_SECONDS``) is **orthogonal** to the
+history-persistence threshold (``HISTORY_PERSIST_THRESHOLD_SECONDS``).
+Both are 30 seconds today but are semantically independent. A clipboard
+force-persist can turn a virtual activity into ``persisted_open`` before
+the 30-second ownership threshold, but the live display still follows
+``display_project`` until the pending window elapses or the activity ends.
 """
 
 from __future__ import annotations
@@ -54,7 +55,11 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
-from ..constants import HISTORY_PERSIST_THRESHOLD_SECONDS, TIME_FORMAT, UNCATEGORIZED_PROJECT
+from ..constants import (
+    PROJECT_OWNERSHIP_CONFIRM_SECONDS,
+    TIME_FORMAT,
+    UNCATEGORIZED_PROJECT,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -105,12 +110,19 @@ class ProjectLabel:
 
 @dataclass(frozen=True)
 class ProjectTransition:
-    """Project ownership transition state."""
+    """Project ownership transition state.
+
+    ``threshold_seconds`` gates the project-ownership confirmation window
+    (``PROJECT_OWNERSHIP_CONFIRM_SECONDS``), NOT the history-persistence
+    threshold (``HISTORY_PERSIST_THRESHOLD_SECONDS``). Both are 30 seconds
+    today but are semantically independent — see
+    ``worktrace.constants`` for details.
+    """
 
     pending: bool = False
     started_at: str = ""
     elapsed_seconds: int = 0
-    threshold_seconds: int = HISTORY_PERSIST_THRESHOLD_SECONDS
+    threshold_seconds: int = PROJECT_OWNERSHIP_CONFIRM_SECONDS
     from_project_id: int | None = None
     to_project_id: int | None = None
 
@@ -243,7 +255,7 @@ def begin_ownership_for_new_resource(
     state: ProjectOwnershipState | None,
     candidate: ProjectLabel,
     at_time: str,
-    threshold_seconds: int = HISTORY_PERSIST_THRESHOLD_SECONDS,
+    threshold_seconds: int = PROJECT_OWNERSHIP_CONFIRM_SECONDS,
 ) -> ProjectOwnershipState:
     """Begin ownership for a brand-new resource signature.
 

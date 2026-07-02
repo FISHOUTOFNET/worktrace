@@ -6,7 +6,11 @@ from datetime import date, timedelta
 from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, UNCATEGORIZED_PROJECT
 from .context_service import recompute_context_assignments_for_date
 from . import timeline_service
-from .live_time_service import safe_int, snapshot_elapsed_seconds, snapshot_extra_seconds
+from .live_display_service import (
+    build_live_projection,
+    classify_live_state,
+    is_live_eligible_for_normal,
+)
 from .settings_service import get_setting
 
 # Phase 4A: maximum inclusive calendar-day span accepted by the read-only
@@ -61,14 +65,23 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True, inc
         if row.get("status") == STATUS_EXCLUDED
     )
     live = _live_projection(start_date, end_date) if include_live else None
-    if live is not None:
-        # ``_live_projection`` only returns a virtual (unpersisted normal)
-        # snapshot, so ``live["status"]`` is always STATUS_NORMAL. idle /
-        # paused / excluded / error snapshots are never projected (item 13).
+    # Virtual live: the snapshot is unpersisted, so its duration is NOT in
+    # the DB rows. Add it to total / effective so the KPI reflects the
+    # current in-progress activity.
+    # Persisted_open live: the open DB row IS already in the rows above, so
+    # its duration is already in total / effective. Do NOT add it again
+    # (would double-count). The project attribution overlay is handled via
+    # get_project_stats(include_live=True) below.
+    if live is not None and live.get("live_state") == "virtual":
         live_duration = int(live["duration_seconds"])
         total += live_duration
         effective += live_duration
-    project_stats = get_project_stats(start_date, end_date, ensure_context=False, include_live=False)
+    # Use include_live=True for project_stats so BOTH the virtual projection
+    # (add duration to display_project group) AND the persisted_open overlay
+    # (relabel matching session's project to display_project) are applied.
+    # This keeps the uncategorized / classified split consistent with the
+    # display_project contract during the 30-second pending window.
+    project_stats = get_project_stats(start_date, end_date, ensure_context=False, include_live=include_live)
     uncategorized = sum(
         int(row["total_duration"])
         for row in project_stats
@@ -79,11 +92,6 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True, inc
         for row in project_stats
         if row["project"] != UNCATEGORIZED_PROJECT
     )
-    if live is not None and live["status"] == STATUS_NORMAL:
-        if live["project"] == UNCATEGORIZED_PROJECT:
-            uncategorized += int(live["duration_seconds"])
-        else:
-            classified += int(live["duration_seconds"])
     return {
         "total_duration": total,
         "effective_duration": effective,
@@ -98,6 +106,12 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True, inc
 def get_project_stats(start_date: str, end_date: str, ensure_context: bool = True, include_live: bool = False) -> list[dict]:
     if ensure_context:
         _ensure_context_range(start_date, end_date)
+    # Build the live projection once so we can apply BOTH:
+    # - virtual: add the live duration to the display_project group
+    # - persisted_open: relabel the matching session's project to
+    #   display_project (no duration change — the DB row already carries it)
+    live = _live_projection(start_date, end_date) if include_live else None
+    persisted_overlay = _persisted_open_overlay(live)
     groups: dict[str, dict] = {}
     for session in timeline_service.get_project_sessions_by_range(
         start_date,
@@ -108,14 +122,27 @@ def get_project_stats(start_date: str, end_date: str, ensure_context: bool = Tru
         if session["status"] not in {STATUS_NORMAL, "mixed"}:
             continue
         project = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
-        group = groups.setdefault(project, {"project": project, "total_duration": 0, "record_count": 0})
         description = str(session.get("project_description") or "").strip()
+        # Persisted_open overlay: when the session contains the
+        # persisted_activity_id, relabel its project to the snapshot's
+        # display_project. This ensures the KPI attributes the in-progress
+        # open row's time to the inherited display project during the
+        # 30-second pending window, NOT the DB row's candidate assignment.
+        # The duration is NOT changed (no double-count).
+        if persisted_overlay and persisted_overlay["persisted_activity_id"] in {
+            int(aid) for aid in (session.get("activity_ids") or []) if aid
+        }:
+            project = str(persisted_overlay.get("project") or UNCATEGORIZED_PROJECT)
+            description = str(persisted_overlay.get("project_description") or "").strip()
+        group = groups.setdefault(project, {"project": project, "total_duration": 0, "record_count": 0})
         if description and not group.get("project_description"):
             group["project_description"] = description
         group["total_duration"] += int(session.get("duration_seconds") or 0)
         group["record_count"] += 1
-    live = _live_projection(start_date, end_date) if include_live else None
-    if live is not None and live["status"] == STATUS_NORMAL:
+    # Virtual live projection: add the live duration to the
+    # display_project group. The virtual snapshot has no DB row, so this
+    # does NOT double-count.
+    if live is not None and live.get("live_state") == "virtual" and live.get("status") == STATUS_NORMAL:
         project = str(live["project"] or UNCATEGORIZED_PROJECT)
         group = groups.setdefault(project, {"project": project, "total_duration": 0, "record_count": 0})
         if live.get("project_description") and not group.get("project_description"):
@@ -142,57 +169,82 @@ def _ensure_context_range(start_date: str, end_date: str) -> None:
 
 
 def _live_projection(start_date: str, end_date: str) -> dict | None:
-    """Project the current unpersisted normal snapshot as live time.
+    """Project the current live snapshot for KPI attribution.
 
-    Unified live-display model. Only a *virtual* snapshot (normal,
-    unpersisted, no persisted_activity_id) is projected. idle / paused /
-    excluded / error snapshots are NEVER projected as normal project
-    live duration. persisted_open snapshots are NEVER projected here
-    because their real DB row already carries the live seconds via
-    ``timeline_service._live_duration_for_row`` (avoiding double count).
+    Unified live-display model. Uses ``build_live_projection`` (the public
+    contract) so virtual and persisted_open share the SAME display_project
+    source — the snapshot's ``display_project`` block — rather than the DB
+    row's candidate assignment.
 
-    The projected duration includes the short-activity carry seconds so
-    consecutive <30s activities do not first lose seconds and then
-    suddenly jump when the next activity persists.
+    Returns a dict carrying:
+
+    - ``live_state``: ``"virtual"`` / ``"persisted_open"`` / ``"none"``.
+    - ``status``: ``STATUS_NORMAL`` (idle / paused / excluded / error are
+      never projected).
+    - ``duration_seconds``: the live duration. For virtual this is added
+      to KPI totals; for persisted_open it is NOT (the DB row already
+      carries it — adding would double-count).
+    - ``project`` / ``project_description``: the display_project name and
+      description (from the snapshot's ``display_project`` block, NOT the
+      DB row's candidate assignment).
+    - ``persisted_activity_id``: for persisted_open, the real DB row id
+      used to match the session for project overlay.
+    - ``is_uncategorized``: ``True`` when display_project is uncategorized.
+
+    Returns ``None`` when the snapshot is not eligible (no snapshot, not
+    normal, not today, idle / paused / excluded / error).
     """
-    from .live_display_service import (
-        _display_project_description,
-        _display_project_name,
-        short_activity_carry_seconds,
-        classify_live_state,
-        is_live_eligible_for_normal,
-    )
-
     snapshot = _read_current_activity_snapshot()
     if not snapshot:
         return None
     report_date = timeline_service.get_default_report_date()
-    # Only virtual (unpersisted normal) snapshots are eligible. This
-    # excludes idle / paused / excluded / error (item 13) and
-    # persisted_open (avoid double count with the real DB row).
-    if classify_live_state(snapshot) != "virtual":
-        return None
     if not is_live_eligible_for_normal(snapshot, report_date, report_date):
         return None
     if not (start_date <= report_date <= end_date):
         return None
-    duration = snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
+    live_state = classify_live_state(snapshot)
+    if live_state not in {"virtual", "persisted_open"}:
+        return None
+    # Use the public live projection contract so virtual and persisted_open
+    # share the SAME display_project source.
+    projection = build_live_projection(snapshot, report_date=report_date, today=report_date)
+    if not projection:
+        return None
+    duration = int(projection.get("duration_seconds") or 0)
     if duration <= 0:
         return None
-    # Include the short-activity carry seconds so consecutive <30s
-    # activities do not first lose seconds and then suddenly jump.
-    duration = duration + short_activity_carry_seconds(snapshot, report_date)
-    # Use the display project from the project-ownership contract — NOT
-    # the raw ``inferred_project_name`` / candidate project. During a
-    # 30-second pending transition the live KPI must attribute time to
-    # the inherited display project, not the candidate.
-    project = _display_project_name(snapshot)
-    description = _display_project_description(snapshot)
     return {
+        "live_state": live_state,
         "status": STATUS_NORMAL,
         "duration_seconds": duration,
-        "project": project,
-        "project_description": description,
+        "project": str(projection.get("project_name") or UNCATEGORIZED_PROJECT),
+        "project_description": str(projection.get("project_description") or ""),
+        "is_uncategorized": bool(projection.get("is_uncategorized")),
+        "persisted_activity_id": int(projection.get("persisted_activity_id") or 0),
+    }
+
+
+def _persisted_open_overlay(live: dict | None) -> dict | None:
+    """Return the persisted_open project overlay info from a live projection.
+
+    Returns ``None`` when ``live`` is ``None`` or the live state is not
+    ``persisted_open``. Otherwise returns a dict with
+    ``persisted_activity_id``, ``project``, ``project_description`` so the
+    caller can relabel the matching session's project attribution to the
+    snapshot's ``display_project`` without changing the duration (no
+    double-count).
+    """
+    if not live:
+        return None
+    if live.get("live_state") != "persisted_open":
+        return None
+    persisted_id = int(live.get("persisted_activity_id") or 0)
+    if persisted_id <= 0:
+        return None
+    return {
+        "persisted_activity_id": persisted_id,
+        "project": str(live.get("project") or UNCATEGORIZED_PROJECT),
+        "project_description": str(live.get("project_description") or ""),
     }
 
 

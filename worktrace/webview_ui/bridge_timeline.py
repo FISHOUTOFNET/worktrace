@@ -148,11 +148,21 @@ class TimelineBridgeMixin:
     def get_timeline(self, date: str | None = None) -> dict[str, Any]:
         """Return read-only timeline data for a single date.
 
-        The Timeline page is a daily correction /补记 interface — it shows
-        only closed historical sessions. Virtual live sessions and
-        in-progress (persisted-open) sessions are NOT included so the user
-        cannot accidentally edit an unfinished activity. Current-activity
-        display is handled by the Overview page.
+        For TODAY's view the Timeline includes the current live session so
+        the user can see and select the in-progress activity:
+
+        - **virtual live** (unpersisted normal snapshot): a display-only
+          virtual session is prepended to the session list. It carries
+          ``is_virtual=True``, ``edit_disabled=True``, and the snapshot's
+          ``display_project``.
+        - **persisted_open** (real open DB row): the matching DB session is
+          kept (NOT filtered out) and the persisted-open overlay is applied
+          so its project fields come from the snapshot's ``display_project``
+          block, not the DB row's candidate assignment. ``edit_disabled``
+          is ``True`` so the user cannot modify the unfinished activity.
+
+        For HISTORICAL dates the Timeline shows only closed historical
+        sessions — no live projection is injected.
 
         Each session carries:
         - ``duration_seconds`` / ``duration``: display duration (override
@@ -162,7 +172,9 @@ class TimelineBridgeMixin:
         - ``adjusted_duration_seconds``: user override or ``None``.
         - ``has_duration_override``: ``True`` when an override is set.
 
-        ``total_seconds`` / ``total_duration`` use display duration;
+        ``total_seconds`` / ``total_duration`` use display duration and
+        include today's live session duration. For persisted_open the live
+        duration is NOT double-counted (the DB session already carries it).
         ``raw_total_seconds`` / ``raw_total_duration`` use raw duration.
         """
         try:
@@ -181,14 +193,81 @@ class TimelineBridgeMixin:
             live_projection = live_display_api.build_live_projection(
                 snapshot, report_date=report_date, today=today
             )
+            # Build the persisted-open overlay once so matching DB sessions
+            # can carry the display_project fields. Returns None when the
+            # snapshot is not persisted_open or the date is not today.
+            persisted_overlay = live_display_api.build_persisted_open_overlay(
+                snapshot, report_date=report_date, today=today
+            )
+            is_today = (report_date == today)
             sessions: list[dict[str, Any]] = []
             display_total_seconds = 0
             raw_total_seconds = 0
+            # Inject the virtual live session for today's view. The virtual
+            # session is display-only (activity_id=0, edit_disabled=True)
+            # and carries the snapshot's display_project.
+            virtual_injected = False
+            if is_today:
+                virtual_session = live_display_api.build_virtual_session(
+                    snapshot, report_date=report_date, today=today
+                )
+                if virtual_session is not None:
+                    virtual_seconds = int(virtual_session.get("duration_seconds") or 0)
+                    display_total_seconds += virtual_seconds
+                    raw_total_seconds += virtual_seconds
+                    sessions.append(
+                        {
+                            "session_id": str(virtual_session.get("session_id") or ""),
+                            "project_name": str(virtual_session.get("project_name") or "未归类"),
+                            "project_description": str(virtual_session.get("project_description") or ""),
+                            "project_id": int(virtual_session.get("project_id") or 0),
+                            "start_time": str(virtual_session.get("start_time") or ""),
+                            "end_time": "",
+                            "duration": str(virtual_session.get("duration") or "00:00:00"),
+                            "duration_seconds": virtual_seconds,
+                            "raw_duration": str(virtual_session.get("duration") or "00:00:00"),
+                            "raw_duration_seconds": virtual_seconds,
+                            "adjusted_duration_seconds": None,
+                            "has_duration_override": False,
+                            "status": str(virtual_session.get("status") or "进行中"),
+                            "event_count": 1,
+                            "is_uncategorized": bool(virtual_session.get("is_uncategorized")),
+                            "is_classified": bool(virtual_session.get("is_classified")),
+                            "is_in_progress": True,
+                            "is_live_projected": False,
+                            "is_virtual": True,
+                            "is_virtual_live": True,
+                            "live_display_key": str(virtual_session.get("live_display_key") or ""),
+                            "live_state": "virtual",
+                            "stable_live_key": str(virtual_session.get("stable_live_key") or ""),
+                            "stable_live_key_hash": str(virtual_session.get("stable_live_key_hash") or ""),
+                            "live_started_at_epoch_ms": int(virtual_session.get("live_started_at_epoch_ms") or 0),
+                            "carry_seconds": int(virtual_session.get("carry_seconds") or 0),
+                            "activity_ids": [],
+                            "first_activity_id": None,
+                            "session_note": "",
+                            "edit_disabled": True,
+                            "disable_reason": str(virtual_session.get("disable_reason") or ""),
+                            "source": "snapshot",
+                            "display_project": virtual_session.get("display_project"),
+                            "candidate_project": virtual_session.get("candidate_project"),
+                            "project_transition": virtual_session.get("project_transition"),
+                            "project_transition_pending": bool(virtual_session.get("project_transition_pending")),
+                        }
+                    )
+                    virtual_injected = True
             for session in sessions_raw:
-                # Filter out in-progress sessions — the Timeline page only
-                # shows closed historical sessions.
-                if bool(session.get("is_in_progress")):
-                    continue
+                # Real DB sessions (including in-progress / persisted_open
+                # ones) are kept for BOTH today and historical dates. The
+                # spec only forbids *injecting* live projection (virtual
+                # session + persisted_open overlay) on historical dates;
+                # ``build_persisted_open_overlay`` already returns ``None``
+                # when ``report_date != today``, so the overlay is a no-op
+                # for history and the row is shown with its DB project
+                # fields as-is. We must NOT blanket-filter ``is_in_progress``
+                # sessions, otherwise pre-existing in-progress DB rows on
+                # historical dates vanish from the Timeline.
+                is_session_in_progress = bool(session.get("is_in_progress"))
                 start_time = str(session.get("start_time") or "")
                 raw_seconds = int(session.get("raw_duration_seconds") or session.get("duration_seconds") or 0)
                 adjusted = session.get("adjusted_duration_seconds")
@@ -214,7 +293,8 @@ class TimelineBridgeMixin:
                     "status": str(session.get("status_summary") or session.get("status") or ""),
                     "event_count": int(session.get("event_count") or 0),
                     "is_uncategorized": bool(session.get("is_uncategorized")),
-                    "is_in_progress": False,
+                    "is_classified": not bool(session.get("is_uncategorized")),
+                    "is_in_progress": is_session_in_progress,
                     "is_live_projected": False,
                     "is_virtual": False,
                     "is_virtual_live": False,
@@ -230,7 +310,25 @@ class TimelineBridgeMixin:
                     "edit_disabled": False,
                     "disable_reason": "",
                     "source": "db",
+                    "display_project": None,
+                    "candidate_project": None,
+                    "project_transition": None,
+                    "project_transition_pending": False,
                 }
+                # Apply the persisted-open overlay so the matching DB
+                # session carries display_project fields and stable live
+                # identity. No-op for closed / non-matching sessions, and
+                # a no-op on historical dates (overlay is None there).
+                live_display_api.apply_persisted_open_overlay_to_row(row, persisted_overlay)
+                # Any in-progress DB row (open end_time) must be
+                # edit-disabled regardless of date / overlay: the spec
+                # forbids modifying an unfinished activity via edit /
+                # split / merge / hide / delete / restore. The overlay
+                # already sets this for today's persisted_open; this
+                # covers historical in-progress rows the overlay skips.
+                if is_session_in_progress and not row.get("edit_disabled"):
+                    row["edit_disabled"] = True
+                    row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
                 sessions.append(row)
             return {
                 "ok": True,
@@ -413,8 +511,17 @@ class TimelineBridgeMixin:
                 }
                 # Apply the persisted-open overlay so the matching DB
                 # detail row carries the same stable live fields as the
-                # virtual detail row. No-op for closed / non-matching rows.
+                # virtual detail row. No-op for closed / non-matching
+                # rows, and a no-op on historical dates (overlay is None
+                # there).
                 live_display_api.apply_persisted_open_overlay_to_row(detail_row, persisted_overlay)
+                # Any in-progress DB detail row must be edit-disabled
+                # regardless of date / overlay (see get_timeline for the
+                # same rationale). The overlay sets this for today's
+                # persisted_open; this covers historical in-progress rows.
+                if is_in_progress and not detail_row.get("edit_disabled"):
+                    detail_row["edit_disabled"] = True
+                    detail_row["disable_reason"] = detail_row.get("disable_reason") or "进行中记录暂不支持编辑"
                 activities.append(detail_row)
             return {
                 "ok": True,

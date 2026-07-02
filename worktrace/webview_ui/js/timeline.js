@@ -19,18 +19,42 @@
         var listEl = document.getElementById("timeline-sessions-list");
         var sessions = data.sessions || [];
         App.currentSessions = sessions;
+        // Live projection detection: when sessions is empty BUT a live
+        // projection exists (virtual or persisted_open), we still want to
+        // surface the live session instead of clearing the panel. The
+        // backend's get_timeline() injects the live session into the
+        // sessions list for today, so an empty list with a non-empty
+        // live_projection means the snapshot is not eligible (e.g. idle)
+        // — in that case the empty state is correct.
+        var liveProjection = data.live_projection || null;
+        var hasLiveProjection = !!(
+            liveProjection
+            && (liveProjection.is_virtual_live || liveProjection.is_in_progress)
+        );
         if (sessions.length === 0) {
-            listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
-            // Verification item 22: invalidate any pending detail request so
-            // a stale ``get_timeline_session_details`` response does not
-            // backfill the cleared detail panel. Also clear the detail cache
-            // so the ticker does not project against a stale payload.
-            ++App.detailsRequestToken;
-            App.lastSessionDetailsData = null;
-            document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
-            document.getElementById("timeline-details-list").innerHTML = "";
-            App.selectedSessionId = null;
-            clearEditPanel();
+            if (hasLiveProjection) {
+                // Live projection exists but the backend did not inject a
+                // session (e.g. snapshot is persisted_open but the DB row
+                // has not yet been grouped into a session). Keep the
+                // detail cache intact so a subsequent refresh can render
+                // the live session. Show a neutral placeholder instead of
+                // "当日暂无活动记录" so the user does not think the day is
+                // empty.
+                listEl.innerHTML = '<div class="timeline-empty">正在加载当前活动…</div>';
+            } else {
+                listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
+                // Verification item 22: invalidate any pending detail request so
+                // a stale ``get_timeline_session_details`` response does not
+                // backfill the cleared detail panel. Also clear the detail cache
+                // so the ticker does not project against a stale payload.
+                ++App.detailsRequestToken;
+                App.lastSessionDetailsData = null;
+                document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
+                document.getElementById("timeline-details-list").innerHTML = "";
+                App.selectedSessionId = null;
+                App.selectedSessionLiveKey = null;
+                clearEditPanel();
+            }
             return;
         }
 
@@ -42,10 +66,12 @@
         var sessionContinuityKeys = [];
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
-            // Defensive: backend now filters virtual / in-progress sessions,
-            // but skip any virtual session that slips through so the
-            // simplified list stays clean.
-            if (s.is_virtual === true) continue;
+            // Live projection convergence: virtual live sessions MUST be
+            // rendered, clickable, and selectable. Previously the
+            // ``is_virtual === true`` skip prevented virtual live sessions
+            // from appearing in the Timeline, which broke the live
+            // continuity contract. The backend marks them
+            // ``edit_disabled=True`` so the edit panel stays disabled.
             var startTimeOnly = App.formatStartTimeOnly(s.start_time);
             var projectLabel = App.formatProjectLabel(s.project_name, s.project_description);
             // ``duration_seconds`` is already the display value (adjusted
@@ -58,8 +84,16 @@
             if (s.is_uncategorized) cls += " uncategorized";
             if (s.is_in_progress) cls += " in-progress";
             if (s.is_live_projected === true) cls += " live-projected";
+            if (s.is_virtual_live === true) cls += " virtual-live";
             if (s.session_id === App.selectedSessionId) cls += " selected";
+            // Stable live key data attribute so the frontend ticker /
+            // selection continuity can locate the session DOM across the
+            // virtual → persisted_open transition (when session_id changes
+            // from "virtual-live:<hash>" to the real DB session id, the
+            // stable_live_key_hash stays the same).
+            var stableKeyHash = s.stable_live_key_hash || "";
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
+                + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
                 + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startTimeOnly) + '｜' + App.escapeHtml(sDurText) + '"'
                 + '>'
                 + '<div class="timeline-item-main">'
@@ -104,15 +138,42 @@
         }
 
         // If the previously selected session still exists, reload its details.
-        if (App.selectedSessionId !== null) {
+        // Selection continuity: when the virtual → persisted_open transition
+        // happens, the session_id changes from "virtual-live:<hash>" to the
+        // real DB session id. We preserve the selection by checking
+        // ``selectedSessionLiveKey`` (stable_live_key_hash) FIRST, falling
+        // back to ``selectedSessionId`` for closed sessions. This keeps
+        // the detail panel visible across the transition instead of
+        // clearing it.
+        if (App.selectedSessionId !== null || App.selectedSessionLiveKey) {
             var found = null;
-            for (var k = 0; k < sessions.length; k++) {
-                if (sessions[k].session_id === App.selectedSessionId) {
-                    found = sessions[k];
-                    break;
+            // First try to match by stable_live_key_hash (handles
+            // virtual → persisted_open transition where session_id
+            // changes but stable_live_key_hash stays the same).
+            if (App.selectedSessionLiveKey) {
+                for (var sk = 0; sk < sessions.length; sk++) {
+                    if (sessions[sk].stable_live_key_hash
+                        && sessions[sk].stable_live_key_hash === App.selectedSessionLiveKey) {
+                        found = sessions[sk];
+                        break;
+                    }
+                }
+            }
+            // Fall back to session_id match (closed sessions, or live
+            // sessions that have not transitioned yet).
+            if (!found && App.selectedSessionId !== null) {
+                for (var k = 0; k < sessions.length; k++) {
+                    if (sessions[k].session_id === App.selectedSessionId) {
+                        found = sessions[k];
+                        break;
+                    }
                 }
             }
             if (found) {
+                // Update the selection anchors so a subsequent refresh
+                // (after the transition) can still find the session.
+                App.selectedSessionId = found.session_id;
+                App.selectedSessionLiveKey = found.stable_live_key_hash || null;
                 // Phase R3 issues 11/17: skip the detail reload when any
                 // Timeline editing is active — unsaved session edits, open
                 // inline time/split editors, saving states, or correction
@@ -132,8 +193,8 @@
                     && (!App.editingSession || App.editingSession.session_id !== found.session_id || !isEditDirty())) {
                     populateEditPanel(found);
                 } else if (found.edit_disabled) {
-                    // Virtual live session: clear the edit panel since it
-                    // cannot be edited.
+                    // Virtual / persisted_open live session: clear the edit
+                    // panel since it cannot be edited.
                     clearEditPanel();
                 }
                 // Phase 3B.5B: if the correction shell is open for this
@@ -164,6 +225,7 @@
                 ++App.detailsRequestToken;
                 App.lastSessionDetailsData = null;
                 App.selectedSessionId = null;
+                App.selectedSessionLiveKey = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
                 document.getElementById("timeline-details-list").innerHTML = "";
                 clearEditPanel();
@@ -180,22 +242,31 @@
         if (App.correctionShellOpen && App.correctionShellSessionId !== sessionId) {
             App.resetCorrectionShellState();
         }
-        // Update selected class without full re-render
+        // Update selected class without full re-render. Match by session_id
+        // AND stable_live_key_hash so the virtual → persisted_open transition
+        // (where session_id changes but stable_live_key_hash stays the same)
+        // keeps the visual selection.
         var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
+        // Find the newly-selected session so we can capture its stable key.
+        var newSelected = null;
+        for (var j0 = 0; j0 < sessions.length; j0++) {
+            if (sessions[j0].session_id === sessionId) {
+                newSelected = sessions[j0];
+                break;
+            }
+        }
+        App.selectedSessionLiveKey = (newSelected && newSelected.stable_live_key_hash) || null;
         for (var i = 0; i < items.length; i++) {
             items[i].classList.remove("selected");
-            if (items[i].getAttribute("data-session-id") === sessionId) {
+            var itemSid = items[i].getAttribute("data-session-id");
+            var itemKey = items[i].getAttribute("data-stable-live-key-hash");
+            if (itemSid === sessionId
+                || (App.selectedSessionLiveKey && itemKey === App.selectedSessionLiveKey)) {
                 items[i].classList.add("selected");
             }
         }
         // Find the session to get activity_ids
-        var found = null;
-        for (var j = 0; j < sessions.length; j++) {
-            if (sessions[j].session_id === sessionId) {
-                found = sessions[j];
-                break;
-            }
-        }
+        var found = newSelected;
         if (found) {
             loadSessionDetails(found.activity_ids, App.timelineDate);
             // Verification item 4: virtual live sessions are display-only.
@@ -299,7 +370,15 @@
             if (a.is_in_progress) cls += " in-progress";
             if (a.is_virtual === true) cls += " virtual-live";
             var aid = a.activity_id || 0;
+            // Stable live key data attribute so the detail ticker can
+            // locate the row across the virtual → persisted_open
+            // transition (when activity_id changes from 0 to the real DB
+            // id, the stable_live_key_hash stays the same). The ticker
+            // looks up the DOM by stable key first, falling back to
+            // activity_id for closed rows.
+            var detailStableKey = a.stable_live_key_hash || "";
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
+                + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
                 + ' data-detail-index="' + i + '"'
                 + '>'
                 + '<div class="detail-item-time">' + App.escapeHtml(startTimeOnly) + '</div>'
@@ -1876,6 +1955,7 @@
         var current = App.timelineDate || (dateEl ? dateEl.value : null);
         App.timelineDate = App.shiftDate(current, -1);
         App.selectedSessionId = null;
+        App.selectedSessionLiveKey = null;
         // Verification item 22: invalidate pending detail requests and clear
         // the detail cache on date switch so a stale response from the
         // previous date does not backfill the new date's detail panel.
@@ -1893,6 +1973,7 @@
         var current = App.timelineDate || (dateEl ? dateEl.value : null);
         App.timelineDate = App.shiftDate(current, 1);
         App.selectedSessionId = null;
+        App.selectedSessionLiveKey = null;
         // Verification item 22: invalidate pending detail requests and clear
         // the detail cache on date switch.
         ++App.detailsRequestToken;
@@ -1906,6 +1987,7 @@
     function goToday() {
         App.timelineDate = null;
         App.selectedSessionId = null;
+        App.selectedSessionLiveKey = null;
         // Verification item 22: invalidate pending detail requests and clear
         // the detail cache on date switch.
         ++App.detailsRequestToken;

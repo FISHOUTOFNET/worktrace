@@ -557,6 +557,7 @@ def build_current_activity_summary(
             "status": "",
             "is_persisted": False,
             "project_name": "",
+            "project_id": 0,
             "persisted_activity_id": 0,
             "live_state": "none",
             "is_in_progress": False,
@@ -667,6 +668,7 @@ def build_current_activity_summary(
     elif status == STATUS_ERROR:
         state_label = "异常"
     display = f"{resource_name}｜{project_name}｜{format_duration(display_seconds)}｜{state_label}"
+    dp_id = display_project_dict.get("id") if isinstance(display_project_dict, dict) else None
     return {
         "active": True,
         "display": display,
@@ -675,6 +677,7 @@ def build_current_activity_summary(
         "status": status,
         "is_persisted": is_persisted,
         "project_name": project_name,
+        "project_id": int(dp_id) if dp_id is not None else 0,
         "persisted_activity_id": int(persisted_id or 0),
         "live_state": live_state,
         "is_in_progress": bool(is_in_progress),
@@ -719,6 +722,63 @@ def _virtual_session_id(snapshot: dict[str, Any] | None) -> str:
     return "virtual-live:" + h
 
 
+def _snapshot_display_project_fields(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the full set of display-facing project fields from a snapshot.
+
+    Centralizes the project-field extraction so virtual session, virtual
+    detail, persisted_open overlay, and the live row contract all share
+    the SAME source of truth for project attribution. During a 30-second
+    pending transition the fields come from the snapshot's
+    ``display_project`` block (the inherited last-confirmed project), NOT
+    from the DB row's candidate assignment.
+
+    Returns a dict with: ``project_id``, ``project_name``,
+    ``project_description``, ``display_project``, ``candidate_project``,
+    ``project_transition``, ``project_transition_pending``,
+    ``is_uncategorized``, ``is_classified``, ``status``, ``start_time``.
+    """
+    project_name = _display_project_name(snapshot)
+    project_description = _display_project_description(snapshot)
+    is_uncategorized = (
+        not project_name or project_name == UNCATEGORIZED_PROJECT
+    )
+    display_project_dict = _snapshot_display_project_dict(snapshot) or {
+        "id": None,
+        "name": project_name,
+        "description": project_description,
+        "source": "uncategorized",
+        "is_uncategorized": is_uncategorized,
+        "is_suggested_project": False,
+    }
+    candidate_project_dict = snapshot.get("candidate_project") if snapshot else None
+    if not isinstance(candidate_project_dict, dict) or not candidate_project_dict:
+        candidate_project_dict = display_project_dict
+    project_transition_dict = snapshot.get("project_transition") if snapshot else None
+    if not isinstance(project_transition_dict, dict):
+        project_transition_dict = {
+            "pending": False,
+            "started_at": "",
+            "elapsed_seconds": 0,
+            "threshold_seconds": 30,
+            "from_project_id": None,
+            "to_project_id": None,
+        }
+    dp_id = display_project_dict.get("id")
+    return {
+        "project_id": int(dp_id) if dp_id is not None else 0,
+        "project_name": project_name,
+        "project_description": project_description,
+        "display_project": display_project_dict,
+        "candidate_project": candidate_project_dict,
+        "project_transition": project_transition_dict,
+        "project_transition_pending": bool(project_transition_dict.get("pending")),
+        "is_uncategorized": bool(is_uncategorized),
+        "is_classified": not bool(is_uncategorized),
+        "status": _snapshot_status(snapshot),
+        "start_time": str(snapshot.get("start_time") or "") if snapshot else "",
+    }
+
+
 def build_virtual_session(
     snapshot: dict[str, Any] | None,
     report_date: str,
@@ -753,18 +813,20 @@ def build_virtual_session(
     project_name = _display_project_name(snapshot)
     project_description = _display_project_description(snapshot)
     start_time = str(snapshot.get("start_time") or "")
+    project_fields = _snapshot_display_project_fields(snapshot)
     return {
         "session_id": _virtual_session_id(snapshot),
         "project_name": project_name,
         "project_description": project_description,
-        "project_id": 0,
+        "project_id": project_fields["project_id"],
         "start_time": start_time,
         "end_time": None,
         "duration": format_duration(duration_seconds),
         "duration_seconds": int(duration_seconds),
         "status": "进行中",
         "event_count": 1,
-        "is_uncategorized": project_name == UNCATEGORIZED_PROJECT,
+        "is_uncategorized": project_fields["is_uncategorized"],
+        "is_classified": project_fields["is_classified"],
         "is_in_progress": True,
         "is_live_projected": False,
         "is_virtual": True,
@@ -784,6 +846,12 @@ def build_virtual_session(
         "carry_seconds": int(carry),
         "edit_disabled": True,
         "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
+        # Display-facing project fields from the snapshot's
+        # display_project block (project-ownership contract).
+        "display_project": project_fields["display_project"],
+        "candidate_project": project_fields["candidate_project"],
+        "project_transition": project_fields["project_transition"],
+        "project_transition_pending": project_fields["project_transition_pending"],
     }
 
 
@@ -817,6 +885,7 @@ def build_virtual_detail_row(
     start_time = str(snapshot.get("start_time") or "")
     resource_kind = str(snapshot.get("resource_kind") or "")
     resource_subtype = str(snapshot.get("resource_subtype") or "")
+    project_fields = _snapshot_display_project_fields(snapshot)
     return {
         "activity_id": _VIRTUAL_ACTIVITY_ID,
         "start_time": start_time,
@@ -828,6 +897,7 @@ def build_virtual_detail_row(
         "resource_name": resource_name,
         "project_name": project_name,
         "project_description": project_description,
+        "project_id": project_fields["project_id"],
         "status": STATUS_NORMAL,
         "is_in_progress": True,
         "is_virtual": True,
@@ -842,6 +912,14 @@ def build_virtual_detail_row(
         "carry_seconds": int(carry),
         "edit_disabled": True,
         "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
+        # Display-facing project fields from the snapshot's
+        # display_project block (project-ownership contract).
+        "is_uncategorized": project_fields["is_uncategorized"],
+        "is_classified": project_fields["is_classified"],
+        "display_project": project_fields["display_project"],
+        "candidate_project": project_fields["candidate_project"],
+        "project_transition": project_fields["project_transition"],
+        "project_transition_pending": project_fields["project_transition_pending"],
     }
 
 
@@ -877,10 +955,16 @@ def build_persisted_open_overlay(
     """Return the persisted-open live overlay metadata for bridge consumers.
 
     When the snapshot is persisted_open AND the report date is today, this
-    returns ``{persisted_activity_id, live_seconds, live_display_key,
-    stable_live_key, stable_live_key_hash, live_started_at_epoch_ms,
-    carry_seconds}`` so the bridge can apply the unified live clock
-    increment to the matching real DB session/detail row.
+    returns a dict carrying the unified live clock fields AND the
+    display-facing project fields so the bridge can apply BOTH the live
+    clock increment and the ``display_project`` overlay to the matching
+    real DB session/detail row.
+
+    The project fields come from the snapshot's ``display_project`` block
+    (written by the project-ownership state machine), NOT from the DB
+    row's assignment. During a 30-second pending transition this prevents
+    the project label from flipping to the candidate project before the
+    pending window elapses.
 
     Returns ``None`` when not applicable.
     """
@@ -898,6 +982,11 @@ def build_persisted_open_overlay(
     # carry_seconds is 0 (the carry is already folded into the row's
     # stored duration via ``increment_activity_duration``).
     live_started_at_epoch_ms = _start_time_epoch_ms(snapshot)
+    # Display-facing project fields from the snapshot's display_project
+    # block. These override the DB row's project assignment so the live
+    # UI shows the inherited display project during the 30-second pending
+    # window, not the candidate project.
+    project_fields = _snapshot_display_project_fields(snapshot)
     return {
         "persisted_activity_id": int(persisted_id),
         "live_seconds": int(_snapshot_total_seconds(snapshot)),
@@ -906,6 +995,18 @@ def build_persisted_open_overlay(
         "stable_live_key_hash": _stable_live_key_hash(snapshot),
         "live_started_at_epoch_ms": int(live_started_at_epoch_ms or 0),
         "carry_seconds": 0,
+        # Display-facing project fields (from snapshot display_project).
+        "project_id": project_fields["project_id"],
+        "project_name": project_fields["project_name"],
+        "project_description": project_fields["project_description"],
+        "display_project": project_fields["display_project"],
+        "candidate_project": project_fields["candidate_project"],
+        "project_transition": project_fields["project_transition"],
+        "project_transition_pending": project_fields["project_transition_pending"],
+        "is_uncategorized": project_fields["is_uncategorized"],
+        "is_classified": project_fields["is_classified"],
+        "status": project_fields["status"],
+        "start_time": project_fields["start_time"],
     }
 
 
@@ -1093,6 +1194,13 @@ def compute_refresh_revision(
 #: carry, regardless of whether the row is virtual (unpersisted snapshot)
 #: or persisted_open (real DB row). Raw ``window_title`` /
 #: ``file_path_hint`` / ``note`` / ``clipboard`` are NEVER included.
+#:
+#: The contract includes display-facing project fields so that virtual and
+#: persisted_open rows share the SAME project attribution source — the
+#: snapshot's ``display_project`` block — rather than the DB row's
+#: candidate assignment. This prevents the project label from flipping to
+#: the candidate during the 30-second pending window when a clipboard
+#: force-persist turns a virtual activity into persisted_open.
 LIVE_ROW_CONTRACT_FIELDS = (
     "live_state",
     "stable_live_key",
@@ -1107,6 +1215,19 @@ LIVE_ROW_CONTRACT_FIELDS = (
     "edit_disabled",
     "disable_reason",
     "source",
+    # Display-facing project fields — overlaid from the snapshot's
+    # display_project block for BOTH virtual and persisted_open rows.
+    "project_id",
+    "project_name",
+    "project_description",
+    "display_project",
+    "candidate_project",
+    "project_transition",
+    "project_transition_pending",
+    "is_uncategorized",
+    "is_classified",
+    "status",
+    "start_time",
 )
 
 
@@ -1128,11 +1249,23 @@ def apply_persisted_open_overlay_to_row(
       in-progress persisted activity is one of its activities (typically
       the last one).
 
-    The merged fields are display-safe only:
-    ``live_state`` / ``stable_live_key`` / ``stable_live_key_hash`` /
-    ``live_display_key`` / ``live_started_at_epoch_ms`` /
-    ``carry_seconds``. The DB row itself is never changed — this is a
-    read-side projection only.
+    The merged fields include BOTH the unified live clock fields AND the
+    display-facing project fields. The project fields (``project_name``,
+    ``project_description``, ``project_id``, ``display_project``,
+    ``candidate_project``, ``project_transition``,
+    ``project_transition_pending``, ``is_uncategorized``,
+    ``is_classified``) are overlaid from the snapshot's
+    ``display_project`` block so the live UI shows the inherited display
+    project during the 30-second pending window, not the DB row's
+    candidate assignment. ``candidate_project`` is surfaced as a separate
+    field but NEVER overrides ``project_name`` / ``project_id``.
+
+    The DB row itself is never changed — this is a read-side projection
+    only. ``duration_seconds`` is NOT overlaid: the persisted_open row's
+    real DB duration (or projected live duration from
+    ``timeline_service``) is already correct and should not be replaced
+    by the overlay's snapshot-based ``live_seconds`` (which would
+    double-count).
     """
     if not overlay:
         return row
@@ -1153,6 +1286,7 @@ def apply_persisted_open_overlay_to_row(
         }
     if not matches:
         return row
+    # Unified live clock fields.
     row["live_state"] = "persisted_open"
     row["stable_live_key"] = str(overlay.get("stable_live_key") or "")
     row["stable_live_key_hash"] = str(overlay.get("stable_live_key_hash") or "")
@@ -1163,6 +1297,27 @@ def apply_persisted_open_overlay_to_row(
     row["is_virtual_live"] = False
     row["is_in_progress"] = True
     row["is_live_projected"] = True
+    # Display-facing project fields — overlaid from the snapshot's
+    # display_project block so the live UI shows the inherited display
+    # project during the 30-second pending window. candidate_project is
+    # surfaced as a separate field but does NOT override project_name.
+    row["project_id"] = int(overlay.get("project_id") or 0)
+    row["project_name"] = str(overlay.get("project_name") or "未归类")
+    row["project_description"] = str(overlay.get("project_description") or "")
+    row["display_project"] = overlay.get("display_project")
+    row["candidate_project"] = overlay.get("candidate_project")
+    row["project_transition"] = overlay.get("project_transition")
+    row["project_transition_pending"] = bool(overlay.get("project_transition_pending"))
+    row["is_uncategorized"] = bool(overlay.get("is_uncategorized"))
+    row["is_classified"] = bool(overlay.get("is_classified"))
+    row["status"] = str(overlay.get("status") or "")
+    row["start_time"] = str(overlay.get("start_time") or "")
+    # Persisted_open rows are NOT editable (the activity is still in
+    # progress). The frontend uses these to disable edit / split / merge /
+    # hide / delete / restore controls.
+    row["edit_disabled"] = True
+    row["disable_reason"] = _VIRTUAL_EDIT_DISABLE_REASON
+    row["source"] = "db"
     return row
 
 
@@ -1204,9 +1359,21 @@ def build_live_row_contract(
             "is_virtual_live": False,
             "is_in_progress": True,
             "is_live_projected": True,
-            "edit_disabled": False,
-            "disable_reason": "",
-            "source": str(row.get("source") or "db") if row else "db",
+            "edit_disabled": True,
+            "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
+            "source": "db",
+            # Display-facing project fields from the overlay.
+            "project_id": int(overlay.get("project_id") or 0),
+            "project_name": str(overlay.get("project_name") or "未归类"),
+            "project_description": str(overlay.get("project_description") or ""),
+            "display_project": overlay.get("display_project"),
+            "candidate_project": overlay.get("candidate_project"),
+            "project_transition": overlay.get("project_transition"),
+            "project_transition_pending": bool(overlay.get("project_transition_pending")),
+            "is_uncategorized": bool(overlay.get("is_uncategorized")),
+            "is_classified": bool(overlay.get("is_classified")),
+            "status": str(overlay.get("status") or ""),
+            "start_time": str(overlay.get("start_time") or ""),
         }
     if row_kind == "virtual_session":
         virtual = build_virtual_session(snapshot, report_date, today)
@@ -1236,6 +1403,18 @@ def build_live_row_contract(
             "edit_disabled": bool(summary.get("edit_disabled")),
             "disable_reason": str(summary.get("disable_reason") or ""),
             "source": str(summary.get("source") or ""),
+            # Display-facing project fields from the summary.
+            "project_id": int(summary.get("project_id") or 0) if summary.get("project_id") else 0,
+            "project_name": str(summary.get("project_name") or ""),
+            "project_description": str(summary.get("project_description") or ""),
+            "display_project": summary.get("display_project"),
+            "candidate_project": summary.get("candidate_project"),
+            "project_transition": summary.get("project_transition"),
+            "project_transition_pending": bool(summary.get("project_transition_pending")),
+            "is_uncategorized": bool(summary.get("is_uncategorized")),
+            "is_classified": bool(summary.get("is_classified")),
+            "status": str(summary.get("status") or ""),
+            "start_time": str(summary.get("start_time") or ""),
         }
     return {}
 
@@ -1255,6 +1434,18 @@ def _contract_from_virtual(virtual: dict[str, Any]) -> dict[str, Any]:
         "edit_disabled": bool(virtual.get("edit_disabled")),
         "disable_reason": str(virtual.get("disable_reason") or ""),
         "source": str(virtual.get("source") or "snapshot"),
+        # Display-facing project fields from the virtual builder.
+        "project_id": int(virtual.get("project_id") or 0),
+        "project_name": str(virtual.get("project_name") or "未归类"),
+        "project_description": str(virtual.get("project_description") or ""),
+        "display_project": virtual.get("display_project"),
+        "candidate_project": virtual.get("candidate_project"),
+        "project_transition": virtual.get("project_transition"),
+        "project_transition_pending": bool(virtual.get("project_transition_pending")),
+        "is_uncategorized": bool(virtual.get("is_uncategorized")),
+        "is_classified": bool(virtual.get("is_classified")),
+        "status": str(virtual.get("status") or ""),
+        "start_time": str(virtual.get("start_time") or ""),
     }
 
 
@@ -1341,10 +1532,19 @@ def build_live_projection(
         "persisted_activity_id": int(summary.get("persisted_activity_id") or 0),
         "activity_id": summary.get("activity_id"),
         "source": str(summary.get("source") or "none"),
-        "edit_disabled": not bool(summary.get("is_in_progress")),
+        # Both virtual (unpersisted) and persisted_open (real open DB row)
+        # are still in-progress activities and MUST be edit-disabled. The
+        # frontend uses these to disable edit / split / merge / hide /
+        # delete / restore controls.
+        "edit_disabled": bool(
+            summary.get("is_virtual_live") or summary.get("is_in_progress")
+        ),
         "disable_reason": (
             _VIRTUAL_EDIT_DISABLE_REASON
-            if summary.get("is_virtual_live")
+            if (
+                summary.get("is_virtual_live")
+                or summary.get("is_in_progress")
+            )
             else ""
         ),
         # Convenience: the display project name + description for

@@ -81,6 +81,12 @@
     App.timelineLoaded = false;    // whether timeline has been loaded at least once
     App.timelineLoading = false;   // whether a timeline load is in progress
     App.selectedSessionId = null;  // currently selected session for detail view
+    // Stable live key (stable_live_key_hash) for the currently selected
+    // session. Used for selection continuity across the virtual →
+    // persisted_open transition: when session_id changes from
+    // "virtual-live:<hash>" to the real DB session id, the
+    // stable_live_key_hash stays the same so the selection survives.
+    App.selectedSessionLiveKey = null;
 
     // Request tokens prevent stale bridge responses from overwriting newer
     // data when the user rapidly switches dates / pages. Each load
@@ -863,14 +869,30 @@
             // list (e.g. after a revision change) cannot mismatch sessions.
             // Verification item 12: the continuity key uses stable_live_key_hash
             // for live sessions so the duration does not reset on transition.
+            // Live projection convergence: look up the DOM by
+            // stable_live_key_hash FIRST so the ticker survives the
+            // virtual → persisted_open transition (when session_id
+            // changes from "virtual-live:<hash>" to the real DB session
+            // id, the stable_live_key_hash stays the same). Fall back to
+            // session_id for closed sessions that don't carry a stable
+            // key (verification item 三.5).
             if (isToday && tlDelta >= 0 && tl.sessions) {
                 for (var si = 0; si < tl.sessions.length; si++) {
                     var s = tl.sessions[si];
-                    if (s.is_in_progress || s.is_live_projected) {
+                    if (s.is_in_progress || s.is_live_projected || s.is_virtual_live) {
                         var sid = s.session_id;
-                        var itemEl = document.querySelector(
-                            '#timeline-sessions-list .timeline-item[data-session-id="' + sid + '"]'
-                        );
+                        var sStableKey = s.stable_live_key_hash || "";
+                        var itemEl = null;
+                        if (sStableKey) {
+                            itemEl = document.querySelector(
+                                '#timeline-sessions-list .timeline-item[data-stable-live-key-hash="' + sStableKey + '"]'
+                            );
+                        }
+                        if (!itemEl) {
+                            itemEl = document.querySelector(
+                                '#timeline-sessions-list .timeline-item[data-session-id="' + sid + '"]'
+                            );
+                        }
                         if (itemEl) {
                             var durEl = itemEl.querySelector(".timeline-item-duration");
                             if (durEl) {
@@ -889,7 +911,7 @@
             // live clock, independent of when the Timeline main payload
             // arrived. This prevents drift between the detail duration and
             // its own baseline.
-            if (isToday && App.selectedSessionId
+            if (isToday && (App.selectedSessionId || App.selectedSessionLiveKey)
                 && App.lastSessionDetailsData && !App._timelineEditingActive()) {
                 var detailsList = document.getElementById("timeline-details-list");
                 if (detailsList) {
@@ -903,10 +925,27 @@
                     for (var dai = 0; dai < detailActs.length; dai++) {
                         var dAct = detailActs[dai];
                         if (dAct.is_virtual_live || dAct.is_in_progress) {
-                            var dAid = dAct.activity_id || 0;
-                            var dEl = detailsList.querySelector(
-                                '.detail-item[data-activity-id="' + dAid + '"] .detail-item-duration'
-                            );
+                            // Live projection convergence: look up the DOM
+                            // by stable_live_key_hash FIRST so the ticker
+                            // survives the virtual → persisted_open
+                            // transition (when activity_id changes from 0
+                            // to the real DB id, the stable_live_key_hash
+                            // stays the same). Fall back to activity_id
+                            // for closed rows that don't carry a stable
+                            // key (verification item 三.5).
+                            var dStableKey = dAct.stable_live_key_hash || "";
+                            var dEl = null;
+                            if (dStableKey) {
+                                dEl = detailsList.querySelector(
+                                    '.detail-item[data-stable-live-key-hash="' + dStableKey + '"] .detail-item-duration'
+                                );
+                            }
+                            if (!dEl) {
+                                var dAid = dAct.activity_id || 0;
+                                dEl = detailsList.querySelector(
+                                    '.detail-item[data-activity-id="' + dAid + '"] .detail-item-duration'
+                                );
+                            }
                             if (dEl) {
                                 var dBaseSec = parseInt(dAct.duration_seconds, 10) || 0;
                                 var dContinuity = liveContinuityKey(dAct, "detail");

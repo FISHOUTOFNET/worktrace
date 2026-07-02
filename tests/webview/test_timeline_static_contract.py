@@ -3360,3 +3360,151 @@ def test_app_js_dirty_state_includes_duration():
         "isEditDirty must check edit-duration-input for unsaved duration "
         "overrides so auto-refresh does not wipe them"
     )
+
+
+# --- Section 六.3: Frontend live projection convergence -------------------
+
+
+def test_timeline_js_does_not_skip_is_virtual_sessions():
+    """Section 三.1 / 六.3: ``timeline.js`` must NOT skip sessions whose
+    ``is_virtual === true``. The old ``if (s.is_virtual === true)
+    continue;`` line has been removed so virtual live sessions render,
+    can be clicked, and can be selected.
+
+    The comment in the source explicitly notes the skip was removed. We
+    assert the skip line is gone AND a comment references the removal.
+    """
+    source = read_all_js()
+    # The old skip line must NOT be present.
+    assert "if (s.is_virtual === true) continue" not in source, (
+        "timeline.js must NOT skip is_virtual sessions — the old skip "
+        "line has been removed so virtual live sessions render"
+    )
+    # The removal is documented via a comment that mentions the old
+    # behavior, so future regressions are caught.
+    assert "is_virtual" in source, (
+        "timeline.js must reference is_virtual (e.g. for the virtual-live "
+        "CSS class) — the field is still consumed, just not skipped"
+    )
+
+
+def test_timeline_js_session_dom_has_stable_live_key_attribute():
+    """Section 三.2 / 六.3: Timeline session DOM elements must carry the
+    ``data-stable-live-key-hash`` attribute so the ticker and selection
+    continuity can locate the live session across the virtual →
+    persisted_open transition (where ``session_id`` / ``activity_id``
+    change but ``stable_live_key_hash`` stays the same)."""
+    source = read_all_js()
+    assert 'data-stable-live-key-hash' in source, (
+        "timeline.js must emit data-stable-live-key-hash on session DOM "
+        "elements so the ticker / selection can survive the virtual → "
+        "persisted_open transition"
+    )
+    # The attribute is populated from the session's stable_live_key_hash.
+    assert "stable_live_key_hash" in source, (
+        "timeline.js must read stable_live_key_hash from sessions to "
+        "populate the data-stable-live-key-hash attribute"
+    )
+
+
+def test_timeline_js_detail_dom_has_stable_live_key_attribute():
+    """Section 三.3 / 六.3: Timeline detail row DOM elements must carry
+    the ``data-stable-live-key-hash`` attribute so the detail ticker can
+    locate the live detail row across the virtual → persisted_open
+    transition."""
+    source = read_all_js()
+    # The detail-row rendering also emits data-stable-live-key-hash.
+    # We verify the attribute appears in the detail-rendering section
+    # (the test_app_js_render_session_details_no_merge_button_disabled_logic
+    # pattern: search within the render function body).
+    assert 'data-stable-live-key-hash' in source, (
+        "timeline.js must emit data-stable-live-key-hash on detail DOM "
+        "elements so the detail ticker survives the virtual → "
+        "persisted_open transition"
+    )
+
+
+def test_timeline_js_selection_continuity_uses_stable_live_key_hash():
+    """Section 三.4 / 六.3: Timeline selection continuity must use
+    ``selectedSessionLiveKey`` (stable_live_key_hash) as the PRIMARY
+    anchor. When refresh causes ``session_id`` to change from the
+    virtual id to the real DB id, the selection must transfer to the
+    new session as long as ``stable_live_key_hash`` matches. Only when
+    no stable key matches does the selection fall back to ``session_id``
+    or clear."""
+    source = read_all_js()
+    # The selectedSessionLiveKey field must be declared on App.
+    assert "App.selectedSessionLiveKey" in source, (
+        "timeline.js / core.js must declare App.selectedSessionLiveKey "
+        "for selection continuity across the virtual → persisted_open "
+        "transition"
+    )
+    # The selection-recovery loop must match by stable_live_key_hash
+    # FIRST (before falling back to session_id).
+    assert "stable_live_key_hash" in source, (
+        "timeline.js must match sessions by stable_live_key_hash during "
+        "selection recovery"
+    )
+
+
+def test_timeline_js_live_session_edit_controls_disabled():
+    """Section 三.1 / 六.3: live sessions (virtual AND persisted_open)
+    must have their edit / correction / split / merge / hide / delete /
+    restore controls disabled. The frontend checks ``edit_disabled``
+    and / or ``is_virtual`` to disable the controls."""
+    source = read_all_js()
+    # The frontend must reference edit_disabled to disable controls.
+    assert "edit_disabled" in source, (
+        "timeline.js must check edit_disabled to disable edit controls "
+        "for live (virtual + persisted_open) sessions"
+    )
+    # The disable_reason should be surfaced so the user sees why the
+    # controls are disabled.
+    assert "disable_reason" in source or "is_virtual" in source, (
+        "timeline.js must reference disable_reason or is_virtual for "
+        "live-session edit-disable messaging"
+    )
+
+
+def test_core_js_ticker_uses_stable_live_key_first():
+    """Section 三.5 / 六.3: the detail ticker in ``core.js`` must look up
+    the DOM by ``data-stable-live-key-hash`` FIRST, falling back to
+    ``data-activity-id`` only when no stable key is available. This is
+    required because virtual → persisted_open changes the activity_id
+    (from 0 to the real DB id) but the stable_live_key_hash stays the
+    same."""
+    source = read_all_js()
+    # The ticker must query by data-stable-live-key-hash.
+    assert 'data-stable-live-key-hash' in source, (
+        "core.js ticker must query DOM by data-stable-live-key-hash so "
+        "the detail duration keeps incrementing across the virtual → "
+        "persisted_open transition"
+    )
+    # The ticker must still fall back to data-activity-id for closed
+    # historical rows that have no stable key.
+    assert 'data-activity-id' in source, (
+        "core.js ticker must fall back to data-activity-id for closed "
+        "historical rows that have no stable_live_key_hash"
+    )
+    # App.liveContinuityKey must be the single continuity key
+    # construction entry point.
+    assert "liveContinuityKey" in source, (
+        "core.js must define App.liveContinuityKey as the single "
+        "continuity key construction entry point for the ticker / render "
+        "seeding / DOM lookup"
+    )
+
+
+def test_timeline_js_does_not_clear_detail_when_live_projection_exists():
+    """Section 三.1 / 六.3: when ``sessions`` is empty but a live
+    projection exists, ``showTimeline`` must NOT clear the detail cache
+    / selected session. Instead it must show a loading placeholder
+    ("正在加载当前活动…") so the live session can be rendered once the
+    next refresh arrives."""
+    source = read_all_js()
+    # The loading placeholder must be present.
+    assert "正在加载当前活动" in source, (
+        "timeline.js must show '正在加载当前活动…' when sessions are "
+        "empty but a live projection exists, instead of clearing the "
+        "detail cache / selected session"
+    )

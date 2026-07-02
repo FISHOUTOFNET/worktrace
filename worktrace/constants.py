@@ -4,6 +4,13 @@ APP_VERSION = "0.1.0"
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 HISTORY_PERSIST_THRESHOLD_SECONDS = 30
+# Project ownership confirmation window — the number of seconds a candidate
+# project must be continuously observed before it is confirmed as the display
+# project. Semantically independent from ``HISTORY_PERSIST_THRESHOLD_SECONDS``
+# (which gates when a virtual activity is persisted to the DB). Both happen to
+# be 30 seconds today, but they must remain separate constants so the two
+# concerns can evolve independently.
+PROJECT_OWNERSHIP_CONFIRM_SECONDS = 30
 DEFAULT_IDLE_THRESHOLD_SECONDS = 5 * 60
 DEFAULT_CONTEXT_CARRY_MINUTES = 15
 REPORT_CONTEXT_SHORT_MERGE_SECONDS = 5 * 60
