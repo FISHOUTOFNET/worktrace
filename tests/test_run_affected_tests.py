@@ -93,7 +93,7 @@ def test_bridge_py_selects_bridge_tests_and_boundary(runner):
 
 
 # ---------------------------------------------------------------------------
-# B (the page-level split). New split mixin files -> bridge tests + boundary
+# B (the page module mapping). New split mixin files -> bridge tests + boundary
 # ---------------------------------------------------------------------------
 
 
@@ -104,14 +104,14 @@ def test_bridge_py_selects_bridge_tests_and_boundary(runner):
     "worktrace/webview_ui/bridge_statistics.py",
     "worktrace/webview_ui/bridge_timeline.py",
 ])
-def test_m4_split_mixin_selects_bridge_tests_and_boundary(runner, bridge_file):
+def test_bridge_mixin_file_selects_bridge_tests_and_boundary(runner, bridge_file):
     # each new split mixin file must trigger section B (WebView
     # bridge) so the broad bridge test suite + boundary tests run when any
     # mixin body changes. These mixins are not frontend resources, so no
     # import smoke is expected from section B.
     # section B now also carries the per-feature split-
     # sensitive bridge tests (time_edit / split / visibility / statistics /
-    # csv_export) plus the settings-privacy / phase1-entry / app-runtime-
+    # csv_export) plus the settings-privacy / default-entry / app-runtime-
     # privacy-gate tests so a mixin body change can never silently drop a
     # specialized bridge test from the feature-specific D / E / K1 sections.
     sel = runner.select_targets([bridge_file])
@@ -128,7 +128,7 @@ def test_m4_split_mixin_selects_bridge_tests_and_boundary(runner, bridge_file):
         "tests/test_webview_bridge_statistics.py",
         "tests/test_statistics_csv_export.py",
         "tests/test_settings_privacy_status.py",
-        "tests/test_webview_phase1_entry.py",
+        "tests/test_webview_entry.py",
         "tests/test_app_runtime_privacy_gate.py",
         "tests/test_ui_backend_boundary.py",
     ]:
@@ -145,14 +145,14 @@ def test_m4_bridge_settings_py_also_selects_k1_settings_suite(runner):
     so the settings-specific static contract, privacy status, packaging, and
     frontend boundary tests run, plus the import smoke command.
 
-    the page-level split: K1 now also carries the entry test and the
+    the page module mapping: K1 now also carries the entry test and the
     app-runtime privacy gate test because bridge_settings.py owns the
     first-run notice accept flow that the startup gate depends on."""
     sel = runner.select_targets(["worktrace/webview_ui/bridge_settings.py"])
     for expected in (
         "tests/test_settings_privacy_status.py",
         "tests/webview/test_settings_static_contract.py",
-        "tests/test_webview_phase1_entry.py",
+        "tests/test_webview_entry.py",
         "tests/test_app_runtime_privacy_gate.py",
         "tests/test_ui_backend_boundary.py",
         "tests/webview/test_frontend_global_boundaries.py",
@@ -168,7 +168,7 @@ def test_m4_bridge_settings_py_also_selects_k1_settings_suite(runner):
 
 
 # ---------------------------------------------------------------------------
-# B/D/E/K1 (the page-level split). Per-split-file specialized test locks.
+# B/D/E/K1 (the page module mapping). Per-split-file specialized test locks.
 # Each split mixin file is a trigger for its own feature section (D / E / K1)
 # in addition to section B. These tests lock the feature-specific specialized
 # tests so a future runner refactor cannot silently drop them.
@@ -233,23 +233,23 @@ def test_bridge_dialogs_py_selects_statistics_and_settings_tests(runner):
         "tests/test_settings_privacy_status.py",
         "tests/test_app_runtime_privacy_gate.py",
         "tests/webview/test_settings_static_contract.py",
-        "tests/test_webview_phase1_entry.py",
+        "tests/test_webview_entry.py",
     ):
         assert expected in sel.pytest_targets, (
             f"bridge_dialogs.py must select Settings/privacy test: {expected}"
         )
 
 
-def test_bridge_settings_py_selects_phase1_and_privacy_gate_tests(runner):
+def test_bridge_settings_py_selects_entry_and_privacy_gate_tests(runner):
     """bridge_settings.py owns the first-run notice
     accept flow (the first-run notice) that the startup gate and app-runtime privacy
     gate depend on. In addition to the K1 settings static contract /
-    privacy status tests, it must select the phase1 entry test and the
+    privacy status tests, it must select the default entry test and the
     app-runtime privacy gate test."""
     sel = runner.select_targets(["worktrace/webview_ui/bridge_settings.py"])
     for expected in (
         "tests/test_settings_privacy_status.py",
-        "tests/test_webview_phase1_entry.py",
+        "tests/test_webview_entry.py",
         "tests/test_app_runtime_privacy_gate.py",
     ):
         assert expected in sel.pytest_targets, (
@@ -475,7 +475,7 @@ def test_rules_project_actions_js_selects_static_contract_and_smoke(runner):
     "worktrace/webview_ui/js/rules_keyword_actions.js",
     "worktrace/webview_ui/js/rules_folder_actions.js",
 ])
-def test_mc2_split_module_selects_static_contract_and_smoke(runner, js_module):
+def test_rules_split_module_selects_static_contract_and_smoke(runner, js_module):
     # each new split module must trigger section A (frontend
     # resources, broad) AND section C6 (Project Rules static contract).
     # Both contribute the static contract target; dedup ensures it
@@ -496,7 +496,7 @@ def test_mc2_split_module_selects_static_contract_and_smoke(runner, js_module):
     "worktrace/webview_ui/js/rules_keyword_actions.js",
     "worktrace/webview_ui/js/rules_folder_actions.js",
 ])
-def test_mc2_split_module_does_not_trigger_api_or_service_tests(runner, js_module):
+def test_rules_split_module_does_not_trigger_api_or_service_tests(runner, js_module):
     # a pure frontend JS change must not unconditionally
     # trigger the keyword/folder/project API or service tests. Those run
     # only when the API / service / bridge source files change (sections
@@ -969,14 +969,14 @@ def test_k1_does_not_trigger_project_rules_suite(runner):
 # ---------------------------------------------------------------------------
 
 
-def test_webview_main_py_selects_phase6e_startup_tests(runner):
+def test_webview_main_py_selects_startup_tests(runner):
     """webview_main.py carries the first-run notice startup gate,
     so it must select the K2 target set (entry + startup imports + boundary
     + settings privacy status + affected runner self-tests). the heartbeat adds
     the app-runtime privacy gate test to K2 as well."""
     sel = runner.select_targets(["worktrace/webview_main.py"])
     for expected in (
-        "tests/test_webview_phase1_entry.py",
+        "tests/test_webview_entry.py",
         "tests/test_startup_imports.py",
         "tests/test_ui_backend_boundary.py",
         "tests/test_settings_privacy_status.py",
@@ -997,13 +997,13 @@ def test_webview_main_py_adds_import_smoke(runner):
     )
 
 
-def test_main_py_selects_phase6e_startup_tests(runner):
+def test_main_py_selects_startup_tests(runner):
     """worktrace/main.py is a K2 trigger because it can alter the
     process entry point that decides whether the WebView main loop starts.
     the heartbeat adds the app-runtime privacy gate test to K2."""
     sel = runner.select_targets(["worktrace/main.py"])
     for expected in (
-        "tests/test_webview_phase1_entry.py",
+        "tests/test_webview_entry.py",
         "tests/test_startup_imports.py",
         "tests/test_ui_backend_boundary.py",
         "tests/test_settings_privacy_status.py",
@@ -1015,14 +1015,14 @@ def test_main_py_selects_phase6e_startup_tests(runner):
         )
 
 
-def test_app_api_py_selects_phase6e_startup_tests(runner):
+def test_app_api_py_selects_startup_tests(runner):
     """app_api.py carries start_collector / stop_collector, which
     the startup gate and toggle_pause guard depend on; it must select the
     K2 target set so boundary and entry tests run. the heartbeat adds the
     app-runtime privacy gate test to K2."""
     sel = runner.select_targets(["worktrace/api/app_api.py"])
     for expected in (
-        "tests/test_webview_phase1_entry.py",
+        "tests/test_webview_entry.py",
         "tests/test_startup_imports.py",
         "tests/test_ui_backend_boundary.py",
         "tests/test_settings_privacy_status.py",
@@ -1034,14 +1034,14 @@ def test_app_api_py_selects_phase6e_startup_tests(runner):
         )
 
 
-def test_app_runtime_py_selects_phase6h_privacy_gate_tests(runner):
+def test_app_runtime_py_selects_privacy_gate_tests(runner):
     """app_runtime.py carries the split start_background_workers()
     method that the first-run notice privacy gate depends on. It must select
     the K2 target set so the app-runtime privacy gate test, boundary, and
     entry tests all run."""
     sel = runner.select_targets(["worktrace/runtime/app_runtime.py"])
     for expected in (
-        "tests/test_webview_phase1_entry.py",
+        "tests/test_webview_entry.py",
         "tests/test_startup_imports.py",
         "tests/test_ui_backend_boundary.py",
         "tests/test_settings_privacy_status.py",

@@ -133,7 +133,7 @@ def webview_ui_files() -> list[Path]:
     return _collect_webview_ui_files()
 
 
-# page-level split: ``bridge.py`` is now a thin composition class
+# page module mapping: ``bridge.py`` is now a thin composition class
 # that inherits from six mixins (``BridgeDialogMixin``, ``OverviewBridgeMixin``,
 # ``SettingsBridgeMixin``, ``StatisticsBridgeMixin``, ``TimelineBridgeMixin``,
 # ``ProjectRulesBridgeMixin``). Method bodies live in the mixin files below.
@@ -215,8 +215,8 @@ def test_webview_bridge_has_no_runtime_or_config_imports() -> None:
 
     The Project Rules bridge methods live in
     ``bridge_rules.py`` (mixed into ``WebViewBridge`` via
-    ``ProjectRulesBridgeMixin``). The Overview / Settings / Statistics / Timeline bridge methods live
-    the Overview / Settings / Statistics / Timeline bridge methods live
+    ``ProjectRulesBridgeMixin``). The Overview / Settings / Statistics /
+    Timeline bridge methods live
     in ``bridge_overview.py`` / ``bridge_settings.py`` /
     ``bridge_statistics.py`` / ``bridge_timeline.py`` respectively, and
     shared helpers live in ``bridge_common.py`` / ``bridge_dialogs.py``.
@@ -308,7 +308,7 @@ def test_webview_frontend_resources_have_no_external_links() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_webview_bridge_exposes_phase_5i_batch_and_automatic_methods() -> None:
+def test_webview_bridge_exposes_automatic_rules_batch_and_automatic_methods() -> None:
     """``WebViewBridge`` must expose the four the rule automation methods.
 
     The methods are defined on ``ProjectRulesBridgeMixin`` and inherited by
@@ -343,7 +343,7 @@ def test_webview_bridge_exposes_phase_5i_batch_and_automatic_methods() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_webview_bridge_exposes_phase_6b_clipboard_toggle_method() -> None:
+def test_webview_bridge_exposes_settings_clipboard_toggle_method() -> None:
     """``WebViewBridge`` must expose the clipboard toggle ``set_clipboard_capture_enabled``
     method with a single required ``enabled`` parameter (no optional args,
     no loose ``*args``)."""
@@ -436,7 +436,7 @@ def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens()
 # ---------------------------------------------------------------------------
 
 
-def test_webview_bridge_exposes_phase_6c_export_method() -> None:
+def test_webview_bridge_exposes_backup_export_method() -> None:
     """``WebViewBridge`` must expose the backup export ``export_encrypted_backup``
     method with exactly two required parameters (``passphrase`` and
     ``confirm_passphrase``); no optional args, no ``*args``, no ``**kwargs``."""
@@ -472,7 +472,7 @@ def test_webview_bridge_exposes_phase_6c_export_method() -> None:
         )
 
 
-def test_webview_bridge_exposes_phase_6c_manifest_preview_method() -> None:
+def test_webview_bridge_exposes_backup_manifest_preview_method() -> None:
     """``WebViewBridge`` must expose the backup export
     ``preview_encrypted_backup_manifest`` method with zero parameters."""
     import inspect
@@ -632,7 +632,7 @@ def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_webview_bridge_exposes_phase_6d_import_method() -> None:
+def test_webview_bridge_exposes_destructive_data_import_method() -> None:
     """``WebViewBridge`` must expose the backup import ``import_encrypted_backup``
     method with exactly two required parameters (``passphrase`` and
     ``confirm_text``); no optional args, no ``*args``, no ``**kwargs``."""
@@ -668,7 +668,7 @@ def test_webview_bridge_exposes_phase_6d_import_method() -> None:
         )
 
 
-def test_webview_bridge_exposes_phase_6d_clear_method() -> None:
+def test_webview_bridge_exposes_destructive_data_clear_method() -> None:
     """``WebViewBridge`` must expose the backup import ``clear_all_local_data``
     method with exactly one required parameter (``confirm_text``); no
     optional args, no ``*args``, no ``**kwargs``."""
@@ -862,7 +862,7 @@ def test_webview_bridge_clear_does_not_call_backup_actions_or_set() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_webview_bridge_exposes_phase_6e_first_run_notice_methods() -> None:
+def test_webview_bridge_exposes_privacy_notice_first_run_notice_methods() -> None:
     """``WebViewBridge`` must expose the first-run notice ``get_first_run_notice``
     and ``accept_first_run_notice`` methods, both with zero parameters."""
     import inspect
@@ -1262,7 +1262,7 @@ def test_webview_bridge_exposes_union_of_all_mixin_public_methods() -> None:
     """``WebViewBridge()`` must expose every public method defined on any of
     the 8 bridge mixin files, and no extras beyond the union.
 
-    the page-level split split ``bridge.py`` into ``bridge_common.py``,
+    the page module mapping split ``bridge.py`` into ``bridge_common.py``,
     ``bridge_dialogs.py``, ``bridge_overview.py``, ``bridge_settings.py``,
     ``bridge_statistics.py``, ``bridge_timeline.py``, and ``bridge_rules.py``
     (plus the slim composition ``bridge.py``). ``WebViewBridge`` inherits
@@ -1311,7 +1311,7 @@ def test_webview_bridge_exposes_union_of_all_mixin_public_methods() -> None:
 # surface. The union-of-mixin test above guards against a mixin growing a new
 # method that fails to reach ``WebViewBridge``. It does NOT guard against a
 # historically-public method being silently dropped during a split (e.g. a
-# method that lived on ``WebViewBridge`` before the page-level split and was accidentally
+# method that lived on ``WebViewBridge`` before the page module mapping and was accidentally
 # left out of every mixin). This fixed set closes that gap: every name listed
 # here MUST remain callable on ``WebViewBridge()``. The set is hand-curated
 # from the actual public methods declared across the 8 bridge files (verified
@@ -1387,7 +1387,7 @@ EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
 def test_webview_bridge_exposes_expected_fixed_public_api_surface() -> None:
     """``WebViewBridge()`` must expose every method in the fixed expected set.
 
-    the page-level split: this is the complement to
+    the page module mapping: this is the complement to
     ``test_webview_bridge_exposes_union_of_all_mixin_public_methods``. The
     union test prevents a mixin from growing a method that fails to reach
     ``WebViewBridge``. This fixed-set test prevents a historically-public
@@ -1419,7 +1419,7 @@ def test_webview_bridge_exposes_expected_fixed_public_api_surface() -> None:
 
 # ---------------------------------------------------------------------------
 # Compat cleanup: ``bridge.py`` must NOT expose API facade module
-# symbols. Before the page-level split cleanup, ``bridge.py``
+# symbols. Before the page module mapping cleanup, ``bridge.py``
 # imported ``app_api`` / ``export_api`` / ``project_api`` / ``rule_api`` /
 # ``settings_api`` / ``statistics_api`` / ``timeline_api`` at module level
 # so tests that monkeypatched ``bridge_module.<api>`` would resolve. After
@@ -1433,7 +1433,7 @@ def test_bridge_module_does_not_expose_api_facade_symbols() -> None:
     """``worktrace.webview_ui.bridge`` must NOT expose any API facade module
     as a module-level attribute.
 
-    After the page-level split cleanup, ``bridge.py`` only imports
+    After the page module mapping cleanup, ``bridge.py`` only imports
     the six mixin classes (``BridgeDialogMixin``, ``OverviewBridgeMixin``,
     ``SettingsBridgeMixin``, ``StatisticsBridgeMixin``, ``TimelineBridgeMixin``,
     ``ProjectRulesBridgeMixin``) and stdlib (``logging``, ``typing``). Each

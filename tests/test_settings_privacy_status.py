@@ -66,7 +66,6 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
     assert isinstance(status, dict)
     for key in (
         "page",
-        "phase",
         "storage_model",
         "clipboard_capture_enabled",
         "export_path_configured",
@@ -77,7 +76,6 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
     ):
         assert key in status, f"status missing required key: {key}"
     assert status["page"] == "settings_privacy"
-    assert status["phase"] == "6E"
     assert status["storage_model"] == "local_only"
 
 
@@ -132,10 +130,8 @@ def test_api_secure_import_in_progress_reflects_backup_guard(temp_db) -> None:
     assert status["secure_import_in_progress"] is False
 
 
-def test_api_encrypted_backup_availability_fields_match_phase_6d(temp_db) -> None:
-    # export + manifest preview + import are all available in
-    # WebView. Export / manifest preview were opened in the backup export; import
-    # is opened in the backup import.
+def test_api_encrypted_backup_availability_fields_are_present(temp_db) -> None:
+    # Export, manifest preview, and import are all available in WebView.
     status = get_settings_privacy_status()["status"]
     enc = status["encrypted_backup"]
     assert isinstance(enc, dict)
@@ -146,8 +142,8 @@ def test_api_encrypted_backup_availability_fields_match_phase_6d(temp_db) -> Non
 
 
 def test_api_destructive_clear_all_availability_is_true(temp_db) -> None:
-    # clear-all-local-data is now available in WebView behind
-    # the explicit Chinese confirmation literal.
+    # clear-all-local-data is available in WebView behind the explicit
+    # Chinese confirmation literal.
     status = get_settings_privacy_status()["status"]
     destructive = status["destructive_actions"]
     assert isinstance(destructive, dict)
@@ -253,7 +249,6 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
     assert set(result.keys()) == {"ok", "status"}
     assert set(status.keys()) == {
         "page",
-        "phase",
         "storage_model",
         "clipboard_capture_enabled",
         "export_path_configured",
@@ -1825,7 +1820,11 @@ def test_bridge_clear_method_signature_has_one_required_param() -> None:
 
 def test_bridge_clear_success_calls_api_and_returns_narrow_payload(temp_db) -> None:
     bridge = WebViewBridge()
-    api_result = {"ok": True, "message": "本地数据已清空", "status": {"phase": "6D"}}
+    api_result = {
+        "ok": True,
+        "message": "本地数据已清空",
+        "status": {"page": "settings_privacy"},
+    }
     with patch.object(
         settings_api,
         "clear_all_local_data_for_webview",
@@ -1836,7 +1835,7 @@ def test_bridge_clear_success_calls_api_and_returns_narrow_payload(temp_db) -> N
     assert result.get("ok") is True
     assert result["message"] == "本地数据已清空"
     # status may be transparently passed through.
-    assert result.get("status") == {"phase": "6D"}
+    assert result.get("status") == {"page": "settings_privacy"}
 
 
 def test_bridge_clear_api_ok_false_passes_error_through(temp_db) -> None:

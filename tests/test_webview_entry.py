@@ -1,6 +1,6 @@
 """default WebView entry behavior tests.
 
-These tests cover the migration invariants:
+These tests cover the default entry contracts:
 
 - ``worktrace.main.main([])`` defaults to WebView, not the Tkinter
   ``WorkTraceApp``;
@@ -184,13 +184,13 @@ def test_resource_path_resolves_index_html_in_frozen_run(monkeypatch, tmp_path):
     assert "webview_ui" in path.parts
 
 
-def test_bridge_only_imports_worktrace_api():
-    """The bridge module must only import from ``worktrace.api`` (and
-    ``worktrace.formatters``). It must not import services, db, collector,
-    security, runtime, or config directly. This complements
-    ``test_ui_backend_boundary.py`` with a focused assertion."""
-    bridge_path = REPO_ROOT / "worktrace" / "webview_ui" / "bridge.py"
-    source = bridge_path.read_text(encoding="utf-8")
+def test_bridge_layer_only_imports_allowed_facades():
+    """The bridge layer must use API facades and avoid direct lower-layer imports."""
+    bridge_dir = REPO_ROOT / "worktrace" / "webview_ui"
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(bridge_dir.glob("bridge*.py"))
+    )
     forbidden = [
         "from ..services",
         "from worktrace.services",
@@ -206,7 +206,7 @@ def test_bridge_only_imports_worktrace_api():
         "from worktrace.config",
     ]
     for token in forbidden:
-        assert token not in source, f"bridge.py must not import {token}"
+        assert token not in source, f"bridge layer must not import {token}"
     assert "from ..api import" in source or "from worktrace.api import" in source
 
 

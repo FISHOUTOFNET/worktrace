@@ -1,11 +1,9 @@
 """Timeline correction-shell WebView static-contract tests.
 
 These tests read the bundled frontend resources (index.html /
-js/*.js / styles.css) directly without starting the GUI. The
-app.js is split into six js/ modules; JS-level contracts
-use read_all_js() (concatenated split modules in load order). They lock
+js/*.js / styles.css) directly without starting the GUI. Frontend JS is
+loaded from the ordered modules listed in ALL_JS_FILES. These tests lock
 the correction-shell contracts.
-3B.6, 3B.6.1, 3B.7, 3B.7.1, 3B.8, 3B.8.1, 3B.9, and 3B.9.1.
 """
 
 from __future__ import annotations
@@ -32,7 +30,7 @@ from static_helpers import (
 # --- section -------------------------------------------------
 
 
-def test_app_js_detail_rows_are_read_only():
+def test_frontend_js_detail_rows_are_read_only():
     """renderSessionDetails must keep detail rows read-only."""
     source = read_all_js()
     body = func_body(source, "renderSessionDetails")
@@ -57,7 +55,7 @@ def test_app_js_detail_rows_are_read_only():
 
 
 
-def test_app_js_detail_rows_route_actions_to_correction_shell():
+def test_frontend_js_detail_rows_route_actions_to_correction_shell():
     """Per-activity actions live in the correction shell, not detail rows."""
     source = read_all_js()
     detail_body = func_body(source, "renderSessionDetails")
@@ -70,7 +68,7 @@ def test_app_js_detail_rows_route_actions_to_correction_shell():
 
 
 
-def test_app_js_merge_has_dirty_state_guard():
+def test_frontend_js_merge_has_dirty_state_guard():
     """saveActivityMerge must refuse while there are unsaved
     project/note/time/split inputs, consistent with hide / delete. Merge
     triggers a refresh that would wipe those inputs."""
@@ -100,7 +98,7 @@ def test_app_js_merge_has_dirty_state_guard():
 
 
 
-def test_app_js_merge_has_row_id_consistency_check():
+def test_frontend_js_merge_has_row_id_consistency_check():
     """saveActivityMerge must verify the activity id still
     matches the detail row, consistent with hide / delete, so a stale
     button does not operate on a different session's activity."""
@@ -130,7 +128,7 @@ def test_app_js_merge_has_row_id_consistency_check():
 
 
 
-def test_app_js_dirty_state_refusal_message_is_unified():
+def test_frontend_js_dirty_state_refusal_message_is_unified():
     """the dirty-state refusal message must be unified across
     merge / hide / delete (per-activity and session-level)."""
     source = read_all_js()
@@ -165,7 +163,7 @@ def test_app_js_dirty_state_refusal_message_is_unified():
 
 
 
-def test_app_js_destructive_action_copy_is_unified():
+def test_frontend_js_destructive_action_copy_is_unified():
     """hide / delete success and failure copy must be
     unified. Hide: 已隐藏 / 隐藏失败. Delete: 已删除 / 删除失败."""
     source = read_all_js()
@@ -190,10 +188,10 @@ def test_index_html_has_unified_section_labels():
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for label in ("项目", "时长（分钟）", "备注", "纠错面板"):
         assert label in source, "edit/correction UI must expose label: " + label
-    # The old section titles must be gone (拆分时段 / 隐藏 / 删除 as a
+    # The obsolete section titles must be gone (拆分时段 / 隐藏 / 删除 as a
     # section label is replaced by 可见性).
     assert "拆分时段" not in source, (
-        "old section title 拆分时段 must be replaced by 拆分"
+        "obsolete section title 拆分时段 must be replaced by 拆分"
     )
 
 
@@ -251,7 +249,7 @@ def test_styles_css_has_section_label_style():
 
 
 
-def test_app_js_clear_edit_panel_resets_all_action_state():
+def test_frontend_js_clear_edit_panel_resets_all_action_state():
     """clearEditPanel must reset all transient action state,
     including merge / hide / delete saving state and target ids."""
     source = read_all_js()
@@ -301,7 +299,7 @@ def test_app_js_clear_edit_panel_resets_all_action_state():
 
 
 
-def test_app_js_populate_edit_panel_populates_all_correction_sections():
+def test_frontend_js_populate_edit_panel_populates_all_correction_sections():
     """populateEditPanel must populate / reset all correction
     sections (project/note, time, split, visibility) so switching sessions
     does not leave stale state behind."""
@@ -334,7 +332,7 @@ def test_app_js_populate_edit_panel_populates_all_correction_sections():
 
 
 
-def test_app_js_consolidation_has_no_forbidden_handlers():
+def test_frontend_js_consolidation_has_no_forbidden_handlers():
     """the consolidation must not introduce batch edit,
     batch hide, batch delete, undo / restore, permanent delete, auto-rule,
     complex correction page, or overlap detection handlers."""
@@ -354,7 +352,7 @@ def test_app_js_consolidation_has_no_forbidden_handlers():
         "deleteactivity",  # lowercase-d permanent delete handler name
     ):
         assert forbidden not in lowered, (
-            f"app.js must not introduce a '{forbidden}' handler"
+            f"frontend JS must not introduce a '{forbidden}' handler"
         )
 
 
@@ -364,10 +362,10 @@ def test_index_html_consolidation_has_no_forbidden_controls():
     batch time / batch split / batch merge / batch restore / restore-all /
     permanent-delete / auto-rule / complex-correction-page / overlap
     controls. Batch project reassignment means "batch"
-    is now allowed in index.html but only in the project context; the
+    is allowed in index.html but only in the project context; the
     specific batch hide / delete / time / split / merge variants must still
     be absent. Single activity restore means "restore"
-    is now allowed; batch restore, restore-all, undo stack, and permanent
+    is allowed; batch restore, restore-all, undo stack, and permanent
     delete must still be absent."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
@@ -485,62 +483,62 @@ def test_index_html_correction_shell_inside_timeline_page():
 
 
 
-def test_app_js_has_open_correction_shell_helper():
-    """app.js must define an openCorrectionShell helper."""
+def test_frontend_js_has_open_correction_shell_helper():
+    """frontend JS must define an openCorrectionShell helper."""
     source = read_all_js()
     assert "function openCorrectionShell" in source, (
-        "app.js must define openCorrectionShell"
+        "frontend JS must define openCorrectionShell"
     )
 
 
 
-def test_app_js_has_close_correction_shell_helper():
-    """app.js must define a closeCorrectionShell helper."""
+def test_frontend_js_has_close_correction_shell_helper():
+    """frontend JS must define a closeCorrectionShell helper."""
     source = read_all_js()
     assert "function closeCorrectionShell" in source, (
-        "app.js must define closeCorrectionShell"
+        "frontend JS must define closeCorrectionShell"
     )
 
 
 
-def test_app_js_has_reset_correction_shell_state_helper():
-    """app.js must define a resetCorrectionShellState helper."""
+def test_frontend_js_has_reset_correction_shell_state_helper():
+    """frontend JS must define a resetCorrectionShellState helper."""
     source = read_all_js()
     assert "function resetCorrectionShellState" in source, (
-        "app.js must define resetCorrectionShellState"
+        "frontend JS must define resetCorrectionShellState"
     )
 
 
 
-def test_app_js_has_render_correction_shell_helper():
-    """app.js must define a renderCorrectionShell helper."""
+def test_frontend_js_has_render_correction_shell_helper():
+    """frontend JS must define a renderCorrectionShell helper."""
     source = read_all_js()
     assert "function renderCorrectionShell" in source, (
-        "app.js must define renderCorrectionShell"
+        "frontend JS must define renderCorrectionShell"
     )
 
 
 
-def test_app_js_has_set_correction_shell_status_helper():
-    """app.js must define a setCorrectionShellStatus helper."""
+def test_frontend_js_has_set_correction_shell_status_helper():
+    """frontend JS must define a setCorrectionShellStatus helper."""
     source = read_all_js()
     assert "function setCorrectionShellStatus" in source, (
-        "app.js must define setCorrectionShellStatus"
+        "frontend JS must define setCorrectionShellStatus"
     )
 
 
 
-def test_app_js_has_get_selected_session_helper():
-    """app.js must define a getSelectedSession helper that
+def test_frontend_js_has_get_selected_session_helper():
+    """frontend JS must define a getSelectedSession helper that
     looks up the selected session from currentSessions."""
     source = read_all_js()
     assert "function getSelectedSession" in source, (
-        "app.js must define getSelectedSession"
+        "frontend JS must define getSelectedSession"
     )
 
 
 
-def test_app_js_open_correction_shell_checks_dirty_state():
+def test_frontend_js_open_correction_shell_checks_dirty_state():
     """openCorrectionShell must refuse to open while there
     are unsaved edits, using the refusal text 请先保存或取消当前编辑."""
     source = read_all_js()
@@ -556,7 +554,7 @@ def test_app_js_open_correction_shell_checks_dirty_state():
 
 
 
-def test_app_js_open_correction_shell_checks_selected_session():
+def test_frontend_js_open_correction_shell_checks_selected_session():
     """openCorrectionShell must verify a selected session
     exists before opening."""
     source = read_all_js()
@@ -569,7 +567,7 @@ def test_app_js_open_correction_shell_checks_selected_session():
 
 
 
-def test_app_js_close_correction_shell_preserves_selected_session():
+def test_frontend_js_close_correction_shell_preserves_selected_session():
     """closeCorrectionShell must NOT clear selectedSessionId
     so the user returns to the same session context."""
     source = read_all_js()
@@ -585,7 +583,7 @@ def test_app_js_close_correction_shell_preserves_selected_session():
 
 
 
-def test_app_js_clear_edit_panel_resets_shell_state():
+def test_frontend_js_clear_edit_panel_resets_shell_state():
     """clearEditPanel must call resetCorrectionShellState so
     a stale shell does not leak into the next session."""
     source = read_all_js()
@@ -598,7 +596,7 @@ def test_app_js_clear_edit_panel_resets_shell_state():
 
 
 
-def test_app_js_date_navigation_closes_shell():
+def test_frontend_js_date_navigation_closes_shell():
     """goPrevDay / goNextDay / goToday must close the
     correction shell so the shell context does not carry across dates."""
     source = read_all_js()
@@ -612,7 +610,7 @@ def test_app_js_date_navigation_closes_shell():
 
 
 
-def test_app_js_selected_session_disappear_resets_shell():
+def test_frontend_js_selected_session_disappear_resets_shell():
     """when the selected session disappears during a refresh,
     the shell state must be reset (via clearEditPanel)."""
     source = read_all_js()
@@ -633,7 +631,7 @@ def test_app_js_selected_session_disappear_resets_shell():
 
 
 
-def test_app_js_session_switch_closes_shell():
+def test_frontend_js_session_switch_closes_shell():
     """selecting a different session must close the shell so
     the shell context does not get confused across sessions."""
     source = read_all_js()
@@ -649,8 +647,8 @@ def test_app_js_session_switch_closes_shell():
 
 
 
-def test_app_js_correction_shell_state_variables_exist():
-    """app.js must declare the correction shell state
+def test_frontend_js_correction_shell_state_variables_exist():
+    """frontend JS must declare the correction shell state
     variables."""
     source = read_all_js()
     assert "correctionShellOpen" in source
@@ -660,7 +658,7 @@ def test_app_js_correction_shell_state_variables_exist():
 
 
 
-def test_app_js_correction_shell_no_sensitive_fields():
+def test_frontend_js_correction_shell_no_sensitive_fields():
     """the shell rendering must only use display-safe fields
     and must never read raw window_title / file_path / clipboard / note
     internals."""
@@ -676,7 +674,7 @@ def test_app_js_correction_shell_no_sensitive_fields():
 
 
 
-def test_app_js_get_current_detail_activities_no_sensitive_fields():
+def test_frontend_js_get_current_detail_activities_no_sensitive_fields():
     """getCurrentDetailActivities must only read display-safe
     DOM fields, never raw sensitive fields."""
     source = read_all_js()
@@ -691,7 +689,7 @@ def test_app_js_get_current_detail_activities_no_sensitive_fields():
 
 
 
-def test_app_js_correction_shell_uses_existing_string_helpers():
+def test_frontend_js_correction_shell_uses_existing_string_helpers():
     """the shell must not parse backend times with
     new Date(string); it must reuse the existing fixed-format helpers."""
     source = read_all_js()
@@ -708,17 +706,17 @@ def test_app_js_correction_shell_uses_existing_string_helpers():
 
 
 
-def test_app_js_correction_shell_no_browser_storage():
+def test_frontend_js_correction_shell_no_browser_storage():
     """the shell must not use localStorage / sessionStorage."""
     source = read_all_js()
     assert not re.search(r"localStorage|sessionStorage", source), (
-        "app.js must not use browser storage"
+        "frontend JS must not use browser storage"
     )
 
 
 
-def test_app_js_correction_shell_no_forbidden_handlers():
-    """app.js must not contain batch edit / batch hide /
+def test_frontend_js_correction_shell_no_forbidden_handlers():
+    """frontend JS must not contain batch edit / batch hide /
     batch delete / restore / permanent delete / auto-rule / global overlap
     detection handlers."""
     source = read_all_js()
@@ -727,7 +725,7 @@ def test_app_js_correction_shell_no_forbidden_handlers():
                       "permanentDelete", "autoRule", "auto_rule",
                       "overlapDetection", "globalOverlap"):
         assert forbidden not in source, (
-            "app.js must not contain " + forbidden + " handler"
+            "frontend JS must not contain " + forbidden + " handler"
         )
 
 
@@ -737,10 +735,10 @@ def test_index_html_correction_shell_no_forbidden_controls():
     batch time / batch split / batch merge / batch restore / restore-all /
     permanent-delete / auto-rule / overlap controls in the shell. The
     batch project reassignment in the correction shell means
-    "batch" is now allowed in the shell but only in the project context;
+    "batch" is allowed in the shell but only in the project context;
     the specific batch hide / delete / time / split / merge variants must
     still be absent. The single activity restore in the
-    shell means "restore" is now allowed; batch restore, restore-all, undo
+    shell means "restore" is allowed; batch restore, restore-all, undo
     stack, and permanent delete must still be absent."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
@@ -759,7 +757,7 @@ def test_index_html_correction_shell_no_forbidden_controls():
 
 
 
-def test_app_js_correction_shell_actions_guide_only():
+def test_frontend_js_correction_shell_actions_guide_only():
     """the shell action area must only guide the user back to
     the existing controls; it must not render its own write buttons. The
     delete guidance must remain soft-delete wording."""
@@ -857,17 +855,17 @@ def test_bridge_imports_only_allowed_modules():
 # --- section -----------------------------------------------
 
 
-def test_app_js_correction_shell_highlight_timer_variable_declared():
-    """app.js must declare a single tracked highlight timer
+def test_frontend_js_correction_shell_highlight_timer_variable_declared():
+    """frontend JS must declare a single tracked highlight timer
     so repeated click-to-locate clicks never accumulate timers."""
     source = read_all_js()
     assert "correctionShellHighlightTimer" in source, (
-        "app.js must declare the correctionShellHighlightTimer state variable"
+        "frontend JS must declare the correctionShellHighlightTimer state variable"
     )
 
 
 
-def test_app_js_reset_correction_shell_state_clears_highlight_timer():
+def test_frontend_js_reset_correction_shell_state_clears_highlight_timer():
     """resetCorrectionShellState must cancel any pending
     highlight timer so a close / reset never leaves a dangling timer."""
     source = read_all_js()
@@ -881,7 +879,7 @@ def test_app_js_reset_correction_shell_state_clears_highlight_timer():
 
 
 
-def test_app_js_highlight_detail_row_no_bridge_writes():
+def test_frontend_js_highlight_detail_row_no_bridge_writes():
     """highlightDetailRow must be read-only — it must not
     call any bridge method (write or otherwise) and must not perform any
     save / hide / delete / merge / split / time / project / note action."""
@@ -901,7 +899,7 @@ def test_app_js_highlight_detail_row_no_bridge_writes():
 
 
 
-def test_app_js_highlight_detail_row_safe_single_timer():
+def test_frontend_js_highlight_detail_row_safe_single_timer():
     """the transient highlight must use a single tracked
     timer — clearTimeout before setTimeout — so repeated clicks never
     accumulate timers."""
@@ -923,7 +921,7 @@ def test_app_js_highlight_detail_row_safe_single_timer():
 
 
 
-def test_app_js_highlight_detail_row_stale_target_message():
+def test_frontend_js_highlight_detail_row_stale_target_message():
     """when the target detail row is missing, the handler
     must show a safe message (not throw, not perform any write)."""
     source = read_all_js()
@@ -943,7 +941,7 @@ def test_app_js_highlight_detail_row_stale_target_message():
 
 
 
-def test_app_js_highlight_detail_row_uses_detail_item_selector():
+def test_frontend_js_highlight_detail_row_uses_detail_item_selector():
     """click-to-locate must only look up the existing
     .detail-item[data-activity-id=...] row inside #timeline-details-list."""
     source = read_all_js()
@@ -954,7 +952,7 @@ def test_app_js_highlight_detail_row_uses_detail_item_selector():
 
 
 
-def test_app_js_render_correction_shell_uses_correction_activity_id():
+def test_frontend_js_render_correction_shell_uses_correction_activity_id():
     """shell activity rows must carry a distinct
     data-correction-activity-id attribute so they cannot be confused with
     the real .detail-item rows."""
@@ -966,7 +964,7 @@ def test_app_js_render_correction_shell_uses_correction_activity_id():
 
 
 
-def test_app_js_render_correction_shell_invalid_id_not_clickable():
+def test_frontend_js_render_correction_shell_invalid_id_not_clickable():
     """a non-numeric / missing activity id must not be
     rendered as a click-to-locate target (numeric guard)."""
     source = read_all_js()
@@ -981,7 +979,7 @@ def test_app_js_render_correction_shell_invalid_id_not_clickable():
 
 
 
-def test_app_js_render_correction_shell_uses_escape_html():
+def test_frontend_js_render_correction_shell_uses_escape_html():
     """every dynamic value rendered into the shell must go
     through escapeHtml so no unescaped external / dynamic value is
     injected via innerHTML."""
@@ -993,7 +991,7 @@ def test_app_js_render_correction_shell_uses_escape_html():
 
 
 
-def test_app_js_render_correction_shell_no_sensitive_fields_3b_5b_1():
+def test_frontend_js_render_correction_shell_no_sensitive_fields():
     """the hardened shell rendering must still never read
     raw window_title / file_path_hint / full_path / clipboard / note
     internals, and must not surface traceback / SQL / exception text."""
@@ -1008,7 +1006,7 @@ def test_app_js_render_correction_shell_no_sensitive_fields_3b_5b_1():
 
 
 
-def test_app_js_correction_shell_state_independent_of_saving_states():
+def test_frontend_js_correction_shell_state_independent_of_saving_states():
     """resetCorrectionShellState must only reset shell-only
     state; it must not reset the edit / time / split / merge / hide / delete
     saving states (those are owned by clearEditPanel)."""
@@ -1023,7 +1021,7 @@ def test_app_js_correction_shell_state_independent_of_saving_states():
 
 
 
-def test_app_js_open_correction_shell_dirty_refusal_preserves_state():
+def test_frontend_js_open_correction_shell_dirty_refusal_preserves_state():
     """the dirty-state refusal in openCorrectionShell must
     not clear selectedSessionId, must not clear the edit panel / inputs,
     and must not change the selected session."""
@@ -1041,7 +1039,7 @@ def test_app_js_open_correction_shell_dirty_refusal_preserves_state():
 
 
 
-def test_app_js_open_correction_shell_scrolls_and_focuses_panel():
+def test_frontend_js_open_correction_shell_scrolls_and_focuses_panel():
     """After a successful open, openCorrectionShell must scroll / focus the
     correction shell title so the user sees the panel appear. This avoids
     the 'click with no visible feedback' problem."""
@@ -1061,7 +1059,7 @@ def test_app_js_open_correction_shell_scrolls_and_focuses_panel():
 
 
 
-def test_app_js_get_selected_session_uses_current_sessions():
+def test_frontend_js_get_selected_session_uses_current_sessions():
     """getSelectedSession must look the session up from
     currentSessions so a stale / disappeared session cannot open the
     shell."""
@@ -1073,7 +1071,7 @@ def test_app_js_get_selected_session_uses_current_sessions():
 
 
 
-def test_app_js_auto_refresh_shell_guarded_by_dirty_state():
+def test_frontend_js_auto_refresh_shell_guarded_by_dirty_state():
     """auto-refresh must not overwrite a dirty shell. The
     showTimeline shell re-render path must be guarded by !isEditDirty()."""
     source = read_all_js()
@@ -1090,7 +1088,7 @@ def test_app_js_auto_refresh_shell_guarded_by_dirty_state():
 
 
 
-def test_app_js_close_correction_shell_no_refresh_or_write():
+def test_frontend_js_close_correction_shell_no_refresh_or_write():
     """closeCorrectionShell must not trigger a refresh and
     must not perform any write action."""
     source = read_all_js()
@@ -1105,7 +1103,7 @@ def test_app_js_close_correction_shell_no_refresh_or_write():
 
 
 
-def test_app_js_correction_shell_no_new_forbidden_handlers_3b_5b_1():
+def test_frontend_js_correction_shell_no_new_forbidden_handlers():
     """the hardening must not introduce batch edit / hide /
     delete, undo / restore, permanent delete, auto-rule, or global overlap
     detection handlers."""
@@ -1116,12 +1114,12 @@ def test_app_js_correction_shell_no_new_forbidden_handlers_3b_5b_1():
                       "overlapDetection", "globalOverlap",
                       "multiActivityHide", "multiActivityDelete"):
         assert forbidden not in source, (
-            "app.js must not contain " + forbidden + " handler"
+            "frontend JS must not contain " + forbidden + " handler"
         )
 
 
 
-def test_index_html_correction_shell_no_external_resources_3b_5b_1():
+def test_index_html_correction_shell_no_external_resources():
     """the correction shell region must not introduce
     external links, CDN, Google Fonts, or browser storage."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -1184,13 +1182,13 @@ def test_styles_css_correction_shell_hidden_still_display_none():
 
 
 
-def test_bridge_no_new_methods_for_phase_3b_5b_1():
+def test_bridge_no_unexpected_methods_for_contract():
     """the hardening must not add any new bridge method,
     and the bridge must continue to import only allowed modules."""
     # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
-    # No new shell-specific write / read method is added in this phase.
+    # No new shell-specific write / read method is added in this contract.
     for forbidden in ("def correction_shell", "def batch_edit",
                       "def batch_hide", "def batch_delete",
                       "def restore_activity", "def permanent_delete",
@@ -1221,48 +1219,48 @@ def test_bridge_no_new_methods_for_phase_3b_5b_1():
 # --- section --------------------------------------------------
 
 
-def test_app_js_has_batch_selection_state():
-    """app.js must declare the batch project selection state."""
+def test_frontend_js_has_batch_selection_state():
+    """frontend JS must declare the batch project selection state."""
     source = read_all_js()
     assert "selectedBatchActivityIds" in source, (
-        "app.js must declare the selectedBatchActivityIds state variable"
+        "frontend JS must declare the selectedBatchActivityIds state variable"
     )
     assert "batchProjectSaving" in source, (
-        "app.js must declare the batchProjectSaving state variable"
+        "frontend JS must declare the batchProjectSaving state variable"
     )
     assert "batchProjectTargetId" in source, (
-        "app.js must declare the batchProjectTargetId state variable"
+        "frontend JS must declare the batchProjectTargetId state variable"
     )
 
 
 
-def test_app_js_has_batch_project_save_helper():
-    """app.js must define the saveBatchProject function."""
+def test_frontend_js_has_batch_project_save_helper():
+    """frontend JS must define the saveBatchProject function."""
     source = read_all_js()
     assert "function saveBatchProject" in source, (
-        "app.js must define the saveBatchProject function"
+        "frontend JS must define the saveBatchProject function"
     )
     assert "function resetBatchProjectState" in source, (
-        "app.js must define the resetBatchProjectState function"
+        "frontend JS must define the resetBatchProjectState function"
     )
     assert "function renderBatchProjectSection" in source, (
-        "app.js must define the renderBatchProjectSection function"
+        "frontend JS must define the renderBatchProjectSection function"
     )
     assert "function pruneStaleBatchSelection" in source, (
-        "app.js must define the pruneStaleBatchSelection function"
+        "frontend JS must define the pruneStaleBatchSelection function"
     )
     assert "function setBatchProjectSaving" in source, (
-        "app.js must define the setBatchProjectSaving function"
+        "frontend JS must define the setBatchProjectSaving function"
     )
 
 
 
-def test_app_js_calls_batch_update_bridge():
-    """app.js must call the batch_update_timeline_activities_project
+def test_frontend_js_calls_batch_update_bridge():
+    """frontend JS must call the batch_update_timeline_activities_project
     bridge method."""
     source = read_all_js()
     assert "batch_update_timeline_activities_project" in source, (
-        "app.js must call the batch_update_timeline_activities_project bridge method"
+        "frontend JS must call the batch_update_timeline_activities_project bridge method"
     )
 
 
@@ -1320,22 +1318,22 @@ def test_index_html_no_batch_hide_delete_time_split_merge_controls():
 
 
 
-def test_app_js_batch_checkbox_only_for_shell_activities():
+def test_frontend_js_batch_checkbox_only_for_shell_activities():
     """the batch checkbox must only be rendered on shell
     activity rows, not on the detail list rows."""
     source = read_all_js()
     # The checkbox class must be correction-shell-activity-checkbox.
     assert "correction-shell-activity-checkbox" in source, (
-        "app.js must render the correction-shell-activity-checkbox class"
+        "frontend JS must render the correction-shell-activity-checkbox class"
     )
     # The checkbox must carry a data-batch-activity-id attribute.
     assert "data-batch-activity-id" in source, (
-        "app.js must render the data-batch-activity-id attribute on checkboxes"
+        "frontend JS must render the data-batch-activity-id attribute on checkboxes"
     )
 
 
 
-def test_app_js_batch_in_progress_checkbox_disabled():
+def test_frontend_js_batch_in_progress_checkbox_disabled():
     """in-progress activities must render a disabled checkbox."""
     source = read_all_js()
     # The renderCorrectionShell function must check is_in_progress and
@@ -1353,7 +1351,7 @@ def test_app_js_batch_in_progress_checkbox_disabled():
 
 
 
-def test_app_js_batch_save_disabled_for_fewer_than_two():
+def test_frontend_js_batch_save_disabled_for_fewer_than_two():
     """the batch save button must be disabled when fewer than
     two activities are selected."""
     source = read_all_js()
@@ -1367,7 +1365,7 @@ def test_app_js_batch_save_disabled_for_fewer_than_two():
 
 
 
-def test_app_js_batch_save_blocked_by_dirty_edit():
+def test_frontend_js_batch_save_blocked_by_dirty_edit():
     """saveBatchProject must block when isEditDirty() is true."""
     source = read_all_js()
     save_start = source.find("function saveBatchProject")
@@ -1383,7 +1381,7 @@ def test_app_js_batch_save_blocked_by_dirty_edit():
 
 
 
-def test_app_js_batch_success_refreshes_timeline():
+def test_frontend_js_batch_success_refreshes_timeline():
     """a successful batch save must refresh the Timeline."""
     source = read_all_js()
     save_start = source.find("function saveBatchProject")
@@ -1395,7 +1393,7 @@ def test_app_js_batch_success_refreshes_timeline():
 
 
 
-def test_app_js_batch_failure_preserves_selection():
+def test_frontend_js_batch_failure_preserves_selection():
     """a failed batch save must preserve the selection and
     detail list so the user can retry."""
     source = read_all_js()
@@ -1410,7 +1408,7 @@ def test_app_js_batch_failure_preserves_selection():
 
 
 
-def test_app_js_clear_edit_panel_resets_batch_state():
+def test_frontend_js_clear_edit_panel_resets_batch_state():
     """clearEditPanel must call resetBatchProjectState."""
     source = read_all_js()
     clear_start = source.find("function clearEditPanel")
@@ -1422,7 +1420,7 @@ def test_app_js_clear_edit_panel_resets_batch_state():
 
 
 
-def test_app_js_reset_correction_shell_resets_batch_state():
+def test_frontend_js_reset_correction_shell_resets_batch_state():
     """resetCorrectionShellState must call
     resetBatchProjectState."""
     source = read_all_js()
@@ -1435,16 +1433,16 @@ def test_app_js_reset_correction_shell_resets_batch_state():
 
 
 
-def test_app_js_batch_no_local_storage():
+def test_frontend_js_batch_no_local_storage():
     """the batch project code must not use browser storage."""
     source = read_all_js()
     assert not re.search(r"localStorage|sessionStorage", source), (
-        "app.js must not use localStorage or sessionStorage"
+        "frontend JS must not use localStorage or sessionStorage"
     )
 
 
 
-def test_app_js_batch_no_external_links():
+def test_frontend_js_batch_no_external_links():
     """the batch project code must not introduce external links."""
     for filename in FRONTEND_RESOURCE_FILES:
         source = read_resource(filename)
@@ -1454,7 +1452,7 @@ def test_app_js_batch_no_external_links():
 
 
 
-def test_app_js_batch_no_restore_permanent_auto_rule_overlap():
+def test_frontend_js_batch_no_restore_permanent_auto_rule_overlap():
     """the batch project code must not introduce restore,
     permanent delete, auto-rule, or overlap handlers."""
     source = read_all_js()
@@ -1462,7 +1460,7 @@ def test_app_js_batch_no_restore_permanent_auto_rule_overlap():
                       "permanentDelete", "autoRule", "auto_rule",
                       "overlapDetection", "globalOverlap"):
         assert forbidden not in source, (
-            "app.js must not contain " + forbidden + " handler"
+            "frontend JS must not contain " + forbidden + " handler"
         )
 
 
@@ -1552,11 +1550,11 @@ def test_service_has_batch_update_function():
 
 
 
-def test_app_js_batch_stale_id_pruning():
-    """app.js must prune stale selected ids on every render."""
+def test_frontend_js_batch_stale_id_pruning():
+    """frontend JS must prune stale selected ids on every render."""
     source = read_all_js()
     assert "function pruneStaleBatchSelection" in source, (
-        "app.js must define the pruneStaleBatchSelection function"
+        "frontend JS must define the pruneStaleBatchSelection function"
     )
     # The prune function must be called from renderCorrectionShell.
     render_start = source.find("function renderCorrectionShell")
@@ -1568,7 +1566,7 @@ def test_app_js_batch_stale_id_pruning():
 
 
 
-def test_app_js_batch_save_rechecks_stale_ids():
+def test_frontend_js_batch_save_rechecks_stale_ids():
     """saveBatchProject must re-check selected ids against the
     currently rendered shell activity rows before calling the bridge."""
     source = read_all_js()
@@ -1587,7 +1585,7 @@ def test_app_js_batch_save_rechecks_stale_ids():
 # --- section ------------------------------------------------
 
 
-def test_app_js_batch_saving_independent_state_var():
+def test_frontend_js_batch_saving_independent_state_var():
     """batchProjectSaving must be a separate state variable,
     not aliased to any other saving flag."""
     source = read_all_js()
@@ -1604,18 +1602,18 @@ def test_app_js_batch_saving_independent_state_var():
         "deleteSaving",
     ):
         assert var in source, (
-            "app.js must declare the " + var + " state variable"
+            "frontend JS must declare the " + var + " state variable"
         )
 
 
 
-def test_app_js_session_switch_clears_batch_selection():
+def test_frontend_js_session_switch_clears_batch_selection():
     """selectTimelineSession must call resetCorrectionShellState
     when switching to a different session, which clears the batch
     selection."""
     source = read_all_js()
     fn_start = source.find("function selectTimelineSession")
-    assert fn_start != -1, "app.js must define selectTimelineSession"
+    assert fn_start != -1, "frontend JS must define selectTimelineSession"
     fn_end = source.find("\n    function ", fn_start + 1)
     fn_body = source[fn_start:fn_end]
     assert "resetCorrectionShellState" in fn_body, (
@@ -1624,13 +1622,13 @@ def test_app_js_session_switch_clears_batch_selection():
 
 
 
-def test_app_js_date_switch_clears_batch_selection():
+def test_frontend_js_date_switch_clears_batch_selection():
     """goPrevDay / goNextDay / goToday must all call
     resetCorrectionShellState, which clears the batch selection."""
     source = read_all_js()
     for fn_name in ("goPrevDay", "goNextDay", "goToday"):
         fn_start = source.find("function " + fn_name)
-        assert fn_start != -1, "app.js must define " + fn_name
+        assert fn_start != -1, "frontend JS must define " + fn_name
         fn_end = source.find("\n    function ", fn_start + 1)
         fn_body = source[fn_start:fn_end]
         assert "resetCorrectionShellState" in fn_body, (
@@ -1639,7 +1637,7 @@ def test_app_js_date_switch_clears_batch_selection():
 
 
 
-def test_app_js_auto_refresh_prunes_disappeared_ids():
+def test_frontend_js_auto_refresh_prunes_disappeared_ids():
     """pruneStaleBatchSelection must drop ids that are no
     longer present in the freshly rendered activity list, and must be
     called from both renderCorrectionShell and renderBatchProjectSection."""
@@ -1674,7 +1672,7 @@ def test_app_js_auto_refresh_prunes_disappeared_ids():
 
 
 
-def test_app_js_prune_rejects_non_numeric_ids():
+def test_frontend_js_prune_rejects_non_numeric_ids():
     """pruneStaleBatchSelection must use a numeric regex so
     invalid (non-numeric) ids are dropped from the selection."""
     source = read_all_js()
@@ -1688,7 +1686,7 @@ def test_app_js_prune_rejects_non_numeric_ids():
 
 
 
-def test_app_js_prune_skips_in_progress_activities():
+def test_frontend_js_prune_skips_in_progress_activities():
     """pruneStaleBatchSelection must skip in-progress
     activities so they cannot be selected."""
     source = read_all_js()
@@ -1701,7 +1699,7 @@ def test_app_js_prune_skips_in_progress_activities():
 
 
 
-def test_app_js_saving_disables_checkboxes_select_button():
+def test_frontend_js_saving_disables_checkboxes_select_button():
     """setBatchProjectSaving(true) must disable the save
     button, select-all button, clear button, project select, and every
     batch checkbox."""
@@ -1737,7 +1735,7 @@ def test_app_js_saving_disables_checkboxes_select_button():
 
 
 
-def test_app_js_save_catch_resets_saving():
+def test_frontend_js_save_catch_resets_saving():
     """the .catch handler in saveBatchProject must call
     setBatchProjectSaving(false) so saving never gets stuck."""
     source = read_all_js()
@@ -1757,7 +1755,7 @@ def test_app_js_save_catch_resets_saving():
 
 
 
-def test_app_js_save_success_clears_selection():
+def test_frontend_js_save_success_clears_selection():
     """the success path in saveBatchProject must clear the
     selection and refresh the Timeline."""
     source = read_all_js()
@@ -1779,7 +1777,7 @@ def test_app_js_save_success_clears_selection():
 
 
 
-def test_app_js_save_invalid_project_message():
+def test_frontend_js_save_invalid_project_message():
     """saveBatchProject must show 请选择有效的项目 when the
     project select is empty or invalid."""
     source = read_all_js()
@@ -1792,7 +1790,7 @@ def test_app_js_save_invalid_project_message():
 
 
 
-def test_app_js_save_derives_ids_from_rendered_rows():
+def test_frontend_js_save_derives_ids_from_rendered_rows():
     """saveBatchProject must derive cleanIds from the rendered
     shell rows (querySelectorAll), not from a stale in-memory copy."""
     source = read_all_js()
@@ -1808,7 +1806,7 @@ def test_app_js_save_derives_ids_from_rendered_rows():
 
 
 
-def test_app_js_save_failure_does_not_clear_selection():
+def test_frontend_js_save_failure_does_not_clear_selection():
     """the failure path (result.ok === false) must NOT clear
     the selection or call resetBatchProjectState. The saving flag is reset
     once at the top of the .then handler (before branching), so both
@@ -1845,7 +1843,7 @@ def test_app_js_save_failure_does_not_clear_selection():
 
 
 
-def test_app_js_reset_batch_project_state_clears_selection():
+def test_frontend_js_reset_batch_project_state_clears_selection():
     """resetBatchProjectState must clear the selection, the
     target project, the saving flag, and reset the DOM controls."""
     source = read_all_js()
@@ -1864,7 +1862,7 @@ def test_app_js_reset_batch_project_state_clears_selection():
 
 
 
-def test_app_js_batch_save_guarded_by_saving_flag():
+def test_frontend_js_batch_save_guarded_by_saving_flag():
     """saveBatchProject must early-return if
     batchProjectSaving is already true (prevents double-submit)."""
     source = read_all_js()
@@ -1922,52 +1920,52 @@ def test_styles_css_has_batch_disabled_states():
 # --- section --------------------------------------------------
 
 
-def test_app_js_has_batch_note_saving_state():
-    """app.js must declare the batchNoteSaving state variable."""
+def test_frontend_js_has_batch_note_saving_state():
+    """frontend JS must declare the batchNoteSaving state variable."""
     source = read_all_js()
     assert "batchNoteSaving" in source, (
-        "app.js must declare the batchNoteSaving state variable"
+        "frontend JS must declare the batchNoteSaving state variable"
     )
 
 
 
-def test_app_js_has_batch_note_save_helper():
-    """app.js must define the saveBatchNote function and
+def test_frontend_js_has_batch_note_save_helper():
+    """frontend JS must define the saveBatchNote function and
     related helpers."""
     source = read_all_js()
     assert "function saveBatchNote" in source, (
-        "app.js must define the saveBatchNote function"
+        "frontend JS must define the saveBatchNote function"
     )
     assert "function resetBatchNoteState" in source, (
-        "app.js must define the resetBatchNoteState function"
+        "frontend JS must define the resetBatchNoteState function"
     )
     assert "function renderBatchNoteSection" in source, (
-        "app.js must define the renderBatchNoteSection function"
+        "frontend JS must define the renderBatchNoteSection function"
     )
     assert "function setBatchNoteSaving" in source, (
-        "app.js must define the setBatchNoteSaving function"
+        "frontend JS must define the setBatchNoteSaving function"
     )
     assert "function updateBatchNoteCount" in source, (
-        "app.js must define the updateBatchNoteCount function"
+        "frontend JS must define the updateBatchNoteCount function"
     )
     assert "function updateBatchNoteSaveButtonState" in source, (
-        "app.js must define the updateBatchNoteSaveButtonState function"
+        "frontend JS must define the updateBatchNoteSaveButtonState function"
     )
     assert "function showBatchNoteStatus" in source, (
-        "app.js must define the showBatchNoteStatus function"
+        "frontend JS must define the showBatchNoteStatus function"
     )
     assert "function bindBatchNoteControls" in source, (
-        "app.js must define the bindBatchNoteControls function"
+        "frontend JS must define the bindBatchNoteControls function"
     )
 
 
 
-def test_app_js_calls_batch_note_update_bridge():
-    """app.js must call the batch_update_timeline_activities_note
+def test_frontend_js_calls_batch_note_update_bridge():
+    """frontend JS must call the batch_update_timeline_activities_note
     bridge method."""
     source = read_all_js()
     assert "batch_update_timeline_activities_note" in source, (
-        "app.js must call the batch_update_timeline_activities_note bridge method"
+        "frontend JS must call the batch_update_timeline_activities_note bridge method"
     )
 
 
@@ -2052,7 +2050,7 @@ def test_index_html_no_batch_hide_delete_time_split_merge_controls_3b7():
 
 
 
-def test_app_js_batch_note_save_disabled_for_fewer_than_two():
+def test_frontend_js_batch_note_save_disabled_for_fewer_than_two():
     """the batch note save button must be disabled when fewer
     than two activities are selected."""
     source = read_all_js()
@@ -2066,7 +2064,7 @@ def test_app_js_batch_note_save_disabled_for_fewer_than_two():
 
 
 
-def test_app_js_batch_note_save_blocked_by_dirty_edit():
+def test_frontend_js_batch_note_save_blocked_by_dirty_edit():
     """saveBatchNote must block when isEditDirty() is true."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
@@ -2082,7 +2080,7 @@ def test_app_js_batch_note_save_blocked_by_dirty_edit():
 
 
 
-def test_app_js_batch_note_success_refreshes_timeline():
+def test_frontend_js_batch_note_success_refreshes_timeline():
     """a successful batch note save must refresh the Timeline."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
@@ -2094,7 +2092,7 @@ def test_app_js_batch_note_success_refreshes_timeline():
 
 
 
-def test_app_js_batch_note_failure_preserves_selection():
+def test_frontend_js_batch_note_failure_preserves_selection():
     """a failed batch note save must preserve the selection,
     detail list, and note textarea so the user can retry."""
     source = read_all_js()
@@ -2108,7 +2106,7 @@ def test_app_js_batch_note_failure_preserves_selection():
 
 
 
-def test_app_js_batch_note_catch_resets_saving():
+def test_frontend_js_batch_note_catch_resets_saving():
     """the .catch path in saveBatchNote must reset saving."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
@@ -2125,7 +2123,7 @@ def test_app_js_batch_note_catch_resets_saving():
 
 
 
-def test_app_js_clear_edit_panel_resets_batch_note_state():
+def test_frontend_js_clear_edit_panel_resets_batch_note_state():
     """clearEditPanel must call resetBatchNoteState."""
     source = read_all_js()
     clear_start = source.find("function clearEditPanel")
@@ -2137,7 +2135,7 @@ def test_app_js_clear_edit_panel_resets_batch_note_state():
 
 
 
-def test_app_js_reset_correction_shell_resets_batch_note_state():
+def test_frontend_js_reset_correction_shell_resets_batch_note_state():
     """resetCorrectionShellState must call
     resetBatchNoteState."""
     source = read_all_js()
@@ -2150,7 +2148,7 @@ def test_app_js_reset_correction_shell_resets_batch_note_state():
 
 
 
-def test_app_js_batch_note_rechecks_stale_ids():
+def test_frontend_js_batch_note_rechecks_stale_ids():
     """saveBatchNote must re-check selected ids against the
     currently rendered shell activity rows before calling the bridge."""
     source = read_all_js()
@@ -2166,7 +2164,7 @@ def test_app_js_batch_note_rechecks_stale_ids():
 
 
 
-def test_app_js_batch_note_empty_allowed():
+def test_frontend_js_batch_note_empty_allowed():
     """the batch note save must allow empty string (to clear
     notes). The save function must not reject an empty note."""
     source = read_all_js()
@@ -2181,7 +2179,7 @@ def test_app_js_batch_note_empty_allowed():
 
 
 
-def test_app_js_batch_note_saving_disables_controls():
+def test_frontend_js_batch_note_saving_disables_controls():
     """setBatchNoteSaving must disable the textarea, save
     button, and checkboxes during save."""
     source = read_all_js()
@@ -2200,7 +2198,7 @@ def test_app_js_batch_note_saving_disables_controls():
 
 
 
-def test_app_js_batch_note_count_uses_max_length():
+def test_frontend_js_batch_note_count_uses_max_length():
     """updateBatchNoteCount must use NOTE_MAX_LENGTH."""
     source = read_all_js()
     count_start = source.find("function updateBatchNoteCount")
@@ -2212,7 +2210,7 @@ def test_app_js_batch_note_count_uses_max_length():
 
 
 
-def test_app_js_batch_note_bind_controls_called_in_init():
+def test_frontend_js_batch_note_bind_controls_called_in_init():
     """bindBatchNoteControls must be called during init."""
     source = read_all_js()
     # The bind call should be in the initButtons function (where other
@@ -2226,17 +2224,17 @@ def test_app_js_batch_note_bind_controls_called_in_init():
 
 
 
-def test_app_js_batch_note_no_local_storage():
+def test_frontend_js_batch_note_no_local_storage():
     """the batch note code must not use browser storage
-    (re-asserted for the whole app.js)."""
+    (re-asserted for the whole frontend JS)."""
     source = read_all_js()
     assert not re.search(r"localStorage|sessionStorage", source), (
-        "app.js must not use localStorage or sessionStorage"
+        "frontend JS must not use localStorage or sessionStorage"
     )
 
 
 
-def test_app_js_batch_note_no_external_links():
+def test_frontend_js_batch_note_no_external_links():
     """the batch note code must not introduce external links
     (re-asserted for all frontend resources)."""
     for filename in FRONTEND_RESOURCE_FILES:
@@ -2247,7 +2245,7 @@ def test_app_js_batch_note_no_external_links():
 
 
 
-def test_app_js_batch_note_no_restore_permanent_auto_rule_overlap():
+def test_frontend_js_batch_note_no_restore_permanent_auto_rule_overlap():
     """the batch note code must not introduce batch restore,
     restore all, undo restore, permanent delete, auto-rule, or overlap
     handlers (re-asserted: single ``saveActivityRestore`` is
@@ -2260,7 +2258,7 @@ def test_app_js_batch_note_no_restore_permanent_auto_rule_overlap():
                       "autoRule", "auto_rule",
                       "overlapDetection", "globalOverlap"):
         assert forbidden not in source, (
-            "app.js must not contain " + forbidden + " handler"
+            "frontend JS must not contain " + forbidden + " handler"
         )
 
 
@@ -2346,7 +2344,7 @@ def test_service_has_batch_note_update_function():
 
 
 
-def test_app_js_batch_note_render_called_from_render_correction_shell():
+def test_frontend_js_batch_note_render_called_from_render_correction_shell():
     """renderBatchNoteSection must be called from
     renderCorrectionShell so the section is always populated when the shell
     opens."""
@@ -2363,7 +2361,7 @@ def test_app_js_batch_note_render_called_from_render_correction_shell():
 # --- section ------------------------------------------------
 
 
-def test_app_js_batch_note_save_checks_batch_project_saving():
+def test_frontend_js_batch_note_save_checks_batch_project_saving():
     """saveBatchNote must check ``batchProjectSaving`` before
     proceeding so two batch saves cannot compete."""
     source = read_all_js()
@@ -2376,7 +2374,7 @@ def test_app_js_batch_note_save_checks_batch_project_saving():
 
 
 
-def test_app_js_select_timeline_session_resets_batch_note():
+def test_frontend_js_select_timeline_session_resets_batch_note():
     """selectTimelineSession must call
     resetCorrectionShellState (which calls resetBatchNoteState) when
     switching sessions so the note textarea does not carry over."""
@@ -2391,14 +2389,14 @@ def test_app_js_select_timeline_session_resets_batch_note():
 
 
 
-def test_app_js_date_navigation_resets_batch_note():
+def test_frontend_js_date_navigation_resets_batch_note():
     """goPrevDay / goNextDay / goToday must all call
     resetCorrectionShellState (which calls resetBatchNoteState) so the
     note textarea does not carry over to a different day."""
     source = read_all_js()
     for func_name in ("goPrevDay", "goNextDay", "goToday"):
         func_start = source.find("function " + func_name)
-        assert func_start >= 0, f"app.js must define {func_name}"
+        assert func_start >= 0, f"frontend JS must define {func_name}"
         func_end = source.find("\n    function ", func_start + 1)
         func_body = source[func_start:func_end]
         assert "resetCorrectionShellState" in func_body, (
@@ -2408,7 +2406,7 @@ def test_app_js_date_navigation_resets_batch_note():
 
 
 
-def test_app_js_close_correction_shell_resets_batch_note():
+def test_frontend_js_close_correction_shell_resets_batch_note():
     """closeCorrectionShell must call
     resetCorrectionShellState (which calls resetBatchNoteState) so the
     note textarea is cleared when the user closes the shell."""
@@ -2423,7 +2421,7 @@ def test_app_js_close_correction_shell_resets_batch_note():
 
 
 
-def test_app_js_set_batch_note_saving_disables_batch_project_controls():
+def test_frontend_js_set_batch_note_saving_disables_batch_project_controls():
     """setBatchNoteSaving must disable the batch project
     save button (and select-all / clear / project select) so the user
     cannot start a competing project save while a note save is in flight."""
@@ -2446,7 +2444,7 @@ def test_app_js_set_batch_note_saving_disables_batch_project_controls():
 
 
 
-def test_app_js_set_batch_project_saving_disables_batch_note_controls():
+def test_frontend_js_set_batch_project_saving_disables_batch_note_controls():
     """setBatchProjectSaving must disable the batch note
     textarea so the user cannot edit the note while a project save is in
     flight."""
@@ -2460,7 +2458,7 @@ def test_app_js_set_batch_project_saving_disables_batch_note_controls():
 
 
 
-def test_app_js_reset_correction_shell_state_calls_reset_batch_note():
+def test_frontend_js_reset_correction_shell_state_calls_reset_batch_note():
     """resetCorrectionShellState must call
     resetBatchNoteState so every path that resets the shell also clears
     the note textarea / count / status / saving state."""
@@ -2474,7 +2472,7 @@ def test_app_js_reset_correction_shell_state_calls_reset_batch_note():
 
 
 
-def test_app_js_reset_batch_note_state_clears_textarea_and_count():
+def test_frontend_js_reset_batch_note_state_clears_textarea_and_count():
     """resetBatchNoteState must clear the note textarea
     value, reset the count, and hide the status area."""
     source = read_all_js()
@@ -2493,7 +2491,7 @@ def test_app_js_reset_batch_note_state_clears_textarea_and_count():
 
 
 
-def test_app_js_batch_note_no_old_or_new_note_leak_in_error_handling():
+def test_frontend_js_batch_note_no_old_or_new_note_leak_in_error_handling():
     """the batch note error handling code must not reference
     old_note or new_note variables — the bridge error is surfaced verbatim
     without echoing note content."""
@@ -2516,7 +2514,7 @@ def test_app_js_batch_note_no_old_or_new_note_leak_in_error_handling():
 
 
 
-def test_app_js_batch_note_failure_preserves_textarea():
+def test_frontend_js_batch_note_failure_preserves_textarea():
     """the failure path in saveBatchNote must NOT clear the
     note textarea — the user's input is preserved so they can retry."""
     source = read_all_js()
@@ -2545,7 +2543,7 @@ def test_app_js_batch_note_failure_preserves_textarea():
 
 
 
-def test_app_js_batch_note_success_clears_selection_and_textarea():
+def test_frontend_js_batch_note_success_clears_selection_and_textarea():
     """the success path in saveBatchNote must clear the
     selection and the note textarea."""
     source = read_all_js()
@@ -2617,63 +2615,63 @@ def test_index_html_no_batch_restore_restore_all_permanent_undo_controls():
 
 
 
-def test_app_js_has_restore_saving_state():
-    """app.js must declare the restoreSaving state variable,
+def test_frontend_js_has_restore_saving_state():
+    """frontend JS must declare the restoreSaving state variable,
     independent from batchProjectSaving / batchNoteSaving."""
     source = read_all_js()
     assert "restoreSaving" in source, (
-        "app.js must declare the restoreSaving state variable"
+        "frontend JS must declare the restoreSaving state variable"
     )
     assert "restoreSavingActivityId" in source, (
-        "app.js must declare the restoreSavingActivityId state variable"
+        "frontend JS must declare the restoreSavingActivityId state variable"
     )
 
 
 
-def test_app_js_has_restore_helpers():
-    """app.js must define the restore helper functions."""
+def test_frontend_js_has_restore_helpers():
+    """frontend JS must define the restore helper functions."""
     source = read_all_js()
     assert "function resetRestoreState" in source, (
-        "app.js must define the resetRestoreState function"
+        "frontend JS must define the resetRestoreState function"
     )
     assert "function showRestoreStatus" in source, (
-        "app.js must define the showRestoreStatus function"
+        "frontend JS must define the showRestoreStatus function"
     )
     assert "function setRestoreSaving" in source, (
-        "app.js must define the setRestoreSaving function"
+        "frontend JS must define the setRestoreSaving function"
     )
     assert "function renderRestoreSection" in source, (
-        "app.js must define the renderRestoreSection function"
+        "frontend JS must define the renderRestoreSection function"
     )
     assert "function loadRestorableActivities" in source, (
-        "app.js must define the loadRestorableActivities function"
+        "frontend JS must define the loadRestorableActivities function"
     )
     assert "function renderRestorableActivities" in source, (
-        "app.js must define the renderRestorableActivities function"
+        "frontend JS must define the renderRestorableActivities function"
     )
     assert "function saveActivityRestore" in source, (
-        "app.js must define the saveActivityRestore function"
+        "frontend JS must define the saveActivityRestore function"
     )
     assert "function bindRestoreControls" in source, (
-        "app.js must define the bindRestoreControls function"
+        "frontend JS must define the bindRestoreControls function"
     )
 
 
 
-def test_app_js_calls_restore_bridge_methods():
-    """app.js must call the restore_timeline_activity and
+def test_frontend_js_calls_restore_bridge_methods():
+    """frontend JS must call the restore_timeline_activity and
     get_timeline_restorable_activities bridge methods."""
     source = read_all_js()
     assert "restore_timeline_activity" in source, (
-        "app.js must call the restore_timeline_activity bridge method"
+        "frontend JS must call the restore_timeline_activity bridge method"
     )
     assert "get_timeline_restorable_activities" in source, (
-        "app.js must call the get_timeline_restorable_activities bridge method"
+        "frontend JS must call the get_timeline_restorable_activities bridge method"
     )
 
 
 
-def test_app_js_restore_save_blocked_by_dirty_edit():
+def test_frontend_js_restore_save_blocked_by_dirty_edit():
     """saveActivityRestore must block when isEditDirty() is
     true and show the dirty-edit blocking message."""
     source = read_all_js()
@@ -2690,7 +2688,7 @@ def test_app_js_restore_save_blocked_by_dirty_edit():
 
 
 
-def test_app_js_restore_save_checks_restore_saving():
+def test_frontend_js_restore_save_checks_restore_saving():
     """saveActivityRestore must check restoreSaving before
     proceeding so two restores cannot compete."""
     source = read_all_js()
@@ -2703,7 +2701,7 @@ def test_app_js_restore_save_checks_restore_saving():
 
 
 
-def test_app_js_restore_success_refreshes_timeline():
+def test_frontend_js_restore_success_refreshes_timeline():
     """a successful restore must refresh the Timeline."""
     source = read_all_js()
     save_start = source.find("function saveActivityRestore")
@@ -2715,7 +2713,7 @@ def test_app_js_restore_success_refreshes_timeline():
 
 
 
-def test_app_js_restore_success_shows_restored_message():
+def test_frontend_js_restore_success_shows_restored_message():
     """a successful restore must show the 已恢复 message."""
     source = read_all_js()
     save_start = source.find("function saveActivityRestore")
@@ -2727,7 +2725,7 @@ def test_app_js_restore_success_shows_restored_message():
 
 
 
-def test_app_js_restore_failure_preserves_list():
+def test_frontend_js_restore_failure_preserves_list():
     """a failed restore must preserve the restore list so the
     user can retry."""
     source = read_all_js()
@@ -2745,7 +2743,7 @@ def test_app_js_restore_failure_preserves_list():
 
 
 
-def test_app_js_restore_catch_resets_saving():
+def test_frontend_js_restore_catch_resets_saving():
     """the .catch path in saveActivityRestore must reset
     saving."""
     source = read_all_js()
@@ -2764,7 +2762,7 @@ def test_app_js_restore_catch_resets_saving():
 
 
 
-def test_app_js_restore_saving_disables_buttons():
+def test_frontend_js_restore_saving_disables_buttons():
     """setRestoreSaving must disable all restore buttons when
     saving is true."""
     source = read_all_js()
@@ -2780,7 +2778,7 @@ def test_app_js_restore_saving_disables_buttons():
 
 
 
-def test_app_js_clear_edit_panel_resets_restore_state():
+def test_frontend_js_clear_edit_panel_resets_restore_state():
     """clearEditPanel must call resetRestoreState."""
     source = read_all_js()
     clear_start = source.find("function clearEditPanel")
@@ -2792,7 +2790,7 @@ def test_app_js_clear_edit_panel_resets_restore_state():
 
 
 
-def test_app_js_reset_correction_shell_resets_restore_state():
+def test_frontend_js_reset_correction_shell_resets_restore_state():
     """resetCorrectionShellState must call resetRestoreState."""
     source = read_all_js()
     reset_start = source.find("function resetCorrectionShellState")
@@ -2804,7 +2802,7 @@ def test_app_js_reset_correction_shell_resets_restore_state():
 
 
 
-def test_app_js_restore_render_called_from_render_correction_shell():
+def test_frontend_js_restore_render_called_from_render_correction_shell():
     """renderRestoreSection must be called from
     renderCorrectionShell so the section is always populated when the shell
     opens."""
@@ -2818,7 +2816,7 @@ def test_app_js_restore_render_called_from_render_correction_shell():
 
 
 
-def test_app_js_restore_bind_called_in_init():
+def test_frontend_js_restore_bind_called_in_init():
     """bindRestoreControls must be called during initButtons."""
     source = read_all_js()
     buttons_start = source.find("function initButtons")
@@ -2830,7 +2828,7 @@ def test_app_js_restore_bind_called_in_init():
 
 
 
-def test_app_js_restore_uses_escape_html():
+def test_frontend_js_restore_uses_escape_html():
     """renderRestorableActivities must escape dynamic values
     using escapeHtml."""
     source = read_all_js()
@@ -2843,17 +2841,17 @@ def test_app_js_restore_uses_escape_html():
 
 
 
-def test_app_js_restore_no_local_storage():
+def test_frontend_js_restore_no_local_storage():
     """the restore code must not use browser storage
-    (re-asserted for the whole app.js)."""
+    (re-asserted for the whole frontend JS)."""
     source = read_all_js()
     assert not re.search(r"localStorage|sessionStorage", source), (
-        "app.js must not use localStorage or sessionStorage"
+        "frontend JS must not use localStorage or sessionStorage"
     )
 
 
 
-def test_app_js_restore_no_external_links():
+def test_frontend_js_restore_no_external_links():
     """the restore code must not introduce external links
     (re-asserted for all frontend resources)."""
     for filename in FRONTEND_RESOURCE_FILES:
@@ -2864,7 +2862,7 @@ def test_app_js_restore_no_external_links():
 
 
 
-def test_app_js_restore_no_raw_field_display():
+def test_frontend_js_restore_no_raw_field_display():
     """the restore code must not display raw window_title /
     file_path / clipboard / note fields."""
     source = read_all_js()
@@ -2972,8 +2970,8 @@ def test_service_has_restore_function():
 
 
 
-def test_app_js_restore_state_independent_from_batch_states():
-    """/ 3B.9: the restore saving STATE VARIABLE must be
+def test_frontend_js_restore_state_independent_from_batch_states():
+    """The restore saving state variable must be
     independent from batchProjectSaving / batchNoteSaving (declared as a
     separate variable). The cross-save guard means
     saveActivityRestore refuses when a batch save is in flight; that guard
@@ -2983,10 +2981,10 @@ def test_app_js_restore_state_independent_from_batch_states():
     # The restore saving variable must be declared separately.
     # state vars now live on the App. namespace.
     assert "App.restoreSaving" in source, (
-        "app.js must declare restoreSaving as a separate variable"
+        "frontend JS must declare restoreSaving as a separate variable"
     )
     assert "App.restoreSavingActivityId" in source, (
-        "app.js must declare restoreSavingActivityId as a separate variable"
+        "frontend JS must declare restoreSavingActivityId as a separate variable"
     )
     # The setRestoreSaving helper must still set the independent
     # restoreSaving variable (not batchProjectSaving / batchNoteSaving).
@@ -2999,7 +2997,7 @@ def test_app_js_restore_state_independent_from_batch_states():
 
 
 
-def test_app_js_restore_does_not_reload_during_save():
+def test_frontend_js_restore_does_not_reload_during_save():
     """renderRestoreSection must not reload the recovery list
     while a restore save is in flight."""
     source = read_all_js()
@@ -3012,7 +3010,7 @@ def test_app_js_restore_does_not_reload_during_save():
 
 
 
-def test_app_js_restore_load_shows_loading_placeholder():
+def test_frontend_js_restore_load_shows_loading_placeholder():
     """loadRestorableActivities must show a loading placeholder
     while the list loads."""
     source = read_all_js()
@@ -3025,7 +3023,7 @@ def test_app_js_restore_load_shows_loading_placeholder():
 
 
 
-def test_app_js_restore_load_failure_shows_error():
+def test_frontend_js_restore_load_failure_shows_error():
     """loadRestorableActivities must show 加载可恢复记录失败 on
     failure."""
     source = read_all_js()
@@ -3038,7 +3036,7 @@ def test_app_js_restore_load_failure_shows_error():
 
 
 
-def test_app_js_restore_empty_list_css_fallback():
+def test_frontend_js_restore_empty_list_css_fallback():
     """an empty restore list must rely on the CSS :empty
     rule (no explicit 'no records' text in JS)."""
     source = read_all_js()
@@ -3065,7 +3063,7 @@ def test_styles_css_restore_empty_state():
 # --- section ------------------------------------------------
 
 
-def test_app_js_restore_stale_row_guard():
+def test_frontend_js_restore_stale_row_guard():
     """saveActivityRestore must confirm the activity row
     still exists in the current restore list before calling the bridge.
     If the row is stale (e.g. the list was reloaded by an auto-refresh and
@@ -3107,7 +3105,7 @@ def test_app_js_restore_stale_row_guard():
 
 
 
-def test_app_js_restore_stale_row_guard_before_dirty_check():
+def test_frontend_js_restore_stale_row_guard_before_dirty_check():
     """the stale-row guard must run before the dirty-edit
     check so that a stale row is surfaced even when the user has unsaved
     edits (the stale row message is more specific than the dirty-edit
@@ -3129,7 +3127,7 @@ def test_app_js_restore_stale_row_guard_before_dirty_check():
 
 
 
-def test_app_js_restore_auto_refresh_reload_guard():
+def test_frontend_js_restore_auto_refresh_reload_guard():
     """the auto-refresh path that re-renders the correction
     shell (and thus the restore section) must be guarded by:
       1. shell open (correctionShellOpen),
@@ -3179,7 +3177,7 @@ def test_app_js_restore_auto_refresh_reload_guard():
 
 
 
-def test_app_js_restore_saving_guard_in_render_returns_early():
+def test_frontend_js_restore_saving_guard_in_render_returns_early():
     """when restoreSaving is true, renderRestoreSection must
     return immediately (skip the loadRestorableActivities call) so the
     in-flight save's success/failure handler can complete the reload
@@ -3197,7 +3195,7 @@ def test_app_js_restore_saving_guard_in_render_returns_early():
 
 
 
-def test_app_js_restore_stale_guard_does_not_change_selected_session():
+def test_frontend_js_restore_stale_guard_does_not_change_selected_session():
     """the stale-row refusal path must not change the
     selected session (only show a safe message and return). This mirrors
     the dirty-state refusal semantics."""
@@ -3222,7 +3220,7 @@ def test_app_js_restore_stale_guard_does_not_change_selected_session():
 
 
 
-def test_app_js_restore_stale_guard_no_bridge_call():
+def test_frontend_js_restore_stale_guard_no_bridge_call():
     """the stale-row guard path must not call callBridge.
     Only the path after the dirty-edit check (the actual restore path) may
     call the bridge."""
@@ -3366,7 +3364,7 @@ def test_index_html_correction_shell_card_headers_present_3b9():
 
 def test_index_html_correction_shell_preserves_existing_ids_3b9():
     """consolidation must not remove any existing IDs that
-    prior-phase tests depend on."""
+    earlier contract tests depend on."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for required_id in (
         "timeline-correction-shell",
@@ -3441,16 +3439,16 @@ def test_index_html_correction_shell_no_external_resources_3b9():
 
 
 
-def test_app_js_has_safe_text_helper_3b9():
-    """app.js must define a safeText display-safe helper."""
+def test_frontend_js_has_safe_text_helper_3b9():
+    """frontend JS must define a safeText display-safe helper."""
     source = read_all_js()
     assert "function safeText" in source, (
-        "app.js must define the safeText helper"
+        "frontend JS must define the safeText helper"
     )
 
 
 
-def test_app_js_safe_text_returns_fallback_3b9():
+def test_frontend_js_safe_text_returns_fallback_3b9():
     """safeText must return the fallback for null / undefined /
     empty values, and stringify non-empty values."""
     source = read_all_js()
@@ -3462,12 +3460,12 @@ def test_app_js_safe_text_returns_fallback_3b9():
 
 
 
-def test_app_js_has_is_any_correction_write_saving_helper_3b9():
-    """app.js must define an isAnyCorrectionWriteSaving
+def test_frontend_js_has_is_any_correction_write_saving_helper_3b9():
+    """frontend JS must define an isAnyCorrectionWriteSaving
     cross-save guard helper."""
     source = read_all_js()
     assert "function isAnyCorrectionWriteSaving" in source, (
-        "app.js must define the isAnyCorrectionWriteSaving helper"
+        "frontend JS must define the isAnyCorrectionWriteSaving helper"
     )
     body = func_body(source, "isAnyCorrectionWriteSaving")
     assert "batchProjectSaving" in body, (
@@ -3482,12 +3480,12 @@ def test_app_js_has_is_any_correction_write_saving_helper_3b9():
 
 
 
-def test_app_js_has_reset_correction_action_status_helper_3b9():
-    """app.js must define a resetCorrectionActionStatus helper
+def test_frontend_js_has_reset_correction_action_status_helper_3b9():
+    """frontend JS must define a resetCorrectionActionStatus helper
     that clears every shell status area."""
     source = read_all_js()
     assert "function resetCorrectionActionStatus" in source, (
-        "app.js must define the resetCorrectionActionStatus helper"
+        "frontend JS must define the resetCorrectionActionStatus helper"
     )
     body = func_body(source, "resetCorrectionActionStatus")
     assert "setCorrectionShellStatus" in body, (
@@ -3505,7 +3503,7 @@ def test_app_js_has_reset_correction_action_status_helper_3b9():
 
 
 
-def test_app_js_open_correction_shell_calls_reset_action_status_3b9():
+def test_frontend_js_open_correction_shell_calls_reset_action_status_3b9():
     """openCorrectionShell must call resetCorrectionActionStatus
     so stale messages from a previous shell session do not linger."""
     source = read_all_js()
@@ -3516,7 +3514,7 @@ def test_app_js_open_correction_shell_calls_reset_action_status_3b9():
 
 
 
-def test_app_js_render_correction_shell_uses_safe_text_3b9():
+def test_frontend_js_render_correction_shell_uses_safe_text_3b9():
     """renderCorrectionShell must pass dynamic values through
     safeText so the shell never renders undefined / null."""
     source = read_all_js()
@@ -3527,7 +3525,7 @@ def test_app_js_render_correction_shell_uses_safe_text_3b9():
 
 
 
-def test_app_js_render_restorable_activities_uses_safe_text_3b9():
+def test_frontend_js_render_restorable_activities_uses_safe_text_3b9():
     """renderRestorableActivities must pass dynamic values
     through safeText so the restore list never renders undefined / null."""
     source = read_all_js()
@@ -3538,7 +3536,7 @@ def test_app_js_render_restorable_activities_uses_safe_text_3b9():
 
 
 
-def test_app_js_render_correction_shell_still_uses_escape_html_3b9():
+def test_frontend_js_render_correction_shell_still_uses_escape_html_3b9():
     """renderCorrectionShell must still escapeHtml every
     dynamic value before inserting into innerHTML."""
     source = read_all_js()
@@ -3549,7 +3547,7 @@ def test_app_js_render_correction_shell_still_uses_escape_html_3b9():
 
 
 
-def test_app_js_correction_shell_no_raw_sensitive_fields_3b9():
+def test_frontend_js_correction_shell_no_raw_sensitive_fields_3b9():
     """the correction shell render path must not read raw
     window_title / file_path_hint / full_path / clipboard / note internals
     / traceback / SQL / exception text."""
@@ -3564,7 +3562,7 @@ def test_app_js_correction_shell_no_raw_sensitive_fields_3b9():
 
 
 
-def test_app_js_render_restorable_activities_no_raw_sensitive_fields_3b9():
+def test_frontend_js_render_restorable_activities_no_raw_sensitive_fields_3b9():
     """the restore list render path must not read raw
     window_title / file_path_hint / full_path / clipboard / note internals
     / traceback / SQL / exception text."""
@@ -3579,7 +3577,7 @@ def test_app_js_render_restorable_activities_no_raw_sensitive_fields_3b9():
 
 
 
-def test_app_js_save_batch_project_has_cross_save_guard_3b9():
+def test_frontend_js_save_batch_project_has_cross_save_guard_3b9():
     """saveBatchProject must refuse when a batch note save or
     single restore is in flight (cross-save guard)."""
     source = read_all_js()
@@ -3596,7 +3594,7 @@ def test_app_js_save_batch_project_has_cross_save_guard_3b9():
 
 
 
-def test_app_js_save_batch_note_has_cross_save_guard_3b9():
+def test_frontend_js_save_batch_note_has_cross_save_guard_3b9():
     """saveBatchNote must refuse when a single restore is in
     flight (cross-save guard)."""
     source = read_all_js()
@@ -3610,7 +3608,7 @@ def test_app_js_save_batch_note_has_cross_save_guard_3b9():
 
 
 
-def test_app_js_save_activity_restore_has_cross_save_guard_3b9():
+def test_frontend_js_save_activity_restore_has_cross_save_guard_3b9():
     """saveActivityRestore must refuse when a batch project or
     batch note save is in flight (cross-save guard)."""
     source = read_all_js()
@@ -3627,7 +3625,7 @@ def test_app_js_save_activity_restore_has_cross_save_guard_3b9():
 
 
 
-def test_app_js_save_activity_restore_cross_save_after_dirty_check_3b9():
+def test_frontend_js_save_activity_restore_cross_save_after_dirty_check_3b9():
     """the cross-save guard in saveActivityRestore must come
     AFTER the dirty-edit check (the stale-row guard must still come before
     the dirty-edit check)."""
@@ -3648,7 +3646,7 @@ def test_app_js_save_activity_restore_cross_save_after_dirty_check_3b9():
 
 
 
-def test_app_js_save_activity_restore_cross_save_no_bridge_call_3b9():
+def test_frontend_js_save_activity_restore_cross_save_no_bridge_call_3b9():
     """the cross-save guard path in saveActivityRestore must
     not call callBridge."""
     source = read_all_js()
@@ -3665,7 +3663,7 @@ def test_app_js_save_activity_restore_cross_save_no_bridge_call_3b9():
 
 
 
-def test_app_js_reset_correction_shell_state_still_resets_all_3b9():
+def test_frontend_js_reset_correction_shell_state_still_resets_all_3b9():
     """resetCorrectionShellState must still call the three
     sub-reset helpers (batch project / batch note / restore)."""
     source = read_all_js()
@@ -3682,7 +3680,7 @@ def test_app_js_reset_correction_shell_state_still_resets_all_3b9():
 
 
 
-def test_app_js_reset_correction_shell_state_independent_of_edit_saving_3b9():
+def test_frontend_js_reset_correction_shell_state_independent_of_edit_saving_3b9():
     """resetCorrectionShellState must not reset the edit /
     time / split / merge / hide / delete saving states (those are owned by
     clearEditPanel)."""
@@ -3697,7 +3695,7 @@ def test_app_js_reset_correction_shell_state_independent_of_edit_saving_3b9():
 
 
 
-def test_app_js_close_correction_shell_no_write_3b9():
+def test_frontend_js_close_correction_shell_no_write_3b9():
     """closeCorrectionShell must not trigger a refresh or any
     write action."""
     source = read_all_js()
@@ -3714,41 +3712,41 @@ def test_app_js_close_correction_shell_no_write_3b9():
 
 
 
-def test_app_js_correction_shell_no_local_storage_3b9():
+def test_frontend_js_correction_shell_no_local_storage_3b9():
     """the correction shell must not use localStorage or
     sessionStorage."""
     source = read_all_js()
     for forbidden in ("localStorage", "sessionStorage"):
         assert forbidden not in source, (
-            "app.js must not use " + forbidden
+            "frontend JS must not use " + forbidden
         )
 
 
 
-def test_app_js_correction_shell_no_external_links_3b9():
-    """app.js must not reference external links, CDN, or
+def test_frontend_js_correction_shell_no_external_links_3b9():
+    """frontend JS must not reference external links, CDN, or
     Google Fonts."""
     source = read_all_js()
     for forbidden in ("http://", "https://", "cdn.", "googleapis.com",
                       "fonts.googleapis"):
         assert forbidden not in source, (
-            "app.js must not reference " + forbidden
+            "frontend JS must not reference " + forbidden
         )
 
 
 
-def test_app_js_correction_shell_no_traceback_display_3b9():
-    """app.js must not display tracebacks / SQL / raw exception
+def test_frontend_js_correction_shell_no_traceback_display_3b9():
+    """frontend JS must not display tracebacks / SQL / raw exception
     text in the correction shell."""
     source = read_all_js()
     for forbidden in ("traceback", "Traceback", "SQL", "Exception"):
         assert forbidden not in source, (
-            "app.js must not display " + forbidden
+            "frontend JS must not display " + forbidden
         )
 
 
 
-def test_app_js_correction_shell_no_new_forbidden_handlers_3b9():
+def test_frontend_js_correction_shell_no_new_forbidden_handlers_3b9():
     """the consolidation must not introduce batch hide /
     delete, batch restore, restore all, undo stack, permanent delete,
     auto-rule, or global overlap detection handlers."""
@@ -3762,12 +3760,12 @@ def test_app_js_correction_shell_no_new_forbidden_handlers_3b9():
                       "batchTimeCorrection", "batchSplit", "batchMerge",
                       "batchNoteAppend", "batchNoteMerge"):
         assert forbidden not in source, (
-            "app.js must not contain " + forbidden + " handler"
+            "frontend JS must not contain " + forbidden + " handler"
         )
 
 
 
-def test_app_js_batch_project_and_note_share_selection_3b9():
+def test_frontend_js_batch_project_and_note_share_selection_3b9():
     """batch project and batch note must share the same
     selectedBatchActivityIds selection (single source of truth)."""
     source = read_all_js()
@@ -3832,7 +3830,7 @@ def test_styles_css_no_external_resources_3b9():
 
 
 
-def test_bridge_no_new_methods_for_phase_3b_9():
+def test_bridge_no_unexpected_methods_for_contract_contract_2():
     """the bridge must not gain new methods. The existing
     project / note / time / split / merge / hide / delete / batch project /
     batch note / restore methods must still be present."""
@@ -3864,7 +3862,7 @@ def test_bridge_no_new_methods_for_phase_3b_9():
 
 
 
-def test_bridge_imports_only_allowed_modules_3b_9():
+def test_bridge_imports_only_allowed_modules_contract_2():
     """the bridge must still only import worktrace.api and
     worktrace.formatters; no direct service / db / collector / security /
     runtime / config imports."""
@@ -3885,7 +3883,7 @@ def test_bridge_imports_only_allowed_modules_3b_9():
 # --- section ------------------------------------------------
 
 
-def test_app_js_save_batch_note_cross_save_uses_unified_message_3b9_1():
+def test_frontend_js_save_batch_note_cross_save_uses_unified_message():
     """saveBatchNote must use the unified cross-save message
     '请等待当前操作完成' for BOTH batchProjectSaving and restoreSaving, not
     '操作失败' for batchProjectSaving."""
@@ -3906,7 +3904,7 @@ def test_app_js_save_batch_note_cross_save_uses_unified_message_3b9_1():
 
 
 
-def test_app_js_save_batch_note_no_removed_failure_message_for_cross_save_3b9_1():
+def test_frontend_js_save_batch_note_no_removed_failure_message_for_cross_save():
     """saveBatchNote must NOT use '操作失败' for the
     batchProjectSaving cross-save (that was the pre-hardening behavior)."""
     source = read_all_js()
@@ -3923,7 +3921,7 @@ def test_app_js_save_batch_note_no_removed_failure_message_for_cross_save_3b9_1(
 
 
 
-def test_app_js_auto_refresh_checks_correction_write_saving_3b9_1():
+def test_frontend_js_auto_refresh_checks_correction_write_saving():
     """the auto-refresh re-render path must check
     isAnyCorrectionWriteSaving() so a save in flight is not overwritten."""
     source = read_all_js()
@@ -3931,7 +3929,7 @@ def test_app_js_auto_refresh_checks_correction_write_saving_3b9_1():
     # timeline render path. It must include isAnyCorrectionWriteSaving().
     # We search for the combined condition.
     assert "isAnyCorrectionWriteSaving()" in source, (
-        "app.js must call isAnyCorrectionWriteSaving()"
+        "frontend JS must call isAnyCorrectionWriteSaving()"
     )
     # The auto-refresh block must combine the four conditions.
     assert "correctionShellOpen" in source
@@ -3951,7 +3949,7 @@ def test_app_js_auto_refresh_checks_correction_write_saving_3b9_1():
 
 
 
-def test_app_js_render_batch_project_section_status_guard_3b9_1():
+def test_frontend_js_render_batch_project_section_status_guard():
     """renderBatchProjectSection must not clear the batch
     project status while a batch project save is in flight."""
     source = read_all_js()
@@ -3975,7 +3973,7 @@ def test_app_js_render_batch_project_section_status_guard_3b9_1():
 
 
 
-def test_app_js_render_batch_note_section_status_guard_3b9_1():
+def test_frontend_js_render_batch_note_section_status_guard():
     """renderBatchNoteSection must not clear the batch note
     status while a batch note save is in flight."""
     source = read_all_js()
@@ -3996,7 +3994,7 @@ def test_app_js_render_batch_note_section_status_guard_3b9_1():
 
 
 
-def test_app_js_cross_save_guard_order_dirty_before_cross_save_3b9_1():
+def test_frontend_js_cross_save_guard_order_dirty_before_cross_save():
     """in all three consolidated write paths, the dirty guard
     (isEditDirty) must come BEFORE the cross-save guard."""
     source = read_all_js()
@@ -4020,7 +4018,7 @@ def test_app_js_cross_save_guard_order_dirty_before_cross_save_3b9_1():
 
 
 
-def test_app_js_cross_save_guard_no_bridge_call_3b9_1():
+def test_frontend_js_cross_save_guard_no_bridge_call():
     """none of the three cross-save guard paths may call
     callBridge before returning."""
     source = read_all_js()
@@ -4043,7 +4041,7 @@ def test_app_js_cross_save_guard_no_bridge_call_3b9_1():
 
 
 
-def test_app_js_cross_save_guard_preserves_state_3b9_1():
+def test_frontend_js_cross_save_guard_preserves_state():
     """the cross-save guard paths must not clear selection,
     textarea, or restore list (they only show a status and return)."""
     source = read_all_js()
@@ -4067,7 +4065,7 @@ def test_app_js_cross_save_guard_preserves_state_3b9_1():
 
 
 
-def test_app_js_is_any_correction_write_saving_covers_three_states_3b9_1():
+def test_frontend_js_is_any_correction_write_saving_covers_three_states():
     """isAnyCorrectionWriteSaving must cover batchProjectSaving,
     batchNoteSaving, and restoreSaving."""
     source = read_all_js()
@@ -4084,7 +4082,7 @@ def test_app_js_is_any_correction_write_saving_covers_three_states_3b9_1():
 
 
 
-def test_app_js_reset_correction_shell_state_calls_sub_resets_3b9_1():
+def test_frontend_js_reset_correction_shell_state_calls_sub_resets():
     """resetCorrectionShellState must still call all three
     sub-reset helpers."""
     source = read_all_js()
@@ -4101,7 +4099,7 @@ def test_app_js_reset_correction_shell_state_calls_sub_resets_3b9_1():
 
 
 
-def test_app_js_reset_paths_cover_all_contexts_3b9_1():
+def test_frontend_js_reset_paths_cover_all_contexts():
     """resetCorrectionShellState must be called on close,
     date switch, session switch, and session disappear paths."""
     source = read_all_js()
@@ -4125,7 +4123,7 @@ def test_app_js_reset_paths_cover_all_contexts_3b9_1():
 
 
 
-def test_app_js_close_correction_shell_preserves_selected_session_3b9_1():
+def test_frontend_js_close_correction_shell_preserves_selected_session_contract_2():
     """closeCorrectionShell must NOT clear selectedSessionId
     (the user returns to the same session context)."""
     source = read_all_js()
@@ -4141,7 +4139,7 @@ def test_app_js_close_correction_shell_preserves_selected_session_3b9_1():
 
 
 
-def test_app_js_safe_text_still_used_in_correction_shell_3b9_1():
+def test_frontend_js_safe_text_still_used_in_correction_shell():
     """renderCorrectionShell and renderRestorableActivities
     must still use safeText for dynamic values."""
     source = read_all_js()
@@ -4156,8 +4154,8 @@ def test_app_js_safe_text_still_used_in_correction_shell_3b9_1():
 
 
 
-def test_app_js_correction_shell_no_raw_sensitive_fields_3b9_1():
-    """app.js must not reference raw sensitive backend column
+def test_frontend_js_correction_shell_no_raw_sensitive_fields():
+    """frontend JS must not reference raw sensitive backend column
     names anywhere (window_title, file_path_hint, full_path, clipboard).
 
     Exception: ``clipboard_capture_enabled`` is the JSON status
@@ -4180,12 +4178,12 @@ def test_app_js_correction_shell_no_raw_sensitive_fields_3b9_1():
     for forbidden in ("window_title", "file_path_hint", "full_path",
                       "clipboard"):
         assert forbidden not in source_without_capture_flag, (
-            "app.js must not reference raw sensitive field: " + forbidden
+            "frontend JS must not reference raw sensitive field: " + forbidden
         )
 
 
 
-def test_app_js_correction_shell_escape_html_still_used_3b9_1():
+def test_frontend_js_correction_shell_escape_html_still_used():
     """escapeHtml must still be used in correction shell
     rendering paths."""
     source = read_all_js()
@@ -4200,30 +4198,30 @@ def test_app_js_correction_shell_escape_html_still_used_3b9_1():
 
 
 
-def test_app_js_correction_shell_no_local_storage_3b9_1():
-    """app.js must not use localStorage or sessionStorage."""
+def test_frontend_js_correction_shell_no_local_storage():
+    """frontend JS must not use localStorage or sessionStorage."""
     source = read_all_js().lower()
     assert "localstorage" not in source, (
-        "app.js must not use localStorage"
+        "frontend JS must not use localStorage"
     )
     assert "sessionstorage" not in source, (
-        "app.js must not use sessionStorage"
+        "frontend JS must not use sessionStorage"
     )
 
 
 
-def test_app_js_correction_shell_no_external_links_3b9_1():
-    """app.js must not reference external http/https/CDN
+def test_frontend_js_correction_shell_no_external_links():
+    """frontend JS must not reference external http/https/CDN
     resources."""
     source = read_all_js()
     for forbidden in ("http://", "https://", "//cdn", "googleapis"):
         assert forbidden not in source, (
-            "app.js must not reference external resource: " + forbidden
+            "frontend JS must not reference external resource: " + forbidden
         )
 
 
 
-def test_index_html_correction_shell_cards_still_present_3b9_1():
+def test_index_html_correction_shell_cards_still_present():
     """the remaining correction shell cards must still be
     present in index.html, and the not-implemented card must NOT exist."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -4243,7 +4241,7 @@ def test_index_html_correction_shell_cards_still_present_3b9_1():
 
 
 
-def test_index_html_correction_shell_existing_ids_preserved_3b9_1():
+def test_index_html_correction_shell_existing_ids_preserved():
     """all existing JS-dependent ids must still be present."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for element_id in (
@@ -4276,7 +4274,7 @@ def test_index_html_correction_shell_existing_ids_preserved_3b9_1():
 
 
 
-def test_index_html_no_forbidden_batch_ui_3b9_1():
+def test_index_html_no_forbidden_batch_ui():
     """index.html must not contain batch hide / batch delete /
     batch restore / undo stack / permanent delete UI controls."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -4310,7 +4308,7 @@ def test_index_html_no_not_implemented_card():
 
 
 
-def test_styles_css_correction_shell_hidden_display_none_3b9_1():
+def test_styles_css_correction_shell_hidden_display_none():
     """.correction-shell[hidden] must remain display:none."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell[hidden]" in source, (
@@ -4324,7 +4322,7 @@ def test_styles_css_correction_shell_hidden_display_none_3b9_1():
 
 
 
-def test_styles_css_card_classes_present_3b9_1():
+def test_styles_css_card_classes_present():
     """unified card CSS classes must still be present."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     for cls in (
@@ -4339,7 +4337,7 @@ def test_styles_css_card_classes_present_3b9_1():
 
 
 
-def test_styles_css_no_external_resources_3b9_1():
+def test_styles_css_no_external_resources():
     """styles.css must not reference external resources."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8").lower()
     for forbidden in ("http://", "https://", "@import", "googleapis",
@@ -4350,7 +4348,7 @@ def test_styles_css_no_external_resources_3b9_1():
 
 
 
-def test_styles_css_highlight_still_present_3b9_1():
+def test_styles_css_highlight_still_present():
     """the transient highlight CSS must still be present."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert "detail-item-highlight" in source, (
@@ -4362,7 +4360,7 @@ def test_styles_css_highlight_still_present_3b9_1():
 
 
 
-def test_bridge_no_new_methods_for_phase_3b9_1():
+def test_bridge_no_unexpected_methods_for_contract_contract_3():
     """no new bridge methods beyond the known set."""
     # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
@@ -4398,7 +4396,7 @@ def test_bridge_no_new_methods_for_phase_3b9_1():
 
 
 
-def test_bridge_imports_only_allowed_modules_3b9_1():
+def test_bridge_imports_only_allowed_modules_contract_3():
     """the bridge must still only import worktrace.api and
     worktrace.formatters."""
     # scan all 8 bridge mixin files (method bodies / constants

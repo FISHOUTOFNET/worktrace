@@ -152,12 +152,8 @@ def get_settings_privacy_status() -> dict[str, Any]:
             # Defensive: never let the backup facade leak tracebacks to the UI.
             secure_import_in_progress = False
         # Display-safe first-run notice state. The raw DB setting key name
-        # (``first_run_notice_accepted``) is NOT exposed; only the boolean +
-        # view/accept availability flags are surfaced. ``accept_required``
-        # is the negation of ``accepted`` so the frontend can decide whether
-        # page offers a read-only notice viewer). ``accept_required`` is
-        # the negation of ``accepted`` so the frontend can decide whether
-        # to show the blocking first-run gate.
+        # (``first_run_notice_accepted``) is NOT exposed; only the boolean
+        # and view/accept availability flags are surfaced.
         try:
             notice_accepted = bool(first_run_notice_accepted())
         except Exception:
@@ -165,7 +161,6 @@ def get_settings_privacy_status() -> dict[str, Any]:
             notice_accepted = False
         status: dict[str, Any] = {
             "page": "settings_privacy",
-            "phase": "6E",
             "storage_model": "local_only",
             "clipboard_capture_enabled": clipboard_enabled,
             "export_path_configured": export_path_configured,

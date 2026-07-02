@@ -31,7 +31,7 @@ from static_helpers import (
 # --- statistics ----------------------------------------------------
 
 
-def test_index_html_statistics_nav_entry_4a():
+def test_index_html_statistics_nav_entry_exists():
     """the sidebar nav must contain the 统计与导出 entry."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'data-page="statistics"' in source
@@ -39,7 +39,7 @@ def test_index_html_statistics_nav_entry_4a():
 
 
 
-def test_index_html_statistics_page_section_exists_4a():
+def test_index_html_statistics_page_section_exists():
     """the page-statistics section must exist and not be a
     placeholder."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -51,21 +51,21 @@ def test_index_html_statistics_page_section_exists_4a():
 
 
 
-def test_index_html_statistics_header_subtitle_4b():
+def test_index_html_statistics_header_subtitle_describes_csv_export():
     """the page header subtitle must announce CSV export is
-    open (no longer the read-only copy)."""
+    open (not obsolete read-only-only copy)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-statistics"')
     section = source[pos:pos + 600]
     assert "统计 / 导出" in section
     assert "查看统计并导出当前范围内的活动记录为 CSV 文件" in section
-    # the old read-only copy must be gone.
+    # the obsolete read-only-only copy must be gone.
     assert "本阶段仅提供只读统计和导出预览" not in section
     assert "暂不写入文件" not in section
 
 
 
-def test_index_html_statistics_date_range_controls_4a():
+def test_index_html_statistics_date_range_controls():
     """date range controls must exist."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="statistics-date-from"' in source
@@ -75,7 +75,7 @@ def test_index_html_statistics_date_range_controls_4a():
 
 
 
-def test_index_html_statistics_quick_range_buttons_4a():
+def test_index_html_statistics_quick_range_buttons():
     """quick range buttons (today / 7d / month) exist."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="statistics-today-btn"' in source
@@ -84,7 +84,7 @@ def test_index_html_statistics_quick_range_buttons_4a():
 
 
 
-def test_index_html_statistics_summary_cards_4a():
+def test_index_html_statistics_summary_cards():
     """the four summary cards exist (total / activity / project /
     app)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -95,7 +95,7 @@ def test_index_html_statistics_summary_cards_4a():
 
 
 
-def test_index_html_statistics_grouped_tables_4a():
+def test_index_html_statistics_grouped_tables():
     """by_project / by_app / by_status tables exist."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="stats-by-project"' in source
@@ -107,7 +107,7 @@ def test_index_html_statistics_grouped_tables_4a():
 
 
 
-def test_index_html_statistics_empty_states_4a():
+def test_index_html_statistics_empty_states():
     """each table has an empty-state element."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="stats-empty-project"' in source
@@ -117,7 +117,7 @@ def test_index_html_statistics_empty_states_4a():
 
 
 
-def test_index_html_statistics_export_preview_4a():
+def test_index_html_statistics_export_preview():
     """the export preview card exists with range / count /
     duration / formats fields."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -130,7 +130,7 @@ def test_index_html_statistics_export_preview_4a():
 
 
 
-def test_index_html_statistics_export_action_enabled_4b():
+def test_index_html_statistics_export_action_enabled():
     """the export action button must be enabled and labeled
     "导出 CSV" (no longer the disabled placeholder)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -140,14 +140,14 @@ def test_index_html_statistics_export_action_enabled_4b():
     # The button must be a real action button with the CSV label.
     assert "导出 CSV" in section
     # The button itself must NOT carry a disabled attribute; the old
-    # 4A copy ("导出动作将在后续阶段开放") must be gone.
+    # Unavailable export copy must be absent.
     assert "导出动作将在后续阶段开放" not in section
     # A status element must exist for export progress / success / cancel.
     assert 'id="stats-export-status"' in source
 
 
 
-def test_index_html_statistics_export_hint_csv_enabled_4b():
+def test_index_html_statistics_export_hint_csv_enabled():
     """the export hint must announce CSV is the supported format
     for closed, non-hidden activity records in the current range."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -164,14 +164,14 @@ def test_index_html_statistics_export_hint_csv_enabled_4b():
 
 
 
-def test_index_html_statistics_loading_text_4a():
+def test_index_html_statistics_loading_text():
     """the loading text 正在加载统计… must be present."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "正在加载统计" in source
 
 
 
-def test_index_html_statistics_error_text_4a():
+def test_index_html_statistics_error_text():
     """the error banner default text 加载统计失败 must be present."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="statistics-error"' in source
@@ -179,7 +179,7 @@ def test_index_html_statistics_error_text_4a():
 
 
 
-def test_index_html_statistics_only_csv_export_button_allowed_4b():
+def test_index_html_statistics_only_csv_export_button_allowed():
     """CSV export is now supported via the bridge. index.html may
     contain the CSV export button (stats-export-action-btn / 导出 CSV), but
     must NOT contain Excel / PDF / timesheet / open-folder / auto-submit
@@ -189,7 +189,7 @@ def test_index_html_statistics_only_csv_export_button_allowed_4b():
 
     Note: the export hint text legitimately mentions Excel / PDF / timesheet
     / 打开文件夹 / 自动提交工时 as *unsupported* features; those mentions are
-    verified by test_index_html_statistics_export_hint_csv_enabled_4b. This
+    verified by test_index_html_statistics_export_hint_csv_enabled. This
     test only forbids button-like ids / classes and the ``导出excel`` /
     ``导出pdf`` label tokens (with the 导出 prefix) that would indicate a
     real unsupported export button."""
@@ -208,7 +208,7 @@ def test_index_html_statistics_only_csv_export_button_allowed_4b():
 
 
 
-def test_index_html_overview_and_timeline_nav_not_regressed_4a():
+def test_index_html_overview_and_timeline_nav_not_regressed():
     """Overview and Timeline nav entries must still exist."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'data-page="overview"' in source
@@ -216,7 +216,7 @@ def test_index_html_overview_and_timeline_nav_not_regressed_4a():
 
 
 
-def test_frontend_js_statistics_state_variables_4a():
+def test_frontend_js_statistics_state_variables():
     """frontend JS must declare the statistics state variables."""
     source = read_all_js()
     assert "statisticsLoaded" in source
@@ -225,7 +225,7 @@ def test_frontend_js_statistics_state_variables_4a():
 
 
 
-def test_frontend_js_statistics_load_function_4a():
+def test_frontend_js_statistics_load_function():
     """frontend JS must define loadStatisticsExportSummary and call the
     bridge method get_statistics_export_summary."""
     source = read_all_js()
@@ -234,7 +234,7 @@ def test_frontend_js_statistics_load_function_4a():
 
 
 
-def test_frontend_js_statistics_render_function_4a():
+def test_frontend_js_statistics_render_function():
     """frontend JS must define showStatistics and renderStatsTable."""
     source = read_all_js()
     assert "function showStatistics" in source
@@ -243,7 +243,7 @@ def test_frontend_js_statistics_render_function_4a():
 
 
 
-def test_frontend_js_statistics_quick_range_function_4a():
+def test_frontend_js_statistics_quick_range_function():
     """frontend JS must define applyStatisticsQuickRange and
     initStatisticsDefaults."""
     source = read_all_js()
@@ -252,7 +252,7 @@ def test_frontend_js_statistics_quick_range_function_4a():
 
 
 
-def test_frontend_js_statistics_lazy_load_in_switch_page_4a():
+def test_frontend_js_statistics_lazy_load_in_switch_page():
     """switchPage must lazy-load the statistics summary on first
     navigation to the page."""
     source = read_all_js()
@@ -266,7 +266,7 @@ def test_frontend_js_statistics_lazy_load_in_switch_page_4a():
 
 
 
-def test_frontend_js_statistics_event_binding_in_init_buttons_4a():
+def test_frontend_js_statistics_event_binding_in_init_buttons():
     """initButtons must bind the statistics load + quick range
     buttons."""
     source = read_all_js()
@@ -282,7 +282,7 @@ def test_frontend_js_statistics_event_binding_in_init_buttons_4a():
 
 
 
-def test_frontend_js_statistics_uses_escape_html_4a():
+def test_frontend_js_statistics_uses_escape_html():
     """renderStatsTable must use escapeHtml for dynamic values."""
     source = read_all_js()
     pos = source.find("function renderStatsTable")
@@ -293,7 +293,7 @@ def test_frontend_js_statistics_uses_escape_html_4a():
 
 
 
-def test_frontend_js_statistics_export_only_via_bridge_4b():
+def test_frontend_js_statistics_export_only_via_bridge():
     """CSV export is now supported, but only through the bridge.
     The frontend JS must define ``exportStatisticsCsv`` and must invoke
     ``App.callBridge("export_statistics_csv", ...)``. Direct filesystem
@@ -323,7 +323,7 @@ def test_frontend_js_statistics_export_only_via_bridge_4b():
 
 
 
-def test_frontend_js_statistics_no_local_storage_4a():
+def test_frontend_js_statistics_no_local_storage():
     """the statistics page must not use localStorage /
     sessionStorage (regression lock)."""
     source = read_all_js()
@@ -334,14 +334,14 @@ def test_frontend_js_statistics_no_local_storage_4a():
 
 
 
-def test_frontend_js_statistics_error_text_4a():
+def test_frontend_js_statistics_error_text():
     """the statistics error path must surface 加载统计失败."""
     source = read_all_js()
     assert "加载统计失败" in source
 
 
 
-def test_frontend_js_statistics_loading_text_4a():
+def test_frontend_js_statistics_loading_text():
     """the statistics loading path must surface 正在加载统计…."""
     source = read_all_js()
     # The loading text is in index.html; frontend JS toggles the hidden flag on
@@ -350,7 +350,7 @@ def test_frontend_js_statistics_loading_text_4a():
 
 
 
-def test_styles_css_statistics_page_classes_4a():
+def test_styles_css_statistics_page_classes():
     """styles.css must contain the statistics page classes."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     for cls in (".stats-header", ".stats-controls", ".stats-summary-grid",
@@ -363,7 +363,7 @@ def test_styles_css_statistics_page_classes_4a():
 
 
 
-def test_styles_css_statistics_responsive_wrap_4a():
+def test_styles_css_statistics_responsive_wrap():
     """styles.css must include responsive wrap rules for narrow
     windows."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
@@ -373,7 +373,7 @@ def test_styles_css_statistics_responsive_wrap_4a():
 
 
 
-def test_styles_css_statistics_export_action_enabled_style_4b():
+def test_styles_css_statistics_export_action_enabled_style():
     """the export action button must use an enabled pointer
     style (no longer the ``cursor: not-allowed`` disabled style)."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
@@ -392,7 +392,7 @@ def test_styles_css_statistics_export_action_enabled_style_4b():
 
 
 
-def test_styles_css_no_external_assets_4a():
+def test_styles_css_no_external_assets():
     """styles.css must not reference external assets (regression
     lock)."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
@@ -402,7 +402,7 @@ def test_styles_css_no_external_assets_4a():
 
 
 
-def test_styles_css_timeline_and_correction_shell_not_removed_4a():
+def test_styles_css_timeline_and_correction_shell_not_removed():
     """Timeline and correction shell CSS must not be removed
     (regression lock)."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
@@ -411,7 +411,7 @@ def test_styles_css_timeline_and_correction_shell_not_removed_4a():
 
 
 
-def test_index_html_project_rules_page_migrated_after_5b():
+def test_index_html_project_rules_page_migrated_after():
     """Project Rules page is active; supports existing rule
     toggles (5B) and keyword rule creation (5C). The boundary copy lists
     the supported ops."""
@@ -436,7 +436,7 @@ def test_index_html_project_rules_page_migrated_after_5b():
 
 
 
-def test_frontend_js_no_save_dialog_or_folder_open_4a():
+def test_frontend_js_no_save_dialog_or_folder_open():
     """frontend JS must not call any save dialog or folder open helper."""
     source = read_all_js()
     lowered = source.lower()
@@ -448,7 +448,7 @@ def test_frontend_js_no_save_dialog_or_folder_open_4a():
 
 
 
-def test_bridge_no_export_write_method_4a():
+def test_bridge_no_export_write_method():
     """the bridge must not expose any export write / file save
     method."""
     # scan all bridge mixin files.
@@ -470,7 +470,7 @@ def test_bridge_no_export_write_method_4a():
 
 
 
-def test_schema_sql_unchanged_4a():
+def test_schema_sql_unchanged():
     """schema.sql must not have been modified. We verify the known tables/columns are still present and no new statistics-specific table has been added."""
     schema_path = REPO_ROOT / "worktrace" / "schema.sql"
     source = schema_path.read_text(encoding="utf-8")
@@ -491,7 +491,7 @@ def test_removed_ui_files_deleted():
 
 
 
-def test_index_html_no_react_vue_vite_node_4a():
+def test_index_html_no_react_vue_vite_node():
     """no React / Vue / Vite / Node references may be introduced."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
@@ -502,7 +502,7 @@ def test_index_html_no_react_vue_vite_node_4a():
 
 
 
-def test_frontend_js_no_react_vue_vite_node_4a():
+def test_frontend_js_no_react_vue_vite_node():
     """frontend JS must not reference React / Vue / Vite / Node.
     Uses word-boundary matching to avoid false positives on substrings
     like ``navItems`` containing ``vite``."""
@@ -517,7 +517,7 @@ def test_frontend_js_no_react_vue_vite_node_4a():
 
 
 
-def test_frontend_js_correction_shell_no_external_links_3c():
+def test_frontend_js_correction_shell_no_external_links():
     """frontend JS must not reference external links / CDN
     (regression lock)."""
     source = read_all_js()
@@ -530,7 +530,7 @@ def test_frontend_js_correction_shell_no_external_links_3c():
 
 
 
-def test_frontend_js_correction_shell_no_raw_sensitive_fields_3c():
+def test_frontend_js_correction_shell_no_raw_sensitive_fields():
     """frontend JS must not render raw window_title / file_path_hint /
     full_path / clipboard fields (regression lock).
 
@@ -559,7 +559,7 @@ def test_frontend_js_correction_shell_no_raw_sensitive_fields_3c():
 
 
 
-def test_bridge_no_new_methods_for_phase_3c():
+def test_bridge_no_unexpected_methods_for_contract():
     """no new bridge methods beyond the known 21-method set
     (regression lock — same known method set)."""
     # scan all bridge mixin files.
@@ -586,11 +586,11 @@ def test_bridge_no_new_methods_for_phase_3c():
 
 
 
-def test_bridge_imports_only_allowed_modules_3c():
+def test_bridge_imports_only_allowed_modules():
     """the bridge must still only import worktrace.api and
     worktrace.formatters (regression lock)."""
     # scan all bridge mixin files.
-    # of them after the page-level split).
+    # of them after the page module mapping).
     bridge_src = read_bridge_sources_combined()
     for forbidden in ("from ..services", "from ..db",
                       "from ..collector", "from ..security",
@@ -638,7 +638,7 @@ def test_api_has_expected_timeline_methods():
 
 
 
-def test_no_new_db_schema_for_phase_3c():
+def test_no_new_db_schema_for_contract():
     """schema.sql must still define the known core tables
     (regression lock — no new DB schema)."""
     schema_src = (REPO_ROOT / "worktrace" / "schema.sql").read_text(
@@ -657,7 +657,7 @@ def test_no_new_db_schema_for_phase_3c():
 
 
 
-def test_default_webview_entry_preserved_3c():
+def test_default_webview_entry_preserved():
     """the default entry point must still delegate to
     worktrace.webview_main (regression lock — no Tkinter fallback)."""
     main_src = (REPO_ROOT / "worktrace" / "main.py").read_text(
@@ -675,7 +675,7 @@ def test_default_webview_entry_preserved_3c():
 # --- statistics --------------------------------------------------
 
 
-def test_frontend_js_statistics_loading_double_click_guard_4a1():
+def test_frontend_js_statistics_loading_double_click_guard():
     """loadStatisticsExportSummary must refuse concurrent loads
     by checking ``statisticsLoading`` before doing any work."""
     source = read_all_js()
@@ -688,7 +688,7 @@ def test_frontend_js_statistics_loading_double_click_guard_4a1():
 
 
 
-def test_frontend_js_statistics_client_side_range_validator_4a1():
+def test_frontend_js_statistics_client_side_range_validator():
     """frontend JS must have a client-side date range validator that
     catches invalid_date / invalid_range / range_too_large before calling the
     bridge."""
@@ -710,7 +710,7 @@ def test_frontend_js_statistics_client_side_range_validator_4a1():
 
 
 
-def test_frontend_js_statistics_load_uses_validator_4a1():
+def test_frontend_js_statistics_load_uses_validator():
     """loadStatisticsExportSummary must call
     validateStatisticsDateRange before calling the bridge."""
     source = read_all_js()
@@ -721,7 +721,7 @@ def test_frontend_js_statistics_load_uses_validator_4a1():
 
 
 
-def test_frontend_js_statistics_no_direct_file_write_in_module_4b():
+def test_frontend_js_statistics_no_direct_file_write_in_module():
     """the statistics module may invoke the CSV export through the
     bridge (``App.callBridge("export_statistics_csv", ...)``), but must not
     contain any direct file write / save dialog / filesystem helper. The
@@ -757,7 +757,7 @@ def test_frontend_js_statistics_no_direct_file_write_in_module_4b():
 
 
 
-def test_index_html_statistics_export_hint_csv_enabled():
+def test_index_html_statistics_export_hint_csv_enabled_contract_2():
     """The export preview area must announce that CSV is supported."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="statistics-export-preview"')
@@ -765,14 +765,14 @@ def test_index_html_statistics_export_hint_csv_enabled():
     section = source[pos:pos + 2000]
     # CSV is now supported; the hint announces it.
     assert "导出当前范围内已结束、非隐藏的活动记录为 CSV" in section
-    # The old 4A.1 read-only copy must be gone.
+    # Obsolete read-only-only copy must be absent.
     assert "本阶段不支持写出" not in section
     assert "不打开保存对话框" not in section
     assert "不打开文件夹" not in section
 
 
 
-def test_bridge_statistics_explicit_bool_rejection_comment_4a1():
+def test_bridge_statistics_explicit_bool_rejection_comment():
     """the bridge must document that bool/None/non-string inputs
     are rejected by the isinstance str check."""
     body = read_bridge_method_body("get_statistics_export_summary")
@@ -783,7 +783,7 @@ def test_bridge_statistics_explicit_bool_rejection_comment_4a1():
 
 
 
-def test_service_statistics_status_inclusion_semantics_documented_4a1():
+def test_service_statistics_status_inclusion_semantics_documented():
     """statistics_service.py must document the status inclusion
     semantics (normal/idle/paused/excluded/error all included)."""
     service_path = REPO_ROOT / "worktrace" / "services" / "statistics_service.py"
@@ -795,7 +795,7 @@ def test_service_statistics_status_inclusion_semantics_documented_4a1():
 
 
 
-def test_service_statistics_bool_input_rejected_4a1(temp_db):
+def test_service_statistics_bool_input_rejected(temp_db):
     """bool inputs must be rejected as invalid_date."""
     from worktrace.services import statistics_service
     import pytest
@@ -808,7 +808,7 @@ def test_service_statistics_bool_input_rejected_4a1(temp_db):
 
 
 
-def test_service_statistics_none_input_rejected_4a1(temp_db):
+def test_service_statistics_none_input_rejected(temp_db):
     """None inputs must be rejected as invalid_date."""
     from worktrace.services import statistics_service
     import pytest
@@ -821,7 +821,7 @@ def test_service_statistics_none_input_rejected_4a1(temp_db):
 
 
 
-def test_service_statistics_tie_breaker_stable_4a1(temp_db):
+def test_service_statistics_tie_breaker_stable(temp_db):
     """groups with equal duration must tie-break by display_name
     (casefold) so the order is stable across runs."""
     from worktrace.services import activity_service, project_service, statistics_service
@@ -858,7 +858,7 @@ def test_service_statistics_tie_breaker_stable_4a1(temp_db):
 
 
 
-def test_service_statistics_all_known_statuses_included_4a1(temp_db):
+def test_service_statistics_all_known_statuses_included(temp_db):
     """all known statuses (normal/idle/paused/excluded/error)
     must be included in the summary when closed, non-hidden, non-deleted."""
     from worktrace.services import activity_service, project_service, statistics_service
@@ -879,7 +879,7 @@ def test_service_statistics_all_known_statuses_included_4a1(temp_db):
 
 
 
-def test_api_statistics_delegates_validation_to_service_4a1(temp_db, monkeypatch):
+def test_api_statistics_delegates_validation_to_service(temp_db, monkeypatch):
     """the API layer delegates date validation to the service
     layer. If the service raises ValueError with a stable code, the API maps
     it to StatisticsSummaryError with the same code."""
@@ -897,7 +897,7 @@ def test_api_statistics_delegates_validation_to_service_4a1(temp_db, monkeypatch
 
 
 
-def test_api_statistics_unknown_value_error_collapses_to_operation_failed_4a1(
+def test_api_statistics_unknown_value_error_collapses_to_operation_failed(
     temp_db, monkeypatch
 ):
     """a ValueError without a known code token must collapse to
@@ -917,7 +917,7 @@ def test_api_statistics_unknown_value_error_collapses_to_operation_failed_4a1(
 
 
 
-def test_bridge_statistics_bool_input_rejected_4a1(temp_db):
+def test_bridge_statistics_bool_input_rejected(temp_db):
     """bool inputs must be rejected with 请选择有效日期."""
     from worktrace.services import settings_service
     from worktrace.webview_ui.bridge import WebViewBridge
@@ -934,7 +934,7 @@ def test_bridge_statistics_bool_input_rejected_4a1(temp_db):
 
 
 
-def test_bridge_statistics_none_input_rejected_4a1(temp_db):
+def test_bridge_statistics_none_input_rejected(temp_db):
     """None inputs must be rejected with 请选择有效日期."""
     from worktrace.services import settings_service
     from worktrace.webview_ui.bridge import WebViewBridge
@@ -951,7 +951,7 @@ def test_bridge_statistics_none_input_rejected_4a1(temp_db):
 
 
 
-def test_bridge_statistics_empty_string_input_rejected_4a1(temp_db):
+def test_bridge_statistics_empty_string_input_rejected(temp_db):
     """empty string inputs must be rejected with 请选择有效日期."""
     from worktrace.services import settings_service
     from worktrace.webview_ui.bridge import WebViewBridge
@@ -968,7 +968,7 @@ def test_bridge_statistics_empty_string_input_rejected_4a1(temp_db):
 
 
 
-def test_schema_sql_unchanged_4a1():
+def test_schema_sql_unchanged_contract_2():
     """no DB schema changes."""
     schema_path = REPO_ROOT / "worktrace" / "schema.sql"
     source = schema_path.read_text(encoding="utf-8")
@@ -992,7 +992,7 @@ def test_removed_ui_files_deleted_duplicate_lock():
 # --- statistics ----------------------------------------------------
 
 
-def test_frontend_js_statistics_export_calls_bridge_export_statistics_csv_4b():
+def test_frontend_js_statistics_export_calls_bridge_export_statistics_csv():
     """frontend JS must call the bridge ``export_statistics_csv``
     method to perform the CSV write. The frontend never writes a file
     itself; it only invokes the bridge."""
@@ -1003,7 +1003,7 @@ def test_frontend_js_statistics_export_calls_bridge_export_statistics_csv_4b():
 
 
 
-def test_frontend_js_statistics_export_saving_guard_present_4b():
+def test_frontend_js_statistics_export_saving_guard_present():
     """frontend JS must define a separate ``statisticsExportSaving``
     guard so the CSV write cannot be double-triggered or overlap a
     statistics load. The guard must NOT reuse ``statisticsLoading``."""
@@ -1034,7 +1034,7 @@ def test_frontend_js_statistics_export_saving_guard_present_4b():
 
 
 
-def test_frontend_js_statistics_export_uses_validate_statistics_date_range_4b():
+def test_frontend_js_statistics_export_uses_validate_statistics_date_range():
     """exportStatisticsCsv must call
     validateStatisticsDateRange before calling the bridge, so the user
     gets an immediate clear message without a bridge round-trip."""
@@ -1048,7 +1048,7 @@ def test_frontend_js_statistics_export_uses_validate_statistics_date_range_4b():
 
 
 
-def test_frontend_js_statistics_export_catch_never_surfaces_raw_exception_4b():
+def test_frontend_js_statistics_export_catch_never_surfaces_raw_exception():
     """the exportStatisticsCsv promise catch must collapse to
     a stable Chinese message and never read raw exception text."""
     source = read_all_js()
@@ -1077,7 +1077,7 @@ def test_frontend_js_statistics_export_catch_never_surfaces_raw_exception_4b():
 
 
 
-def test_frontend_js_statistics_export_cancel_is_clean_result_4b():
+def test_frontend_js_statistics_export_cancel_is_clean_result():
     """a cancelled export must be handled as a clean info
     result (``已取消导出``), not as a Python exception or ``导出失败``."""
     source = read_all_js()
@@ -1093,7 +1093,7 @@ def test_frontend_js_statistics_export_cancel_is_clean_result_4b():
 
 
 
-def test_frontend_js_statistics_export_success_shows_filename_count_duration_4b():
+def test_frontend_js_statistics_export_success_shows_filename_count_duration():
     """a successful export must surface the basename, activity
     count, and total duration — never the full local path."""
     source = read_all_js()
@@ -1117,7 +1117,7 @@ def test_frontend_js_statistics_export_success_shows_filename_count_duration_4b(
 
 
 
-def test_frontend_js_no_export_excel_pdf_timesheet_open_folder_methods_4b():
+def test_frontend_js_no_export_excel_pdf_timesheet_open_folder_methods():
     """frontend JS must not define any export_excel / export_pdf /
     export_timesheet / open_folder / auto-submit methods."""
     source = read_all_js()
@@ -1145,11 +1145,11 @@ def test_frontend_js_no_export_excel_pdf_timesheet_open_folder_methods_4b():
 
 
 
-def test_bridge_export_statistics_csv_method_present_4b():
+def test_bridge_export_statistics_csv_method_present():
     """bridge.py must define ``export_statistics_csv`` (the
     controlled write path for the CSV export)."""
     # the method body lives in bridge_statistics.py.
-    # bridge_statistics.py after the page-level split).
+    # bridge_statistics.py after the page module mapping).
     source = read_bridge_sources_combined()
     assert "def export_statistics_csv" in source, (
         "bridge.py must define export_statistics_csv"
@@ -1169,7 +1169,7 @@ def test_bridge_export_statistics_csv_method_present_4b():
 
 
 
-def test_bridge_set_window_method_present_4b():
+def test_bridge_set_window_method_present():
     """bridge.py must define ``set_window`` so webview_main.py
     can inject the pywebview window for the native save dialog."""
     # ``set_window`` is still defined on the composition
@@ -1196,7 +1196,7 @@ def test_bridge_set_window_method_present_4b():
 
 
 
-def test_bridge_export_statistics_csv_returns_basename_only_4b():
+def test_bridge_export_statistics_csv_returns_basename_only():
     """the docstring of export_statistics_csv must state that
     only the basename is returned (never the full local path)."""
     # method body lives in bridge_statistics.py.
@@ -1214,7 +1214,7 @@ def test_bridge_export_statistics_csv_returns_basename_only_4b():
 
 
 
-def test_webview_main_injects_window_into_bridge_4b():
+def test_webview_main_injects_window_into_bridge():
     """webview_main.py must call bridge.set_window(window) so
     the bridge can open the native save dialog for the CSV export."""
     source = (REPO_ROOT / "worktrace" / "webview_main.py").read_text(
@@ -1238,7 +1238,7 @@ def test_webview_main_injects_window_into_bridge_4b():
 
 
 
-def test_index_html_statistics_export_status_element_present_4b():
+def test_index_html_statistics_export_status_element_present():
     """index.html must contain a dedicated export status
     element (``stats-export-status``) so the frontend can surface
     export progress / success / cancel / error without alert()."""
@@ -1249,7 +1249,7 @@ def test_index_html_statistics_export_status_element_present_4b():
 
 
 
-def test_styles_css_statistics_export_status_classes_4b():
+def test_styles_css_statistics_export_status_classes():
     """styles.css must define the export status base class and
     the info / success / error variants."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
@@ -1260,7 +1260,7 @@ def test_styles_css_statistics_export_status_classes_4b():
 
 
 
-def test_frontend_js_statistics_export_no_local_storage_session_storage_4b():
+def test_frontend_js_statistics_export_no_local_storage_session_storage():
     """the export action must not use localStorage or
     sessionStorage (regression lock for the new write path)."""
     source = read_all_js()
@@ -1275,7 +1275,7 @@ def test_frontend_js_statistics_export_no_local_storage_session_storage_4b():
 
 
 
-def test_index_html_statistics_export_no_external_links_4b():
+def test_index_html_statistics_export_no_external_links():
     """the statistics export section must not reference any
     external link / CDN / Google Fonts (regression lock)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -1317,7 +1317,7 @@ def test_no_stale_app_js_must_wording_in_this_file():
 # cross-disable the other's button so a load and a write can never overlap.
 
 
-def test_frontend_js_statistics_load_and_export_use_independent_state_4b1():
+def test_frontend_js_statistics_load_and_export_use_independent_state():
     """``statisticsLoading`` and ``statisticsExportSaving`` must
     be declared as distinct boolean state variables (not aliases of each
     other). The load function guards on ``statisticsLoading`` and the export
@@ -1353,7 +1353,7 @@ def test_frontend_js_statistics_load_and_export_use_independent_state_4b1():
     )
 
 
-def test_frontend_js_statistics_export_disables_both_buttons_4b1():
+def test_frontend_js_statistics_export_disables_both_buttons():
     """``setStatisticsExportSaving`` must disable BOTH the
     export button and the statistics load button while a write is in
     flight, so the user cannot trigger a concurrent load."""
@@ -1374,7 +1374,7 @@ def test_frontend_js_statistics_export_disables_both_buttons_4b1():
     )
 
 
-def test_frontend_js_statistics_load_disables_export_button_4b1():
+def test_frontend_js_statistics_load_disables_export_button():
     """``setStatisticsLoading`` must disable the export button
     while statistics are loading, so a write cannot be triggered mid-load."""
     source = read_js("statistics.js")

@@ -47,7 +47,7 @@ def _read(path: Path) -> str:
 def test_spec_bundles_webview_ui_static_resources():
     """the spec must bundle index.html, styles.css, and every
     ``js/`` module listed in ``static_helpers.ALL_JS_FILES`` (the single
-    source of truth). app.js must no longer be
+    source of truth). frontend JS must no longer be
     referenced since the file was removed."""
     spec = _read(SPEC_PATH)
     for name in ("index.html", "styles.css"):
@@ -55,9 +55,9 @@ def test_spec_bundles_webview_ui_static_resources():
     # every JS module in ALL_JS_FILES must be bundled.
     for name in ALL_JS_FILES:
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/js/{name}"
-    # The removed app.js must no longer be referenced.
+    # The removed frontend JS must no longer be referenced.
     assert "app.js" not in spec, (
-        "WorkTrace.spec must not reference the removed app.js"
+        "WorkTrace.spec must not reference the removed monolithic frontend bundle"
     )
 
 

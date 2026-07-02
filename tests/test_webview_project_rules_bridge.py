@@ -4622,7 +4622,7 @@ def test_preview_and_backfill_do_not_cross_call_other_project_rules_apis(monkeyp
     def make_forbidden(name: str):
         def _fail(*args, **kwargs):
             forbidden_calls.append(name)
-            raise AssertionError(name + " must not be called by 5H paths")
+            raise AssertionError(name + " must not be called by single-rule operation paths")
 
         return _fail
 
@@ -4707,7 +4707,7 @@ def test_preview_and_backfill_payloads_are_json_serializable(monkeypatch):
 
 
 def test_bridge_rules_5h_message_maps_are_stable_chinese():
-    # Regression lock: the 5H message maps owned by
+    # Regression lock: the single-rule message maps owned by
     # ``bridge_rules`` must remain stable Chinese so impact preview and
     # backfill error codes map to the documented messages.
     from worktrace.webview_ui.bridge_rules import (

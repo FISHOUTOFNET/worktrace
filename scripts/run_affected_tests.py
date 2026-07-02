@@ -149,7 +149,7 @@ RULES: list[dict] = [
             "tests/test_webview_bridge_statistics.py",
             "tests/test_statistics_csv_export.py",
             "tests/test_settings_privacy_status.py",
-            "tests/test_webview_phase1_entry.py",
+            "tests/test_webview_entry.py",
             "tests/test_app_runtime_privacy_gate.py",
             "tests/test_ui_backend_boundary.py",
             "tests/test_bridge_refresh_state_and_projection.py",
@@ -475,7 +475,7 @@ RULES: list[dict] = [
         "tests": [
             "tests/test_settings_privacy_status.py",
             "tests/webview/test_settings_static_contract.py",
-            "tests/test_webview_phase1_entry.py",
+            "tests/test_webview_entry.py",
             "tests/test_app_runtime_privacy_gate.py",
             "tests/test_ui_backend_boundary.py",
             "tests/webview/test_frontend_global_boundaries.py",
@@ -496,7 +496,7 @@ RULES: list[dict] = [
             "worktrace/runtime/app_runtime.py",
         ],
         "tests": [
-            "tests/test_webview_phase1_entry.py",
+            "tests/test_webview_entry.py",
             "tests/test_startup_imports.py",
             "tests/test_ui_backend_boundary.py",
             "tests/test_settings_privacy_status.py",

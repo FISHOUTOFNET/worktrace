@@ -1593,7 +1593,7 @@ body {
 
 /* Transient highlight applied on top of .shell-target
    right after a click-to-locate, giving immediate visual feedback. It is
-   removed automatically by a single tracked timer in app.js; .shell-target
+   removed automatically by a single tracked timer in frontend JS; .shell-target
    remains as the persistent locator. Noticeable but not harsh. */
 .detail-item.detail-item-highlight {
     border-color: #f59e0b;

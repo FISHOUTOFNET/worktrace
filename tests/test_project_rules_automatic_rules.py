@@ -22,7 +22,7 @@ Locked behavior:
 - Activity already on the target project is not re-written.
 - Multi-rule deterministic priority: folder rules before keyword rules;
   within each kind, ``created_at, id`` ascending; first match wins and no
-  later rule overwrites it.
+  later matching rules are ignored.
 - No DB schema change (no new table / column / migration).
 - The bridge ``automatic_rules_status`` payload is display-safe (no raw
   ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard / note /
@@ -157,7 +157,7 @@ def _schema_sql_text() -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_rule_automation_service_confidence_constants_match_5h(temp_db):
+def test_rule_automation_service_confidence_constants_match_inference_contract(temp_db):
     # the automatic-rules confidence must match the single-rule
     # backfill confidence so there is a single inference
     # contract across automatic + manual + batch paths.
@@ -549,7 +549,7 @@ def test_keyword_rule_fields_correct(temp_db):
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "worktrace" / "schema.sql"
 
 
-def test_no_schema_change_phase_5i(temp_db):
+def test_no_schema_change_for_automatic_rules(temp_db):
     # must not modify schema.sql. The file's content is the
     # single source of truth for the DB structure and must not gain new
     # tables or columns. This test asserts the file is unchanged by

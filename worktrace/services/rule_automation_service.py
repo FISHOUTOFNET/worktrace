@@ -1,14 +1,9 @@
-"""Automatic Project Rules application foundation.
+"""Thin facade for automatic Project Rules application.
 
-This module is the **named, documented entry point** for the automatic
-application of enabled folder / keyword Project Rules to new eligible
-activities. It does NOT re-implement matching or inference: the real work
-lives in :mod:`worktrace.services.project_inference_service`, which the
-collector / activity_service hook (``finalize_created_activity`` ->
-``process_new_activity`` -> ``assign_project_for_activity``) calls
-when an activity is persisted.
-the supported automatic-rules contract and ships regression locks + docs
-rather than a second divergent matcher.
+This module is the named entry point for applying enabled folder / keyword
+Project Rules to newly persisted eligible activities. It delegates matching
+and inference to :mod:`worktrace.services.project_inference_service` through
+``process_new_activity`` instead of maintaining a second matcher.
 
 Why a thin facade (and not a re-implementation)?
 
@@ -20,14 +15,12 @@ Why a thin facade (and not a re-implementation)?
   matcher to maintain.
 - It already implements the deterministic priority: folder rules before
   keyword rules; within each kind, rules are read in ``created_at, id``
-  order (stable). The first match wins and no later rule overwrites it.
-  rule overwrites it.
+  order (stable). The first match wins and later matching rules are ignored.
 - It already skips ``manual_override = 1`` / ``is_manual = 1`` activities
   and non-normal activities, never sets ``manual_override = 1``, writes
   ``auto_classified = 1`` for ``folder_rule`` / ``keyword_rule`` sources,
   and upserts the assignment with ``is_manual = 0``, the rule source, and
   the inference confidence (85 folder / 80 keyword).
-  5H single-rule backfill contract.
 - The enabled-rule / available-project gating is already enforced by the
   read paths: ``_enabled_keyword_rules`` filters on
   ``pr.enabled = 1 AND p.enabled = 1 AND p.name <> EXCLUDED_PROJECT``;
@@ -70,7 +63,7 @@ KEYWORD_RULE_SOURCE = "keyword_rule"
 # kind, ``project_inference_service._enabled_keyword_rules`` orders by
 # ``created_at, id`` and ``folder_rule_service.find_matching_folder_rule``
 # returns the first match in its own stable order. The first matching rule
-# wins and no later rule overwrites it.
+# wins and later matching rules are ignored.
 AUTOMATIC_RULE_PRIORITY = (FOLDER_RULE_SOURCE, KEYWORD_RULE_SOURCE)
 
 
@@ -80,7 +73,6 @@ def apply_automatic_rules_to_activity(activity_id: int) -> dict[str, Any]:
     Thin, documented delegation to
     ``project_inference_service.process_new_activity`` (the automatic-rules
     entry point). The automatic path applies narrow skip guards for hidden /
-    facade. The automatic path applies narrow skip guards for hidden /
     deleted / in-progress activities before delegating to
     ``assign_project_for_activity``; the inference itself reuses the
     single folder / keyword matching code paths, skips

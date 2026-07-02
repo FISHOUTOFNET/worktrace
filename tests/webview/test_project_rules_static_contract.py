@@ -103,9 +103,9 @@ def test_project_rules_required_dom_ids_exist():
         assert 'id="' + dom_id + '"' in section
 
 
-def test_project_rules_phase_5b_boundary_copy_present():
+def test_project_rules_boundary_copy_lists_supported_capabilities():
     section = _rules_section()
-    # Boundary copy: the boundary copy now mentions project lifecycle
+    # Boundary copy: the boundary copy mentions project lifecycle
     # (create/edit/enable-disable/archive) and single-rule impact preview +
     # apply-to-history as supported capabilities alongside the existing
     # folder/keyword rule CRUD and batch operations.
@@ -2094,7 +2094,7 @@ def test_project_rules_folder_delete_js_deleting_state_clears_on_all_paths():
     assert cleanup_pos != -1
 
 
-def test_project_rules_folder_delete_js_does_not_call_keyword_delete():
+def test_project_rules_folder_delete_js_does_not_call_keyword_delete_contract_2():
     source = read_rules_module_js()
     delete_body = func_body(source, "handleFolderDelete")
     assert 'callBridge("delete_project_keyword_rule"' not in delete_body
@@ -3827,7 +3827,7 @@ def test_project_rules_project_lifecycle_packaging_spec_unchanged():
 
 
 def test_project_rules_project_lifecycle_no_app_js_reintroduced():
-    # Regression lock: app.js must not be reintroduced in
+    # Regression lock: frontend JS must not be reintroduced in
     # index.html. The project lifecycle code lives in rules.js and
     # rules_project_actions.js only (mixin split).
     source = read_resource("index.html")
@@ -4121,7 +4121,7 @@ def test_project_rules_mc2_state_keys_unchanged():
 
 
 def test_project_rules_mc2_no_app_js_reintroduced():
-    # Regression lock: the removed app.js must not be reintroduced.
+    # Regression lock: the removed frontend JS must not be reintroduced.
     # be reintroduced by the split.
     source = read_resource("index.html")
     assert "app.js" not in source

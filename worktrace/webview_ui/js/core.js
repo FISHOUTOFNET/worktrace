@@ -213,34 +213,21 @@
     App.rulesArchivingProjectId = null; // project id being archived (int or null)
 
     // Rule impact preview + safe single-rule backfill state.
-    // ``rulesPreviewingImpactKey``: rule whose preview is loading.
-    // ``rulesBackfillingRuleKey``: rule being applied.
-    // ``rulesImpactPreviewKey``: rule whose preview is rendered (null = none).
+    // ``rulesPreviewingImpactKey``: preview key currently loading.
+    // ``rulesBackfillingRuleKey``: backfill key currently being applied.
+    // ``rulesImpactPreviewKey``: rendered preview key (null = no preview).
     // ``rulesImpactPreviewData``: cached preview payload for re-render.
-    // the "<kind>:<id>" key of the rule whose preview is loading;
-    // ``rulesBackfillingRuleKey`` carries the key of the rule being applied;
-    // ``rulesImpactPreviewKey`` is the key of the rule whose preview is
-    // currently rendered (null = no preview shown);
-    // ``rulesImpactPreviewData`` caches the last preview payload so the
-    // panel can be re-rendered from cache without a round-trip.
     App.rulesPreviewingImpactKey = null;
     App.rulesBackfillingRuleKey = null;
     App.rulesImpactPreviewKey = null;
     App.rulesImpactPreviewData = null;
 
     // Selected-rule batch operations state.
-    // ``rulesBatchSelectedKeys``: object map of "<kind>:<id>" -> true kept
-    // in JS memory only. ``rulesBatchInFlight``: true while any batch
-    // lifecycle, 5H single-rule preview / backfill) so batch operations
-    // can never pollute any other write button / input disabled state.
-    // ``rulesBatchSelectedKeys`` is an object map of selected rule keys
-    // ("<kind>:<id>" -> true) kept in JS memory only (no browser storage
-    // APIs). ``rulesBatchInFlight`` is true while any batch
-    // operation (preview / apply / enable / disable) is running; while
-    // true, every batch button AND every per-rule write button is disabled.
+    // ``rulesBatchSelectedKeys``: selected rule keys kept in JS memory only.
+    // ``rulesBatchInFlight``: true while preview / apply / enable / disable
+    // batch work is running; while true, batch and per-rule write controls
+    // are disabled.
     // ``rulesBatchPanelData``: cached batch panel payload for re-render.
-    // ({mode: "preview"|"apply"|"toggle", payload: {...}} | null) so the
-    // panel can be re-rendered from cache without a round-trip.
     App.rulesBatchSelectedKeys = {};
     App.rulesBatchInFlight = false;
     App.rulesBatchPanelData = null;

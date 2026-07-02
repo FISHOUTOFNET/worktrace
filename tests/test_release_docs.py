@@ -237,7 +237,7 @@ def test_readme_points_to_current_state():
 def test_readme_points_to_history():
     readme = _read_text(README_PATH)
     assert "docs/history/webview-phases.md" in readme, (
-        "README must point to docs/history/webview-phases.md for phase history"
+        "README must point to docs/history/webview-phases.md for history archive"
     )
 
 
@@ -249,7 +249,7 @@ def test_readme_points_to_ai_context_guide():
 
 
 @pytest.mark.parametrize(
-    "phase_label",
+    "chronology_label",
     [
         "5B.1",
         "5C.1",
@@ -257,11 +257,11 @@ def test_readme_points_to_ai_context_guide():
         "5E.1",
     ],
 )
-def test_readme_does_not_contain_project_rules_phase_chronology(phase_label):
-    """README must not carry long Project Rules phase-by-phase chronology."""
+def test_readme_does_not_contain_project_rules_chronology(chronology_label):
+    """README must not carry long Project Rules project chronology."""
     readme = _read_text(README_PATH)
-    assert phase_label not in readme, (
-        f"README must not contain per-phase Project Rules chronology: {phase_label}"
+    assert chronology_label not in readme, (
+        f"README must not contain Project Rules chronology: {chronology_label}"
     )
 
 
@@ -281,12 +281,12 @@ def test_current_state_line_count_under_hard_max():
 
 def test_current_state_documents_project_rules_lifecycle():
     """Post-WebView-migration: current-state.md no longer carries UI
-    migration phase labels. Instead it must document the
+    migration milestone labels. Instead it must document the
     shipped capability — user project create / edit / enable-disable /
-    archive — which is what the old phase label was a proxy for."""
+    archive — which is what the old milestone label was a proxy for."""
     text = _read_text(CURRENT_STATE_PATH)
     assert "automatic rules" not in text, (
-        "current-state.md must not carry UI migration phase labels "
+        "current-state.md must not carry UI migration milestone labels "
         "(post-migration governance)"
     )
     assert "user project create / edit / enable-disable / archive" in text, (
@@ -353,7 +353,7 @@ def test_ui_webview_migration_points_to_current_state_and_history():
     )
 
 
-def test_ui_webview_migration_status_section_has_no_phase_5g_facades():
+def test_ui_webview_migration_status_section_has_no_stale_facades():
     """The Status section must not carry detailed API facade names."""
     text = _read_text(MIGRATION_PATH)
     status_section = text.split("## Status", 1)[1].split("## ", 1)[0]
@@ -487,7 +487,7 @@ def test_current_state_remains_under_one_screen_hard_max_after_dg1_1():
     )
 
 
-def test_current_state_phase_description_is_unambiguous_after_dg1_1():
+def test_current_state_description_is_unambiguous():
     """The description must use unambiguous wording that lists
     user project create / edit / enable-disable / archive as distinct
     capabilities — not the old "on existing user projects" form that could
