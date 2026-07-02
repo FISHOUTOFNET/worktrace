@@ -1,4 +1,4 @@
-"""Phase 5H: rule impact preview + safe single-rule backfill service/API tests.
+"""rule impact preview + safe single-rule backfill service/API tests.
 
 Covers ``worktrace.services.rule_impact_service`` and the stable
 ``worktrace.api.rule_api.preview_project_rule_impact`` /
@@ -67,7 +67,7 @@ def _create_closed_activity(
         project_id=project_id,
     )
     # Set end_time directly via SQL instead of calling ``close_activity``.
-    # Phase 5I.1 made ``close_activity`` re-trigger ``process_new_activity``
+    # made ``close_activity`` re-trigger ``process_new_activity``
     # so automatic rules apply to just-closed activities. The rule-impact
     # tests need a closed-but-unassigned activity so they can verify
     # preview / backfill behaviour from a clean state. Bypassing
@@ -943,7 +943,6 @@ def test_existing_rule_toggle_still_works(temp_db):
 
 
 def test_existing_project_lifecycle_still_works(temp_db):
-    result = rule_api.create_project_keyword_rule  # placeholder
     from worktrace.api import project_api
     create_result = project_api.create_project_for_rules("LifecycleTest", "desc")
     assert create_result["ok"] is True

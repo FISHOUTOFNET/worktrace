@@ -1,6 +1,6 @@
-"""Encrypted local backup export/import service for WorkTrace v0.2 Phase 1B.
+"""Encrypted local backup export/import service.
 
-This service bridges the Phase 1A ``worktrace.security.backup_format`` crypto
+This service bridges the ``worktrace.security.backup_format`` crypto
 container with the real WorkTrace SQLite database. It produces a UTF-8 JSON
 payload of the user-migratable tables, encrypts it into a ``.wtbackup`` file,
 and restores it back into the local database.
@@ -185,7 +185,7 @@ def import_encrypted_backup(
 ) -> ImportResult:
     """Import an encrypted ``.wtbackup`` file into the current local database.
 
-    Phase 1B supports only ``mode="replace"``. The import runs inside a
+    Only ``mode="replace"`` is supported. The import runs inside a
     ``secure_import_guard`` that pauses the collector and blocks collector
     writes for the duration of the DB replacement. Decryption and payload
     validation happen inside the guard so that, even on failure, the collector

@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.4 Timeline hide / soft-delete bridge methods.
+"""Tests for the Timeline hide / soft-delete bridge methods.
 
 Covers ``WebViewBridge.hide_timeline_activity``,
 ``soft_delete_timeline_activity``, ``hide_timeline_session``, and
@@ -513,7 +513,7 @@ def test_soft_delete_timeline_session_multi_activity_error_has_no_raw_fields(bri
     assert "winword" not in payload_str.lower()
 
 
-# --- Phase 3B.4.1 bridge-layer hardening ---------------------------------
+# --- bridge-layer hardening ---------------------------------
 
 
 def test_hide_timeline_session_multi_activity_does_not_call_api(bridge):

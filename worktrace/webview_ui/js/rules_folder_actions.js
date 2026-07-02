@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend - Project Rules folder actions (Phase 5E, MC2 split).
+// WorkTrace WebView frontend - Project Rules folder actions.
 // Folder rule create / edit / delete.
 // Loaded after rules_keyword_actions.js, before project lifecycle actions.
 
@@ -6,10 +6,10 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Phase 5E: folder rule create ----------------------------------
+    // --- folder rule create ----------------------------------
 
     function populateFolderCreateProjectSelector(projects) {
-        // Phase 5E: populate the folder-create project selector from the
+        // populate the folder-create project selector from the
         // freshly loaded Project Rules data. Only enabled, non-excluded
         // projects with a positive id are valid targets — this mirrors the
         // ``project_api.list_rule_target_projects()`` eligibility rule the
@@ -64,7 +64,7 @@
     App.populateFolderCreateProjectSelector = populateFolderCreateProjectSelector;
 
     function handleFolderCreateSubmit() {
-        // Phase 5E: validate project id + folder_path locally, then call the
+        // validate project id + folder_path locally, then call the
         // bridge. Only one folder create may be in flight at a time. The
         // folder_path is trimmed before validation and before the bridge
         // call. On success the folder_path input is cleared and the Project
@@ -108,12 +108,12 @@
     App.handleFolderCreateSubmit = handleFolderCreateSubmit;
 
     function setFolderCreateCreating(creating) {
-        // Phase 5E: toggle the folder create saving state. The state is
-        // intentionally separate from ``rulesSavingRuleKey`` (Phase 5B
-        // toggle saving), ``rulesCreatingKeyword`` (Phase 5C keyword
-        // create), and ``rulesDeletingRuleKey`` (Phase 5D keyword delete)
-        // so the four write paths can never pollute each other's button /
-        // input disabled state.
+        // toggle the folder create saving state. The state is
+        // intentionally separate from ``rulesSavingRuleKey`` (toggle
+        // saving), ``rulesCreatingKeyword`` (keyword create), and
+        // ``rulesDeletingRuleKey`` (keyword delete) so the four write
+        // paths can never pollute each other's button / input disabled
+        // state.
         App.rulesCreatingFolder = creating;
         var btn = document.getElementById("rules-folder-create-submit");
         var input = document.getElementById("rules-folder-create-input");
@@ -149,10 +149,10 @@
     }
     App.clearFolderCreateStatus = clearFolderCreateStatus;
 
-    // --- Phase 5E: folder rule edit / delete (event delegation) --------
+    // --- folder rule edit / delete (event delegation) --------
 
     function bindProjectRuleFolderEvents() {
-        // Phase 5E: event-delegated binding for folder edit / delete /
+        // event-delegated binding for folder edit / delete /
         // edit-save / edit-cancel. Re-uses the same #rules-list container
         // as the toggle and keyword delete bindings so no extra per-row
         // listeners are needed. Bound once per page lifecycle via the data
@@ -165,7 +165,7 @@
     App.bindProjectRuleFolderEvents = bindProjectRuleFolderEvents;
 
     function handleProjectRuleFolderEvent(event) {
-        // Phase 5E: single delegated click handler for all folder write
+        // single delegated click handler for all folder write
         // operations (edit start, edit save, edit cancel, delete). Routes
         // to the matching sub-handler based on the button class. The catch
         // path never reads .message.
@@ -191,7 +191,7 @@
     App.handleProjectRuleFolderEvent = handleProjectRuleFolderEvent;
 
     function handleFolderEditStart(button) {
-        // Phase 5E: enter inline edit mode for one folder rule row. Only
+        // enter inline edit mode for one folder rule row. Only
         // one folder edit may be in flight at a time. Setting the editing
         // key triggers a re-render of that row into the edit form.
         if (App.rulesEditingFolderKey) return;
@@ -213,7 +213,7 @@
     App.handleFolderEditStart = handleFolderEditStart;
 
     function handleFolderEditSave(button) {
-        // Phase 5E: save the inline folder edit. Validates the edited
+        // save the inline folder edit. Validates the edited
         // folder_path locally, then calls the bridge. On success the
         // editing state clears and the Project Rules list refreshes; on
         // failure the editing form is preserved so the user can retry.
@@ -262,7 +262,7 @@
     App.handleFolderEditSave = handleFolderEditSave;
 
     function handleFolderEditCancel(button) {
-        // Phase 5E: cancel the inline folder edit. Just clears the editing
+        // cancel the inline folder edit. Just clears the editing
         // state and re-renders. No bridge call is made.
         if (!App.rulesEditingFolderKey) return;
         App.setFolderEditing(null);
@@ -271,7 +271,7 @@
     App.handleFolderEditCancel = handleFolderEditCancel;
 
     function handleFolderDelete(button) {
-        // Phase 5E: delete one existing folder rule. Confirms first, then
+        // delete one existing folder rule. Confirms first, then
         // validates the dataset rule id locally before calling the bridge.
         // Only one folder delete may be in flight at a time. The deleting
         // state is intentionally separate from the other four write paths
@@ -312,7 +312,7 @@
     App.handleFolderDelete = handleFolderDelete;
 
     function setFolderEditing(folderKey) {
-        // Phase 5E: enter / leave inline edit mode for one folder rule row.
+        // enter / leave inline edit mode for one folder rule row.
         // Setting the key triggers a full re-render via loadProjectRules
         // is NOT called here (that would lose the input focus); instead
         // the caller relies on the next render cycle (e.g. after a
@@ -324,7 +324,7 @@
     App.setFolderEditing = setFolderEditing;
 
     function setFolderSaving(saving) {
-        // Phase 5E: toggle the in-flight state for a folder edit save. This
+        // toggle the in-flight state for a folder edit save. This
         // flips the save / cancel button disabled state on the edit form
         // so the user cannot double-submit. State is separate from the
         // editing key (which stays set until success clears it).
@@ -342,7 +342,7 @@
     App.setFolderSaving = setFolderSaving;
 
     function setFolderDeleting(folderKey) {
-        // Phase 5E: toggle the folder delete saving state. Updates every
+        // toggle the folder delete saving state. Updates every
         // folder delete / edit button label / disabled state and the
         // matching toggle button disabled state on the same row so the
         // write paths cannot run concurrently on one row.
@@ -372,10 +372,10 @@
     }
     App.setFolderDeleting = setFolderDeleting;
 
-    // --- Phase 6G: excluded folder rule creation -----------------------
+    // --- excluded folder rule creation -----------------------
 
     function bindExcludedFolderRuleEvents() {
-        // Phase 6G: event-delegated binding for the excluded folder create
+        // event-delegated binding for the excluded folder create
         // submit button. Bound once per page lifecycle via the data
         // attribute guard, re-using the same #rules-list container as the
         // other rule event delegations.
@@ -393,7 +393,7 @@
     App.bindExcludedFolderRuleEvents = bindExcludedFolderRuleEvents;
 
     function handleExcludedFolderCreateSubmit() {
-        // Phase 6G: validate the excluded folder_path + recursive locally,
+        // validate the excluded folder_path + recursive locally,
         // then call the dedicated ``create_excluded_folder_rule`` bridge
         // method. This method does NOT pass a project_id — the API pins it
         // to EXCLUDED_PROJECT internally. Reuses ``rulesCreatingFolder`` as

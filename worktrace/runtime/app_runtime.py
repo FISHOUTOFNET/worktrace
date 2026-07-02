@@ -1,7 +1,7 @@
 """Process-level application runtime.
 
 Encapsulates the collector thread, folder-index worker, stop event, single
-instance lock, and recovery logic that previously lived inline in ``main.py``.
+instance lock, and recovery logic.
 ``main.py`` now only creates an ``AppRuntime``, initializes it, runs the UI
 main loop, and shuts it down.
 
@@ -76,13 +76,13 @@ class AppRuntime:
         """Initialize the database, acquire single-instance lock, and recover
         unclosed records.
 
-        Phase 6G privacy gate: ``initialize`` only does non-collection
-        startup work (DB init, single-instance lock, recovery). It must
-        NOT start the folder index worker because the worker probes
-        local ``os.path.exists(file_path)`` paths for ready indexes,
-        which is privacy-relevant local path probing. The worker is
-        started separately via ``start_background_workers`` only after
-        the first-run privacy notice has been accepted.
+        Privacy gate: ``initialize`` only does non-collection startup work
+        (DB init, single-instance lock, recovery). It must NOT start the
+        folder index worker because the worker probes local
+        ``os.path.exists(file_path)`` paths for ready indexes, which is
+        privacy-relevant local path probing. The worker is started
+        separately via ``start_background_workers`` only after the
+        first-run privacy notice has been accepted.
         """
         db.initialize_database(self.paths.db_path)
 
@@ -103,7 +103,7 @@ class AppRuntime:
         does not own the collector (no-op). Idempotent: repeated calls
         do not spawn duplicate workers.
 
-        Phase 6G privacy gate: callers (``webview_main.main``,
+        Privacy gate: callers (``webview_main.main``,
         ``bridge.toggle_pause``, ``bridge.accept_first_run_notice``)
         must only invoke this after the first-run privacy notice has
         been accepted. The worker's ``validate_ready_indexes`` startup

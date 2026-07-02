@@ -1,7 +1,7 @@
-"""Phase 5C API / service regression locks for keyword rule creation.
+"""API / service regression locks for keyword rule creation.
 
-These tests lock the narrow ``rule_api.create_project_keyword_rule`` facade
-introduced in Phase 5C. They cover valid creation, input validation,
+These tests lock the narrow ``rule_api.create_project_keyword_rule`` facade.
+They cover valid creation, input validation,
 duplicate rejection, project-eligibility rejection, exception collapse,
 no-side-effect guarantees (no folder rule / project / activity / assignment
 / session-note rows touched, no conflict preview / backfill invoked), cache
@@ -78,7 +78,7 @@ def test_create_keyword_rule_for_normal_project(temp_db):
 
 
 def test_create_keyword_rule_for_excluded_project_rejected_as_project_not_found(temp_db):
-    # Phase 5C regression lock: the special local ``排除规则`` project is
+    # Regression lock: the special local ``排除规则`` project is
     # created with ``enabled = 0`` and is therefore NOT a rule target per
     # ``project_api.list_rule_target_projects()``. The API must reject it as
     # ``project_not_found`` rather than bypassing the service eligibility
@@ -147,7 +147,7 @@ def test_create_keyword_rule_rejects_zero_and_negative_project_id(temp_db, bad_i
 
 @pytest.mark.parametrize("bad_id", [None, [], {}, (), {1, 2}, (1,), frozenset({1})])
 def test_create_keyword_rule_rejects_other_invalid_project_id_types(temp_db, bad_id):
-    # Phase 5C.1 regression lock: container types (list / dict / tuple / set /
+    # Regression lock: container types (list / dict / tuple / set /
     # frozenset) all collapse to ``invalid_input`` via the ``type(...) is not
     # int`` guard before reaching the service layer.
     result = rule_api.create_project_keyword_rule(bad_id, "Spec")
@@ -172,7 +172,7 @@ def test_create_keyword_rule_rejects_bool_keyword(temp_db, bad_keyword):
 
 @pytest.mark.parametrize("bad_keyword", [1, 1.0, 2.5, [], {}, (), {1, 2}, (1,), frozenset({1})])
 def test_create_keyword_rule_rejects_non_string_keyword(temp_db, bad_keyword):
-    # Phase 5C.1 regression lock: container types (list / dict / tuple / set /
+    # Regression lock: container types (list / dict / tuple / set /
     # frozenset) all collapse to ``invalid_input`` via the ``type(...) is not
     # str`` guard.
     project = project_service.create_project("Client")
@@ -205,7 +205,7 @@ def test_create_keyword_rule_trims_keyword_before_create(temp_db):
 
 
 def test_create_keyword_rule_html_script_keyword_saved_as_plain_text(temp_db):
-    # Phase 5C.1 regression lock: HTML / script-like content in the keyword
+    # Regression lock: HTML / script-like content in the keyword
     # must not cause the API or bridge to leak an exception. The API saves
     # the keyword as ordinary plain text; frontend rendering is responsible
     # for escaping (locked by the static-contract escape-helper test). The
@@ -225,7 +225,7 @@ def test_create_keyword_rule_html_script_keyword_saved_as_plain_text(temp_db):
 
 
 def test_create_keyword_rule_html_script_keyword_duplicate_detection(temp_db):
-    # Phase 5C.1 regression lock: the duplicate check must treat the
+    # Regression lock: the duplicate check must treat the
     # HTML/script keyword as ordinary plain text — a second identical
     # keyword must be rejected as ``duplicate_rule``.
     project = project_service.create_project("Client")
@@ -293,7 +293,7 @@ def test_duplicate_keyword_check_is_case_sensitive_and_trim_aware(temp_db):
 
 
 def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
-    # Phase 5C regression lock: any unexpected service exception must
+    # Regression lock: any unexpected service exception must
     # collapse to ``operation_failed`` and never surface raw exception text
     # or SQL in the payload.
     project = project_service.create_project("Client")
@@ -480,7 +480,7 @@ def test_create_keyword_rule_does_not_call_folder_rule_create(temp_db, monkeypat
 
 
 def test_create_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch):
-    # Phase 5C regression lock: ``rule_service.create_rule`` calls
+    # Regression lock: ``rule_service.create_rule`` calls
     # ``invalidate_keyword_rule_cache`` so newly created keyword rules take
     # effect immediately for project inference. The API facade must not
     # bypass that cache invalidation.
@@ -509,7 +509,7 @@ def test_create_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch
 
 
 def test_create_keyword_rule_clears_exclude_rules_cache(temp_db, monkeypatch):
-    # Phase 5C regression lock: ``rule_service.create_rule`` also calls
+    # Regression lock: ``rule_service.create_rule`` also calls
     # ``privacy_service.clear_exclude_rules_cache`` so the privacy/exclude
     # matching result stays consistent after a new keyword rule is created.
     from worktrace.services import privacy_service
@@ -582,8 +582,8 @@ def test_create_keyword_rule_failure_payloads_are_json_serializable(temp_db):
 
 
 def test_existing_set_project_rule_enabled_still_works(temp_db):
-    # Phase 5C regression lock: the new ``create_project_keyword_rule`` facade
-    # must not regress the existing Phase 5B toggle path.
+    # Regression lock: the new ``create_project_keyword_rule`` facade
+    # must not regress the existing toggle path.
     project = project_service.create_project("Client")
     rule_id = rule_service.create_rule("Spec", project)
 
@@ -604,7 +604,7 @@ def test_existing_set_project_rule_enabled_still_works(temp_db):
 
 
 def test_create_keyword_rule_does_not_toggle_existing_rules(temp_db):
-    # Phase 5C regression lock: creating a new keyword rule must not change
+    # Regression lock: creating a new keyword rule must not change
     # the enabled state of any existing rule.
     project = project_service.create_project("Client")
     existing_rule = rule_service.create_rule("Existing", project)
@@ -629,11 +629,11 @@ def test_create_keyword_rule_does_not_toggle_existing_rules(temp_db):
     assert after == 0
 
 
-# --- Phase 6G: excluded-keyword rule creation facade -------------------
+# --- excluded-keyword rule creation facade -------------------
 
 
 def test_create_excluded_keyword_rule_for_webview_success(temp_db):
-    # Phase 6G regression lock: the dedicated facade creates a keyword rule
+    # Regression lock: the dedicated facade creates a keyword rule
     # on the special ``排除规则`` project, trims the keyword, and returns the
     # narrow created-rule summary. It does NOT accept a project_id from the
     # caller — the project is resolved internally.
@@ -671,7 +671,7 @@ def test_create_excluded_keyword_rule_for_webview_success(temp_db):
 def test_create_excluded_keyword_rule_for_webview_rejects_invalid_input(
     temp_db, bad_keyword
 ):
-    # Phase 6G regression lock: non-str / whitespace-only keyword collapses
+    # Regression lock: non-str / whitespace-only keyword collapses
     # to ``invalid_input`` and creates no rule row.
     before = _counts()
     result = rule_api.create_excluded_keyword_rule_for_webview(bad_keyword)
@@ -682,7 +682,7 @@ def test_create_excluded_keyword_rule_for_webview_rejects_invalid_input(
 
 
 def test_create_excluded_keyword_rule_for_webview_rejects_duplicate(temp_db):
-    # Phase 6G regression lock: an exact duplicate (same excluded project +
+    # Regression lock: an exact duplicate (same excluded project +
     # same trimmed keyword) is rejected as ``duplicate_rule`` and creates no
     # second row.
     first = rule_api.create_excluded_keyword_rule_for_webview("敏感词")
@@ -702,7 +702,7 @@ def test_create_excluded_keyword_rule_for_webview_rejects_duplicate(temp_db):
 def test_create_excluded_keyword_rule_for_webview_exception_collapses(
     temp_db, monkeypatch
 ):
-    # Phase 6G regression lock: an unexpected service failure collapses to
+    # Regression lock: an unexpected service failure collapses to
     # ``operation_failed`` without surfacing the exception text, traceback,
     # SQL, or sensitive metadata.
     def _raise(*args, **kwargs):

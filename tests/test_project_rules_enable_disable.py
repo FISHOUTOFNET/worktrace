@@ -125,7 +125,7 @@ def test_invalid_rule_type_returns_stable_invalid_input(temp_db):
     ],
 )
 def test_invalid_rule_type_variants_return_stable_invalid_input(temp_db, bad_rule_type):
-    # Phase 5B.1 regression lock: only ``"folder"`` and ``"keyword"`` are
+    # Regression lock: only ``"folder"`` and ``"keyword"`` are
     # accepted. Anything else (None, empty, case variants, plurals, unknown
     # strings, non-string types) collapses to ``invalid_input`` without
     # crossing the service layer.
@@ -145,7 +145,7 @@ def test_invalid_rule_id_returns_stable_invalid_input(temp_db, bad_id):
 
 @pytest.mark.parametrize("bad_id", ["abc", "1.5", 2.5, 0.5, -999, [], {}, "true"])
 def test_invalid_rule_id_extra_variants_return_stable_invalid_input(temp_db, bad_id):
-    # Phase 5B.1 regression lock: numeric strings, arbitrary floats, deep
+    # Regression lock: numeric strings, arbitrary floats, deep
     # negatives, and container types all collapse to ``invalid_input``.
     assert rule_api.set_project_rule_enabled("folder", bad_id, True) == {
         "ok": False,
@@ -163,7 +163,7 @@ def test_invalid_enabled_returns_stable_invalid_input(temp_db, bad_enabled):
 
 @pytest.mark.parametrize("bad_enabled", ["1", "0", "True", "False", 1.0, 0.0, [], {}])
 def test_invalid_enabled_extra_variants_return_stable_invalid_input(temp_db, bad_enabled):
-    # Phase 5B.1 regression lock: ``enabled`` must be a real ``bool``. Numeric
+    # Regression lock: ``enabled`` must be a real ``bool``. Numeric
     # strings, mixed-case bool strings, floats, and container types all
     # collapse to ``invalid_input``.
     assert rule_api.set_project_rule_enabled("keyword", 1, bad_enabled) == {
@@ -257,11 +257,11 @@ def test_excluded_project_existing_rules_can_be_toggled(temp_db):
     assert _enabled("folder_project_rule", folder_rule) == 0
 
 
-# --- Phase 5B.1 hardening regression locks -------------------------------
+# --- hardening regression locks -------------------------------
 
 
 def test_keyword_service_exception_is_folded_to_operation_failed(temp_db, monkeypatch):
-    # Phase 5B.1 regression lock: when the keyword service raises any
+    # Regression lock: when the keyword service raises any
     # exception, the API collapses it to ``operation_failed`` and never
     # surfaces the raw exception text or SQL in the payload.
     project = project_service.create_project("Client")
@@ -291,7 +291,7 @@ def test_keyword_service_exception_is_folded_to_operation_failed(temp_db, monkey
 
 
 def test_folder_service_exception_is_folded_to_operation_failed(temp_db, monkeypatch):
-    # Phase 5B.1 regression lock: same collapse behavior for the folder rule
+    # Regression lock: same collapse behavior for the folder rule
     # service write path.
     project = project_service.create_project("Client")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\Client", project)
@@ -320,7 +320,7 @@ def test_folder_service_exception_is_folded_to_operation_failed(temp_db, monkeyp
 
 
 def test_existence_check_runs_before_service_write(temp_db, monkeypatch):
-    # Phase 5B.1 regression lock: when the rule does not exist, the API
+    # Regression lock: when the rule does not exist, the API
     # returns ``not_found`` and never invokes the service write path. This
     # guarantees a SQLite UPDATE no-op on a missing rule is never treated as
     # success.
@@ -351,7 +351,7 @@ def test_existence_check_runs_before_service_write(temp_db, monkeypatch):
 
 
 def test_toggle_does_not_call_conflict_preview(temp_db, monkeypatch):
-    # Phase 5B.1 regression lock: enabling/disabling a folder rule must not
+    # Regression lock: enabling/disabling a folder rule must not
     # invoke ``preview_folder_rule_conflicts``.
     project = project_service.create_project("Client")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\Client", project)
@@ -365,7 +365,7 @@ def test_toggle_does_not_call_conflict_preview(temp_db, monkeypatch):
 
 
 def test_toggle_idempotent_when_rule_already_at_target_state(temp_db):
-    # Phase 5B.1 regression lock: re-toggling a rule to its current
+    # Regression lock: re-toggling a rule to its current
     # ``enabled`` value still returns success. The existence check protects
     # against a missing-rule no-op; a same-value update on an existing rule
     # is a legitimate idempotent write.
@@ -390,7 +390,7 @@ def test_toggle_idempotent_when_rule_already_at_target_state(temp_db):
 
 
 def test_keyword_toggle_clears_exclude_rules_cache(temp_db, monkeypatch):
-    # Phase 5B.1 regression lock: the keyword service write path must keep
+    # Regression lock: the keyword service write path must keep
     # invalidating the privacy/exclude cache so the excluded-project /
     # exclude-rule matching result stays consistent after a toggle.
     from worktrace.services import privacy_service
@@ -411,7 +411,7 @@ def test_keyword_toggle_clears_exclude_rules_cache(temp_db, monkeypatch):
 
 
 def test_folder_toggle_clears_exclude_rules_cache(temp_db, monkeypatch):
-    # Phase 5B.1 regression lock: same as the keyword path, the folder
+    # Regression lock: same as the keyword path, the folder
     # service write path keeps invalidating the privacy/exclude cache.
     from worktrace.services import privacy_service
 
@@ -431,7 +431,7 @@ def test_folder_toggle_clears_exclude_rules_cache(temp_db, monkeypatch):
 
 
 def test_toggle_does_not_change_history_activity_assignment_or_session_note_rows(temp_db):
-    # Phase 5B.1 regression lock: re-affirm with explicit pre/post counts
+    # Regression lock: re-affirm with explicit pre/post counts
     # that the toggle write path leaves activity history, project assignment,
     # and session notes untouched even when a folder/keyword rule is toggled
     # multiple times.
@@ -465,7 +465,7 @@ def test_toggle_does_not_change_history_activity_assignment_or_session_note_rows
 
 
 def test_toggle_payload_is_json_serializable_and_stable(temp_db):
-    # Phase 5B.1 regression lock: the API success payload must remain a plain
+    # Regression lock: the API success payload must remain a plain
     # JSON-serializable dict with the exact stable shape the bridge expects.
     import json
 

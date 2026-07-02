@@ -1,7 +1,7 @@
 """WebView2 Runtime availability check (Windows).
 
-Phase 1. Detects whether the Microsoft Edge WebView2 Runtime is likely
-installed by reading the EdgeUpdate registry keys. Never downloads anything.
+Detects whether the Microsoft Edge WebView2 Runtime is likely installed by
+reading the EdgeUpdate registry keys. Never downloads anything.
 
 On non-Windows platforms, returns ``"unknown"`` so tests are not blocked.
 
@@ -10,9 +10,9 @@ registry, it returns ``"unknown"`` rather than raising, so a failed detection
 does not block startup. The caller still surfaces a clear error message when
 the runtime is genuinely missing.
 
-As of Phase 1, the WebView2 Runtime is a blocking runtime prerequisite for
-WorkTrace. When it is missing on Windows, the user is prompted to install it
-and WorkTrace exits with a non-zero code.
+The WebView2 Runtime is a blocking runtime prerequisite for WorkTrace. When
+it is missing on Windows, the user is prompted to install it and WorkTrace
+exits with a non-zero code.
 """
 
 from __future__ import annotations

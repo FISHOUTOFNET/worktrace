@@ -1,7 +1,7 @@
-"""Phase 5F API / service regression locks for keyword rule edit.
+"""API / service regression locks for keyword rule edit.
 
-These tests lock the narrow ``rule_api.update_project_keyword_rule`` facade
-introduced in Phase 5F. They cover valid update of an existing keyword
+These tests lock the narrow ``rule_api.update_project_keyword_rule`` facade.
+They cover valid update of an existing keyword
 rule's keyword text, input validation (bool-as-int, numeric string,
 float, zero / negative, list / dict / tuple / set / frozenset,
 non-string keyword, whitespace-only keyword), ``not_found`` for unknown

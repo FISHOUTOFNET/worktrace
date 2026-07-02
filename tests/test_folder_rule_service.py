@@ -74,7 +74,7 @@ def test_folder_rule_wins_over_keyword_rule_and_source_is_persisted(temp_db):
 def test_backfill_safe_does_not_overwrite_manual_override(temp_db):
     """Backfill via the safe path skips manual_override activities.
 
-    The legacy ``folder_rule_service.backfill_folder_rule`` entry was
+    The removed ``folder_rule_service.backfill_folder_rule`` entry was
     removed; the safe path lives in ``rule_impact_service``. This test
     keeps coverage of the manual-override skip behavior at the folder
     backfill level by exercising the new safe path.

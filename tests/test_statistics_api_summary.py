@@ -1,4 +1,4 @@
-"""Tests for the Phase 4A read-only Statistics / Export summary.
+"""Tests for the read-only Statistics / Export summary.
 
 Covers ``worktrace.api.statistics_api.get_statistics_export_summary`` and
 ``worktrace.services.statistics_service.get_statistics_export_summary``:
@@ -8,7 +8,7 @@ Covers ``worktrace.api.statistics_api.get_statistics_export_summary`` and
   ``StatisticsSummaryError`` with stable codes;
 - empty range returns zero summary;
 - hidden / deleted activities are excluded;
-- in-progress activities are excluded (no live projection in Phase 4A);
+- in-progress activities are excluded (no live projection);
 - by_project / by_app / by_status group correctly;
 - total_duration_seconds / activity_count are correct;
 - no raw DB rows / window_title / file_path_hint / full_path / clipboard /
@@ -244,7 +244,7 @@ def test_service_summary_excludes_deleted_activities(temp_db):
 
 
 def test_service_summary_excludes_in_progress_activities(temp_db):
-    """Phase 4A intentionally does NOT project live time. An open activity
+    """intentionally does NOT project live time. An open activity
     (end_time IS NULL) must be excluded from the summary."""
     pid = project_service.create_project("Client")
     aid = activity_service.create_activity(
@@ -267,7 +267,7 @@ def test_service_summary_export_preview_read_only(temp_db):
     assert preview["date_to"] == "2026-06-25"
     assert preview["included_activity_count"] == 1
     assert preview["included_duration_seconds"] == 1800
-    # Phase 4B: only CSV export is enabled; timesheet is not yet supported.
+    # only CSV export is enabled; timesheet is not yet supported.
     # The export action button is now enabled (CSV write is open).
     assert preview["available_formats"] == ["csv"]
     assert preview["export_actions_enabled"] is True

@@ -55,7 +55,7 @@ def test_collector_pause_does_not_poll_active_window(temp_db):
     assert settings_service.get_setting("current_activity_snapshot", "") == ""
 
 
-# --- Phase 1B.1: secure import guard tests -------------------------------
+# --- secure import guard tests -------------------------------
 #
 # When ``secure_import_in_progress=true`` the collector loop must skip
 # active-window polling and must not write any real activity rows.

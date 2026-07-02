@@ -20,7 +20,7 @@ def test_settings_cache_reuses_reads_and_updates_on_write(temp_db, monkeypatch):
 
     monkeypatch.setattr(settings_service, "get_connection", counted_connection)
 
-    # Section 八: seeded default is now "1" (was "3").
+    # seeded default is now "1" (was "3").
     assert settings_service.get_setting("poll_interval_seconds") == "1"
     assert settings_service.get_setting("poll_interval_seconds") == "1"
     assert calls["count"] == 1
@@ -40,7 +40,7 @@ def test_settings_cache_isolated_by_database_path(tmp_path):
     assert settings_service.get_setting("poll_interval_seconds") == "4"
 
     db.initialize_database(second)
-    # Section 八: seeded default is now "1" (was "3").
+    # seeded default is now "1" (was "3").
     assert settings_service.get_setting("poll_interval_seconds") == "1"
 
     db.initialize_database(first)

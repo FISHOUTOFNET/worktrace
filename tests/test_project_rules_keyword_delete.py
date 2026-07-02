@@ -1,7 +1,7 @@
-"""Phase 5D API / service regression locks for keyword rule deletion.
+"""API / service regression locks for keyword rule deletion.
 
-These tests lock the narrow ``rule_api.delete_project_keyword_rule`` facade
-introduced in Phase 5D. They cover valid deletion of enabled / disabled
+These tests lock the narrow ``rule_api.delete_project_keyword_rule`` facade.
+They cover valid deletion of enabled / disabled
 keyword rules, keyword rules under normal and special ``排除规则``
 projects, input validation (bool-as-int, numeric string, float,
 zero / negative, list / dict / tuple / set / frozenset), ``not_found``
@@ -117,9 +117,9 @@ def test_delete_keyword_rule_under_normal_project_decreases_count_by_one(temp_db
 def test_delete_keyword_rule_under_excluded_project(temp_db):
     # The special ``排除规则`` project is created with ``enabled = 0`` but
     # keyword rules attached to it are still legitimate keyword rules in
-    # the ``project_rule`` table. The Phase 5D delete facade only checks
+    # the ``project_rule`` table. The delete facade only checks
     # that the id is a real keyword rule — it does not gate on project
-    # eligibility (unlike Phase 5C create). This mirrors the spec: "删除
+    # eligibility (unlike create). This mirrors the spec: "删除
     # existing keyword rule" must work regardless of project state.
     excluded_id = project_service.get_or_create_excluded_project()
     rule_id = rule_service.create_rule("Secret", excluded_id)
@@ -163,7 +163,7 @@ def test_delete_keyword_rule_rejects_zero_and_negative_rule_id(temp_db, bad_id):
     "bad_id", [None, [], {}, (), {1, 2}, (1,), frozenset({1})]
 )
 def test_delete_keyword_rule_rejects_other_invalid_rule_id_types(temp_db, bad_id):
-    # Phase 5D regression lock: container types (list / dict / tuple / set /
+    # Regression lock: container types (list / dict / tuple / set /
     # frozenset) all collapse to ``invalid_input`` via the ``type(...) is not
     # int`` guard before reaching the service layer.
     result = rule_api.delete_project_keyword_rule(bad_id)
@@ -180,7 +180,7 @@ def test_unknown_keyword_rule_returns_stable_not_found(temp_db):
 
 
 def test_folder_rule_id_returns_not_found_and_does_not_delete_folder_rule(temp_db):
-    # Phase 5D regression lock: a folder rule id must never be deleted
+    # Regression lock: a folder rule id must never be deleted
     # through the keyword delete path. The facade uses ``_rule_exists(
     # "keyword", rule_id)`` which only returns True for ids in
     # ``project_rule`` (keyword table), so a folder rule id resolves to
@@ -199,7 +199,7 @@ def test_folder_rule_id_returns_not_found_and_does_not_delete_folder_rule(temp_d
 
 
 def test_keyword_rule_id_does_not_delete_folder_rule(temp_db):
-    # Phase 5D regression lock: deleting a keyword rule must not delete any
+    # Regression lock: deleting a keyword rule must not delete any
     # folder rule, even folder rules bound to the same project.
     project = project_service.create_project("Client")
     folder_rule_id = folder_rule_service.create_or_update_folder_rule(
@@ -219,7 +219,7 @@ def test_keyword_rule_id_does_not_delete_folder_rule(temp_db):
 
 
 def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
-    # Phase 5D regression lock: any unexpected service exception must
+    # Regression lock: any unexpected service exception must
     # collapse to ``operation_failed`` and never surface raw exception text
     # or SQL in the payload.
     project = project_service.create_project("Client")
@@ -403,7 +403,7 @@ def test_delete_keyword_rule_does_not_call_folder_delete(temp_db, monkeypatch):
 
 
 def test_delete_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch):
-    # Phase 5D regression lock: ``rule_service.delete_rule`` calls
+    # Regression lock: ``rule_service.delete_rule`` calls
     # ``invalidate_keyword_rule_cache`` so deleted keyword rules stop
     # matching immediately for project inference. The API facade must not
     # bypass that cache invalidation.
@@ -433,7 +433,7 @@ def test_delete_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch
 
 
 def test_delete_keyword_rule_clears_exclude_rules_cache(temp_db, monkeypatch):
-    # Phase 5D regression lock: ``rule_service.delete_rule`` also calls
+    # Regression lock: ``rule_service.delete_rule`` also calls
     # ``privacy_service.clear_exclude_rules_cache`` so the privacy/exclude
     # matching result stays consistent after a keyword rule is deleted.
     project = project_service.create_project("Client")
@@ -518,8 +518,8 @@ def test_delete_keyword_rule_failure_payloads_are_json_serializable(temp_db):
 
 
 def test_existing_create_project_keyword_rule_still_works(temp_db):
-    # Phase 5D regression lock: the new ``delete_project_keyword_rule`` facade
-    # must not regress the existing Phase 5C create path.
+    # Regression lock: the new ``delete_project_keyword_rule`` facade
+    # must not regress the existing create path.
     project = project_service.create_project("Client")
 
     result = rule_api.create_project_keyword_rule(project, "Spec")
@@ -531,8 +531,8 @@ def test_existing_create_project_keyword_rule_still_works(temp_db):
 
 
 def test_existing_set_project_rule_enabled_still_works(temp_db):
-    # Phase 5D regression lock: the new ``delete_project_keyword_rule`` facade
-    # must not regress the existing Phase 5B toggle path.
+    # Regression lock: the new ``delete_project_keyword_rule`` facade
+    # must not regress the existing toggle path.
     project = project_service.create_project("Client")
     rule_id = rule_service.create_rule("Spec", project)
 
@@ -553,7 +553,7 @@ def test_existing_set_project_rule_enabled_still_works(temp_db):
 
 
 def test_delete_then_recreate_same_keyword_works(temp_db):
-    # Phase 5D regression lock: after deleting a keyword rule, the same
+    # Regression lock: after deleting a keyword rule, the same
     # keyword can be re-created on the same project (no soft-delete residue
     # / unique-constraint violation). This verifies the existing service
     # uses a hard DELETE, not a soft-delete.
@@ -569,11 +569,11 @@ def test_delete_then_recreate_same_keyword_works(temp_db):
     assert recreate_result["rule"]["keyword"] == "Spec"
 
 
-# --- Phase 5D.1: keyword deletion hardening regression locks ------------
+# --- keyword deletion hardening regression locks ------------
 
 
 def test_delete_keyword_rule_second_delete_is_not_treated_as_success(temp_db):
-    # Phase 5D.1 regression lock: a no-op delete must never be reported as
+    # Regression lock: a no-op delete must never be reported as
     # success. After a successful first delete, the row is gone, so a second
     # delete on the same id must resolve to ``not_found`` (not ``ok: True``).
     # This locks the existence pre-check + hard DELETE contract so a future
@@ -593,7 +593,7 @@ def test_delete_keyword_rule_second_delete_is_not_treated_as_success(temp_db):
 def test_delete_keyword_rule_does_not_call_keyword_create_or_toggle_service_paths(
     temp_db, monkeypatch
 ):
-    # Phase 5D.1 regression lock: the keyword delete path must only call
+    # Regression lock: the keyword delete path must only call
     # ``rule_service.delete_rule``. It must not invoke the keyword create
     # service path (``create_rule``) or the keyword toggle service path
     # (``set_rule_enabled``), which would mutate the rule set instead of
@@ -618,7 +618,7 @@ def test_delete_keyword_rule_does_not_call_keyword_create_or_toggle_service_path
 
 
 def test_delete_keyword_rule_folder_rule_id_returns_stable_not_found_code(temp_db):
-    # Phase 5D.1 regression lock: a folder rule id must collapse to the
+    # Regression lock: a folder rule id must collapse to the
     # stable ``not_found`` code through the keyword delete path, and the
     # returned code must be exactly ``not_found`` (not a folder-specific
     # code that would leak which table the id belonged to). The folder rule

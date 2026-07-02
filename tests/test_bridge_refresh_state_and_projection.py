@@ -1,7 +1,7 @@
-"""Phase 6H-followup / Phase R3 backend tests: unified live display model.
+"""Backend tests: unified live display model.
 
 These tests cover the unified live-display contract introduced by the
-Phase R3 rewrite (``worktrace.services.live_display_service``):
+live display rewrite (``worktrace.services.live_display_service``):
 
 - ``bridge.get_refresh_state()`` is attached to ``WebViewBridge`` and
   returns a display-safe lightweight payload (no raw window title / file
@@ -98,7 +98,7 @@ def _normal_snapshot(
 
 
 def test_get_refresh_state_attached_to_webview_bridge(bridge):
-    """Section 3: ``get_refresh_state`` must be a method on
+    """``get_refresh_state`` must be a method on
     ``WebViewBridge`` so the frontend can call it via the pywebview API."""
     assert callable(getattr(bridge, "get_refresh_state", None)), (
         "WebViewBridge must expose get_refresh_state as a callable method"
@@ -106,7 +106,7 @@ def test_get_refresh_state_attached_to_webview_bridge(bridge):
 
 
 def test_get_refresh_state_returns_dict_with_required_fields(bridge):
-    """Section 3: ``get_refresh_state`` must return a display-safe small
+    """``get_refresh_state`` must return a display-safe small
     payload with the structural fields the heartbeat needs."""
     result = bridge.get_refresh_state()
     assert isinstance(result, dict)
@@ -125,10 +125,10 @@ def test_get_refresh_state_returns_dict_with_required_fields(bridge):
         "latest_activity_id",
     ):
         assert field in result, "get_refresh_state missing field: " + field
-    # Legacy live clock fields have been removed from the refresh state
+    # Removed live clock fields must stay absent from the refresh state
     # payload; assert they are absent so a future regression is caught.
     assert "snapshot_baseline_epoch_ms" not in result, (
-        "get_refresh_state must not return legacy snapshot_baseline_epoch_ms"
+        "get_refresh_state must not return snapshot_baseline_epoch_ms"
     )
 
 
@@ -138,7 +138,7 @@ def test_get_refresh_state_is_json_serializable(bridge):
 
 
 def test_get_refresh_state_does_not_leak_sensitive_fields(bridge):
-    """Section 4: ``get_refresh_state`` must NOT return raw window title,
+    """``get_refresh_state`` must NOT return raw window title,
     file path, clipboard, note, SQL, or traceback. The payload is
     display-safe."""
     _set_snapshot(
@@ -171,7 +171,7 @@ def test_get_refresh_state_does_not_leak_sensitive_fields(bridge):
 
 
 def test_get_refresh_state_returns_generic_error_on_failure(bridge):
-    """Section 3: on exception, ``get_refresh_state`` must return a generic
+    """on exception, ``get_refresh_state`` must return a generic
     error payload without traceback."""
     with patch(
         "worktrace.api.settings_api.get_collector_status",
@@ -187,7 +187,7 @@ def test_get_refresh_state_returns_generic_error_on_failure(bridge):
 
 
 def test_refresh_revision_unchanged_when_only_elapsed_advances(bridge):
-    """Section 4: ``refresh_revision`` must NOT change when only
+    """``refresh_revision`` must NOT change when only
     ``elapsed_seconds`` / ``extra_seconds`` advance within the same
     activity. Natural time progression must not trigger a heavy refresh.
 
@@ -216,7 +216,7 @@ def test_refresh_revision_unchanged_when_only_elapsed_advances(bridge):
 
 
 def test_refresh_revision_changes_on_status_change(bridge):
-    """Section 4: ``refresh_revision`` must change when the current
+    """``refresh_revision`` must change when the current
     activity status changes (e.g. normal -> idle)."""
     _set_snapshot(_normal_snapshot(status=STATUS_NORMAL))
     r1 = bridge.get_refresh_state()
@@ -228,7 +228,7 @@ def test_refresh_revision_changes_on_status_change(bridge):
 
 
 def test_refresh_revision_changes_on_persisted_state(bridge):
-    """Section 4: ``refresh_revision`` must change when the current
+    """``refresh_revision`` must change when the current
     activity's persisted state changes (unpersisted -> persisted)."""
     _set_snapshot(_normal_snapshot(is_persisted=False, persisted_activity_id=0))
     r1 = bridge.get_refresh_state()
@@ -240,7 +240,7 @@ def test_refresh_revision_changes_on_persisted_state(bridge):
 
 
 def test_refresh_revision_changes_on_persisted_activity_id(bridge):
-    """Section 4: ``refresh_revision`` must change when
+    """``refresh_revision`` must change when
     ``persisted_activity_id`` changes (even if both are persisted)."""
     _set_snapshot(
         _normal_snapshot(is_persisted=True, persisted_activity_id=42)
@@ -256,7 +256,7 @@ def test_refresh_revision_changes_on_persisted_activity_id(bridge):
 
 
 def test_refresh_revision_changes_on_inferred_project_name(bridge):
-    """Section 4: ``refresh_revision`` must change when
+    """``refresh_revision`` must change when
     ``inferred_project_name`` changes (the activity was reclassified)."""
     _set_snapshot(_normal_snapshot(inferred_project_name="ProjectA"))
     r1 = bridge.get_refresh_state()
@@ -268,7 +268,7 @@ def test_refresh_revision_changes_on_inferred_project_name(bridge):
 
 
 def test_refresh_revision_changes_on_collector_status(bridge):
-    """Section 4: ``refresh_revision`` must change when collector_status
+    """``refresh_revision`` must change when collector_status
     changes (e.g. running -> paused)."""
     settings_service.set_setting("collector_status", "running")
     settings_service.clear_settings_cache()
@@ -282,7 +282,7 @@ def test_refresh_revision_changes_on_collector_status(bridge):
 
 
 def test_refresh_revision_changes_on_user_paused(bridge):
-    """Section 4: ``refresh_revision`` must change when user_paused flips."""
+    """``refresh_revision`` must change when user_paused flips."""
     settings_service.set_setting("user_paused", "false")
     settings_service.clear_settings_cache()
     r1 = bridge.get_refresh_state()
@@ -298,20 +298,20 @@ def test_refresh_revision_changes_on_user_paused(bridge):
 
 
 def test_get_recent_activities_returns_required_fields(bridge):
-    """Section 2: each recent item must carry the unified live-display
+    """each recent item must carry the unified live-display
     fields; the payload must carry ``live_display``."""
     _set_snapshot(None)  # no current activity -> no virtual item
     result = bridge.get_recent_activities()
     assert result["ok"] is True
     assert "live_display" in result
-    # Legacy live clock fields have been removed from the recent
+    # Removed live clock fields must stay absent from the recent
     # activities payload; assert they are absent so a future regression
     # is caught.
     assert "snapshot_at_epoch_ms" not in result, (
-        "get_recent_activities must not return legacy snapshot_at_epoch_ms"
+        "get_recent_activities must not return snapshot_at_epoch_ms"
     )
     assert "baseline_epoch_ms" not in result, (
-        "get_recent_activities must not return legacy baseline_epoch_ms"
+        "get_recent_activities must not return baseline_epoch_ms"
     )
     for item in result["activities"]:
         assert "duration_seconds" in item
@@ -326,7 +326,7 @@ def test_get_recent_activities_returns_required_fields(bridge):
 
 
 def test_get_recent_activities_no_projection_without_snapshot(bridge):
-    """Section 2: when no current snapshot exists, no virtual item is
+    """when no current snapshot exists, no virtual item is
     prepended and ``live_display.is_virtual_live`` is False."""
     _set_snapshot(None)
     result = bridge.get_recent_activities()
@@ -337,7 +337,7 @@ def test_get_recent_activities_no_projection_without_snapshot(bridge):
 
 
 def test_get_recent_activities_no_projection_for_paused_snapshot(bridge):
-    """Section 12: paused / idle / excluded / error snapshots must NOT
+    """paused / idle / excluded / error snapshots must NOT
     produce a virtual recent item."""
     for status in ("idle", "paused", "excluded", "error"):
         _set_snapshot(_normal_snapshot(status=status))
@@ -352,7 +352,7 @@ def test_get_recent_activities_no_projection_for_paused_snapshot(bridge):
 
 
 def test_get_recent_activities_no_projection_for_persisted_snapshot(bridge):
-    """Section 12: when the current snapshot is already persisted, no
+    """when the current snapshot is already persisted, no
     virtual item is prepended (avoid double counting). The real
     persisted-open DB row (if any) carries ``is_in_progress``."""
     _set_snapshot(
@@ -369,7 +369,7 @@ def test_get_recent_activities_no_projection_for_persisted_snapshot(bridge):
 
 
 def test_get_timeline_returns_required_projection_fields(bridge):
-    """Section 2: ``get_timeline`` payload must NOT carry the legacy
+    """``get_timeline`` payload must NOT carry the removed
     root-level ``live_projected_session_id`` / ``live_projected_seconds``
     fields. Live projection metadata lives only on the per-row contract
     (``live_state``, ``stable_live_key_hash``, ``live_started_at_epoch_ms``,
@@ -380,20 +380,20 @@ def test_get_timeline_returns_required_projection_fields(bridge):
     # The root-level projection fields have been removed; assert they
     # are absent so a future regression is caught.
     assert "live_projected_session_id" not in result, (
-        "get_timeline must not return legacy root-level "
+        "get_timeline must not return removed root-level "
         "live_projected_session_id"
     )
     assert "live_projected_seconds" not in result, (
-        "get_timeline must not return legacy root-level "
+        "get_timeline must not return removed root-level "
         "live_projected_seconds"
     )
-    # Legacy live clock fields have been removed from the timeline
+    # Removed live clock fields must stay absent from the timeline
     # payload; assert they are absent so a future regression is caught.
     assert "snapshot_at_epoch_ms" not in result, (
-        "get_timeline must not return legacy snapshot_at_epoch_ms"
+        "get_timeline must not return snapshot_at_epoch_ms"
     )
     assert "baseline_epoch_ms" not in result, (
-        "get_timeline must not return legacy baseline_epoch_ms"
+        "get_timeline must not return baseline_epoch_ms"
     )
     for s in result["sessions"]:
         assert "duration_seconds" in s
@@ -402,7 +402,7 @@ def test_get_timeline_returns_required_projection_fields(bridge):
 
 
 def test_get_timeline_does_not_project_historical_date(bridge):
-    """Section 12: historical dates must NOT be live-projected. Only today
+    """historical dates must NOT be live-projected. Only today
     is eligible for projection. No virtual session is prepended and the
     root-level projection fields are absent."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
@@ -417,7 +417,7 @@ def test_get_timeline_does_not_project_historical_date(bridge):
 
 
 def test_get_timeline_no_projection_for_persisted_snapshot(bridge):
-    """Section 12: when the current snapshot is already persisted, no
+    """when the current snapshot is already persisted, no
     short-activity projection is applied (avoid double counting). The
     real ``is_in_progress`` session alone carries the live duration.
     Root-level projection fields are absent."""
@@ -430,7 +430,7 @@ def test_get_timeline_no_projection_for_persisted_snapshot(bridge):
 
 
 def test_get_timeline_no_projection_for_paused_snapshot(bridge):
-    """Section 12: paused / idle / excluded / error snapshots must NOT
+    """paused / idle / excluded / error snapshots must NOT
     produce Timeline projection. No virtual session is prepended and the
     root-level projection fields are absent."""
     for status in ("idle", "paused", "excluded", "error"):
@@ -449,7 +449,7 @@ def test_get_timeline_no_projection_for_paused_snapshot(bridge):
 
 
 def test_get_timeline_session_details_returns_duration_seconds(bridge):
-    """Section 2: each detail row must carry ``duration_seconds`` and the
+    """each detail row must carry ``duration_seconds`` and the
     unified live-display fields. With no snapshot, no virtual row is
     produced so the list is empty (the per-row schema is exercised by the
     virtual-row test below)."""
@@ -457,18 +457,18 @@ def test_get_timeline_session_details_returns_duration_seconds(bridge):
     result = bridge.get_timeline_session_details([], None)
     assert result["ok"] is True
     assert result["activities"] == []
-    # Legacy live clock fields have been removed from the detail payload;
+    # Removed live clock fields must stay absent from the detail payload;
     # assert they are absent so a future regression is caught.
     assert "snapshot_at_epoch_ms" not in result, (
-        "get_timeline_session_details must not return legacy snapshot_at_epoch_ms"
+        "get_timeline_session_details must not return snapshot_at_epoch_ms"
     )
     assert "baseline_epoch_ms" not in result, (
-        "get_timeline_session_details must not return legacy baseline_epoch_ms"
+        "get_timeline_session_details must not return baseline_epoch_ms"
     )
 
 
 def test_get_timeline_session_details_no_sensitive_fields(bridge):
-    """Section 2: detail rows must NOT leak raw title / path / note."""
+    """detail rows must NOT leak raw title / path / note."""
     _set_snapshot(None)
     result = bridge.get_timeline_session_details([], None)
     serialized = json.dumps(result)
@@ -480,7 +480,7 @@ def test_get_timeline_session_details_no_sensitive_fields(bridge):
 
 
 def test_get_refresh_state_bridge_method_is_on_webview_bridge():
-    """Section 3 / 13: ``get_refresh_state`` must be a method on the
+    """/ 13: ``get_refresh_state`` must be a method on the
     ``WebViewBridge`` class so the frontend can call
     ``window.pywebview.api.get_refresh_state()``."""
     assert hasattr(WebViewBridge, "get_refresh_state")
@@ -495,11 +495,11 @@ def test_get_refresh_state_is_json_serializable_with_snapshot(bridge):
     json.dumps(bridge.get_refresh_state())
 
 
-# --- Phase R3: unified virtual live display contract --------------------
+# --- unified virtual live display contract --------------------
 
 
 def test_get_recent_activities_prepends_virtual_item_for_normal_snapshot(bridge):
-    """Phase R3: when the current snapshot is a normal unpersisted
+    """when the current snapshot is a normal unpersisted
     activity, ``get_recent_activities`` must prepend a virtual live item
     with ``is_virtual`` / ``is_virtual_live`` True, ``activity_id`` 0,
     ``source`` "snapshot", ``edit_disabled`` True, and a non-empty
@@ -519,13 +519,13 @@ def test_get_recent_activities_prepends_virtual_item_for_normal_snapshot(bridge)
     assert virtual["is_in_progress"] is True
     assert virtual["live_display_key"]
     assert virtual["duration_seconds"] > 0
-    # Verification item 12/16/21: stable_live_key / stable_live_key_hash
+    # stable_live_key / stable_live_key_hash
     assert virtual["stable_live_key"]
     assert virtual["stable_live_key_hash"]
 
 
 def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
-    """Phase R3: when the current snapshot is a normal unpersisted
+    """when the current snapshot is a normal unpersisted
     activity, ``get_timeline`` must prepend a virtual live session.
     ``today_total_seconds`` must include the virtual session's fetched
     snapshot duration so the displayed total is non-zero even when there
@@ -561,7 +561,7 @@ def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
 
 
 def test_get_timeline_session_details_returns_virtual_detail_row(bridge):
-    """Phase R3: when ``activity_ids`` is empty and the current snapshot
+    """when ``activity_ids`` is empty and the current snapshot
     is a normal unpersisted activity, ``get_timeline_session_details``
     must return a single virtual detail row. The row uses the snapshot's
     display-safe resource/app/project — it is NEVER projected onto an old
@@ -580,7 +580,7 @@ def test_get_timeline_session_details_returns_virtual_detail_row(bridge):
     assert row["is_in_progress"] is True
     assert row["live_display_key"]
     assert row["duration_seconds"] > 0
-    # Verification item 12/16/21: stable_live_key / stable_live_key_hash
+    # stable_live_key / stable_live_key_hash
     assert row["stable_live_key"]
     assert row["stable_live_key_hash"]
     # The virtual row must use the snapshot's display-safe project, not a
@@ -589,7 +589,7 @@ def test_get_timeline_session_details_returns_virtual_detail_row(bridge):
 
 
 def test_virtual_items_do_not_leak_sensitive_fields(bridge):
-    """Phase R3: virtual items / sessions / detail rows must NOT leak raw
+    """virtual items / sessions / detail rows must NOT leak raw
     window_title / file_path_hint / clipboard / note VALUES / SQL /
     traceback. Note: ``session_note`` is a legitimate display-safe field
     name; the check targets the raw ``note`` KEY and the sensitive VALUES."""
@@ -629,7 +629,7 @@ def test_virtual_items_do_not_leak_sensitive_fields(bridge):
 
 
 def test_refresh_revision_changes_on_pending_short_seconds(bridge):
-    """Phase R3: ``refresh_revision`` must change when
+    """``refresh_revision`` must change when
     ``pending_short_seconds`` changes (the carry state advances so a
     short activity that just crossed the threshold triggers a refresh)."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
@@ -645,7 +645,7 @@ def test_refresh_revision_changes_on_pending_short_seconds(bridge):
 
 
 def test_refresh_revision_changes_on_date_rollover(bridge):
-    """Phase R3: ``refresh_revision`` must change when ``today`` changes
+    """``refresh_revision`` must change when ``today`` changes
     (date rollover at midnight)."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     from worktrace.api import timeline_api

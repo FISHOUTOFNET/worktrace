@@ -661,9 +661,9 @@ def _display_duration(row: dict) -> int:
     # Unified live-clock routing: open rows that match the current
     # snapshot are routed through ``live_display_service.persisted_open_live_seconds``
     # via ``_live_duration_for_row``. Closed rows use their stored
-    # ``duration_seconds``. The previous ``datetime.now() - start_time``
-    # fallback bypassed the unified live clock and could produce
-    # inconsistent durations that polluted both the live ticker and
+    # ``duration_seconds``. Rows without a stored duration and without a
+    # live-duration match return 0, a safe display value that does not
+    # affect the live ticker or refresh_revision.
     # ``refresh_revision`` (verification item 17). It is removed; rows
     # without a stored duration and without a live-duration match now
     # return 0, which is a safe display value that does not affect the

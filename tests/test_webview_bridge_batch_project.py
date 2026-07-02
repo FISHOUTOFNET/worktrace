@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.6 Timeline batch project editing bridge method.
+"""Tests for the Timeline batch project editing bridge method.
 
 Covers ``WebViewBridge.batch_update_timeline_activities_project``:
 

@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend - Project Rules rule toggle actions (Phase 5B, MC2 split).
+// WorkTrace WebView frontend - Project Rules rule toggle actions.
 // Existing rule enable/disable toggle via event delegation on #rules-list.
 // Loaded after rules_render.js, before keyword / folder / project action modules.
 
@@ -6,7 +6,7 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Phase 5B: existing rule enable / disable toggle ----------------
+    // --- existing rule enable / disable toggle ----------------
 
     function bindProjectRuleToggles() {
         var list = document.getElementById("rules-list");
@@ -60,7 +60,7 @@
     }
     App.setProjectRuleSaving = setProjectRuleSaving;
 
-    // --- Phase 5H: rule impact preview + safe single-rule backfill ------
+    // --- rule impact preview + safe single-rule backfill ------
 
     function bindProjectRuleImpactEvents() {
         var list = document.getElementById("rules-list");
@@ -195,11 +195,11 @@
     }
     App.clearProjectRuleImpactPanel = clearProjectRuleImpactPanel;
 
-    // --- Phase 5I: selected-rule batch operations ----------------------
+    // --- selected-rule batch operations ----------------------
 
     function bindProjectRuleBatchEvents() {
-        // Phase 5I: bind delegated listeners for the batch toolbar buttons
-        // (on #rules-batch-toolbar), the batch panel close button (on
+        // Bind delegated listeners for the batch toolbar buttons (on
+        // #rules-batch-toolbar), the batch panel close button (on
         // #rules-batch-panel), and the per-row batch checkboxes (on
         // #rules-list). Each container is bound once (guarded by a
         // data-*-bound attribute) so re-renders of the inner HTML do not
@@ -223,10 +223,10 @@
     App.bindProjectRuleBatchEvents = bindProjectRuleBatchEvents;
 
     function handleProjectRuleBatchCheckboxChange(event) {
-        // Phase 5I: delegated change handler for per-row batch checkboxes.
-        // Toggles the selection in ``App.rulesBatchSelectedKeys`` (JS memory
-        // only) and refreshes the toolbar so the selected count + button
-        // disabled state update immediately. Refuses to act while any batch
+        // Delegated change handler for per-row batch checkboxes. Toggles
+        // the selection in ``App.rulesBatchSelectedKeys`` (JS memory only)
+        // and refreshes the toolbar so the selected count + button disabled
+        // state update immediately. Refuses to act while any batch
         // operation is in flight (the checkbox should already be disabled,
         // but this is a defensive guard).
         var target = event.target;
@@ -246,7 +246,7 @@
     App.handleProjectRuleBatchCheckboxChange = handleProjectRuleBatchCheckboxChange;
 
     function handleProjectRuleBatchToolbarClick(event) {
-        // Phase 5I: delegated click handler for the batch toolbar buttons.
+        // Delegated click handler for the batch toolbar buttons.
         var target = event.target;
         if (!target || !target.closest) return;
         if (target.closest(".rules-batch-preview-button")) {
@@ -411,9 +411,9 @@
             }
             var applyResult = (result && result.result) || {};
             showProjectRulesBatchPanel({ mode: "apply", payload: applyResult });
-            // Phase 5I: clear selection on successful batch write so the
-            // user must re-confirm before another batch write. Refresh the
-            // list so the new project assignments are reflected.
+            // Clear selection on successful batch write so the user must
+            // re-confirm before another batch write. Refresh the list so
+            // the new project assignments are reflected.
             App.rulesBatchSelectedKeys = {};
             return App.loadProjectRules().then(function () {
                 App.showRulesError("选中规则已应用到历史记录");
@@ -448,9 +448,9 @@
             }
             var toggleResult = (result && result.result) || {};
             showProjectRulesBatchPanel({ mode: "toggle", payload: toggleResult });
-            // Phase 5I: clear selection on successful batch write so the
-            // user must re-confirm before another batch write. Refresh the
-            // list so the new enabled states are reflected.
+            // Clear selection on successful batch write so the user must
+            // re-confirm before another batch write. Refresh the list so
+            // the new enabled states are reflected.
             App.rulesBatchSelectedKeys = {};
             return App.loadProjectRules().then(function () {
                 App.showRulesError("选中规则已" + actionLabel);

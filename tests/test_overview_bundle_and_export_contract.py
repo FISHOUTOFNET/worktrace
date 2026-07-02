@@ -226,7 +226,7 @@ def test_overview_bundle_current_and_recent_share_same_sample_id(bridge):
 
 
 def test_overview_bundle_current_and_recent_first_frame_seconds_consistent(bridge):
-    """Section 五.2: the current activity and the recent live row must
+    """the current activity and the recent live row must
     NOT have a 1-2 second drift on the first frame. Both derive from
     the same snapshot, so their duration_seconds must be equal."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
@@ -245,7 +245,7 @@ def test_overview_bundle_current_and_recent_first_frame_seconds_consistent(bridg
 
 
 def test_overview_bundle_pending_recent_uses_display_project_not_candidate(bridge):
-    """Section 五.2: during a pending project transition the recent live
+    """during a pending project transition the recent live
     row uses the display project (ProjectA), NOT the candidate (ProjectB).
     The candidate must NOT appear as a separate independent project row."""
     _set_snapshot(_pending_snapshot())
@@ -265,7 +265,7 @@ def test_overview_bundle_pending_recent_uses_display_project_not_candidate(bridg
 
 
 def test_overview_bundle_is_display_safe(bridge):
-    """Section 二.4: the bundle must not leak raw ``window_title`` /
+    """the bundle must not leak raw ``window_title`` /
     ``file_path_hint`` / clipboard / note / SQL / traceback."""
     _set_snapshot(_pending_snapshot())
     bundle = bridge.get_overview_live_bundle()
@@ -294,7 +294,7 @@ def test_timeline_returns_live_projection(bridge):
 
 
 def test_timeline_session_uses_display_project_and_description(bridge):
-    """Section 五.3: Timeline session uses the display project name +
+    """Timeline session uses the display project name +
     description (not hardcoded empty)."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     timeline = bridge.get_timeline()
@@ -307,7 +307,7 @@ def test_timeline_session_uses_display_project_and_description(bridge):
 
 
 def test_timeline_pending_candidate_does_not_preempt_session_project(bridge):
-    """Section 五.3: during pending the Timeline session project is the
+    """during pending the Timeline session project is the
     display project (ProjectA), NOT the candidate (ProjectB)."""
     _set_snapshot(_pending_snapshot())
     timeline = bridge.get_timeline()
@@ -320,7 +320,7 @@ def test_timeline_pending_candidate_does_not_preempt_session_project(bridge):
 
 
 def test_timeline_detail_carries_own_live_projection(bridge):
-    """Section 五.3: ``get_timeline_session_details()`` must return its
+    """``get_timeline_session_details()`` must return its
     OWN ``live_projection`` — the detail ticker must NOT reuse the
     Timeline main payload's projection."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
@@ -334,7 +334,7 @@ def test_timeline_detail_carries_own_live_projection(bridge):
 
 
 def test_timeline_detail_uses_display_project_and_description(bridge):
-    """Section 五.3: detail row uses the current resource + display
+    """detail row uses the current resource + display
     project + description (not hardcoded empty)."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     details = bridge.get_timeline_session_details([], None)
@@ -347,7 +347,7 @@ def test_timeline_detail_uses_display_project_and_description(bridge):
 
 
 def test_timeline_detail_pending_uses_display_project_not_candidate(bridge):
-    """Section 五.3: during pending the detail row uses the display
+    """during pending the detail row uses the display
     project (ProjectA), NOT the candidate (ProjectB)."""
     _set_snapshot(_pending_snapshot())
     details = bridge.get_timeline_session_details([], None)
@@ -365,7 +365,7 @@ def test_timeline_detail_pending_uses_display_project_not_candidate(bridge):
 
 
 def test_overview_kpi_include_live_uses_display_project(bridge):
-    """Section 六.1: Overview KPI with ``include_live=True`` uses
+    """Overview KPI with ``include_live=True`` uses
     ``live_projection.display_project`` — during pending (<30s) the KPI
     attributes live time to the display project (ProjectA), NOT the
     candidate (ProjectB)."""
@@ -381,7 +381,7 @@ def test_overview_kpi_include_live_uses_display_project(bridge):
 
 
 def test_export_preview_does_not_project_current_live_activity(bridge):
-    """Section 六.2: ``get_statistics_export_summary`` does NOT project
+    """``get_statistics_export_summary`` does NOT project
     the current live activity — it only includes finalized/closed rows."""
     _set_snapshot(_pending_snapshot())
     from worktrace.services import timeline_service
@@ -394,7 +394,7 @@ def test_export_preview_does_not_project_current_live_activity(bridge):
 
 
 def test_export_preview_only_includes_closed_rows(bridge):
-    """Section 六.2: even when a live activity exists, the export
+    """even when a live activity exists, the export
     preview's activity count and total duration only reflect closed
     rows."""
     _set_snapshot(_pending_snapshot())

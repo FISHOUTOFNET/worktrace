@@ -1,4 +1,4 @@
-"""Tests for the Phase 4A WebView bridge Statistics / Export summary method.
+"""Tests for the WebView bridge Statistics / Export summary method.
 
 Covers ``WebViewBridge.get_statistics_export_summary``:
 
@@ -117,7 +117,7 @@ def test_bridge_statistics_summary_success(bridge):
         assert "duration" in group
     for group in summary["by_status"]:
         assert "duration" in group
-    # export_preview: Phase 4B opens the CSV write action. timesheet is no
+    # export_preview: the CSV write action is open. timesheet is no
     # longer advertised as an available format.
     preview = summary["export_preview"]
     assert preview["export_actions_enabled"] is True

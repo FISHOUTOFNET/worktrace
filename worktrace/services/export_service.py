@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 _UNKNOWN_APP_LABEL = "未知应用"
 
-# Phase 4B: ordered CSV columns. Each entry is ``(dict_key, csv_header)``.
+# Ordered CSV columns. Each entry is ``(dict_key, csv_header)``.
 # The dict rows returned by ``build_statistics_csv_rows`` use the English
 # keys; the writer emits the Chinese headers so Excel opens the file with
 # readable column names. The columns are display-safe by construction:
@@ -240,15 +240,15 @@ def export_all_local_data(path: str) -> str:
 def clear_all_local_data(confirm: bool) -> None:
     """Clear all local data by resetting the database.
 
-    Phase 6D hardening: when ``confirm=True`` the reset runs inside a
-    destructive reset guard that mirrors the secure-backup import guard
-    semantics. While the guard is active the collector is paused and
-    ``secure_import_in_progress`` is set to ``true`` so the collector loop
-    skips its normal write path (see ``collector.is_secure_import_in_progress``).
-    On success the app is left paused so the user can verify the cleared
-    state before resuming recording; on failure the prior pause / status
-    state is best-effort restored and ``secure_import_in_progress`` is
-    cleared so the collector is never permanently blocked.
+    When ``confirm=True`` the reset runs inside a destructive reset guard
+    that mirrors the secure-backup import guard semantics. While the guard
+    is active the collector is paused and ``secure_import_in_progress``
+    is set to ``true`` so the collector loop skips its normal write path
+    (see ``collector.is_secure_import_in_progress``). On success the app
+    is left paused so the user can verify the cleared state before
+    resuming recording; on failure the prior pause / status state is
+    best-effort restored and ``secure_import_in_progress`` is cleared so
+    the collector is never permanently blocked.
 
     This guard is local to ``export_service``; it does NOT reuse the
     private ``secure_backup_service._secure_import_guard`` context manager
@@ -258,9 +258,9 @@ def clear_all_local_data(confirm: bool) -> None:
     Cache invalidation after a successful reset matches the
     ``secure_backup_service._invalidate_caches`` set: settings cache,
     privacy exclude rules cache, uncategorized project cache, folder rule
-    cache, keyword rule cache, and context recompute cache. The context
-    recompute cache was previously missing from this path; it is now
-    invalidated because ``reset_database`` drops all activity / project /
+    cache, keyword rule cache, and context recompute cache.
+    The context recompute cache is invalidated because ``reset_database``
+    drops all activity / project /
     rule rows that the context recompute cache is derived from.
     """
     if not confirm:

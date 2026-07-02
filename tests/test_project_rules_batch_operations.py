@@ -1,4 +1,4 @@
-"""Phase 5I: selected-rule batch operations service / API tests.
+"""selected-rule batch operations service / API tests.
 
 Covers ``worktrace.services.rule_batch_service`` and the stable
 ``worktrace.api.rule_api.preview_project_rules_batch_impact`` /
@@ -21,7 +21,7 @@ Locked behavior:
   (``too_many_matches`` writes nothing), first-rule-wins on collision,
   all-or-nothing transaction with rowcount guard rollback, never sets
   ``manual_override = 1``, writes ``auto_classified = 1``,
-  ``is_manual = 0``, source + confidence matching Phase 5H.
+  ``is_manual = 0``, source + confidence matching the single-rule backfill.
 - Batch enable / disable: all-or-nothing, no delete / create / edit /
   backfill, no project enabled state change, cache invalidation hooks
   fire after commit.
@@ -73,7 +73,7 @@ def _create_closed_activity(
         project_id=project_id,
     )
     # Set end_time directly via SQL instead of calling ``close_activity``.
-    # Phase 5I.1 made ``close_activity`` re-trigger ``process_new_activity``
+    # made ``close_activity`` re-trigger ``process_new_activity``
     # so automatic rules apply to just-closed activities. The batch /
     # rule-impact tests need a closed-but-unassigned activity so they can
     # verify batch apply / preview / backfill behaviour from a clean state.
@@ -870,7 +870,7 @@ def test_no_schema_change_batch_service(temp_db):
 
 
 # ---------------------------------------------------------------------------
-# Phase 5I.1 hardening: validation variants + preview/apply/toggle guarantees
+# Hardening lock: validation variants + preview/apply/toggle guarantees
 # ---------------------------------------------------------------------------
 
 
@@ -879,7 +879,7 @@ def test_no_schema_change_batch_service(temp_db):
     [1.5, None, [], {}, (1,), {1, 2}, frozenset({1})],
 )
 def test_batch_preview_rejects_non_int_rule_id_variants(temp_db, bad_id):
-    # Phase 5I.1: ``rule_id`` must be a real positive ``int``. Float,
+    # ``rule_id`` must be a real positive ``int``. Float,
     # ``None``, list, dict, tuple, set, frozenset all collapse to
     # ``invalid_input``. Existing tests cover bool / 0 / negative / numeric
     # string; this locks the remaining container / float / None variants.
@@ -902,7 +902,7 @@ def test_batch_preview_rejects_non_int_rule_id_variants(temp_db, bad_id):
     ],
 )
 def test_batch_preview_rejects_malformed_items(temp_db, bad_item):
-    # Phase 5I.1: each item must be a dict with ``rule_type`` in
+    # each item must be a dict with ``rule_type`` in
     # ``{"folder","keyword"}`` and a real positive int ``rule_id``. Missing
     # keys and non-string rule_type collapse to ``invalid_input``.
     result = rule_api.preview_project_rules_batch_impact([bad_item])
@@ -911,7 +911,7 @@ def test_batch_preview_rejects_malformed_items(temp_db, bad_item):
 
 
 def test_batch_preview_archived_project_returns_zero_counts_not_error(temp_db):
-    # Phase 5I.1: batch preview is informational. An archived target
+    # batch preview is informational. An archived target
     # project must contribute zero counts for that rule (availability
     # surfaced in the per-rule summary), NOT raise ``project_not_available``.
     project = project_service.create_project("ArchivedPreview")
@@ -931,7 +931,7 @@ def test_batch_preview_archived_project_returns_zero_counts_not_error(temp_db):
 
 
 def test_batch_apply_never_sets_manual_override_on_all_updated_rows(temp_db):
-    # Phase 5I.1: batch apply must never set ``manual_override = 1`` on ANY
+    # batch apply must never set ``manual_override = 1`` on ANY
     # updated row. Existing test checks one row; this locks the guarantee
     # across multiple updated rows (folder + keyword paths).
     project_a = project_service.create_project("NoOverrideA")
@@ -971,7 +971,7 @@ def test_batch_apply_never_sets_manual_override_on_all_updated_rows(temp_db):
 
 
 def test_batch_toggle_does_not_change_project_enabled_state(temp_db):
-    # Phase 5I.1: batch enable/disable only flips rule.enabled; it must NOT
+    # batch enable/disable only flips rule.enabled; it must NOT
     # change the target project's enabled flag. Lock that project.enabled is
     # unchanged after a batch disable.
     project = project_service.create_project("ProjStateLocked")
@@ -990,7 +990,7 @@ def test_batch_toggle_does_not_change_project_enabled_state(temp_db):
 
 
 def test_batch_apply_too_many_rules_writes_nothing(temp_db):
-    # Phase 5I.1: the 20-rule cap is enforced in ``_normalize_rules``
+    # the 20-rule cap is enforced in ``_normalize_rules``
     # BEFORE any DB write. Lock that the ``too_many_rules`` path writes
     # nothing (the existing apply test only checks the error code).
     project = project_service.create_project("TooManyApplyNoWrite")
@@ -1018,7 +1018,7 @@ def test_batch_apply_too_many_rules_writes_nothing(temp_db):
 
 
 def test_batch_toggle_too_many_rules_writes_nothing(temp_db):
-    # Phase 5I.1: the 20-rule cap on toggle is enforced before any write.
+    # the 20-rule cap on toggle is enforced before any write.
     # Lock that the first rule's enabled state is unchanged.
     project = project_service.create_project("TooManyToggleNoWrite")
     folder_rid = folder_rule_service.create_or_update_folder_rule(
@@ -1051,7 +1051,7 @@ def test_batch_toggle_too_many_rules_writes_nothing(temp_db):
 
 
 def test_batch_apply_folder_id_on_keyword_path_writes_nothing(temp_db):
-    # Phase 5I.1: a folder id sent on the keyword path must return
+    # a folder id sent on the keyword path must return
     # ``not_found`` and write nothing. Locks rule-table isolation on the
     # apply path (existing test only covers preview cross-path).
     project = project_service.create_project("CrossPathApplyNoWrite")

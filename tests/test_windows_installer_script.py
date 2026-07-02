@@ -1,7 +1,7 @@
 """Static validation of ``scripts/build_windows_installer.ps1``.
 
-Phase 0C.1 hardened the installer build script so PyInstaller's stderr INFO
-logs no longer trigger false terminating errors under
+The installer build script hardens PyInstaller's stderr INFO logs so they
+no longer trigger false terminating errors under
 ``$ErrorActionPreference = "Stop"``. These tests read the script as text and
 assert the hardening invariants remain in place. They never invoke
 PyInstaller, PowerShell, or the installer itself, so they run on any host.
@@ -35,7 +35,7 @@ def test_installer_build_script_exists(script_text: str) -> None:
 def test_script_keeps_global_strict_error_action(script_text: str) -> None:
     """The script must still set a global ``$ErrorActionPreference = "Stop"``.
 
-    Phase 0C.1 does not weaken global error handling; it only carves out a
+    The hardening does not weaken global error handling; it only carves out a
     local relaxation around the native PyInstaller call. A global ``Stop`` must
     still be present so non-PyInstaller failures (Resolve-Path, Get-Command,
     New-Item, Get-Item) remain terminating.

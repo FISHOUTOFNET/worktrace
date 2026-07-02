@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.8 Timeline single activity restore API and
+"""Tests for the Timeline single activity restore API and
 service layer.
 
 Covers ``worktrace.api.timeline_api.restore_timeline_activity``,
@@ -549,11 +549,11 @@ def test_get_restorable_activities_excludes_other_dates(temp_db):
     assert not any(a["activity_id"] == a1 for a in result_26["activities"])
 
 
-# --- Phase 3B.8.1: restore hardening tests --------------------------------
+# --- restore hardening tests --------------------------------
 
 
 def test_service_restore_activity_write_exception_propagates(temp_db):
-    """Phase 3B.8.1: a write exception (e.g. sqlite3.OperationalError)
+    """a write exception (e.g. sqlite3.OperationalError)
     during the restore UPDATE must propagate from the service so the API
     layer can collapse it to ``operation_failed``. The transaction must
     roll back so the activity remains hidden."""
@@ -603,7 +603,7 @@ def test_service_restore_activity_write_exception_propagates(temp_db):
 
 
 def test_restore_activity_api_write_exception_operation_failed(temp_db):
-    """Phase 3B.8.1: a non-ValueError service exception during restore
+    """a non-ValueError service exception during restore
     must collapse to ``operation_failed`` at the API layer."""
     aid = _seed_closed_activity()
     timeline_api.hide_timeline_activity(aid)
@@ -617,7 +617,7 @@ def test_restore_activity_api_write_exception_operation_failed(temp_db):
 
 
 def test_get_restorable_activities_api_non_value_error(temp_db):
-    """Phase 3B.8.1: a non-ValueError service exception from the recovery
+    """a non-ValueError service exception from the recovery
     list read must collapse to ``operation_failed`` at the API layer."""
     with patch.object(
         activity_service,
@@ -631,7 +631,7 @@ def test_get_restorable_activities_api_non_value_error(temp_db):
 
 
 def test_get_restorable_activities_sorted_by_start_time_then_id(temp_db):
-    """Phase 3B.8.1: when two hidden activities share the same start_time,
+    """when two hidden activities share the same start_time,
     the recovery list must break ties by id ascending."""
     # Create two activities with the same start_time. The second created
     # will have a higher id.
@@ -649,7 +649,7 @@ def test_get_restorable_activities_sorted_by_start_time_then_id(temp_db):
 
 
 def test_restore_activity_updated_at_refreshed(temp_db):
-    """Phase 3B.8.1: restore must refresh ``updated_at``."""
+    """restore must refresh ``updated_at``."""
     aid = _seed_closed_activity()
     timeline_api.hide_timeline_activity(aid)
     before = activity_service.get_activity(aid)
@@ -665,7 +665,7 @@ def test_restore_activity_updated_at_refreshed(temp_db):
 
 
 def test_restore_activity_idempotent_after_restore(temp_db):
-    """Phase 3B.8.1: restoring an already-restored activity is rejected
+    """restoring an already-restored activity is rejected
     as ``not_restorable`` — restore is not a silent no-op."""
     aid = _seed_closed_activity()
     timeline_api.hide_timeline_activity(aid)
@@ -677,7 +677,7 @@ def test_restore_activity_idempotent_after_restore(temp_db):
 
 
 def test_get_restorable_activities_no_updated_at_change(temp_db):
-    """Phase 3B.8.1: the recovery list read path must not refresh
+    """the recovery list read path must not refresh
     ``updated_at`` on any activity."""
     aid = _seed_closed_activity()
     timeline_api.hide_timeline_activity(aid)
@@ -689,7 +689,7 @@ def test_get_restorable_activities_no_updated_at_change(temp_db):
 
 
 def test_restore_activity_does_not_leak_exception_in_message(temp_db):
-    """Phase 3B.8.1: the API error message must not contain the service
+    """the API error message must not contain the service
     exception class name or internal detail."""
     aid = _seed_closed_activity()
     timeline_api.hide_timeline_activity(aid)

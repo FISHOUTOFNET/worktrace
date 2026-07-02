@@ -1,7 +1,7 @@
 """Unit tests for ``worktrace.api._write_contract`` helper.
 
-The Phase M2 refactor moved the shared Project Rules write-path validation
-/ fail payload / success payload logic into this helper. These tests lock
+The shared Project Rules write-path validation
+/ fail payload / success payload logic was moved into this helper. These tests lock
 the contract so a future refactor cannot silently break the "true positive
 int", "true bool", "true non-empty str", or stable payload shapes that
 every Project Rules facade relies on.

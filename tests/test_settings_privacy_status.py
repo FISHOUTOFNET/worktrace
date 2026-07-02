@@ -1,11 +1,11 @@
-"""Phase 6A / 6B / 6C / 6D / 6E — Settings / Privacy status facade + bridge tests.
+"""Settings / Privacy status facade + bridge tests.
 
 These tests verify the ``settings_api.get_settings_privacy_status`` facade,
 the ``settings_api.set_clipboard_capture_enabled_for_webview`` write facade,
 the ``settings_api.export_encrypted_backup_for_webview`` and
 ``settings_api.preview_encrypted_backup_manifest_for_webview`` facades, the
-Phase 6D ``settings_api.import_encrypted_backup_for_webview`` and
-``settings_api.clear_all_local_data_for_webview`` facades, the Phase 6E
+backup import ``settings_api.import_encrypted_backup_for_webview`` and
+``settings_api.clear_all_local_data_for_webview`` facades, the first-run notice
 ``settings_api.get_first_run_notice_for_webview`` and
 ``settings_api.accept_first_run_notice_for_webview`` facades, and the
 corresponding ``WebViewBridge`` methods. They assert the read-only status
@@ -133,9 +133,9 @@ def test_api_secure_import_in_progress_reflects_backup_guard(temp_db) -> None:
 
 
 def test_api_encrypted_backup_availability_fields_match_phase_6d(temp_db) -> None:
-    # Phase 6D: export + manifest preview + import are all available in
-    # WebView. Export / manifest preview were opened in Phase 6C; import
-    # is opened in Phase 6D.
+    # export + manifest preview + import are all available in
+    # WebView. Export / manifest preview were opened in the backup export; import
+    # is opened in the backup import.
     status = get_settings_privacy_status()["status"]
     enc = status["encrypted_backup"]
     assert isinstance(enc, dict)
@@ -146,7 +146,7 @@ def test_api_encrypted_backup_availability_fields_match_phase_6d(temp_db) -> Non
 
 
 def test_api_destructive_clear_all_availability_is_true(temp_db) -> None:
-    # Phase 6D: clear-all-local-data is now available in WebView behind
+    # clear-all-local-data is now available in WebView behind
     # the explicit Chinese confirmation literal.
     status = get_settings_privacy_status()["status"]
     destructive = status["destructive_actions"]
@@ -237,7 +237,7 @@ def test_bridge_method_exists_on_composed_webview_bridge() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "get_settings_privacy_status", None)
     assert callable(method), (
-        "WebViewBridge must expose get_settings_privacy_status for Phase 6A"
+        "WebViewBridge must expose get_settings_privacy_status for settings privacy status contract"
     )
 
 
@@ -312,7 +312,7 @@ def test_bridge_method_signature_has_no_required_args() -> None:
         )
 
 
-# --- Phase 6B: API write facade -----------------------------------------
+# --- API write facade -----------------------------------------
 
 
 def test_api_write_true_success_status_reflects_setting(temp_db) -> None:
@@ -471,14 +471,14 @@ def test_api_write_does_not_change_schema(temp_db) -> None:
     assert expected_tables == actual_tables
 
 
-# --- Phase 6B: Bridge write method --------------------------------------
+# --- Bridge write method --------------------------------------
 
 
 def test_bridge_write_method_exists_on_composed_webview_bridge() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "set_clipboard_capture_enabled", None)
     assert callable(method), (
-        "WebViewBridge must expose set_clipboard_capture_enabled for Phase 6B"
+        "WebViewBridge must expose set_clipboard_capture_enabled for settings capture contract"
     )
 
 
@@ -655,7 +655,7 @@ def test_bridge_write_api_ok_false_passes_error_through(temp_db) -> None:
     assert result == api_result
 
 
-# --- Phase 6C: API export facade ---------------------------------------
+# --- API export facade ---------------------------------------
 
 
 def test_api_export_success_returns_narrow_payload(temp_db) -> None:
@@ -781,7 +781,7 @@ def test_api_export_does_not_call_import_or_manifest_or_clear_or_set(temp_db) ->
         mock_set_value.assert_not_called()
 
 
-# --- Phase 6C: API manifest preview facade -----------------------------
+# --- API manifest preview facade -----------------------------
 
 
 def _fake_manifest_info() -> BackupManifestInfo:
@@ -912,14 +912,14 @@ def test_api_manifest_does_not_require_passphrase(temp_db) -> None:
     assert result["ok"] is True
 
 
-# --- Phase 6C: Bridge export + manifest methods ------------------------
+# --- Bridge export + manifest methods ------------------------
 
 
 def test_bridge_export_method_exists() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "export_encrypted_backup", None)
     assert callable(method), (
-        "WebViewBridge must expose export_encrypted_backup for Phase 6C"
+        "WebViewBridge must expose export_encrypted_backup for encrypted backup contract"
     )
 
 
@@ -948,7 +948,7 @@ def test_bridge_preview_method_exists() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "preview_encrypted_backup_manifest", None)
     assert callable(method), (
-        "WebViewBridge must expose preview_encrypted_backup_manifest for Phase 6C"
+        "WebViewBridge must expose preview_encrypted_backup_manifest for encrypted backup contract"
     )
 
 
@@ -1184,7 +1184,7 @@ def test_bridge_preview_uses_open_dialog_with_wtbackup_filter(temp_db) -> None:
     assert "save_filename" not in call
 
 
-# --- Phase 6D: API import facade --------------------------------------
+# --- API import facade --------------------------------------
 
 
 def test_api_import_success_returns_narrow_payload(temp_db) -> None:
@@ -1452,14 +1452,14 @@ def test_api_import_round_trip_smoke(temp_db, tmp_path) -> None:
         assert token not in serialized, f"import smoke leaks: {token!r}"
 
 
-# --- Phase 6D: Bridge import method -----------------------------------
+# --- Bridge import method -----------------------------------
 
 
 def test_bridge_import_method_exists() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "import_encrypted_backup", None)
     assert callable(method), (
-        "WebViewBridge must expose import_encrypted_backup for Phase 6D"
+        "WebViewBridge must expose import_encrypted_backup for destructive settings contract"
     )
 
 
@@ -1659,7 +1659,7 @@ def test_bridge_import_payload_never_leaks_full_path_or_passphrase(temp_db) -> N
         assert token not in serialized, f"bridge import leaks: {token!r}"
 
 
-# --- Phase 6D: API clear-all facade -----------------------------------
+# --- API clear-all facade -----------------------------------
 
 
 def test_api_clear_success_returns_narrow_payload(temp_db) -> None:
@@ -1792,14 +1792,14 @@ def test_api_clear_round_trip_smoke(temp_db) -> None:
         assert token not in serialized, f"clear smoke leaks: {token!r}"
 
 
-# --- Phase 6D: Bridge clear-all method --------------------------------
+# --- Bridge clear-all method --------------------------------
 
 
 def test_bridge_clear_method_exists() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "clear_all_local_data", None)
     assert callable(method), (
-        "WebViewBridge must expose clear_all_local_data for Phase 6D"
+        "WebViewBridge must expose clear_all_local_data for destructive settings contract"
     )
 
 
@@ -1885,7 +1885,7 @@ def test_bridge_clear_does_not_call_backup_actions_directly(temp_db) -> None:
         mock_manifest.assert_not_called()
 
 
-# --- Phase 6E: First-run notice API facade ----------------------------
+# --- First-run notice API facade ----------------------------
 
 
 def test_api_first_run_notice_default_is_false_for_new_db(temp_db) -> None:
@@ -1914,7 +1914,7 @@ def test_api_first_run_notice_text_matches_privacy_notice_constant(temp_db) -> N
     assert result["notice_text"] == PRIVACY_NOTICE_TEXT
 
 
-def test_api_first_run_notice_highlights_match_legacy_dialog(temp_db) -> None:
+def test_api_first_run_notice_highlights_match_expected_notice(temp_db) -> None:
     result = get_first_run_notice_for_webview()
     assert result["highlights"] == [
         "本地保存",
@@ -1988,7 +1988,7 @@ def test_api_first_run_notice_fail_closed_on_accepted_read_exception(temp_db) ->
         assert token not in serialized, f"notice fail-closed leaks: {token!r}"
 
 
-# --- Phase 6G: First-run notice fail-closed + success path -----------
+# --- First-run notice fail-closed + success path -----------
 
 
 def test_api_first_run_notice_success_path_returns_full_notice_text(temp_db) -> None:
@@ -2120,19 +2120,19 @@ def test_api_status_does_not_expose_raw_first_run_setting_key(temp_db) -> None:
     assert "first_run_notice_accepted" not in serialized
 
 
-# --- Phase 6E: Bridge first-run notice methods ------------------------
+# --- Bridge first-run notice methods ------------------------
 
 
 def test_bridge_get_first_run_notice_method_exists() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "get_first_run_notice", None)
-    assert callable(method), "WebViewBridge must expose get_first_run_notice for Phase 6E"
+    assert callable(method), "WebViewBridge must expose get_first_run_notice for startup gate contract"
 
 
 def test_bridge_accept_first_run_notice_method_exists() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "accept_first_run_notice", None)
-    assert callable(method), "WebViewBridge must expose accept_first_run_notice for Phase 6E"
+    assert callable(method), "WebViewBridge must expose accept_first_run_notice for startup gate contract"
 
 
 def test_bridge_first_run_notice_methods_have_no_required_args() -> None:
@@ -2237,7 +2237,7 @@ def test_bridge_accept_first_run_notice_does_not_call_backup_or_set_setting(temp
         mock_clear.assert_not_called()
 
 
-# --- Phase 6E: toggle_pause first-run guard ---------------------------
+# --- toggle_pause first-run guard ---------------------------
 
 
 def test_bridge_toggle_pause_does_not_start_collector_when_notice_unaccepted(temp_db) -> None:

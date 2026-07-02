@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.7 Timeline batch note editing bridge method.
+"""Tests for the Timeline batch note editing bridge method.
 
 Covers ``WebViewBridge.batch_update_timeline_activities_note``:
 
@@ -374,7 +374,7 @@ def test_bridge_does_not_import_backend_internals():
         )
 
 
-# --- Phase 3B.7.1: bridge hardening --------------------------------------
+# --- bridge hardening --------------------------------------
 #
 # These tests verify the bridge error/success payload does not leak note
 # content, the updated_count matches the selection, and the bridge
@@ -382,7 +382,7 @@ def test_bridge_does_not_import_backend_internals():
 
 
 def test_batch_error_does_not_leak_note_content(bridge):
-    """Phase 3B.7.1: error payloads must not contain the note content that
+    """error payloads must not contain the note content that
     was sent to the bridge. The user may have typed sensitive content into
     the note textarea; a validation error must not echo it back."""
     ids = _seed_two_closed_activities()
@@ -405,7 +405,7 @@ def test_batch_error_does_not_leak_note_content(bridge):
 
 
 def test_batch_success_updated_count_matches_selection(bridge):
-    """Phase 3B.7.1: the ``updated_count`` in the success payload must
+    """the ``updated_count`` in the success payload must
     equal the number of activities sent (after dedup)."""
     ids = _seed_two_closed_activities()
     result = bridge.batch_update_timeline_activities_note(ids, "note")
@@ -414,7 +414,7 @@ def test_batch_success_updated_count_matches_selection(bridge):
 
 
 def test_batch_success_updated_count_matches_deduped_selection(bridge):
-    """Phase 3B.7.1: duplicate ids in the input must be deduplicated, and
+    """duplicate ids in the input must be deduplicated, and
     ``updated_count`` must reflect the deduplicated count."""
     ids = _seed_two_closed_activities()
     # Send duplicates.
@@ -426,7 +426,7 @@ def test_batch_success_updated_count_matches_deduped_selection(bridge):
 
 
 def test_batch_all_chinese_error_messages_present(bridge):
-    """Phase 3B.7.1: verify every stable error code produces its exact
+    """verify every stable error code produces its exact
     Chinese message through the bridge. This guards against accidental
     message drift."""
     ids = _seed_two_closed_activities()
@@ -453,7 +453,7 @@ def test_batch_all_chinese_error_messages_present(bridge):
 
 
 def test_batch_unknown_code_converges_to_generic(bridge):
-    """Phase 3B.7.1: an unrecognized error code must converge to
+    """an unrecognized error code must converge to
     ``操作失败`` so internal details are never surfaced."""
     ids = _seed_two_closed_activities()
     with patch(
@@ -467,7 +467,7 @@ def test_batch_unknown_code_converges_to_generic(bridge):
 
 
 def test_batch_success_payload_has_only_ok_and_count(bridge):
-    """Phase 3B.7.1: the success payload must contain exactly ``ok`` and
+    """the success payload must contain exactly ``ok`` and
     ``updated_count`` — no extra keys that could leak internal data."""
     ids = _seed_two_closed_activities()
     result = bridge.batch_update_timeline_activities_note(ids, "note")
@@ -476,7 +476,7 @@ def test_batch_success_payload_has_only_ok_and_count(bridge):
 
 
 def test_batch_error_payload_has_only_ok_and_error(bridge):
-    """Phase 3B.7.1: the error payload must contain exactly ``ok`` and
+    """the error payload must contain exactly ``ok`` and
     ``error`` — no extra keys that could leak internal data."""
     ids = _seed_two_closed_activities()
     with patch(
@@ -489,7 +489,7 @@ def test_batch_error_payload_has_only_ok_and_error(bridge):
 
 
 def test_batch_note_too_long_rejected_at_bridge(bridge):
-    """Phase 3B.7.1: the bridge must reject an overly long note before
+    """the bridge must reject an overly long note before
     calling the API, returning the ``备注过长`` message."""
     ids = _seed_two_closed_activities()
     from worktrace.api import timeline_api as api_module

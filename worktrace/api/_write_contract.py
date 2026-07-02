@@ -1,11 +1,9 @@
 """Shared write-path contract helpers for Project Rules API facades.
 
-These helpers centralize the input validation, stable fail payload, and
-narrow success payload patterns used by both ``rule_api`` (keyword / folder
-rule facades) and ``project_api`` (project lifecycle facades). They are
-intentionally tiny and dependency-free so the contract stays identical
-across every Project Rules write path, and so a future facade does not
-re-invent (and subtly break) the same validation / error-mapping logic.
+Pure-stdlib validators and stable payload builders shared by ``rule_api``
+and ``project_api``. Must NOT import services / db / collector / security /
+runtime / config; it stays pure stdlib so any API facade can import it
+without creating a layering cycle.
 
 Design notes
 ------------
@@ -20,11 +18,6 @@ Design notes
 - The fail payload is always ``{"ok": False, "error": code}``; the success
   payload is always ``{"ok": True, ...}``. Codes are stable strings the
   WebView bridge maps to Chinese text.
-
-This module is the M2 single source of truth for the Project Rules write
-contract. It must NOT import services / db / collector / security / runtime
-/ config; it is pure stdlib so it can be imported from any API facade
-without creating a layering cycle.
 """
 
 from __future__ import annotations
@@ -45,11 +38,9 @@ ERROR_DUPLICATE_RULE = "duplicate_rule"
 ERROR_DUPLICATE_PROJECT = "duplicate_project"
 ERROR_SYSTEM_PROJECT = "system_project"
 ERROR_OPERATION_FAILED = "operation_failed"
-# Phase 5H: rule impact preview / safe single-rule backfill stable codes.
 ERROR_RULE_DISABLED = "rule_disabled"
 ERROR_PROJECT_NOT_AVAILABLE = "project_not_available"
 ERROR_TOO_MANY_MATCHES = "too_many_matches"
-# Phase 5I: selected-rule batch operations stable code.
 ERROR_TOO_MANY_RULES = "too_many_rules"
 
 
@@ -92,10 +83,8 @@ def valid_nonempty_str(value: Any) -> str | None:
     after trim, otherwise ``None``.
 
     Returning the trimmed string lets the caller avoid a second ``.strip()``
-    call and avoids the "trim twice" pattern that previously appeared in
-    each facade. ``None`` is the single sentinel for "reject as
-    ``invalid_input``"; callers do not need to distinguish "not a str"
-    from "empty after trim".
+    call. ``None`` is the single sentinel for "reject as ``invalid_input``";
+    callers do not need to distinguish "not a str" from "empty after trim".
     """
     if type(value) is not str:
         return None
@@ -125,7 +114,7 @@ def ok_payload(**fields: Any) -> dict[str, Any]:
     Shape is always ``{"ok": True, ...fields}``. Callers pass the
     facade-specific narrowed payload (``rule=...`` / ``project=...`` /
     ``rule_type=...`` etc.) as keyword arguments so the success shape stays
-    identical to the pre-helper shape.
+    identical across facades.
     """
     payload: dict[str, Any] = {"ok": True}
     payload.update(fields)

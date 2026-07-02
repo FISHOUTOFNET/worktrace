@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.3 Timeline activity-merge API and service layer.
+"""Tests for the Timeline activity-merge API and service layer.
 
 Covers ``worktrace.api.timeline_api.merge_timeline_activities`` and the
 underlying ``worktrace.services.activity_service.merge_activities`` write:
@@ -731,9 +731,9 @@ def test_service_merge_assignment_resource_not_complex_merged(temp_db):
     assert after_resources == before_resources
 
 
-# --- Phase 3B.3.1: merge hardening tests ----------------------------------
+# --- merge hardening tests ----------------------------------
 #
-# These tests cover the hardening edge cases the Phase 3B.3 foundation
+# These tests cover the hardening edge cases the foundation
 # tests did not explicitly exercise: excluded vs non-excluded rejection,
 # no-partial-write for every rejection path, kept-fields-unchanged on
 # validation failure, soft-delete UPDATE exception rollback, and the

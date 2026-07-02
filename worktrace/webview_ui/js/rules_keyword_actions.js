@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend - Project Rules keyword actions (Phase 5C-5F, MC2 split).
+// WorkTrace WebView frontend - Project Rules keyword actions.
 // Keyword rule create / edit / delete.
 // Loaded after rules_rule_actions.js, before folder / project action modules.
 
@@ -6,10 +6,10 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Phase 5D: keyword rule deletion -------------------------------
+    // --- keyword rule deletion -------------------------------
 
     function bindProjectRuleDelete() {
-        // Phase 5D: event-delegated binding for keyword delete buttons.
+        // event-delegated binding for keyword delete buttons.
         // Re-uses the same #rules-list container as the toggle binding so
         // no extra per-row listeners are needed. Bound once per page
         // lifecycle via the data attribute guard.
@@ -21,7 +21,7 @@
     App.bindProjectRuleDelete = bindProjectRuleDelete;
 
     function handleProjectRuleDelete(event) {
-        // Phase 5D: delete one existing keyword rule. Confirms first, then
+        // delete one existing keyword rule. Confirms first, then
         // validates the dataset rule id locally before calling the bridge.
         // Only one keyword delete may be in flight at a time. The deleting
         // state is intentionally separate from rulesSavingRuleKey (toggle)
@@ -64,7 +64,7 @@
     App.handleProjectRuleDelete = handleProjectRuleDelete;
 
     function setRuleDeleting(ruleKey) {
-        // Phase 5D: toggle the keyword delete saving state. Updates every
+        // toggle the keyword delete saving state. Updates every
         // delete button label / disabled state and the matching toggle
         // button disabled state on the same row so the two write paths
         // cannot run concurrently on one row.
@@ -86,10 +86,10 @@
     }
     App.setRuleDeleting = setRuleDeleting;
 
-    // --- Phase 5F: keyword rule edit -----------------------------------
+    // --- keyword rule edit -----------------------------------
 
     function bindProjectRuleKeywordEditEvents() {
-        // Phase 5F: event-delegated binding for keyword edit / edit-save /
+        // event-delegated binding for keyword edit / edit-save /
         // edit-cancel. Re-uses the same #rules-list container as the toggle,
         // delete, and folder bindings so no extra per-row listeners are
         // needed. Bound once per page lifecycle via the data attribute guard.
@@ -101,7 +101,7 @@
     App.bindProjectRuleKeywordEditEvents = bindProjectRuleKeywordEditEvents;
 
     function handleProjectRuleKeywordEditEvent(event) {
-        // Phase 5F: single delegated click handler for all keyword edit
+        // single delegated click handler for all keyword edit
         // operations (edit start, edit save, edit cancel). Routes to the
         // matching sub-handler based on the button class.
         var button = event.target && event.target.closest ? event.target.closest("button") : null;
@@ -122,7 +122,7 @@
     App.handleProjectRuleKeywordEditEvent = handleProjectRuleKeywordEditEvent;
 
     function handleKeywordEditStart(button) {
-        // Phase 5F: enter inline edit mode for one keyword rule row. Only
+        // enter inline edit mode for one keyword rule row. Only
         // one keyword edit may be in flight at a time. Setting the editing
         // key triggers a re-render of that row into the edit form.
         if (App.rulesEditingKeywordKey) return;
@@ -145,7 +145,7 @@
     App.handleKeywordEditStart = handleKeywordEditStart;
 
     function handleKeywordEditSave(button) {
-        // Phase 5F: save the inline keyword edit. Validates the edited
+        // save the inline keyword edit. Validates the edited
         // keyword locally, then calls the bridge. On success the editing
         // state clears and the Project Rules list refreshes; on failure
         // the editing form is preserved so the user can retry. The catch
@@ -193,7 +193,7 @@
     App.handleKeywordEditSave = handleKeywordEditSave;
 
     function handleKeywordEditCancel(button) {
-        // Phase 5F: cancel the inline keyword edit. Just clears the editing
+        // cancel the inline keyword edit. Just clears the editing
         // state and re-renders. No bridge call is made.
         if (!App.rulesEditingKeywordKey) return;
         App.setKeywordEditing(null);
@@ -202,7 +202,7 @@
     App.handleKeywordEditCancel = handleKeywordEditCancel;
 
     function setKeywordEditing(keywordKey) {
-        // Phase 5F: enter / leave inline edit mode for one keyword rule row.
+        // enter / leave inline edit mode for one keyword rule row.
         // Setting the key triggers a re-render of the list from cached data
         // so the edit form appears / disappears immediately.
         App.rulesEditingKeywordKey = keywordKey || null;
@@ -211,7 +211,7 @@
     App.setKeywordEditing = setKeywordEditing;
 
     function setKeywordSaving(keywordKey) {
-        // Phase 5F: toggle the in-flight state for a keyword edit save.
+        // toggle the in-flight state for a keyword edit save.
         // Flips the save / cancel button disabled state on the edit form
         // so the user cannot double-submit. State is separate from the
         // editing key (which stays set until success clears it).
@@ -229,10 +229,10 @@
     }
     App.setKeywordSaving = setKeywordSaving;
 
-    // --- Phase 5C: keyword rule creation -------------------------------
+    // --- keyword rule creation -------------------------------
 
     function populateKeywordCreateProjectSelector(projects) {
-        // Phase 5C: populate the keyword-create project selector from the
+        // populate the keyword-create project selector from the
         // freshly loaded Project Rules data. Only enabled, non-excluded
         // projects with a positive id are valid targets — this mirrors the
         // ``project_api.list_rule_target_projects()`` eligibility rule the
@@ -290,7 +290,7 @@
     App.populateKeywordCreateProjectSelector = populateKeywordCreateProjectSelector;
 
     function handleKeywordCreateSubmit() {
-        // Phase 5C: validate project id + keyword locally, then call the
+        // validate project id + keyword locally, then call the
         // bridge. Only one keyword create may be in flight at a time. The
         // keyword is trimmed before validation and before the bridge call.
         // On success the keyword input is cleared and the Project Rules
@@ -331,9 +331,9 @@
     App.handleKeywordCreateSubmit = handleKeywordCreateSubmit;
 
     function setKeywordCreateCreating(creating) {
-        // Phase 5C: toggle the keyword create saving state. The state is
-        // intentionally separate from ``rulesSavingRuleKey`` (Phase 5B
-        // toggle saving) so the two write paths can never pollute each
+        // toggle the keyword create saving state. The state is
+        // intentionally separate from ``rulesSavingRuleKey`` (toggle
+        // saving) so the two write paths can never pollute each
         // other's button / input disabled state.
         App.rulesCreatingKeyword = creating;
         var btn = document.getElementById("rules-keyword-create-submit");
@@ -368,10 +368,10 @@
     }
     App.clearKeywordCreateStatus = clearKeywordCreateStatus;
 
-    // --- Phase 6G: excluded keyword rule creation ----------------------
+    // --- excluded keyword rule creation ----------------------
 
     function bindExcludedKeywordRuleEvents() {
-        // Phase 6G: event-delegated binding for the excluded keyword
+        // event-delegated binding for the excluded keyword
         // create submit button. Bound once per page lifecycle via the
         // data attribute guard, re-using the same #rules-list container
         // as the other rule event delegations.
@@ -389,7 +389,7 @@
     App.bindExcludedKeywordRuleEvents = bindExcludedKeywordRuleEvents;
 
     function handleExcludedKeywordCreateSubmit() {
-        // Phase 6G: validate the excluded keyword locally, then call the
+        // validate the excluded keyword locally, then call the
         // dedicated ``create_excluded_keyword_rule`` bridge method. This
         // method does NOT pass a project_id — the API pins it to
         // EXCLUDED_PROJECT internally. On success the keyword input is

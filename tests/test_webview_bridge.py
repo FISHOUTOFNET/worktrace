@@ -5,12 +5,12 @@ The bridge must:
 - never return tracebacks;
 - only import worktrace.api (enforced by test_ui_backend_boundary.py).
 - never surface sensitive raw fields (window_title, file_path_hint, note,
-  clipboard) in Timeline output (Phase 2.1).
+  clipboard) in Timeline output.
 - expose ``is_in_progress`` as an explicit flag passed through from the
   timeline service (not inferred from the displayed ``end_time``, which
-  may be projected for open activities) (Phase 2.1).
+  may be projected for open activities).
 - build ``resource_name`` from sanitized display fields only, never falling
-  back to the raw ``window_title`` column (Phase 2.1).
+  back to the raw ``window_title`` column.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from worktrace.webview_ui.bridge_common import _safe_resource_display_name
 @pytest.fixture()
 def bridge(temp_db):
     settings_service.clear_settings_cache()
-    # Phase 6E: toggle_pause now gates on first_run_notice_accepted.
+    # toggle_pause now gates on first_run_notice_accepted.
     # Most bridge tests assume the user has already accepted the notice
     # (the normal runtime state). Accept it here so the existing
     # toggle_pause / pause / resume semantics are exercised.
@@ -223,7 +223,7 @@ def test_toggle_pause_resumes_when_paused(bridge):
 
 
 # ---------------------------------------------------------------------------
-# Phase 2.1: Timeline read-only validation hardening
+# Timeline read-only validation hardening
 # ---------------------------------------------------------------------------
 
 
@@ -330,7 +330,7 @@ def test_safe_resource_display_name_never_returns_window_title():
 
 
 def test_get_timeline_session_exposes_is_in_progress_flag(bridge):
-    """Phase 2.1: each Timeline session must carry ``is_in_progress`` so the
+    """each Timeline session must carry ``is_in_progress`` so the
     frontend can mark open sessions distinctly from closed history."""
     project_service.create_project("A")
     activity_service.create_activity(
@@ -348,7 +348,7 @@ def test_get_timeline_session_exposes_is_in_progress_flag(bridge):
 
 
 def test_get_timeline_session_details_exposes_is_in_progress_flag(bridge):
-    """Phase 2.1: each Timeline detail row must carry ``is_in_progress``."""
+    """each Timeline detail row must carry ``is_in_progress``."""
     aid = activity_service.create_activity(
         "Word", "winword.exe", "A.docx",
         start_time="2026-06-25 09:00:00",
@@ -365,7 +365,7 @@ def test_get_timeline_session_details_exposes_is_in_progress_flag(bridge):
 
 
 def test_get_timeline_does_not_leak_sensitive_fields(bridge):
-    """Phase 2.1: ``get_timeline`` must not surface window_title,
+    """``get_timeline`` must not surface window_title,
     file_path_hint, note, clipboard, traceback, or full_path anywhere in
     its output."""
     project = project_service.create_project("A")
@@ -376,7 +376,7 @@ def test_get_timeline_does_not_leak_sensitive_fields(bridge):
 
 
 def test_get_timeline_session_details_does_not_leak_sensitive_fields(bridge):
-    """Phase 2.1: ``get_timeline_session_details`` must not surface
+    """``get_timeline_session_details`` must not surface
     window_title, file_path_hint, note, clipboard, traceback, or
     full_path anywhere in its output."""
     project = project_service.create_project("A")
@@ -387,7 +387,7 @@ def test_get_timeline_session_details_does_not_leak_sensitive_fields(bridge):
 
 
 def test_get_timeline_session_details_resource_name_skips_window_title(bridge):
-    """Phase 2.1: ``resource_name`` must be built from sanitized display
+    """``resource_name`` must be built from sanitized display
     fields only. Even when the underlying row has a sensitive
     ``window_title`` containing a full path, the surfaced ``resource_name``
     must not contain that path."""
@@ -409,7 +409,7 @@ def test_get_timeline_session_details_resource_name_skips_window_title(bridge):
 
 
 def test_get_timeline_session_details_with_empty_safe_fields_returns_unknown(bridge):
-    """Phase 2.1: when the activity has only a window_title containing a
+    """when the activity has only a window_title containing a
     full path, the bridge must return a sanitized basename (extracted by
     the resource service) or ``未知`` — never the raw window_title with
     the full path, directory, or ``- Word`` suffix."""
@@ -438,7 +438,7 @@ def test_get_timeline_session_details_with_empty_safe_fields_returns_unknown(bri
 
 
 def test_get_timeline_session_details_error_returns_generic_message(bridge):
-    """Phase 2.1: on exception, the bridge must return the generic
+    """on exception, the bridge must return the generic
     ``操作失败`` error and must not leak the underlying exception type,
     message, or any traceback."""
     with patch(
@@ -455,7 +455,7 @@ def test_get_timeline_session_details_error_returns_generic_message(bridge):
 
 
 def test_get_timeline_session_details_returns_json_serializable_with_sensitive_data(bridge):
-    """Phase 2.1: the bridge output must remain JSON-serializable even when
+    """the bridge output must remain JSON-serializable even when
     the underlying activity rows contain sensitive raw fields."""
     project = project_service.create_project("A")
     aid = _seed_activity_with_sensitive_metadata(project_id=project)
@@ -465,7 +465,7 @@ def test_get_timeline_session_details_returns_json_serializable_with_sensitive_d
 
 
 def test_bridge_module_does_not_import_unsafe_display_helper():
-    """Phase 2.1: ``bridge.py`` must not import
+    """``bridge.py`` must not import
     ``format_activity_display_name`` from ``worktrace.formatters`` because
     that helper falls back to the raw ``window_title`` column. The bridge
     uses ``_safe_resource_display_name`` instead."""
@@ -478,7 +478,7 @@ def test_bridge_module_does_not_import_unsafe_display_helper():
     )
 
 
-# --- Phase 6G: P0 privacy gate + P2 ticker payload tests ---
+# --- P0 privacy gate + P2 ticker payload tests ---
 
 
 # P0: toggle_pause + start_background_workers
@@ -772,7 +772,7 @@ def test_accept_first_run_notice_succeeds_even_if_background_workers_start_fails
 
 
 def test_get_overview_returns_snapshot_and_seconds_fields(bridge):
-    """Phase 6G: ``get_overview`` must return ``today_total_seconds`` and
+    """``get_overview`` must return ``today_total_seconds`` and
     ``current_activity_elapsed_seconds`` as ints, and the
     ``current_activity`` dict must include ``elapsed_seconds`` (int) and
     ``is_paused`` (bool) so the frontend 1-second ticker can increment
@@ -790,7 +790,7 @@ def test_get_overview_returns_snapshot_and_seconds_fields(bridge):
 
 
 def test_get_timeline_returns_total_seconds_and_snapshot_fields(bridge):
-    """Phase 6G: ``get_timeline`` must return ``total_seconds``,
+    """``get_timeline`` must return ``total_seconds``,
     ``today_total_seconds``, and ``current_activity_elapsed_seconds`` as
     ints, and each session in ``sessions`` must include
     ``duration_seconds`` (int) so the frontend 1-second ticker can
@@ -863,7 +863,7 @@ def test_get_overview_classified_plus_uncategorized_le_total(bridge):
 
 def test_get_overview_classified_uncategorized_match_string_durations(bridge):
     """The numeric ``classified_seconds`` / ``uncategorized_seconds``
-    must be consistent with the legacy ``classified_duration`` /
+    must be consistent with the ``classified_duration`` /
     ``uncategorized_duration`` string fields (both derive from the same
     underlying summary)."""
     settings_service.clear_settings_cache()

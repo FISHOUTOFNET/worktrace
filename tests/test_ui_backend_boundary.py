@@ -12,9 +12,9 @@ backend through ``worktrace.api``. The WebView entry point
 ``config``, and ``db`` initialization helpers, mirroring ``worktrace/main.py``,
 but still must not import ``services``, ``collector``, or ``security``.
 
-Phase 6F: the legacy ``worktrace/ui`` (Tkinter / CustomTkinter) package has
-been deleted. A dedicated test asserts the package is gone so it cannot be
-accidentally reintroduced.
+The Tkinter / CustomTkinter ``worktrace/ui`` package has been deleted. A
+dedicated test asserts the package is gone so it cannot be accidentally
+reintroduced.
 
 Allowed WebView dependencies:
 - ``worktrace.api`` (the facade layer)
@@ -66,28 +66,28 @@ FORBIDDEN_LABELS = [
 
 
 # ---------------------------------------------------------------------------
-# Legacy UI package removal (Phase 6F)
+# Tkinter UI package removal
 # ---------------------------------------------------------------------------
 
 _LEGACY_UI_DIR = Path(__file__).resolve().parents[1] / "worktrace" / "ui"
 
 
-def test_legacy_ui_package_removed() -> None:
-    """Phase 6F: the legacy ``worktrace/ui`` package must not exist.
+def test_removed_ui_package_absent() -> None:
+    """The ``worktrace/ui`` package must not exist.
 
-    The entire Tkinter / CustomTkinter UI was deleted in Phase 6F. WebView is
+    The entire Tkinter / CustomTkinter UI has been deleted. WebView is
     the only shipping UI. This test guards against accidental reintroduction.
     """
     assert not _LEGACY_UI_DIR.is_dir(), (
-        f"worktrace/ui directory must not exist (Phase 6F legacy UI removal); "
+        f"worktrace/ui directory must not exist (removed UI package); "
         f"found {_LEGACY_UI_DIR}"
     )
 
 
-def test_legacy_ui_app_import_raises_module_not_found() -> None:
+def test_removed_ui_app_import_raises_module_not_found() -> None:
     """Importing ``worktrace.ui.app`` must fail with ``ModuleNotFoundError``.
 
-    Phase 6F: the legacy ``WorkTraceApp`` class is gone. No code path may
+    The ``WorkTraceApp`` class is gone. No code path may
     import it.
     """
     import importlib
@@ -133,13 +133,12 @@ def webview_ui_files() -> list[Path]:
     return _collect_webview_ui_files()
 
 
-# Phase M4 page-level split: ``bridge.py`` is now a thin composition class
+# page-level split: ``bridge.py`` is now a thin composition class
 # that inherits from six mixins (``BridgeDialogMixin``, ``OverviewBridgeMixin``,
 # ``SettingsBridgeMixin``, ``StatisticsBridgeMixin``, ``TimelineBridgeMixin``,
 # ``ProjectRulesBridgeMixin``). Method bodies live in the mixin files below.
-# Static source-level tests that previously read ``bridge.py`` directly must
-# now scan all 8 bridge files so the method bodies are found regardless of
-# which mixin holds them.
+# Static source-level tests scan all bridge files so method bodies are found
+# regardless of which mixin holds them.
 BRIDGE_FILES = [
     "bridge.py",
     "bridge_common.py",
@@ -180,7 +179,7 @@ def _read_bridge_method_body(method_name: str, *, max_chars: int = 4000) -> str:
 
 def test_webview_ui_directory_exists() -> None:
     assert WEBVIEW_UI_DIR.is_dir(), (
-        "worktrace/webview_ui directory must exist (Phase 1 default UI package)"
+        "worktrace/webview_ui directory must exist (WebView UI package)"
     )
 
 
@@ -214,9 +213,9 @@ def test_webview_ui_file_has_no_forbidden_backend_imports(wv_file: Path) -> None
 def test_webview_bridge_has_no_runtime_or_config_imports() -> None:
     """The bridge modules must only use worktrace.api, not runtime/config/db.
 
-    As of the Phase M3 split, the Project Rules bridge methods live in
+    The Project Rules bridge methods live in
     ``bridge_rules.py`` (mixed into ``WebViewBridge`` via
-    ``ProjectRulesBridgeMixin``). As of the Phase M4 page-level split,
+    ``ProjectRulesBridgeMixin``). The Overview / Settings / Statistics / Timeline bridge methods live
     the Overview / Settings / Statistics / Timeline bridge methods live
     in ``bridge_overview.py`` / ``bridge_settings.py`` /
     ``bridge_statistics.py`` / ``bridge_timeline.py`` respectively, and
@@ -226,7 +225,7 @@ def test_webview_bridge_has_no_runtime_or_config_imports() -> None:
     ``security`` imports.
     """
     # bridge.py is the primary bridge module and must always exist.
-    assert (WEBVIEW_UI_DIR / "bridge.py").is_file(), "bridge.py must exist (Phase 1)"
+    assert (WEBVIEW_UI_DIR / "bridge.py").is_file(), "bridge.py must exist (WebView UI)"
     violations: list[str] = []
     for name in BRIDGE_FILES:
         path = WEBVIEW_UI_DIR / name
@@ -269,7 +268,7 @@ def test_webview_frontend_resources_have_no_external_links() -> None:
     or Google Fonts references."""
     resource_dir = WEBVIEW_UI_DIR / "static"
     if not resource_dir.is_dir():
-        pytest.skip("static/ resource directory not created yet (Phase 1)")
+        pytest.skip("static/ resource directory not created yet (WebView UI)")
     forbidden_patterns = [
         re.compile(r'https?://', re.IGNORECASE),
         re.compile(r'cdn', re.IGNORECASE),
@@ -300,7 +299,7 @@ def test_webview_frontend_resources_have_no_external_links() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 5I.1 hardening: lock the four Project Rules batch / automatic-rules
+# Hardening lock: lock the four Project Rules batch / automatic-rules
 # bridge methods on the composed ``WebViewBridge`` class. The methods are
 # defined on ``ProjectRulesBridgeMixin`` (in ``bridge_rules.py``) and inherited
 # by ``WebViewBridge``. Without this lock, a future refactor that drops the
@@ -310,10 +309,10 @@ def test_webview_frontend_resources_have_no_external_links() -> None:
 
 
 def test_webview_bridge_exposes_phase_5i_batch_and_automatic_methods() -> None:
-    """``WebViewBridge`` must expose the four Phase 5I methods.
+    """``WebViewBridge`` must expose the four the rule automation methods.
 
     The methods are defined on ``ProjectRulesBridgeMixin`` and inherited by
-    ``WebViewBridge``. Phase 5I.1 hardens this composition so a refactor
+    ``WebViewBridge``. the hardening hardens this composition so a refactor
     that drops the mixin (or renames a method) fails here instead of
     silently removing the 5I API surface from the only shipping bridge.
     """
@@ -328,16 +327,16 @@ def test_webview_bridge_exposes_phase_5i_batch_and_automatic_methods() -> None:
     bridge = WebViewBridge()
     for name in expected_methods:
         assert callable(getattr(bridge, name, None)), (
-            f"WebViewBridge must expose Phase 5I bridge method {name!r} "
+            f"WebViewBridge must expose project-rules bridge method {name!r} "
             "(inherited from ProjectRulesBridgeMixin)"
         )
 
 
 # ---------------------------------------------------------------------------
-# Phase 6B: Settings / Privacy clipboard capture toggle bridge method.
+# Settings / Privacy clipboard capture toggle bridge method.
 # The new ``set_clipboard_capture_enabled`` method is defined directly on
 # ``WebViewBridge`` (no mixin), so a rename or removal would silently drop
-# the Phase 6B write surface from the only shipping bridge. This lock also
+# the clipboard toggle write surface from the only shipping bridge. This lock also
 # confirms the error payload carries no sensitive tokens (no path / no
 # clipboard content / no passphrase / no SQL / no traceback / no raw
 # exception) so the bridge boundary stays leak-free.
@@ -345,7 +344,7 @@ def test_webview_bridge_exposes_phase_5i_batch_and_automatic_methods() -> None:
 
 
 def test_webview_bridge_exposes_phase_6b_clipboard_toggle_method() -> None:
-    """``WebViewBridge`` must expose the Phase 6B ``set_clipboard_capture_enabled``
+    """``WebViewBridge`` must expose the clipboard toggle ``set_clipboard_capture_enabled``
     method with a single required ``enabled`` parameter (no optional args,
     no loose ``*args``)."""
     import inspect
@@ -355,7 +354,7 @@ def test_webview_bridge_exposes_phase_6b_clipboard_toggle_method() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "set_clipboard_capture_enabled", None)
     assert callable(method), (
-        "WebViewBridge must expose Phase 6B bridge method "
+        "WebViewBridge must expose settings capture contract bridge method "
         "'set_clipboard_capture_enabled'"
     )
     sig = inspect.signature(method)
@@ -381,7 +380,7 @@ def test_webview_bridge_exposes_phase_6b_clipboard_toggle_method() -> None:
 
 
 def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens() -> None:
-    """Phase 6B: the bridge ``set_clipboard_capture_enabled`` error payload
+    """the bridge ``set_clipboard_capture_enabled`` error payload
     must collapse to a stable Chinese message and must not leak path /
     clipboard content / passphrase / SQL / traceback / raw exception text.
 
@@ -392,7 +391,7 @@ def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens()
     executable code (the docstring is skipped because it legitimately
     mentions these words to document what the method does NOT leak).
     """
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("set_clipboard_capture_enabled")
     # Stable Chinese error messages that must appear in the payload.
     assert "请选择有效的剪贴板记录状态" in body
@@ -423,7 +422,7 @@ def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens()
 
 
 # ---------------------------------------------------------------------------
-# Phase 6C: Settings / Privacy encrypted backup export + manifest preview
+# Settings / Privacy encrypted backup export + manifest preview
 # bridge methods. The two new methods are defined directly on
 # ``WebViewBridge`` (no mixin). ``export_encrypted_backup`` takes exactly
 # two required parameters (``passphrase`` / ``confirm_passphrase``);
@@ -438,7 +437,7 @@ def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens()
 
 
 def test_webview_bridge_exposes_phase_6c_export_method() -> None:
-    """``WebViewBridge`` must expose the Phase 6C ``export_encrypted_backup``
+    """``WebViewBridge`` must expose the backup export ``export_encrypted_backup``
     method with exactly two required parameters (``passphrase`` and
     ``confirm_passphrase``); no optional args, no ``*args``, no ``**kwargs``."""
     import inspect
@@ -448,7 +447,7 @@ def test_webview_bridge_exposes_phase_6c_export_method() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "export_encrypted_backup", None)
     assert callable(method), (
-        "WebViewBridge must expose Phase 6C bridge method "
+        "WebViewBridge must expose encrypted backup contract bridge method "
         "'export_encrypted_backup'"
     )
     sig = inspect.signature(method)
@@ -474,7 +473,7 @@ def test_webview_bridge_exposes_phase_6c_export_method() -> None:
 
 
 def test_webview_bridge_exposes_phase_6c_manifest_preview_method() -> None:
-    """``WebViewBridge`` must expose the Phase 6C
+    """``WebViewBridge`` must expose the backup export
     ``preview_encrypted_backup_manifest`` method with zero parameters."""
     import inspect
 
@@ -483,7 +482,7 @@ def test_webview_bridge_exposes_phase_6c_manifest_preview_method() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "preview_encrypted_backup_manifest", None)
     assert callable(method), (
-        "WebViewBridge must expose Phase 6C bridge method "
+        "WebViewBridge must expose encrypted backup contract bridge method "
         "'preview_encrypted_backup_manifest'"
     )
     sig = inspect.signature(method)
@@ -495,7 +494,7 @@ def test_webview_bridge_exposes_phase_6c_manifest_preview_method() -> None:
 
 
 def test_webview_bridge_export_error_payload_has_no_sensitive_tokens() -> None:
-    """Phase 6C: the bridge ``export_encrypted_backup`` error payload must
+    """the bridge ``export_encrypted_backup`` error payload must
     collapse to stable Chinese messages and must not leak traceback /
     str(exc) / repr / format_exc / exc_info / .message / raw_exception /
     clipboard_content.
@@ -506,7 +505,7 @@ def test_webview_bridge_export_error_payload_has_no_sensitive_tokens() -> None:
     ``test_settings_privacy_status`` verify the returned payload never
     carries the passphrase value.
     """
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("export_encrypted_backup")
     # Stable Chinese error messages that must appear in the payload.
     assert "已取消导出" in body
@@ -535,7 +534,7 @@ def test_webview_bridge_export_error_payload_has_no_sensitive_tokens() -> None:
 
 
 def test_webview_bridge_manifest_preview_error_payload_has_no_sensitive_tokens() -> None:
-    """Phase 6C: the bridge ``preview_encrypted_backup_manifest`` error
+    """the bridge ``preview_encrypted_backup_manifest`` error
     payload must collapse to stable Chinese messages and must not leak
     traceback / str(exc) / repr / format_exc / exc_info / .message /
     raw_exception / clipboard_content / passphrase.
@@ -544,7 +543,7 @@ def test_webview_bridge_manifest_preview_error_payload_has_no_sensitive_tokens()
     because the manifest preview method never accepts or references a
     passphrase.
     """
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     # The helper slices at the next ``def`` so the body covers only this
     # method (a fixed window would bleed into ``import_encrypted_backup``
     # whose signature references ``passphrase``, falsely failing the
@@ -576,12 +575,12 @@ def test_webview_bridge_manifest_preview_error_payload_has_no_sensitive_tokens()
 
 
 def test_webview_bridge_export_passes_passphrase_to_api_facade() -> None:
-    """Phase 6C: ``export_encrypted_backup`` must pass ``passphrase`` and
+    """``export_encrypted_backup`` must pass ``passphrase`` and
     ``confirm_passphrase`` through to
     ``settings_api.export_encrypted_backup_for_webview``. This is a static
     source-level check confirming the passphrase is used as a pass-through
     argument (not logged, not returned, not persisted)."""
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("export_encrypted_backup")
     # The method must call the API facade with both passphrase arguments.
     assert "settings_api.export_encrypted_backup_for_webview" in body
@@ -590,12 +589,12 @@ def test_webview_bridge_export_passes_passphrase_to_api_facade() -> None:
 
 
 def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
-    """Phase 6C: neither ``export_encrypted_backup`` nor
+    """neither ``export_encrypted_backup`` nor
     ``preview_encrypted_backup_manifest`` may call
     ``import_encrypted_backup``, ``clear_all_local_data``, or
     ``set_setting_value``. This is a static source-level check on the
     bridge module."""
-    # Phase M4: method bodies live in bridge_settings.py (SettingsBridgeMixin).
+    # method bodies live in bridge_settings.py (SettingsBridgeMixin).
     export_body = _read_bridge_method_body("export_encrypted_backup")
     for forbidden in (
         "import_encrypted_backup",
@@ -617,7 +616,7 @@ def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 6D: Settings / Privacy encrypted backup import + clear-all-local-data
+# Settings / Privacy encrypted backup import + clear-all-local-data
 # bridge methods. The two new methods are defined directly on ``WebViewBridge``
 # (no mixin). ``import_encrypted_backup`` takes exactly two required
 # parameters (``passphrase`` / ``confirm_text``); ``clear_all_local_data``
@@ -628,13 +627,13 @@ def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
 # variable, and pass-through argument to the API facade; it is only
 # forbidden in the returned payload / error payload / logging (enforced by
 # the runtime tests in test_settings_privacy_status). The method body is
-# sliced at the next ``\n    def `` so the next method's passphrase
+# sliced at the next ``\n def `` so the next method's passphrase
 # reference does not trigger false positives.
 # ---------------------------------------------------------------------------
 
 
 def test_webview_bridge_exposes_phase_6d_import_method() -> None:
-    """``WebViewBridge`` must expose the Phase 6D ``import_encrypted_backup``
+    """``WebViewBridge`` must expose the backup import ``import_encrypted_backup``
     method with exactly two required parameters (``passphrase`` and
     ``confirm_text``); no optional args, no ``*args``, no ``**kwargs``."""
     import inspect
@@ -644,7 +643,7 @@ def test_webview_bridge_exposes_phase_6d_import_method() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "import_encrypted_backup", None)
     assert callable(method), (
-        "WebViewBridge must expose Phase 6D bridge method "
+        "WebViewBridge must expose destructive settings contract bridge method "
         "'import_encrypted_backup'"
     )
     sig = inspect.signature(method)
@@ -670,7 +669,7 @@ def test_webview_bridge_exposes_phase_6d_import_method() -> None:
 
 
 def test_webview_bridge_exposes_phase_6d_clear_method() -> None:
-    """``WebViewBridge`` must expose the Phase 6D ``clear_all_local_data``
+    """``WebViewBridge`` must expose the backup import ``clear_all_local_data``
     method with exactly one required parameter (``confirm_text``); no
     optional args, no ``*args``, no ``**kwargs``."""
     import inspect
@@ -680,7 +679,7 @@ def test_webview_bridge_exposes_phase_6d_clear_method() -> None:
     bridge = WebViewBridge()
     method = getattr(bridge, "clear_all_local_data", None)
     assert callable(method), (
-        "WebViewBridge must expose Phase 6D bridge method "
+        "WebViewBridge must expose destructive settings contract bridge method "
         "'clear_all_local_data'"
     )
     sig = inspect.signature(method)
@@ -704,7 +703,7 @@ def test_webview_bridge_exposes_phase_6d_clear_method() -> None:
 
 
 def test_webview_bridge_import_error_payload_has_no_sensitive_tokens() -> None:
-    """Phase 6D: the bridge ``import_encrypted_backup`` error payload must
+    """the bridge ``import_encrypted_backup`` error payload must
     collapse to stable Chinese messages and must not leak traceback /
     str(exc) / repr / format_exc / exc_info / .message / raw_exception /
     clipboard_content.
@@ -717,7 +716,7 @@ def test_webview_bridge_import_error_payload_has_no_sensitive_tokens() -> None:
     ``\\n    def `` so the following method's passphrase reference does
     not trigger false positives.
     """
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     # The helper slices at the next ``def`` so the clear_all_local_data
     # method body (which legitimately references ``confirm_text``) is not
     # accidentally included in this check.
@@ -749,7 +748,7 @@ def test_webview_bridge_import_error_payload_has_no_sensitive_tokens() -> None:
 
 
 def test_webview_bridge_clear_error_payload_has_no_sensitive_tokens() -> None:
-    """Phase 6D: the bridge ``clear_all_local_data`` error payload must
+    """the bridge ``clear_all_local_data`` error payload must
     collapse to stable Chinese messages and must not leak traceback /
     str(exc) / repr / format_exc / exc_info / .message / raw_exception /
     clipboard_content / passphrase.
@@ -759,7 +758,7 @@ def test_webview_bridge_clear_error_payload_has_no_sensitive_tokens() -> None:
     The method body is sliced at the next ``\\n    def `` so the following
     module-level helper (if any) does not trigger false positives.
     """
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("clear_all_local_data")
     # Stable Chinese error message that must appear in the payload.
     assert "清空本地数据失败" in body
@@ -786,12 +785,12 @@ def test_webview_bridge_clear_error_payload_has_no_sensitive_tokens() -> None:
 
 
 def test_webview_bridge_import_passes_passphrase_to_api_facade() -> None:
-    """Phase 6D: ``import_encrypted_backup`` must pass ``passphrase`` and
+    """``import_encrypted_backup`` must pass ``passphrase`` and
     ``confirm_text`` through to
     ``settings_api.import_encrypted_backup_for_webview``. This is a static
     source-level check confirming the passphrase is used as a pass-through
     argument (not logged, not returned, not persisted)."""
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("import_encrypted_backup")
     # The method must call the API facade with both arguments.
     assert "settings_api.import_encrypted_backup_for_webview" in body
@@ -800,22 +799,22 @@ def test_webview_bridge_import_passes_passphrase_to_api_facade() -> None:
 
 
 def test_webview_bridge_clear_calls_api_facade() -> None:
-    """Phase 6D: ``clear_all_local_data`` must call
+    """``clear_all_local_data`` must call
     ``settings_api.clear_all_local_data_for_webview`` with
     ``confirm_text``. This is a static source-level check confirming the
     bridge does not touch the DB / service directly."""
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("clear_all_local_data")
     assert "settings_api.clear_all_local_data_for_webview" in body
     assert "confirm_text" in body
 
 
 def test_webview_bridge_import_does_not_call_export_or_manifest_or_set() -> None:
-    """Phase 6D: ``import_encrypted_backup`` must not call
+    """``import_encrypted_backup`` must not call
     ``export_encrypted_backup``, ``preview_encrypted_backup_manifest``,
     ``clear_all_local_data``, or ``set_setting_value``. This is a static
     source-level check on the bridge module."""
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("import_encrypted_backup")
     for forbidden in (
         "export_encrypted_backup",
@@ -828,11 +827,11 @@ def test_webview_bridge_import_does_not_call_export_or_manifest_or_set() -> None
 
 
 def test_webview_bridge_clear_does_not_call_backup_actions_or_set() -> None:
-    """Phase 6D: ``clear_all_local_data`` must not call
+    """``clear_all_local_data`` must not call
     ``export_encrypted_backup``, ``preview_encrypted_backup_manifest``,
     ``import_encrypted_backup``, or ``set_setting_value``. This is a
     static source-level check on the bridge module."""
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("clear_all_local_data")
     for forbidden in (
         "export_encrypted_backup",
@@ -846,7 +845,7 @@ def test_webview_bridge_clear_does_not_call_backup_actions_or_set() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 6E: First-run privacy notice bridge methods. The two new methods are
+# First-run privacy notice bridge methods. The two new methods are
 # defined directly on ``WebViewBridge`` (no mixin).
 # ``get_first_run_notice`` takes zero parameters and only calls
 # ``settings_api.get_first_run_notice_for_webview()``.
@@ -864,7 +863,7 @@ def test_webview_bridge_clear_does_not_call_backup_actions_or_set() -> None:
 
 
 def test_webview_bridge_exposes_phase_6e_first_run_notice_methods() -> None:
-    """``WebViewBridge`` must expose the Phase 6E ``get_first_run_notice``
+    """``WebViewBridge`` must expose the first-run notice ``get_first_run_notice``
     and ``accept_first_run_notice`` methods, both with zero parameters."""
     import inspect
 
@@ -874,7 +873,7 @@ def test_webview_bridge_exposes_phase_6e_first_run_notice_methods() -> None:
     for method_name in ("get_first_run_notice", "accept_first_run_notice"):
         method = getattr(bridge, method_name, None)
         assert callable(method), (
-            f"WebViewBridge must expose Phase 6E bridge method {method_name!r}"
+            f"WebViewBridge must expose startup gate contract bridge method {method_name!r}"
         )
         sig = inspect.signature(method)
         params = list(sig.parameters.values())
@@ -894,11 +893,11 @@ def test_webview_bridge_exposes_phase_6e_first_run_notice_methods() -> None:
 
 
 def test_webview_bridge_get_first_run_notice_calls_api_facade() -> None:
-    """Phase 6E: ``get_first_run_notice`` must call
+    """``get_first_run_notice`` must call
     ``settings_api.get_first_run_notice_for_webview``. This is a static
     source-level check confirming the bridge delegates to the API facade
     and does not touch the DB / service directly."""
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("get_first_run_notice")
     assert "settings_api.get_first_run_notice_for_webview" in body
     # Must NOT touch DB / collector / security directly.
@@ -919,13 +918,13 @@ def test_webview_bridge_get_first_run_notice_calls_api_facade() -> None:
 
 
 def test_webview_bridge_accept_first_run_notice_calls_api_facade_and_start_collector() -> None:
-    """Phase 6E: ``accept_first_run_notice`` must call
+    """``accept_first_run_notice`` must call
     ``settings_api.accept_first_run_notice_for_webview`` and, only on
     ``ok=True``, must call ``app_api.start_collector()``. This is a
     static source-level check confirming the bridge delegates to the API
     facade for the accept write and then starts the collector (mirroring
-    the legacy Tkinter ``_accept_notice`` flow)."""
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    the Tkinter ``_accept_notice`` flow)."""
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("accept_first_run_notice")
     assert "settings_api.accept_first_run_notice_for_webview" in body
     # The accept method MUST call app_api.start_collector() on success.
@@ -950,12 +949,12 @@ def test_webview_bridge_accept_first_run_notice_calls_api_facade_and_start_colle
 
 
 def test_webview_bridge_get_first_run_notice_error_payload_has_no_sensitive_tokens() -> None:
-    """Phase 6E: the bridge ``get_first_run_notice`` error payload must
+    """the bridge ``get_first_run_notice`` error payload must
     collapse to the stable Chinese message ``加载隐私说明失败`` and must
     not leak traceback / str(exc) / repr / format_exc / exc_info /
     .message / raw_exception / clipboard_content / passphrase / path.
     """
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("get_first_run_notice")
     # Stable Chinese error message that must appear in the payload.
     assert "加载隐私说明失败" in body
@@ -982,7 +981,7 @@ def test_webview_bridge_get_first_run_notice_error_payload_has_no_sensitive_toke
 
 
 def test_webview_bridge_accept_first_run_notice_error_payload_has_no_sensitive_tokens() -> None:
-    """Phase 6E: the bridge ``accept_first_run_notice`` error payload must
+    """the bridge ``accept_first_run_notice`` error payload must
     collapse to the stable Chinese message ``确认隐私说明失败`` and must
     not leak traceback / str(exc) / repr / format_exc / exc_info /
     .message / raw_exception / clipboard_content / passphrase / path.
@@ -991,7 +990,7 @@ def test_webview_bridge_accept_first_run_notice_error_payload_has_no_sensitive_t
     of the method). ``passphrase`` is NOT allowed because the accept
     flow never references a passphrase.
     """
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("accept_first_run_notice")
     # Stable Chinese error message that must appear in the payload.
     assert "确认隐私说明失败" in body
@@ -1018,7 +1017,7 @@ def test_webview_bridge_accept_first_run_notice_error_payload_has_no_sensitive_t
 
 
 def test_webview_bridge_toggle_pause_gates_on_first_run_notice() -> None:
-    """Phase 6E: ``toggle_pause`` must call
+    """``toggle_pause`` must call
     ``settings_api.first_run_notice_accepted()`` before any path that
     could call ``app_api.start_collector()``. If the read returns False
     (or raises), the method must fail closed: return
@@ -1028,7 +1027,7 @@ def test_webview_bridge_toggle_pause_gates_on_first_run_notice() -> None:
     This is a static source-level check confirming the gate is wired
     into ``toggle_pause`` and the fail-closed error message is present.
     """
-    # Phase M4: method body lives in bridge_overview.py (OverviewBridgeMixin).
+    # method body lives in bridge_overview.py (OverviewBridgeMixin).
     body = _read_bridge_method_body("toggle_pause")
     # The gate check must appear BEFORE the first ``app_api.start_collector``
     # call. Find both positions and assert ordering.
@@ -1036,11 +1035,11 @@ def test_webview_bridge_toggle_pause_gates_on_first_run_notice() -> None:
     start_pos = body.find("app_api.start_collector()")
     assert gate_pos != -1, (
         "toggle_pause must call settings_api.first_run_notice_accepted() "
-        "for Phase 6E"
+        "for startup gate contract"
     )
     assert start_pos != -1, (
         "toggle_pause must still call app_api.start_collector() when the "
-        "gate is open (Phase 6E does not remove the start path, only gates it)"
+        "gate is open (startup gate contract does not remove the start path, only gates it)"
     )
     assert gate_pos < start_pos, (
         "toggle_pause must check first_run_notice_accepted() BEFORE any "
@@ -1051,11 +1050,11 @@ def test_webview_bridge_toggle_pause_gates_on_first_run_notice() -> None:
 
 
 def test_webview_bridge_toggle_pause_does_not_mutate_state_when_gate_closed() -> None:
-    """Phase 6E: when the first-run notice is not accepted,
+    """when the first-run notice is not accepted,
     ``toggle_pause`` must NOT call ``set_user_paused``,
     ``set_collector_status``, ``set_current_activity_snapshot``, or
     ``start_collector``. The fail-closed path is a pure return."""
-    # Phase M4: method body lives in bridge_overview.py (OverviewBridgeMixin).
+    # method body lives in bridge_overview.py (OverviewBridgeMixin).
     body = _read_bridge_method_body("toggle_pause")
     # Find the fail-closed return block: between the gate check and the
     # ``raw_status = settings_api.get_collector_status()`` line that
@@ -1082,10 +1081,10 @@ def test_webview_bridge_toggle_pause_does_not_mutate_state_when_gate_closed() ->
 
 
 def test_webview_bridge_first_run_notice_methods_do_not_open_file_dialog() -> None:
-    """Phase 6E: neither ``get_first_run_notice`` nor
+    """neither ``get_first_run_notice`` nor
     ``accept_first_run_notice`` may open a native file dialog. The
     first-run notice is a pure accept flow with no file chooser."""
-    # Phase M4: method bodies live in bridge_settings.py (SettingsBridgeMixin).
+    # method bodies live in bridge_settings.py (SettingsBridgeMixin).
     for method_name in ("get_first_run_notice", "accept_first_run_notice"):
         body = _read_bridge_method_body(method_name)
         for forbidden in (
@@ -1103,7 +1102,7 @@ def test_webview_bridge_first_run_notice_methods_do_not_open_file_dialog() -> No
 
 
 def test_webview_main_imports_settings_api() -> None:
-    """Phase 6E: ``webview_main.py`` must import ``settings_api`` from
+    """``webview_main.py`` must import ``settings_api`` from
     ``worktrace.api`` so the first-run startup gate can read the
     notice-accepted state. The bridge boundary is unaffected: only
     ``webview_main`` (the entry point) is allowed to import
@@ -1115,7 +1114,7 @@ def test_webview_main_imports_settings_api() -> None:
     source = webview_main_path.read_text(encoding="utf-8")
     # The import must be present.
     assert "settings_api" in source, (
-        "webview_main.py must import settings_api for Phase 6E startup gate"
+        "webview_main.py must import settings_api for startup gate contract startup gate"
     )
     # The import must come from worktrace.api (not from services / db).
     assert (
@@ -1124,7 +1123,7 @@ def test_webview_main_imports_settings_api() -> None:
     # The startup gate must reference first_run_notice_accepted.
     assert "first_run_notice_accepted" in source, (
         "webview_main.py must call settings_api.first_run_notice_accepted() "
-        "in the Phase 6E startup gate"
+        "in the startup gate contract startup gate"
     )
     # webview_main.py is the entry point and is allowed to import AppRuntime
     # / config / logging helpers, but still must NOT import services /
@@ -1147,7 +1146,7 @@ def test_webview_main_imports_settings_api() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 6G: Privacy gate for the folder index worker. The bridge
+# Privacy gate for the folder index worker. The bridge
 # ``toggle_pause`` and ``accept_first_run_notice`` methods must call
 # ``app_api.start_background_workers()`` BEFORE ``app_api.start_collector()``
 # so the folder index is warm by the time the collector starts matching
@@ -1157,7 +1156,7 @@ def test_webview_main_imports_settings_api() -> None:
 
 
 def test_webview_bridge_toggle_pause_calls_start_background_workers_before_collector() -> None:
-    """Phase 6G: ``toggle_pause`` must call ``app_api.start_background_workers()``
+    """``toggle_pause`` must call ``app_api.start_background_workers()``
     BEFORE ``app_api.start_collector()`` on the resume path so the folder index
     worker is running before the collector starts matching activities.
 
@@ -1165,17 +1164,17 @@ def test_webview_bridge_toggle_pause_calls_start_background_workers_before_colle
     ``test_webview_bridge_toggle_pause_gates_on_first_run_notice``: find the
     ``toggle_pause`` body, slice to the next ``def``, and assert ordering.
     """
-    # Phase M4: method body lives in bridge_overview.py (OverviewBridgeMixin).
+    # method body lives in bridge_overview.py (OverviewBridgeMixin).
     body = _read_bridge_method_body("toggle_pause")
     bg_pos = body.find("app_api.start_background_workers()")
     start_pos = body.find("app_api.start_collector()")
     assert bg_pos != -1, (
         "toggle_pause must call app_api.start_background_workers() before "
-        "start_collector (Phase 6G)"
+        "start_collector (live startup contract)"
     )
     assert start_pos != -1, (
         "toggle_pause must still call app_api.start_collector() when the "
-        "gate is open (Phase 6G does not remove the start path)"
+        "gate is open (live startup contract does not remove the start path)"
     )
     assert bg_pos < start_pos, (
         "toggle_pause must call start_background_workers() BEFORE "
@@ -1184,32 +1183,32 @@ def test_webview_bridge_toggle_pause_calls_start_background_workers_before_colle
 
 
 def test_webview_bridge_accept_first_run_notice_calls_start_background_workers() -> None:
-    """Phase 6G: ``accept_first_run_notice`` must call
+    """``accept_first_run_notice`` must call
     ``app_api.start_background_workers`` after a successful accept so the
     folder index worker starts alongside the collector. This is a static
     source-level check mirroring
     ``test_webview_bridge_accept_first_run_notice_calls_api_facade_and_start_collector``."""
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("accept_first_run_notice")
     assert "app_api.start_background_workers" in body, (
         "accept_first_run_notice must call app_api.start_background_workers "
-        "after a successful accept (Phase 6G)"
+        "after a successful accept (live startup contract)"
     )
 
 
 def test_webview_bridge_accept_first_run_notice_starts_background_workers_before_collector() -> None:
-    """Phase 6G: ``accept_first_run_notice`` must call
+    """``accept_first_run_notice`` must call
     ``app_api.start_background_workers`` BEFORE ``app_api.start_collector``
     so the folder index is warm by the time the collector starts.
 
     The docstring mentions ``app_api.start_collector()`` so the docstring is
     skipped before comparing positions (mirroring the existing forbidden-token
-    pattern used by the Phase 6C/6D/6E error-payload tests).
+    pattern used by the error-payload tests).
     """
-    # Phase M4: method body lives in bridge_settings.py (SettingsBridgeMixin).
+    # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("accept_first_run_notice")
     # Skip the docstring because it legitimately mentions
-    # ``app_api.start_collector()`` to document the Phase 6E behavior; only
+    # ``app_api.start_collector()`` to document the first-run notice behavior; only
     # the executable code should be checked for ordering.
     doc_start = body.find('"""')
     doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
@@ -1218,11 +1217,11 @@ def test_webview_bridge_accept_first_run_notice_starts_background_workers_before
     start_pos = code_only.find("app_api.start_collector")
     assert bg_pos != -1, (
         "accept_first_run_notice must call app_api.start_background_workers "
-        "after a successful accept (Phase 6G)"
+        "after a successful accept (live startup contract)"
     )
     assert start_pos != -1, (
         "accept_first_run_notice must still call app_api.start_collector "
-        "after a successful accept (Phase 6E)"
+        "after a successful accept (startup gate contract)"
     )
     assert bg_pos < start_pos, (
         "accept_first_run_notice must call start_background_workers BEFORE "
@@ -1231,7 +1230,7 @@ def test_webview_bridge_accept_first_run_notice_starts_background_workers_before
 
 
 def test_app_api_exports_start_background_workers_facade() -> None:
-    """Phase 6G: ``app_api.py`` must define a ``start_background_workers``
+    """``app_api.py`` must define a ``start_background_workers``
     facade and export it in ``__all__``. This is a static source-level check
     confirming the facade exists and is publicly exported."""
     app_api_path = (
@@ -1239,17 +1238,17 @@ def test_app_api_exports_start_background_workers_facade() -> None:
     )
     source = app_api_path.read_text(encoding="utf-8")
     assert "def start_background_workers" in source, (
-        "app_api.py must define start_background_workers facade (Phase 6G)"
+        "app_api.py must define start_background_workers facade (live startup contract)"
     )
     from worktrace.api import app_api
 
     assert "start_background_workers" in app_api.__all__, (
-        "app_api.__all__ must export start_background_workers (Phase 6G)"
+        "app_api.__all__ must export start_background_workers (live startup contract)"
     )
 
 
 # ---------------------------------------------------------------------------
-# Phase M4: page-level bridge split. ``WebViewBridge`` is now a thin
+# page-level bridge split. ``WebViewBridge`` is now a thin
 # composition class that inherits from six mixins. This test asserts the
 # runtime public method set on ``WebViewBridge()`` equals the union of all
 # public methods defined across the 8 bridge mixin files, so a future
@@ -1263,7 +1262,7 @@ def test_webview_bridge_exposes_union_of_all_mixin_public_methods() -> None:
     """``WebViewBridge()`` must expose every public method defined on any of
     the 8 bridge mixin files, and no extras beyond the union.
 
-    Phase M4 split ``bridge.py`` into ``bridge_common.py``,
+    the page-level split split ``bridge.py`` into ``bridge_common.py``,
     ``bridge_dialogs.py``, ``bridge_overview.py``, ``bridge_settings.py``,
     ``bridge_statistics.py``, ``bridge_timeline.py``, and ``bridge_rules.py``
     (plus the slim composition ``bridge.py``). ``WebViewBridge`` inherits
@@ -1308,11 +1307,11 @@ def test_webview_bridge_exposes_union_of_all_mixin_public_methods() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase M4-followup: fixed expected-set lock on the WebViewBridge public API
+# fixed expected-set lock on the WebViewBridge public API
 # surface. The union-of-mixin test above guards against a mixin growing a new
 # method that fails to reach ``WebViewBridge``. It does NOT guard against a
 # historically-public method being silently dropped during a split (e.g. a
-# method that lived on ``WebViewBridge`` before Phase M4 and was accidentally
+# method that lived on ``WebViewBridge`` before the page-level split and was accidentally
 # left out of every mixin). This fixed set closes that gap: every name listed
 # here MUST remain callable on ``WebViewBridge()``. The set is hand-curated
 # from the actual public methods declared across the 8 bridge files (verified
@@ -1328,7 +1327,7 @@ EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
     "toggle_pause",
     "get_overview",
     "get_recent_activities",
-    # Phase 6H-followup: lightweight refresh-state for the heartbeat.
+    # lightweight refresh-state for the heartbeat.
     "get_refresh_state",
     # first-run / settings / privacy
     "get_first_run_notice",
@@ -1388,7 +1387,7 @@ EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
 def test_webview_bridge_exposes_expected_fixed_public_api_surface() -> None:
     """``WebViewBridge()`` must expose every method in the fixed expected set.
 
-    Phase M4-followup: this is the complement to
+    the page-level split: this is the complement to
     ``test_webview_bridge_exposes_union_of_all_mixin_public_methods``. The
     union test prevents a mixin from growing a method that fails to reach
     ``WebViewBridge``. This fixed-set test prevents a historically-public
@@ -1419,8 +1418,8 @@ def test_webview_bridge_exposes_expected_fixed_public_api_surface() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy compat cleanup: ``bridge.py`` must NOT expose API facade module
-# symbols. Before the Phase M4 page-level split cleanup, ``bridge.py``
+# Compat cleanup: ``bridge.py`` must NOT expose API facade module
+# symbols. Before the page-level split cleanup, ``bridge.py``
 # imported ``app_api`` / ``export_api`` / ``project_api`` / ``rule_api`` /
 # ``settings_api`` / ``statistics_api`` / ``timeline_api`` at module level
 # so tests that monkeypatched ``bridge_module.<api>`` would resolve. After
@@ -1434,7 +1433,7 @@ def test_bridge_module_does_not_expose_api_facade_symbols() -> None:
     """``worktrace.webview_ui.bridge`` must NOT expose any API facade module
     as a module-level attribute.
 
-    After the Phase M4 page-level split cleanup, ``bridge.py`` only imports
+    After the page-level split cleanup, ``bridge.py`` only imports
     the six mixin classes (``BridgeDialogMixin``, ``OverviewBridgeMixin``,
     ``SettingsBridgeMixin``, ``StatisticsBridgeMixin``, ``TimelineBridgeMixin``,
     ``ProjectRulesBridgeMixin``) and stdlib (``logging``, ``typing``). Each
@@ -1482,31 +1481,26 @@ def test_bridge_module_all_equals_webview_bridge_only() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy live-clock field / function name cleanup: ``carry_baseline_seconds``
-# was renamed to ``short_activity_carry_seconds`` to remove the old
-# "baseline" terminology from the live-clock context. These tests lock the
-# new name so the old name cannot regress.
+# Live-clock carry helper export contract. ``short_activity_carry_seconds``
+# is the public helper; ``carry_baseline_seconds`` must stay absent.
 # ---------------------------------------------------------------------------
 
 
 def test_short_activity_carry_seconds_exists_under_new_name() -> None:
     """``short_activity_carry_seconds`` must exist in both
-    ``live_display_service`` and ``live_display_api`` under the new name.
+    ``live_display_service`` and ``live_display_api``.
 
-    The function was renamed from ``carry_baseline_seconds`` to
-    ``short_activity_carry_seconds`` to remove the old "baseline"
-    terminology from the live-clock context. The function's business
-    behavior is unchanged: it returns the carry-over seconds from
+    The helper returns the carry-over seconds from
     consecutive sub-30s short activities that should be added to the
     unified live-display duration.
     """
     from worktrace.api import live_display_api
     from worktrace.services import live_display_service
 
-    # The new name must exist in the service module.
+    # The public helper must exist in the service module.
     assert hasattr(live_display_service, "short_activity_carry_seconds"), (
         "live_display_service must define short_activity_carry_seconds "
-        "(renamed from carry_baseline_seconds)"
+        "(carry helper export)"
     )
     assert callable(live_display_service.short_activity_carry_seconds), (
         "live_display_service.short_activity_carry_seconds must be callable"
@@ -1520,10 +1514,10 @@ def test_short_activity_carry_seconds_exists_under_new_name() -> None:
     )
     # The old name must NOT exist in either module.
     assert not hasattr(live_display_service, "carry_baseline_seconds"), (
-        "live_display_service must not retain the old name carry_baseline_seconds"
+        "live_display_service must not retain the removed name carry_baseline_seconds"
     )
     assert not hasattr(live_display_api, "carry_baseline_seconds"), (
-        "live_display_api must not retain the old name carry_baseline_seconds"
+        "live_display_api must not retain the removed name carry_baseline_seconds"
     )
     # The new name must appear in __all__ for both modules.
     assert "short_activity_carry_seconds" in live_display_service.__all__, (

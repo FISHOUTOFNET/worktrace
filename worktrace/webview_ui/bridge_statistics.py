@@ -1,4 +1,4 @@
-"""Statistics / Export bridge mixin, split out of ``bridge.py``.
+"""Statistics / Export bridge mixin.
 
 Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 
@@ -33,9 +33,9 @@ logger = logging.getLogger(__name__)
 
 
 # Maps ``StatisticsSummaryError.code`` to stable Chinese user-facing messages
-# for the Phase 4A read-only statistics / export summary. Unknown codes
-# collapse to the load-focused "加载统计失败" so internal details are never
-# surfaced and a statistics load failure never echoes a write-focused message.
+# for the read-only statistics / export summary. Unknown codes collapse to
+# the load-focused "加载统计失败" so internal details are never surfaced and
+# a statistics load failure never echoes a write-focused message.
 _STATISTICS_ERROR_MESSAGES = {
     "invalid_date": "请选择有效日期",
     "invalid_range": "请选择有效日期范围",
@@ -44,8 +44,8 @@ _STATISTICS_ERROR_MESSAGES = {
 }
 
 # Maps ``StatisticsExportError.code`` to stable Chinese user-facing messages
-# for the Phase 4B CSV export write action. Unknown codes collapse to
-# "导出失败" so internal details are never surfaced. ``permission_denied`` /
+# for the CSV export write action. Unknown codes collapse to "导出失败" so
+# internal details are never surfaced. ``permission_denied`` /
 # ``file_busy`` / ``write_failed`` share one message so a low-level OS
 # failure never distinguishes which kind of write error occurred.
 _STATISTICS_EXPORT_ERROR_MESSAGES = {
@@ -62,22 +62,22 @@ _STATISTICS_EXPORT_ERROR_MESSAGES = {
 
 
 class StatisticsBridgeMixin:
-    """Statistics / Export bridge methods, split out of ``WebViewBridge``.
+    """Statistics / Export bridge methods.
 
-    The mixin is mixed into ``WebViewBridge`` in ``bridge.py`` so the
-    Statistics / Export method names stay on ``WebViewBridge``. The mixin
-    must NOT add ``__init__``; it relies on the host class.
+    Mixed into ``WebViewBridge`` in ``bridge.py`` so the Statistics / Export
+    method names stay on ``WebViewBridge``. The mixin must NOT add
+    ``__init__``; it relies on the host class.
     """
 
-    # --- Phase 4A: Statistics / Export read-only summary ----------------
+    # --- Statistics / Export read-only summary -------------------------
 
     def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:
         """Return a read-only statistics + export-preview summary.
 
-        Phase 4A read-only path: this method only reads closed activities
-        through ``worktrace.api`` and never writes to the DB, never writes a
-        file, and never opens a save dialog. ``date_from`` and ``date_to``
-        must be ``YYYY-MM-DD`` strings with ``date_from <= date_to`` and an
+        Read-only path: this method only reads closed activities through
+        ``worktrace.api`` and never writes to the DB, never writes a file,
+        and never opens a save dialog. ``date_from`` and ``date_to`` must
+        be ``YYYY-MM-DD`` strings with ``date_from <= date_to`` and an
         inclusive span of at most 31 calendar days.
 
         Returns ``{"ok": true, "summary": {...}}`` on success or
@@ -108,12 +108,12 @@ class StatisticsBridgeMixin:
             logger.exception("webview bridge get_statistics_export_summary failed")
             return {"ok": False, "error": "加载统计失败", "summary": None}
 
-    # --- Phase 4B: Statistics CSV export (controlled file write) ---------
+    # --- Statistics CSV export (controlled file write) ----------------
 
     def export_statistics_csv(self, date_from, date_to) -> dict[str, Any]:
         """Export a display-safe CSV for the statistics date range.
 
-        Phase 4B controlled write path. ``date_from`` / ``date_to`` must be
+        Controlled write path. ``date_from`` / ``date_to`` must be
         ``YYYY-MM-DD`` strings sharing the same rules as the read-only
         summary. The save path is chosen by the user through the native
         pywebview save dialog (the window is injected via ``set_window``);

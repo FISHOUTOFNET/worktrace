@@ -82,8 +82,8 @@ def format_safe_display_name(row: dict) -> str:
     ``note`` are also skipped. If all safe fields are empty the row falls
     back to ``"未知"`` rather than leaking sensitive metadata.
 
-    Used by the WebView bridge Timeline detail rows and by the Phase 4B CSV
-    export so the service layer does not reverse-depend on the bridge.
+    Used by the WebView bridge Timeline detail rows and the CSV export so
+    the service layer does not reverse-depend on the bridge.
     """
     for key in (
         "resource_display_name",

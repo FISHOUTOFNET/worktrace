@@ -41,7 +41,7 @@ def recover_unclosed_records() -> None:
             continue
         # Non-cross-midnight recovery: route through the lifecycle facade so
         # the close-finalize helper converges project inference / automatic
-        # rules on the recovered row. Previously this was a direct SQL UPDATE
+        # rules on the recovered row.
         # that bypassed project inference entirely, leaving recovered rows in
         # the "uncategorized" assignment even when a concrete inferred project
         # was available.
@@ -68,7 +68,7 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
     original_id = int(row["id"])
     # Close the first half of the original row at first_midnight via the
     # lifecycle facade so the close-finalize helper converges project
-    # inference / automatic rules on it (verification item 9). Previously
+    # inference / automatic rules on it.
     # this was a direct SQL UPDATE that bypassed project inference entirely,
     # leaving the first-half row in the "uncategorized" assignment.
     recover_first_half_close(

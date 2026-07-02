@@ -1,7 +1,7 @@
 """Shared anchor predicates for context_service and timeline_service.
 
-This module centralizes the file-based context-anchor judgment that was
-previously duplicated between ``context_service._is_context_anchor`` and
+This module centralizes the file-based context-anchor judgment used by
+``context_service._is_context_anchor`` and
 ``timeline_service._is_project_anchor``. It also exposes a direct
 assignment anchor predicate used by context inference to propagate
 project context from high-confidence direct assignments

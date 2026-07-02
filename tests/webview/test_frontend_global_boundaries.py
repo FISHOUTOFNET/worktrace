@@ -1,24 +1,22 @@
 """Global WebView frontend resource boundary tests.
 
 These tests read the bundled frontend resources (``index.html`` /
-``js/*.js`` / ``styles.css``) directly without starting the GUI. Phase R2
-split the monolithic ``app.js`` into six ``js/`` modules; JS-level
-contracts use ``read_all_js()`` (concatenated split modules in load
+``js/*.js`` / ``styles.css``) directly without starting the GUI. The
+JS-level contracts use ``read_all_js()`` (concatenated modules in load
 order). They cover:
 
 - Resource existence (index.html / js/*.js / styles.css / bridge.py).
 - Global static boundaries (no external links / CDN / Google Fonts /
-  localStorage / traceback text), expressed as parametrized tests that
-  replace the per-phase duplicate checks scattered across the original
-  monolithic file.
+  localStorage / traceback text), expressed as parametrized tests over
+  every frontend resource.
 - index.html structural anchors (local resource refs, Chinese sidebar nav,
-  unmigrated-page placeholder).
+  no migration copy).
 - Overview page production contract (KPIs, current/recent sections, error
   banner, pause toggle, classified/uncategorized durations, surfaces bridge
   errors, does not expose tracebacks).
 - Startup module contracts (main entry exists, resource_path resolves,
   pywebview missing gives a clear Chinese error).
-- Consolidated doc-mention regression locks for the WebView phase history.
+- Documentation regression locks for WebView history and release validation.
 """
 
 from __future__ import annotations
@@ -50,15 +48,14 @@ def test_index_html_exists():
 
 
 def test_app_js_exists():
-    """Phase R2: the monolithic app.js has been split into six js/ modules.
-    The old app.js must no longer exist; each js/ module must exist."""
+    """Frontend JavaScript is bundled from ordered js/ modules."""
     assert not (WEBVIEW_UI_DIR / "app.js").is_file(), (
-        "app.js must be removed after Phase R2 split"
+        "app.js must be removed after frontend module split"
     )
-    assert JS_DIR.is_dir(), "js/ directory must exist after Phase R2 split"
+    assert JS_DIR.is_dir(), "js/ directory must exist after frontend module split"
     for name in ALL_JS_FILES:
         assert (JS_DIR / name).is_file(), (
-            "js/" + name + " must exist after Phase R2 split"
+            "js/" + name + " must exist after frontend module split"
         )
 
 
@@ -71,11 +68,8 @@ def test_bridge_py_exists():
 
 
 # --- global boundary tests (parametrized) --------------------------------
-# These five parametrized tests replace the dozens of per-phase
-# ``test_frontend_resources_*_still_no_external_links`` /
-# ``*_no_browser_storage`` / ``*_no_traceback_display`` duplicates that
-# existed in the original monolithic file. They cover every frontend
-# resource file for every prohibited pattern.
+# These parametrized tests cover every frontend resource file for every
+# prohibited pattern.
 
 
 @pytest.mark.parametrize("filename", FRONTEND_RESOURCE_FILES)
@@ -127,7 +121,7 @@ def test_frontend_resource_has_no_traceback_text(filename):
 def test_index_html_references_local_resources():
     source = read_resource("index.html")
     assert 'href="styles.css"' in source
-    # Phase R2: index.html must load the six js/ modules in order and
+    # index.html must load the six js/ modules in order and
     # must no longer reference the removed app.js.
     assert 'src="app.js"' not in source, (
         "index.html must not reference removed app.js"
@@ -149,13 +143,11 @@ def test_index_html_has_sidebar_nav():
         assert label in source
 
 
-def test_index_html_has_no_unmigrated_placeholder():
-    """Phase 6A: every sidebar page is now a migrated WebView page.
+def test_index_html_has_no_migration_placeholder():
+    """every sidebar page is a concrete WebView page.
 
-    The old "WebView 迁移中" placeholder copy must not appear anywhere in
-    index.html. Settings / Privacy was the last page migrated (Phase 6A,
-    read-only status foundation); Timeline / Statistics / Rules migrated
-    earlier.
+    The removed "WebView 迁移中" placeholder copy must not appear anywhere in
+    index.html.
     """
     source = read_resource("index.html")
     assert "WebView 迁移中" not in source
@@ -165,8 +157,8 @@ def test_index_html_has_no_unmigrated_placeholder():
 
 
 def test_index_html_overview_page_has_required_kpis():
-    """Phase 1: the Overview page must show the production KPI set, not a
-    spike placeholder. Required KPIs: date, total duration, project count,
+    """the Overview page must show the production KPI set, not a
+    temporary placeholder. Required KPIs: date, total duration, project count,
     classified duration, uncategorized duration."""
     source = read_resource("index.html")
     assert 'id="kpi-date"' in source
@@ -177,7 +169,7 @@ def test_index_html_overview_page_has_required_kpis():
 
 
 def test_index_html_overview_page_has_current_and_recent_sections():
-    """Phase 1: the Overview page must have a current-activity section and a
+    """the Overview page must have a current-activity section and a
     recent-activities list."""
     source = read_resource("index.html")
     assert 'id="current-activity"' in source
@@ -185,14 +177,14 @@ def test_index_html_overview_page_has_current_and_recent_sections():
 
 
 def test_index_html_overview_page_has_error_banner():
-    """Phase 1: the Overview page must have an in-page error banner so
+    """the Overview page must have an in-page error banner so
     bridge errors are surfaced to the user without exposing tracebacks."""
     source = read_resource("index.html")
     assert 'id="overview-error"' in source
 
 
 def test_index_html_overview_page_has_pause_toggle():
-    """Phase 1: the Overview page must support pause/resume through the
+    """the Overview page must support pause/resume through the
     sidebar toggle button."""
     source = read_resource("index.html")
     assert 'id="toggle-pause-btn"' in source
@@ -200,9 +192,9 @@ def test_index_html_overview_page_has_pause_toggle():
 
 
 def test_app_js_displays_classified_and_uncategorized_durations():
-    """Phase 1: the frontend must render classified_duration and
+    """the frontend must render classified_duration and
     uncategorized_duration returned by the bridge, not just total
-    duration. (Phase R2: contract now checked across all js/ modules.)"""
+    duration. (Contract checked across all js/ modules.)"""
     source = read_all_js()
     assert "kpi-classified" in source
     assert "kpi-uncategorized" in source
@@ -211,9 +203,9 @@ def test_app_js_displays_classified_and_uncategorized_durations():
 
 
 def test_app_js_surfaces_bridge_errors_in_page():
-    """Phase 1: the frontend must show bridge errors in the in-page error
-    banner instead of silently swallowing them. (Phase R2: contract now
-    checked across all js/ modules.)"""
+    """the frontend must show bridge errors in the in-page error
+    banner instead of silently swallowing them. (Contract checked
+    across all js/ modules.)"""
     source = read_all_js()
     assert "overview-error" in source
     assert "showError" in source
@@ -223,7 +215,7 @@ def test_app_js_surfaces_bridge_errors_in_page():
 def test_app_js_does_not_expose_tracebacks():
     """The frontend must not attempt to parse or display Python tracebacks.
     It only shows the generic error string returned by the bridge.
-    (Phase R2: contract now checked across all js/ modules.)"""
+    (Contract checked across all js/ modules.)"""
     source = read_all_js()
     assert "traceback" not in source.lower()
 
@@ -282,12 +274,12 @@ def test_webview_main_check_pywebview_missing_gives_clear_error(monkeypatch):
 
 
 def test_docs_history_mention_phase_3b_5a():
-    """Phase 3B.5A: the history doc and release-validation doc must
-    mention Phase 3B.5A and restate that batch edit / restore / permanent
+    """the history doc and release-validation doc must
+    mention the batch-edit consolidation scope and restate that batch edit / restore / permanent
     delete / complex correction page are not implemented."""
     history = HISTORY_PATH.read_text(encoding="utf-8")
     assert "3B.5A" in history, (
-        "docs/history/webview-phases.md must mention Phase 3B.5A"
+        "docs/history/webview-phases.md must mention 3B.5A"
     )
     assert "consolidation" in history.lower(), (
         "docs/history/webview-phases.md must describe 3B.5A as a "
@@ -300,17 +292,17 @@ def test_docs_history_mention_phase_3b_5a():
         )
     release_val = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     assert "3B.5A" in release_val, (
-        "release-validation.md must mention Phase 3B.5A"
+        "release-validation.md must mention 3B.5A"
     )
 
 
 def test_docs_history_mention_phase_3b_5b():
-    """Phase 3B.5B: the history doc and release-validation doc must
-    mention Phase 3B.5B and restate that batch edit / restore / permanent
+    """the history doc and release-validation doc must
+    mention the correction shell scope and restate that batch edit / restore / permanent
     delete / auto-rule / overlap detection are not implemented."""
     history = HISTORY_PATH.read_text(encoding="utf-8")
     assert "3B.5B" in history, (
-        "docs/history/webview-phases.md must mention Phase 3B.5B"
+        "docs/history/webview-phases.md must mention 3B.5B"
     )
     assert "correction shell" in history.lower() or "高级纠错" in history, (
         "docs/history/webview-phases.md must describe 3B.5B as a "
@@ -324,20 +316,20 @@ def test_docs_history_mention_phase_3b_5b():
         )
     release_val = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     assert "3B.5B" in release_val, (
-        "release-validation.md must mention Phase 3B.5B"
+        "release-validation.md must mention 3B.5B"
     )
 
 
 def test_docs_history_mention_phase_3b_5b_1():
-    """Phase 3B.5B.1: the history doc, release-validation doc, and (via the
-    history verbatim copy) README must mention Phase 3B.5B.1 as the
-    correction shell hardening phase and restate that no new backend /
+    """the history doc, release-validation doc, and (via the
+    history verbatim copy) README must mention the correction shell
+    hardening scope and restate that no new backend /
     DB / bridge capability and no batch editing were added."""
     history = HISTORY_PATH.read_text(encoding="utf-8")
     release_val = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     for doc, name in ((history, "docs/history/webview-phases.md"),
                       (release_val, "release-validation.md")):
-        assert "3B.5B.1" in doc, name + " must mention Phase 3B.5B.1"
+        assert "3B.5B.1" in doc, name + " must mention 3B.5B.1"
         assert "hardening" in doc.lower() or "硬化" in doc, (
             name + " must describe 3B.5B.1 as a hardening phase"
         )
@@ -353,10 +345,10 @@ def test_docs_history_mention_phase_3b_5b_1():
 
 
 def test_docs_history_mention_phase_3b_9():
-    """Phase 3B.9: the history doc must mention Phase 3B.9."""
+    """the history doc must mention the 3B.9 consolidation scope."""
     source = HISTORY_PATH.read_text(encoding="utf-8")
     assert "3B.9" in source, (
-        "docs/history/webview-phases.md must mention Phase 3B.9"
+        "docs/history/webview-phases.md must mention 3B.9"
     )
     assert "consolidation" in source.lower() or "整理" in source, (
         "docs/history/webview-phases.md must describe 3B.9 as consolidation"
@@ -364,58 +356,58 @@ def test_docs_history_mention_phase_3b_9():
 
 
 def test_docs_release_validation_mentions_phase_3b_9():
-    """Phase 3B.9: release-validation must mention Phase 3B.9."""
+    """release-validation must mention the 3B.9 scope."""
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     assert "3B.9" in source, (
-        "release-validation.md must mention Phase 3B.9"
+        "release-validation.md must mention 3B.9"
     )
 
 
 def test_docs_history_mention_phase_3b9_1():
-    """Phase 3B.9.1: the history doc must mention Phase 3B.9.1."""
+    """the history doc must mention the 3B.9.1 scope."""
     source = HISTORY_PATH.read_text(encoding="utf-8")
     assert "3B.9.1" in source, (
-        "docs/history/webview-phases.md must mention Phase 3B.9.1"
+        "docs/history/webview-phases.md must mention 3B.9.1"
     )
 
 
 def test_docs_release_validation_mentions_phase_3b9_1():
-    """Phase 3B.9.1: release-validation must mention Phase 3B.9.1."""
+    """release-validation must mention the 3B.9.1 scope."""
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     assert "3B.9.1" in source, (
-        "release-validation.md must mention Phase 3B.9.1"
+        "release-validation.md must mention 3B.9.1"
     )
 
 
 def test_docs_history_mention_phase_3c():
-    """Phase 3C: the history doc must mention Phase 3C."""
+    """the history doc must mention the 3C scope."""
     source = HISTORY_PATH.read_text(encoding="utf-8")
     assert "3C" in source, (
-        "docs/history/webview-phases.md must mention Phase 3C"
+        "docs/history/webview-phases.md must mention 3C"
     )
-    assert "Phase 3C Implemented Scope" in source, (
-        "docs/history/webview-phases.md must have a Phase 3C Implemented "
+    assert "3C Implemented Scope" in source, (
+        "docs/history/webview-phases.md must have a 3C Implemented "
         "Scope section"
     )
 
 
 def test_docs_release_validation_mentions_phase_3c():
-    """Phase 3C: release-validation must mention Phase 3C."""
+    """release-validation must mention the 3C scope."""
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     assert "3C" in source, (
-        "release-validation.md must mention Phase 3C"
+        "release-validation.md must mention 3C"
     )
-    assert "WebView Phase 3C Validation" in source, (
-        "release-validation.md must have a WebView Phase 3C Validation section"
+    assert "3C Validation" in source, (
+        "release-validation.md must have a WebView 3C Validation section"
     )
 
 
 def test_docs_release_validation_phase_3c_release_blockers_3c():
-    """Phase 3C: release-validation must list the Phase 3C release
+    """release-validation must list the 3C release
     blockers."""
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
-    assert "Phase 3C Release Blockers" in source, (
-        "release-validation.md must have a Phase 3C Release Blockers section"
+    assert "3C Release Blockers" in source, (
+        "release-validation.md must have a 3C Release Blockers section"
     )
     for blocker in ("new backend write capability",
                     "new bridge", "new DB schema",
@@ -427,31 +419,31 @@ def test_docs_release_validation_phase_3c_release_blockers_3c():
 
 
 def test_docs_history_mention_phase_3c1():
-    """Phase 3C.1: the history doc must mention Phase 3C.1."""
+    """the history doc must mention the 3C.1 scope."""
     source = HISTORY_PATH.read_text(encoding="utf-8")
     assert "3C.1" in source, (
-        "docs/history/webview-phases.md must mention Phase 3C.1"
+        "docs/history/webview-phases.md must mention 3C.1"
     )
 
 
 def test_docs_release_validation_mentions_phase_3c1():
-    """Phase 3C.1: release-validation must mention Phase 3C.1."""
+    """release-validation must mention the 3C.1 scope."""
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     assert "3C.1" in source, (
-        "release-validation.md must mention Phase 3C.1"
+        "release-validation.md must mention 3C.1"
     )
-    assert "WebView Phase 3C.1 Validation" in source, (
-        "release-validation.md must have a WebView Phase 3C.1 Validation "
+    assert "3C.1 Validation" in source, (
+        "release-validation.md must have a WebView 3C.1 Validation "
         "section"
     )
 
 
 def test_docs_release_validation_phase_3c1_release_blockers_3c1():
-    """Phase 3C.1: release-validation must list the Phase 3C.1 release
+    """release-validation must list the 3C.1 release
     blockers."""
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
-    assert "Phase 3C.1 Release Blockers" in source, (
-        "release-validation.md must have a Phase 3C.1 Release Blockers "
+    assert "3C.1 Release Blockers" in source, (
+        "release-validation.md must have a 3C.1 Release Blockers "
         "section"
     )
     for blocker in ("raw exception", "traceback", "auto-refresh",
@@ -464,40 +456,40 @@ def test_docs_release_validation_phase_3c1_release_blockers_3c1():
 
 
 def test_docs_history_mention_phase_4a():
-    """Phase 4A: the history doc must mention Phase 4A."""
+    """the history doc must mention the 4A scope."""
     source = HISTORY_PATH.read_text(encoding="utf-8")
     assert "4A" in source, (
-        "docs/history/webview-phases.md must mention Phase 4A"
+        "docs/history/webview-phases.md must mention statistics contract"
     )
-    assert "Phase 4A" in source, (
-        "docs/history/webview-phases.md must mention 'Phase 4A'"
+    assert "4A Implemented Scope" in source, (
+        "docs/history/webview-phases.md must have a 4A scope section"
     )
 
 
 def test_docs_release_validation_mentions_phase_4a():
-    """Phase 4A: release-validation must mention Phase 4A."""
+    """release-validation must mention the 4A scope."""
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     assert "4A" in source, (
-        "release-validation.md must mention Phase 4A"
+        "release-validation.md must mention statistics contract"
     )
-    assert "WebView Phase 4A Validation" in source, (
-        "release-validation.md must have a WebView Phase 4A Validation section"
+    assert "4A Validation" in source, (
+        "release-validation.md must have a WebView 4A Validation section"
     )
 
 
 def test_docs_release_validation_phase_4a_release_blockers_4a():
-    """Phase 4A: release-validation must list the Phase 4A release
+    """release-validation must list the 4A release
     blockers."""
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
-    assert "Phase 4A Release Blockers" in source, (
-        "release-validation.md must have a Phase 4A Release Blockers section"
+    assert "4A Release Blockers" in source, (
+        "release-validation.md must have a 4A Release Blockers section"
     )
     for blocker in ("export write", "save dialog",
                     "raw title", "clipboard", "note",
                     "traceback", "SQL",
                     "DB schema", "write API",
                     "Project Rules", "Settings",
-                    "legacy UI", "localStorage",
+                    "Tkinter fallback", "localStorage",
                     "Timeline", "regression"):
         assert blocker in source, (
             "release-validation.md must mention release blocker: " + blocker
@@ -505,37 +497,37 @@ def test_docs_release_validation_phase_4a_release_blockers_4a():
 
 
 def test_docs_history_mention_phase_4a1():
-    """Phase 4A.1: the history doc must mention Phase 4A.1 hardening."""
+    """the history doc must mention the 4A.1 hardening."""
     source = HISTORY_PATH.read_text(encoding="utf-8")
     assert "4A.1" in source, (
-        "docs/history/webview-phases.md must mention Phase 4A.1"
+        "docs/history/webview-phases.md must mention statistics contract.1"
     )
     assert "hardening" in source.lower() or "harden" in source.lower()
 
 
 def test_docs_release_validation_phase_4a1_section_4a1():
-    """Phase 4A.1: release-validation must have a Phase 4A.1 section."""
+    """release-validation must have a 4A.1 section."""
     source = RELEASE_VALIDATION_PATH.read_text(encoding="utf-8")
     assert "4A.1" in source, (
-        "release-validation.md must mention Phase 4A.1"
+        "release-validation.md must mention statistics contract.1"
     )
 
 
-# --- Phase R2: JS module split structural tests --------------------------
-# Phase R2 split the monolithic app.js into six IIFE modules under
+# --- JS module split structural tests --------------------------
+# split app.js into six IIFE modules under
 # worktrace/webview_ui/js/. These tests verify the split is structurally
 # correct and behavior-preserving.
 
 
 def test_phase_r2_js_directory_exists():
-    """Phase R2: the js/ subdirectory must exist under webview_ui/."""
+    """the js/ subdirectory must exist under webview_ui/."""
     assert JS_DIR.is_dir(), (
-        "worktrace/webview_ui/js/ directory must exist after Phase R2"
+        "worktrace/webview_ui/js/ directory must exist after frontend module split"
     )
 
 
 def test_phase_r2_each_js_file_declares_worktrace_namespace():
-    """Phase R2: every js/ module must declare the shared namespace via
+    """every js/ module must declare the shared namespace via
     ``var App = window.WorkTraceApp = window.WorkTraceApp || {};`` so all
     modules share the same namespace object."""
     for name in ALL_JS_FILES:
@@ -546,7 +538,7 @@ def test_phase_r2_each_js_file_declares_worktrace_namespace():
 
 
 def test_phase_r2_each_js_file_is_iife():
-    """Phase R2: every js/ module must be wrapped in an IIFE to avoid
+    """every js/ module must be wrapped in an IIFE to avoid
     leaking locals into the global scope (matching the original app.js
     structure). A short leading comment header (module name / purpose)
     is permitted before the IIFE opening."""
@@ -563,7 +555,7 @@ def test_phase_r2_each_js_file_is_iife():
 
 
 def test_phase_r2_index_html_loads_js_files_in_correct_order():
-    """Phase R2: index.html must load the six js/ modules in the exact
+    """index.html must load the six js/ modules in the exact
     dependency order (core → overview → timeline → timeline_correction →
     statistics → init). A wrong order would cause ReferenceError at load
     time because a module might call App.foo() before core.js defines it."""
@@ -584,7 +576,7 @@ def test_phase_r2_index_html_loads_js_files_in_correct_order():
 
 
 def test_phase_r2_no_es_module_syntax_in_js_files():
-    """Phase R2: the js/ modules must NOT use ES module syntax (import /
+    """the js/ modules must NOT use ES module syntax (import /
     export). The project loads scripts via plain <script> tags, so ES
     modules would break the load chain.
 
@@ -613,7 +605,7 @@ def test_phase_r2_no_es_module_syntax_in_js_files():
 
 
 def test_phase_r2_domcontentloaded_wiring_only_in_init_js():
-    """Phase R2: the DOMContentLoaded wiring (the only top-level code
+    """the DOMContentLoaded wiring (the only top-level code
     that runs at module-load time) must exist ONLY in init.js — the last
     module loaded. Other modules must not auto-execute any code."""
     for name in ALL_JS_FILES:
@@ -630,21 +622,21 @@ def test_phase_r2_domcontentloaded_wiring_only_in_init_js():
 
 
 def test_phase_r2_worktrace_spec_bundles_js_modules():
-    """Phase R2: the PyInstaller spec must list every js/ module in datas
+    """the PyInstaller spec must list every js/ module in datas
     so the packaged exe includes the split frontend resources."""
     spec = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
     for name in ALL_JS_FILES:
         assert ("js" in spec and name in spec), (
             "WorkTrace.spec must bundle js/" + name + " in datas"
         )
-    # The old app.js reference must be gone.
+    # The app.js reference must be gone.
     assert "app.js" not in spec, (
         "WorkTrace.spec must no longer reference the removed app.js"
     )
 
 
 def test_phase_r2_no_app_js_references_remain_in_js_files():
-    """Phase R2: no js/ module must reference the removed app.js file
+    """no js/ module must reference the removed app.js file
     (e.g., via a script load or string literal)."""
     source = read_all_js()
     assert "app.js" not in source, (
@@ -652,12 +644,12 @@ def test_phase_r2_no_app_js_references_remain_in_js_files():
     )
 
 
-# --- Phase R2: CRITICAL behavior-preservation guards --------------------
+# --- CRITICAL behavior-preservation guards --------------------
 
 
 def test_phase_r2_all_functions_still_defined():
-    """CRITICAL Phase R2 guard: every function that existed in the
-    monolithic app.js must still be defined across the six js/ modules.
+    """CRITICAL guard: every function that existed in the
+    app.js must still be defined across the six js/ modules.
     A missing function would cause a ReferenceError at runtime when the
     UI tries to call it — and no other test would catch this except a
     full runtime integration test. This static guard lists the critical
@@ -706,7 +698,7 @@ def test_phase_r2_all_functions_still_defined():
         if source.find("function " + name + "(") == -1:
             missing.append(name)
     assert not missing, (
-        "Phase R2 split is missing function definitions: "
+        "frontend module split is missing function definitions: "
         + ", ".join(missing)
         + ". These would cause ReferenceError at runtime."
     )
@@ -722,7 +714,7 @@ def test_phase_r2_all_functions_still_defined():
 
 
 def test_phase_r2_state_variables_only_accessed_via_app_namespace():
-    """CRITICAL Phase R2 guard: every state variable declared via
+    """CRITICAL guard: every state variable declared via
     ``App.<name>`` in core.js must be accessed ONLY via the App.
     namespace in all js/ modules. A bare reference (e.g.
     ``timelineDate = shiftDate(...)`` without ``App.``) would be a
@@ -784,18 +776,18 @@ def test_phase_r2_state_variables_only_accessed_via_app_namespace():
     )
 
 
-# --- Phase 6G: init.js does not start refresh before notice loaded -----
+# --- init.js does not start refresh before notice loaded -----
 
 
 def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
-    """Phase 6G: in ``init()``, the call to ``App.loadFirstRunNotice()``
+    """in ``init()``, the call to ``App.loadFirstRunNotice()``
     must appear before the main UI refresh / heartbeat-start calls in
     source order, AND those calls must be inside a ``.then(...)``
     callback (or after an ``await``), not at the top level of ``init``.
     This eliminates the frontend race where refresh could fire before
     the gate overlay was up.
 
-    Phase 6H-followup: the legacy ``refreshAll()`` /
+    The unified heartbeat rewrite: the ``refreshAll()`` /
     ``startAutoRefresh()`` / ``startLocalTicker()`` calls were replaced
     by ``refreshCurrentPageData()`` + ``startHeartbeat()``; this test
     verifies the new contract."""
@@ -832,14 +824,14 @@ def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
     )
 
 
-# --- Phase 6G: local ticker (1-second DOM-only refresh) ----------------
+# --- local ticker (1-second DOM-only refresh) ----------------
 
 
-def test_core_js_does_not_define_legacy_ticker_interval() -> None:
-    """Static boundary test: core.js must NOT define the legacy
+def test_core_js_does_not_define_removed_ticker_interval() -> None:
+    """Static boundary test: core.js must NOT define the removed
     ``LOCAL_TICKER_INTERVAL_MS`` / ``REFRESH_INTERVAL_MS`` constants.
     The unified heartbeat (``App.HEARTBEAT_INTERVAL_MS = 1000``) owns
-    the single 1-second timer; the legacy parallel-timer constants have
+    the single 1-second timer; the parallel-timer constants have
     been removed entirely and must not regress."""
     source = read_js("core.js")
     assert "App.LOCAL_TICKER_INTERVAL_MS" not in source, (
@@ -853,20 +845,20 @@ def test_core_js_does_not_define_legacy_ticker_interval() -> None:
 
 
 def test_core_js_defines_apply_local_ticker_function() -> None:
-    """Phase 6G: core.js must define the ``applyLocalTicker`` function
+    """core.js must define the ``applyLocalTicker`` function
     and expose it on the App namespace so the timer in init.js can
     invoke it once per second."""
     source = read_js("core.js")
     assert "function applyLocalTicker" in source, (
-        "core.js must define function applyLocalTicker for Phase 6G"
+        "core.js must define function applyLocalTicker for live startup contract"
     )
     assert "App.applyLocalTicker" in source, (
-        "core.js must expose App.applyLocalTicker for Phase 6G"
+        "core.js must expose App.applyLocalTicker for live startup contract"
     )
 
 
 def test_core_js_ticker_does_not_call_bridge_methods() -> None:
-    """Phase 6G: the ``applyLocalTicker`` function body must NOT contain
+    """the ``applyLocalTicker`` function body must NOT contain
     ``callBridge`` or ``App.callBridge``. The ticker is cosmetic: it only
     updates DOM text with a locally-computed elapsed increment. It must
     never trigger a backend round-trip, never write the database, and

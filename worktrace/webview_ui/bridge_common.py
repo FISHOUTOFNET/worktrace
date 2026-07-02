@@ -1,10 +1,11 @@
 """Shared bridge helpers used by multiple bridge mixin modules.
 
-This module was split out of ``bridge.py`` so that the page-level mixins
-(``bridge_overview.py``, ``bridge_timeline.py``, ``bridge_statistics.py``,
-``bridge_settings.py``, ``bridge_dialogs.py``) can share common validation,
-payload-building, and display-safe helpers without reverse-importing
-``bridge.py`` (which would create a circular dependency).
+Holds the common validation, payload-building, and display-safe helpers
+shared by the page-level mixins (``bridge_overview.py``,
+``bridge_timeline.py``, ``bridge_statistics.py``, ``bridge_settings.py``,
+``bridge_dialogs.py``). Lives outside ``bridge.py`` so the mixins can
+import it without reverse-importing ``bridge.py`` (which would create a
+circular dependency).
 
 Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 

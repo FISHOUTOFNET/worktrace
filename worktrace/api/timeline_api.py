@@ -25,14 +25,14 @@ from ..services.live_time_service import (
 
 
 class TimelineTimeEditError(ValueError):
-    """Raised by the Phase 3B.1 time-correction methods for known,
+    """Raised by the time-correction methods for known user-facing failures.
     user-facing failure modes.
 
     The ``code`` attribute is a stable token the WebView bridge maps to a
-    Chinese user-facing message. Using a dedicated exception (instead of
-    echoing ``ValueError`` text) keeps internal field names, ids, and SQL
-    details out of bridge responses. The bridge catches this separately from
-    generic ``ValueError`` so unknown validation failures still collapse to
+    Chinese message, so internal field names, ids, and SQL details never
+    reach the bridge. The bridge catches this separately from generic
+    ``ValueError`` so unknown validation failures still collapse to the
+    generic ``"操作失败"`` message.
     the generic ``"操作失败"`` message.
     """
 
@@ -42,7 +42,7 @@ class TimelineTimeEditError(ValueError):
 
 
 class TimelineSplitError(ValueError):
-    """Raised by the Phase 3B.2 activity-split methods for known,
+    """Raised by the activity-split methods for known user-facing failures.
     user-facing failure modes.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
@@ -61,7 +61,7 @@ class TimelineSplitError(ValueError):
 
 
 class TimelineMergeError(ValueError):
-    """Raised by the Phase 3B.3 activity-merge methods for known,
+    """Raised by the activity-merge methods for known user-facing failures.
     user-facing failure modes.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
@@ -85,7 +85,7 @@ class TimelineMergeError(ValueError):
 
 
 class TimelineVisibilityError(ValueError):
-    """Raised by the Phase 3B.4 hide / soft-delete methods for known,
+    """Raised by the hide / soft-delete methods for known user-facing failures.
     user-facing failure modes.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
@@ -104,8 +104,8 @@ class TimelineVisibilityError(ValueError):
 
 
 class TimelineBatchProjectError(ValueError):
-    """Raised by the Phase 3B.6 batch project reassignment methods for
-    known, user-facing failure modes.
+    """Raised by the batch project reassignment methods for known
+    user-facing failures.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
 
@@ -128,7 +128,7 @@ class TimelineBatchProjectError(ValueError):
 
 
 class TimelineBatchNoteError(ValueError):
-    """Raised by the Phase 3B.7 batch note overwrite methods for known,
+    """Raised by the batch note overwrite methods for known user-facing failures.
     user-facing failure modes.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
@@ -152,8 +152,8 @@ class TimelineBatchNoteError(ValueError):
 
 
 class TimelineRestoreActivityError(ValueError):
-    """Raised by the Phase 3B.8 single activity restore methods for known,
-    user-facing failure modes.
+    """Raised by the single activity restore methods for known user-facing
+    failures.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
 
@@ -236,11 +236,11 @@ def preview_session_project_update(
     return timeline_service.preview_session_project_update(session_activity_ids, project_id)
 
 
-# --- Phase 3A: validated Timeline editing (project reclassification + note) ---
+# --- Validated Timeline editing (project reclassification + note) ---
 
-# Maximum length for a session note. The existing ``project_session_note``
-# table has no length constraint, so the API enforces a reasonable upper
-# bound to keep the WebView editing surface bounded and testable.
+# Maximum length for a session note. The ``project_session_note`` table has
+# no length constraint, so the API enforces a reasonable upper bound to
+# keep the WebView editing surface bounded and testable.
 TIMELINE_NOTE_MAX_LENGTH = 2000
 
 # Maximum allowed value for ``adjusted_duration_seconds``. A single day has
@@ -256,7 +256,7 @@ def reclassify_timeline_session_project(
     """Validate and apply a project reclassification to a Timeline session.
 
     Reclassifies every activity in ``activity_ids`` to ``project_id`` as a
-    manual assignment. This mirrors the legacy Tkinter ``update_session_project``
+    manual assignment (all activities in the session move together).
     behavior (all activities in the session move together) but adds explicit
     input validation so the WebView bridge never performs a partial or
     invalid write.
@@ -289,8 +289,8 @@ def update_timeline_session_note(
     """Validate and write a session note for the Timeline page.
 
     The session note is stored in ``project_session_note`` keyed by
-    ``(report_date, first_activity_id)`` — the same model the legacy Tkinter
-    Timeline uses. ``first_activity_id`` is the first activity id of the
+    ``(report_date, first_activity_id)``. ``first_activity_id`` is the
+    first activity id of the session (``activity_ids[0]``).
     session (``activity_ids[0]``).
 
     Validation:
@@ -299,8 +299,8 @@ def update_timeline_session_note(
       existing, non-deleted activity.
     - ``note`` must be a string. It is stripped; the stripped value must not
       exceed ``TIMELINE_NOTE_MAX_LENGTH`` characters. Whitespace-only notes
-      are treated as empty and delete the existing note row (matching the
-      legacy ``set_session_note`` behavior). Legitimate newlines inside the
+      are treated as empty and delete the existing note row. Legitimate
+      newlines inside the note are preserved.
       note are preserved.
 
     Raises ``ValueError`` on any invalid input.
@@ -342,9 +342,7 @@ def update_timeline_session_note_and_duration(
     timeline_service.update_session_note_and_duration(date, first_id, text, duration)
 
 
-# --- Phase 3B.1: Timeline time correction (single-activity foundation) ---
-#
-# Phase 3B.1 implements the minimal time-correction foundation:
+# --- Timeline time correction (single-activity foundation) ---
 #
 # - ``update_timeline_activity_time`` corrects a single closed activity's
 #   ``start_time`` and ``end_time`` and recomputes ``duration_seconds``.
@@ -353,7 +351,7 @@ def update_timeline_session_note_and_duration(
 #   sessions raise ``TimelineTimeEditError("multi_activity")`` so the user
 #   is pointed to per-activity editing instead.
 #
-# Data semantics (see docs/ui-webview-migration.md):
+# Data semantics:
 # - ``start_time`` and ``end_time`` must be ``YYYY-MM-DD HH:MM:SS`` strings.
 # - ``start_time < end_time`` (zero and negative durations are rejected).
 # - In-progress activities (``end_time IS NULL``) cannot be edited: their
@@ -362,8 +360,7 @@ def update_timeline_session_note_and_duration(
 # - Deleted activities cannot be edited.
 # - Cross-day results are handled by ``timeline_service`` projection
 #   (``_split_calendar_report_rows``); the API/bridge never copies rows.
-# - Overlap detection is NOT performed in Phase 3B.1; it is deferred to a
-#   later phase.
+# - Overlap detection against other activities is NOT performed here.
 
 
 def update_timeline_activity_time(
@@ -404,9 +401,9 @@ def update_timeline_session_time(
     """Validate and apply a session-level time correction.
 
     A session is an aggregate of one or more activities; it is not an
-    independent DB record. Phase 3B.1 supports whole-session time
-    correction only when the session resolves to a single activity (after
-    deduplication), in which case the call is equivalent to
+    independent DB record. Whole-session time correction is supported only
+    when the session resolves to a single activity (after deduplication),
+    in which case the call is equivalent to
     ``update_timeline_activity_time`` on that activity. Multi-activity
     sessions raise ``TimelineTimeEditError("multi_activity")`` — the
     frontend must direct the user to per-activity editing instead.
@@ -443,9 +440,7 @@ def update_timeline_session_time(
         raise TimelineTimeEditError("invalid_id")
 
 
-# --- Phase 3B.2: Timeline activity split (single-activity foundation) ---
-#
-# Phase 3B.2 implements the minimal split foundation:
+# --- Timeline activity split (single-activity foundation) ---
 #
 # - ``split_timeline_activity`` splits a single closed activity at a given
 #   ``split_time`` into two closed activities. The original activity keeps
@@ -456,7 +451,7 @@ def update_timeline_session_time(
 #   ``TimelineSplitError("multi_activity")`` so the user is pointed to
 #   per-activity splitting instead.
 #
-# Data semantics (see docs/ui-webview-migration.md):
+# Data semantics:
 # - ``split_time`` must be a ``YYYY-MM-DD HH:MM:SS`` string strictly between
 #   the activity's ``start_time`` and ``end_time``.
 # - In-progress activities (``end_time IS NULL``) cannot be split.
@@ -470,7 +465,7 @@ def update_timeline_session_time(
 #   ``(report_date, first_activity_id)``; the front-half keeps the original
 #   id and thus keeps any session note.
 # - Cross-day results are handled by ``timeline_service`` projection.
-# - Overlap detection is NOT performed in Phase 3B.2; it is deferred to a
+# - Overlap detection against other activities is NOT performed here.
 #   later phase.
 
 
@@ -512,8 +507,8 @@ def split_timeline_activity(activity_id: int, split_time: str) -> dict:
 def split_timeline_session(activity_ids: list[int], split_time: str) -> dict:
     """Validate and apply a session-level split.
 
-    A session is an aggregate of one or more activities. Phase 3B.2 supports
-    whole-session split only when the session resolves to a single activity
+    A session is an aggregate of one or more activities. Whole-session
+    split is supported only when the session resolves to a single activity
     (after deduplication), in which case the call is equivalent to
     ``split_timeline_activity`` on that activity. Multi-activity sessions
     raise ``TimelineSplitError("multi_activity")`` — the frontend must direct
@@ -605,9 +600,7 @@ def _validate_split_range(split_time: str, start_time: str, end_time: str) -> No
         raise TimelineSplitError("outside_range")
 
 
-# --- Phase 3B.3: Timeline activity merge (two-activity foundation) ---
-#
-# Phase 3B.3 implements the minimal merge foundation:
+# --- Timeline activity merge (two-activity foundation) ---
 #
 # - ``merge_timeline_activities`` merges exactly two closed activities into
 #   one. The earlier activity (by start_time, then id) is kept: its
@@ -619,7 +612,7 @@ def _validate_split_range(split_time: str, start_time: str, end_time: str) -> No
 # - Multi-activity session whole-merge is NOT supported; the frontend
 #   directs the user to merge pairs of adjacent activities one at a time.
 #
-# Data semantics (see docs/ui-webview-migration.md):
+# Data semantics:
 # - Both activities must be closed (raw ``end_time IS NOT NULL``).
 # - Both must not be deleted.
 # - The two activities must not overlap and must be adjacent within
@@ -628,7 +621,7 @@ def _validate_split_range(split_time: str, start_time: str, end_time: str) -> No
 #   source.
 # - The kept activity's note is preserved; the later activity's note is NOT
 #   copied or concatenated.
-# - project_session_note is NOT migrated.
+# - project_session_note rows are NOT moved.
 # - The write is a single atomic transaction; any failure rolls back.
 # - Overlap detection is NOT performed as a global feature; only the two
 #   activities being merged are checked for overlap against each other.
@@ -734,9 +727,7 @@ def _validate_merge_activity_ids(activity_ids: list[int]) -> list[int]:
     return ids
 
 
-# --- Phase 3B.4: Timeline hide / soft delete (single-activity foundation) ---
-#
-# Phase 3B.4 implements the minimal hide / soft-delete foundation:
+# --- Timeline hide / soft delete (single-activity foundation) ---
 #
 # - ``hide_timeline_activity`` hides a single closed activity by setting
 #   ``is_hidden = 1``. Hidden activities do not appear in the default
@@ -750,7 +741,7 @@ def _validate_merge_activity_ids(activity_ids: list[int]) -> list[int]:
 #   ``multi_activity_hide`` / ``multi_activity_delete`` so the user is pointed
 #   to per-activity editing instead.
 #
-# Data semantics (see docs/ui-webview-migration.md):
+# Data semantics:
 # - Neither operation physically deletes the DB row.
 # - Neither operation deletes assignment / resource / note / session-note rows.
 # - Neither operation modifies start_time / end_time / duration_seconds /
@@ -761,7 +752,7 @@ def _validate_merge_activity_ids(activity_ids: list[int]) -> list[int]:
 # - Hide is idempotent: hiding an already-hidden activity succeeds.
 # - Soft delete is NOT idempotent: deleting an already-deleted activity fails
 #   with ``invalid_id`` (the activity is treated as missing).
-# - project_session_note is NOT migrated.
+# - project_session_note rows are NOT moved.
 # - The write is a single atomic UPDATE; no partial writes are possible.
 
 
@@ -808,9 +799,9 @@ def soft_delete_timeline_activity(activity_id: int) -> None:
 def hide_timeline_session(activity_ids: list[int]) -> None:
     """Validate and apply a session-level hide.
 
-    A session is an aggregate of one or more activities. Phase 3B.4 supports
-    whole-session hide only when the session resolves to a single activity
-    (after deduplication), in which case the call is equivalent to
+    A session is an aggregate of one or more activities. Whole-session hide
+    is supported only when the session resolves to a single activity (after
+    deduplication), in which case the call is equivalent to
     ``hide_timeline_activity`` on that activity. Multi-activity sessions
     raise ``TimelineVisibilityError("multi_activity_hide")`` — the frontend
     must direct the user to per-activity hiding instead.
@@ -840,9 +831,9 @@ def hide_timeline_session(activity_ids: list[int]) -> None:
 def soft_delete_timeline_session(activity_ids: list[int]) -> None:
     """Validate and apply a session-level soft delete.
 
-    A session is an aggregate of one or more activities. Phase 3B.4 supports
-    whole-session soft delete only when the session resolves to a single
-    activity (after deduplication), in which case the call is equivalent to
+    A session is an aggregate of one or more activities. Whole-session soft
+    delete is supported only when the session resolves to a single activity
+    (after deduplication), in which case the call is equivalent to
     ``soft_delete_timeline_activity`` on that activity. Multi-activity
     sessions raise ``TimelineVisibilityError("multi_activity_delete")`` — the
     frontend must direct the user to per-activity deletion instead.
@@ -932,10 +923,7 @@ def _validate_visibility_activity_ids(activity_ids: list[int]) -> list[int]:
     return ids
 
 
-# --- Phase 3B.6: Timeline batch project editing foundation ---
-#
-# Phase 3B.6 implements the first batch write capability: batch project
-# reassignment only.
+# --- Timeline batch project editing foundation ---
 #
 # - ``batch_update_timeline_activities_project`` sets the same project on
 #   multiple closed, non-hidden, non-deleted activities in a single atomic
@@ -948,9 +936,6 @@ def _validate_visibility_activity_ids(activity_ids: list[int]) -> list[int]:
 #   ``MAX_BATCH_PROJECT_EDIT_ACTIVITIES`` (100).
 # - In-progress, hidden, and deleted activities are rejected.
 # - No new DB schema is introduced.
-# - This phase does NOT implement batch note editing, batch hide, batch
-#   delete, batch time correction, batch split, batch merge, undo / restore,
-#   permanent delete, auto-rule, or global overlap detection.
 
 
 def batch_update_timeline_activities_project(
@@ -999,7 +984,7 @@ def batch_update_timeline_activities_project(
         # message without echoing internal details.
         raise TimelineBatchProjectError("operation_failed")
     except Exception:
-        # Phase 3B.6.1: a non-ValueError service exception (e.g.
+        # A non-ValueError service exception (e.g.
         # ``sqlite3.OperationalError``, ``RuntimeError``) must also collapse
         # to ``operation_failed`` so the bridge returns a clear generic
         # message without echoing internal details or tracebacks.
@@ -1065,10 +1050,7 @@ def _validate_batch_project_id(project_id: int) -> int:
     return pid
 
 
-# --- Phase 3B.7: Timeline batch note editing foundation ---
-#
-# Phase 3B.7 implements the second batch write capability: batch note
-# overwrite only.
+# --- Timeline batch note editing foundation ---
 #
 # - ``batch_update_timeline_activities_note`` overwrites the note on
 #   multiple closed, non-hidden, non-deleted activities with the same note
@@ -1084,10 +1066,6 @@ def _validate_batch_project_id(project_id: int) -> int:
 #   ``MAX_BATCH_NOTE_EDIT_ACTIVITIES`` (100).
 # - In-progress, hidden, and deleted activities are rejected.
 # - No new DB schema is introduced.
-# - This phase does NOT implement batch hide, batch delete, batch time
-#   correction, batch split, batch merge, batch note append, batch note
-#   merge, undo / restore, permanent delete, auto-rule, or global overlap
-#   detection.
 
 
 def batch_update_timeline_activities_note(
@@ -1198,9 +1176,7 @@ def _validate_batch_note(note: str) -> str:
     return note
 
 
-# --- Phase 3B.8: Timeline single activity restore foundation ---
-#
-# Phase 3B.8 implements the minimal restore foundation:
+# --- Timeline single activity restore foundation ---
 #
 # - ``restore_timeline_activity`` restores a single hidden or soft-deleted
 #   activity by setting ``is_hidden = 0`` AND ``is_deleted = 0`` in a single
@@ -1211,7 +1187,7 @@ def _validate_batch_note(note: str) -> str:
 #   list of hidden / deleted activities for a given date so the user can
 #   select which activity to restore.
 #
-# Data semantics (see docs/ui-webview-migration.md):
+# Data semantics:
 # - Restore only modifies ``is_hidden``, ``is_deleted``, and ``updated_at``.
 # - Restore does NOT modify ``start_time`` / ``end_time`` /
 #   ``duration_seconds`` / ``project_id`` / ``note`` / ``status`` /
@@ -1223,10 +1199,6 @@ def _validate_batch_note(note: str) -> str:
 # - The write is a single atomic UPDATE with a rowcount guard; no partial
 #   writes are possible.
 # - The recovery list is read-only and returns display-safe fields only.
-#
-# This phase does NOT implement batch restore, undo stack, permanent
-# delete, batch hide/delete, batch time correction, batch split, batch
-# merge, auto-rule, or global overlap detection.
 
 
 def restore_timeline_activity(activity_id: int) -> dict:
@@ -1438,7 +1410,7 @@ def _validate_adjusted_duration(adjusted_duration_seconds: int | None) -> int | 
     return value
 
 
-# --- Phase 3B.1 time-correction validators --------------------------------
+# --- Time-correction validators --------------------------------
 
 
 def _validate_activity_id_for_time_edit(activity_id: int) -> int:

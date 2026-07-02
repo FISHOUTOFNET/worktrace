@@ -100,10 +100,10 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
 
 
 def _sleep_poll(stop_event: threading.Event) -> None:
-    # Section 八: default poll interval is 1 second (immediacy of current
-    # activity change perception takes priority over minor polling
-    # overhead). The setting is seeded in ``db.seed_defaults``; the
-    # fallback here stays 1 so a missing setting does not regress to 3.
+    # Default poll interval is 1 second (immediacy of current activity
+    # change perception takes priority over minor polling overhead). The
+    # setting is seeded in ``db.seed_defaults``; the fallback here matches
+    # the seeded default.
     interval = max(1, get_int_setting("poll_interval_seconds", 1))
     stop_event.wait(interval)
 

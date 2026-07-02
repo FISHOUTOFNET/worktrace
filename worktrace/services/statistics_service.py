@@ -13,15 +13,15 @@ from .live_display_service import (
 )
 from .settings_service import get_setting
 
-# Phase 4A: maximum inclusive calendar-day span accepted by the read-only
+# Maximum inclusive calendar-day span accepted by the read-only
 # statistics/export summary. A 31-day span (e.g. 2026-06-01..2026-07-01) is
-# allowed; anything wider is rejected as ``range_too_large`` so the first
-# version does not read an unbounded amount of data.
+# allowed; anything wider is rejected as ``range_too_large`` so the summary
+# never reads an unbounded amount of data.
 STATISTICS_SUMMARY_MAX_RANGE_DAYS = 31
 
-# Phase 4A: display-safe Chinese labels for the by_status breakdown. The raw
-# status codes (``normal`` / ``idle`` / ``paused`` / ``excluded`` / ``error``)
-# are used as the stable ``key``; these labels are the ``display_name``.
+# Display-safe Chinese labels for the by_status breakdown. The raw status
+# codes (``normal`` / ``idle`` / ``paused`` / ``excluded`` / ``error``) are
+# used as the stable ``key``; these labels are the ``display_name``.
 _STATUS_DISPLAY_LABELS = {
     STATUS_NORMAL: "正常",
     STATUS_IDLE: "空闲",
@@ -125,7 +125,7 @@ def get_project_stats(start_date: str, end_date: str, ensure_context: bool = Tru
         description = str(session.get("project_description") or "").strip()
         # Persisted_open overlay: when the session contains the
         # persisted_activity_id, relabel its project to the snapshot's
-        # display_project. This ensures the KPI attributes the in-progress
+        # display_project (duration unchanged — see ``get_summary``).
         # open row's time to the inherited display project during the
         # 30-second pending window, NOT the DB row's candidate assignment.
         # The duration is NOT changed (no double-count).
@@ -140,8 +140,8 @@ def get_project_stats(start_date: str, end_date: str, ensure_context: bool = Tru
         group["total_duration"] += int(session.get("duration_seconds") or 0)
         group["record_count"] += 1
     # Virtual live projection: add the live duration to the
-    # display_project group. The virtual snapshot has no DB row, so this
-    # does NOT double-count.
+    # display_project group. The virtual snapshot has no DB row, so no
+    # double-count risk here (see ``get_summary``).
     if live is not None and live.get("live_state") == "virtual" and live.get("status") == STATUS_NORMAL:
         project = str(live["project"] or UNCATEGORIZED_PROJECT)
         group = groups.setdefault(project, {"project": project, "total_duration": 0, "record_count": 0})
@@ -171,8 +171,8 @@ def _ensure_context_range(start_date: str, end_date: str) -> None:
 def _live_projection(start_date: str, end_date: str) -> dict | None:
     """Project the current live snapshot for KPI attribution.
 
-    Unified live-display model. Uses ``build_live_projection`` (the public
-    contract) so virtual and persisted_open share the SAME display_project
+    Uses ``build_live_projection`` so virtual and persisted_open share the
+    SAME display_project source — the snapshot's ``display_project`` block.
     source — the snapshot's ``display_project`` block — rather than the DB
     row's candidate assignment.
 
@@ -182,10 +182,10 @@ def _live_projection(start_date: str, end_date: str) -> dict | None:
     - ``status``: ``STATUS_NORMAL`` (idle / paused / excluded / error are
       never projected).
     - ``duration_seconds``: the live duration. For virtual this is added
-      to KPI totals; for persisted_open it is NOT (the DB row already
+      to KPI totals; for persisted_open it is NOT (see ``get_summary``).
       carries it — adding would double-count).
     - ``project`` / ``project_description``: the display_project name and
-      description (from the snapshot's ``display_project`` block, NOT the
+      description.
       DB row's candidate assignment).
     - ``persisted_activity_id``: for persisted_open, the real DB row id
       used to match the session for project overlay.
@@ -231,7 +231,7 @@ def _persisted_open_overlay(live: dict | None) -> dict | None:
     ``persisted_open``. Otherwise returns a dict with
     ``persisted_activity_id``, ``project``, ``project_description`` so the
     caller can relabel the matching session's project attribution to the
-    snapshot's ``display_project`` without changing the duration (no
+    snapshot's ``display_project`` without changing the duration.
     double-count).
     """
     if not live:
@@ -259,7 +259,7 @@ def _read_current_activity_snapshot() -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-# --- Phase 4A: read-only statistics / export preview ---------------------
+# --- Read-only statistics / export preview -------------------------------
 #
 # ``get_statistics_export_summary`` is a READ-ONLY aggregation used by the
 # WebView Statistics / Export page. It never writes to the DB, never writes a
@@ -268,12 +268,10 @@ def _read_current_activity_snapshot() -> dict | None:
 # ``is_deleted = 1`` and, with ``include_hidden=False``, ``is_hidden = 1``).
 #
 # In-progress activities (``end_time IS NULL``) are excluded: they have no
-# finalized duration. This matches the documented Phase 4A semantics and is
-# locked by tests. The legacy Tkinter Statistics page projects the live
-# snapshot via ``include_live=True``; Phase 4A intentionally does NOT project
-# live time so the read-only preview is stable and deterministic.
+# finalized duration. The read-only preview intentionally does NOT project
+# live time so it stays stable and deterministic.
 #
-# Status inclusion semantics (Phase 4A.1, documented and locked by tests):
+# Status inclusion semantics (locked by tests):
 #   - ``normal``  → included
 #   - ``idle``    → included
 #   - ``paused``  → included
@@ -354,9 +352,9 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
             "date_to": date_to,
             "included_activity_count": activity_count,
             "included_duration_seconds": total_duration,
-            # Phase 4B: CSV export is now available. Excel / PDF /
-            # timesheet are intentionally NOT listed here; the frontend must
-            # never offer a format the backend cannot produce.
+            # CSV export is available. Excel / PDF / timesheet are
+            # intentionally NOT listed here; the frontend must never offer
+            # a format the backend cannot produce.
             "available_formats": ["csv"],
             "export_actions_enabled": True,
         },
@@ -367,7 +365,7 @@ def validate_statistics_date_range(date_from: str, date_to: str) -> None:
     """Validate the date range shared by the Statistics summary and CSV export.
 
     This is the single canonical validation used by both the read-only
-    summary (``get_statistics_export_summary``) and the Phase 4B CSV export
+    summary (``get_statistics_export_summary``) and the CSV export
     (``export_service.build_statistics_csv_rows`` / ``write_statistics_csv``)
     so summary and export enforce identical rules.
 
@@ -393,7 +391,7 @@ def validate_statistics_date_range(date_from: str, date_to: str) -> None:
         raise ValueError("range_too_large")
 
 
-# Backwards-compatible private alias. Existing internal callers and tests
+# Private alias for internal callers.
 # that referenced the pre-refactor private name keep working; the canonical
 # implementation is the public ``validate_statistics_date_range`` above.
 _validate_summary_date_range = validate_statistics_date_range
@@ -402,8 +400,8 @@ _validate_summary_date_range = validate_statistics_date_range
 def get_status_display_label(status_code: str | None) -> str:
     """Return the display-safe Chinese label for a status code.
 
-    Shared by the read-only statistics summary and the Phase 4B CSV export
-    so both surface identical status labels. Unknown codes fall back to
+    Shared by the read-only statistics summary and the CSV export so both
+    surface identical status labels. Unknown codes fall back to
     ``"未知状态"``; raw ``window_title`` / ``file_path_hint`` / ``note`` are
     never used.
     """

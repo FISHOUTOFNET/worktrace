@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.2 Timeline activity-split API and service layer.
+"""Tests for the Timeline activity-split API and service layer.
 
 Covers ``worktrace.api.timeline_api.split_timeline_activity`` and
 ``worktrace.api.timeline_api.split_timeline_session``, and the underlying
@@ -673,7 +673,7 @@ def test_service_split_activity_atomic_rollback_on_zero_row_update(temp_db):
     assert _count_activities() == before_count
 
 
-# --- Phase 3B.2.1: hardening tests ---------------------------------------
+# --- hardening tests ---------------------------------------
 
 
 def test_split_activity_no_assignment_does_not_create_assignment(temp_db):

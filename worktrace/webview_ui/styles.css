@@ -265,7 +265,7 @@ body {
     padding: 60px 20px;
 }
 
-/* --- Timeline page (Phase 2) ----------------------------------------- */
+/* --- Timeline page ----------------------------------------- */
 
 .timeline-date-nav {
     display: flex;
@@ -496,7 +496,7 @@ body {
 .detail-item {
     display: grid;
     grid-template-columns: 80px 1fr auto;
-    /* Phase 6G: use grid-template-areas so .detail-item-actions gets its
+    /* Use grid-template-areas so .detail-item-actions gets its
        own row and never overlaps with .detail-item-meta /
        .detail-item-project. The editor / split / merge / visibility
        status rows are only occupied when the user opens an inline editor;
@@ -575,7 +575,7 @@ body {
     }
 }
 
-/* --- Phase 2.1 hardening --------------------------------------------- */
+/* --- In-progress tinting and narrow-viewport wrapping ---------------- */
 
 /* In-progress sessions/activities are tinted so the user can tell the
    current open record from closed history at a glance. */
@@ -614,7 +614,7 @@ body {
 
 @media (max-width: 900px) {
     .detail-item {
-        /* Phase 6G: single-column flow on mobile. Each element gets its
+        /* Single-column flow on mobile. Each element gets its
            own row via grid-template-areas so nothing overlaps. Duration
            gets its own row instead of sharing row 1 with time. */
         grid-template-columns: 1fr;
@@ -633,7 +633,7 @@ body {
     .detail-item-project {
         text-align: left;
     }
-    /* Phase 6G: split editor and merge status occupy their own grid areas
+    /* Split editor and merge status occupy their own grid areas
        on mobile (defined in grid-template-areas above). Explicit rules
        keep them reachable on narrow viewports and lock the responsive
        layout contract. */
@@ -653,7 +653,7 @@ body {
         margin-top: 4px;
     }
 
-    /* Phase 3A.1: keep the edit panel usable on narrow viewports. The
+    /* Keep the edit panel usable on narrow viewports. The
        actions row wraps so save/cancel remain reachable, and the note
        textarea keeps a sane min-height instead of collapsing. */
     .edit-actions {
@@ -671,7 +671,7 @@ body {
     word-break: keep-all;
 }
 
-/* --- Phase 3A: Timeline edit panel ---------------------------------- */
+/* --- Timeline edit panel ---------------------------------- */
 
 .timeline-edit-panel {
     margin-top: 16px;
@@ -688,7 +688,7 @@ body {
     margin-bottom: 12px;
 }
 
-/* Phase 3B.5B: header actions row inside the edit panel (e.g. the
+/* Header actions row inside the edit panel (e.g. the
    "打开高级纠错" entry button). Kept minimal so it does not displace the
    existing section layout. */
 .edit-panel-header-actions {
@@ -751,7 +751,7 @@ body {
     font-weight: 500;
 }
 
-/* Phase 3B.5A: correction-section labels (项目与备注 / 时间修正 / 拆分 / 可见性).
+/* Correction-section labels (项目与备注 / 时间修正 / 拆分 / 可见性).
    Slightly more prominent than field-level .edit-label so the user can
    scan the edit panel by section. Each section below the first also
    carries a dashed top border (see .edit-time-section /
@@ -900,7 +900,7 @@ body {
     border: 1px solid #bbf7d0;
 }
 
-/* --- Phase 3C: Unified status type classes ------------------------- */
+/* --- Unified status type classes ------------------------------------- */
 /* Additional status types so loading / empty / info states share the same
    visual vocabulary as error / success across the Timeline list, detail
    panel, edit panel, and correction shell. These are additive: the existing
@@ -926,7 +926,7 @@ body {
     border: 1px solid #f1f5f9;
 }
 
-/* --- Phase 3B.1: Timeline time correction ---------------------------- */
+/* --- Timeline time correction ---------------------------------------- */
 
 /* The time-correction section is visually separated from the project/note
    edit fields so the user can tell the two independent save flows apart. */
@@ -936,7 +936,7 @@ body {
     border-top: 1px dashed #e2e8f0;
 }
 
-/* --- Phase 3B.2: Timeline activity split ------------------------------ */
+/* --- Timeline activity split ----------------------------------------- */
 
 /* The split section reuses the time-correction layout (rows, inputs,
    actions) but is visually separated so the user can tell the independent
@@ -1021,7 +1021,7 @@ body {
 
 /* Per-activity inline time editor inside the detail list. */
 .detail-item-actions {
-    /* Phase 6G: own grid row via grid-area so it never overlaps with
+    /* Own grid row via grid-area so it never overlaps with
        .detail-item-meta / .detail-item-project. */
     grid-area: actions;
     margin-top: 4px;
@@ -1031,7 +1031,7 @@ body {
     align-items: center;
 }
 
-/* Phase 3B.5A: action group wrappers. The three groups (edit / merge /
+/* Action group wrappers. The three groups (edit / merge /
    danger) are visually separated so the user can tell destructive actions
    apart from edits at a glance. Each group is an inline-flex sub-row so
    its buttons stay together when the action row wraps on narrow viewports. */
@@ -1087,7 +1087,7 @@ body {
     border-radius: 6px;
 }
 
-/* Phase 3B.2: per-activity inline split editor. Mirrors the time editor
+/* Per-activity inline split editor. Mirrors the time editor
    layout but occupies its own grid row so both editors are not visible at
    the same time (the JS layer closes one when the other opens). */
 .detail-split-editor {
@@ -1117,7 +1117,7 @@ body {
     cursor: not-allowed;
 }
 
-/* Phase 3B.3 / 3B.5A: per-activity "与下一条合并" button. Carries an
+/* Per-activity "与下一条合并" button. Carries an
    indigo accent so the merge action reads as a distinct structural
    operation (it changes the session shape), separate from the plain edit
    buttons (编辑时间 / 拆分) and from the destructive hide / delete buttons. */
@@ -1146,11 +1146,11 @@ body {
     font-size: 11px;
 }
 
-/* Phase 3B.4: per-activity "隐藏" / "删除" buttons. Mirror the merge button
+/* Per-activity "隐藏" / "删除" buttons. Mirror the merge button
    styling so the action row looks consistent. Hide is a neutral light
    button; delete carries a red accent so the user can tell the destructive
    action apart at a glance, while still being a soft delete (no DB row is
-   physically removed in this phase). */
+   physically removed). */
 .detail-hide-btn {
     padding: 2px 8px;
     font-size: 11px;
@@ -1195,7 +1195,7 @@ body {
     font-size: 11px;
 }
 
-/* Phase 3B.4: session-level "隐藏此 session" / "删除此 session" section.
+/* Session-level "隐藏此 session" / "删除此 session" section.
    Visually separated from the split section above so the user can tell the
    destructive visibility actions apart from editing flows. The delete
    button carries a red accent consistent with the per-activity delete
@@ -1293,20 +1293,20 @@ body {
     .edit-time-row {
         flex-wrap: wrap;
     }
-    /* Phase 6G: grid rows are now defined via grid-template-areas in the
+    /* Grid rows are now defined via grid-template-areas in the
        mobile block above; these rules only handle the flex-wrap behavior
        for the editor rows and action groups. No grid-row overrides are
        needed here because the grid-area assignments are inherited. */
     .detail-time-row {
         flex-wrap: wrap;
     }
-    /* Phase 3B.2: split editor mirrors the time editor's narrow-viewport
+    /* Split editor mirrors the time editor's narrow-viewport
        behavior. The split row wraps so the input remains reachable. */
     .detail-split-row,
     .detail-time-row {
         flex-wrap: wrap;
     }
-    /* Phase 3B.3 / 3B.5A: action buttons wrap on narrow viewports so the
+    /* Action buttons wrap on narrow viewports so the
        merge button remains reachable alongside the edit/split buttons. The
        group wrappers also wrap so each group's buttons stay together while
        the groups themselves can flow to the next line. */
@@ -1325,7 +1325,7 @@ body {
     }
 }
 
-/* --- Phase 3B.5B: Timeline correction shell ------------------------- */
+/* --- Timeline correction shell --------------------------------------- */
 
 /* The correction shell is a read-only context + navigation layout that
    lives inside #timeline-details, after the edit panel. It is hidden by
@@ -1389,7 +1389,7 @@ body {
     opacity: 0.55;
 }
 
-/* --- Phase 3B.9: unified correction shell card styles -------------- */
+/* --- Unified correction shell card styles ---------------------------- */
 /* All shell sections (context / activity / single-action / batch / restore
    / not-implemented) share the same card chrome so the visual hierarchy
    stays consistent and the per-section CSS stays minimal. The card class
@@ -1583,7 +1583,7 @@ body {
     color: #b91c1c;
 }
 
-/* Phase 3B.5B: brief highlight applied to a detail row when the user
+/* Brief highlight applied to a detail row when the user
    clicks the corresponding shell activity row, so they can locate the
    existing per-activity action buttons. */
 .detail-item.shell-target {
@@ -1591,7 +1591,7 @@ body {
     background: #eef2ff;
 }
 
-/* Phase 3B.5B.1: transient highlight applied on top of .shell-target
+/* Transient highlight applied on top of .shell-target
    right after a click-to-locate, giving immediate visual feedback. It is
    removed automatically by a single tracked timer in app.js; .shell-target
    remains as the persistent locator. Noticeable but not harsh. */
@@ -1601,9 +1601,9 @@ body {
     box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
 }
 
-/* --- Statistics / Export page (Phase 4A, read-only) ------------------ */
+/* --- Statistics / Export page (read-only) ------------------ */
 /* Read-only page: only renders display-safe aggregated data. No export
-   write button is ever enabled in this phase. */
+   write button is ever enabled. */
 
 .stats-header {
     flex-wrap: wrap;
@@ -1856,7 +1856,7 @@ body {
     line-height: 1.6;
 }
 
-/* Phase 6H-followup section 11: closed-only hint shown above the
+/* Closed-only hint shown above the
    statistics summary grid and above the export preview. Reminds the
    user that in-progress activities are NOT included in either view;
    only finalized/closed activities are aggregated. */
@@ -1886,7 +1886,7 @@ body {
     border-color: #1d4ed8;
 }
 
-/* Phase 4B: disabled export / load buttons (during a write or a load). */
+/* Disabled export / load buttons (during a write or a load). */
 .stats-export-action-btn:disabled,
 .stats-load-btn:disabled {
     cursor: not-allowed;
@@ -1895,7 +1895,7 @@ body {
     color: #94a3b8;
 }
 
-/* Phase 4B: CSV export status line. Collapses to a single message with a
+/* CSV export status line. Collapses to a single message with a
    kind-based color so success / info / error are visually distinct. */
 .stats-export-status {
     font-size: 12px;
@@ -1926,7 +1926,7 @@ body {
     color: #b91c1c;
 }
 
-/* --- Project Rules page (Phase 5B) ----------------------------------- */
+/* --- Project Rules page ---------------------------------------------- */
 
 .rules-header {
     flex-wrap: wrap;
@@ -2156,7 +2156,7 @@ body {
     opacity: 0.65;
 }
 
-/* Phase 5D: keyword rule delete button. Mirrors the existing toggle button
+/* Keyword rule delete button. Mirrors the existing toggle button
    visual style so the delete action reads as part of the row. Only keyword
    rules render this button; folder rules and project cards never do. The
    red text color signals the destructive intent while keeping the same
@@ -2194,7 +2194,7 @@ body {
     border-radius: 8px;
 }
 
-/* Phase 5C: keyword rule creation form. Mirrors the existing Project Rules
+/* Keyword rule creation form. Mirrors the existing Project Rules
    card visual style so the create form reads as part of the page. Only the
    keyword create submit button is a static action button in this section. */
 .rules-keyword-create-form {
@@ -2291,7 +2291,7 @@ body {
     border: 1px solid #bbf7d0;
 }
 
-/* Phase 5E: folder rule creation form. Mirrors the keyword create form
+/* Folder rule creation form. Mirrors the keyword create form
    visual style so the two create forms read as siblings. Only the folder
    create submit button is a static action button in this section. */
 .rules-folder-create-form {
@@ -2408,7 +2408,7 @@ body {
     border: 1px solid #bbf7d0;
 }
 
-/* Phase 6G: excluded-rule creation form. Rendered dynamically inside the
+/* Excluded-rule creation form. Rendered dynamically inside the
    ``排除规则`` card (not as a static submit button — the static contract
    test locks the static submit button count to 3). The form has two
    sub-sections: keyword rule creation and folder rule creation. Both call
@@ -2496,7 +2496,7 @@ body {
     opacity: 0.75;
 }
 
-/* Phase 5E: folder rule row edit / delete buttons. Mirrors the existing
+/* Folder rule row edit / delete buttons. Mirrors the existing
    keyword delete button visual style so destructive / write actions read
    consistently across rule kinds. Only folder rules render these buttons;
    keyword rules and project cards never do. */
@@ -2535,7 +2535,7 @@ body {
     opacity: 0.65;
 }
 
-/* Phase 5E: inline folder rule edit form. Rendered in place of the normal
+/* Inline folder rule edit form. Rendered in place of the normal
    row body when the user enters edit mode for a folder rule. The form
    collapses the row into a single column so the input has room. */
 .rules-row.is-folder-editing {
@@ -2660,7 +2660,7 @@ body {
     }
 }
 
-/* Phase 5F: keyword rule row edit button. Mirrors the existing folder edit
+/* Keyword rule row edit button. Mirrors the existing folder edit
    button visual style so write actions read consistently across rule kinds.
    Only keyword rules render this button; folder rules and project cards
    never do. */
@@ -2686,7 +2686,7 @@ body {
     opacity: 0.65;
 }
 
-/* Phase 5H: rule impact preview + backfill buttons. Each folder / keyword
+/* Rule impact preview + backfill buttons. Each folder / keyword
    rule row gets a "预览影响" (read-only preview) and "应用到历史记录"
    (safe single-rule backfill) button. The preview button uses a neutral
    border; the backfill button uses an indigo accent so the write action
@@ -2729,7 +2729,7 @@ body {
     opacity: 0.65;
 }
 
-/* Phase 5H: rule impact preview / backfill result panel. Rendered in
+/* Rule impact preview / backfill result panel. Rendered in
    #rules-impact-panel between the loading indicator and the rules list.
    The panel shows the rule summary, a counts grid, and (for preview) up
    to 20 display-safe sample rows. Scoped to Project Rules so the styles
@@ -2858,7 +2858,7 @@ body {
     background: #f8fafc;
 }
 
-/* Phase 5I: selected-rule batch operations toolbar + panel + per-row checkbox.
+/* Selected-rule batch operations toolbar + panel + per-row checkbox.
    The toolbar is rendered into #rules-batch-toolbar by rules_render.js on
    every list render. The panel is rendered into #rules-batch-panel by the
    batch action handlers. The per-row checkbox is the first element of every
@@ -3037,7 +3037,7 @@ body {
     background: #f8fafc;
 }
 
-/* Phase 5F: inline keyword rule edit form. Rendered in place of the normal
+/* Inline keyword rule edit form. Rendered in place of the normal
    row body when the user enters edit mode for a keyword rule. The form
    collapses the row into a single column so the input has room. */
 .rules-row.is-keyword-editing {
@@ -3107,7 +3107,7 @@ body {
     background: #f8fafc;
 }
 
-/* Phase 3B.5B.1: a shell activity row whose activity id is missing / non-
+/* A shell activity row whose activity id is missing / non-
    numeric is rendered non-clickable so it never produces a stale-target
    error. It keeps the summary text but drops the pointer cursor. */
 .correction-shell-activity-row.is-static {
@@ -3115,7 +3115,7 @@ body {
     opacity: 0.7;
 }
 
-/* Phase 3B.6: batch project reassignment section inside the correction
+/* Batch project reassignment section inside the correction
    shell. This is the first batch write capability: only project
    reassignment. The section mirrors the existing per-activity edit
    styling so it reads as part of the shell. */
@@ -3160,7 +3160,7 @@ body {
     cursor: not-allowed;
 }
 
-/* Phase 3B.6: checkbox cell on each shell activity row. When the batch
+/* Checkbox cell on each shell activity row. When the batch
    section is open, eligible (closed, non-hidden, non-deleted) activities
    show the checkbox; in-progress / stale rows disable it. */
 .correction-shell-activity-row .correction-shell-activity-checkbox {
@@ -3175,7 +3175,7 @@ body {
     opacity: 0.5;
 }
 
-/* --- First-run privacy notice overlay (Phase 6E) --------------------- */
+/* --- First-run privacy notice overlay --------------------- */
 /* The overlay is a fixed-position full-screen modal that blocks all
    underlying app interaction while the first-run privacy notice gate
    is active. It is also reused for the read-only "查看隐私说明" view
@@ -3307,7 +3307,7 @@ body {
     display: none;
 }
 
-/* --- Settings / Privacy notice row (Phase 6E) ------------------------ */
+/* --- Settings / Privacy notice row ------------------------ */
 /* Inline row on the Settings / Privacy privacy card: shows the
    display-safe accept status and a read-only "查看隐私说明" button.
    The button opens the overlay in view mode; it does NOT re-accept or
@@ -3348,7 +3348,7 @@ body {
     pointer-events: none;
 }
 
-/* Phase 3B.7: batch note overwrite section inside the correction shell.
+/* Batch note overwrite section inside the correction shell.
    This is the second batch write capability: only note overwrite on
    multiple closed, non-hidden, non-deleted activities. The section
    mirrors the batch project section and reuses the same selection. The
@@ -3359,7 +3359,7 @@ body {
     resize: vertical;
 }
 
-/* Phase 3B.8: single activity restore section inside the correction shell.
+/* Single activity restore section inside the correction shell.
    This is the restore foundation: only single hidden / soft-deleted
    activities can be restored. The section mirrors the batch sections so it
    reads as part of the shell, but does NOT provide batch restore,
@@ -3494,7 +3494,7 @@ body {
     .correction-shell-restore-btn {
         justify-self: flex-start;
     }
-    /* Phase 3B.9: keep the unified cards stable on narrow viewports.
+    /* Keep the unified cards stable on narrow viewports.
        The cards stay full-width, the inner select / textarea / buttons
        never overflow, and the card padding tightens so the shell stays
        usable on a single column. */
@@ -3512,7 +3512,7 @@ body {
     }
 }
 
-/* --- Settings / Privacy page (Phase 6A) ------------------------------ */
+/* --- Settings / Privacy page ------------------------------ */
 
 .settings-header {
     flex-wrap: wrap;
@@ -3582,14 +3582,13 @@ body {
     line-height: 1.5;
 }
 
-/* Card type modifiers exist as stable CSS hooks so future phases can
-   specialize each card without re-shaping the grid. They intentionally
-   inherit from .settings-card; Phase 6A keeps all four cards visually
+/* Card type modifiers exist as stable CSS hooks so each card can be
+   specialized without re-shaping the grid. They intentionally
+   inherit from .settings-card; keeps all four cards visually
    consistent except the danger card. */
 .settings-storage-card,
 .settings-privacy-card,
 .settings-backup-card {
-    /* no overrides in Phase 6A */
 }
 
 .settings-danger-card {
@@ -3601,7 +3600,7 @@ body {
     color: #b91c1c;
 }
 
-/* --- Settings / Privacy clipboard toggle (Phase 6B) ------------------ */
+/* --- Settings / Privacy clipboard toggle ------------------ */
 
 .settings-toggle-row {
     display: flex;
@@ -3639,7 +3638,7 @@ body {
     color: #475569;
 }
 
-/* --- Phase 6C: Settings / Privacy encrypted backup controls ---------- */
+/* --- Settings / Privacy encrypted backup controls ---------- */
 
 .settings-backup-row {
     display: flex;
@@ -3739,7 +3738,7 @@ body {
     word-break: break-all;
 }
 
-/* --- Phase 6D: Settings / Privacy backup import + clear-all ---------- */
+/* --- Settings / Privacy backup import + clear-all ---------- */
 
 .settings-backup-import-section {
     margin-top: 16px;

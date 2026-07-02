@@ -73,10 +73,10 @@ def initialize_database(path: str | Path | None = None) -> None:
 def seed_defaults(conn: sqlite3.Connection) -> None:
     ts = now_str()
     defaults = {
-        # Section 八: poll interval default is 1 second. WorkTrace is a
-        # local automatic time-tracking tool; the immediacy of current
-        # activity change perception takes priority over the minor polling
-        # overhead. No system-level foreground event hook is used.
+        # Poll interval default is 1 second. WorkTrace is a local automatic
+        # time-tracking tool; the immediacy of current activity change
+        # perception takes priority over the minor polling overhead. No
+        # system-level foreground event hook is used.
         "poll_interval_seconds": "1",
         "idle_threshold_seconds": str(DEFAULT_IDLE_THRESHOLD_SECONDS),
         "current_activity_snapshot": "",
@@ -128,13 +128,13 @@ def reset_database() -> None:
 
 
 def ensure_schema_migrations(conn: sqlite3.Connection) -> None:
-    """Run idempotent schema migrations for older databases.
+    """Run idempotent schema migrations.
 
     ``CREATE TABLE IF NOT EXISTS`` in ``schema.sql`` does not add new
     columns to existing tables. This function checks for and adds any
-    columns introduced after the initial table creation. Each migration
-    is idempotent: it uses ``PRAGMA table_info`` to check whether the
-    column already exists before running ``ALTER TABLE``.
+    columns missing from existing tables. Each migration is idempotent:
+    it uses ``PRAGMA table_info`` to check whether the column already
+    exists before running ``ALTER TABLE``.
     """
     ensure_project_session_note_adjusted_duration_column(conn)
 
@@ -143,7 +143,7 @@ def ensure_project_session_note_adjusted_duration_column(conn: sqlite3.Connectio
     """Add ``adjusted_duration_seconds`` to ``project_session_note`` if missing.
 
     Idempotent: checks ``PRAGMA table_info(project_session_note)`` before
-    running ``ALTER TABLE``. Safe to call on both new and already-migrated
+    running ``ALTER TABLE``. Safe to call on any database.
     databases.
     """
     columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(project_session_note)").fetchall()}

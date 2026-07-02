@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend — timeline correction module (Phase R2 split).
+// WorkTrace WebView frontend — timeline correction module.
 // Correction shell + batch project / batch note / single activity restore.
 // Reuses display-safe fields only; never reads raw sensitive backend columns.
 
@@ -6,7 +6,7 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Phase 3B.5B: Timeline correction shell helpers -----------------
+    // --- Timeline correction shell helpers -------------------------------
     // The shell is a read-only context + navigation layout. It reuses the
     // existing edit panel / detail row controls; it does not introduce any
     // new write capability. Activity summaries are read from the already-
@@ -60,11 +60,11 @@
     }
     App.getCurrentDetailActivities = getCurrentDetailActivities;
 
-    // --- Phase 3B.9: correction shell consolidation helpers ------------
-    // These helpers consolidate the cross-phase saving / status / display
-    // logic so single / batch / restore sections share one source of truth.
-    // No new write capability is introduced; the helpers only coordinate
-    // existing state and DOM.
+    // --- Correction shell consolidation helpers -------------------------
+    // These helpers consolidate the cross-save / status / display logic so
+    // single / batch / restore sections share one source of truth. No new
+    // write capability is introduced; the helpers only coordinate existing
+    // state and DOM.
 
     // Cross-save guard: returns true when ANY correction-shell write is in
     // flight (batch project, batch note, or single restore). The existing
@@ -134,22 +134,22 @@
         App.correctionShellSessionId = null;
         App.correctionShellActivityId = null;
         App.correctionShellMode = null;
-        // Phase 3B.5B.1: cancel any pending highlight timer so a shell
-        // close / reset never leaves a dangling timer that mutates a
-        // detail row's class list after the shell is gone.
+        // Cancel any pending highlight timer so a shell close / reset
+        // never leaves a dangling timer that mutates a detail row's class
+        // list after the shell is gone.
         if (App.correctionShellHighlightTimer !== null) {
             clearTimeout(App.correctionShellHighlightTimer);
             App.correctionShellHighlightTimer = null;
         }
-        // Phase 3B.6: clear the batch project selection so a stale selection
-        // does not carry over to the next shell open. selectedSessionId is
+        // Clear the batch project selection so a stale selection does not
+        // carry over to the next shell open. selectedSessionId is
         // intentionally NOT cleared here (preserved by closeCorrectionShell).
         resetBatchProjectState();
-        // Phase 3B.7: clear the batch note textarea / saving flag too so a
-        // stale note does not carry over to the next shell open.
+        // Clear the batch note textarea / saving flag too so a stale note
+        // does not carry over to the next shell open.
         resetBatchNoteState();
-        // Phase 3B.8: clear the restore list / saving flag too so a stale
-        // restore list does not carry over to the next shell open.
+        // Clear the restore list / saving flag too so a stale restore list
+        // does not carry over to the next shell open.
         resetRestoreState();
         var shell = document.getElementById("timeline-correction-shell");
         if (shell) shell.hidden = true;
@@ -184,8 +184,8 @@
         if (!ctxEl || !session) return;
 
         // --- Context summary (display-safe only) ---
-        // Phase 3B.9: every dynamic value passes through safeText + escapeHtml
-        // so the shell never reads / displays raw sensitive backend columns
+        // Every dynamic value passes through safeText + escapeHtml so the
+        // shell never reads / displays raw sensitive backend columns
         // (titles, paths, copy buffers, note internals). Only display-safe
         // fields (date, project label, time range, duration, count, status)
         // are used.
@@ -227,19 +227,19 @@
                 for (var i = 0; i < activities.length; i++) {
                     var a = activities[i];
                     var rawId = String(a.activity_id || "");
-                    // Phase 3B.5B.1: only a numeric activity id is a valid
-                    // click-to-locate target. An invalid / missing id is
-                    // rendered as a non-clickable row so the user never
-                    // gets a stale-target error from an id that could never
-                    // match a real .detail-item.
+                    // Only a numeric activity id is a valid click-to-locate
+                    // target. An invalid / missing id is rendered as a
+                    // non-clickable row so the user never gets a stale-target
+                    // error from an id that could never match a real
+                    // .detail-item.
                     var numericId = /^[0-9]+$/.test(rawId) ? rawId : "";
                     var cls = "correction-shell-activity-row";
                     if (!numericId) cls += " is-static";
                     if (mode === "activity" && activityId && rawId === String(activityId)) {
                         cls += " is-selected";
                     }
-                    // Phase 3B.6: in-progress activities cannot be batch
-                    // edited (their displayed end_time may be projected).
+                    // In-progress activities cannot be batch edited (their
+                    // displayed end_time may be projected).
                     var isInProgress = !!a.is_in_progress;
                     if (isInProgress) cls += " is-in-progress";
                     // Eligible for batch project edit only when closed and
@@ -265,9 +265,9 @@
                         + '</div>';
                 }
                 actsEl.innerHTML = html;
-                // Phase 3B.6: prune stale selected ids that no longer exist
-                // in the freshly rendered activity list so the selection is
-                // always a subset of the current shell activities.
+                // Prune stale selected ids that no longer exist in the
+                // freshly rendered activity list so the selection is always
+                // a subset of the current shell activities.
                 pruneStaleBatchSelection(activities);
                 // Bind click handlers only on rows that carry a valid
                 // numeric id. The handler only scrolls to / highlights the
@@ -290,9 +290,9 @@
                         });
                     })(rows[j]);
                 }
-                // Phase 3B.6: bind batch checkbox change handlers so toggling
-                // a checkbox updates the selection state without re-rendering
-                // the whole shell (which would lose the user's checkbox focus).
+                // Bind batch checkbox change handlers so toggling a checkbox
+                // updates the selection state without re-rendering the whole
+                // shell (which would lose the user's checkbox focus).
                 var checkboxes = actsEl.querySelectorAll(
                     ".correction-shell-activity-checkbox[data-batch-activity-id]"
                 );
@@ -326,18 +326,18 @@
             actionsEl.innerHTML = guidance;
         }
 
-        // --- Phase 3B.6: batch project reassignment section ---
+        // --- Batch project reassignment section ---
         // The batch section is always rendered when the shell is open so the
         // user can start a batch project reassignment. It reuses the cached
         // project list (projectsCache) so no extra bridge call is needed
         // after the first load.
         renderBatchProjectSection(session, activities);
-        // --- Phase 3B.7: batch note overwrite section ---
+        // --- Batch note overwrite section ---
         // Rendered alongside the batch project section and reuses the same
         // selectedBatchActivityIds selection. The user picks activities once
         // and can choose either "set project" or "overwrite note".
         renderBatchNoteSection(session, activities);
-        // --- Phase 3B.8: single activity restore section ---
+        // --- Single activity restore section ---
         // Loads the restorable activities for the current date and renders
         // a read-only recovery list. Only single hidden / soft-deleted
         // activities can be restored; no batch restore, undo stack, or
@@ -366,10 +366,10 @@
             all[i].classList.remove("detail-item-highlight");
         }
         row.classList.add("shell-target");
-        // Phase 3B.5B.1: brief transient highlight for immediate feedback.
-        // A single tracked timer is used: clear the previous before
-        // scheduling a new one so repeated clicks never accumulate timers
-        // or throw. .shell-target remains as the persistent locator.
+        // Brief transient highlight for immediate feedback. A single tracked
+        // timer is used: clear the previous before scheduling a new one so
+        // repeated clicks never accumulate timers or throw. .shell-target
+        // remains as the persistent locator.
         row.classList.add("detail-item-highlight");
         if (App.correctionShellHighlightTimer !== null) {
             clearTimeout(App.correctionShellHighlightTimer);
@@ -433,8 +433,8 @@
             effectiveMode,
             App.correctionShellActivityId
         );
-        // Phase 3B.9: clear every action status area on open so stale
-        // messages from a previous shell session do not linger.
+        // Clear every action status area on open so stale messages from a
+        // previous shell session do not linger.
         resetCorrectionActionStatus();
         // Scroll and focus the shell title so the user sees the panel
         // opened in response to their click, avoiding the impression of
@@ -460,23 +460,23 @@
         resetCorrectionShellState();
         // selectedSessionId is intentionally NOT cleared here.
         if (wasOpen) {
-            // Phase 3B.9: resetCorrectionShellState already clears the
-            // shell-only status areas via the per-section reset helpers;
-            // this extra clear is a no-op safety net.
+            // resetCorrectionShellState already clears the shell-only
+            // status areas via the per-section reset helpers; this extra
+            // clear is a no-op safety net.
             setCorrectionShellStatus("", false);
         }
     }
     App.closeCorrectionShell = closeCorrectionShell;
 
     // ====================================================================
-    // Phase 3B.6: Timeline batch project editing foundation
+    // Timeline batch project editing
     // ====================================================================
     //
-    // This is the first batch write capability in the WebView Timeline. It
-    // allows the user to select multiple closed, non-hidden, non-deleted
-    // activities in the current correction shell session and reclassify them
-    // to the same project in a single atomic transaction (the bridge ->
-    // API -> service path uses a rowcount guard + rollback so no partial
+    // Batch project reassignment: select multiple closed, non-hidden,
+    // non-deleted activities in the current correction shell session and
+    // reclassify them to the same project in a single atomic transaction
+    // (the bridge -> API -> service path uses a rowcount guard + rollback
+    // so no partial write is ever persisted).
     // write is ever persisted).
     //
     // Scope boundaries (enforced by the backend, mirrored here):
@@ -641,9 +641,9 @@
                 checkboxes[i].disabled = saving;
             }
         }
-        // Phase 3B.7: also disable the batch note textarea / save button so
-        // the user cannot start a competing note save while a project save
-        // is in flight.
+        // Also disable the batch note textarea / save button so the user
+        // cannot start a competing note save while a project save is in
+        // flight.
         var noteText = document.getElementById("correction-shell-batch-note-text");
         if (noteText) noteText.disabled = saving || App.batchNoteSaving;
         if (!saving) {
@@ -697,10 +697,10 @@
         }
         updateBatchSelectionCount();
         updateBatchSaveButtonState();
-        // Phase 3B.9.1: do not clear the status area while a save is in
-        // flight. The save success / failure handler owns the status during
-        // saving; an auto-refresh re-render must not wipe a just-shown
-        // error or success message.
+        // Do not clear the status area while a save is in flight. The save
+        // success / failure handler owns the status during saving; an
+        // auto-refresh re-render must not wipe a just-shown error or
+        // success message.
         if (!App.batchProjectSaving) {
             showBatchProjectStatus("", false);
         }
@@ -730,7 +730,7 @@
             option.textContent = label;
             select.appendChild(option);
         }
-        // Restore the previously chosen target project if any (e.g. after
+        // Restore the last chosen target project if any (e.g. after
         // an auto-refresh re-rendered the select).
         if (App.batchProjectTargetId) {
             select.value = String(App.batchProjectTargetId);
@@ -747,10 +747,10 @@
             showBatchProjectStatus("请先保存或取消当前编辑", true);
             return;
         }
-        // Phase 3B.9: cross-save guard. A batch project save triggers a
-        // Timeline refresh which would race with an in-flight batch note
-        // save or single restore. Refuse with the unified message instead
-        // of calling the bridge.
+        // Cross-save guard. A batch project save triggers a Timeline refresh
+        // which would race with an in-flight batch note save or single
+        // restore. Refuse with the unified message instead of calling the
+        // bridge.
         if (App.batchNoteSaving || App.restoreSaving) {
             showBatchProjectStatus("请等待当前操作完成", true);
             return;
@@ -775,11 +775,11 @@
             showBatchProjectStatus("请选择有效的项目", true);
             return;
         }
-        // Phase 3B.6: re-check every selected id is still present in the
-        // currently rendered shell activity rows. Stale ids (e.g. an
-        // auto-refresh removed a row between the user checking the box and
-        // clicking save) are dropped silently; if fewer than 2 remain we
-        // abort with a clear message instead of calling the bridge.
+        // Re-check every selected id is still present in the currently
+        // rendered shell activity rows. Stale ids (e.g. an auto-refresh
+        // removed a row between the user checking the box and clicking
+        // save) are dropped silently; if fewer than 2 remain we abort with
+        // a clear message instead of calling the bridge.
         var renderedIds = {};
         var rows = document.querySelectorAll(
             "#correction-shell-activities .correction-shell-activity-checkbox[data-batch-activity-id]:not([disabled])"
@@ -881,13 +881,13 @@
     App.bindBatchProjectControls = bindBatchProjectControls;
 
     // ====================================================================
-    // Phase 3B.7: Timeline batch note editing foundation
+    // Timeline batch note editing
     // ====================================================================
     //
-    // This is the second batch write capability in the WebView Timeline. It
-    // overwrites the note on multiple closed, non-hidden, non-deleted
-    // activities with the same note value in a single atomic transaction
-    // (the bridge -> API -> service path uses a rowcount guard + rollback
+    // Batch note overwrite: overwrites the note on multiple closed,
+    // non-hidden, non-deleted activities with the same note value in a
+    // single atomic transaction (the bridge -> API -> service path uses a
+    // rowcount guard + rollback so no partial write is ever persisted).
     // so no partial write is ever persisted).
     //
     // Scope boundaries (enforced by the backend, mirrored here):
@@ -1024,10 +1024,10 @@
         }
         updateBatchNoteCount();
         updateBatchNoteSaveButtonState();
-        // Phase 3B.9.1: do not clear the status area while a save is in
-        // flight. The save success / failure handler owns the status during
-        // saving; an auto-refresh re-render must not wipe a just-shown
-        // error or success message.
+        // Do not clear the status area while a save is in flight. The save
+        // success / failure handler owns the status during saving; an
+        // auto-refresh re-render must not wipe a just-shown error or
+        // success message.
         if (!App.batchNoteSaving) {
             showBatchNoteStatus("", false);
         }
@@ -1042,10 +1042,10 @@
             showBatchNoteStatus("请先保存或取消当前编辑", true);
             return;
         }
-        // Phase 3B.9 / 3B.9.1: cross-save guard. A batch note save triggers
-        // a Timeline refresh which would race with an in-flight batch
-        // project save or single restore. Refuse with the unified message
-        // instead of calling the bridge.
+        // Cross-save guard. A batch note save triggers a Timeline refresh
+        // which would race with an in-flight batch project save or single
+        // restore. Refuse with the unified message instead of calling the
+        // bridge.
         if (App.batchProjectSaving || App.restoreSaving) {
             showBatchNoteStatus("请等待当前操作完成", true);
             return;
@@ -1151,13 +1151,13 @@
     App.bindBatchNoteControls = bindBatchNoteControls;
 
     // ====================================================================
-    // Phase 3B.8: Timeline single activity restore foundation
+    // Timeline single activity restore
     // ====================================================================
     //
-    // This is the single activity restore capability in the WebView
-    // Timeline. It allows the user to restore a single hidden or
-    // soft-deleted activity by setting is_hidden = 0 and is_deleted = 0 in
-    // a single atomic UPDATE (the bridge -> API -> service path uses a
+    // Single activity restore: restore a single hidden or soft-deleted
+    // activity by setting is_hidden = 0 and is_deleted = 0 in a single
+    // atomic UPDATE (the bridge -> API -> service path uses a rowcount
+    // guard so no partial write is ever persisted).
     // rowcount guard so no partial write is ever persisted).
     //
     // Scope boundaries (enforced by the backend, mirrored here):
@@ -1278,9 +1278,9 @@
         for (var i = 0; i < activities.length; i++) {
             var a = activities[i];
             var aid = String(a.activity_id || "");
-            // Phase 3B.9: every dynamic value passes through safeText so the
-            // restore list never renders "undefined" / "null". Only display-
-            // safe fields (activity_id, time range, app_name, resource_type,
+            // Every dynamic value passes through safeText so the restore
+            // list never renders "undefined" / "null". Only display-safe
+            // fields (activity_id, time range, app_name, resource_type,
             // resource_name, project_name, duration, restore_state) are used;
             // raw sensitive backend columns (titles, paths, copy buffers,
             // note internals) are never read.
@@ -1359,11 +1359,11 @@
             showRestoreStatus("请选择有效的活动", true);
             return;
         }
-        // Phase 3B.8.1: confirm the activity id still exists in the
-        // current restore list. If the list was reloaded (e.g. by an
-        // auto-refresh) and the activity is no longer present, surface a
-        // safe message and do not call the bridge. This guards against a
-        // stale row whose state may have already changed.
+        // Confirm the activity id still exists in the current restore list.
+        // If the list was reloaded (e.g. by an auto-refresh) and the
+        // activity is no longer present, surface a safe message and do not
+        // call the bridge. This guards against a stale row whose state may
+        // have already changed.
         var listEl = document.getElementById("correction-shell-restore-list");
         if (listEl) {
             var staleRow = listEl.querySelector(
@@ -1382,8 +1382,8 @@
             showRestoreStatus("请先保存或取消当前编辑", true);
             return;
         }
-        // Phase 3B.9: cross-save guard. A restore triggers a Timeline refresh
-        // which would race with an in-flight batch project / batch note save.
+        // Cross-save guard. A restore triggers a Timeline refresh which
+        // would race with an in-flight batch project / batch note save.
         // Refuse with the unified message instead of calling the bridge.
         if (App.batchProjectSaving || App.batchNoteSaving) {
             showRestoreStatus("请等待当前操作完成", true);

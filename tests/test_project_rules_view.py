@@ -1,8 +1,8 @@
 """Service-layer regression tests for the Project Rules domain.
 
-Phase 6F (legacy Tkinter UI removal): the six legacy ``ProjectRulesView``
-widget-wiring tests and the two ``worktrace.ui.*`` imports were removed. The
-five service-layer tests below exercise ``project_service`` /
+The six ``ProjectRulesView`` widget-wiring tests and the two
+``worktrace.ui.*`` imports were removed. The five service-layer tests below
+exercise ``project_service`` /
 ``folder_rule_service`` / ``rule_service`` / ``activity_service`` directly and
 do not depend on any UI module. They are kept because they lock behavior that
 is not fully covered by the API-facade tests in

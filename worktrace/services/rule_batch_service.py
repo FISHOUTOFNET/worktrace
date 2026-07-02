@@ -1,4 +1,4 @@
-"""Phase 5I: selected-rule batch operations service.
+"""Selected-rule batch operations service.
 
 This module is the single batch-capable surface exposed (via
 ``worktrace.api.rule_api``) to the WebView bridge. It supports three
@@ -48,8 +48,8 @@ Design constraints (locked by tests):
   target project. It never sets ``manual_override = 1``; it sets
   ``auto_classified = 1`` and upserts the assignment with
   ``is_manual = 0``, ``source = "folder_rule" | "keyword_rule"``, and the
-  inference confidence (85 folder / 80 keyword) — identical to the Phase
-  5H single-rule backfill.
+  inference confidence (85 folder / 80 keyword) — identical to the
+  single-rule backfill.
 - No raw ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard
   text / note / SQL / traceback / raw row is ever returned in a payload.
 
@@ -57,7 +57,7 @@ Folder / keyword matching and activity classification reuse
 ``rule_impact_service`` helpers (``_resolve_folder_rule`` /
 ``_resolve_keyword_rule`` / ``_project_available`` /
 ``_classify_activities`` / ``_sample_row``) so there is a single matcher
-code path shared with the Phase 5H single-rule preview / backfill.
+code path shared with the single-rule preview / backfill.
 """
 
 from __future__ import annotations

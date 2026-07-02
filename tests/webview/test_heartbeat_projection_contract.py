@@ -1,10 +1,10 @@
-"""Phase 6H-followup: unified heartbeat + live display projection contracts.
+"""unified heartbeat + live display projection contracts.
 
 These static-contract tests verify the frontend pieces introduced by the
-Phase 6H-followup rewrite:
+unified heartbeat rewrite:
 
 - A single 1-second ``startHeartbeat`` timer owns all periodic work.
-  The legacy ``REFRESH_INTERVAL_MS`` / ``LOCAL_TICKER_INTERVAL_MS``
+  the ``REFRESH_INTERVAL_MS`` / ``LOCAL_TICKER_INTERVAL_MS``
   constants, the ``App.refreshTimer`` / ``App.localTickerTimer`` state
   vars, and the ``startAutoRefresh`` / ``startLocalTicker`` standalone
   functions have all been removed entirely; ``startHeartbeat`` only
@@ -43,13 +43,13 @@ from static_helpers import (
 )
 
 
-# --- Section 8: single heartbeat replaces parallel timers ----------------
+# --- single heartbeat replaces parallel timers ----------------
 
 
 def test_heartbeat_single_timer_replaces_parallel_timers():
-    """Section 8: there must be exactly one 1-second timer
-    (``App.heartbeatTimer``). The legacy ``App.refreshTimer`` /
-    ``App.localTickerTimer`` state vars, the legacy
+    """there must be exactly one 1-second timer
+    (``App.heartbeatTimer``). the ``App.refreshTimer`` /
+    ``App.localTickerTimer`` state vars, the removed
     ``REFRESH_INTERVAL_MS`` / ``LOCAL_TICKER_INTERVAL_MS`` constants,
     and the ``startAutoRefresh`` / ``startLocalTicker`` standalone
     functions have all been removed entirely. ``startHeartbeat`` is the
@@ -63,7 +63,7 @@ def test_heartbeat_single_timer_replaces_parallel_timers():
     assert "App.heartbeatTimer = setInterval" in init_source, (
         "startHeartbeat must arm App.heartbeatTimer with setInterval"
     )
-    # App.heartbeatTimer is the ONLY timer state; the legacy timer
+    # App.heartbeatTimer is the ONLY timer state; the removed timer
     # state vars must NOT appear anywhere in init.js.
     assert "App.refreshTimer" not in init_source, (
         "init.js must not reference the removed App.refreshTimer state; "
@@ -73,7 +73,7 @@ def test_heartbeat_single_timer_replaces_parallel_timers():
         "init.js must not reference the removed App.localTickerTimer state; "
         "startHeartbeat only manages App.heartbeatTimer"
     )
-    # The legacy interval constants must NOT appear in core.js.
+    # The removed interval constants must NOT appear in core.js.
     assert "REFRESH_INTERVAL_MS" not in core_source, (
         "core.js must not define the removed REFRESH_INTERVAL_MS constant"
     )
@@ -94,7 +94,7 @@ def test_heartbeat_single_timer_replaces_parallel_timers():
 
 
 def test_heartbeat_interval_is_one_second():
-    """Section 8: the heartbeat must tick at 1-second cadence so the
+    """the heartbeat must tick at 1-second cadence so the
     displayed durations update every second without jumps."""
     source = read_js("core.js")
     assert "App.HEARTBEAT_INTERVAL_MS = 1000" in source, (
@@ -103,7 +103,7 @@ def test_heartbeat_interval_is_one_second():
 
 
 def test_heartbeat_runs_ticker_then_revision_check():
-    """Section 8: each heartbeat tick must first run the local ticker
+    """each heartbeat tick must first run the local ticker
     (display continuity) and then run the lightweight revision check
     (under in-flight guard). This guarantees the display is always
     advanced before any heavy refresh is triggered."""
@@ -124,8 +124,8 @@ def test_heartbeat_runs_ticker_then_revision_check():
     )
 
 
-def test_init_does_not_call_legacy_start_auto_refresh():
-    """Section 9: ``init()`` must not call the legacy ``startAutoRefresh()``
+def test_init_does_not_call_removed_start_auto_refresh():
+    """``init()`` must not call the ``startAutoRefresh()``
     or a standalone ``startLocalTicker()``. Only ``refreshCurrentPageData()``
     + ``startHeartbeat()`` are permitted after the first-run notice is
     confirmed."""
@@ -144,7 +144,7 @@ def test_init_does_not_call_legacy_start_auto_refresh():
 
 
 def test_revision_check_has_in_flight_guard():
-    """Section 8: ``runRevisionCheck`` must guard against overlapping
+    """``runRevisionCheck`` must guard against overlapping
     ``get_refresh_state`` round-trips so the heartbeat never stacks
     concurrent bridge requests."""
     source = read_js("init.js")
@@ -158,7 +158,7 @@ def test_revision_check_has_in_flight_guard():
 
 
 def test_revision_check_does_not_use_elapsed_as_change_signal():
-    """Section 4/10: ``refresh_revision`` must NOT change when only
+    """``refresh_revision`` must NOT change when only
     ``elapsed_seconds`` / ``extra_seconds`` / ``snapshot_updated_at``
     advance. The frontend must not use these fields as a revision-change
     signal. This test verifies the frontend does not compute its own
@@ -183,7 +183,7 @@ def test_revision_check_does_not_use_elapsed_as_change_signal():
 
 
 def test_revision_unchanged_does_not_trigger_heavy_refresh():
-    """Section 10: when ``refresh_revision`` is unchanged, the revision
+    """when ``refresh_revision`` is unchanged, the revision
     check must NOT call ``get_overview`` / ``get_recent_activities`` /
     ``get_timeline`` / ``loadProjectRules``. Only the sidebar status is
     updated from the refresh_state payload (no extra bridge call)."""
@@ -211,7 +211,7 @@ def test_revision_unchanged_does_not_trigger_heavy_refresh():
 
 
 def test_heartbeat_does_not_auto_call_load_project_rules():
-    """Section 10: the heartbeat / revision-check / low-frequency
+    """the heartbeat / revision-check / low-frequency
     reconciliation must NOT call ``loadProjectRules()``. Rules are only
     refreshed on user navigation / manual refresh / rules write."""
     source = read_js("init.js")
@@ -228,13 +228,13 @@ def test_heartbeat_does_not_auto_call_load_project_rules():
 
 
 def test_low_frequency_reconciliation_exists():
-    """Section 8/10: a low-frequency reconciliation must exist so a stalled
+    """a low-frequency reconciliation must exist so a stalled
     revision signal cannot freeze the UI forever. It must refresh status +
     Overview + current Timeline, but NOT Rules / Settings / Statistics.
 
-    Section 七.1: Overview now uses the single ``get_overview_live_bundle``
+    Overview now uses the single ``get_overview_live_bundle``
     call (fusing overview + recent into one sample). The reconciliation
-    may call either ``refreshOverviewBundle`` or the legacy
+    may call either ``refreshOverviewBundle`` or the removed
     ``refreshOverview`` / ``refreshRecent`` pair — both paths refresh
     the Overview + recent data."""
     source = read_js("init.js")
@@ -248,12 +248,12 @@ def test_low_frequency_reconciliation_exists():
         "fullReconcileCollectionViews must refresh collector status"
     )
     # Must refresh Overview + recent. Under the bundle contract this is
-    # done via ``refreshOverviewBundle``; the legacy separate-call path
+    # done via ``refreshOverviewBundle``; the separate-call path
     # (``refreshOverview`` + ``refreshRecent``) is also acceptable as a
     # fallback. At least one of the two paths must be present.
     has_bundle = "refreshOverviewBundle" in body
-    has_legacy = "refreshOverview" in body and "refreshRecent" in body
-    assert has_bundle or has_legacy, (
+    has_separate_refresh = "refreshOverview" in body and "refreshRecent" in body
+    assert has_bundle or has_separate_refresh, (
         "fullReconcileCollectionViews must refresh Overview + recent via "
         "refreshOverviewBundle (preferred) or refreshOverview + refreshRecent"
     )
@@ -264,7 +264,7 @@ def test_low_frequency_reconciliation_exists():
 
 
 def test_low_frequency_reconciliation_skips_timeline_when_editing():
-    """Section 8/10: the low-frequency reconciliation must NOT re-render
+    """the low-frequency reconciliation must NOT re-render
     the Timeline when an editor / split editor / correction shell write
     is in progress so the user's input focus is preserved."""
     source = read_js("init.js")
@@ -276,7 +276,7 @@ def test_low_frequency_reconciliation_skips_timeline_when_editing():
 
 
 def test_page_switch_immediately_refreshes_current_page():
-    """Section 10: page switch must immediately refresh the current page's
+    """page switch must immediately refresh the current page's
     live data so the user sees fresh data without waiting for the next
     heartbeat revision check."""
     source = read_js("init.js")
@@ -287,11 +287,11 @@ def test_page_switch_immediately_refreshes_current_page():
     )
 
 
-# --- Section 5/6: recent / timeline data attributes & snapshots ----------
+# --- Recent / timeline data attributes & snapshots ----------
 
 
 def test_overview_js_stores_last_recent_snapshot():
-    """Section 5: ``showRecent`` must save the recent payload to
+    """``showRecent`` must save the recent payload to
     ``App.lastRecentSnapshot`` so the ticker can increment the
     live-projected recent item without a bridge round-trip."""
     source = read_js("overview.js")
@@ -301,9 +301,9 @@ def test_overview_js_stores_last_recent_snapshot():
 
 
 def test_recent_item_renders_data_index_and_progress_flags():
-    """Section 5: each recent item must render a stable ``data-recent-index``
+    """each recent item must render a stable ``data-recent-index``
     attribute and use ``is_in_progress || is_live_projected`` to mark
-    in-progress / live-projected rows with CSS classes. Phase R3: the
+    in-progress / live-projected rows with CSS classes. The
     unified live-display model also adds ``is_virtual`` / ``virtual-live``
     so virtual live items are visually distinct from real in-progress rows."""
     source = read_js("overview.js")
@@ -331,7 +331,7 @@ def test_recent_item_renders_data_index_and_progress_flags():
 
 
 def test_recent_item_prefers_duration_seconds_over_string():
-    """Section 5: recent items must prefer ``duration_seconds`` (raw int)
+    """recent items must prefer ``duration_seconds`` (raw int)
     over the formatted ``duration`` string so the ticker / monotonic
     helper can recompute from a stable baseline."""
     source = read_js("overview.js")
@@ -344,7 +344,7 @@ def test_recent_item_prefers_duration_seconds_over_string():
 
 
 def test_timeline_js_stores_last_session_details_data():
-    """Section 5: ``renderSessionDetails`` must save the details payload
+    """``renderSessionDetails`` must save the details payload
     to ``App.lastSessionDetailsData`` so the ticker can increment the
     live-projected detail row without a bridge round-trip."""
     source = read_js("timeline.js")
@@ -354,7 +354,7 @@ def test_timeline_js_stores_last_session_details_data():
 
 
 def test_timeline_detail_row_renders_data_attributes():
-    """Section 5: each detail row must render ``data-activity-id``,
+    """each detail row must render ``data-activity-id``,
     ``data-detail-index``, and ``data-duration-seconds`` attributes so
     the ticker can locate rows precisely without relying on array index."""
     source = read_js("timeline.js")
@@ -370,7 +370,7 @@ def test_timeline_detail_row_renders_data_attributes():
 
 
 def test_timeline_detail_row_prefers_duration_seconds():
-    """Section 5: detail rows must prefer ``duration_seconds`` (raw int)
+    """detail rows must prefer ``duration_seconds`` (raw int)
     over the formatted ``duration`` string."""
     source = read_js("timeline.js")
     assert "duration_seconds" in source, (
@@ -379,7 +379,7 @@ def test_timeline_detail_row_prefers_duration_seconds():
 
 
 def test_timeline_session_renders_data_session_id():
-    """Section 7.3: timeline session items must render ``data-session-id``
+    """timeline session items must render ``data-session-id``
     so the ticker can locate each session's DOM precisely without relying
     on array index."""
     source = read_js("timeline.js")
@@ -388,14 +388,14 @@ def test_timeline_session_renders_data_session_id():
     )
 
 
-# --- Section 6/7: ticker uses unified live clock model ------------------
+# --- Ticker uses unified live clock model ------------------
 
 
 def test_core_js_defines_monotonic_render_helpers():
-    """Section 6: core.js must define the monotonic-render helpers used by
+    """core.js must define the monotonic-render helpers used by
     the unified live clock (``live_started_at_epoch_ms + carry_seconds``).
     The ticker computes live deltas from ``live_started_at_epoch_ms`` +
-    ``carry_seconds`` directly; no separate legacy projection helper
+    ``carry_seconds`` directly; no separate projection helper
     exists."""
     source = read_js("core.js")
     for name in (
@@ -412,7 +412,7 @@ def test_core_js_defines_monotonic_render_helpers():
 
 
 def test_ticker_uses_render_duration_monotonic():
-    """Section 6/7: the ticker must use ``renderDurationMonotonic`` for
+    """the ticker must use ``renderDurationMonotonic`` for
     Overview KPIs, recent items, Timeline sessions, and Timeline details
     so the same monotonic-render contract is applied everywhere."""
     source = read_js("core.js")
@@ -428,7 +428,7 @@ def test_ticker_uses_render_duration_monotonic():
 
 
 def test_ticker_does_not_call_bridge_methods():
-    """Section 7: the ticker must NOT call ``callBridge`` /
+    """the ticker must NOT call ``callBridge`` /
     ``App.callBridge``. It only updates DOM text and never triggers a
     backend round-trip."""
     source = read_js("core.js")
@@ -444,7 +444,7 @@ def test_ticker_does_not_call_bridge_methods():
 
 
 def test_ticker_does_not_use_browser_storage():
-    """Section 7: the ticker must NOT use browser storage APIs
+    """the ticker must NOT use browser storage APIs
     (localStorage / sessionStorage). All state lives in the in-memory
     App namespace."""
     source = read_js("core.js")
@@ -463,7 +463,7 @@ def test_ticker_does_not_use_browser_storage():
 
 
 def test_ticker_locates_timeline_session_via_data_session_id():
-    """Section 7.3: the ticker must locate each Timeline session's DOM via
+    """the ticker must locate each Timeline session's DOM via
     ``data-session-id`` (querySelector), NOT via array index into a
     ``querySelectorAll`` snapshot. This prevents a mismatch when a
     revision change re-renders the list between ticks."""
@@ -481,7 +481,7 @@ def test_ticker_locates_timeline_session_via_data_session_id():
 
 
 def test_ticker_skips_detail_updates_when_editing():
-    """Section 7.4: the ticker must NOT update detail-row durations when
+    """the ticker must NOT update detail-row durations when
     a Timeline editor / split editor / correction shell write is in
     progress so input focus and button state are never disturbed."""
     source = read_js("core.js")
@@ -498,7 +498,7 @@ def test_ticker_skips_detail_updates_when_editing():
 
 
 def test_render_duration_monotonic_prevents_small_rollback():
-    """Section 6: ``renderDurationMonotonic`` must keep the current DOM
+    """``renderDurationMonotonic`` must keep the current DOM
     value when the new projected seconds are 1-2s less than the last
     rendered value (same live target still running), avoiding visual
     rollback. State / activity / session / date changes still allow the
@@ -519,7 +519,7 @@ def test_render_duration_monotonic_prevents_small_rollback():
 
 
 def test_render_duration_monotonic_allows_overwrite_on_state_change():
-    """Section 6: when the activity / session / date changes, the backend
+    """when the activity / session / date changes, the backend
     truth must be allowed to overwrite the displayed value. This is
     implemented by seeding ``_monotonicRenderState`` from the backend
     refresh (in showOverview / showRecent / showTimeline /
@@ -535,11 +535,11 @@ def test_render_duration_monotonic_allows_overwrite_on_state_change():
         )
 
 
-# --- Section 11: Statistics / Export closed-only hint ---------------------
+# --- Statistics / Export closed-only hint ---------------------
 
 
 def test_statistics_page_has_closed_only_hint():
-    """Section 11: the Statistics page must show a closed-only hint
+    """the Statistics page must show a closed-only hint
     reminding the user that in-progress activities are not included in
     the statistics summary or the export preview."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -558,7 +558,7 @@ def test_statistics_page_has_closed_only_hint():
 
 
 def test_statistics_page_has_closed_only_hint_css():
-    """Section 11: the closed-only hint must have a dedicated CSS class
+    """the closed-only hint must have a dedicated CSS class
     so it is visually distinct from the export hint."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".stats-closed-only-hint" in source, (
@@ -566,11 +566,11 @@ def test_statistics_page_has_closed_only_hint_css():
     )
 
 
-# --- Phase R3: unified live display eligibility + page-switch guard -------
+# --- unified live display eligibility + page-switch guard -------
 
 
 def test_ticker_live_eligible_checks_live_state():
-    """Phase R3 issue 1: the ticker must only increment normal project
+    """issue 1: the ticker must only increment normal project
     duration when ``live_display.live_state`` is ``"virtual"`` or
     ``"persisted_open"``. idle / paused / excluded / error must NOT be
     eligible. The ``tickerLiveEligible`` helper centralises this check so
@@ -596,7 +596,7 @@ def test_ticker_live_eligible_checks_live_state():
 
 
 def test_ticker_does_not_read_dom_text_as_baseline():
-    """Phase R3 issue 6: the ticker must NOT use DOM current text as the
+    """issue 6: the ticker must NOT use DOM current text as the
     duration baseline. The baseline must come from the cached payload's
     ``duration_seconds`` field. This prevents the duration from
     accelerating growth on each tick."""
@@ -616,7 +616,7 @@ def test_ticker_does_not_read_dom_text_as_baseline():
 
 
 def test_ticker_locates_live_detail_by_flag_not_last_row():
-    """Phase R3 issues 2 & 10: the ticker must locate the live detail row
+    """issues 2 & 10: the ticker must locate the live detail row
     by flag (``is_virtual_live || is_in_progress``) from the cached
     payload, NOT by using the last row of the detail list. The detail list
     is newest-first so the old ``detailRows[length-1]`` was wrong."""
@@ -636,7 +636,7 @@ def test_ticker_locates_live_detail_by_flag_not_last_row():
 
 
 def test_page_switch_refresh_uses_pending_token_mechanism():
-    """Phase R3 issue 14: page-switch immediate refresh must NOT be
+    """issue 14: page-switch immediate refresh must NOT be
     silently skipped by the global in-flight guard. When a refresh is
     in-flight and a page switch occurs, ``pendingPageRefresh`` must be
     set so the refresh is re-triggered after the in-flight one completes."""
@@ -653,7 +653,7 @@ def test_page_switch_refresh_uses_pending_token_mechanism():
 
 
 def test_timeline_editing_guard_covers_open_editors():
-    """Phase R3 issue 12: ``_timelineEditingActive`` must cover not just
+    """issue 12: ``_timelineEditingActive`` must cover not just
     saving states but also editors that are OPEN BUT NOT YET SAVED
     (``editingActivityId`` / ``editingSplitActivityId``) and dirty session
     edits (``editingSession`` + ``isEditDirty()``)."""
@@ -675,7 +675,7 @@ def test_timeline_editing_guard_covers_open_editors():
 
 
 def test_render_session_details_skips_rerender_when_editing():
-    """Phase R3 issue 17: ``renderSessionDetails`` must NOT re-render the
+    """issue 17: ``renderSessionDetails`` must NOT re-render the
     detail list (which would overwrite user input) when an inline editor /
     split editor is open and dirty or a save is in progress."""
     source = read_js("timeline.js")
@@ -689,11 +689,11 @@ def test_render_session_details_skips_rerender_when_editing():
     )
 
 
-# --- Verification items: unified live clock + refresh orchestration -------
+# --- unified live clock + refresh orchestration ----------------------------
 
 
 def test_ticker_uses_unified_live_clock_scheme_a():
-    """Verification item 6: the ticker must use the unified live clock
+    """the ticker must use the unified live clock
     (scheme A: ``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
     anchored on a stable start-time anchor. ``tickerDeltaSeconds`` must read
     ``live_started_at_epoch_ms`` and ``carry_seconds`` from the payload.
@@ -707,7 +707,7 @@ def test_ticker_uses_unified_live_clock_scheme_a():
     assert "carry_seconds" in body, (
         "tickerDeltaSeconds must read carry_seconds from the payload"
     )
-    # The legacy snapshot_at_epoch_ms fallback has been removed; the
+    # The snapshot_at_epoch_ms fallback has been removed; the
     # function returns 0 when live_started_at_epoch_ms is missing.
     assert "snapshot_at_epoch_ms" not in body, (
         "tickerDeltaSeconds must not fall back to snapshot_at_epoch_ms; "
@@ -715,26 +715,26 @@ def test_ticker_uses_unified_live_clock_scheme_a():
     )
 
 
-def test_frontend_js_does_not_contain_legacy_live_clock_fields():
+def test_frontend_js_does_not_contain_removed_live_clock_fields():
     """Static boundary test (spec §VIII Live clock boundary): the entire
-    frontend JS bundle must NOT contain the legacy baseline
+    frontend JS bundle must NOT contain the removed live-clock
     field names ``snapshot_at_epoch_ms`` or ``baseline_epoch_ms`` anywhere.
     The unified live clock uses only ``live_started_at_epoch_ms`` +
-    ``carry_seconds``; the old baseline scheme has been removed entirely
-    and must not regress in comments, fallback logic, or payload parsing."""
+    ``carry_seconds`` and must not regress in comments, fallback logic, or
+    payload parsing."""
     all_js = read_all_js()
     assert "snapshot_at_epoch_ms" not in all_js, (
-        "frontend JS must not contain the legacy snapshot_at_epoch_ms field; "
+        "frontend JS must not contain the snapshot_at_epoch_ms field; "
         "the unified live clock uses live_started_at_epoch_ms + carry_seconds"
     )
     assert "baseline_epoch_ms" not in all_js, (
-        "frontend JS must not contain the legacy baseline_epoch_ms field; "
+        "frontend JS must not contain the baseline_epoch_ms field; "
         "the unified live clock uses live_started_at_epoch_ms + carry_seconds"
     )
 
 
 def test_ticker_uses_stable_live_key_hash_for_continuity():
-    """Verification item 12: ``liveContinuityKey`` must use
+    """``liveContinuityKey`` must use
     ``stable_live_key_hash`` as the continuity anchor so the same activity
     survives the virtual → persisted_open transition without a false reset."""
     source = read_js("core.js")
@@ -748,7 +748,7 @@ def test_ticker_uses_stable_live_key_hash_for_continuity():
 
 
 def test_overview_has_request_token():
-    """Verification item 13: ``refreshOverview`` must use a request token
+    """``refreshOverview`` must use a request token
     so stale responses cannot overwrite newer ones."""
     source = read_js("init.js")
     assert "App.overviewRequestToken" in source, (
@@ -761,7 +761,7 @@ def test_overview_has_request_token():
 
 
 def test_recent_has_request_token():
-    """Verification item 13/15: ``refreshRecent`` must use a request token
+    """``refreshRecent`` must use a request token
     so stale responses cannot overwrite newer ones."""
     source = read_js("init.js")
     assert "App.recentRequestToken" in source, (
@@ -774,7 +774,7 @@ def test_recent_has_request_token():
 
 
 def test_render_session_details_cache_after_guard():
-    """Verification item 14: ``renderSessionDetails`` must set
+    """``renderSessionDetails`` must set
     ``App.lastSessionDetailsData`` AFTER the dirty-editor / saving guard,
     not before. When the DOM render is skipped, the cache must also be
     skipped so they stay atomic."""
@@ -797,7 +797,7 @@ def test_render_session_details_cache_after_guard():
 
 
 def test_clear_sessions_invalidates_pending_detail_request():
-    """Verification item 22: when sessions are cleared (empty list),
+    """when sessions are cleared (empty list),
     ``detailsRequestToken`` must be incremented so a stale
     ``get_timeline_session_details`` response does not backfill."""
     source = read_js("timeline.js")
@@ -813,7 +813,7 @@ def test_clear_sessions_invalidates_pending_detail_request():
 
 
 def test_date_switch_invalidates_pending_detail_request():
-    """Verification item 22: when switching dates (goPrevDay / goNextDay /
+    """when switching dates (goPrevDay / goNextDay /
     goToday), ``detailsRequestToken`` must be incremented so a stale
     response from the previous date does not backfill."""
     source = read_js("timeline.js")
@@ -828,7 +828,7 @@ def test_date_switch_invalidates_pending_detail_request():
 
 
 def test_virtual_session_click_does_not_open_edit_panel():
-    """Verification item 4: ``selectTimelineSession`` must NOT call
+    """``selectTimelineSession`` must NOT call
     ``populateEditPanel`` for virtual sessions (``edit_disabled`` /
     ``is_virtual``). Instead, it must call ``clearEditPanel``."""
     source = read_js("timeline.js")
@@ -843,7 +843,7 @@ def test_virtual_session_click_does_not_open_edit_panel():
 
 
 def test_init_awaits_first_refresh_before_heartbeat():
-    """Verification item 18: ``init`` must await the first
+    """``init`` must await the first
     ``refreshCurrentPageData()`` BEFORE reading ``get_refresh_state`` and
     starting the heartbeat. This prevents the first heartbeat tick from
     racing the initial heavy refresh."""
@@ -875,7 +875,7 @@ def test_init_awaits_first_refresh_before_heartbeat():
 
 
 def test_init_initializes_last_reconcile_after_first_refresh():
-    """Verification item 19: ``lastReconcileAtEpochMs`` must be initialized
+    """``lastReconcileAtEpochMs`` must be initialized
     AFTER the first refresh completes, not left at 0. Without this, the
     first heartbeat tick sees ``now - 0 >= RECONCILE_INTERVAL_MS`` and
     immediately triggers low-frequency reconciliation."""
@@ -895,7 +895,7 @@ def test_init_initializes_last_reconcile_after_first_refresh():
 
 
 def test_revision_check_skips_reconciliation_on_same_tick():
-    """Verification item 20: when a revision-change heavy refresh is
+    """when a revision-change heavy refresh is
     triggered, the low-frequency reconciliation must NOT also be triggered
     on the same tick. The revision check must track whether a heavy refresh
     was triggered and skip reconciliation if so."""
@@ -908,7 +908,7 @@ def test_revision_check_skips_reconciliation_on_same_tick():
 
 
 def test_reconciliation_skips_when_page_refresh_inflight():
-    """Verification item 12: low-frequency reconciliation must NOT run when
+    """low-frequency reconciliation must NOT run when
     ``activePageRefreshInFlight`` is true so it does not concurrently
     re-pull the same data."""
     source = read_js("init.js")
@@ -920,7 +920,7 @@ def test_reconciliation_skips_when_page_refresh_inflight():
 
 
 def test_revision_check_passes_report_date():
-    """Verification item 8: ``runRevisionCheck`` must pass the current
+    """``runRevisionCheck`` must pass the current
     Timeline date to ``get_refresh_state`` so the revision is scoped to
     the viewed date."""
     source = read_js("init.js")

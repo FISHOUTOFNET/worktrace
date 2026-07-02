@@ -2,7 +2,7 @@
 
 These tests guard against drift between README build instructions, the
 build-dependency file, and the release validation baseline. They also lock
-the Phase DG1 documentation governance rules so the docs do not re-bloat.
+the documentation governance rules so the docs do not re-bloat.
 
 They are intentionally cross-platform: they only read text files and never
 invoke PyInstaller, start the UI, or require Windows.
@@ -27,7 +27,7 @@ BUILD_DEP_CANDIDATES = [
     REPO_ROOT / "requirements-build.txt",
 ]
 
-# Phase DG1 documentation governance targets.
+# documentation governance targets.
 CURRENT_STATE_TARGET_LINES = 150
 CURRENT_STATE_HARD_MAX_LINES = 170
 
@@ -127,7 +127,7 @@ def test_ci_workflow_contains_required_release_smoke_steps(phrase):
 
 
 # ---------------------------------------------------------------------------
-# Phase DG1: release-checklist stub tests.
+# release-checklist stub tests.
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +169,7 @@ def test_release_checklist_does_not_contain_full_checklist_sections(section):
     ],
 )
 def test_release_validation_contains_key_command(command):
-    """Commands previously checked in release-checklist now live in release-validation."""
+    """Release-validation owns the canonical release commands."""
     validation = _read_text(VALIDATION_PATH)
     assert command in validation, f"release validation missing command: {command}"
 
@@ -185,14 +185,13 @@ def test_release_validation_contains_key_command(command):
     ],
 )
 def test_release_validation_contains_privacy_acceptance_phrase(phrase):
-    """Privacy phrases previously checked in release-checklist now live in
-    release-validation."""
+    """Release-validation owns the canonical privacy validation phrases."""
     validation = _read_text(VALIDATION_PATH)
     assert phrase in validation, f"release validation missing privacy phrase: {phrase}"
 
 
 # ---------------------------------------------------------------------------
-# Phase DG1: CSV-only release doc test.
+# CSV-only release doc test.
 # ---------------------------------------------------------------------------
 
 
@@ -224,7 +223,7 @@ def test_release_validation_does_not_contain_positive_excel_acceptance(phrase):
 
 
 # ---------------------------------------------------------------------------
-# Phase DG1: README doc diet tests.
+# README doc diet tests.
 # ---------------------------------------------------------------------------
 
 
@@ -252,10 +251,10 @@ def test_readme_points_to_ai_context_guide():
 @pytest.mark.parametrize(
     "phase_label",
     [
-        "Phase 5B.1",
-        "Phase 5C.1",
-        "Phase 5D.1",
-        "Phase 5E.1",
+        "5B.1",
+        "5C.1",
+        "5D.1",
+        "5E.1",
     ],
 )
 def test_readme_does_not_contain_project_rules_phase_chronology(phase_label):
@@ -267,7 +266,7 @@ def test_readme_does_not_contain_project_rules_phase_chronology(phase_label):
 
 
 # ---------------------------------------------------------------------------
-# Phase DG1: current-state one-screen test.
+# current-state one-screen test.
 # ---------------------------------------------------------------------------
 
 
@@ -282,11 +281,11 @@ def test_current_state_line_count_under_hard_max():
 
 def test_current_state_documents_project_rules_lifecycle():
     """Post-WebView-migration: current-state.md no longer carries UI
-    migration phase labels (e.g. "Phase 5I"). Instead it must document the
+    migration phase labels. Instead it must document the
     shipped capability — user project create / edit / enable-disable /
     archive — which is what the old phase label was a proxy for."""
     text = _read_text(CURRENT_STATE_PATH)
-    assert "Phase 5I" not in text, (
+    assert "automatic rules" not in text, (
         "current-state.md must not carry UI migration phase labels "
         "(post-migration governance)"
     )
@@ -324,7 +323,7 @@ def test_current_state_retains_affected_test_command():
 
 
 # ---------------------------------------------------------------------------
-# Phase DG1: ui-webview-migration slimness test.
+# ui-webview-migration slimness test.
 # ---------------------------------------------------------------------------
 
 
@@ -355,7 +354,7 @@ def test_ui_webview_migration_points_to_current_state_and_history():
 
 
 def test_ui_webview_migration_status_section_has_no_phase_5g_facades():
-    """The Status section must not carry detailed Phase 5G API facade names."""
+    """The Status section must not carry detailed API facade names."""
     text = _read_text(MIGRATION_PATH)
     status_section = text.split("## Status", 1)[1].split("## ", 1)[0]
     for facade in (
@@ -364,13 +363,13 @@ def test_ui_webview_migration_status_section_has_no_phase_5g_facades():
         "archive_project_for_rules",
     ):
         assert facade not in status_section, (
-            f"ui-webview-migration.md Status section must not contain Phase 5G "
+            f"ui-webview-migration.md Status section must not contain 5G "
             f"facade name: {facade}"
         )
 
 
 # ---------------------------------------------------------------------------
-# Phase DG1: AI context governance test.
+# AI context governance test.
 # ---------------------------------------------------------------------------
 
 
@@ -412,7 +411,7 @@ def test_ai_context_guide_marks_research_docs_as_non_default_context():
 
 
 # ---------------------------------------------------------------------------
-# Phase DG1.1: README Current Limitations residual contradiction regression.
+# README Current Limitations residual contradiction regression.
 # ---------------------------------------------------------------------------
 
 # Project Rules capabilities that the current-state capability matrix lists
@@ -489,7 +488,7 @@ def test_current_state_remains_under_one_screen_hard_max_after_dg1_1():
 
 
 def test_current_state_phase_description_is_unambiguous_after_dg1_1():
-    """The Phase 5I description must use unambiguous wording that lists
+    """The description must use unambiguous wording that lists
     user project create / edit / enable-disable / archive as distinct
     capabilities — not the old "on existing user projects" form that could
     be misread as "create only on existing user projects"."""

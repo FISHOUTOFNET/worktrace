@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend — init module (Phase R2 split).
+// WorkTrace WebView frontend — init module.
 // Refresh orchestration, navigation, button binding, and DOMContentLoaded wiring.
 // This module must be loaded LAST so all cross-file App.* references resolve.
 
@@ -7,20 +7,20 @@
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
     // --- Refresh orchestration ------------------------------------------
-    // Phase 6H-followup: the fixed 8-second full refresh and the independent
-    // 1-second ticker are replaced by a single 1-second heartbeat
-    // (``startHeartbeat``). The heartbeat first applies the local ticker
-    // (re-renders already-fetched durations with a wall-clock delta) and
-    // then runs a lightweight ``get_refresh_state`` revision check. Heavy
-    // interfaces are only called when the structural revision changes, and
-    // only for the data needed by the current page. Rules / Settings /
-    // Statistics are NOT included in background auto-refresh; they keep
+    // A single 1-second heartbeat (``startHeartbeat``) drives refresh. Each
+    // tick first applies the local ticker (re-renders already-fetched
+    // durations with a wall-clock delta), then runs a lightweight
+    // ``get_refresh_state`` revision check. Heavy interfaces are only called
+    // when the structural revision changes, and only for the data needed by
+    // the current page. Rules / Settings / Statistics are NOT included in
+    // background auto-refresh; they keep their own page-level load / refresh
+    // buttons.
     // their own page-level load / refresh buttons.
     //
     // ``refreshCurrentPageData`` is the unified heavy-refresh entry point
     // used by the manual refresh button, the heartbeat revision-change
     // branch, and page-switch immediate refresh. It refreshes status (the
-    // sidebar is always visible) plus the current page's live data. It is
+    // sidebar is always visible) plus the current page's live data, and is
     // guarded by ``activePageRefreshInFlight`` so overlapping heavy
     // refreshes are skipped.
 
@@ -35,13 +35,13 @@
         });
     }
 
-    // Phase 6H-followup section 8: ``refreshStatusFromRefreshState`` updates
-    // the sidebar status display directly from a ``get_refresh_state``
-    // payload without calling ``get_status`` again. This is the preferred
-    // path inside the heartbeat because ``get_refresh_state`` already
-    // returns ``collector_status`` / ``paused`` / ``status_display``.
-    // Falls back to the legacy ``refreshStatus`` path when ``state`` is
-    // null or missing required fields so the sidebar always reflects the
+    // ``refreshStatusFromRefreshState`` updates the sidebar status display
+    // directly from a ``get_refresh_state`` payload without calling
+    // ``get_status`` again. This is the preferred path inside the heartbeat
+    // because ``get_refresh_state`` already returns ``collector_status`` /
+    // ``paused`` / ``status_display``. Falls back to refreshStatus when
+    // state is null or missing required fields so the sidebar always
+    // reflects the backend truth.
     // backend truth.
     function refreshStatusFromRefreshState(state) {
         if (!state || !state.ok) {
@@ -59,10 +59,10 @@
     App.refreshStatusFromRefreshState = refreshStatusFromRefreshState;
 
     function refreshOverview() {
-        // Verification items 13, 15: request token prevents stale
-        // Overview responses from overwriting newer data when the user
-        // switches pages or a revision-change refresh races a manual
-        // refresh. Only the response whose token equals the current
+        // Request token prevents stale Overview responses from overwriting
+        // newer data when the user switches pages or a revision-change
+        // refresh races a manual refresh. Only the response whose token
+        // equals the current value is applied to the DOM.
         // value is applied to the DOM.
         var token = ++App.overviewRequestToken;
         return App.callBridge("get_overview").then(function (result) {
@@ -78,8 +78,8 @@
     }
 
     function refreshRecent() {
-        // Verification items 13, 15: request token prevents stale Recent
-        // responses from overwriting newer data. Same rationale as
+        // Request token prevents stale Recent responses from overwriting
+        // newer data. Same rationale as ``refreshOverview``.
         // ``refreshOverview``.
         var token = ++App.recentRequestToken;
         return App.callBridge("get_recent_activities").then(function (result) {
@@ -94,11 +94,11 @@
         });
     }
 
-    // Phase 七.1: single-sample Overview bundle. Replaces the previous
-    // parallel ``get_overview`` + ``get_recent_activities`` calls which
-    // naturally produced two different snapshot samples (the recent live
-    // row could be 1-2 seconds ahead of the current activity, causing
-    // the frontend to freeze the current activity while waiting for it
+    // Single-sample Overview bundle. One backend call reads the snapshot
+    // once and returns ``live_projection`` + ``overview`` KPI +
+    // ``current_activity`` + ``activities`` + ``sample_id`` from the same
+    // sample, so the recent live row cannot drift ahead of the current
+    // activity.
     // to catch up). The bundle reads the snapshot ONCE in the backend
     // and returns ``live_projection`` + ``overview`` KPI + ``current_activity``
     // + ``activities`` + ``sample_id`` from the same sample.
@@ -128,7 +128,7 @@
             overview.live_projection = bundle.live_projection || overview.live_projection;
             overview.live_display = bundle.live_display || bundle.live_projection || overview.live_display;
             overview.sample_id = bundle.sample_id || overview.sample_id;
-            // KPI fields may live at the bundle root (legacy get_overview
+            // KPI fields may live at the bundle root (get_overview
             // shape) — copy them in when the overview sub-payload does
             // not already carry them.
             if (overview.today_total_seconds === undefined) {
@@ -186,13 +186,13 @@
     }
 
     function refreshCurrentPageData() {
-        // Phase R3 issue 14: when a refresh is already in-flight, record
-        // a pending request instead of silently skipping. After the
-        // in-flight refresh completes, if ``pendingPageRefresh`` is true
-        // a new refresh is triggered for the CURRENT page so page-switch
-        // immediate refresh is never lost. Stale-response protection is
-        // already handled by per-page request tokens (timelineRequestToken
-        // etc.), so a pending refresh always targets the latest page.
+        // When a refresh is already in-flight, record a pending request
+        // instead of silently skipping. After the in-flight refresh
+        // completes, if ``pendingPageRefresh`` is true a new refresh is
+        // triggered for the CURRENT page so page-switch immediate refresh
+        // is never lost. Stale-response protection is already handled by
+        // per-page request tokens (timelineRequestToken etc.), so a pending
+        // refresh always targets the latest page.
         if (App.activePageRefreshInFlight) {
             App.pendingPageRefresh = true;
             return Promise.resolve();
@@ -201,17 +201,17 @@
         App.pendingPageRefresh = false;
         var promises = [refreshStatus()];
         if (App.currentPage === "overview") {
-            // Phase 七.1: single-sample Overview bundle. One backend call
-            // returns KPI + current activity + recent + live_projection
-            // from the same snapshot sample, eliminating the multi-sample
-            // drift between current activity and the recent live row.
+            // Single-sample Overview bundle: one backend call returns KPI
+            // + current activity + recent + live_projection from the same
+            // snapshot sample, eliminating multi-sample drift between
+            // current activity and the recent live row.
             promises.push(refreshOverviewBundle());
         } else if (App.currentPage === "timeline" && App.timelineLoaded) {
-            // Phase R3 issue 11: skip Timeline refresh when an editor /
-            // split editor / dirty session edit / correction shell is
-            // active. The heartbeat revision-change refresh and manual
-            // refresh must not overwrite user input. The next heartbeat
-            // tick after the editor closes will catch up.
+            // Skip Timeline refresh when an editor / split editor / dirty
+            // session edit / correction shell is active so the heartbeat
+            // revision-change refresh and manual refresh do not overwrite
+            // user input. The next heartbeat tick after the editor closes
+            // will catch up.
             if (typeof App._timelineEditingActive !== "function" || !App._timelineEditingActive()) {
                 promises.push(refreshTimeline());
             }
@@ -231,10 +231,10 @@
             if (!anyError) {
                 App.clearError();
             }
-            // Phase R3 issue 14: if a page switch (or other caller)
-            // requested a refresh while this one was in-flight, trigger a
-            // new refresh now for whatever the current page is. This
-            // ensures the page-switch immediate refresh is never silently
+            // If a page switch (or other caller) requested a refresh
+            // while this one was in-flight, trigger a new refresh now for
+            // whatever the current page is. This ensures the page-switch
+            // immediate refresh is never silently skipped.
             // skipped.
             if (App.pendingPageRefresh) {
                 App.pendingPageRefresh = false;
@@ -243,34 +243,34 @@
         });
     }
 
-    // ``refreshAll`` is kept as the manual refresh-button entry point. It
-    // now delegates to ``refreshCurrentPageData`` so the manual button also
-    // obeys the page-scoped contract (status + current page live data) and
-    // does not pull in Rules / Settings / Statistics auto-refresh.
+    // ``refreshAll`` is the manual refresh-button entry point. It delegates
+    // to ``refreshCurrentPageData`` so the manual button obeys the same
+    // page-scoped contract (status + current page live data) and does not
+    // pull in Rules / Settings / Statistics auto-refresh.
     function refreshAll() {
         return refreshCurrentPageData();
     }
     App.refreshAll = refreshAll;
     App.refreshCurrentPageData = refreshCurrentPageData;
 
-    // Phase 6H-followup section 8/10: low-frequency collection
-    // reconciliation. Re-pulls collector status + Overview + current
-    // Timeline so a stalled ``refresh_revision`` signal (e.g. a missed
-    // update between heartbeat ticks) cannot freeze the UI forever. Rules
-    // / Settings / Statistics are NEVER touched here. When a Timeline
-    // editor / split editor / correction shell write is in progress, the
-    // Timeline re-render is skipped (only sidebar + overview refresh) so
-    // the user's input focus and button state are preserved. The manual
-    // refresh button can still trigger a heavier refresh; this is the
+    // Low-frequency collection reconciliation. Re-pulls collector status +
+    // Overview + current Timeline so a stalled ``refresh_revision`` signal
+    // (e.g. a missed update between heartbeat ticks) cannot freeze the UI
+    // forever. Rules / Settings / Statistics are NEVER touched here. When a
+    // Timeline editor / split editor / correction shell write is in
+    // progress, the Timeline re-render is skipped (only sidebar + overview
+    // refresh) so the user's input focus and button state are preserved.
+    // This is the background safety net only; the manual refresh button
+    // can still trigger a heavier refresh.
     // background safety net only.
     function fullReconcileCollectionViews(reason) {
         if (App.reconcileInFlight) return Promise.resolve();
         App.reconcileInFlight = true;
         var promises = [refreshStatus()];
         // Overview is always refreshed: the sidebar / current activity
-        // display depend on it on every page. Phase 七.1: use the
-        // single-sample bundle so current activity / KPI / recent live
-        // row do not drift apart during reconciliation.
+        // display depend on it on every page. Use the single-sample
+        // bundle so current activity / KPI / recent live row do not drift
+        // apart during reconciliation.
         promises.push(refreshOverviewBundle());
         // Timeline is only re-rendered when no editing / split / correction
         // shell write is in progress so input focus is never lost. When the
@@ -321,34 +321,34 @@
         if (pageId === "timeline" && !App.timelineLoaded && !App.timelineLoading) {
             App.loadTimeline(App.timelineDate);
         }
-        // Phase 4A: lazy-load Statistics / Export read-only summary when
-        // navigating to the page for the first time. Defaults to today's
-        // date range. No write / file / dialog action is triggered.
+        // Lazy-load Statistics / Export read-only summary when navigating
+        // to the page for the first time. Defaults to today's date range.
+        // No write / file / dialog action is triggered.
         if (pageId === "statistics" && !App.statisticsLoaded && !App.statisticsLoading) {
             App.initStatisticsDefaults();
             App.loadStatisticsExportSummary();
         }
-        // Phase 5A: lazy-load Project Rules read-only data when navigating
-        // to the page for the first time. No Project Rules write events are
-        // bound in this phase.
+        // Lazy-load Project Rules read-only data when navigating to the
+        // page for the first time. No Project Rules write events are bound
+        // here.
         if (pageId === "rules" && !App.rulesLoaded && !App.rulesLoading) {
             App.loadProjectRules();
         }
-        // Phase 6A: lazy-load Settings / Privacy read-only status when
-        // navigating to the page for the first time. Only a single read is
-        // in flight at a time; subsequent visits reuse the cached status
-        // until the user clicks the refresh button.
+        // Lazy-load Settings / Privacy read-only status when navigating to
+        // the page for the first time. Only a single read is in flight at a
+        // time; subsequent visits reuse the cached status until the user
+        // clicks the refresh button.
         if (pageId === "settings" && !App.settingsLoaded && !App.settingsLoading) {
             App.loadSettingsPrivacyStatus();
         }
 
-        // Phase 6H-followup: immediately refresh the current page's live
-        // data on page switch so the user sees fresh data without waiting
-        // for the next heartbeat revision check. Only live pages
-        // (overview / timeline) are refreshed here; Rules / Settings /
-        // Statistics keep their lazy-load-once + manual-refresh behavior
-        // and are NOT included in the auto-refresh path. Must run AFTER
-        // lazy-load so timeline's first load is not bypassed.
+        // Immediately refresh the current page's live data on page switch
+        // so the user sees fresh data without waiting for the next
+        // heartbeat revision check. Only live pages (overview / timeline)
+        // are refreshed here; Rules / Settings / Statistics keep their
+        // lazy-load-once + manual-refresh behavior and are NOT included in
+        // the auto-refresh path. Must run AFTER lazy-load so timeline's
+        // first load is not bypassed.
         if (pageId === "overview") {
             refreshCurrentPageData();
         } else if (pageId === "timeline" && App.timelineLoaded) {
@@ -388,27 +388,27 @@
                 App.loadTimeline(App.timelineDate);
             });
         }
-        // Phase 3A: Timeline editing handlers
+        // Timeline editing handlers
         document.getElementById("edit-save-btn").addEventListener("click", App.saveEdit);
         document.getElementById("edit-cancel-btn").addEventListener("click", App.cancelEdit);
         var noteEl = document.getElementById("edit-note-text");
         if (noteEl) {
             noteEl.addEventListener("input", App.updateNoteCount);
         }
-        // Phase 3B.1: session-level time correction handler. Per-activity
-        // inline editor buttons are bound inside renderSessionDetails because
+        // Session-level time correction handler. Per-activity inline
+        // editor buttons are bound inside renderSessionDetails because
         // they are recreated on each render.
         var sessionTimeSaveBtn = document.getElementById("edit-time-save-btn");
         if (sessionTimeSaveBtn) {
             sessionTimeSaveBtn.addEventListener("click", App.saveSessionTime);
         }
-        // Phase 3B.2: session-level split handler. Per-activity inline split
-        // buttons are bound inside renderSessionDetails.
+        // Session-level split handler. Per-activity inline split buttons
+        // are bound inside renderSessionDetails.
         var sessionSplitSaveBtn = document.getElementById("edit-split-save-btn");
         if (sessionSplitSaveBtn) {
             sessionSplitSaveBtn.addEventListener("click", App.saveSessionSplit);
         }
-        // Phase 3B.4: session-level hide / soft-delete handlers. Per-activity
+        // Session-level hide / soft-delete handlers. Per-activity
         // hide/delete buttons are bound inside renderSessionDetails.
         var sessionHideBtn = document.getElementById("edit-visibility-hide-btn");
         if (sessionHideBtn) {
@@ -418,9 +418,9 @@
         if (sessionDeleteBtn) {
             sessionDeleteBtn.addEventListener("click", App.saveSessionDelete);
         }
-        // Phase 3B.5B: correction shell open / close handlers. The shell
-        // only reads display-safe data and guides the user back to the
-        // existing action buttons; no new write path is wired here.
+        // Correction shell open / close handlers. The shell only reads
+        // display-safe data and guides the user back to the existing
+        // action buttons; no new write path is wired here.
         var shellOpenBtn = document.getElementById("open-correction-shell-btn");
         if (shellOpenBtn) {
             shellOpenBtn.addEventListener("click", function () {
@@ -431,26 +431,26 @@
         if (shellCloseBtn) {
             shellCloseBtn.addEventListener("click", App.closeCorrectionShell);
         }
-        // Phase 3B.6: batch project reassignment controls inside the
-        // correction shell. The save button calls the bridge's
+        // Batch project reassignment controls inside the correction shell.
+        // The save button calls the bridge's
         // batch_update_timeline_activities_project method; the select-all /
         // clear buttons only manipulate in-memory selection state.
         App.bindBatchProjectControls();
-        // Phase 3B.7: batch note overwrite controls inside the correction
-        // shell. The save button calls the bridge's
+        // Batch note overwrite controls inside the correction shell. The
+        // save button calls the bridge's
         // batch_update_timeline_activities_note method; the textarea input
         // updates the count / save button state in-memory only.
         App.bindBatchNoteControls();
-        // Phase 3B.8: single activity restore controls inside the correction
-        // shell. The restore buttons are rendered dynamically, so event
+        // Single activity restore controls inside the correction shell.
+        // The restore buttons are rendered dynamically, so event
         // delegation on the list container handles clicks without
         // re-binding on every render.
         App.bindRestoreControls();
-        // Phase 4A / 4B: Statistics / Export page controls. The load button
-        // triggers a read-only bridge call; the quick-range buttons only
-        // update the in-memory date inputs and re-trigger the read. The
-        // export button (Phase 4B) opens the native save dialog through the
-        // bridge and writes the chosen CSV file; the frontend never writes a
+        // Statistics / Export page controls. The load button triggers a
+        // read-only bridge call; the quick-range buttons only update the
+        // in-memory date inputs and re-trigger the read. The export button
+        // opens the native save dialog through the bridge and writes the
+        // chosen CSV file; the frontend never writes a file itself.
         // file itself.
         var statsLoadBtn = document.getElementById("statistics-load-btn");
         if (statsLoadBtn) {
@@ -478,23 +478,23 @@
         if (statsExportBtn) {
             statsExportBtn.addEventListener("click", App.exportStatisticsCsv);
         }
-        // Phase 6B: capture toggle write handler. The toggle
-        // writes the clipboard_capture_enabled flag through the bridge;
-        // no other write action is wired here.
+        // Capture toggle write handler. The toggle writes the
+        // clipboard_capture_enabled flag through the bridge; no other
+        // write action is wired here.
         var captureToggle = document.getElementById("settings-clipboard-toggle");
         if (captureToggle) {
             captureToggle.addEventListener("change", App.handleCaptureToggleChange);
         }
-        // Phase 6C: encrypted backup export + manifest preview handlers.
-        // The export button opens a native save dialog and writes an
-        // encrypted .wtbackup file; the manifest preview button opens a
-        // native open file dialog and reads the non-sensitive manifest.
-        // Phase 6D: the import button opens a native open file dialog
-        // (reusing the existing .wtbackup open dialog helper) and imports
-        // the chosen file in replace mode; the clear-all button does not
-        // open a dialog and only triggers the destructive reset when the
-        // user has typed the explicit Chinese confirmation literal.
-        // No save-settings, set-path, or arbitrary file/folder dialog
+        // Encrypted backup export + manifest preview handlers. The export
+        // button opens a native save dialog and writes an encrypted
+        // .wtbackup file; the manifest preview button opens a native open
+        // file dialog and reads the non-sensitive manifest. The import
+        // button opens a native open file dialog (reusing the existing
+        // .wtbackup open dialog helper) and imports the chosen file in
+        // replace mode; the clear-all button does not open a dialog and
+        // only triggers the destructive reset when the user has typed the
+        // explicit Chinese confirmation literal. No save-settings,
+        // set-path, or arbitrary file/folder dialog action is wired here.
         // action is wired here.
         var backupExportBtn = document.getElementById("settings-backup-export-btn");
         if (backupExportBtn) {
@@ -512,36 +512,36 @@
         if (clearAllBtn) {
             clearAllBtn.addEventListener("click", App.clearAllLocalData);
         }
-        // Phase 5C: Project Rules keyword create submit handler. This is
-        // the only Project Rules create event bound in init; the existing
-        // rule toggle uses event delegation set up inside rules.js.
+        // Project Rules keyword create submit handler. This is the only
+        // Project Rules create event bound in init; the existing rule
+        // toggle uses event delegation set up inside rules.js.
         var keywordCreateBtn = document.getElementById("rules-keyword-create-submit");
         if (keywordCreateBtn) {
             keywordCreateBtn.addEventListener("click", App.handleKeywordCreateSubmit);
         }
-        // Phase 5E: Project Rules folder create submit handler. Same pattern
-        // as the keyword create submit handler; the folder edit / delete
-        // / edit-save / edit-cancel use event delegation set up inside
+        // Project Rules folder create submit handler. Same pattern as the
+        // keyword create submit handler; the folder edit / delete /
+        // edit-save / edit-cancel use event delegation set up inside
         // rules.js on the #rules-list container.
         var folderCreateBtn = document.getElementById("rules-folder-create-submit");
         if (folderCreateBtn) {
             folderCreateBtn.addEventListener("click", App.handleFolderCreateSubmit);
         }
-        // Phase 5G: Project Rules project create submit handler. Same pattern
-        // as the keyword / folder create submit handlers; the project
-        // edit / toggle / archive use event delegation set up inside
-        // rules.js on the #rules-list container.
+        // Project Rules project create submit handler. Same pattern as the
+        // keyword / folder create submit handlers; the project edit /
+        // toggle / archive use event delegation set up inside rules.js on
+        // the #rules-list container.
         var projectCreateBtn = document.getElementById("rules-project-create-submit");
         if (projectCreateBtn) {
             projectCreateBtn.addEventListener("click", App.handleProjectCreateSubmit);
         }
-        // Phase 6E: First-run privacy notice handlers. The accept button
-        // is only ever visible in "gate" mode (blocking first-run gate).
-        // The close button is only ever visible in "view" mode (read-only
-        // view from Settings); the JS mode guard inside hideFirstRunNotice
-        // ensures the close button can never dismiss the gate. The
-        // Settings "查看隐私说明" button opens the overlay in view mode
-        // without writing any setting or starting the collector.
+        // First-run privacy notice handlers. The accept button is only
+        // ever visible in "gate" mode (blocking first-run gate). The close
+        // button is only ever visible in "view" mode (read-only view from
+        // Settings); the JS mode guard inside hideFirstRunNotice ensures
+        // the close button can never dismiss the gate. The Settings
+        // "查看隐私说明" button opens the overlay in view mode without
+        // writing any setting or starting the collector.
         var firstRunAcceptBtn = document.getElementById("first-run-notice-accept-btn");
         if (firstRunAcceptBtn) {
             firstRunAcceptBtn.addEventListener("click", App.acceptFirstRunNotice);
@@ -565,7 +565,7 @@
     }
     App.initButtons = initButtons;
 
-    // Phase 6H-followup: unified 1-second heartbeat. Each tick:
+    // Unified 1-second heartbeat. Each tick:
     //   1. Apply the local ticker (re-render already-fetched durations
     //      with a wall-clock delta). The ticker only updates DOM text.
     //   2. Run a lightweight ``get_refresh_state`` revision check. When the
@@ -577,12 +577,12 @@
     function runRevisionCheck() {
         if (App.refreshCheckInFlight) return;
         App.refreshCheckInFlight = true;
-        // Verification item 8: pass the current Timeline date so the
-        // structural revision is scoped to the viewed date. When not on
-        // the Timeline page or no date is set, pass null to use the
-        // default (today). This ensures a structural change on a past
-        // date (edit / split / merge / hide / restore) triggers a heavy
-        // refresh even when today's revision is unchanged.
+        // Pass the current Timeline date so the structural revision is
+        // scoped to the viewed date. When not on the Timeline page or no
+        // date is set, pass null to use the default (today). This ensures
+        // a structural change on a past date (edit / split / merge / hide
+        // / restore) triggers a heavy refresh even when today's revision
+        // is unchanged.
         var reportDate = (App.currentPage === "timeline" && App.timelineLoaded && App.timelineDate)
             ? App.timelineDate
             : null;
@@ -596,31 +596,31 @@
             var isFirstCheck = prevRevision === null || prevRevision === undefined;
             App.lastRefreshState = state;
             var triggeredHeavyRefresh = false;
-            // Phase 6H-followup section 10: when revision unchanged, only
-            // update the sidebar status from the refresh_state payload
-            // (no get_status call). When revision changed (or first
-            // check), refresh the current page's heavy data.
+            // When revision unchanged, only update the sidebar status from
+            // the refresh_state payload (no get_status call). When revision
+            // changed (or first check), refresh the current page's heavy
+            // data.
             if (isFirstCheck || prevRevision !== newRevision) {
                 triggeredHeavyRefresh = true;
                 refreshCurrentPageData();
             } else {
                 refreshStatusFromRefreshState(state);
             }
-            // Phase 6H-followup section 8/10: low-frequency reconciliation.
-            // Even when revision is unchanged, periodically re-pull status +
-            // Overview + current Timeline so a missed revision signal cannot
-            // freeze the UI. Guarded by ``reconcileInFlight`` and the
-            // editing-active guard inside ``fullReconcileCollectionViews``.
+            // Low-frequency reconciliation. Even when revision is
+            // unchanged, periodically re-pull status + Overview + current
+            // Timeline so a missed revision signal cannot freeze the UI.
+            // Guarded by ``reconcileInFlight`` and the editing-active guard
+            // inside ``fullReconcileCollectionViews``.
             //
-            // Verification item 20: skip when a revision-change heavy
-            // refresh was just triggered on this same tick — the heavy
-            // refresh already re-pulled all page data, so a concurrent
-            // reconciliation would be redundant and could race the
+            // Skip when a revision-change heavy refresh was just triggered
+            // on this same tick — the heavy refresh already re-pulled all
+            // page data, so a concurrent reconciliation would be redundant
+            // and could race the in-flight refresh.
             // in-flight refresh.
             //
-            // Verification item 12: skip when a page refresh is already
-            // in-flight (``activePageRefreshInFlight``) so the
-            // reconciliation does not concurrently re-pull the same data.
+            // Skip when a page refresh is already in-flight
+            // (``activePageRefreshInFlight``) so the reconciliation does
+            // not concurrently re-pull the same data.
             var now = Date.now();
             if (!triggeredHeavyRefresh
                 && !App.activePageRefreshInFlight
@@ -639,7 +639,7 @@
     function startHeartbeat() {
         if (App.heartbeatTimer !== null) clearInterval(App.heartbeatTimer);
         App.heartbeatTimer = setInterval(function () {
-            // Phase 1: local ticker (update DOM text with wall-clock delta).
+            // Local ticker (update DOM text with wall-clock delta).
             try {
                 if (typeof App.applyLocalTicker === "function") {
                     App.applyLocalTicker();
@@ -648,7 +648,7 @@
                 // Swallow ticker errors: the ticker is cosmetic and must
                 // never break the revision check or the rest of the UI.
             }
-            // Phase 2: lightweight revision check (with in-flight guard).
+            // Lightweight revision check (with in-flight guard).
             try {
                 runRevisionCheck();
             } catch (e) {
@@ -661,47 +661,47 @@
     function init() {
         initNav();
         initButtons();
-        // Phase 6G: load the first-run privacy notice BEFORE refreshing
-        // the main UI so the privacy gate is shown before any data
-        // refresh begins. The notice load is awaited: refreshAll and
-        // startHeartbeat only run after the notice state is known. If
-        // the notice has not been accepted the blocking gate overlay is
-        // shown and the collector must NOT start; the gate's accept
-        // handler starts the collector after the user accepts. The
-        // backend startup gate (webview_main.py) is the final safety
-        // boundary; awaiting here eliminates the frontend race where
-        // refreshAll could fire before the gate overlay was up.
+        // Load the first-run privacy notice BEFORE refreshing the main UI
+        // so the privacy gate is shown before any data refresh begins. The
+        // notice load is awaited: refreshAll and startHeartbeat only run
+        // after the notice state is known. If the notice has not been
+        // accepted the blocking gate overlay is shown and the collector
+        // must NOT start; the gate's accept handler starts the collector
+        // after the user accepts. The backend startup gate
+        // (webview_main.py) is the final safety boundary; awaiting here
+        // eliminates the frontend race where refreshAll could fire before
+        // the gate overlay was up.
         //
-        // Phase 6I: loadFirstRunNotice resolves to ``true`` only when the
-        // notice state was successfully confirmed. On failure (backend
-        // ok:false or bridge rejection) it resolves ``false`` after
-        // showing the blocking error overlay. The main UI refresh /
-        // heartbeat must NOT start on failure (fail-closed): the
-        // collector is not running and auto-refreshing the sidebar would
-        // imply data collection is active. The old catch branch that
+        // ``loadFirstRunNotice`` resolves to ``true`` only when the notice
+        // state was successfully confirmed. On failure (backend ok:false
+        // or bridge rejection) it resolves ``false`` after showing the
+        // blocking error overlay. The main UI refresh / heartbeat must NOT
+        // start on failure (fail-closed): the collector is not running and
+        // auto-refreshing the sidebar would imply data collection is
+        // active.
         // unconditionally started refresh is removed.
         App.loadFirstRunNotice().then(function (noticeConfirmed) {
             if (!noticeConfirmed) return;
-            // Verification item 18: await the first ``refreshCurrentPageData()``
-            // BEFORE reading ``get_refresh_state`` and starting the heartbeat.
-            // This ensures the initial heavy refresh completes first, so:
+            // Await the first ``refreshCurrentPageData()`` BEFORE reading
+            // ``get_refresh_state`` and starting the heartbeat. This ensures
+            // the initial heavy refresh completes first, so:
             //   - the first heartbeat tick sees a real revision (not null,
             //     which would trigger a redundant ``isFirstCheck`` heavy
             //     refresh on top of the one that just completed);
             //   - ``activePageRefreshInFlight`` is false when the first
             //     heartbeat tick runs, so the revision check does not skip.
             //
-            // Verification item 19: initialize ``lastReconcileAtEpochMs``
-            // AFTER the first refresh completes (not at 0). Without this,
-            // the first heartbeat tick sees ``now - 0 >= RECONCILE_INTERVAL_MS``
-            // and immediately triggers low-frequency reconciliation on top
-            // of the heavy refresh that just completed.
+            // Initialize ``lastReconcileAtEpochMs`` AFTER the first refresh
+            // completes (not at 0). Without this, the first heartbeat tick
+            // sees ``now - 0 >= RECONCILE_INTERVAL_MS`` and immediately
+            // triggers low-frequency reconciliation on top of the heavy
+            // refresh that just completed.
             refreshCurrentPageData().then(function () {
                 App.lastReconcileAtEpochMs = Date.now();
-                // Phase R3 issue 3: initialize ``lastRefreshState`` BEFORE
-                // starting the heartbeat. Without this, the first heartbeat
-                // tick sees ``prevRevision === null`` (isFirstCheck === true)
-                // and triggers a redundant heavy refresh on top of the one
+                // Initialize ``lastRefreshState`` BEFORE starting the
+                // heartbeat. Without this, the first heartbeat tick sees
+                // ``prevRevision === null`` (isFirstCheck === true) and
+                // triggers a redundant heavy refresh on top of the one
                 // that just completed above.
                 return App.callBridge("get_refresh_state");
             }).then(function (result) {
@@ -723,8 +723,8 @@
     App.init = init;
 
     // --- Bootstrap wiring (must run at module load) -------------------
-    // Phase 6H: gate ``init()`` on BOTH DOMContentLoaded AND the pywebview
-    // bridge being ready. The bridge is ready when either:
+    // Gate ``init()`` on BOTH DOMContentLoaded AND the pywebview bridge
+    // being ready. The bridge is ready when either:
     //   - ``window.pywebview && window.pywebview.api`` already exists
     //     (pywebview finished injecting before this script ran), OR
     //   - the ``pywebviewready`` event fires on ``window`` (pywebview

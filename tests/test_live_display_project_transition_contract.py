@@ -322,7 +322,7 @@ def _today_report_date() -> str:
 
 
 def test_virtual_session_project_description_comes_from_display_project():
-    """Section 五.1: virtual session's ``project_description`` must come
+    """virtual session's ``project_description`` must come
     from ``display_project.description`` — NOT be hardcoded to ``""``."""
     snap = _pending_snapshot(is_persisted=False)
     today = _today_report_date()
@@ -333,7 +333,7 @@ def test_virtual_session_project_description_comes_from_display_project():
 
 
 def test_virtual_detail_row_project_description_comes_from_display_project():
-    """Section 五.1: virtual detail row's ``project_description`` must
+    """virtual detail row's ``project_description`` must
     come from ``display_project.description`` — NOT be hardcoded to
     ``""``."""
     snap = _pending_snapshot(is_persisted=False)
@@ -550,8 +550,8 @@ REQUIRED_PROJECTION_FIELDS = {
 
 
 def test_live_projection_carries_all_required_contract_fields():
-    """Section 三: ``live_projection`` must carry every field listed in
-    the contract so consumers do not need to fall back to legacy
+    """``live_projection`` must carry every field listed in
+    the contract so consumers do not need to fall back to removed
     fields."""
     snap = _pending_snapshot(is_persisted=False)
     projection = build_live_projection(snap)
@@ -560,7 +560,7 @@ def test_live_projection_carries_all_required_contract_fields():
 
 
 def test_live_projection_resource_name_reflects_new_resource():
-    """Section 一.1: the projection's ``resource_name`` reflects the NEW
+    """the projection's ``resource_name`` reflects the NEW
     resource immediately (resource identity is immediate), even while
     the project ownership is still pending."""
     snap = _pending_snapshot(is_persisted=False)
@@ -595,7 +595,7 @@ def test_live_projection_project_transition_block_is_surfacable():
     ["idle", "paused", "excluded", "error"],
 )
 def test_system_status_snapshots_have_no_pending_display_project(status):
-    """Section 四.4: idle / paused / excluded / error do not participate
+    """idle / paused / excluded / error do not participate
     in normal project pending. Their ``display_project`` is uncategorized
     and ``project_transition_pending`` is False (no normal project
     inheritance)."""

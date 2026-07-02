@@ -1,7 +1,7 @@
-"""Phase 5I: Automatic Project Rules application foundation tests.
+"""Automatic Project Rules application foundation tests.
 
-Locks the behavior of the automatic-rules engine. Phase 5I normalizes the
-existing inference path (``activity_service.finalize_created_activity`` ->
+Locks the behavior of the automatic-rules engine. The supported
+automatic-rules contract normalizes the existing inference path (``activity_service.finalize_created_activity`` ->
 ``project_inference_service.process_new_activity`` ->
 ``assign_project_for_activity``) as the **supported** automatic-rules
 contract. The thin facade
@@ -158,8 +158,8 @@ def _schema_sql_text() -> str:
 
 
 def test_rule_automation_service_confidence_constants_match_5h(temp_db):
-    # Phase 5I: the automatic-rules confidence must match the Phase 5H
-    # single-rule backfill confidence so there is a single inference
+    # the automatic-rules confidence must match the single-rule
+    # backfill confidence so there is a single inference
     # contract across automatic + manual + batch paths.
     assert rule_automation_service.FOLDER_RULE_CONFIDENCE == 85
     assert rule_automation_service.KEYWORD_RULE_CONFIDENCE == 80
@@ -550,7 +550,7 @@ _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "worktrace" / "schema.sq
 
 
 def test_no_schema_change_phase_5i(temp_db):
-    # Phase 5I must not modify schema.sql. The file's content is the
+    # must not modify schema.sql. The file's content is the
     # single source of truth for the DB structure and must not gain new
     # tables or columns. This test asserts the file is unchanged by
     # asserting the new service modules do not issue CREATE TABLE /
@@ -660,12 +660,12 @@ def test_automatic_rules_status_payload_json_serializable(temp_db):
 
 
 # ---------------------------------------------------------------------------
-# Phase 5I.1 hardening: thin facade + hook-chain guard order + no toggle
+# Hardening lock: thin facade + hook-chain guard order + no toggle
 # ---------------------------------------------------------------------------
 
 
 def test_apply_automatic_rules_facade_source_has_no_separate_matcher(temp_db):
-    # Phase 5I.1: ``rule_automation_service`` must remain a thin documented
+    # ``rule_automation_service`` must remain a thin documented
     # facade over the existing inference path. It must NOT re-implement
     # matching (no regex, no keyword/folder matcher, no inference helper).
     # This locks the "single matcher" invariant so the automatic path can
@@ -731,7 +731,7 @@ def test_apply_automatic_rules_facade_source_has_no_separate_matcher(temp_db):
 def test_process_new_activity_in_progress_guard_runs_before_assign(
     temp_db, monkeypatch
 ):
-    # Phase 5I.1: ``process_new_activity`` must apply the in-progress
+    # ``process_new_activity`` must apply the in-progress
     # (``end_time IS NULL``) skip guard BEFORE delegating to
     # ``assign_project_for_activity``. This locks the guard ordering so an
     # in-progress activity never reaches the matcher.
@@ -762,7 +762,7 @@ def test_process_new_activity_in_progress_guard_runs_before_assign(
 
 
 def test_automatic_rules_status_payload_has_no_on_off_toggle_field(temp_db):
-    # Phase 5I.1: the automatic-rules foundation is always-on for enabled
+    # the automatic-rules foundation is always-on for enabled
     # rules. The status payload must be display-only and must NOT carry a
     # toggle-like field (``enabled`` / ``toggle`` / ``on`` / ``off`` /
     # ``active`` / ``is_enabled``) that could be mistaken for a toggle.
@@ -777,7 +777,7 @@ def test_automatic_rules_status_payload_has_no_on_off_toggle_field(temp_db):
 
 
 def test_close_activity_triggers_automatic_rules_for_in_progress_activity(temp_db):
-    # Phase 5I.1 regression fix: when an activity is created in-progress
+    # regression fix: when an activity is created in-progress
     # (``end_time IS NULL``), ``finalize_created_activity`` calls
     # ``process_new_activity`` but the in-progress guard skips it. When the
     # activity is later closed via ``close_activity``, the automatic-rules

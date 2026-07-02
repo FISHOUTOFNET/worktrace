@@ -1,4 +1,4 @@
-"""Overview bridge mixin, split out of ``bridge.py``.
+"""Overview page bridge mixin.
 
 Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 
@@ -13,7 +13,7 @@ Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 
 ``WebViewBridge`` in ``bridge.py`` inherits ``OverviewBridgeMixin`` so the
 Overview page method names (``get_status`` / ``toggle_pause`` /
-``get_overview`` / ``get_recent_activities``) stay on ``WebViewBridge`` and
+``get_overview`` / ``get_recent_activities``) stay on ``WebViewBridge``.
 the frontend / tests see no API-surface change.
 """
 
@@ -42,11 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 class OverviewBridgeMixin:
-    """Overview page bridge methods, split out of ``WebViewBridge``.
+    """Overview page bridge methods.
 
-    The mixin is mixed into ``WebViewBridge`` in ``bridge.py`` so the
-    Overview page method names stay on ``WebViewBridge``. The mixin must
-    NOT add ``__init__``; it relies on the host class.
+    Mixed into ``WebViewBridge`` in ``bridge.py`` so the Overview page
+    method names stay on ``WebViewBridge``. The mixin must NOT add
+    ``__init__``; it relies on the host class.
     """
 
     def get_status(self) -> dict[str, Any]:
@@ -76,23 +76,23 @@ class OverviewBridgeMixin:
     def toggle_pause(self) -> dict[str, Any]:
         """Toggle the collector pause state.
 
-        Mirrors the Tkinter sidebar toggle: if currently paused or not running,
-        clear user_paused and start the collector; otherwise set user_paused,
-        mark collector_status paused, and clear the current activity snapshot.
+        If currently paused or not running, clear user_paused and start
+        the collector; otherwise set user_paused, mark collector_status
+        paused, and clear the current activity snapshot.
 
-        Phase 6E: before any path that could start the collector, verify
-        the first-run privacy notice has been accepted. If not accepted
-        (or the read itself fails), fail closed: do not start the
-        collector, do not mutate ``user_paused`` / ``collector_status``,
-        and return the stable Chinese error ``请先确认隐私说明``.
+        Before any path that could start the collector, verify the
+        first-run privacy notice has been accepted. If not accepted (or
+        the read itself fails), fail closed: do not start the collector,
+        do not mutate ``user_paused`` / ``collector_status``, and return
+        the stable Chinese error ``请先确认隐私说明``.
         """
         try:
-            # Phase 6E first-run gate: the collector must not start until
-            # the user has accepted the privacy notice. ``toggle_pause``
-            # is the only sidebar action that can start the collector
-            # besides ``accept_first_run_notice``; both must respect the
-            # gate. Fail-closed on any read error so a settings hiccup
-            # cannot accidentally bypass the gate.
+            # First-run gate: the collector must not start until the user
+            # has accepted the privacy notice. ``toggle_pause`` is the
+            # only sidebar action that can start the collector besides
+            # ``accept_first_run_notice``; both must respect the gate.
+            # Fail-closed on any read error so a settings hiccup cannot
+            # accidentally bypass the gate.
             try:
                 notice_accepted = settings_api.first_run_notice_accepted()
             except Exception:
@@ -108,12 +108,12 @@ class OverviewBridgeMixin:
             paused = settings_api.is_user_paused() or raw_status == "paused"
             if paused or raw_status != "running":
                 settings_api.set_user_paused(False)
-                # Phase 6G: ensure the folder index worker is running
-                # before the collector starts matching activities. The
-                # worker is gated by the same privacy notice as the
-                # collector (checked above). ``start_background_workers``
-                # is idempotent and a no-op when this instance does not
-                # own the collector.
+                # Ensure the folder index worker is running before the
+                # collector starts matching activities. The worker is
+                # gated by the same privacy notice as the collector
+                # (checked above). ``start_background_workers`` is
+                # idempotent and a no-op when this instance does not own
+                # the collector.
                 app_api.start_background_workers()
                 app_api.start_collector()
             else:
@@ -300,13 +300,13 @@ class OverviewBridgeMixin:
         """Return Overview KPI + current activity + recent activities + live
         projection in a SINGLE backend call from a SINGLE snapshot sample.
 
-        Replaces the previous parallel ``get_overview`` +
-        ``get_recent_activities`` calls which naturally produced two
-        different snapshot samples (the recent live row could be 1-2
-        seconds ahead of the current activity, causing the frontend to
-        freeze the current activity while waiting for it to catch up).
+        Reading the snapshot ONCE (instead of one call per sub-payload)
+        avoids the two-sample drift where the recent live row could be
+        1-2 seconds ahead of the current activity, which made the
+        frontend freeze the current activity while waiting for it to
+        catch up.
 
-        The bundle reads the snapshot ONCE and derives every sub-payload
+        The bundle derives every sub-payload from that one sample:
         from it:
 
         - ``live_projection`` — the unified live projection (single
@@ -354,9 +354,9 @@ class OverviewBridgeMixin:
                 },
                 "current_activity": current,
                 "activities": recent.get("activities", []),
-                # Keep ``live_display`` as an alias of the live projection's
-                # current-activity summary so legacy frontend code that
-                # reads ``live_display`` keeps working during the transition.
+                # ``live_display`` is an alias of the live projection's
+                # current-activity summary, kept for frontend code that
+                # still reads that key.
                 "live_display": current,
                 "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
             }
@@ -367,16 +367,16 @@ class OverviewBridgeMixin:
     def get_refresh_state(self, report_date=None) -> dict[str, Any]:
         """Return a lightweight refresh-state snapshot for the heartbeat.
 
-        Phase 6H-followup. The frontend heartbeat calls this once per second
-        after running the local ticker. It compares the returned
-        ``refresh_revision`` with the previous tick's value: if unchanged,
-        no heavy interface (``get_overview`` / ``get_recent_activities`` /
-        ``get_timeline``) is invoked. If changed, only the data needed by
-        the current page is re-pulled.
+        The frontend heartbeat calls this once per second after running the
+        local ticker. It compares the returned ``refresh_revision`` with
+        the previous tick's value: if unchanged, no heavy interface
+        (``get_overview`` / ``get_recent_activities`` / ``get_timeline``)
+        is invoked. If changed, only the data needed by the current page
+        is re-pulled.
 
         ``report_date`` (optional) scopes the structural signature to the
-        currently viewed Timeline date (verification item 8). When omitted
-        the facade defaults to today.
+        currently viewed Timeline date. When omitted the facade defaults
+        to today.
 
         The payload is display-safe: no raw ``window_title``,
         ``file_path_hint``, ``note``, ``clipboard``, ``traceback`` or SQL
@@ -390,7 +390,7 @@ class OverviewBridgeMixin:
         (``live_started_at_epoch_ms``, ``carry_seconds``,
         ``stable_live_key``, ``stable_live_key_hash``) so the frontend
         ticker can compute the live duration from a stable start-time
-        anchor (verification item 6).
+        anchor.
 
         The bridge method only calls the ``settings_api.get_refresh_state``
         facade and wraps the result with a stable error payload. It does

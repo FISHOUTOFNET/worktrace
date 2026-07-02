@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.2 Timeline activity-split bridge methods.
+"""Tests for the Timeline activity-split bridge methods.
 
 Covers ``WebViewBridge.split_timeline_activity`` and
 ``WebViewBridge.split_timeline_session``:

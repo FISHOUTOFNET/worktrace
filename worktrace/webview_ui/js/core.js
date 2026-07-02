@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend — core module (Phase R2 split).
+// WorkTrace WebView frontend — core module.
 // Namespace + shared state + bridge helper + generic helpers + date/time/format utils.
 // Only communicates with Python through pywebview API bridge.
 // Does not persist sensitive data in browser storage APIs.
@@ -9,65 +9,65 @@
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
     // --- Module-level state (single source of truth across all js modules) ---
-    // Phase 6H-followup: the fixed 8-second full refresh and the independent
-    // 1-second ticker are replaced by a single 1-second heartbeat. The
-    // heartbeat first applies the local ticker (re-renders already-fetched
-    // durations with a wall-clock delta) and then runs a lightweight
-    // ``get_refresh_state`` revision check. Heavy interfaces (get_overview /
+    // Single 1-second heartbeat: applies the local ticker (re-renders
+    // already-fetched durations with a wall-clock delta) and then runs a
+    // lightweight ``get_refresh_state`` revision check. Heavy interfaces
+    // (get_overview / get_recent_activities / get_timeline) are only called
+    // when the structural revision changes.
     // get_recent_activities / get_timeline) are only called when the
     // structural revision changes.
     App.HEARTBEAT_INTERVAL_MS = 1000;
     App.NOTE_MAX_LENGTH = 2000;
     App.heartbeatTimer = null;
 
-    // --- Phase 6G / 6H-followup: live display state -------------------
-    // The heartbeat's local-ticker phase re-renders already-fetched
-    // durations with a locally-computed elapsed increment. The ticker ONLY
-    // updates DOM text; it never calls a bridge method, never writes the DB,
-    // and never starts / stops the collector. The following snapshots are
-    // set by showOverview / showRecent / showTimeline / renderSessionDetails
+    // --- Live display state ---
+    // The local ticker ONLY updates DOM text; it never calls a bridge
+    // method, never writes the DB, and never starts / stops the collector.
+    // The snapshots are set by showOverview / showRecent / showTimeline /
+    // renderSessionDetails and read by the ticker to compute the live
+    // increment.
     // respectively and read by the ticker to compute the live increment.
     App.lastOverviewSnapshot = null;
-    // Phase 6H-followup: recent-activities snapshot so the ticker can
-    // increment the live-projected recent item's duration without a bridge
+    // Recent-activities snapshot so the ticker can increment the live-
+    // projected recent item's duration without a bridge round-trip.
     // round-trip. Set by showRecent.
     App.lastRecentSnapshot = null;
-    // Phase 6H-followup: session-details snapshot so the ticker can
-    // increment the live-projected detail row's duration without a bridge
+    // Session-details snapshot so the ticker can increment the live-
+    // projected detail row's duration without a bridge round-trip.
     // round-trip. Set by renderSessionDetails.
     App.lastSessionDetailsData = null;
 
-    // --- Phase 6H-followup: heartbeat refresh-state ---------------------
+    // --- Heartbeat refresh-state ---
     // ``lastRefreshState`` caches the last ``get_refresh_state`` payload so
     // the heartbeat can compare ``refresh_revision`` between ticks.
-    // ``refreshCheckInFlight`` guards against overlapping get_refresh_state
-    // round-trips. ``activePageRefreshInFlight`` guards against overlapping
-    // heavy page-data refreshes triggered by a revision change.
+    // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard
+    // overlapping revision checks and heavy page-data refreshes.
+    // ``lastFullRefreshAtEpochMs`` records the last heavy-refresh completion.
     // ``lastFullRefreshAtEpochMs`` records the last time a heavy refresh
     // completed so a future safety net can detect a stalled heartbeat.
     App.lastRefreshState = null;
     App.refreshCheckInFlight = false;
     App.activePageRefreshInFlight = false;
-    // Phase R3 issue 14: pending page refresh. When ``refreshCurrentPageData``
-    // is called while a refresh is already in-flight (e.g. a page switch
-    // during a heartbeat refresh), the request is recorded here. After the
-    // in-flight refresh completes, if ``pendingPageRefresh`` is true a new
-    // refresh is triggered so page-switch immediate refresh is never
+    // Pending page refresh: when ``refreshCurrentPageData`` is called while
+    // a refresh is already in-flight, the request is recorded here. After
+    // the in-flight refresh completes, a new refresh is triggered if this
+    // flag is true so a page-switch immediate refresh is never silently
+    // skipped by the global in-flight guard.
     // silently skipped by the global in-flight guard.
     App.pendingPageRefresh = false;
     App.lastFullRefreshAtEpochMs = 0;
-    // Phase 6H-followup section 8/10: low-frequency collection reconciliation.
-    // Every ``RECONCILE_INTERVAL_MS`` the heartbeat triggers a guarded
+    // Low-frequency collection reconciliation. Every
+    // ``RECONCILE_INTERVAL_MS`` the heartbeat triggers a guarded
     // ``fullReconcileCollectionViews`` that re-pulls collector status +
     // Overview + current Timeline so a stalled revision signal cannot
     // freeze the UI forever. Rules / Settings / Statistics are NOT touched.
     // The reconciliation skips Timeline re-render when an editor / split /
-    // correction shell is open so the user's input focus is preserved.
+    // correction shell is open so user input is preserved.
     App.RECONCILE_INTERVAL_MS = 180000;  // 3 minutes (within 2-5 min band)
     App.lastReconcileAtEpochMs = 0;
     App.reconcileInFlight = false;
 
-    // --- Phase 6H-followup: monotonic duration render state ------------
+    // --- Monotonic duration render state ---
     // Maps a continuity key (e.g. ``"recent:live:<stable_hash>"``,
     // ``"session:live:<stable_hash>"``, ``"detail:live:<stable_hash>"``,
     // ``"overview-total"``) to the last rendered seconds. Used by
@@ -82,52 +82,52 @@
     App.timelineLoading = false;   // whether a timeline load is in progress
     App.selectedSessionId = null;  // currently selected session for detail view
     // Stable live key (stable_live_key_hash) for the currently selected
-    // session. Used for selection continuity across the virtual →
-    // persisted_open transition: when session_id changes from
-    // "virtual-live:<hash>" to the real DB session id, the
-    // stable_live_key_hash stays the same so the selection survives.
+    // session. Selection continuity: when session_id changes from
+    // "virtual-live:<hash>" to the real DB session id, stable_live_key_hash
+    // stays the same so the selection survives the virtual → persisted_open
+    // transition.
     App.selectedSessionLiveKey = null;
 
     // Request tokens prevent stale bridge responses from overwriting newer
     // data when the user rapidly switches dates / pages. Each load
     // increments the token; only the response whose token equals the
-    // current value is applied to the DOM (verification items 13, 15).
-    // Overview and Recent previously lacked tokens, so stale responses
-    // could overwrite newer ones when the user switched pages or a
-    // revision-change refresh raced a manual refresh.
+    // current value is applied to the DOM.
+    // Per-view tokens prevent stale overlapping responses from overwriting
+    // newer data when the user switches pages or a revision-change refresh
+    // races a manual refresh.
     App.timelineRequestToken = 0;
     App.detailsRequestToken = 0;
     App.overviewRequestToken = 0;
     App.recentRequestToken = 0;
 
-    // --- Phase 3A: Timeline editing state -------------------------------
+    // --- Timeline editing state ----------------------------------------
     App.projectsCache = null;
     App.projectsLoading = false;
     App.currentSessions = [];
     App.editingSession = null;
     App.editSaving = false;
 
-    // --- Phase 3B.1: Timeline time-correction state ---------------------
+    // --- Timeline time-correction state --------------------------------
     App.timeSaving = false;
     App.editingActivityId = null;
     App.activityTimeSaving = false;
 
-    // --- Phase 3B.2: Timeline activity-split state -----------------------
+    // --- Timeline activity-split state ---------------------------------
     App.sessionSplitSaving = false;
     App.editingSplitActivityId = null;
     App.activitySplitSaving = false;
 
-    // --- Phase 3B.3: Timeline activity-merge state -----------------------
+    // --- Timeline activity-merge state ---------------------------------
     App.mergeSaving = false;
     App.mergingActivityId = null;
 
-    // --- Phase 3B.4: Timeline hide / soft delete state -------------------
+    // --- Timeline hide / soft delete state -----------------------------
     App.hideSaving = false;
     App.hidingActivityId = null;
     App.deleteSaving = false;
     App.deletingActivityId = null;
 
-    // --- Phase 3B.5B: Timeline correction shell state -------------------
+    // --- Timeline correction shell state -------------------------------
     App.correctionShellOpen = false;
     App.correctionShellSessionId = null;
     App.correctionShellActivityId = null;
@@ -140,48 +140,48 @@
     App.restoreSaving = false;
     App.restoreSavingActivityId = null;
 
-    // --- Phase 4A / 4B: Statistics / Export state -----------------------
+    // --- Statistics / Export state -------------------------------------
     App.statisticsLoaded = false;
     App.statisticsLoading = false;
     App.statisticsRequestToken = 0;
     App.statisticsExportSaving = false;
 
-    // --- Phase 6A: Settings / Privacy read-only state -----------------
-    // Only a single read-only load is in flight at a time. The request
-    // token guards against stale responses when the user re-enters the
+    // --- Settings / Privacy state ---
+    // A single read-only load is in flight at a time; the request token
+    // guards against stale responses on rapid re-entry.
     // page rapidly; it is monotonically incremented per load attempt.
     App.settingsLoaded = false;
     App.settingsLoading = false;
     App.settingsRequestToken = 0;
-    // --- Phase 6B: Settings / Privacy capture toggle write -------------
-    // Separate from settingsLoading (read) so a write in flight never
+    // Capture toggle write state. Separate from settingsLoading (read) so a
+    // write in flight never pollutes the read-state guard.
     // pollutes the read-state guard. While true, both the refresh button
     // and the capture toggle are disabled so no concurrent write or
     // read can race the in-flight toggle write.
     App.settingsWriteInProgress = false;
-    // --- Phase 6C: Settings / Privacy encrypted backup state -----------
-    // Separate from settingsWriteInProgress (capture toggle) so a backup
+    // Encrypted backup export + manifest preview state. Separate from the
+    // capture toggle so a backup operation cannot race the toggle.
     // operation in flight never races the capture toggle and vice versa.
     // While either is true, the backup controls are disabled.
     App.settingsBackupExportInProgress = false;
     App.settingsBackupManifestInProgress = false;
-    // --- Phase 6D: Settings / Privacy backup import + clear-all state --
-    // Separate from settingsBackupExportInProgress (6C export) and
+    // Backup import + clear-all state. Separate from export / manifest /
+    // capture toggle so an import / clear cannot race the other writes.
     // settingsBackupManifestInProgress (6C manifest) so an import / clear
     // in flight never races the export / manifest / capture toggle. While
     // either is true, every Settings control is disabled.
     App.settingsBackupImportInProgress = false;
     App.settingsClearAllInProgress = false;
 
-    // --- Phase 6E: First-run privacy notice state -----------------------
+    // --- First-run privacy notice state ---
     // ``firstRunNoticeLoaded`` is true after the first ``get_first_run_notice``
-    // round-trip completes (success or failure). ``firstRunNoticeLoading``
-    // is true while the load is in flight so a rapid re-entry cannot
-    // re-trigger a second load. ``firstRunNoticeRequired`` is true when
-    // the backend reports ``accepted === false``; the blocking overlay
-    // stays open and the sidebar pause/resume control must not start
-    // the collector. ``firstRunNoticeAcceptInProgress`` is true while
-    // the accept round-trip is in flight so the accept button can be
+    // round-trip completes. ``firstRunNoticeRequired`` is true when the
+    // backend reports ``accepted === false``; the blocking overlay stays
+    // open and the sidebar pause/resume control must not start the
+    // collector. ``firstRunNoticeViewingFromSettings`` is true when the
+    // overlay was opened from the Settings "查看隐私说明" button; in that
+    // mode the close button is shown and no accept action is taken on
+    // close. State lives in JS memory only.
     // disabled. ``firstRunNoticeViewingFromSettings`` is true when the
     // overlay was opened from the Settings / Privacy "查看隐私说明"
     // button; in that mode the close button is shown and no accept
@@ -193,67 +193,49 @@
     App.firstRunNoticeAcceptInProgress = false;
     App.firstRunNoticeViewingFromSettings = false;
 
-    // --- Phase 5B: Project Rules state ---------------------------------
+    // --- Project Rules state -------------------------------------------
     App.rulesLoaded = false;
     App.rulesLoading = false;
     App.rulesRequestToken = 0;
     App.rulesSavingRuleKey = null;
 
-    // --- Phase 5C: Project Rules keyword creation state ---------------
-    // Separate from rulesSavingRuleKey so the toggle write state and the
-    // keyword create write state can never pollute each other. Only one
-    // keyword create may be in flight at a time.
+    // Keyword creation writes are isolated from rule toggle writes.
+    // Only one keyword create may be in flight at a time.
     App.rulesCreatingKeyword = false;
 
-    // --- Phase 5D: Project Rules keyword deletion state ---------------
-    // Separate from rulesSavingRuleKey (Phase 5B toggle) and
-    // rulesCreatingKeyword (Phase 5C create) so the three write paths can
-    // never pollute each other. Only one keyword delete may be in flight
-    // at a time; it carries the "<kind>:<id>" key of the row being
-    // deleted so the deleting button label can be flipped to ``正在删除…``.
+    // Keyword deletion writes carry the "<kind>:<id>" key of the row being
+    // deleted so only that row's button enters deleting state.
     App.rulesDeletingRuleKey = null;
 
-    // --- Phase 5F: Project Rules keyword rule edit state ----------------
-    // Separate from rulesSavingRuleKey (Phase 5B toggle),
-    // rulesCreatingKeyword (Phase 5C create), rulesDeletingRuleKey
-    // (Phase 5D delete), and the folder CRUD states (Phase 5E) so the
-    // five write paths can never pollute each other. Only one keyword
-    // edit may be in flight at a time; it carries the "keyword:<id>" key
-    // of the row being edited.
+    // Keyword edit writes carry the "keyword:<id>" key of the row being
+    // edited or saved.
     App.rulesEditingKeywordKey = null;   // "keyword:<id>" of the row being edited
     App.rulesUpdatingKeywordKey = null;  // "keyword:<id>" of the row being saved
 
-    // --- Phase 5E: Project Rules folder rule CRUD state ----------------
-    // Separate from rulesSavingRuleKey (Phase 5B toggle),
-    // rulesCreatingKeyword (Phase 5C keyword create), and
-    // rulesDeletingRuleKey (Phase 5D keyword delete) so the four write
-    // paths can never pollute each other. Only one folder write may be in
-    // flight per kind at a time.
+    // Folder rule CRUD state. Only one folder write may be in flight per
+    // kind at a time.
     App.rulesCreatingFolder = false;
     App.rulesEditingFolderKey = null;   // "folder:<id>" of the row being edited
     App.rulesDeletingFolderKey = null;  // "folder:<id>" of the row being deleted
-    // Phase 5E: cache of the last-loaded Project Rules data so the inline
-    // folder edit form can re-render the list immediately without a
-    // round-trip through loadProjectRules (which would lose input focus).
+    // Cache of the last-loaded Project Rules data so the inline folder
+    // edit form can re-render the list immediately without a round-trip
+    // through loadProjectRules (which would lose input focus).
     App.lastProjectRulesData = null;
 
-    // --- Phase 5G: Project lifecycle state -----------------------------
-    // Separate from all rule write states (5B toggle, 5C keyword create,
-    // 5D keyword delete, 5E folder CRUD, 5F keyword edit) so project
-    // lifecycle writes can never pollute rule write button / input
-    // disabled state. Only one project lifecycle write may be in flight
-    // per kind at a time.
+    // Project lifecycle writes are isolated from rule CRUD button and input
+    // disabled state. Only one project lifecycle write may be in flight per
+    // kind at a time.
     App.rulesCreatingProject = false;
     App.rulesEditingProjectId = null;   // project id being edited (int or null)
     App.rulesUpdatingProjectId = null;  // project id being saved (int or null)
     App.rulesTogglingProjectId = null;  // project id being toggled (int or null)
     App.rulesArchivingProjectId = null; // project id being archived (int or null)
 
-    // --- Phase 5H: rule impact preview + safe single-rule backfill state ---
-    // Separate from all rule write states (5B toggle, 5C keyword create,
-    // 5D keyword delete, 5E folder CRUD, 5F keyword edit, 5G project
-    // lifecycle) so preview / backfill can never pollute any other write
-    // button / input disabled state. ``rulesPreviewingImpactKey`` carries
+    // Rule impact preview + safe single-rule backfill state.
+    // ``rulesPreviewingImpactKey``: rule whose preview is loading.
+    // ``rulesBackfillingRuleKey``: rule being applied.
+    // ``rulesImpactPreviewKey``: rule whose preview is rendered (null = none).
+    // ``rulesImpactPreviewData``: cached preview payload for re-render.
     // the "<kind>:<id>" key of the rule whose preview is loading;
     // ``rulesBackfillingRuleKey`` carries the key of the rule being applied;
     // ``rulesImpactPreviewKey`` is the key of the rule whose preview is
@@ -265,9 +247,9 @@
     App.rulesImpactPreviewKey = null;
     App.rulesImpactPreviewData = null;
 
-    // --- Phase 5I: selected-rule batch operations state ----------------
-    // Separate from all rule write states (5B toggle, 5C keyword create,
-    // 5D keyword delete, 5E folder CRUD, 5F keyword edit, 5G project
+    // Selected-rule batch operations state.
+    // ``rulesBatchSelectedKeys``: object map of "<kind>:<id>" -> true kept
+    // in JS memory only. ``rulesBatchInFlight``: true while any batch
     // lifecycle, 5H single-rule preview / backfill) so batch operations
     // can never pollute any other write button / input disabled state.
     // ``rulesBatchSelectedKeys`` is an object map of selected rule keys
@@ -275,14 +257,14 @@
     // APIs). ``rulesBatchInFlight`` is true while any batch
     // operation (preview / apply / enable / disable) is running; while
     // true, every batch button AND every per-rule write button is disabled.
-    // ``rulesBatchPanelData`` caches the last batch panel payload
+    // ``rulesBatchPanelData``: cached batch panel payload for re-render.
     // ({mode: "preview"|"apply"|"toggle", payload: {...}} | null) so the
     // panel can be re-rendered from cache without a round-trip.
     App.rulesBatchSelectedKeys = {};
     App.rulesBatchInFlight = false;
     App.rulesBatchPanelData = null;
 
-    // --- Phase 3C: Unified Timeline status semantics -------------------
+    // --- Unified Timeline status semantics -----------------------------
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",
         success: "edit-status-success",
@@ -357,7 +339,7 @@
     }
     App.setTimelineLoading = setTimelineLoading;
 
-    // --- Phase 3C: Unified Timeline status semantics -------------------
+    // --- Unified Timeline status semantics -----------------------------
 
     function statusClassFor(type) {
         return App.STATUS_TYPE_CLASS[type] || App.STATUS_TYPE_CLASS.info;
@@ -454,7 +436,7 @@
     }
     App.showStatus = showStatus;
 
-    // --- Phase 3B.9: consolidation helpers (display-safe text) ---------
+    // --- Consolidation helpers (display-safe text) ---------------------
 
     function safeText(value, fallback) {
         if (value === null || value === undefined || value === "") {
@@ -487,7 +469,7 @@
     App.formatTimeRange = formatTimeRange;
 
     // Display-only start time (HH:MM) extracted from a backend
-    // "YYYY-MM-DD HH:MM:SS" timestamp. Used by the simplified Timeline
+    // "YYYY-MM-DD HH:MM:SS" timestamp.
     // session list and read-only detail rows where the end time is no
     // longer shown.
     function formatStartTimeOnly(start_time) {
@@ -532,10 +514,10 @@
     }
     App.formatDuration = formatDuration;
 
-    // --- Phase 6H-followup: unified projection / monotonic helpers -------
-    // These helpers are shared by Overview KPI, current activity, recent,
-    // Timeline total, Timeline session, and Timeline details so every live
-    // target uses the same monotonic-render contract.
+    // --- Unified projection / monotonic helpers ---
+    // Shared by Overview KPI, current activity, recent, Timeline total,
+    // Timeline session, and Timeline details so every live target uses the
+    // same monotonic-render contract.
     //
     // ``readDurationSecondsFromText`` reads the ``data-duration-seconds``
     // attribute (preferred) or parses the ``HH:MM:SS`` text as a fallback.
@@ -589,10 +571,10 @@
     }
     App.resetMonotonicRenderState = resetMonotonicRenderState;
 
-    // Unified project label contract (section 五.4):
+    // Unified project label contract:
     //   project_label = name if description empty else f"{name}（{description}）"
     // Uses full-width Chinese parentheses with no surrounding space so the
-    // label stays compact and consistent across Overview / Recent / Timeline
+    // label stays compact and consistent across all rendered rows.
     // session / Timeline detail / virtual / pending / persisted-open rows.
     function formatProjectLabel(name, description) {
         var n = String(name || "").trim();
@@ -603,22 +585,21 @@
     }
     App.formatProjectLabel = formatProjectLabel;
 
-    // --- Phase 6H-followup: 1-second heartbeat local ticker ---------------
-    // ``applyLocalTicker`` is the first phase of the unified heartbeat. It
-    // re-renders already-fetched durations with a wall-clock delta so the
-    // UI updates every second without a bridge round-trip. The ticker ONLY
-    // updates DOM text; it never calls a bridge method, never writes the DB,
-    // and never starts / stops the collector. It is a no-op when the current
-    // activity is paused / idle / excluded / error or when no snapshot has
+    // --- 1-second heartbeat local ticker ---
+    // ``applyLocalTicker`` re-renders already-fetched durations with a
+    // wall-clock delta so the UI updates every second without a bridge
+    // round-trip. The ticker ONLY updates DOM text; it never calls a
+    // bridge method, never writes the DB, and never starts / stops the
+    // collector. It is a no-op when the current activity is paused / idle /
+    // excluded / error or when no snapshot has been fetched yet.
     // been fetched yet. The heartbeat's second phase (revision check) runs
     // in init.js and calls heavy interfaces only when the structural
     // revision changes.
     //
-    // Unified live clock (scheme A, verification items 6, 9, 10):
     // The ticker computes the live delta from the activity's start_time
-    // (``live_started_at_epoch_ms``) instead of the backend response time.
-    // This guarantees that the same current activity does not jump
-    // fast/slow across refreshes because the start_time anchor is stable
+    // (``live_started_at_epoch_ms``) instead of the backend response time,
+    // so the same current activity does not jump fast/slow across
+    // refreshes because the start_time anchor is stable. The formula is:
     // across refreshes. The formula is:
     //   display_seconds = carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
     // and the KPI delta is:
@@ -627,17 +608,17 @@
         return Date.now();
     }
 
-    // Unified live clock delta: returns the wall-clock increment to add to
-    // KPI totals and per-item durations. Uses the stable start-time anchor
-    // (``live_started_at_epoch_ms``) so the delta does not drift between
-    // refreshes. Returns 0 when the payload has no live clock fields or
+    // Returns the wall-clock increment to add to KPI totals and per-item
+    // durations. Uses the stable start-time anchor so the delta does not
+    // drift between refreshes. Returns 0 when the payload has no live
+    // clock fields or the current activity is not live-eligible.
     // when the current activity is not live-eligible.
     //
-    // Section 七.2: the ticker reads from the SINGLE page-level live
-    // projection. When the payload carries a ``live_projection`` field
-    // (Overview bundle / Timeline / Detail), that field is the single
-    // source of truth. Legacy payloads without ``live_projection`` fall
-    // back to ``live_display`` / ``current_activity`` so the Timeline
+    // The ticker reads from the SINGLE page-level live projection. When
+    // the payload carries a ``live_projection`` field (Overview bundle /
+    // Timeline / Detail), that field is the single source of truth.
+    // Payloads without ``live_projection`` fall back to ``live_display``
+    // / ``current_activity`` so the Timeline main payload keeps working.
     // main payload (which still carries ``live_display``) keeps working.
     function tickerDeltaSeconds(payload) {
         if (!payload) return 0;
@@ -645,14 +626,12 @@
         if (!ld) return 0;
         var startedAt = parseInt(ld.live_started_at_epoch_ms, 10);
         if (!startedAt || isNaN(startedAt)) {
-            // No unified live clock anchor available — no increment.
             return 0;
         }
         var carry = parseInt(ld.carry_seconds, 10) || 0;
-        // ``live_projection`` carries ``duration_seconds`` (display
-        // seconds at response time); legacy ``live_display`` /
-        // ``current_activity`` carry ``elapsed_seconds``. Accept either
-        // so the delta baseline matches the field the backend wrote.
+        // ``live_projection`` carries ``duration_seconds``; ``live_display``
+        // / ``current_activity`` carry ``elapsed_seconds``. Accept either
+        // field from the backend payload.
         var elapsedAtResponse = parseInt(ld.duration_seconds, 10);
         if (isNaN(elapsedAtResponse)) {
             elapsedAtResponse = parseInt(ld.elapsed_seconds, 10) || 0;
@@ -663,15 +642,12 @@
     }
     App.tickerDeltaSeconds = tickerDeltaSeconds;
 
-    // Unified live-display eligibility: only virtual (unpersisted normal)
-    // and persisted_open (real open normal row) increment normal project
-    // duration. paused / idle / excluded / error / none never do. This
-    // fixes issue 1: idle / excluded / error were previously still
-    // locally timed because only active + !is_paused was checked.
-    //
-    // Section 七.2: prefer ``live_projection.live_state`` (single source
-    // of truth) when present; fall back to ``live_display`` /
-    // ``current_activity`` for legacy payloads.
+    // Live-display eligibility: only virtual (unpersisted normal) and
+    // persisted_open (real open normal row) increment normal project
+    // duration. paused / idle / excluded / error / none never do.
+    // Prefer ``live_projection.live_state`` (single source of truth) when
+    // present; fall back to ``live_display`` / ``current_activity`` for
+    // payloads without live_projection.
     function tickerLiveEligible(payload) {
         if (!payload) return false;
         var lp = payload.live_projection;
@@ -682,7 +658,6 @@
         if (ld) {
             return ld.live_state === "virtual" || ld.live_state === "persisted_open";
         }
-        // Fallback for payloads without live_display: use current_activity.
         var current = payload.current_activity;
         if (!current || !current.active) return false;
         if (current.is_paused) return false;
@@ -697,14 +672,14 @@
 
     // Stable continuity key for a live item. Uses ``stable_live_key_hash``
     // when available so the continuity survives the virtual → persisted_open
-    // transition (verification items 12, 16). Falls back to the session /
-    // activity id for non-live items.
+    // transition. Falls back to the session / activity id for non-live
+    // items.
     //
-    // SINGLE SOURCE OF TRUTH: This function is the ONLY place that should
-    // construct a live-row continuity key. The ticker, the render seed
-    // (showRecent / showTimeline / renderSessionDetails), and any future
-    // live-duration DOM update MUST all call App.liveContinuityKey(item,
-    // prefix) to look up or seed the monotonic render state. Using the
+    // SINGLE SOURCE OF TRUTH: this is the ONLY place that should construct
+    // a live-row continuity key. The ticker, the render seed, and any live
+    // duration DOM update MUST all call App.liveContinuityKey(item,
+    // prefix) so the key stays stable across the virtual → persisted_open
+    // transition.
     // array index, the session id, or the activity id directly would break
     // the virtual → persisted_open transition because those values change
     // across the transition while stable_live_key_hash stays the same.
@@ -724,11 +699,11 @@
     App.liveContinuityKey = liveContinuityKey;
 
     function applyLocalTicker() {
-        // Overview page: update KPI total + classified + uncategorized +
-        // current activity display. total / classified / uncategorized
-        // must use the same delta so the KPIs stay consistent. The delta
-        // is added to EITHER classified OR uncategorized (never both)
-        // depending on the current activity's classification state.
+        // Overview page: KPI total + classified + uncategorized + current
+        // activity display. total / classified / uncategorized must use
+        // the same delta. The delta is added to EITHER classified OR
+        // uncategorized (never both) depending on the current activity's
+        // classification state.
         var ov = App.lastOverviewSnapshot;
         if (ov && App.currentPage === "overview") {
             var delta = 0;
@@ -768,10 +743,10 @@
             var currentEl = document.getElementById("current-activity");
             if (currentEl) {
                 if (current.active) {
-                    // Unified live clock (scheme A): compute the display
-                    // seconds from the stable start-time anchor so the
-                    // current activity display does not drift between
-                    // refreshes (verification item 6). Section 七.2:
+                    // Compute the display seconds from the stable start-time
+                    // anchor so the current activity display does not drift
+                    // between refreshes. Prefer ``live_projection`` (single
+                    // source of truth) when the Overview bundle is in use.
                     // prefer ``live_projection`` (single source of truth)
                     // when the Overview bundle is in use.
                     var ld = ov.live_projection || ov.live_display || current;
@@ -796,12 +771,11 @@
             }
         }
         // Recent list: update live (virtual or persisted-open) recent items.
-        // Issue 6 fix: the baseline comes from the cached payload's
-        // ``duration_seconds``, NOT from DOM text. Issue 8 fix: both virtual
-        // live items and real is_in_progress items are handled by flag,
-        // replacing the single-scenario ``live_projected_recent_index``.
-        // Verification item 12: the continuity key uses stable_live_key_hash
-        // so the duration display does not reset when virtual → persisted.
+        // The baseline comes from the cached payload's ``duration_seconds``,
+        // NOT from DOM text. Both virtual live items and real is_in_progress
+        // items are handled by flag. The continuity key uses
+        // stable_live_key_hash so the duration display does not reset when
+        // virtual → persisted.
         var recent = App.lastRecentSnapshot;
         if (recent && App.currentPage === "overview" && recent.activities) {
             var recentDelta = tickerLiveEligible(recent) ? tickerDeltaSeconds(recent) : 0;
@@ -821,9 +795,9 @@
                 }
             }
         }
-        // Timeline page: update date total + current activity display +
-        // in-progress / live-projected session duration + projected detail.
-        // Only when viewing today.
+        // Timeline page: date total + current activity display + in-progress
+        // / live-projected session duration + projected detail. Only when
+        // viewing today.
         var tl = App.lastTimelineData;
         if (tl && App.currentPage === "timeline") {
             var todayStr = App.localTodayStr();
@@ -841,8 +815,6 @@
             if (tlCurrentEl) {
                 var tlCurrent = tl.current_activity || {};
                 if (tlCurrent.active) {
-                    // Unified live clock (scheme A) for Timeline current
-                    // activity display (verification item 6).
                     var tlLd = tl.live_display || tlCurrent;
                     var tlStartedAt = parseInt(tlLd.live_started_at_epoch_ms, 10);
                     var tlCarry = parseInt(tlLd.carry_seconds, 10) || 0;
@@ -864,13 +836,13 @@
                 }
             }
             // Update in-progress / live-projected session durations.
-            // Phase 6H-followup section 7.3: locate each session's DOM via
-            // ``data-session-id`` instead of array index so a re-rendered
-            // list (e.g. after a revision change) cannot mismatch sessions.
-            // Verification item 12: the continuity key uses stable_live_key_hash
-            // for live sessions so the duration does not reset on transition.
-            // Live projection convergence: look up the DOM by
-            // stable_live_key_hash FIRST so the ticker survives the
+            // Locate each session's DOM via ``data-session-id`` instead of
+            // array index so a re-rendered list cannot mismatch sessions.
+            // The continuity key uses stable_live_key_hash for live
+            // sessions so the duration does not reset on transition. Look
+            // up the DOM by stable_live_key_hash FIRST so the ticker
+            // survives the virtual → persisted_open transition; fall back to
+            // session_id for closed sessions that don't carry a stable key.
             // virtual → persisted_open transition (when session_id
             // changes from "virtual-live:<hash>" to the real DB session
             // id, the stable_live_key_hash stays the same). Fall back to
@@ -904,19 +876,16 @@
                     }
                 }
             }
-            // Unified detail-row projection (verification item 8: detail
-            // ticker must NOT use the Timeline main payload delta).
-            // The detail payload carries its own ``live_display`` field so
-            // the detail ticker computes its delta from the same unified
-            // live clock, independent of when the Timeline main payload
-            // arrived. This prevents drift between the detail duration and
-            // its own baseline.
+            // Detail-row projection. The detail ticker must NOT use the
+            // Timeline main payload delta: the detail payload carries its
+            // own ``live_display`` field so the detail ticker computes its
+            // delta from the same unified live clock, independent of when
+            // the Timeline main payload arrived. This prevents drift
+            // between the detail duration and its own timing anchor.
             if (isToday && (App.selectedSessionId || App.selectedSessionLiveKey)
                 && App.lastSessionDetailsData && !App._timelineEditingActive()) {
                 var detailsList = document.getElementById("timeline-details-list");
                 if (detailsList) {
-                    // Use the detail payload's own live clock, not the
-                    // Timeline main payload's delta (verification item 8).
                     var detailDelta = 0;
                     if (tickerLiveEligible(App.lastSessionDetailsData)) {
                         detailDelta = tickerDeltaSeconds(App.lastSessionDetailsData);
@@ -925,10 +894,10 @@
                     for (var dai = 0; dai < detailActs.length; dai++) {
                         var dAct = detailActs[dai];
                         if (dAct.is_virtual_live || dAct.is_in_progress) {
-                            // Live projection convergence: look up the DOM
-                            // by stable_live_key_hash FIRST so the ticker
-                            // survives the virtual → persisted_open
-                            // transition (when activity_id changes from 0
+                            // Look up the DOM by stable_live_key_hash FIRST
+                            // so the ticker survives the virtual →
+                            // persisted_open transition; fall back to
+                            // activity_id for closed rows.
                             // to the real DB id, the stable_live_key_hash
                             // stays the same). Fall back to activity_id
                             // for closed rows that don't carry a stable
@@ -962,12 +931,12 @@
     }
     App.applyLocalTicker = applyLocalTicker;
 
-    // Unified Timeline editing guard. Issue 12 fix: the old helper only
-    // checked saving flags + correctionShellOpen. It missed editors that
-    // are OPEN BUT NOT YET SAVED (editingActivityId / editingSplitActivityId)
-    // and dirty session edits (editingSession + isEditDirty). The ticker,
-    // revision-change refresh, low-frequency reconciliation, and page-switch
-    // refresh all respect this guard so user input is never overwritten.
+    // Timeline editing guard. The ticker, revision-change refresh,
+    // low-frequency reconciliation, and page-switch refresh all respect
+    // this guard so user input is never overwritten. It checks saving
+    // flags + correctionShellOpen, OPEN BUT NOT YET SAVED editors
+    // (editingActivityId / editingSplitActivityId), and dirty session
+    // edits (editingSession + isEditDirty).
     function timelineEditingActive() {
         if (
             App.editSaving ||

@@ -1,4 +1,4 @@
-"""Unified live-display contract tests (verification items 1-13).
+"""Unified live-display contract tests.
 
 These tests verify the root-cause architecture introduced to stabilize the
 live display clock, refresh cycle, and open-row classification:
@@ -91,11 +91,11 @@ def _normal_snapshot(
     }
 
 
-# --- Verification item 1: unified live clock single sample ---------------
+# --- unified live clock single sample ---------------
 
 
 def test_stable_live_key_consistent_across_overview_recent_timeline_detail(bridge):
-    """Verification item 1: Overview / Recent / Timeline / Detail must
+    """Overview / Recent / Timeline / Detail must
     consume the same stable_live_key / stable_live_key_hash from the same
     snapshot. Each bridge method delegates to
     ``build_current_activity_summary`` / ``build_virtual_session`` /
@@ -133,11 +133,11 @@ def test_stable_live_key_consistent_across_overview_recent_timeline_detail(bridg
     assert dt_virtual["stable_live_key_hash"] == ov_ld["stable_live_key_hash"]
 
 
-# --- Verification item 3: virtual → persisted open keeps stable_live_key
+# --- virtual → persisted open keeps stable_live_key -------------------------
 
 
 def test_stable_live_key_survives_virtual_to_persisted_transition(bridge):
-    """Verification item 3/16: the same activity transitioning from virtual
+    """the same activity transitioning from virtual
     (unpersisted) to persisted_open must keep the same stable_live_key so
     the frontend continuity key does not break.
 
@@ -165,18 +165,18 @@ def test_stable_live_key_survives_virtual_to_persisted_transition(bridge):
 
 
 def test_stable_live_key_changes_on_start_time_change(bridge):
-    """Verification item 3: when the start_time changes (a genuinely
+    """when the start_time changes (a genuinely
     different activity), the stable_live_key must also change."""
     s1 = _normal_snapshot(elapsed_seconds=10, start_time="2026-07-01 10:00:00")
     s2 = _normal_snapshot(elapsed_seconds=20, start_time="2026-07-01 11:00:00")
     assert _stable_live_key(s1) != _stable_live_key(s2)
 
 
-# --- Verification item 4: get_refresh_state unified live clock fields ----
+# --- get_refresh_state unified live clock fields ----
 
 
 def test_get_refresh_state_returns_unified_live_clock_fields(bridge):
-    """Verification item 4/6: ``get_refresh_state`` must return the unified
+    """``get_refresh_state`` must return the unified
     live clock fields so the frontend ticker can use scheme A
     (``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
     anchored on a stable start-time anchor."""
@@ -199,11 +199,11 @@ def test_get_refresh_state_returns_unified_live_clock_fields(bridge):
     assert int(state["live_started_at_epoch_ms"]) > 0
 
 
-# --- Verification item 8: date-scoped revision ---------------------------
+# --- date-scoped revision ---------------------------
 
 
 def test_get_refresh_state_accepts_report_date(bridge):
-    """Verification item 8: ``get_refresh_state`` must accept an optional
+    """``get_refresh_state`` must accept an optional
     ``report_date`` parameter so the revision is scoped to the viewed
     date. A structural change on a past date must be detectable even when
     today's revision is unchanged."""
@@ -220,7 +220,7 @@ def test_get_refresh_state_accepts_report_date(bridge):
 
 
 def test_get_refresh_state_bridge_method_accepts_report_date(bridge):
-    """Verification item 8: the bridge method signature must accept
+    """the bridge method signature must accept
     ``report_date`` and pass it through to the API."""
     # The bridge method must accept the parameter without error.
     result = bridge.get_refresh_state(report_date="2026-06-15")
@@ -228,7 +228,7 @@ def test_get_refresh_state_bridge_method_accepts_report_date(bridge):
     assert result["report_date"] == "2026-06-15"
 
 
-# --- Verification item 5: persisted open display project -----------------
+# --- persisted open display project -----------------
 
 
 def _create_real_open_activity(
@@ -260,7 +260,7 @@ def _create_real_open_activity(
 
 
 def test_persisted_open_display_project_does_not_revert(bridge):
-    """Verification item 5 (defensive fallback path): when a real
+    """(defensive fallback path): when a real
     persisted open DB row is uncategorized AND has no
     ``suggested_project_name``, ``_display_project_name`` falls back to
     the snapshot's ``inferred_project_name`` so the display does not
@@ -298,11 +298,11 @@ def test_persisted_open_display_project_does_not_revert(bridge):
     assert not summary["is_uncategorized"]
 
 
-# --- Verification item 5b: open-row project sync (real DB row tests) -----
+# --- open-row project sync (real DB row tests) ------------------------------
 
 
 def test_persisted_open_display_project_does_not_revert_with_real_uncategorized_row(bridge):
-    """Verification item 5b: a real persisted open DB row that starts
+    """a real persisted open DB row that starts
     uncategorized must be converged to a concrete project by the
     open-row sync helper (``sync_persisted_open_activity_project``)
     BEFORE the display reads it. After the sync,
@@ -356,7 +356,7 @@ def test_persisted_open_display_project_does_not_revert_with_real_uncategorized_
 
 
 def test_persisted_open_timeline_recent_detail_and_overview_classification_consistent(bridge):
-    """Verification items 5b / acceptance 2-5: after the open-row sync
+    """after the open-row sync
     assigns a concrete project, Overview / Recent / Timeline / Detail
     must ALL display the concrete project, and the Overview KPI must
     count the live duration as classified (not uncategorized).
@@ -638,11 +638,11 @@ def test_open_project_sync_supports_suggested_project_name_without_creating_proj
     assert details["activities"][0]["project_name"] == "SuggestedProject"
 
 
-# --- Verification item 7: refresh_revision is structural-only -----------
+# --- refresh_revision is structural-only -----------
 
 
 def test_persisted_open_natural_duration_does_not_change_revision(bridge):
-    """Verification item 7: a persisted open row's natural duration
+    """a persisted open row's natural duration
     growth (via ``set_activity_duration``) must NOT change
     ``refresh_revision``. The revision excludes ``duration_seconds`` and
     ``updated_at`` from the per-row structural signature."""
@@ -670,7 +670,7 @@ def test_persisted_open_natural_duration_does_not_change_revision(bridge):
 
 
 def test_manual_project_edit_changes_revision(bridge):
-    """Verification item 6: a manual project assignment change must change
+    """a manual project assignment change must change
     ``refresh_revision``."""
     from worktrace.services import activity_service, project_service
 
@@ -691,7 +691,7 @@ def test_manual_project_edit_changes_revision(bridge):
 
 
 def test_time_edit_changes_revision(bridge):
-    """Verification item 6: a time edit (changing start_time / end_time)
+    """a time edit (changing start_time / end_time)
     must change ``refresh_revision``."""
     from worktrace.services import activity_service
 
@@ -708,11 +708,11 @@ def test_time_edit_changes_revision(bridge):
     assert r1 != r2
 
 
-# --- Verification item 11: virtual session/detail display-only -----------
+# --- virtual session/detail display-only -----------
 
 
 def test_virtual_session_and_detail_are_display_only(bridge):
-    """Verification item 11: virtual session/detail rows must be
+    """virtual session/detail rows must be
     display-only with ``activity_id`` 0, ``edit_disabled`` True,
     ``source`` "snapshot"."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
@@ -731,11 +731,11 @@ def test_virtual_session_and_detail_are_display_only(bridge):
     assert virtual_row["source"] == "snapshot"
 
 
-# --- Verification item 12: timeline service no datetime.now() fallback ----
+# --- timeline service no datetime.now() fallback ----
 
 
 def test_timeline_service_no_datetime_now_fallback():
-    """Verification item 12: ``timeline_service._display_duration`` must
+    """``timeline_service._display_duration`` must
     NOT use ``datetime.now() - start_time`` as a fallback for open rows.
     The unified live clock (``live_display_service``) is the only source
     of live duration."""
@@ -755,11 +755,11 @@ def test_timeline_service_no_datetime_now_fallback():
     )
 
 
-# --- Verification items 12/16/21: persisted_open contract fields ----------
+# --- persisted_open contract fields ----------
 
 
 def test_persisted_open_recent_item_carries_stable_live_fields(bridge):
-    """Verification items 12, 16, 21: persisted_open DB rows in
+    """persisted_open DB rows in
     ``get_recent_activities`` must carry the same stable live fields
     (``stable_live_key_hash``, ``live_started_at_epoch_ms``,
     ``carry_seconds``, ``live_state``) as virtual rows so the frontend
@@ -805,7 +805,7 @@ def test_persisted_open_recent_item_carries_stable_live_fields(bridge):
 
 
 def test_persisted_open_timeline_session_carries_stable_live_fields(bridge):
-    """Verification items 12, 16, 21: persisted_open DB sessions in
+    """persisted_open DB sessions in
     ``get_timeline`` must carry the same stable live fields as virtual
     sessions."""
     from worktrace.services.live_display_service import assert_live_row_contract
@@ -842,7 +842,7 @@ def test_persisted_open_timeline_session_carries_stable_live_fields(bridge):
 
 
 def test_persisted_open_detail_row_carries_stable_live_fields(bridge):
-    """Verification items 12, 16, 21: persisted_open DB detail rows in
+    """persisted_open DB detail rows in
     ``get_timeline_session_details`` must carry the same stable live
     fields as virtual detail rows."""
     from worktrace.services.live_display_service import assert_live_row_contract
@@ -879,7 +879,7 @@ def test_persisted_open_detail_row_carries_stable_live_fields(bridge):
 
 
 def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
-    """Verification items 12, 16: the stable_live_key_hash must be
+    """the stable_live_key_hash must be
     identical for the virtual row and the persisted_open DB row when
     only ``is_persisted`` / ``persisted_activity_id`` change. This is
     the bridge-level version of ``test_stable_live_key_survives_virtual_to_persisted_transition``.
@@ -1124,7 +1124,7 @@ def test_apply_persisted_open_overlay_to_row_candidate_does_not_override_project
 
 
 def test_apply_persisted_open_overlay_to_row_does_not_overlay_non_matching_row(bridge):
-    """Section 一.3: ``apply_persisted_open_overlay_to_row`` must NOT
+    """``apply_persisted_open_overlay_to_row`` must NOT
     overlay a row whose ``activity_id`` / ``first_activity_id`` /
     ``activity_ids`` do NOT contain the persisted_activity_id. Closed
     historical rows must remain untouched.

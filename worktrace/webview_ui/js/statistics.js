@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend — statistics module (Phase R2 split).
+// WorkTrace WebView frontend — statistics module.
 // Statistics / Export page: read-only summary loading + CSV export.
 // The single controlled write action; the frontend never writes a file itself.
 
@@ -6,7 +6,7 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Phase 4A: Statistics / Export read-only page -------------------
+    // --- Statistics / Export read-only page -------------------
 
     function showStatisticsError(message) {
         var banner = document.getElementById("statistics-error");
@@ -32,17 +32,17 @@
         if (el) el.hidden = !loading;
         var btn = document.getElementById("statistics-load-btn");
         if (btn) btn.disabled = loading;
-        // Phase 4B: also disable the CSV export button while statistics are
-        // loading so a write cannot be triggered mid-load.
+        // Also disable the CSV export button while statistics are loading
+        // so a write cannot be triggered mid-load.
         var exportBtn = document.getElementById("stats-export-action-btn");
         if (exportBtn) exportBtn.disabled = loading || App.statisticsExportSaving;
     }
     App.setStatisticsLoading = setStatisticsLoading;
 
     function loadStatisticsExportSummary() {
-        // Phase 4A.1 hardening: refuse concurrent loads. The load button is
-        // already disabled while loading, but this guard also covers any
-        // programmatic trigger path (quick range buttons, lazy load).
+        // Refuse concurrent loads. The load button is already disabled
+        // while loading, but this guard also covers any programmatic
+        // trigger path (quick range buttons, lazy load).
         if (App.statisticsLoading) return;
         var fromEl = document.getElementById("statistics-date-from");
         var toEl = document.getElementById("statistics-date-to");
@@ -52,9 +52,9 @@
             showStatisticsError("请选择有效日期");
             return;
         }
-        // Phase 4A.1: client-side range pre-check so the user gets an
-        // immediate clear message without a bridge round-trip. The bridge
-        // and service still perform the canonical validation.
+        // Client-side range pre-check so the user gets an immediate clear
+        // message without a bridge round-trip. The bridge and service still
+        // perform the canonical validation.
         var rangeMsg = validateStatisticsDateRange(dateFrom, dateTo);
         if (rangeMsg) {
             showStatisticsError(rangeMsg);
@@ -66,8 +66,8 @@
         App.callBridge("get_statistics_export_summary", dateFrom, dateTo).then(function (result) {
             if (token !== App.statisticsRequestToken) return;  // stale response
             var data = App.handleResult(result, function (msg) {
-                // Phase 4A: never surface raw exception text; the bridge
-                // already collapsed to a stable Chinese message.
+                // Never surface raw exception text; the bridge already
+                // collapsed to a stable Chinese message.
                 showStatisticsError(msg || "加载统计失败");
             });
             setStatisticsLoading(false);
@@ -199,7 +199,7 @@
     }
     App.initStatisticsDefaults = initStatisticsDefaults;
 
-    // --- Phase 4B: Statistics CSV export --------------------------------
+    // --- Statistics CSV export --------------------------------
     // The single controlled write action on the Statistics / Export page.
     // The save path is chosen by the user through the native save dialog
     // (opened by the bridge); the frontend never writes a file itself.

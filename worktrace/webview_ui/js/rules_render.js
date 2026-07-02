@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend - Project Rules render helpers (Phase 5B-5G, MC2 split).
+// WorkTrace WebView frontend - Project Rules render helpers.
 // renderProjectRuleProject / renderProjectRuleRow and private render helpers.
 // Loaded after rules.js, before rule / keyword / folder / project action modules.
 
@@ -23,7 +23,7 @@
         var rows = rules.length ? rules.map(function (rule) {
             return App.renderProjectRuleRow(rule);
         }).join("") : '<div class="rules-project-empty">此项目暂无规则</div>';
-        // Phase 5G: project lifecycle buttons. Only render on user projects
+        // Project lifecycle buttons. Only render on user projects
         // (``editable`` / ``can_toggle`` / ``can_archive``). System/special
         // projects (``未归类`` / ``排除规则``) never get these buttons. The
         // buttons are disabled while any project lifecycle write is in
@@ -105,8 +105,8 @@
     }
     App.renderProjectRuleProject = renderProjectRuleProject;
 
-    // Phase 6G: Excluded-rule creation form. Rendered dynamically inside
-    // the ``排除规则`` card so it does NOT count as a static submit button
+    // Excluded-rule creation form. Rendered dynamically inside the
+    // ``排除规则`` card so it does NOT count as a static submit button
     // (the static contract test locks the static submit button count to 3).
     // The form has two sub-sections: keyword rule creation and folder rule
     // creation. Both call the dedicated excluded-rule bridge methods that
@@ -149,17 +149,17 @@
         var ruleKey = kind + ":" + ruleId;
         var saving = App.rulesSavingRuleKey === ruleKey;
         var deleting = App.rulesDeletingRuleKey === ruleKey;
-        // Phase 5D: disable the toggle button while any rule write is in
-        // flight on this row (toggle saving or keyword delete) or when the
-        // rule id is missing. This keeps the toggle and delete write paths
-        // from concurrently polluting the same row.
+        // Disable the toggle button while any rule write is in flight on
+        // this row (toggle saving or keyword delete) or when the rule id is
+        // missing. This keeps the toggle and delete write paths from
+        // concurrently polluting the same row.
         var disabledAttr = (App.rulesSavingRuleKey || App.rulesDeletingRuleKey || !ruleId) ? " disabled" : "";
         var buttonLabel = saving ? "正在更新…" : actionLabel;
-        // Phase 5D / 5F: only keyword rules get delete + edit buttons. When
-        // editing this row, render the inline edit form in place of the
-        // normal row body so the user can edit the keyword text without
-        // leaving the row. The toggle and delete buttons stay disabled while
-        // keyword edit / save is in flight so the write paths cannot pollute
+        // Only keyword rules get delete + edit buttons. When editing this
+        // row, render the inline edit form in place of the normal row body
+        // so the user can edit the keyword text without leaving the row.
+        // The toggle and delete buttons stay disabled while keyword edit /
+        // save is in flight so the write paths cannot pollute each other.
         // each other.
         var deleteButton = "";
         var keywordEditButton = "";
@@ -179,12 +179,12 @@
             var deleteLabel = deleting ? "正在删除…" : "删除";
             deleteButton = '  <button class="rules-keyword-delete-button" type="button" data-rule-kind="keyword" data-rule-id="' + count(ruleId) + '"' + deleteDisabled + '>' + deleteLabel + '</button>';
         }
-        // Phase 5E: folder rules get inline edit + delete buttons. When
-        // editing this row, render the inline edit form in place of the
-        // normal row body so the user can edit folder_path and recursive
-        // without leaving the row. The toggle button stays disabled while
-        // folder edit / delete is in flight so the four write paths cannot
-        // pollute each other.
+        // Folder rules get inline edit + delete buttons. When editing this
+        // row, render the inline edit form in place of the normal row body
+        // so the user can edit folder_path and recursive without leaving
+        // the row. The toggle button stays disabled while folder edit /
+        // delete is in flight so the four write paths cannot pollute each
+        // other.
         var folderButtons = "";
         var folderEditing = false;
         if (kind === "folder" && ruleId) {
@@ -200,11 +200,11 @@
             folderButtons = '  <button class="rules-folder-edit-button" type="button" data-rule-kind="folder" data-rule-id="' + count(ruleId) + '"' + folderBtnDisabled + '>' + editLabel + '</button>';
             folderButtons += '  <button class="rules-folder-delete-button" type="button" data-rule-kind="folder" data-rule-id="' + count(ruleId) + '"' + folderBtnDisabled + '>' + folderDeleteLabel + '</button>';
         }
-        // Phase 5H: every folder / keyword rule with a valid id gets a
-        // "预览影响" (read-only impact preview) and "应用到历史记录" (safe
-        // single-rule backfill) button. The preview button stays enabled for
-        // disabled rules (preview is informational and returns zero counts);
-        // the backfill button is disabled for disabled rules because backfill
+        // Every folder / keyword rule with a valid id gets a "预览影响"
+        // (read-only impact preview) and "应用到历史记录" (safe single-rule
+        // backfill) button. The preview button stays enabled for disabled
+        // rules (preview is informational and returns zero counts); the
+        // backfill button is disabled for disabled rules because backfill
         // refuses to apply a disabled rule (``rule_disabled``). Both buttons
         // are disabled while any rule write is in flight so the impact paths
         // can never pollute the toggle / delete / edit / lifecycle write
@@ -233,13 +233,13 @@
             impactButtons = '  <button class="rules-preview-impact-button" type="button" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + previewBtnDisabled + '>' + previewLabel + '</button>';
             impactButtons += '  <button class="rules-backfill-button" type="button" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + backfillDisabled + '>' + backfillLabel + '</button>';
         }
-        // Phase 5I: every folder / keyword rule with a valid id gets a
-        // batch-selection checkbox as the first element of the row. The
-        // checkbox is disabled while any batch operation is in flight OR
-        // while any per-rule write is in flight on this row, so the batch
-        // selection state can never pollute an in-flight per-rule write
-        // (and vice versa). Selection lives in ``App.rulesBatchSelectedKeys``
-        // (JS memory only — no browser storage APIs).
+        // Every folder / keyword rule with a valid id gets a batch-selection
+        // checkbox as the first element of the row. The checkbox is disabled
+        // while any batch operation is in flight OR while any per-rule write
+        // is in flight on this row, so the batch selection state can never
+        // pollute an in-flight per-rule write (and vice versa). Selection
+        // lives in ``App.rulesBatchSelectedKeys`` (JS memory only — no
+        // browser storage APIs).
         var batchCheckbox = "";
         var batchSelected = false;
         if (ruleId) {
@@ -278,10 +278,10 @@
                 '</div>'
             ].join("");
         }
-        // Phase 5F: when this keyword row is being edited, render the inline
-        // edit form in place of the normal body. The edit form holds its own
-        // keyword input + save / cancel buttons. The maxlength matches the
-        // keyword create input (200 chars).
+        // When this keyword row is being edited, render the inline edit form
+        // in place of the normal body. The edit form holds its own keyword
+        // input + save / cancel buttons. The maxlength matches the keyword
+        // create input (200 chars).
         if (keywordEditing) {
             var currentKeyword = text(rule && rule.target, "");
             var keywordSaving = App.rulesUpdatingKeywordKey === ruleKey;
@@ -317,14 +317,14 @@
     }
     App.renderProjectRuleRow = renderProjectRuleRow;
 
-    // --- Phase 5H: rule impact preview / backfill result panel render ---
+    // --- rule impact preview / backfill result panel render ---
 
     function renderProjectRuleImpactPreview(ruleKey, impact) {
-        // Phase 5H: render the read-only impact preview panel below the
-        // rules list. The panel shows the rule summary, the skip / count
-        // grid, and up to 20 display-safe sample rows. No raw sensitive
-        // metadata is ever surfaced — the bridge already filtered the
-        // payload to display-safe fields.
+        // Render the read-only impact preview panel below the rules list.
+        // The panel shows the rule summary, the skip / count grid, and up
+        // to 20 display-safe sample rows. No raw sensitive metadata is
+        // ever surfaced — the bridge already filtered the payload to
+        // display-safe fields.
         if (!impact) return "";
         var rule = impact.rule || {};
         var counts = impact.counts || {};
@@ -395,9 +395,9 @@
     App.renderProjectRuleImpactPreview = renderProjectRuleImpactPreview;
 
     function renderProjectRuleBackfillResult(ruleKey, result) {
-        // Phase 5H: render the narrow backfill result panel. Shows the
-        // updated count and skip summary only; no sample rows. The panel
-        // auto-includes a close button.
+        // Render the narrow backfill result panel. Shows the updated count
+        // and skip summary only; no sample rows. The panel auto-includes a
+        // close button.
         if (!result) return "";
         var rule = result.rule || {};
         var kindLabel = rule.kind === "folder" ? "文件夹规则" : "关键词规则";
@@ -432,17 +432,17 @@
     }
     App.renderProjectRuleBackfillResult = renderProjectRuleBackfillResult;
 
-    // --- Phase 5I: selected-rule batch operations toolbar + panel -------
+    // --- selected-rule batch operations toolbar + panel -------
 
     function renderProjectRulesBatchToolbar() {
-        // Phase 5I: render the batch toolbar (selected count + 5 buttons).
-        // The toolbar is rendered into ``#rules-batch-toolbar`` by
-        // ``rules.js`` on every list render. Buttons are disabled when
-        // there is no selection OR any batch operation is in flight. The
-        // clear button is only enabled when there is a selection (it stays
-        // enabled during in-flight so the user can cancel a pending
-        // selection — but the batch in-flight guard in the handler still
-        // refuses to act while a batch op is running, so this is purely
+        // Render the batch toolbar (selected count + 5 buttons). The
+        // toolbar is rendered into ``#rules-batch-toolbar`` by ``rules.js``
+        // on every list render. Buttons are disabled when there is no
+        // selection OR any batch operation is in flight. The clear button
+        // is only enabled when there is a selection (it stays enabled
+        // during in-flight so the user can cancel a pending selection —
+        // but the batch in-flight guard in the handler still refuses to
+        // act while a batch op is running, so this is purely visual).
         // visual).
         var selectedCount = Object.keys(App.rulesBatchSelectedKeys || {}).length;
         var hasSelection = selectedCount > 0;
@@ -469,9 +469,9 @@
     App.renderProjectRulesBatchToolbar = renderProjectRulesBatchToolbar;
 
     function renderProjectRulesBatchPanel(data) {
-        // Phase 5I: render the batch panel (aggregate counts + per-rule
-        // summaries). The panel is rendered into ``#rules-batch-panel`` by
-        // the batch action handlers. ``data`` is
+        // Render the batch panel (aggregate counts + per-rule summaries).
+        // The panel is rendered into ``#rules-batch-panel`` by the batch
+        // action handlers. ``data`` is
         // ``{mode: "preview"|"apply"|"toggle", payload: {...}}``. No raw
         // sensitive activity detail is ever surfaced here — the bridge
         // already filtered the payload to display-safe aggregate fields.

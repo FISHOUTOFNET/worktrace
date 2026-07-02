@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.4 Timeline hide / soft-delete API and service layer.
+"""Tests for the Timeline hide / soft-delete API and service layer.
 
 Covers ``worktrace.api.timeline_api.hide_timeline_activity``,
 ``soft_delete_timeline_activity``, ``hide_timeline_session``,
@@ -656,7 +656,7 @@ def test_service_hide_activity_in_progress_zero_rowcount(temp_db):
         activity_service.hide_activity(aid)
 
 
-# --- Phase 3B.4.1 service-layer hardening --------------------------------
+# --- service-layer hardening --------------------------------
 #
 # These tests directly exercise the service-layer ``hide_activity`` /
 # ``soft_delete_activity`` write paths to confirm the hardening invariants
@@ -813,7 +813,7 @@ def test_service_hide_activity_does_not_modify_is_deleted(temp_db):
 
 def test_service_soft_delete_activity_does_not_modify_is_hidden(temp_db):
     """``soft_delete_activity`` must leave ``is_hidden`` unchanged (if the
-    activity was previously hidden, ``is_hidden`` stays 1)."""
+    activity is already hidden, ``is_hidden`` stays 1)."""
     aid = _seed_closed_activity()
     # Hide first, then soft delete. ``is_hidden`` must remain 1.
     activity_service.hide_activity(aid)

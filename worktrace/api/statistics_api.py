@@ -12,12 +12,12 @@ from ..services import statistics_service
 
 
 class StatisticsSummaryError(ValueError):
-    """Raised by the Phase 4A read-only statistics/export summary for known,
+    """Raised by the read-only statistics/export summary for known user-facing failures.
     user-facing failure modes.
 
     The ``code`` attribute is a stable token the WebView bridge maps to a
-    Chinese user-facing message. Using a dedicated exception (instead of
-    echoing ``ValueError`` text) keeps internal field names, ids, and SQL
+    Chinese message, so internal field names, ids, and SQL details never
+    reach the bridge.
     details out of bridge responses.
 
     Stable ``code`` values:
@@ -70,20 +70,20 @@ def get_uncategorized_duration(start_date: str, end_date: str) -> int:
 def get_statistics_export_summary(date_from: str, date_to: str) -> dict[str, Any]:
     """Return a read-only statistics + export-preview payload for a date range.
 
-    Phase 4A read-only path: this method only reads closed activities and
-    never writes to the DB, never writes a file, and never opens a save
-    dialog. The returned payload is display-safe (no raw ``window_title``,
-    ``file_path_hint``, ``full_path``, ``clipboard``, ``note``, SQL, or
+    Read-only path: only reads closed activities and never writes to the DB,
+    never writes a file, and never opens a save dialog. The returned payload
+    is display-safe (no raw ``window_title``, ``file_path_hint``,
+    ``full_path``, ``clipboard``, ``note``, SQL, or traceback).
     traceback).
 
     Raises ``StatisticsSummaryError`` with a stable ``code`` for known
     failure modes so the bridge can map to Chinese messages without echoing
     internal details.
 
-    Phase 4A.1 hardening: the service layer performs the canonical date
-    validation; this wrapper maps ``ValueError`` (with its stable code
-    token) to ``StatisticsSummaryError`` and collapses any unexpected
-    exception to ``operation_failed`` so internal details never reach the
+    The service layer performs the canonical date validation; this wrapper
+    maps ``ValueError`` (with its stable code token) to
+    ``StatisticsSummaryError`` and collapses any unexpected exception to
+    ``operation_failed`` so internal details never reach the bridge.
     bridge.
     """
     try:

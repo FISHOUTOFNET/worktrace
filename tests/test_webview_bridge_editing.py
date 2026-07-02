@@ -1,4 +1,4 @@
-"""Tests for the Phase 3A Timeline editing bridge methods.
+"""Tests for the Timeline editing bridge methods.
 
 Covers ``WebViewBridge.list_projects_for_timeline``,
 ``WebViewBridge.update_timeline_project``, and
@@ -297,7 +297,7 @@ def test_update_timeline_note_validation_error_no_sensitive_details(bridge):
 def test_bridge_module_does_not_import_backend_internals():
     """The bridge must only import worktrace.api, not services/db/collector/
     security. This is also enforced by test_ui_backend_boundary.py but is
-    re-asserted here for the Phase 3A editing surface."""
+    re-asserted here for the editing surface."""
     import worktrace.webview_ui.bridge as bridge_mod
     import inspect
 
@@ -318,7 +318,7 @@ def test_bridge_module_does_not_import_backend_internals():
         )
 
 
-# --- Phase 3A.1: Bridge input validation hardening -----------------------
+# --- Bridge input validation hardening -----------------------
 
 
 def test_update_timeline_project_rejects_bool_project_id(bridge):

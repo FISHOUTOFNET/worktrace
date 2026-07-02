@@ -1,8 +1,8 @@
-"""WebView UI entry point (Phase 1: default and only shipping UI).
+"""WebView UI entry point (default and only shipping UI).
 
 Starts a pywebview shell that talks to ``worktrace.api`` through
-``worktrace.webview_ui.bridge.WebViewBridge``. As of Phase 1, this is the
-default entry point used by ``python -m worktrace.main`` and by the packaged
+``worktrace.webview_ui.bridge.WebViewBridge``. This is the default entry
+point used by ``python -m worktrace.main`` and by the packaged
 ``WorkTrace.exe``. There is no Tkinter fallback: a missing WebView2 Runtime
 or pywebview dependency is a blocking error that exits with a non-zero code.
 
@@ -75,8 +75,8 @@ def _report_runtime_missing() -> int:
     """Print a clear message when WebView2 Runtime is missing and exit.
 
     Does not raise; returns a non-zero exit code so the caller can surface
-    the message to the user. As of Phase 1 WorkTrace ships only the WebView
-    UI: the user must install the WebView2 Runtime and restart WorkTrace.
+    the message to the user. WorkTrace ships only the WebView UI: the user
+    must install the WebView2 Runtime and restart WorkTrace.
     """
     msg = missing_runtime_message()
     print(msg, file=sys.stderr)
@@ -105,22 +105,22 @@ def main() -> int:
     runtime.initialize()
     app_api.set_runtime(runtime)
 
-    # Phase 6E first-run startup gate: mirror the legacy Tkinter
-    # ``_startup_privacy_gate`` semantics. Only auto-start the collector
-    # when the user has already accepted the first-run privacy notice.
-    # If the notice has not been accepted, leave the collector stopped;
-    # the frontend first-run overlay will display the notice and, on
-    # accept, call ``accept_first_run_notice`` through the bridge which
-    # starts the collector. Fail closed on read error: do not start the
-    # collector, log, but do not block WebView startup (the frontend
+    # First-run privacy gate: only auto-start the collector when the user
+    # has already accepted the first-run privacy notice. If the notice has
+    # not been accepted, leave the collector stopped; the frontend
+    # first-run overlay will display the notice and, on accept, call
+    # ``accept_first_run_notice`` through the bridge which starts the
+    # collector. Fail closed on read error: do not start the collector,
+    # log, but do not block WebView startup (the frontend will call
+    # ``get_first_run_notice`` and surface the error).
     # will call ``get_first_run_notice`` and surface the error).
     #
-    # Phase 6G: the folder index worker is also gated here. The worker
-    # probes local ``os.path.exists(file_path)`` for ready indexes,
-    # which is privacy-relevant local path probing; it must not start
-    # before the user has accepted the privacy notice. Background
-    # workers are started before the collector so the index is warm by
-    # the time the collector starts matching activities.
+    # The folder index worker is also gated here. The worker probes local
+    # ``os.path.exists(file_path)`` for ready indexes, which is
+    # privacy-relevant local path probing; it must not start before the
+    # user has accepted the privacy notice. Background workers are started
+    # before the collector so the index is warm by the time the collector
+    # starts matching activities.
     try:
         notice_accepted = settings_api.first_run_notice_accepted()
     except Exception:
@@ -150,11 +150,11 @@ def main() -> int:
     index_path = resource_path("index.html")
 
     try:
-        # Phase 4B: capture the window so the bridge can open a native save
-        # dialog for the CSV export. ``create_window`` returns the Window
-        # object before ``start()`` runs the main loop; the dialog is only
-        # invoked later from a JS callback (after the WebView is live), so
-        # injecting the reference here is safe and does not start the GUI.
+        # Capture the window so the bridge can open a native save dialog for
+        # the CSV export. ``create_window`` returns the Window object before
+        # ``start()`` runs the main loop; the dialog is only invoked later
+        # from a JS callback (after the WebView is live), so injecting the
+        # reference here is safe and does not start the GUI.
         window = webview.create_window(
             title="WorkTrace",
             url=str(index_path),

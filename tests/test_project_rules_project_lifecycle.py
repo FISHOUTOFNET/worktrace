@@ -1,7 +1,7 @@
-"""Phase 5G API / service regression locks for project lifecycle foundation.
+"""API / service regression locks for project lifecycle foundation.
 
-These tests lock the narrow ``project_api`` lifecycle facades introduced in
-Phase 5G:
+These tests lock the narrow ``project_api`` lifecycle facades:
+5G:
 
 - ``create_project_for_rules(name, description)``
 - ``update_project_for_rules(project_id, name, description)``
@@ -818,7 +818,7 @@ def test_lifecycle_does_not_invoke_backfill(temp_db, monkeypatch):
 
 
 def test_delete_project_not_exposed_on_api_facade(temp_db):
-    # Phase 5G regression lock: hard delete must NOT be reachable via the
+    # Regression lock: hard delete must NOT be reachable via the
     # ``*_for_rules`` lifecycle facades. The bridge must not call
     # ``project_api.delete_project`` either; that lock is enforced in the
     # bridge / static contract tests. Here we only assert that the
@@ -886,11 +886,11 @@ def test_get_project_rules_payload_includes_display_safe_flags(temp_db):
     assert UNCATEGORIZED_PROJECT not in by_name
 
 
-# --- Phase 6G: excluded-project rule-target eligibility locks ----------
+# --- excluded-project rule-target eligibility locks ----------
 
 
 def test_list_rule_target_projects_excludes_excluded_project(temp_db):
-    # Phase 6G foundational lock: the special ``排除规则`` project is created
+    # foundational lock: the special ``排除规则`` project is created
     # with ``enabled = 0``, so ``list_rule_target_projects()`` must NOT
     # include it. This is why the normal ``create_project_keyword_rule`` /
     # ``create_project_folder_rule`` facades reject it as
@@ -909,7 +909,7 @@ def test_list_rule_target_projects_excludes_excluded_project(temp_db):
 
 
 def test_excluded_project_cannot_be_made_rule_target_via_lifecycle(temp_db):
-    # Phase 6G consolidated lock: the excluded project cannot be enabled or
+    # consolidated lock: the excluded project cannot be enabled or
     # archived via the lifecycle API, so it can never become a rule target.
     # After the rejected attempts it stays ``enabled = 0`` /
     # ``is_archived = 0`` and remains absent from

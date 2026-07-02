@@ -1,8 +1,8 @@
 """Pywebview dialog helper mixin for the WebView bridge.
 
-This module was split out of ``bridge.py`` so that the Settings / Statistics
-mixins can call native save / open file dialogs without importing ``bridge.py``
-(which would create a circular dependency).
+Provides native save / open file dialogs used by the Settings / Statistics
+mixins. Lives outside ``bridge.py`` so those mixins can call the dialogs
+without importing ``bridge.py`` (which would create a circular dependency).
 
 Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 
@@ -28,8 +28,8 @@ from ..api.export_api import StatisticsExportError
 class BridgeDialogMixin:
     """Pywebview dialog helpers shared by Statistics and Settings mixins.
 
-    The mixin is mixed into ``WebViewBridge`` in ``bridge.py``. It must NOT
-    add ``__init__``; it relies on the host class having ``self._window``
+    Mixed into ``WebViewBridge`` in ``bridge.py``. It must NOT add
+    ``__init__``; it relies on the host class having ``self._window``
     (injected via ``set_window()``).
     """
 

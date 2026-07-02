@@ -1,19 +1,18 @@
-"""Phase 6A / 6B / 6C / 6D / 6E — Settings / Privacy WebView static-contract tests.
+"""Settings / Privacy WebView static-contract tests.
 
 These tests read the bundled frontend resources (``index.html`` /
 ``js/*.js`` / ``styles.css`` / ``WorkTrace.spec``) directly without starting
-the GUI. They lock the Settings / Privacy page contracts for Phase 6D
-(read-only status foundation + clipboard capture toggle write + encrypted
-backup export + encrypted backup manifest preview + encrypted backup import
-+ clear-all-local-data) and Phase 6E (first-run privacy notice gate +
-read-only view from Settings): the page must be migrated (no placeholder),
-the required DOM ids must exist, ``settings.js`` must be loaded in the
-correct order, and the JS may only call ``get_settings_privacy_status``,
-``set_clipboard_capture_enabled``, ``export_encrypted_backup``,
-``preview_encrypted_backup_manifest``, ``import_encrypted_backup``,
-``clear_all_local_data``, ``get_first_run_notice``, and
-``accept_first_run_notice`` (no save / set-setting / parse-manifest /
-arbitrary file-dialog write paths).
+the GUI. They lock the Settings / Privacy page contracts (read-only status
+foundation + clipboard capture toggle write + encrypted backup export +
+encrypted backup manifest preview + encrypted backup import +
+clear-all-local-data) and the first-run privacy notice gate (read-only
+view from Settings): the required DOM ids must exist, ``settings.js`` must
+be loaded in the correct order, and the JS may only call
+``get_settings_privacy_status``, ``set_clipboard_capture_enabled``,
+``export_encrypted_backup``, ``preview_encrypted_backup_manifest``,
+``import_encrypted_backup``, ``clear_all_local_data``,
+``get_first_run_notice``, and ``accept_first_run_notice`` (no save /
+set-setting / parse-manifest / arbitrary file-dialog write paths).
 """
 
 from __future__ import annotations
@@ -38,21 +37,21 @@ from static_helpers import (
 
 
 def test_index_html_settings_nav_entry_6a() -> None:
-    """Phase 6A: the sidebar nav must still contain the 设置与隐私 entry."""
+    """the sidebar nav must still contain the 设置与隐私 entry."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'data-page="settings"' in source
     assert "设置与隐私" in source
 
 
 def test_index_html_settings_page_section_is_migrated_6a() -> None:
-    """Phase 6A: the page-settings section must not contain the old
+    """the page-settings section must not contain the old
     migration placeholder copy."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-settings"')
     assert pos != -1, "page-settings section must exist"
     section = source[pos:pos + 1200]
     assert "WebView 迁移中" not in section
-    # The migrated page must announce its purpose in user language.
+    # The page must announce its purpose in user language.
     assert "设置与隐私" in section
     assert "管理本地隐私设置" in section
 
@@ -71,8 +70,8 @@ def test_index_html_settings_page_no_refresh_status_text() -> None:
     )
 
 
-def test_index_html_settings_page_no_dev_phase_write_text() -> None:
-    """The Settings page must not contain dev-phase write restriction
+def test_index_html_settings_page_no_unavailable_write_text() -> None:
+    """The Settings page must not contain unavailable write restriction
     copy like '其他写操作暂不开放'."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-settings"')
@@ -86,7 +85,7 @@ def test_index_html_settings_page_no_dev_phase_write_text() -> None:
 
 def test_index_html_no_dev_phase_copy_in_main_ui() -> None:
     """The main UI (index.html user-visible DOM text) must NOT contain
-    dev-phase copy. These phrases imply a future roadmap and should be
+    unavailable-feature copy. These phrases imply a future roadmap and should be
     removed or rewritten in user language. This test only checks
     user-visible DOM text in index.html, NOT JS comments, Python
     docstrings, docs, or test descriptions."""
@@ -101,12 +100,12 @@ def test_index_html_no_dev_phase_copy_in_main_ui() -> None:
         "本阶段",
     ):
         assert forbidden not in source, (
-            "index.html must not contain dev-phase copy: " + forbidden
+            "index.html must not contain unavailable-feature copy: " + forbidden
         )
 
 
 def test_index_html_settings_required_dom_ids_6a() -> None:
-    """Phase 6A / 6B / 6C / 6D: the page-settings section must define the
+    """/ 6B / 6C / 6D: the page-settings section must define the
     required DOM ids."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for dom_id in (
@@ -117,18 +116,18 @@ def test_index_html_settings_required_dom_ids_6a() -> None:
         "settings-privacy-card",
         "settings-backup-card",
         "settings-danger-card",
-        # Phase 6B: clipboard capture toggle control
+        # clipboard capture toggle control
         "settings-clipboard-toggle",
         "settings-clipboard-toggle-label",
         "settings-clipboard-toggle-status",
-        # Phase 6C: encrypted backup export + manifest preview controls
+        # encrypted backup export + manifest preview controls
         "settings-backup-passphrase",
         "settings-backup-passphrase-confirm",
         "settings-backup-export-btn",
         "settings-backup-manifest-btn",
         "settings-backup-status",
         "settings-backup-manifest",
-        # Phase 6D: encrypted backup import + clear-all controls
+        # encrypted backup import + clear-all controls
         "settings-backup-import-passphrase",
         "settings-backup-import-confirm",
         "settings-backup-import-btn",
@@ -146,7 +145,7 @@ def test_index_html_settings_required_dom_ids_6a() -> None:
 
 
 def test_index_html_loads_settings_js_6a() -> None:
-    """Phase 6A: index.html must load ``js/settings.js`` exactly once and
+    """index.html must load ``js/settings.js`` exactly once and
     in the position required by ``ALL_JS_FILES`` (between ``statistics.js``
     and ``rules.js``)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -163,7 +162,7 @@ def test_index_html_loads_settings_js_6a() -> None:
 
 
 def test_all_js_files_includes_settings_js_6a() -> None:
-    """Phase 6A: ``ALL_JS_FILES`` must include ``settings.js`` between
+    """``ALL_JS_FILES`` must include ``settings.js`` between
     ``statistics.js`` and ``rules.js``."""
     assert "settings.js" in ALL_JS_FILES
     stats_idx = ALL_JS_FILES.index("statistics.js")
@@ -175,7 +174,7 @@ def test_all_js_files_includes_settings_js_6a() -> None:
 
 
 def test_worktrace_spec_bundles_settings_js_6a() -> None:
-    """Phase 6A: ``WorkTrace.spec`` must bundle ``settings.js`` so the
+    """``WorkTrace.spec`` must bundle ``settings.js`` so the
     PyInstaller build ships the new module."""
     spec = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
     assert "settings.js" in spec, (
@@ -184,7 +183,7 @@ def test_worktrace_spec_bundles_settings_js_6a() -> None:
 
 
 def test_settings_js_exists_on_disk_6a() -> None:
-    """Phase 6A: the ``settings.js`` module file must exist on disk."""
+    """the ``settings.js`` module file must exist on disk."""
     assert (JS_DIR / "settings.js").is_file(), (
         "worktrace/webview_ui/js/settings.js must exist"
     )
@@ -194,7 +193,7 @@ def test_settings_js_exists_on_disk_6a() -> None:
 
 
 def test_settings_js_defines_load_settings_privacy_status_6a() -> None:
-    """Phase 6A: settings.js must define ``App.loadSettingsPrivacyStatus``
+    """settings.js must define ``App.loadSettingsPrivacyStatus``
     and call ``App.callBridge("get_settings_privacy_status")``."""
     source = read_js("settings.js")
     assert "App.loadSettingsPrivacyStatus" in source
@@ -202,7 +201,7 @@ def test_settings_js_defines_load_settings_privacy_status_6a() -> None:
 
 
 def test_settings_js_only_calls_allowed_bridge_methods_6b() -> None:
-    """Phase 6E: settings.js may only call ``get_settings_privacy_status``,
+    """settings.js may only call ``get_settings_privacy_status``,
     ``set_clipboard_capture_enabled``, ``export_encrypted_backup``,
     ``preview_encrypted_backup_manifest``, ``import_encrypted_backup``,
     ``clear_all_local_data``, ``get_first_run_notice``, and
@@ -218,7 +217,7 @@ def test_settings_js_only_calls_allowed_bridge_methods_6b() -> None:
     assert 'App.callBridge("preview_encrypted_backup_manifest"' in source
     assert 'App.callBridge("import_encrypted_backup"' in source
     assert 'App.callBridge("clear_all_local_data"' in source
-    # Phase 6E: first-run notice gate + read-only view bridge methods.
+    # first-run notice gate + read-only view bridge methods.
     assert 'App.callBridge("get_first_run_notice")' in source
     assert 'App.callBridge("accept_first_run_notice")' in source
     # Every other write-side bridge method is still forbidden. Note:
@@ -238,7 +237,7 @@ def test_settings_js_only_calls_allowed_bridge_methods_6b() -> None:
 
 
 def test_settings_js_does_not_use_network_or_storage_apis_6a() -> None:
-    """Phase 6A / 6B: settings.js must not use any network, storage, or
+    """/ 6B: settings.js must not use any network, storage, or
     browser clipboard API."""
     source = read_js("settings.js")
     for forbidden in (
@@ -257,7 +256,7 @@ def test_settings_js_does_not_use_network_or_storage_apis_6a() -> None:
 
 
 def test_settings_js_catch_does_not_read_error_message_6a() -> None:
-    """Phase 6A: settings.js catch blocks must not read ``.message`` on
+    """settings.js catch blocks must not read ``.message`` on
     the caught error (never surface raw exception text)."""
     source = read_js("settings.js")
     # ``.message`` access would appear as either ``err.message`` or
@@ -269,7 +268,7 @@ def test_settings_js_catch_does_not_read_error_message_6a() -> None:
 
 
 def test_settings_js_uses_text_content_not_inner_html_6a() -> None:
-    """Phase 6A: settings.js dynamic rendering must use ``textContent``;
+    """settings.js dynamic rendering must use ``textContent``;
     ``innerHTML`` is forbidden for dynamic content."""
     source = read_js("settings.js")
     assert "textContent" in source
@@ -277,15 +276,12 @@ def test_settings_js_uses_text_content_not_inner_html_6a() -> None:
 
 
 def test_settings_js_no_clickable_write_buttons_6a() -> None:
-    """Phase 6A / 6C / 6D: the Settings / Privacy page must not surface any
-    clickable save / clipboard-toggle write button. Phase 6C explicitly
-    allows the encrypted backup export and manifest preview buttons, so
-    export-button patterns are no longer forbidden here; Phase 6D
-    explicitly allows the scoped import button (``settings-backup-import-btn``)
-    and the scoped clear-all button (``settings-clear-local-data-btn``), so
-    the import-btn / clear-btn patterns are no longer forbidden here. The
-    precise allowed / forbidden DOM ids are locked by
-    ``test_index_html_no_forbidden_settings_buttons_6c``."""
+    """The Settings / Privacy page must not surface any clickable save /
+    clipboard-toggle write button. The encrypted backup export and manifest
+    preview buttons are allowed, as is the scoped import button
+    (``settings-backup-import-btn``) and the scoped clear-all button
+    (``settings-clear-local-data-btn``). The precise allowed / forbidden
+    DOM ids are locked by ``test_index_html_no_forbidden_settings_buttons_6c``."""
     source = read_js("settings.js")
     lowered = source.lower()
     for forbidden in (
@@ -303,10 +299,10 @@ def test_settings_js_no_clickable_write_buttons_6a() -> None:
 
 
 def test_index_html_no_settings_write_buttons_6a() -> None:
-    """Phase 6A / 6B / 6D: index.html page-settings must not include any
+    """/ 6B / 6D: index.html page-settings must not include any
     save / path / file-dialog write button id, and must not include the
     ambiguous shortcut ids (without the ``-backup-`` / ``-clear-local-data``
-    segments). Phase 6D allows the scoped ``settings-backup-import-btn``
+    segments). The import/clear allows the scoped ``settings-backup-import-btn``
     and ``settings-clear-local-data-btn`` ids; the ambiguous shortcut ids
     ``settings-import-btn`` / ``settings-clear-btn`` /
     ``settings-clear-all-btn`` remain forbidden. The clipboard toggle is
@@ -326,7 +322,7 @@ def test_index_html_no_settings_write_buttons_6a() -> None:
         "settings-clipboard-toggle-btn",
         "settings-save-path-btn",
         "settings-set-path-btn",
-        # Phase 6B: explicit forbidden ids from the spec.
+        # explicit forbidden ids from the spec.
         "settings-path-btn",
         "settings-file-dialog-btn",
         "settings-manifest-btn",
@@ -338,7 +334,7 @@ def test_index_html_no_settings_write_buttons_6a() -> None:
 
 
 def test_settings_js_state_variables_declared_6a() -> None:
-    """Phase 6A: core.js must declare the settings state variables used by
+    """core.js must declare the settings state variables used by
     the lazy-load guard (settingsLoaded / settingsLoading /
     settingsRequestToken)."""
     source = read_js("core.js")
@@ -353,7 +349,7 @@ def test_settings_js_state_variables_declared_6a() -> None:
 
 
 def test_settings_js_lazy_load_in_switch_page_6a() -> None:
-    """Phase 6A: switchPage must lazy-load the settings status when
+    """switchPage must lazy-load the settings status when
     navigating to the page for the first time."""
     source = read_js("init.js")
     pos = source.find("function switchPage")
@@ -378,7 +374,7 @@ def test_settings_js_no_refresh_button_binding_in_init_buttons() -> None:
 
 
 def test_styles_css_has_settings_scoped_classes_6a() -> None:
-    """Phase 6A: styles.css must scope the Settings / Privacy page CSS
+    """styles.css must scope the Settings / Privacy page CSS
     under ``settings-*`` classes."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     for cls in (
@@ -396,21 +392,21 @@ def test_styles_css_has_settings_scoped_classes_6a() -> None:
         assert cls in source, "styles.css must define class: " + cls
 
 
-# --- Phase 6B: clipboard capture toggle write contract ------------------
+# --- clipboard capture toggle write contract ------------------
 
 
 def test_core_js_declares_settings_write_in_progress_6b() -> None:
-    """Phase 6B: core.js must declare ``settingsWriteInProgress`` so the
+    """core.js must declare ``settingsWriteInProgress`` so the
     toggle write guard is separate from the read-state ``settingsLoading``
     flag (a write in flight must not pollute the read-state guard)."""
     source = read_js("core.js")
     assert "settingsWriteInProgress" in source, (
-        "core.js must declare settingsWriteInProgress for Phase 6B"
+        "core.js must declare settingsWriteInProgress"
     )
 
 
 def test_settings_js_defines_toggle_write_helpers_6b() -> None:
-    """Phase 6B: settings.js must define the toggle write helper functions
+    """settings.js must define the toggle write helper functions
     (setSettingsControlsDisabled / setCaptureToggleStatus /
     renderCaptureToggle / setCaptureEnabled /
     handleCaptureToggleChange)."""
@@ -431,7 +427,7 @@ def test_settings_js_defines_toggle_write_helpers_6b() -> None:
 
 
 def test_settings_js_toggle_change_handler_bound_in_init_6b() -> None:
-    """Phase 6B: initButtons must bind the ``settings-clipboard-toggle``
+    """initButtons must bind the ``settings-clipboard-toggle``
     change event to ``App.handleCaptureToggleChange`` so the toggle
     write path is wired without a separate submit button."""
     source = read_js("init.js")
@@ -444,9 +440,9 @@ def test_settings_js_toggle_change_handler_bound_in_init_6b() -> None:
 
 
 def test_settings_js_disables_controls_during_load_and_write_6b() -> None:
-    """Phase 6B / 6C: settings.js must disable the refresh button, the
+    """/ 6C: settings.js must disable the refresh button, the
     capture toggle, and the backup controls while any Settings operation
-    is in flight. Phase 6C introduced ``anySettingsOperationInProgress``
+    is in flight. The backup operations use ``anySettingsOperationInProgress``
     which combines ``settingsLoading``, ``settingsWriteInProgress``,
     ``settingsBackupExportInProgress``, and ``settingsBackupManifestInProgress``;
     ``setSettingsLoading`` and ``renderCaptureToggle`` delegate to it so
@@ -482,7 +478,7 @@ def test_settings_js_disables_controls_during_load_and_write_6b() -> None:
 
 
 def test_settings_js_toggle_write_failure_recovers_state_6b() -> None:
-    """Phase 6B: the toggle write path must restore the previous checked
+    """the toggle write path must restore the previous checked
     state (``!enabled``) on failure so the UI never shows a stale toggle.
     Both the data-failure branch (``!data``) and the catch block must
     contain the restore logic."""
@@ -504,7 +500,7 @@ def test_settings_js_toggle_write_failure_recovers_state_6b() -> None:
 
 
 def test_settings_js_render_status_syncs_toggle_6b() -> None:
-    """Phase 6B: renderSettingsStatus must call renderCaptureToggle so
+    """renderSettingsStatus must call renderCaptureToggle so
     the toggle's checked / disabled / status text is re-synced from the
     latest status snapshot after both a successful read and a successful
     write."""
@@ -516,7 +512,7 @@ def test_settings_js_render_status_syncs_toggle_6b() -> None:
 
 
 def test_styles_css_has_toggle_classes_6b() -> None:
-    """Phase 6B: styles.css must define the ``.settings-*`` toggle classes
+    """styles.css must define the ``.settings-*`` toggle classes
     used by the clipboard capture toggle row."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     for cls in (
@@ -530,24 +526,24 @@ def test_styles_css_has_toggle_classes_6b() -> None:
         )
 
 
-# --- Phase 6C: encrypted backup export + manifest preview contract ------
+# --- encrypted backup export + manifest preview contract ------
 
 
 def test_core_js_declares_settings_backup_state_6c() -> None:
-    """Phase 6C: core.js must declare ``settingsBackupExportInProgress``
+    """core.js must declare ``settingsBackupExportInProgress``
     and ``settingsBackupManifestInProgress`` as separate state flags so
     backup operations never race the clipboard toggle write."""
     source = read_js("core.js")
     assert "settingsBackupExportInProgress" in source, (
-        "core.js must declare settingsBackupExportInProgress for Phase 6C"
+        "core.js must declare settingsBackupExportInProgress"
     )
     assert "settingsBackupManifestInProgress" in source, (
-        "core.js must declare settingsBackupManifestInProgress for Phase 6C"
+        "core.js must declare settingsBackupManifestInProgress"
     )
 
 
 def test_settings_js_defines_backup_helpers_6c() -> None:
-    """Phase 6C: settings.js must define and expose the backup helper
+    """settings.js must define and expose the backup helper
     functions (setSettingsBackupControlsDisabled / setSettingsBackupStatus
     / clearSettingsBackupStatus / renderBackupManifest /
     exportEncryptedBackup / previewEncryptedBackupManifest)."""
@@ -569,12 +565,11 @@ def test_settings_js_defines_backup_helpers_6c() -> None:
 
 
 def test_settings_js_backup_catch_does_not_read_error_message_6c() -> None:
-    """Phase 6C: the backup export / manifest preview catch blocks must
+    """the backup export / manifest preview catch blocks must
     not read ``.message`` on the caught error (never surface raw
     exception text)."""
     source = read_js("settings.js")
-    # The whole module must not read .message in any catch (Phase 6A
-    # already enforced this; Phase 6C extends it to the new functions).
+    # The whole module must not read .message in any catch.
     for forbidden in ("err.message", "error.message", "e.message"):
         assert forbidden not in source, (
             "settings.js must not read .message in catch: " + forbidden
@@ -582,7 +577,7 @@ def test_settings_js_backup_catch_does_not_read_error_message_6c() -> None:
 
 
 def test_settings_js_backup_render_uses_text_content_6c() -> None:
-    """Phase 6C: renderBackupManifest must render manifest fields via
+    """renderBackupManifest must render manifest fields via
     ``textContent`` only; ``innerHTML`` is already forbidden module-wide."""
     source = read_js("settings.js")
     pos = source.find("function renderBackupManifest")
@@ -594,7 +589,7 @@ def test_settings_js_backup_render_uses_text_content_6c() -> None:
 
 
 def test_settings_js_backup_does_not_persist_passphrase_6c() -> None:
-    """Phase 6C: the passphrase must never be saved to ``App`` global
+    """the passphrase must never be saved to ``App`` global
     state. The export function reads the input values into local
     variables and clears the inputs after the call; it must NOT assign
     the passphrase to any ``App.`` property."""
@@ -617,7 +612,7 @@ def test_settings_js_backup_does_not_persist_passphrase_6c() -> None:
 
 
 def test_settings_js_backup_no_inner_html_in_manifest_render_6c() -> None:
-    """Phase 6C: the manifest preview rendering must never use
+    """the manifest preview rendering must never use
     ``innerHTML``; only ``textContent`` and ``createElement`` are
     allowed for dynamic content."""
     source = read_js("settings.js")
@@ -625,7 +620,7 @@ def test_settings_js_backup_no_inner_html_in_manifest_render_6c() -> None:
 
 
 def test_init_js_binds_backup_buttons_6c() -> None:
-    """Phase 6C: initButtons must bind the ``settings-backup-export-btn``
+    """initButtons must bind the ``settings-backup-export-btn``
     click event to ``App.exportEncryptedBackup`` and the
     ``settings-backup-manifest-btn`` click event to
     ``App.previewEncryptedBackupManifest``."""
@@ -640,7 +635,7 @@ def test_init_js_binds_backup_buttons_6c() -> None:
 
 
 def test_styles_css_has_backup_scoped_classes_6c() -> None:
-    """Phase 6C: styles.css must define the ``.settings-backup-*``
+    """styles.css must define the ``.settings-backup-*``
     scoped classes used by the encrypted backup export + manifest
     preview controls."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
@@ -661,9 +656,9 @@ def test_styles_css_has_backup_scoped_classes_6c() -> None:
 
 
 def test_index_html_no_forbidden_settings_buttons_6c() -> None:
-    """Phase 6C: index.html page-settings must not include the forbidden
+    """index.html page-settings must not include the forbidden
     write button ids (import / clear / clear-all / save / set-path).
-    The Phase 6C ``settings-backup-export-btn`` and
+    the ``settings-backup-export-btn`` and
     ``settings-backup-manifest-btn`` are the only allowed backup
     buttons; ``settings-export-btn`` / ``settings-manifest-btn``
     (without the ``-backup-`` segment) remain forbidden so no
@@ -691,9 +686,9 @@ def test_index_html_no_forbidden_settings_buttons_6c() -> None:
 
 
 def test_settings_js_backup_no_network_storage_clipboard_6c() -> None:
-    """Phase 6C: the backup functions must not use any network, storage,
+    """the backup functions must not use any network, storage,
     or browser clipboard API. (Module-wide check; reaffirmed for the
-    new Phase 6C functions.)"""
+    new functions.)"""
     source = read_js("settings.js")
     for forbidden in (
         "fetch(",
@@ -710,28 +705,28 @@ def test_settings_js_backup_no_network_storage_clipboard_6c() -> None:
         )
 
 
-# --- Phase 6D: encrypted backup import + clear-all-local-data contract ---
+# --- encrypted backup import + clear-all-local-data contract ---
 
 
 def test_core_js_declares_settings_import_and_clear_state_6d() -> None:
-    """Phase 6D: core.js must declare ``settingsBackupImportInProgress``
+    """core.js must declare ``settingsBackupImportInProgress``
     and ``settingsClearAllInProgress`` as separate state flags so an
     import / clear in flight never races the export / manifest / toggle
-    write. These flags are distinct from the Phase 6B
-    ``settingsWriteInProgress`` and the Phase 6C
+    write. These flags are distinct from the
+    ``settingsWriteInProgress`` and the
     ``settingsBackupExportInProgress`` / ``settingsBackupManifestInProgress``
     flags."""
     source = read_js("core.js")
     assert "settingsBackupImportInProgress" in source, (
-        "core.js must declare settingsBackupImportInProgress for Phase 6D"
+        "core.js must declare settingsBackupImportInProgress"
     )
     assert "settingsClearAllInProgress" in source, (
-        "core.js must declare settingsClearAllInProgress for Phase 6D"
+        "core.js must declare settingsClearAllInProgress"
     )
 
 
 def test_settings_js_defines_import_and_clear_helpers_6d() -> None:
-    """Phase 6D: settings.js must define and expose the import / clear
+    """settings.js must define and expose the import / clear
     helper functions (setSettingsImportStatus / clearSettingsImportStatus
     / setSettingsClearStatus / clearSettingsClearStatus /
     clearBackupManifestPreview / resetFrontendAfterLocalDataReplacement
@@ -757,7 +752,7 @@ def test_settings_js_defines_import_and_clear_helpers_6d() -> None:
 
 
 def test_settings_js_any_settings_operation_in_progress_includes_6d_flags_6d() -> None:
-    """Phase 6D: ``anySettingsOperationInProgress`` must reference all six
+    """``anySettingsOperationInProgress`` must reference all six
     Settings operation flags (settingsLoading / settingsWriteInProgress /
     settingsBackupExportInProgress / settingsBackupManifestInProgress /
     settingsBackupImportInProgress / settingsClearAllInProgress) so any
@@ -781,7 +776,7 @@ def test_settings_js_any_settings_operation_in_progress_includes_6d_flags_6d() -
 
 
 def test_settings_js_import_does_not_persist_passphrase_6d() -> None:
-    """Phase 6D: the import passphrase must never be saved to ``App``
+    """the import passphrase must never be saved to ``App``
     global state. The import function reads the input values into local
     variables and clears the inputs after the call; it must NOT assign
     the passphrase to any ``App.`` property."""
@@ -806,10 +801,10 @@ def test_settings_js_import_does_not_persist_passphrase_6d() -> None:
 
 
 def test_settings_js_import_clear_catch_does_not_read_error_message_6d() -> None:
-    """Phase 6D: the import / clear catch blocks must not read ``.message``
+    """the import / clear catch blocks must not read ``.message``
     on the caught error (never surface raw exception text)."""
     source = read_js("settings.js")
-    # Whole-module check (Phase 6A already enforced this; Phase 6D
+    # Whole-module check (extended to the new functions).
     # extends it to the new functions).
     for forbidden in ("err.message", "error.message", "e.message"):
         assert forbidden not in source, (
@@ -818,7 +813,7 @@ def test_settings_js_import_clear_catch_does_not_read_error_message_6d() -> None
 
 
 def test_settings_js_import_clear_uses_text_content_6d() -> None:
-    """Phase 6D: the import / clear status rendering must use
+    """the import / clear status rendering must use
     ``textContent`` only; ``innerHTML`` is already forbidden module-wide."""
     source = read_js("settings.js")
     assert "innerHTML" not in source
@@ -831,7 +826,7 @@ def test_settings_js_import_clear_uses_text_content_6d() -> None:
 
 
 def test_settings_js_reset_frontend_after_local_data_replacement_6d() -> None:
-    """Phase 6D: ``resetFrontendAfterLocalDataReplacement`` must clear the
+    """``resetFrontendAfterLocalDataReplacement`` must clear the
     Timeline / Statistics / Project Rules caches and per-session /
     per-activity selection state so stale ids cannot be operated on after
     the local DB is replaced by an import or a clear-all."""
@@ -854,7 +849,7 @@ def test_settings_js_reset_frontend_after_local_data_replacement_6d() -> None:
 
 
 def test_settings_js_import_clear_confirm_literals_present_6d() -> None:
-    """Phase 6D: the import / clear paths must use the explicit Chinese
+    """the import / clear paths must use the explicit Chinese
     confirmation literals ``导入并替换`` (import) and ``清空本地数据``
     (clear) so the user must type the exact phrase to trigger the
     destructive operation."""
@@ -864,7 +859,7 @@ def test_settings_js_import_clear_confirm_literals_present_6d() -> None:
 
 
 def test_settings_js_import_clear_refresh_status_and_overview_6d() -> None:
-    """Phase 6D: the import / clear success path must trigger a Settings
+    """the import / clear success path must trigger a Settings
     status refresh (``App.loadSettingsPrivacyStatus``) and refresh the
     global overview / recent / status (``App.refreshAll``) so the main UI
     does not keep showing pre-import / pre-clear data."""
@@ -882,7 +877,7 @@ def test_settings_js_import_clear_refresh_status_and_overview_6d() -> None:
 
 
 def test_init_js_binds_import_and_clear_buttons_6d() -> None:
-    """Phase 6D: initButtons must bind the ``settings-backup-import-btn``
+    """initButtons must bind the ``settings-backup-import-btn``
     click event to ``App.importEncryptedBackup`` and the
     ``settings-clear-local-data-btn`` click event to
     ``App.clearAllLocalData``."""
@@ -897,7 +892,7 @@ def test_init_js_binds_import_and_clear_buttons_6d() -> None:
 
 
 def test_styles_css_has_import_and_clear_scoped_classes_6d() -> None:
-    """Phase 6D: styles.css must define the ``.settings-backup-import-*``
+    """styles.css must define the ``.settings-backup-import-*``
     and ``.settings-danger-*`` / ``.settings-clear-*`` scoped classes
     used by the encrypted backup import and clear-all-local-data
     controls."""
@@ -913,15 +908,15 @@ def test_styles_css_has_import_and_clear_scoped_classes_6d() -> None:
         ".settings-clear-local-data-btn",
     ):
         assert cls in source, (
-            "styles.css must define Phase 6D class: " + cls
+            "styles.css must define class: " + cls
         )
 
 
-# --- Phase 6E: First-run privacy notice contract -----------------------
+# --- First-run privacy notice contract -----------------------
 
 
 def test_index_html_defines_first_run_notice_overlay_dom_ids_6e() -> None:
-    """Phase 6E: index.html must define the first-run notice overlay DOM
+    """index.html must define the first-run notice overlay DOM
     ids. The overlay must be hidden by default (``hidden`` attribute) so
     it does not flash on already-accepted installs."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -948,7 +943,7 @@ def test_index_html_defines_first_run_notice_overlay_dom_ids_6e() -> None:
 
 
 def test_index_html_settings_page_has_read_only_view_notice_button_6e() -> None:
-    """Phase 6E: the Settings / Privacy page must include a read-only
+    """the Settings / Privacy page must include a read-only
     "查看隐私说明" button + status span so the user can re-open the notice
     without writing any setting or re-accepting. The button must NOT
     be a save / set-path / file-dialog write button."""
@@ -974,7 +969,7 @@ def test_index_html_settings_page_has_read_only_view_notice_button_6e() -> None:
 
 
 def test_index_html_first_run_gate_has_no_skip_or_later_or_cancel_6e() -> None:
-    """Phase 6E: the first-run notice overlay (gate mode) must NOT
+    """the first-run notice overlay (gate mode) must NOT
     include any skip / later / cancel button id that would allow the
     user to bypass the notice without accepting. Only the accept button
     is allowed; the close button is allowed only for the read-only view
@@ -1001,7 +996,7 @@ def test_index_html_first_run_gate_has_no_skip_or_later_or_cancel_6e() -> None:
 
 
 def test_index_html_first_run_close_button_is_hidden_by_default_6e() -> None:
-    """Phase 6E: the close button inside the first-run notice overlay
+    """the close button inside the first-run notice overlay
     must be hidden by default. It is only shown in read-only view mode
     (opened from Settings) by ``renderFirstRunNotice`` flipping the
     ``hidden`` attribute. This ensures the gate mode never offers a
@@ -1017,7 +1012,7 @@ def test_index_html_first_run_close_button_is_hidden_by_default_6e() -> None:
 
 
 def test_core_js_declares_first_run_notice_state_variables_6e() -> None:
-    """Phase 6E: core.js must declare the five first-run notice state
+    """core.js must declare the five first-run notice state
     variables so the gate / accept / view-mode guards have a single
     in-memory source of truth. None of these may be persisted to
     browser storage."""
@@ -1035,7 +1030,7 @@ def test_core_js_declares_first_run_notice_state_variables_6e() -> None:
 
 
 def test_settings_js_defines_first_run_notice_helpers_6e() -> None:
-    """Phase 6E: settings.js must define and expose the first-run notice
+    """settings.js must define and expose the first-run notice
     helper functions (loadFirstRunNotice / showFirstRunNotice /
     hideFirstRunNotice / acceptFirstRunNotice /
     openPrivacyNoticeFromSettings / renderFirstRunNotice)."""
@@ -1057,10 +1052,9 @@ def test_settings_js_defines_first_run_notice_helpers_6e() -> None:
 
 
 def test_settings_js_first_run_notice_uses_text_content_not_inner_html_6e() -> None:
-    """Phase 6E: renderFirstRunNotice must render title / highlights /
+    """renderFirstRunNotice must render title / highlights /
     notice text via ``textContent`` and ``createElement`` only.
-    ``innerHTML`` is already forbidden module-wide; this test focuses
-    on the new Phase 6E render function."""
+    ``innerHTML`` is already forbidden module-wide; this test focuses on the render function."""
     source = read_js("settings.js")
     pos = source.find("function renderFirstRunNotice")
     assert pos != -1
@@ -1068,15 +1062,15 @@ def test_settings_js_first_run_notice_uses_text_content_not_inner_html_6e() -> N
     assert "textContent" in body
     assert "createElement" in body
     assert "innerHTML" not in body
-    # The whole module still forbids innerHTML (reaffirmed for Phase 6E).
+    # The whole module still forbids innerHTML (reaffirmed).
     assert "innerHTML" not in source
 
 
 def test_settings_js_first_run_notice_catch_does_not_read_error_message_6e() -> None:
-    """Phase 6E: the first-run notice catch blocks must not read
+    """the first-run notice catch blocks must not read
     ``.message`` on the caught error (never surface raw exception text)."""
     source = read_js("settings.js")
-    # Whole-module check (Phase 6A already enforced this; Phase 6E
+    # Whole-module check (extended to the new functions).
     # extends it to the new functions).
     for forbidden in ("err.message", "error.message", "e.message"):
         assert forbidden not in source, (
@@ -1085,9 +1079,9 @@ def test_settings_js_first_run_notice_catch_does_not_read_error_message_6e() -> 
 
 
 def test_settings_js_first_run_notice_no_network_storage_clipboard_6e() -> None:
-    """Phase 6E: the first-run notice functions must not use any network,
+    """the first-run notice functions must not use any network,
     storage, or browser clipboard API. (Module-wide check; reaffirmed
-    for the new Phase 6E functions.)"""
+    for the new functions.)"""
     source = read_js("settings.js")
     for forbidden in (
         "fetch(",
@@ -1105,7 +1099,7 @@ def test_settings_js_first_run_notice_no_network_storage_clipboard_6e() -> None:
 
 
 def test_settings_js_first_run_notice_does_not_persist_notice_payload_6e() -> None:
-    """Phase 6E: the notice payload (title / highlights / notice_text)
+    """the notice payload (title / highlights / notice_text)
     must never be saved to ``App`` global state as a long-lived
     property. The render function reads from the local ``data``
     argument only; the load / accept / view functions do not assign
@@ -1128,7 +1122,7 @@ def test_settings_js_first_run_notice_does_not_persist_notice_payload_6e() -> No
 
 
 def test_settings_js_load_first_run_notice_shows_gate_when_unaccepted_6e() -> None:
-    """Phase 6E: ``loadFirstRunNotice`` must set
+    """``loadFirstRunNotice`` must set
     ``App.firstRunNoticeRequired = true`` and call ``showFirstRunNotice``
     with mode ``"gate"`` when the backend reports
     ``result.accepted === false``. This locks the blocking-gate behavior
@@ -1144,7 +1138,7 @@ def test_settings_js_load_first_run_notice_shows_gate_when_unaccepted_6e() -> No
 
 
 def test_settings_js_accept_first_run_notice_clears_required_and_hides_gate_6e() -> None:
-    """Phase 6E: ``acceptFirstRunNotice`` must clear
+    """``acceptFirstRunNotice`` must clear
     ``App.firstRunNoticeRequired`` and call ``hideFirstRunNotice`` on
     success. It must also call ``App.refreshAll`` so the sidebar
     reflects the now-running collector."""
@@ -1158,7 +1152,7 @@ def test_settings_js_accept_first_run_notice_clears_required_and_hides_gate_6e()
 
 
 def test_settings_js_open_privacy_notice_uses_view_mode_only_6e() -> None:
-    """Phase 6E: ``openPrivacyNoticeFromSettings`` must call
+    """``openPrivacyNoticeFromSettings`` must call
     ``showFirstRunNotice`` with mode ``"view"`` (read-only). It must
     never call ``acceptFirstRunNotice`` or write any setting."""
     source = read_js("settings.js")
@@ -1179,7 +1173,7 @@ def test_settings_js_open_privacy_notice_uses_view_mode_only_6e() -> None:
 
 
 def test_settings_js_hide_first_run_notice_does_not_write_setting_or_start_collector_6e() -> None:
-    """Phase 6E: ``hideFirstRunNotice`` must only hide the overlay and
+    """``hideFirstRunNotice`` must only hide the overlay and
     clear the viewing flag. It must NOT call any bridge method, must
     NOT call ``set_setting_value``, must NOT call
     ``accept_first_run_notice``, and must NOT start the collector."""
@@ -1196,7 +1190,7 @@ def test_settings_js_hide_first_run_notice_does_not_write_setting_or_start_colle
 
 
 def test_settings_js_render_first_run_notice_hides_close_in_gate_mode_6e() -> None:
-    """Phase 6E: ``renderFirstRunNotice`` must hide the close button in
+    """``renderFirstRunNotice`` must hide the close button in
     gate mode (``mode !== "view"``) so the only way to dismiss the gate
     is to accept. The accept button is shown in gate mode and hidden in
     view mode."""
@@ -1216,7 +1210,7 @@ def test_settings_js_render_first_run_notice_hides_close_in_gate_mode_6e() -> No
 
 
 def test_settings_js_close_button_handler_guards_on_viewing_from_settings_6e() -> None:
-    """Phase 6E: the close-button click handler (bound in init.js) must
+    """the close-button click handler (bound in init.js) must
     check ``App.firstRunNoticeViewingFromSettings`` before calling
     ``hideFirstRunNotice``. This is the JS mode guard that prevents the
     close button from ever dismissing the gate even if a future code
@@ -1230,7 +1224,7 @@ def test_settings_js_close_button_handler_guards_on_viewing_from_settings_6e() -
 
 
 def test_init_js_binds_first_run_notice_buttons_6e() -> None:
-    """Phase 6E: initButtons must bind the ``first-run-notice-accept-btn``
+    """initButtons must bind the ``first-run-notice-accept-btn``
     click event to ``App.acceptFirstRunNotice``, the
     ``first-run-notice-close-btn`` click event to a guarded
     ``App.hideFirstRunNotice`` wrapper, and the
@@ -1249,13 +1243,13 @@ def test_init_js_binds_first_run_notice_buttons_6e() -> None:
 
 
 def test_init_js_calls_load_first_run_notice_in_init_6e() -> None:
-    """Phase 6E: ``init()`` must call ``App.loadFirstRunNotice()`` so the
+    """``init()`` must call ``App.loadFirstRunNotice()`` so the
     gate is shown on startup when the user has not yet accepted. The
     load must happen before the main UI refresh call so the gate is
     visible before any backend status refresh completes.
 
-    Phase 6H-followup: the legacy ``refreshAll()`` /
-    ``startAutoRefresh()`` / ``startLocalTicker()`` calls were replaced
+    The ``refreshAll()`` /
+    ``startAutoRefresh()`` / ``startLocalTicker()`` were replaced by ``refreshCurrentPageData()`` + ``startHeartbeat()``. This test verifies the contract: loadFirstRunNotice must be called, and
     by ``refreshCurrentPageData()`` + ``startHeartbeat()``. This test now
     verifies the new contract: loadFirstRunNotice must be called, and
     ``refreshCurrentPageData()`` + ``startHeartbeat()`` must both be
@@ -1271,7 +1265,7 @@ def test_init_js_calls_load_first_run_notice_in_init_6e() -> None:
     body = source[pos:end if end != -1 else pos + 2500]
     assert "App.loadFirstRunNotice()" in body
     load_pos = body.find("App.loadFirstRunNotice()")
-    # Phase 6H-followup: ``refreshCurrentPageData()`` and
+    # ``refreshCurrentPageData()`` and
     # ``startHeartbeat()`` must both be called inside the .then()
     # callback after loadFirstRunNotice resolves.
     refresh_pos = body.find("refreshCurrentPageData()")
@@ -1291,7 +1285,7 @@ def test_init_js_calls_load_first_run_notice_in_init_6e() -> None:
 
 
 def test_styles_css_has_first_run_notice_scoped_classes_6e() -> None:
-    """Phase 6E: styles.css must define the ``.first-run-notice-*`` and
+    """styles.css must define the ``.first-run-notice-*`` and
     ``.settings-privacy-notice-*`` scoped classes used by the first-run
     notice overlay and the Settings read-only view entry."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
@@ -1310,12 +1304,12 @@ def test_styles_css_has_first_run_notice_scoped_classes_6e() -> None:
         ".settings-privacy-notice-btn",
     ):
         assert cls in source, (
-            "styles.css must define Phase 6E class: " + cls
+            "styles.css must define class: " + cls
         )
 
 
 def test_first_run_notice_resources_no_external_fonts_or_cdn_6e() -> None:
-    """Phase 6E: the first-run notice resources must not introduce any
+    """the first-run notice resources must not introduce any
     external font, CDN link, or network resource. The existing
     parametrized global-boundary tests already cover this for every
     frontend file; this test reaffirms the invariant for the new
@@ -1336,11 +1330,11 @@ def test_first_run_notice_resources_no_external_fonts_or_cdn_6e() -> None:
             )
 
 
-# --- Phase 6G: Settings controls not dependent on settingsLoaded --------
+# --- Settings controls not dependent on settingsLoaded --------
 
 
 def test_settings_js_backup_controls_not_dependent_on_settingsLoaded() -> None:
-    """Phase 6G: ``setSettingsBackupControlsDisabled`` must compute the
+    """``setSettingsBackupControlsDisabled`` must compute the
     disabled state based ONLY on the ``disabled`` parameter, NOT on
     ``App.settingsLoaded``. This ensures a failed first status load does
     not permanently lock the user out of backup / import / clear controls.
@@ -1374,7 +1368,7 @@ def test_settings_js_backup_controls_not_dependent_on_settingsLoaded() -> None:
 
 
 def test_settings_js_danger_controls_not_dependent_on_settingsLoaded() -> None:
-    """Phase 6G: ``setSettingsDangerControlsDisabled`` must compute the
+    """``setSettingsDangerControlsDisabled`` must compute the
     disabled state based ONLY on the ``disabled`` parameter, NOT on
     ``App.settingsLoaded``. The clear-confirm input must remain editable
     even when the first status read failed; the backend re-validates the
@@ -1405,11 +1399,11 @@ def test_settings_js_danger_controls_not_dependent_on_settingsLoaded() -> None:
 
 
 def test_settings_js_clipboard_toggle_still_uses_settingsLoaded() -> None:
-    """Phase 6G: the clipboard toggle control logic must STILL reference
+    """the clipboard toggle control logic must STILL reference
     ``settingsLoaded`` (this was intentionally kept). The clipboard toggle
     needs the current state to render, so it stays disabled until the
     first successful status load. This is the ONLY Settings control that
-    still depends on settingsLoaded after the Phase 6G fix."""
+    still depends on settingsLoaded after the fix."""
     source = read_js("settings.js")
     pos = source.find("function setSettingsControlsDisabled")
     assert pos != -1
@@ -1419,11 +1413,11 @@ def test_settings_js_clipboard_toggle_still_uses_settingsLoaded() -> None:
     # The clipboard toggle line must reference settingsLoaded.
     assert "!App.settingsLoaded" in body, (
         "setSettingsControlsDisabled must reference App.settingsLoaded "
-        "for the clipboard toggle (intentionally kept in Phase 6G)"
+        "for the clipboard toggle"
     )
 
 
-# --- Phase 6G: First-run notice JS fallback ----------------------------
+# --- First-run notice JS fallback ----------------------------
 
 
 def test_settings_js_has_no_first_run_notice_fallback_text() -> None:
@@ -1444,18 +1438,18 @@ def test_settings_js_has_no_first_run_notice_fallback_text() -> None:
     )
 
 
-# --- Phase 6G: init.js awaits loadFirstRunNotice before refresh ---------
+# --- init.js awaits loadFirstRunNotice before refresh ---------
 
 
 def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
-    """Phase 6G: ``init()`` must await ``App.loadFirstRunNotice()`` before
+    """``init()`` must await ``App.loadFirstRunNotice()`` before
     starting any main UI refresh. The refresh calls must be inside a
     ``.then(...)`` callback (or after an ``await``) on the
     loadFirstRunNotice promise, NOT called synchronously before it. This
     eliminates the frontend race where refresh could fire before the
     gate overlay was up.
 
-    Phase 6H-followup: the legacy ``refreshAll()`` /
+    The ``refreshAll()`` /
     ``startAutoRefresh()`` / ``startLocalTicker()`` calls were replaced
     by ``refreshCurrentPageData()`` + ``startHeartbeat()``. This test
     verifies the new contract: both calls must appear after
@@ -1475,7 +1469,7 @@ def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
         "init() must call App.loadFirstRunNotice()"
     )
     load_pos = body.find("App.loadFirstRunNotice()")
-    # Phase 6H-followup: the two heartbeat-starting calls must appear
+    # the two heartbeat-starting calls must appear
     # after loadFirstRunNotice in source order.
     for call in ("refreshCurrentPageData()", "startHeartbeat()"):
         call_pos = body.find(call)
@@ -1496,7 +1490,7 @@ def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
     )
 
 
-# --- Phase 6H: init.js gates init() on pywebview bridge ready ----------
+# --- init.js gates init() on pywebview bridge ready ----------
 #
 # On cold start, pywebview injects ``window.pywebview.api`` AFTER the
 # frontend scripts load. The old wiring called ``init()`` directly on
@@ -1509,7 +1503,7 @@ def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
 
 
 def test_init_js_gates_bootstrap_on_pywebviewready_event_6h() -> None:
-    """Phase 6H: init.js must wait for the pywebview bridge to be ready
+    """init.js must wait for the pywebview bridge to be ready
     before calling ``init()``. The bootstrap wiring must reference the
     ``pywebviewready`` event so that ``App.loadFirstRunNotice()`` is not
     called while ``window.pywebview.api`` is still undefined. Without this
@@ -1531,7 +1525,7 @@ def test_init_js_gates_bootstrap_on_pywebviewready_event_6h() -> None:
 
 
 def test_init_js_does_not_call_init_directly_on_domcontentloaded_6h() -> None:
-    """Phase 6H: the DOMContentLoaded wiring must NOT pass ``init``
+    """the DOMContentLoaded wiring must NOT pass ``init``
     directly as the listener. It must route through a bridge-ready gate
     (``onDomReady`` / ``bootstrap``) so ``init()`` only runs after
     ``window.pywebview.api`` is available. The direct
@@ -1553,7 +1547,7 @@ def test_init_js_does_not_call_init_directly_on_domcontentloaded_6h() -> None:
 
 
 def test_init_js_bootstrap_runs_init_only_once_6h() -> None:
-    """Phase 6H: the bootstrap wiring must guarantee ``init()`` runs only
+    """the bootstrap wiring must guarantee ``init()`` runs only
     once regardless of whether DOMContentLoaded / pywebviewready fire
     before or after each other (or are already satisfied at script load).
     A re-entrant guard flag (e.g. ``initStarted``) must prevent double
@@ -1579,7 +1573,7 @@ def test_init_js_bootstrap_runs_init_only_once_6h() -> None:
 
 
 def test_init_js_bootstrap_handles_bridge_already_ready_6h() -> None:
-    """Phase 6H: when the bridge is already injected at bootstrap time
+    """when the bridge is already injected at bootstrap time
     (``window.pywebview && window.pywebview.api`` exists), the bootstrap
     must call ``init()`` immediately without waiting for the
     ``pywebviewready`` event (which will never fire again). This covers
@@ -1613,7 +1607,7 @@ def test_init_js_bootstrap_handles_bridge_already_ready_6h() -> None:
 
 
 def test_init_js_does_not_use_storage_or_network_apis_6h() -> None:
-    """Phase 6H: the init.js bootstrap wiring must not introduce any
+    """the init.js bootstrap wiring must not introduce any
     browser storage (localStorage / sessionStorage / cookie) or network
     (fetch / XMLHttpRequest / WebSocket / EventSource / navigator.clipboard)
     API. The pywebview bridge is the only communication channel."""
@@ -1633,7 +1627,7 @@ def test_init_js_does_not_use_storage_or_network_apis_6h() -> None:
         )
 
 
-# --- Phase 6I: notice load failure does not start main UI refresh --------
+# --- notice load failure does not start main UI refresh --------
 #
 # loadFirstRunNotice() now resolves to a boolean: ``true`` when the notice
 # state was successfully confirmed, ``false`` on backend ``ok:false`` or
@@ -1646,17 +1640,12 @@ def test_init_js_does_not_use_storage_or_network_apis_6h() -> None:
 
 
 def test_init_js_does_not_start_refresh_on_notice_load_failure_6i() -> None:
-    """Phase 6I: init() must not call ``refreshCurrentPageData`` /
+    """init() must not call ``refreshCurrentPageData`` /
     ``startHeartbeat`` when loadFirstRunNotice resolves false (notice load
     failed). The refresh calls must be guarded by a notice-confirmed check
     so a failed notice load leaves the main UI auto-refresh off
-    (fail-closed). The old catch branch that unconditionally started
-    refresh is forbidden.
-
-    Phase 6H-followup: the legacy ``refreshAll()`` /
-    ``startAutoRefresh()`` / ``startLocalTicker()`` calls were replaced
-    by ``refreshCurrentPageData()`` + ``startHeartbeat()``; this test
-    verifies the new contract respects the same fail-closed guard."""
+    (fail-closed). The refresh contract is ``refreshCurrentPageData()`` plus
+    ``startHeartbeat()``, guarded by the notice state."""
     source = read_js("init.js")
     pos = source.find("function init()")
     assert pos != -1, "init.js must define function init()"
@@ -1686,7 +1675,7 @@ def test_init_js_does_not_start_refresh_on_notice_load_failure_6i() -> None:
 
 
 def test_settings_js_load_first_run_notice_catch_does_not_lock_state_6i() -> None:
-    """Phase 6I: the catch branch of loadFirstRunNotice must NOT set
+    """the catch branch of loadFirstRunNotice must NOT set
     ``App.firstRunNoticeLoaded = true``. A bridge rejection may be
     transient (bridge not yet injected, temporary unavailability), so
     permanently marking the notice as loaded would prevent any retry and

@@ -1,6 +1,6 @@
 """Project Rules bridge mixin, payload helpers, and Chinese error-message maps.
 
-Phase M3 split this out of ``bridge.py`` so the Project Rules write/read
+The boundary rules from ``bridge.py`` carry over verbatim:
 surface has its own module. The boundary rules from ``bridge.py`` carry
 over verbatim:
 
@@ -14,10 +14,10 @@ over verbatim:
 - Methods do not log window titles, file paths, notes, or copied text.
 
 ``WebViewBridge`` in ``bridge.py`` inherits ``ProjectRulesBridgeMixin`` so
-the 12 Project Rules bridge method names stay on ``WebViewBridge`` and the
-frontend / tests see no API-surface change. The module-level payload
-helpers (``_project_rules_project_payload`` etc.) and the Chinese
-error-message maps (``_PROJECT_RULE_WRITE_MESSAGES`` etc.) live here and
+the 12 Project Rules bridge method names stay on ``WebViewBridge``. The
+module-level payload helpers (``_project_rules_project_payload`` etc.) and
+the Chinese error-message maps (``_PROJECT_RULE_WRITE_MESSAGES`` etc.)
+live here and are imported from this module directly.
 are imported from this module directly; ``bridge.py`` no longer re-exports
 them.
 """
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # message. Unknown codes collapse to the operation-specific generic failure
 # so internal details are never surfaced.
 
-# Maps Project Rules write API stable codes to Phase 5B user-facing messages.
+# Maps Project Rules write API stable codes to user-facing messages.
 # Unknown codes collapse to the generic update failure.
 _PROJECT_RULE_WRITE_MESSAGES = {
     "invalid_input": "操作无效",
@@ -48,7 +48,7 @@ _PROJECT_RULE_WRITE_MESSAGES = {
     "operation_failed": "更新规则状态失败",
 }
 
-# Maps Project Rules keyword-create API stable codes to Phase 5C user-facing
+# Maps Project Rules keyword-create API stable codes to user-facing
 # messages. Unknown codes collapse to the generic create failure so internal
 # details are never surfaced.
 _PROJECT_RULE_CREATE_MESSAGES = {
@@ -58,7 +58,7 @@ _PROJECT_RULE_CREATE_MESSAGES = {
     "operation_failed": "新增关键词规则失败",
 }
 
-# Maps Project Rules keyword-delete API stable codes to Phase 5D user-facing
+# Maps Project Rules keyword-delete API stable codes to user-facing
 # messages. Unknown codes collapse to the generic delete failure so internal
 # details are never surfaced. ``not_found`` covers both "id does not exist"
 # and "id is a folder rule" — both are reported as ``关键词规则不存在`` so the
@@ -69,7 +69,7 @@ _PROJECT_RULE_DELETE_MESSAGES = {
     "operation_failed": "删除关键词规则失败",
 }
 
-# Maps Project Rules keyword-update API stable codes to Phase 5F user-facing
+# Maps Project Rules keyword-update API stable codes to user-facing
 # messages. Unknown codes collapse to the generic update failure so internal
 # details are never surfaced. ``not_found`` covers both "id does not exist"
 # and "id is a folder rule" — both are reported as ``关键词规则不存在`` so the
@@ -81,7 +81,7 @@ _PROJECT_RULE_UPDATE_MESSAGES = {
     "operation_failed": "保存关键词规则失败",
 }
 
-# Maps Project Rules folder-create API stable codes to Phase 5E user-facing
+# Maps Project Rules folder-create API stable codes to user-facing
 # messages. Unknown codes collapse to the generic create failure so internal
 # details are never surfaced.
 _PROJECT_RULE_FOLDER_CREATE_MESSAGES = {
@@ -90,7 +90,7 @@ _PROJECT_RULE_FOLDER_CREATE_MESSAGES = {
     "operation_failed": "新增文件夹规则失败",
 }
 
-# Maps Project Rules folder-update API stable codes to Phase 5E user-facing
+# Maps Project Rules folder-update API stable codes to user-facing
 # messages. Unknown codes collapse to the generic update failure so internal
 # details are never surfaced. ``not_found`` covers both "id does not exist"
 # and "id is a keyword rule" — both are reported as ``文件夹规则不存在`` so the
@@ -101,7 +101,7 @@ _PROJECT_RULE_FOLDER_UPDATE_MESSAGES = {
     "operation_failed": "保存文件夹规则失败",
 }
 
-# Maps Project Rules folder-delete API stable codes to Phase 5E user-facing
+# Maps Project Rules folder-delete API stable codes to user-facing
 # messages. Unknown codes collapse to the generic delete failure so internal
 # details are never surfaced. ``not_found`` covers both "id does not exist"
 # and "id is a keyword rule" — both are reported as ``文件夹规则不存在`` so the
@@ -112,8 +112,8 @@ _PROJECT_RULE_FOLDER_DELETE_MESSAGES = {
     "operation_failed": "删除文件夹规则失败",
 }
 
-# Maps Project lifecycle API stable codes to Phase 5G user-facing messages
-# for project create / edit / enable-disable / archive. Unknown codes
+# Maps Project lifecycle API stable codes to user-facing messages for
+# project create / edit / enable-disable / archive. Unknown codes
 # collapse to the matching operation-specific generic failure so internal
 # details are never surfaced. Each operation has its own fallback message
 # so a create failure never echoes an update-focused message, etc.
@@ -145,7 +145,7 @@ _PROJECT_LIFECYCLE_ARCHIVE_MESSAGES = {
     "operation_failed": "归档项目失败",
 }
 
-# Maps Phase 5H rule impact preview API stable codes to user-facing messages.
+# Maps rule impact preview API stable codes to user-facing messages.
 # Unknown codes collapse to the generic preview failure so internal details
 # are never surfaced. ``not_found`` covers both "id does not exist" and "id
 # belongs to the other rule table" — both reported as ``规则不存在`` so the
@@ -156,7 +156,7 @@ _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES = {
     "operation_failed": "预览规则影响失败",
 }
 
-# Maps Phase 5H safe single-rule backfill API stable codes to user-facing
+# Maps safe single-rule backfill API stable codes to user-facing
 # messages. Unknown codes collapse to the generic backfill failure so
 # internal details are never surfaced.
 _PROJECT_RULE_BACKFILL_MESSAGES = {
@@ -168,7 +168,7 @@ _PROJECT_RULE_BACKFILL_MESSAGES = {
     "operation_failed": "应用规则失败",
 }
 
-# Maps Phase 5I selected-rule batch preview API stable codes to user-facing
+# Maps selected-rule batch preview API stable codes to user-facing
 # messages. Unknown codes collapse to the generic batch-preview failure so
 # internal details are never surfaced. Preview is read-only and treats
 # disabled rules / unavailable projects as informational zero-count
@@ -182,7 +182,7 @@ _PROJECT_RULE_BATCH_PREVIEW_MESSAGES = {
     "operation_failed": "批量预览失败",
 }
 
-# Maps Phase 5I selected-rule batch apply API stable codes to user-facing
+# Maps selected-rule batch apply API stable codes to user-facing
 # messages. Unknown codes collapse to the generic batch-apply failure so
 # internal details are never surfaced. ``rule_disabled`` and
 # ``project_not_available`` use "存在...规则" wording because the batch is
@@ -198,7 +198,7 @@ _PROJECT_RULE_BATCH_APPLY_MESSAGES = {
     "operation_failed": "批量应用失败",
 }
 
-# Maps Phase 5I selected-rule batch enable / disable API stable codes to
+# Maps selected-rule batch enable / disable API stable codes to
 # user-facing messages. Unknown codes collapse to the generic batch
 # operation failure so internal details are never surfaced. Toggle does not
 # touch activities, so ``rule_disabled`` / ``project_not_available`` /
@@ -210,7 +210,7 @@ _PROJECT_RULE_BATCH_TOGGLE_MESSAGES = {
     "operation_failed": "批量操作失败",
 }
 
-# Maps Phase 6G excluded-rule keyword-create API stable codes to user-facing
+# Maps excluded-rule keyword-create API stable codes to user-facing
 # messages. Unknown codes collapse to the generic create failure so internal
 # details are never surfaced. The excluded project is a system/special
 # project, so ``project_not_found`` cannot occur (the facade resolves it
@@ -221,7 +221,7 @@ _EXCLUDED_KEYWORD_RULE_CREATE_MESSAGES = {
     "operation_failed": "新增排除关键词规则失败",
 }
 
-# Maps Phase 6G excluded-rule folder-create API stable codes to user-facing
+# Maps excluded-rule folder-create API stable codes to user-facing
 # messages. Unknown codes collapse to the generic create failure so internal
 # details are never surfaced.
 _EXCLUDED_FOLDER_RULE_CREATE_MESSAGES = {
@@ -236,22 +236,22 @@ _EXCLUDED_FOLDER_RULE_CREATE_MESSAGES = {
 
 
 def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
-    """Build one Phase 5A Project Rules display payload.
+    """Build one Project Rules display payload.
 
-    Phase M4: the raw ``created_by`` value is no longer surfaced to the
-    frontend; only display-safe boolean flags (``is_system`` /
-    ``editable`` / ``can_toggle`` / ``can_archive`` / ``is_excluded``)
-    are exposed for frontend decision logic.
+    The raw ``created_by`` value is not surfaced to the frontend; only
+    display-safe boolean flags (``is_system`` / ``editable`` /
+    ``can_toggle`` / ``can_archive`` / ``is_excluded``) are exposed for
+    frontend decision logic.
     """
     project = _project_rules_mapping(project)
     project_name = _project_rules_text(project.get("name"), "未知项目")
     project_enabled = _project_rules_bool(project.get("enabled"), default=True)
     is_excluded = project_name == "排除规则"
-    # Phase 5G / M4: display-safe project lifecycle flags. ``is_system`` is
-    # True for system/special projects (``created_by == "system"`` or
-    # reserved special project names). The raw ``created_by`` value is NOT
-    # surfaced via these flags or anywhere in the payload; only the boolean
-    # is exposed for frontend decision logic. User projects are editable /
+    # Display-safe project lifecycle flags. ``is_system`` is True for
+    # system/special projects (``created_by == "system"`` or reserved
+    # special project names). The raw ``created_by`` value is NOT surfaced
+    # via these flags or anywhere in the payload; only the boolean is
+    # exposed for frontend decision logic. User projects are editable /
     # can_toggle / can_archive; system projects are not.
     is_system = (
         _project_rules_text(project.get("created_by"), "") == "system"
@@ -296,7 +296,7 @@ def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_lifecycle_summary(project: dict[str, Any]) -> dict[str, Any]:
-    """Build the narrow project summary payload for Phase 5G lifecycle writes.
+    """Build the narrow project summary payload for lifecycle writes.
 
     Only exposes display-safe fields (``id`` / ``name`` / ``description`` /
     ``enabled`` / ``archived``). Never surfaces ``created_by`` /
@@ -408,17 +408,17 @@ def _project_rules_list(value: Any) -> list[Any]:
 
 
 class ProjectRulesBridgeMixin:
-    """Project Rules bridge methods, split out of ``WebViewBridge``.
+    """Project Rules bridge methods.
 
-    The mixin is mixed into ``WebViewBridge`` in ``bridge.py`` so the 12
-    method names (``get_project_rules`` / ``set_project_rule_enabled`` /
-    ... / ``archive_project_for_rules``) stay on ``WebViewBridge`` and the
-    frontend / tests see no API-surface change. The mixin must NOT add
-    ``__init__``; it relies on the host class having a ``logger`` and the
-    module-level ``logger`` defined above for exception logging.
+    Mixed into ``WebViewBridge`` in ``bridge.py`` so the 12 method names
+    (``get_project_rules`` / ``set_project_rule_enabled`` /
+    ... / ``archive_project_for_rules``) stay on ``WebViewBridge``. The
+    mixin must NOT add ``__init__``; it relies on the host class having a
+    ``logger`` and the module-level ``logger`` defined above for exception
+    logging.
     """
 
-    # --- Phase 5B: Project Rules rule enable/disable foundation ---------
+    # --- Project Rules rule enable/disable foundation -----------------
 
     def get_project_rules(self) -> dict[str, Any]:
         """Return display-safe Project Rules data for the WebView page.
@@ -442,7 +442,7 @@ class ProjectRulesBridgeMixin:
     def set_project_rule_enabled(self, rule_type, rule_id, enabled) -> dict[str, Any]:
         """Enable/disable one existing folder or keyword rule.
 
-        Phase 5B write path only: strict bridge validation rejects bool-as-int
+        Write path only: strict bridge validation rejects bool-as-int
         ids and non-bool enabled values before calling ``rule_api``. The bridge
         never exposes raw exceptions or backend details in the payload.
         """
@@ -474,12 +474,12 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge set_project_rule_enabled failed")
             return {"ok": False, "error": "更新规则状态失败"}
 
-    # --- Phase 5C: Project Rules keyword rule creation foundation ------
+    # --- Project Rules keyword rule creation foundation ---------------
 
     def create_project_keyword_rule(self, project_id, keyword) -> dict[str, Any]:
         """Create one new keyword rule on an existing rule-target project.
 
-        Phase 5C write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         bool-as-int ``project_id``, non-int ``project_id``, non-positive
         ids, non-string ``keyword``, and whitespace-only ``keyword`` before
         calling ``rule_api.create_project_keyword_rule``. The bridge never
@@ -495,13 +495,13 @@ class ProjectRulesBridgeMixin:
         try:
             # ``type(...) is not int`` rejects ``bool`` (``type(True) is
             # bool``), ``float``, ``str``, ``None``, and container types in
-            # one check, matching the Phase 5B toggle validation pattern.
+            # one check, matching the toggle validation pattern.
             if type(project_id) is not int or project_id <= 0:
                 return {"ok": False, "error": "操作无效"}
             if type(keyword) is not str or not keyword.strip():
                 return {"ok": False, "error": "操作无效"}
-            # Phase 5C.1: pass the trimmed keyword to the API so the bridge
-            # never forwards leading/trailing whitespace even if a future API
+            # Pass the trimmed keyword to the API so the bridge never
+            # forwards leading/trailing whitespace even if a future API
             # change drops the trim. Behavior-neutral: the API already trims.
             trimmed_keyword = keyword.strip()
             result = rule_api.create_project_keyword_rule(project_id, trimmed_keyword)
@@ -526,12 +526,12 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge create_project_keyword_rule failed")
             return {"ok": False, "error": "新增关键词规则失败"}
 
-    # --- Phase 5D: Project Rules keyword rule deletion foundation -------
+    # --- Project Rules keyword rule deletion foundation ---------------
 
     def delete_project_keyword_rule(self, rule_id) -> dict[str, Any]:
         """Delete one existing keyword rule.
 
-        Phase 5D write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         bool-as-int ``rule_id``, non-int ``rule_id``, and non-positive ids
         before calling ``rule_api.delete_project_keyword_rule``. The bridge
         never exposes raw exceptions, tracebacks, SQL, paths, window titles,
@@ -546,7 +546,7 @@ class ProjectRulesBridgeMixin:
         try:
             # ``type(...) is not int`` rejects ``bool`` (``type(True) is
             # bool``), ``float``, ``str``, ``None``, and container types in
-            # one check, matching the Phase 5B / 5C validation pattern.
+            # one check, matching the shared rule-id validation pattern.
             if type(rule_id) is not int or rule_id <= 0:
                 return {"ok": False, "error": "操作无效"}
             result = rule_api.delete_project_keyword_rule(rule_id)
@@ -569,12 +569,12 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge delete_project_keyword_rule failed")
             return {"ok": False, "error": "删除关键词规则失败"}
 
-    # --- Phase 5F: Project Rules keyword rule edit foundation --------
+    # --- Project Rules keyword rule edit foundation -------------------
 
     def update_project_keyword_rule(self, rule_id, keyword) -> dict[str, Any]:
         """Update one existing keyword rule's ``keyword`` text.
 
-        Phase 5F write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         bool-as-int ``rule_id``, non-int ``rule_id``, non-positive ids,
         non-string ``keyword``, and whitespace-only ``keyword`` before
         calling ``rule_api.update_project_keyword_rule``. The bridge never
@@ -590,7 +590,7 @@ class ProjectRulesBridgeMixin:
         try:
             # ``type(...) is not int`` rejects ``bool`` (``type(True) is
             # bool``), ``float``, ``str``, ``None``, and container types in
-            # one check, matching the Phase 5B / 5C / 5D validation pattern.
+            # one check, matching the shared rule-id validation pattern.
             if type(rule_id) is not int or rule_id <= 0:
                 return {"ok": False, "error": "操作无效"}
             if type(keyword) is not str or not keyword.strip():
@@ -621,12 +621,12 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge update_project_keyword_rule failed")
             return {"ok": False, "error": "保存关键词规则失败"}
 
-    # --- Phase 5E: Project Rules folder rule CRUD foundation ---------
+    # --- Project Rules folder rule CRUD foundation --------------------
 
     def create_project_folder_rule(self, project_id, folder_path, recursive) -> dict[str, Any]:
         """Create one new folder rule on an existing rule-target project.
 
-        Phase 5E write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         bool-as-int ``project_id``, non-int ``project_id``, non-positive
         ids, non-string ``folder_path``, whitespace-only ``folder_path``,
         and non-bool ``recursive`` before calling
@@ -644,7 +644,7 @@ class ProjectRulesBridgeMixin:
         try:
             # ``type(...) is not int`` rejects ``bool`` (``type(True) is
             # bool``), ``float``, ``str``, ``None``, and container types in
-            # one check, matching the Phase 5B / 5C / 5D validation pattern.
+            # one check, matching the shared rule-id validation pattern.
             if type(project_id) is not int or project_id <= 0:
                 return {"ok": False, "error": "操作无效"}
             if type(folder_path) is not str or not folder_path.strip():
@@ -682,12 +682,12 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge create_project_folder_rule failed")
             return {"ok": False, "error": "新增文件夹规则失败"}
 
-    # --- Phase 6G: Excluded-rule creation (排除规则专用入口) -----------
+    # --- Excluded-rule creation (排除规则专用入口) --------------------
 
     def create_excluded_keyword_rule(self, keyword) -> dict[str, Any]:
         """Create one new keyword rule on the special ``排除规则`` project.
 
-        Phase 6G write path only. This is the dedicated excluded-rule
+        Write path only. This is the dedicated excluded-rule
         creation entry: it does NOT accept any ``project_id`` from the
         caller, so the frontend cannot inject an arbitrary project_id.
         The API facade internally resolves the ``EXCLUDED_PROJECT``
@@ -733,7 +733,7 @@ class ProjectRulesBridgeMixin:
     def create_excluded_folder_rule(self, folder_path, recursive) -> dict[str, Any]:
         """Create one new folder rule on the special ``排除规则`` project.
 
-        Phase 6G write path only. This is the dedicated excluded-rule
+        Write path only. This is the dedicated excluded-rule
         creation entry: it does NOT accept any ``project_id`` from the
         caller, so the frontend cannot inject an arbitrary project_id.
         The API facade internally resolves the ``EXCLUDED_PROJECT``
@@ -785,7 +785,7 @@ class ProjectRulesBridgeMixin:
     def update_project_folder_rule(self, rule_id, folder_path, recursive) -> dict[str, Any]:
         """Update one existing folder rule's ``folder_path`` and ``recursive``.
 
-        Phase 5E write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         bool-as-int ``rule_id``, non-int ``rule_id``, non-positive ids,
         non-string ``folder_path``, whitespace-only ``folder_path``, and
         non-bool ``recursive`` before calling
@@ -804,7 +804,7 @@ class ProjectRulesBridgeMixin:
         try:
             # ``type(...) is not int`` rejects ``bool`` (``type(True) is
             # bool``), ``float``, ``str``, ``None``, and container types in
-            # one check, matching the Phase 5B / 5C / 5D validation pattern.
+            # one check, matching the shared rule-id validation pattern.
             if type(rule_id) is not int or rule_id <= 0:
                 return {"ok": False, "error": "操作无效"}
             if type(folder_path) is not str or not folder_path.strip():
@@ -842,7 +842,7 @@ class ProjectRulesBridgeMixin:
     def delete_project_folder_rule(self, rule_id) -> dict[str, Any]:
         """Delete one existing folder rule.
 
-        Phase 5E write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         bool-as-int ``rule_id``, non-int ``rule_id``, and non-positive ids
         before calling ``rule_api.delete_project_folder_rule``. The bridge
         never exposes raw exceptions, tracebacks, SQL, paths, window titles,
@@ -859,7 +859,7 @@ class ProjectRulesBridgeMixin:
         try:
             # ``type(...) is not int`` rejects ``bool`` (``type(True) is
             # bool``), ``float``, ``str``, ``None``, and container types in
-            # one check, matching the Phase 5B / 5C / 5D validation pattern.
+            # one check, matching the shared rule-id validation pattern.
             if type(rule_id) is not int or rule_id <= 0:
                 return {"ok": False, "error": "操作无效"}
             result = rule_api.delete_project_folder_rule(rule_id)
@@ -884,12 +884,12 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge delete_project_folder_rule failed")
             return {"ok": False, "error": "删除文件夹规则失败"}
 
-    # --- Phase 5G: Project lifecycle foundation (create / edit / toggle / archive) ---
+    # --- Project lifecycle foundation (create / edit / toggle / archive) --
 
     def create_project_for_rules(self, name, description) -> dict[str, Any]:
         """Create one new user project from the Project Rules page.
 
-        Phase 5G write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         non-string ``name``, whitespace-only ``name``, and non-string
         ``description`` before calling ``project_api.create_project_for_rules``.
         The bridge never exposes raw exceptions, tracebacks, SQL, paths,
@@ -939,7 +939,7 @@ class ProjectRulesBridgeMixin:
     def update_project_for_rules(self, project_id, name, description) -> dict[str, Any]:
         """Update one existing user project's name and description.
 
-        Phase 5G write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         bool-as-int ``project_id``, non-int ``project_id``, non-positive ids,
         non-string ``name``, whitespace-only ``name``, and non-string
         ``description`` before calling ``project_api.update_project_for_rules``.
@@ -956,7 +956,7 @@ class ProjectRulesBridgeMixin:
         try:
             # ``type(...) is not int`` rejects ``bool`` (``type(True) is
             # bool``), ``float``, ``str``, ``None``, and container types in
-            # one check, matching the Phase 5B / 5C / 5D / 5E validation
+            # one check, matching the shared rule-id validation pattern.
             # pattern.
             if type(project_id) is not int or project_id <= 0:
                 return {"ok": False, "error": "操作无效"}
@@ -989,7 +989,7 @@ class ProjectRulesBridgeMixin:
     def set_project_enabled_for_rules(self, project_id, enabled) -> dict[str, Any]:
         """Enable or disable one existing user project.
 
-        Phase 5G write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         bool-as-int ``project_id``, non-int ``project_id``, non-positive ids,
         and non-bool ``enabled`` before calling
         ``project_api.set_project_enabled_for_rules``. The bridge never
@@ -1029,7 +1029,7 @@ class ProjectRulesBridgeMixin:
     def archive_project_for_rules(self, project_id) -> dict[str, Any]:
         """Archive one existing user project.
 
-        Phase 5G write path only. Strict bridge validation rejects
+        Write path only. Strict bridge validation rejects
         bool-as-int ``project_id``, non-int ``project_id``, and non-positive
         ids before calling ``project_api.archive_project_for_rules``. The
         bridge never exposes raw exceptions, tracebacks, SQL, paths, window
@@ -1063,12 +1063,12 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge archive_project_for_rules failed")
             return {"ok": False, "error": "归档项目失败"}
 
-    # --- Phase 5H: rule impact preview + safe single-rule backfill ------
+    # --- Rule impact preview + safe single-rule backfill --------------
 
     def preview_project_rule_impact(self, rule_type, rule_id) -> dict[str, Any]:
         """Preview the impact of applying one existing folder / keyword rule.
 
-        Phase 5H read path only. Strict bridge validation rejects non-string
+        Read path only. Strict bridge validation rejects non-string
         ``rule_type``, unknown rule types, bool-as-int ``rule_id``,
         non-int ``rule_id``, and non-positive ids before calling
         ``rule_api.preview_project_rule_impact``. The bridge never exposes
@@ -1106,7 +1106,7 @@ class ProjectRulesBridgeMixin:
     def backfill_project_rule(self, rule_type, rule_id) -> dict[str, Any]:
         """Apply one existing enabled folder / keyword rule to eligible history.
 
-        Phase 5H write path only. Strict bridge validation rejects non-string
+        Write path only. Strict bridge validation rejects non-string
         ``rule_type``, unknown rule types, bool-as-int ``rule_id``,
         non-int ``rule_id``, and non-positive ids before calling
         ``rule_api.backfill_project_rule``. The bridge never exposes raw
@@ -1138,7 +1138,7 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge backfill_project_rule failed")
             return {"ok": False, "error": "应用规则失败"}
 
-    # --- Phase 5I: selected-rule batch operations + automatic rules -----
+    # --- Selected-rule batch operations + automatic rules -------------
 
     def _validate_batch_rules(self, rules) -> str | None:
         """Strict bridge-layer validation for the ``rules`` batch input.
@@ -1171,7 +1171,7 @@ class ProjectRulesBridgeMixin:
     def preview_project_rules_batch_impact(self, rules) -> dict[str, Any]:
         """Read-only aggregate impact preview across the selected rules.
 
-        Phase 5I read path only. Strict bridge validation rejects non-list
+        Read path only. Strict bridge validation rejects non-list
         ``rules``, empty lists, non-dict items, unknown rule types, and
         bool-as-int / non-int / non-positive ``rule_id`` values before
         calling ``rule_api.preview_project_rules_batch_impact``. The bridge
@@ -1208,7 +1208,7 @@ class ProjectRulesBridgeMixin:
     def backfill_project_rules_batch(self, rules) -> dict[str, Any]:
         """Apply the selected enabled rules to eligible history in one batch.
 
-        Phase 5I write path only. Strict bridge validation rejects non-list
+        Write path only. Strict bridge validation rejects non-list
         ``rules``, empty lists, non-dict items, unknown rule types, and
         bool-as-int / non-int / non-positive ``rule_id`` values before
         calling ``rule_api.backfill_project_rules_batch``. The bridge never
@@ -1248,7 +1248,7 @@ class ProjectRulesBridgeMixin:
     def set_project_rules_batch_enabled(self, rules, enabled) -> dict[str, Any]:
         """Enable or disable every selected rule in one all-or-nothing batch.
 
-        Phase 5I write path only. Strict bridge validation rejects non-list
+        Write path only. Strict bridge validation rejects non-list
         ``rules``, empty lists, non-dict items, unknown rule types,
         bool-as-int / non-int / non-positive ``rule_id`` values, and
         non-bool ``enabled`` before calling
@@ -1290,7 +1290,7 @@ class ProjectRulesBridgeMixin:
     def automatic_rules_status(self) -> dict[str, Any]:
         """Return a display-safe status payload for the automatic-rules engine.
 
-        Phase 5I read path only. The Project Rules page uses this to render
+        Read path only. The Project Rules page uses this to render
         a status note explaining that enabled folder / keyword rules are
         automatically applied to future eligible closed activities. The
         payload is intentionally narrow: it only carries boolean / string

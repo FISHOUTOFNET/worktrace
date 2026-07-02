@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.8 Timeline single activity restore bridge methods.
+"""Tests for the Timeline single activity restore bridge methods.
 
 Covers ``WebViewBridge.restore_timeline_activity`` and
 ``WebViewBridge.get_timeline_restorable_activities``:

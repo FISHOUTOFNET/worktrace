@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend — settings module (Phase 6D).
+// WorkTrace WebView frontend — settings module.
 // Settings / Privacy: status load, capture toggle, encrypted backup
 // export / manifest preview / import (replace-only), clear-all-local-data.
 // Save-settings / set_setting_value / arbitrary file-dialog NOT opened.
@@ -8,7 +8,7 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Phase 6A: Settings / Privacy read-only status ------------------
+    // --- Settings / Privacy read-only status ------------------
 
     var ERROR_MESSAGE = "加载设置状态失败";
     var WRITE_ERROR_MESSAGE = "设置剪贴板记录失败";
@@ -35,7 +35,7 @@
         // True when any Settings read / capture-toggle write / backup export /
         // manifest preview / backup import / clear-all is in flight. Used to
         // keep all Settings controls disabled together so no two operations
-        // can race. Phase 6D adds the two new flags at the end.
+        // can race.
         return !!(
             App.settingsLoading
             || App.settingsWriteInProgress
@@ -49,18 +49,18 @@
 
     function setSettingsBackupControlsDisabled(disabled) {
         // Backup-specific controls: passphrase inputs, export button,
-        // manifest preview button, and the Phase 6D import controls
-        // (import passphrase / import confirm / import button).
+        // manifest preview button, and the import controls (import
+        // passphrase / import confirm / import button).
         //
-        // Phase 6G: these inputs do NOT depend on ``App.settingsLoaded``.
-        // The backup passphrase / import passphrase / confirm inputs must
-        // remain editable even when the first ``get_settings_privacy_status``
-        // read failed; otherwise a failed status load would permanently
-        // lock the user out of backup / import / clear-local-data. They
-        // are only disabled while a Settings operation is in flight (so
-        // concurrent ops cannot race) or when explicitly requested by the
-        // caller. The capture toggle continues to depend on
-        // ``settingsLoaded`` because it needs the current state to render.
+        // These inputs do NOT depend on ``App.settingsLoaded``. The backup
+        // passphrase / import passphrase / confirm inputs must remain
+        // editable even when the first ``get_settings_privacy_status`` read
+        // failed; otherwise a failed status load would permanently lock the
+        // user out of backup / import / clear-local-data. They are only
+        // disabled while a Settings operation is in flight (so concurrent
+        // ops cannot race) or when explicitly requested by the caller. The
+        // capture toggle continues to depend on ``settingsLoaded`` because
+        // it needs the current state to render.
         var backupDisabled = !!disabled;
         var exportBtn = document.getElementById("settings-backup-export-btn");
         var manifestBtn = document.getElementById("settings-backup-manifest-btn");
@@ -80,9 +80,9 @@
     App.setSettingsBackupControlsDisabled = setSettingsBackupControlsDisabled;
 
     function setSettingsDangerControlsDisabled(disabled) {
-        // Phase 6D: clear-all controls (confirm input + clear button).
+        // Clear-all controls (confirm input + clear button).
         //
-        // Phase 6G: like the backup controls, these do NOT depend on
+        // Like the backup controls, these do NOT depend on
         // ``App.settingsLoaded``. The clear-confirm input must remain
         // editable even when the first status read failed; otherwise a
         // failed status load would permanently block the danger-zone
@@ -157,10 +157,10 @@
     App.renderCaptureToggle = renderCaptureToggle;
 
     function renderSettingsStatus(status) {
-        // Phase 6B renders booleans, the static local-only storage model,
-        // and the capture toggle. Phase 6E also renders the display-safe
-        // first-run notice status line. No path, no capture content,
-        // no passphrase, no DB write.
+        // Renders booleans, the static local-only storage model, and the
+        // capture toggle. Also renders the display-safe first-run notice
+        // status line. No path, no capture content, no passphrase, no DB
+        // write.
         if (!status) return;
         var exportPathConfigured = !!status.export_path_configured;
         var secureImportInProgress = !!status.secure_import_in_progress;
@@ -183,11 +183,11 @@
                 "本地优先：所有数据仅存储在本机，不上传任何远端服务器。"
             );
         }
-        // Phase 6E: render the display-safe first-run notice status line.
-        // The raw DB setting key name is never exposed; only the accepted
-        // boolean is shown. The "查看隐私说明" button stays enabled so the
-        // user can re-read the notice read-only; it does NOT re-accept or
-        // re-trigger collector start.
+        // Render the display-safe first-run notice status line. The raw DB
+        // setting key name is never exposed; only the accepted boolean is
+        // shown. The "查看隐私说明" button stays enabled so the user can
+        // re-read the notice read-only; it does NOT re-accept or re-trigger
+        // collector start.
         var noticeAccepted = false;
         if (status.first_run_notice && typeof status.first_run_notice === "object") {
             noticeAccepted = !!status.first_run_notice.accepted;
@@ -202,14 +202,14 @@
     App.renderSettingsStatus = renderSettingsStatus;
 
     function loadSettingsPrivacyStatus() {
-        // Phase 6A hardening: refuse concurrent loads. The refresh button
-        // and toggle are already disabled while loading, but this guard
-        // also covers programmatic triggers (lazy load on page switch).
-        // Phase 6D: returns a Promise so import / clear success paths can
-        // chain a status refresh and only then re-enable controls. When a
-        // load is already in flight the call returns a resolved Promise so
-        // the caller's chain still runs (the in-flight load will refresh
-        // the UI when it settles).
+        // Refuse concurrent loads. The refresh button and toggle are
+        // already disabled while loading, but this guard also covers
+        // programmatic triggers (lazy load on page switch). Returns a
+        // Promise so import / clear success paths can chain a status
+        // refresh and only then re-enable controls. When a load is already
+        // in flight the call returns a resolved Promise so the caller's
+        // chain still runs (the in-flight load will refresh the UI when it
+        // settles).
         if (App.settingsLoading) return Promise.resolve();
         setSettingsLoading(true);
         clearSettingsError();
@@ -239,7 +239,7 @@
     }
     App.loadSettingsPrivacyStatus = loadSettingsPrivacyStatus;
 
-    // --- Phase 6B: capture toggle write --------------------------------
+    // --- capture toggle write --------------------------------
 
     function setCaptureEnabled(enabled) {
         // Write the clipboard_capture_enabled flag through the bridge.
@@ -294,7 +294,7 @@
     }
     App.handleCaptureToggleChange = handleCaptureToggleChange;
 
-    // --- Phase 6C: encrypted backup export + manifest preview -----------
+    // --- encrypted backup export + manifest preview -----------
 
     var BACKUP_EXPORT_ERROR_MESSAGE = "导出加密备份失败";
     var BACKUP_MANIFEST_ERROR_MESSAGE = "读取备份清单失败";
@@ -427,7 +427,7 @@
     }
     App.previewEncryptedBackupManifest = previewEncryptedBackupManifest;
 
-    // --- Phase 6D: encrypted backup import + clear-all-local-data ------
+    // --- encrypted backup import + clear-all-local-data ------
 
     var BACKUP_IMPORT_ERROR_MESSAGE = "导入加密备份失败";
     var CLEAR_ALL_ERROR_MESSAGE = "清空本地数据失败";
@@ -475,7 +475,7 @@
     App.clearSettingsClearStatus = clearSettingsClearStatus;
 
     function clearBackupManifestPreview() {
-        // Hide and clear any previously-rendered manifest preview so the
+        // Hide and clear any last-rendered manifest preview so the
         // user does not see stale manifest data after an import / clear
         // replaces the local DB. Reuses renderBackupManifest(null, "").
         renderBackupManifest(null, "");
@@ -560,7 +560,7 @@
             // Reset frontend caches so stale Timeline / Statistics /
             // Project Rules data is not operated on after the replacement.
             resetFrontendAfterLocalDataReplacement();
-            // Hide any previously-rendered manifest preview; it referred
+            // Hide any last-rendered manifest preview; it referred
             // to a different file / a pre-import state.
             clearBackupManifestPreview();
             // Chain a Settings status refresh so the cards reflect the
@@ -611,7 +611,7 @@
             // Reset frontend caches so stale Timeline / Statistics /
             // Project Rules data is not operated on after the reset.
             resetFrontendAfterLocalDataReplacement();
-            // Hide any previously-rendered manifest preview; it referred
+            // Hide any last-rendered manifest preview; it referred
             // to a pre-clear backup file.
             clearBackupManifestPreview();
             // Chain a Settings status refresh so the cards reflect the
@@ -637,7 +637,7 @@
     }
     App.clearAllLocalData = clearAllLocalData;
 
-    // --- Phase 6E: First-run privacy notice -----------------------------
+    // --- First-run privacy notice -----------------------------
     // The first-run notice overlay has two modes:
     //   - "gate" (blocking): shown on first run when the backend reports
     //     ``accepted === false``. The close button is hidden; only the

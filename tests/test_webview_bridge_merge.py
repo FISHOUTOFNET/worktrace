@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.3 Timeline activity-merge bridge method.
+"""Tests for the Timeline activity-merge bridge method.
 
 Covers ``WebViewBridge.merge_timeline_activities``:
 

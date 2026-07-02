@@ -135,12 +135,12 @@ def backfill_missing_assignments() -> None:
 def process_new_activity(activity_id: int) -> dict:
     """Automatic-rules entry point called by ``finalize_created_activity``.
 
-    Phase 5I: this is the automatic-specific hook. It applies narrow skip
-    guards for hidden / deleted / in-progress activities BEFORE delegating
-    to ``assign_project_for_activity``, so the automatic-rules contract
-    only touches closed, visible, non-deleted activities. The general
-    ``assign_project_for_activity`` function is unchanged — manual
-    reclassification, rule application, and backfill can still touch these
+    Applies skip guards for hidden / deleted / in-progress activities
+    before delegating to ``assign_project_for_activity``, so the
+    automatic-rules contract only touches closed, visible, non-deleted
+    activities. The general ``assign_project_for_activity`` function
+    still handles manual reclassification, rule application, and backfill
+    when explicitly requested by the caller.
     activities when explicitly requested by the caller.
     """
     with get_connection() as conn:
@@ -158,18 +158,18 @@ def process_new_activity(activity_id: int) -> dict:
 
 
 # Sources that indicate the open row is still effectively uncategorized and
-# therefore eligible for re-inference during the virtual → persisted_open
-# transition. Concrete automatic sources (``folder_rule`` / ``keyword_rule`` /
-# ``midnight_anchor``) and manual sources are intentionally excluded so the
-# open-row sync does not flap an already-concrete assignment mid-activity.
+# therefore eligible for re-inference. Concrete automatic sources
+# (``folder_rule`` / ``keyword_rule`` / ``midnight_anchor``) and manual
+# sources are excluded so the open-row sync does not flap an already-concrete
+# assignment mid-activity.
 _OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
 
 
 def sync_persisted_open_activity_project(activity_id: int) -> dict:
     """Converge an open persisted row's project assignment before display.
 
-    This is the narrow entry point invoked by the collector's
-    ``_ensure_persisted_if_ready`` path right after a virtual activity
+    Purpose: ensure the open persisted row's project attribution matches
+    the current resource-first inference before display.
     crosses the 30-second persistence threshold and becomes a real open
     DB row. ``process_new_activity`` (the regular automatic-rules entry
     point) skips rows whose ``end_time IS NULL``, so without this helper
@@ -179,15 +179,19 @@ def sync_persisted_open_activity_project(activity_id: int) -> dict:
     causing Timeline / Recent / Detail / Overview KPI displays to revert
     to ``未归类`` for the remainder of the activity.
 
-    The helper ONLY delegates to the existing resource-first inference
-    (``assign_project_for_activity``); it never re-implements folder /
-    keyword / suggested-project logic and never creates a new project.
+    Conditions (all must hold; otherwise the helper is a no-op): the
+    activity exists, ``end_time IS NULL`` (still open), ``status ==
+    STATUS_NORMAL``, ``is_deleted = 0``, ``is_hidden = 0``,
+    ``manual_override = 0``, the assignment is not manual, and the
+    current assignment source is in ``_OPEN_ROW_UNCLASSIFIED_SOURCES``
+    (still effectively uncategorized).
 
-    Guards (all must hold; otherwise the helper is a no-op and returns
-    the current assignment):
+    Behavior: delegates to the existing resource-first inference
+    (``assign_project_for_activity``). It does NOT re-implement folder /
+    keyword / suggested-project logic and does NOT create projects.
 
-    - the activity exists;
-    - ``end_time IS NULL`` (still open);
+    Returns the current or updated assignment dict; ``{}`` when the
+    activity is missing.
     - ``status == STATUS_NORMAL``;
     - ``is_deleted = 0`` and ``is_hidden = 0``;
     - ``manual_override = 0`` on the activity row;
@@ -289,8 +293,8 @@ def keyword_pattern_matches(
     """Return True if a casefolded keyword pattern matches the activity's
     safe classification text via substring containment.
 
-    Phase 5H display-safe internal helper. It reuses ``_safe_classification_text``
-    so there is a single keyword text-building code path shared with
+    Reuses ``_safe_classification_text`` so there is a single keyword
+    text-building code path shared with ``_infer_project_resource_first``.
     ``_infer_project_resource_first`` instead of a second divergent matcher.
     The built text may include clipboard content and must NEVER be returned
     to an API / bridge / frontend payload — callers only use the boolean
@@ -375,8 +379,6 @@ def _infer_project_resource_first(
         if rule:
             return int(rule["project_id"]), "folder_rule", 85, None
 
-    # 4. resource-specific rule (placeholder for future extension)
-    # TODO: add resource-specific rules when needed
 
     # 5. keyword rule against safe classification text
     clipboard_text = ""

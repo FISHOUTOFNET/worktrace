@@ -1,4 +1,4 @@
-"""Phase 5H: rule impact preview + safe single-rule backfill service.
+"""Rule impact preview + safe single-rule backfill service.
 
 This module is the single backfill-capable surface exposed (via
 ``worktrace.api.rule_api``) to the WebView bridge. It supports two
@@ -40,7 +40,7 @@ Design constraints (locked by tests):
 Keyword matching reuses ``project_inference_service.keyword_pattern_matches``
 so there is a single keyword text-building code path (no divergent second
 matcher). Folder matching reuses ``folder_rule_service._activity_matches_folder``
-so recursive / index semantics stay identical to the existing folder backfill.
+so recursive / index semantics stay identical to the folder backfill.
 """
 
 from __future__ import annotations

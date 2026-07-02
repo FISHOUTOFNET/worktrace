@@ -1,10 +1,10 @@
 """Timeline correction-shell WebView static-contract tests.
 
 These tests read the bundled frontend resources (index.html /
-js/*.js / styles.css) directly without starting the GUI. Phase R2
-split the monolithic app.js into six js/ modules; JS-level contracts
+js/*.js / styles.css) directly without starting the GUI. The
+app.js is split into six js/ modules; JS-level contracts
 use read_all_js() (concatenated split modules in load order). They lock
-the correction-shell contracts for Phases 3B.5A, 3B.5B, 3B.5B.1,
+the correction-shell contracts.
 3B.6, 3B.6.1, 3B.7, 3B.7.1, 3B.8, 3B.8.1, 3B.9, and 3B.9.1.
 """
 
@@ -29,62 +29,49 @@ from static_helpers import (
 )
 
 
-# --- Phase 3B.5A -------------------------------------------------
+# --- section -------------------------------------------------
 
 
-def test_app_js_has_action_group_wrappers_in_detail_rows():
-    """Phase 3B.5A: renderSessionDetails must wrap the per-activity
-    correction buttons in three action groups (edit / merge / danger) so
-    destructive actions are visually separated from edits."""
+def test_app_js_detail_rows_are_read_only():
+    """renderSessionDetails must keep detail rows read-only."""
     source = read_all_js()
-    start = source.find("function renderSessionDetails(")
-    assert start != -1, "renderSessionDetails must exist"
-    next_func = source.find("\n    function ", start + 1)
-    body = source[start:next_func] if next_func != -1 else source[start:]
-    assert "detail-action-edit-group" in body, (
-        "renderSessionDetails must wrap 编辑时间 / 拆分 in a "
-        "detail-action-edit-group"
-    )
-    assert "detail-action-merge-group" in body, (
-        "renderSessionDetails must wrap 与下一条合并 in a "
-        "detail-action-merge-group"
-    )
-    assert "detail-action-danger-group" in body, (
-        "renderSessionDetails must wrap 隐藏 / 删除 in a "
-        "detail-action-danger-group"
-    )
+    body = func_body(source, "renderSessionDetails")
+    assert "detail-item-time" in body
+    assert "detail-item-name" in body
+    assert "detail-item-project" in body
+    assert "detail-item-duration" in body
+    for forbidden in (
+        "detail-action-edit-group",
+        "detail-action-merge-group",
+        "detail-action-danger-group",
+        "detail-edit-time-btn",
+        "detail-split-btn",
+        "detail-merge-btn",
+        "detail-hide-btn",
+        "detail-delete-btn",
+    ):
+        assert forbidden not in body, (
+            "renderSessionDetails must not render per-activity action control: "
+            + forbidden
+        )
 
 
 
-def test_app_js_action_order_is_stable():
-    """Phase 3B.5A: the per-activity action order must be stable:
-    编辑时间 → 拆分 → 与下一条合并 → 隐藏 → 删除."""
+def test_app_js_detail_rows_route_actions_to_correction_shell():
+    """Per-activity actions live in the correction shell, not detail rows."""
     source = read_all_js()
-    start = source.find("function renderSessionDetails(")
-    assert start != -1, "renderSessionDetails must exist"
-    next_func = source.find("\n    function ", start + 1)
-    body = source[start:next_func] if next_func != -1 else source[start:]
-    # Each action button's class must appear in the stable order.
-    pos_edit = body.find("detail-edit-time-btn")
-    pos_split = body.find("detail-split-btn")
-    pos_merge = body.find("detail-merge-btn")
-    pos_hide = body.find("detail-hide-btn")
-    pos_delete = body.find("detail-delete-btn")
-    assert pos_edit != -1 and pos_split != -1 and pos_merge != -1, (
-        "edit / split / merge buttons must all be rendered"
-    )
-    assert pos_hide != -1 and pos_delete != -1, (
-        "hide / delete buttons must all be rendered"
-    )
-    assert pos_edit < pos_split < pos_merge < pos_hide < pos_delete, (
-        "per-activity action order must be: 编辑时间 → 拆分 → 与下一条合并 "
-        "→ 隐藏 → 删除"
-    )
+    detail_body = func_body(source, "renderSessionDetails")
+    shell_body = func_body(source, "renderCorrectionShell")
+    assert "open-correction-shell-btn" in source
+    assert "detail-edit-time-btn" not in detail_body
+    assert "renderBatchProjectSection" in shell_body
+    assert "renderBatchNoteSection" in shell_body
+    assert "renderRestoreSection" in shell_body
 
 
 
 def test_app_js_merge_has_dirty_state_guard():
-    """Phase 3B.5A: saveActivityMerge must refuse while there are unsaved
+    """saveActivityMerge must refuse while there are unsaved
     project/note/time/split inputs, consistent with hide / delete. Merge
     triggers a refresh that would wipe those inputs."""
     source = read_all_js()
@@ -114,7 +101,7 @@ def test_app_js_merge_has_dirty_state_guard():
 
 
 def test_app_js_merge_has_row_id_consistency_check():
-    """Phase 3B.5A: saveActivityMerge must verify the activity id still
+    """saveActivityMerge must verify the activity id still
     matches the detail row, consistent with hide / delete, so a stale
     button does not operate on a different session's activity."""
     source = read_all_js()
@@ -144,7 +131,7 @@ def test_app_js_merge_has_row_id_consistency_check():
 
 
 def test_app_js_dirty_state_refusal_message_is_unified():
-    """Phase 3B.5A: the dirty-state refusal message must be unified across
+    """the dirty-state refusal message must be unified across
     merge / hide / delete (per-activity and session-level)."""
     source = read_all_js()
     refusal = "请先保存或取消当前编辑"
@@ -179,7 +166,7 @@ def test_app_js_dirty_state_refusal_message_is_unified():
 
 
 def test_app_js_destructive_action_copy_is_unified():
-    """Phase 3B.5A: hide / delete success and failure copy must be
+    """hide / delete success and failure copy must be
     unified. Hide: 已隐藏 / 隐藏失败. Delete: 已删除 / 删除失败."""
     source = read_all_js()
     # Per-activity hide
@@ -198,21 +185,11 @@ def test_app_js_destructive_action_copy_is_unified():
 
 
 def test_index_html_has_unified_section_labels():
-    """Phase 3B.5A: the session-level edit panel sections must be labeled
-    consistently: 项目与备注 / 时间修正 / 拆分 / 可见性."""
+    """the session-level edit panel sections must be labeled
+    consistently for the simplified edit panel and correction shell."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    assert "项目与备注" in source, (
-        "edit panel must have a 项目与备注 section label"
-    )
-    assert "时间修正" in source, (
-        "edit panel must have a 时间修正 section label"
-    )
-    assert "拆分" in source, (
-        "edit panel must have a 拆分 section label"
-    )
-    assert "可见性" in source, (
-        "edit panel must have a 可见性 section label"
-    )
+    for label in ("项目", "时长（分钟）", "备注", "纠错面板"):
+        assert label in source, "edit/correction UI must expose label: " + label
     # The old section titles must be gone (拆分时段 / 隐藏 / 删除 as a
     # section label is replaced by 可见性).
     assert "拆分时段" not in source, (
@@ -222,7 +199,7 @@ def test_index_html_has_unified_section_labels():
 
 
 def test_index_html_visibility_hint_mentions_hide_and_soft_delete():
-    """Phase 3B.5A: the visibility section hint must mention both hide and
+    """the visibility section hint must mention both hide and
     soft-delete semantics so the user understands neither physically
     deletes data."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -242,7 +219,7 @@ def test_index_html_visibility_hint_mentions_hide_and_soft_delete():
 
 
 def test_styles_css_has_action_group_styles():
-    """Phase 3B.5A: styles.css must style the three action groups and
+    """styles.css must style the three action groups and
     visually separate the danger group from the edit / merge groups."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".detail-action-edit-group" in source, (
@@ -265,7 +242,7 @@ def test_styles_css_has_action_group_styles():
 
 
 def test_styles_css_has_section_label_style():
-    """Phase 3B.5A: styles.css must style the .edit-section-label class
+    """styles.css must style the .edit-section-label class
     used by the unified section labels."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".edit-section-label" in source, (
@@ -275,7 +252,7 @@ def test_styles_css_has_section_label_style():
 
 
 def test_app_js_clear_edit_panel_resets_all_action_state():
-    """Phase 3B.5A: clearEditPanel must reset all transient action state,
+    """clearEditPanel must reset all transient action state,
     including merge / hide / delete saving state and target ids."""
     source = read_all_js()
     start = source.find("function clearEditPanel(")
@@ -325,7 +302,7 @@ def test_app_js_clear_edit_panel_resets_all_action_state():
 
 
 def test_app_js_populate_edit_panel_populates_all_correction_sections():
-    """Phase 3B.5A: populateEditPanel must populate / reset all correction
+    """populateEditPanel must populate / reset all correction
     sections (project/note, time, split, visibility) so switching sessions
     does not leave stale state behind."""
     source = read_all_js()
@@ -344,21 +321,21 @@ def test_app_js_populate_edit_panel_populates_all_correction_sections():
                 end = i + 1
                 break
     body = source[start:end]
-    # Session-level correction section populators
-    assert "populateSessionTimeSection" in body, (
-        "populateEditPanel must call populateSessionTimeSection"
-    )
-    assert "populateSessionSplitSection" in body, (
-        "populateEditPanel must call populateSessionSplitSection"
-    )
-    assert "populateSessionVisibilitySection" in body, (
-        "populateEditPanel must call populateSessionVisibilitySection"
-    )
+    # The simplified edit panel only populates project, note, and duration.
+    for forbidden in (
+        "populateSessionTimeSection",
+        "populateSessionSplitSection",
+        "populateSessionVisibilitySection",
+    ):
+        assert forbidden not in body, (
+            "populateEditPanel must not populate hidden correction section: "
+            + forbidden
+        )
 
 
 
 def test_app_js_consolidation_has_no_forbidden_handlers():
-    """Phase 3B.5A: the consolidation must not introduce batch edit,
+    """the consolidation must not introduce batch edit,
     batch hide, batch delete, undo / restore, permanent delete, auto-rule,
     complex correction page, or overlap detection handlers."""
     source = read_all_js()
@@ -383,13 +360,13 @@ def test_app_js_consolidation_has_no_forbidden_handlers():
 
 
 def test_index_html_consolidation_has_no_forbidden_controls():
-    """Phase 3B.5A: index.html must not contain batch hide / batch delete /
+    """index.html must not contain batch hide / batch delete /
     batch time / batch split / batch merge / batch restore / restore-all /
     permanent-delete / auto-rule / complex-correction-page / overlap
-    controls. Phase 3B.6 introduces batch project reassignment, so "batch"
+    controls. Batch project reassignment means "batch"
     is now allowed in index.html but only in the project context; the
     specific batch hide / delete / time / split / merge variants must still
-    be absent. Phase 3B.8 introduces single activity restore, so "restore"
+    be absent. Single activity restore means "restore"
     is now allowed; batch restore, restore-all, undo stack, and permanent
     delete must still be absent."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -413,11 +390,11 @@ def test_index_html_consolidation_has_no_forbidden_controls():
 
 
 
-# --- Phase 3B.5B -------------------------------------------------
+# --- section -------------------------------------------------
 
 
 def test_index_html_has_correction_shell_container():
-    """Phase 3B.5B: index.html must contain a hidden correction shell
+    """index.html must contain a hidden correction shell
     container inside the Timeline details column."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="timeline-correction-shell"' in source, (
@@ -427,7 +404,7 @@ def test_index_html_has_correction_shell_container():
 
 
 def test_index_html_correction_shell_hidden_by_default():
-    """Phase 3B.5B: the correction shell must be hidden by default."""
+    """the correction shell must be hidden by default."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     start = source.find('id="timeline-correction-shell"')
     assert start != -1, "correction shell container must exist"
@@ -441,7 +418,7 @@ def test_index_html_correction_shell_hidden_by_default():
 
 
 def test_index_html_correction_shell_has_close_button():
-    """Phase 3B.5B: the correction shell must have a close button."""
+    """the correction shell must have a close button."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-close-btn"' in source, (
         "correction shell must have a close button"
@@ -453,7 +430,7 @@ def test_index_html_correction_shell_has_close_button():
 
 
 def test_index_html_correction_shell_has_required_areas():
-    """Phase 3B.5B: the shell must have context / status / activity /
+    """the shell must have context / status / activity /
     action areas."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-status"' in source
@@ -464,39 +441,28 @@ def test_index_html_correction_shell_has_required_areas():
 
 
 def test_index_html_correction_shell_title_is_correction_panel():
-    """The shell title must be 纠错面板 (renamed from 高级纠错 to better
-    reflect that the panel is a batch correction panel, not a hidden
-    advanced feature)."""
+    """The shell title must be 纠错面板."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "纠错面板" in source, (
         "correction shell title must be 纠错面板"
-    )
-    # The old dev-phase wording 高级纠错 must no longer appear in the UI.
-    assert "高级纠错" not in source, (
-        "correction shell must not use the old 高级纠错 wording"
     )
 
 
 
 def test_index_html_has_session_level_open_correction_entry():
-    """The session-level edit panel must have a 打开纠错面板 entry button
-    (renamed from 打开高级纠错)."""
+    """The session-level edit panel must have a correction shell entry button."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="open-correction-shell-btn"' in source, (
         "session-level edit panel must have an open-correction-shell button"
     )
-    assert "打开纠错面板" in source, (
-        "session-level open button text must be 打开纠错面板"
-    )
-    # The old dev-phase wording 打开高级纠错 must no longer appear.
-    assert "打开高级纠错" not in source, (
-        "session-level open button must not use the old 打开高级纠错 wording"
+    assert "高级纠错" in source, (
+        "session-level open button text must be 高级纠错"
     )
 
 
 
 def test_index_html_correction_shell_inside_timeline_page():
-    """Phase 3B.5B: the correction shell must live inside the Timeline
+    """the correction shell must live inside the Timeline
     page, not as a new top-level sidebar nav item. The sidebar nav must
     still be exactly 概览 / 时间详情 / 统计与导出 / 项目规则 / 设置与隐私."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -520,7 +486,7 @@ def test_index_html_correction_shell_inside_timeline_page():
 
 
 def test_app_js_has_open_correction_shell_helper():
-    """Phase 3B.5B: app.js must define an openCorrectionShell helper."""
+    """app.js must define an openCorrectionShell helper."""
     source = read_all_js()
     assert "function openCorrectionShell" in source, (
         "app.js must define openCorrectionShell"
@@ -529,7 +495,7 @@ def test_app_js_has_open_correction_shell_helper():
 
 
 def test_app_js_has_close_correction_shell_helper():
-    """Phase 3B.5B: app.js must define a closeCorrectionShell helper."""
+    """app.js must define a closeCorrectionShell helper."""
     source = read_all_js()
     assert "function closeCorrectionShell" in source, (
         "app.js must define closeCorrectionShell"
@@ -538,7 +504,7 @@ def test_app_js_has_close_correction_shell_helper():
 
 
 def test_app_js_has_reset_correction_shell_state_helper():
-    """Phase 3B.5B: app.js must define a resetCorrectionShellState helper."""
+    """app.js must define a resetCorrectionShellState helper."""
     source = read_all_js()
     assert "function resetCorrectionShellState" in source, (
         "app.js must define resetCorrectionShellState"
@@ -547,7 +513,7 @@ def test_app_js_has_reset_correction_shell_state_helper():
 
 
 def test_app_js_has_render_correction_shell_helper():
-    """Phase 3B.5B: app.js must define a renderCorrectionShell helper."""
+    """app.js must define a renderCorrectionShell helper."""
     source = read_all_js()
     assert "function renderCorrectionShell" in source, (
         "app.js must define renderCorrectionShell"
@@ -556,7 +522,7 @@ def test_app_js_has_render_correction_shell_helper():
 
 
 def test_app_js_has_set_correction_shell_status_helper():
-    """Phase 3B.5B: app.js must define a setCorrectionShellStatus helper."""
+    """app.js must define a setCorrectionShellStatus helper."""
     source = read_all_js()
     assert "function setCorrectionShellStatus" in source, (
         "app.js must define setCorrectionShellStatus"
@@ -565,7 +531,7 @@ def test_app_js_has_set_correction_shell_status_helper():
 
 
 def test_app_js_has_get_selected_session_helper():
-    """Phase 3B.5B: app.js must define a getSelectedSession helper that
+    """app.js must define a getSelectedSession helper that
     looks up the selected session from currentSessions."""
     source = read_all_js()
     assert "function getSelectedSession" in source, (
@@ -575,7 +541,7 @@ def test_app_js_has_get_selected_session_helper():
 
 
 def test_app_js_open_correction_shell_checks_dirty_state():
-    """Phase 3B.5B: openCorrectionShell must refuse to open while there
+    """openCorrectionShell must refuse to open while there
     are unsaved edits, using the refusal text 请先保存或取消当前编辑."""
     source = read_all_js()
     open_start = source.find("function openCorrectionShell")
@@ -591,7 +557,7 @@ def test_app_js_open_correction_shell_checks_dirty_state():
 
 
 def test_app_js_open_correction_shell_checks_selected_session():
-    """Phase 3B.5B: openCorrectionShell must verify a selected session
+    """openCorrectionShell must verify a selected session
     exists before opening."""
     source = read_all_js()
     open_start = source.find("function openCorrectionShell")
@@ -604,7 +570,7 @@ def test_app_js_open_correction_shell_checks_selected_session():
 
 
 def test_app_js_close_correction_shell_preserves_selected_session():
-    """Phase 3B.5B: closeCorrectionShell must NOT clear selectedSessionId
+    """closeCorrectionShell must NOT clear selectedSessionId
     so the user returns to the same session context."""
     source = read_all_js()
     close_start = source.find("function closeCorrectionShell")
@@ -620,7 +586,7 @@ def test_app_js_close_correction_shell_preserves_selected_session():
 
 
 def test_app_js_clear_edit_panel_resets_shell_state():
-    """Phase 3B.5B: clearEditPanel must call resetCorrectionShellState so
+    """clearEditPanel must call resetCorrectionShellState so
     a stale shell does not leak into the next session."""
     source = read_all_js()
     clear_start = source.find("function clearEditPanel")
@@ -633,7 +599,7 @@ def test_app_js_clear_edit_panel_resets_shell_state():
 
 
 def test_app_js_date_navigation_closes_shell():
-    """Phase 3B.5B: goPrevDay / goNextDay / goToday must close the
+    """goPrevDay / goNextDay / goToday must close the
     correction shell so the shell context does not carry across dates."""
     source = read_all_js()
     for fname in ("goPrevDay", "goNextDay", "goToday"):
@@ -647,7 +613,7 @@ def test_app_js_date_navigation_closes_shell():
 
 
 def test_app_js_selected_session_disappear_resets_shell():
-    """Phase 3B.5B: when the selected session disappears during a refresh,
+    """when the selected session disappears during a refresh,
     the shell state must be reset (via clearEditPanel)."""
     source = read_all_js()
     # Use the opening-paren form so we match showTimeline(data) and not
@@ -668,7 +634,7 @@ def test_app_js_selected_session_disappear_resets_shell():
 
 
 def test_app_js_session_switch_closes_shell():
-    """Phase 3B.5B: selecting a different session must close the shell so
+    """selecting a different session must close the shell so
     the shell context does not get confused across sessions."""
     source = read_all_js()
     sel_start = source.find("function selectTimelineSession")
@@ -684,7 +650,7 @@ def test_app_js_session_switch_closes_shell():
 
 
 def test_app_js_correction_shell_state_variables_exist():
-    """Phase 3B.5B: app.js must declare the correction shell state
+    """app.js must declare the correction shell state
     variables."""
     source = read_all_js()
     assert "correctionShellOpen" in source
@@ -695,7 +661,7 @@ def test_app_js_correction_shell_state_variables_exist():
 
 
 def test_app_js_correction_shell_no_sensitive_fields():
-    """Phase 3B.5B: the shell rendering must only use display-safe fields
+    """the shell rendering must only use display-safe fields
     and must never read raw window_title / file_path / clipboard / note
     internals."""
     source = read_all_js()
@@ -711,7 +677,7 @@ def test_app_js_correction_shell_no_sensitive_fields():
 
 
 def test_app_js_get_current_detail_activities_no_sensitive_fields():
-    """Phase 3B.5B: getCurrentDetailActivities must only read display-safe
+    """getCurrentDetailActivities must only read display-safe
     DOM fields, never raw sensitive fields."""
     source = read_all_js()
     fn_start = source.find("function getCurrentDetailActivities")
@@ -726,7 +692,7 @@ def test_app_js_get_current_detail_activities_no_sensitive_fields():
 
 
 def test_app_js_correction_shell_uses_existing_string_helpers():
-    """Phase 3B.5B: the shell must not parse backend times with
+    """the shell must not parse backend times with
     new Date(string); it must reuse the existing fixed-format helpers."""
     source = read_all_js()
     render_start = source.find("function renderCorrectionShell")
@@ -743,7 +709,7 @@ def test_app_js_correction_shell_uses_existing_string_helpers():
 
 
 def test_app_js_correction_shell_no_browser_storage():
-    """Phase 3B.5B: the shell must not use localStorage / sessionStorage."""
+    """the shell must not use localStorage / sessionStorage."""
     source = read_all_js()
     assert not re.search(r"localStorage|sessionStorage", source), (
         "app.js must not use browser storage"
@@ -752,7 +718,7 @@ def test_app_js_correction_shell_no_browser_storage():
 
 
 def test_app_js_correction_shell_no_forbidden_handlers():
-    """Phase 3B.5B: app.js must not contain batch edit / batch hide /
+    """app.js must not contain batch edit / batch hide /
     batch delete / restore / permanent delete / auto-rule / global overlap
     detection handlers."""
     source = read_all_js()
@@ -767,14 +733,14 @@ def test_app_js_correction_shell_no_forbidden_handlers():
 
 
 def test_index_html_correction_shell_no_forbidden_controls():
-    """Phase 3B.5B: index.html must not contain batch hide / batch delete /
+    """index.html must not contain batch hide / batch delete /
     batch time / batch split / batch merge / batch restore / restore-all /
-    permanent-delete / auto-rule / overlap controls in the shell. Phase
-    3B.6 introduces batch project reassignment in the correction shell, so
+    permanent-delete / auto-rule / overlap controls in the shell. The
+    batch project reassignment in the correction shell means
     "batch" is now allowed in the shell but only in the project context;
     the specific batch hide / delete / time / split / merge variants must
-    still be absent. Phase 3B.8 introduces single activity restore in the
-    shell, so "restore" is now allowed; batch restore, restore-all, undo
+    still be absent. The single activity restore in the
+    shell means "restore" is now allowed; batch restore, restore-all, undo
     stack, and permanent delete must still be absent."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
@@ -794,7 +760,7 @@ def test_index_html_correction_shell_no_forbidden_controls():
 
 
 def test_app_js_correction_shell_actions_guide_only():
-    """Phase 3B.5B: the shell action area must only guide the user back to
+    """the shell action area must only guide the user back to
     the existing controls; it must not render its own write buttons. The
     delete guidance must remain soft-delete wording."""
     source = read_all_js()
@@ -809,7 +775,7 @@ def test_app_js_correction_shell_actions_guide_only():
 
 
 def test_styles_css_has_correction_shell_styles():
-    """Phase 3B.5B: styles.css must define correction shell styles."""
+    """styles.css must define correction shell styles."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell" in source
     assert ".correction-shell-header" in source
@@ -821,7 +787,7 @@ def test_styles_css_has_correction_shell_styles():
 
 
 def test_styles_css_correction_shell_hidden_rule():
-    """Phase 3B.5B: styles.css must hide the shell when [hidden]."""
+    """styles.css must hide the shell when [hidden]."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell[hidden]" in source, (
         "styles.css must hide .correction-shell[hidden]"
@@ -830,10 +796,10 @@ def test_styles_css_correction_shell_hidden_rule():
 
 
 def test_bridge_no_new_write_methods_for_shell():
-    """Phase 3B.5B: the bridge must not gain new write methods for the
+    """the bridge must not gain new write methods for the
     shell. The existing project / note / time / split / merge / hide /
     delete methods must still be present."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     for required in (
@@ -862,10 +828,10 @@ def test_bridge_no_new_write_methods_for_shell():
 
 
 def test_bridge_imports_only_allowed_modules():
-    """Phase 3B.5B: the bridge must continue to import only
+    """the bridge must continue to import only
     worktrace.api / worktrace.formatters and must not directly import
     services / db / collector / security / runtime / config."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     for forbidden in (
@@ -888,11 +854,11 @@ def test_bridge_imports_only_allowed_modules():
 
 
 
-# --- Phase 3B.5B.1 -----------------------------------------------
+# --- section -----------------------------------------------
 
 
 def test_app_js_correction_shell_highlight_timer_variable_declared():
-    """Phase 3B.5B.1: app.js must declare a single tracked highlight timer
+    """app.js must declare a single tracked highlight timer
     so repeated click-to-locate clicks never accumulate timers."""
     source = read_all_js()
     assert "correctionShellHighlightTimer" in source, (
@@ -902,7 +868,7 @@ def test_app_js_correction_shell_highlight_timer_variable_declared():
 
 
 def test_app_js_reset_correction_shell_state_clears_highlight_timer():
-    """Phase 3B.5B.1: resetCorrectionShellState must cancel any pending
+    """resetCorrectionShellState must cancel any pending
     highlight timer so a close / reset never leaves a dangling timer."""
     source = read_all_js()
     body = func_body(source, "resetCorrectionShellState")
@@ -916,7 +882,7 @@ def test_app_js_reset_correction_shell_state_clears_highlight_timer():
 
 
 def test_app_js_highlight_detail_row_no_bridge_writes():
-    """Phase 3B.5B.1: highlightDetailRow must be read-only — it must not
+    """highlightDetailRow must be read-only — it must not
     call any bridge method (write or otherwise) and must not perform any
     save / hide / delete / merge / split / time / project / note action."""
     source = read_all_js()
@@ -936,7 +902,7 @@ def test_app_js_highlight_detail_row_no_bridge_writes():
 
 
 def test_app_js_highlight_detail_row_safe_single_timer():
-    """Phase 3B.5B.1: the transient highlight must use a single tracked
+    """the transient highlight must use a single tracked
     timer — clearTimeout before setTimeout — so repeated clicks never
     accumulate timers."""
     source = read_all_js()
@@ -958,7 +924,7 @@ def test_app_js_highlight_detail_row_safe_single_timer():
 
 
 def test_app_js_highlight_detail_row_stale_target_message():
-    """Phase 3B.5B.1: when the target detail row is missing, the handler
+    """when the target detail row is missing, the handler
     must show a safe message (not throw, not perform any write)."""
     source = read_all_js()
     body = func_body(source, "highlightDetailRow")
@@ -978,7 +944,7 @@ def test_app_js_highlight_detail_row_stale_target_message():
 
 
 def test_app_js_highlight_detail_row_uses_detail_item_selector():
-    """Phase 3B.5B.1: click-to-locate must only look up the existing
+    """click-to-locate must only look up the existing
     .detail-item[data-activity-id=...] row inside #timeline-details-list."""
     source = read_all_js()
     body = func_body(source, "highlightDetailRow")
@@ -989,7 +955,7 @@ def test_app_js_highlight_detail_row_uses_detail_item_selector():
 
 
 def test_app_js_render_correction_shell_uses_correction_activity_id():
-    """Phase 3B.5B.1: shell activity rows must carry a distinct
+    """shell activity rows must carry a distinct
     data-correction-activity-id attribute so they cannot be confused with
     the real .detail-item rows."""
     source = read_all_js()
@@ -1001,7 +967,7 @@ def test_app_js_render_correction_shell_uses_correction_activity_id():
 
 
 def test_app_js_render_correction_shell_invalid_id_not_clickable():
-    """Phase 3B.5B.1: a non-numeric / missing activity id must not be
+    """a non-numeric / missing activity id must not be
     rendered as a click-to-locate target (numeric guard)."""
     source = read_all_js()
     body = func_body(source, "renderCorrectionShell")
@@ -1016,7 +982,7 @@ def test_app_js_render_correction_shell_invalid_id_not_clickable():
 
 
 def test_app_js_render_correction_shell_uses_escape_html():
-    """Phase 3B.5B.1: every dynamic value rendered into the shell must go
+    """every dynamic value rendered into the shell must go
     through escapeHtml so no unescaped external / dynamic value is
     injected via innerHTML."""
     source = read_all_js()
@@ -1028,7 +994,7 @@ def test_app_js_render_correction_shell_uses_escape_html():
 
 
 def test_app_js_render_correction_shell_no_sensitive_fields_3b_5b_1():
-    """Phase 3B.5B.1: the hardened shell rendering must still never read
+    """the hardened shell rendering must still never read
     raw window_title / file_path_hint / full_path / clipboard / note
     internals, and must not surface traceback / SQL / exception text."""
     source = read_all_js()
@@ -1043,7 +1009,7 @@ def test_app_js_render_correction_shell_no_sensitive_fields_3b_5b_1():
 
 
 def test_app_js_correction_shell_state_independent_of_saving_states():
-    """Phase 3B.5B.1: resetCorrectionShellState must only reset shell-only
+    """resetCorrectionShellState must only reset shell-only
     state; it must not reset the edit / time / split / merge / hide / delete
     saving states (those are owned by clearEditPanel)."""
     source = read_all_js()
@@ -1058,7 +1024,7 @@ def test_app_js_correction_shell_state_independent_of_saving_states():
 
 
 def test_app_js_open_correction_shell_dirty_refusal_preserves_state():
-    """Phase 3B.5B.1: the dirty-state refusal in openCorrectionShell must
+    """the dirty-state refusal in openCorrectionShell must
     not clear selectedSessionId, must not clear the edit panel / inputs,
     and must not change the selected session."""
     source = read_all_js()
@@ -1096,7 +1062,7 @@ def test_app_js_open_correction_shell_scrolls_and_focuses_panel():
 
 
 def test_app_js_get_selected_session_uses_current_sessions():
-    """Phase 3B.5B.1: getSelectedSession must look the session up from
+    """getSelectedSession must look the session up from
     currentSessions so a stale / disappeared session cannot open the
     shell."""
     source = read_all_js()
@@ -1108,7 +1074,7 @@ def test_app_js_get_selected_session_uses_current_sessions():
 
 
 def test_app_js_auto_refresh_shell_guarded_by_dirty_state():
-    """Phase 3B.5B.1: auto-refresh must not overwrite a dirty shell. The
+    """auto-refresh must not overwrite a dirty shell. The
     showTimeline shell re-render path must be guarded by !isEditDirty()."""
     source = read_all_js()
     show_start = source.find("function showTimeline(")
@@ -1125,7 +1091,7 @@ def test_app_js_auto_refresh_shell_guarded_by_dirty_state():
 
 
 def test_app_js_close_correction_shell_no_refresh_or_write():
-    """Phase 3B.5B.1: closeCorrectionShell must not trigger a refresh and
+    """closeCorrectionShell must not trigger a refresh and
     must not perform any write action."""
     source = read_all_js()
     body = func_body(source, "closeCorrectionShell")
@@ -1140,7 +1106,7 @@ def test_app_js_close_correction_shell_no_refresh_or_write():
 
 
 def test_app_js_correction_shell_no_new_forbidden_handlers_3b_5b_1():
-    """Phase 3B.5B.1: the hardening must not introduce batch edit / hide /
+    """the hardening must not introduce batch edit / hide /
     delete, undo / restore, permanent delete, auto-rule, or global overlap
     detection handlers."""
     source = read_all_js()
@@ -1156,7 +1122,7 @@ def test_app_js_correction_shell_no_new_forbidden_handlers_3b_5b_1():
 
 
 def test_index_html_correction_shell_no_external_resources_3b_5b_1():
-    """Phase 3B.5B.1: the correction shell region must not introduce
+    """the correction shell region must not introduce
     external links, CDN, Google Fonts, or browser storage."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     start = source.find('id="timeline-correction-shell"')
@@ -1190,7 +1156,7 @@ def test_index_html_correction_shell_no_external_resources_3b_5b_1():
 
 
 def test_styles_css_has_detail_item_highlight_class():
-    """Phase 3B.5B.1: styles.css must define the transient
+    """styles.css must define the transient
     .detail-item.detail-item-highlight class used by click-to-locate."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".detail-item.detail-item-highlight" in source, (
@@ -1200,7 +1166,7 @@ def test_styles_css_has_detail_item_highlight_class():
 
 
 def test_styles_css_has_correction_shell_is_static_class():
-    """Phase 3B.5B.1: styles.css must define the .is-static style for
+    """styles.css must define the .is-static style for
     shell activity rows whose activity id is missing / non-numeric."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell-activity-row.is-static" in source, (
@@ -1210,7 +1176,7 @@ def test_styles_css_has_correction_shell_is_static_class():
 
 
 def test_styles_css_correction_shell_hidden_still_display_none():
-    """Phase 3B.5B.1: the shell must remain truly hidden when [hidden]."""
+    """the shell must remain truly hidden when [hidden]."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell[hidden]" in source, (
         "styles.css must keep the .correction-shell[hidden] rule"
@@ -1219,9 +1185,9 @@ def test_styles_css_correction_shell_hidden_still_display_none():
 
 
 def test_bridge_no_new_methods_for_phase_3b_5b_1():
-    """Phase 3B.5B.1: the hardening must not add any new bridge method,
+    """the hardening must not add any new bridge method,
     and the bridge must continue to import only allowed modules."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     # No new shell-specific write / read method is added in this phase.
@@ -1252,11 +1218,11 @@ def test_bridge_no_new_methods_for_phase_3b_5b_1():
 
 
 
-# --- Phase 3B.6 --------------------------------------------------
+# --- section --------------------------------------------------
 
 
 def test_app_js_has_batch_selection_state():
-    """Phase 3B.6: app.js must declare the batch project selection state."""
+    """app.js must declare the batch project selection state."""
     source = read_all_js()
     assert "selectedBatchActivityIds" in source, (
         "app.js must declare the selectedBatchActivityIds state variable"
@@ -1271,7 +1237,7 @@ def test_app_js_has_batch_selection_state():
 
 
 def test_app_js_has_batch_project_save_helper():
-    """Phase 3B.6: app.js must define the saveBatchProject function."""
+    """app.js must define the saveBatchProject function."""
     source = read_all_js()
     assert "function saveBatchProject" in source, (
         "app.js must define the saveBatchProject function"
@@ -1292,7 +1258,7 @@ def test_app_js_has_batch_project_save_helper():
 
 
 def test_app_js_calls_batch_update_bridge():
-    """Phase 3B.6: app.js must call the batch_update_timeline_activities_project
+    """app.js must call the batch_update_timeline_activities_project
     bridge method."""
     source = read_all_js()
     assert "batch_update_timeline_activities_project" in source, (
@@ -1302,7 +1268,7 @@ def test_app_js_calls_batch_update_bridge():
 
 
 def test_index_html_has_batch_project_section():
-    """Phase 3B.6: index.html must contain the batch project section in the
+    """index.html must contain the batch project section in the
     correction shell."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "批量项目重分类" in source, (
@@ -1324,7 +1290,7 @@ def test_index_html_has_batch_project_section():
 
 
 def test_index_html_batch_hint_only_project():
-    """Phase 3B.6: the batch section hint must state that only batch
+    """the batch section hint must state that only batch
     project reassignment is supported."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "批量操作仅支持设置项目" in source, (
@@ -1338,7 +1304,7 @@ def test_index_html_batch_hint_only_project():
 
 
 def test_index_html_no_batch_hide_delete_time_split_merge_controls():
-    """Phase 3B.6: index.html must not contain batch hide / delete / time /
+    """index.html must not contain batch hide / delete / time /
     split / merge control identifiers."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
@@ -1355,7 +1321,7 @@ def test_index_html_no_batch_hide_delete_time_split_merge_controls():
 
 
 def test_app_js_batch_checkbox_only_for_shell_activities():
-    """Phase 3B.6: the batch checkbox must only be rendered on shell
+    """the batch checkbox must only be rendered on shell
     activity rows, not on the detail list rows."""
     source = read_all_js()
     # The checkbox class must be correction-shell-activity-checkbox.
@@ -1370,7 +1336,7 @@ def test_app_js_batch_checkbox_only_for_shell_activities():
 
 
 def test_app_js_batch_in_progress_checkbox_disabled():
-    """Phase 3B.6: in-progress activities must render a disabled checkbox."""
+    """in-progress activities must render a disabled checkbox."""
     source = read_all_js()
     # The renderCorrectionShell function must check is_in_progress and
     # disable the checkbox for in-progress rows.
@@ -1388,7 +1354,7 @@ def test_app_js_batch_in_progress_checkbox_disabled():
 
 
 def test_app_js_batch_save_disabled_for_fewer_than_two():
-    """Phase 3B.6: the batch save button must be disabled when fewer than
+    """the batch save button must be disabled when fewer than
     two activities are selected."""
     source = read_all_js()
     save_start = source.find("function updateBatchSaveButtonState")
@@ -1402,7 +1368,7 @@ def test_app_js_batch_save_disabled_for_fewer_than_two():
 
 
 def test_app_js_batch_save_blocked_by_dirty_edit():
-    """Phase 3B.6: saveBatchProject must block when isEditDirty() is true."""
+    """saveBatchProject must block when isEditDirty() is true."""
     source = read_all_js()
     save_start = source.find("function saveBatchProject")
     assert save_start != -1
@@ -1418,7 +1384,7 @@ def test_app_js_batch_save_blocked_by_dirty_edit():
 
 
 def test_app_js_batch_success_refreshes_timeline():
-    """Phase 3B.6: a successful batch save must refresh the Timeline."""
+    """a successful batch save must refresh the Timeline."""
     source = read_all_js()
     save_start = source.find("function saveBatchProject")
     save_end = source.find("\n    function ", save_start + 1)
@@ -1430,7 +1396,7 @@ def test_app_js_batch_success_refreshes_timeline():
 
 
 def test_app_js_batch_failure_preserves_selection():
-    """Phase 3B.6: a failed batch save must preserve the selection and
+    """a failed batch save must preserve the selection and
     detail list so the user can retry."""
     source = read_all_js()
     save_start = source.find("function saveBatchProject")
@@ -1445,7 +1411,7 @@ def test_app_js_batch_failure_preserves_selection():
 
 
 def test_app_js_clear_edit_panel_resets_batch_state():
-    """Phase 3B.6: clearEditPanel must call resetBatchProjectState."""
+    """clearEditPanel must call resetBatchProjectState."""
     source = read_all_js()
     clear_start = source.find("function clearEditPanel")
     clear_end = source.find("\n    function ", clear_start + 1)
@@ -1457,7 +1423,7 @@ def test_app_js_clear_edit_panel_resets_batch_state():
 
 
 def test_app_js_reset_correction_shell_resets_batch_state():
-    """Phase 3B.6: resetCorrectionShellState must call
+    """resetCorrectionShellState must call
     resetBatchProjectState."""
     source = read_all_js()
     reset_start = source.find("function resetCorrectionShellState")
@@ -1470,7 +1436,7 @@ def test_app_js_reset_correction_shell_resets_batch_state():
 
 
 def test_app_js_batch_no_local_storage():
-    """Phase 3B.6: the batch project code must not use browser storage."""
+    """the batch project code must not use browser storage."""
     source = read_all_js()
     assert not re.search(r"localStorage|sessionStorage", source), (
         "app.js must not use localStorage or sessionStorage"
@@ -1479,7 +1445,7 @@ def test_app_js_batch_no_local_storage():
 
 
 def test_app_js_batch_no_external_links():
-    """Phase 3B.6: the batch project code must not introduce external links."""
+    """the batch project code must not introduce external links."""
     for filename in FRONTEND_RESOURCE_FILES:
         source = read_resource(filename)
         assert not re.search(r"https?://", source, re.IGNORECASE), (
@@ -1489,7 +1455,7 @@ def test_app_js_batch_no_external_links():
 
 
 def test_app_js_batch_no_restore_permanent_auto_rule_overlap():
-    """Phase 3B.6: the batch project code must not introduce restore,
+    """the batch project code must not introduce restore,
     permanent delete, auto-rule, or overlap handlers."""
     source = read_all_js()
     for forbidden in ("restoreActivity", "restoreSession",
@@ -1502,7 +1468,7 @@ def test_app_js_batch_no_restore_permanent_auto_rule_overlap():
 
 
 def test_styles_css_has_batch_section_styles():
-    """Phase 3B.6: styles.css must define the batch section styles."""
+    """styles.css must define the batch section styles."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell-batch-section" in source, (
         "styles.css must define .correction-shell-batch-section"
@@ -1517,9 +1483,9 @@ def test_styles_css_has_batch_section_styles():
 
 
 def test_bridge_has_batch_update_method():
-    """Phase 3B.6: the bridge must define the
+    """the bridge must define the
     batch_update_timeline_activities_project method."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     assert "def batch_update_timeline_activities_project" in bridge_src, (
@@ -1529,9 +1495,9 @@ def test_bridge_has_batch_update_method():
 
 
 def test_bridge_batch_error_messages_dict():
-    """Phase 3B.6: the bridge must define the _BATCH_PROJECT_ERROR_MESSAGES
+    """the bridge must define the _BATCH_PROJECT_ERROR_MESSAGES
     dict with all stable error code → Chinese message mappings."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     assert "_BATCH_PROJECT_ERROR_MESSAGES" in bridge_src, (
@@ -1552,7 +1518,7 @@ def test_bridge_batch_error_messages_dict():
 
 
 def test_api_has_batch_update_function():
-    """Phase 3B.6: the API must define the
+    """the API must define the
     batch_update_timeline_activities_project function and
     TimelineBatchProjectError class."""
     api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(
@@ -1568,7 +1534,7 @@ def test_api_has_batch_update_function():
 
 
 def test_service_has_batch_update_function():
-    """Phase 3B.6: the service must define the
+    """the service must define the
     batch_update_activity_project function and the
     MAX_BATCH_PROJECT_EDIT_ACTIVITIES constant."""
     service_src = (REPO_ROOT / "worktrace" / "services" / "activity_service.py").read_text(
@@ -1587,7 +1553,7 @@ def test_service_has_batch_update_function():
 
 
 def test_app_js_batch_stale_id_pruning():
-    """Phase 3B.6: app.js must prune stale selected ids on every render."""
+    """app.js must prune stale selected ids on every render."""
     source = read_all_js()
     assert "function pruneStaleBatchSelection" in source, (
         "app.js must define the pruneStaleBatchSelection function"
@@ -1603,7 +1569,7 @@ def test_app_js_batch_stale_id_pruning():
 
 
 def test_app_js_batch_save_rechecks_stale_ids():
-    """Phase 3B.6: saveBatchProject must re-check selected ids against the
+    """saveBatchProject must re-check selected ids against the
     currently rendered shell activity rows before calling the bridge."""
     source = read_all_js()
     save_start = source.find("function saveBatchProject")
@@ -1618,11 +1584,11 @@ def test_app_js_batch_save_rechecks_stale_ids():
 
 
 
-# --- Phase 3B.6.1 ------------------------------------------------
+# --- section ------------------------------------------------
 
 
 def test_app_js_batch_saving_independent_state_var():
-    """Phase 3B.6.1: batchProjectSaving must be a separate state variable,
+    """batchProjectSaving must be a separate state variable,
     not aliased to any other saving flag."""
     source = read_all_js()
     # All saving flags that must remain independent.
@@ -1644,7 +1610,7 @@ def test_app_js_batch_saving_independent_state_var():
 
 
 def test_app_js_session_switch_clears_batch_selection():
-    """Phase 3B.6.1: selectTimelineSession must call resetCorrectionShellState
+    """selectTimelineSession must call resetCorrectionShellState
     when switching to a different session, which clears the batch
     selection."""
     source = read_all_js()
@@ -1659,7 +1625,7 @@ def test_app_js_session_switch_clears_batch_selection():
 
 
 def test_app_js_date_switch_clears_batch_selection():
-    """Phase 3B.6.1: goPrevDay / goNextDay / goToday must all call
+    """goPrevDay / goNextDay / goToday must all call
     resetCorrectionShellState, which clears the batch selection."""
     source = read_all_js()
     for fn_name in ("goPrevDay", "goNextDay", "goToday"):
@@ -1674,7 +1640,7 @@ def test_app_js_date_switch_clears_batch_selection():
 
 
 def test_app_js_auto_refresh_prunes_disappeared_ids():
-    """Phase 3B.6.1: pruneStaleBatchSelection must drop ids that are no
+    """pruneStaleBatchSelection must drop ids that are no
     longer present in the freshly rendered activity list, and must be
     called from both renderCorrectionShell and renderBatchProjectSection."""
     source = read_all_js()
@@ -1709,7 +1675,7 @@ def test_app_js_auto_refresh_prunes_disappeared_ids():
 
 
 def test_app_js_prune_rejects_non_numeric_ids():
-    """Phase 3B.6.1: pruneStaleBatchSelection must use a numeric regex so
+    """pruneStaleBatchSelection must use a numeric regex so
     invalid (non-numeric) ids are dropped from the selection."""
     source = read_all_js()
     prune_start = source.find("function pruneStaleBatchSelection")
@@ -1723,7 +1689,7 @@ def test_app_js_prune_rejects_non_numeric_ids():
 
 
 def test_app_js_prune_skips_in_progress_activities():
-    """Phase 3B.6.1: pruneStaleBatchSelection must skip in-progress
+    """pruneStaleBatchSelection must skip in-progress
     activities so they cannot be selected."""
     source = read_all_js()
     prune_start = source.find("function pruneStaleBatchSelection")
@@ -1736,7 +1702,7 @@ def test_app_js_prune_skips_in_progress_activities():
 
 
 def test_app_js_saving_disables_checkboxes_select_button():
-    """Phase 3B.6.1: setBatchProjectSaving(true) must disable the save
+    """setBatchProjectSaving(true) must disable the save
     button, select-all button, clear button, project select, and every
     batch checkbox."""
     source = read_all_js()
@@ -1772,7 +1738,7 @@ def test_app_js_saving_disables_checkboxes_select_button():
 
 
 def test_app_js_save_catch_resets_saving():
-    """Phase 3B.6.1: the .catch handler in saveBatchProject must call
+    """the .catch handler in saveBatchProject must call
     setBatchProjectSaving(false) so saving never gets stuck."""
     source = read_all_js()
     fn_start = source.find("function saveBatchProject")
@@ -1792,7 +1758,7 @@ def test_app_js_save_catch_resets_saving():
 
 
 def test_app_js_save_success_clears_selection():
-    """Phase 3B.6.1: the success path in saveBatchProject must clear the
+    """the success path in saveBatchProject must clear the
     selection and refresh the Timeline."""
     source = read_all_js()
     fn_start = source.find("function saveBatchProject")
@@ -1814,7 +1780,7 @@ def test_app_js_save_success_clears_selection():
 
 
 def test_app_js_save_invalid_project_message():
-    """Phase 3B.6.1: saveBatchProject must show 请选择有效的项目 when the
+    """saveBatchProject must show 请选择有效的项目 when the
     project select is empty or invalid."""
     source = read_all_js()
     fn_start = source.find("function saveBatchProject")
@@ -1827,7 +1793,7 @@ def test_app_js_save_invalid_project_message():
 
 
 def test_app_js_save_derives_ids_from_rendered_rows():
-    """Phase 3B.6.1: saveBatchProject must derive cleanIds from the rendered
+    """saveBatchProject must derive cleanIds from the rendered
     shell rows (querySelectorAll), not from a stale in-memory copy."""
     source = read_all_js()
     fn_start = source.find("function saveBatchProject")
@@ -1843,7 +1809,7 @@ def test_app_js_save_derives_ids_from_rendered_rows():
 
 
 def test_app_js_save_failure_does_not_clear_selection():
-    """Phase 3B.6.1: the failure path (result.ok === false) must NOT clear
+    """the failure path (result.ok === false) must NOT clear
     the selection or call resetBatchProjectState. The saving flag is reset
     once at the top of the .then handler (before branching), so both
     success and failure paths reset saving; the failure branch itself
@@ -1880,7 +1846,7 @@ def test_app_js_save_failure_does_not_clear_selection():
 
 
 def test_app_js_reset_batch_project_state_clears_selection():
-    """Phase 3B.6.1: resetBatchProjectState must clear the selection, the
+    """resetBatchProjectState must clear the selection, the
     target project, the saving flag, and reset the DOM controls."""
     source = read_all_js()
     fn_start = source.find("function resetBatchProjectState")
@@ -1899,7 +1865,7 @@ def test_app_js_reset_batch_project_state_clears_selection():
 
 
 def test_app_js_batch_save_guarded_by_saving_flag():
-    """Phase 3B.6.1: saveBatchProject must early-return if
+    """saveBatchProject must early-return if
     batchProjectSaving is already true (prevents double-submit)."""
     source = read_all_js()
     fn_start = source.find("function saveBatchProject")
@@ -1915,7 +1881,7 @@ def test_app_js_batch_save_guarded_by_saving_flag():
 
 
 def test_index_html_batch_section_has_status_area():
-    """Phase 3B.6.1: index.html must contain a batch status area for
+    """index.html must contain a batch status area for
     success / error messages."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-batch-status"' in source, (
@@ -1925,7 +1891,7 @@ def test_index_html_batch_section_has_status_area():
 
 
 def test_index_html_batch_section_has_select_all_and_clear():
-    """Phase 3B.6.1: index.html must contain the select-all and clear
+    """index.html must contain the select-all and clear
     selection buttons referenced by setBatchProjectSaving."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-batch-select-all-btn"' in source, (
@@ -1938,7 +1904,7 @@ def test_index_html_batch_section_has_select_all_and_clear():
 
 
 def test_styles_css_has_batch_disabled_states():
-    """Phase 3B.6.1: styles.css must define disabled / saving styles for
+    """styles.css must define disabled / saving styles for
     the batch controls so the user sees a clear visual state."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     # The batch save button must have a disabled style (or inherit the
@@ -1953,11 +1919,11 @@ def test_styles_css_has_batch_disabled_states():
 
 
 
-# --- Phase 3B.7 --------------------------------------------------
+# --- section --------------------------------------------------
 
 
 def test_app_js_has_batch_note_saving_state():
-    """Phase 3B.7: app.js must declare the batchNoteSaving state variable."""
+    """app.js must declare the batchNoteSaving state variable."""
     source = read_all_js()
     assert "batchNoteSaving" in source, (
         "app.js must declare the batchNoteSaving state variable"
@@ -1966,7 +1932,7 @@ def test_app_js_has_batch_note_saving_state():
 
 
 def test_app_js_has_batch_note_save_helper():
-    """Phase 3B.7: app.js must define the saveBatchNote function and
+    """app.js must define the saveBatchNote function and
     related helpers."""
     source = read_all_js()
     assert "function saveBatchNote" in source, (
@@ -1997,7 +1963,7 @@ def test_app_js_has_batch_note_save_helper():
 
 
 def test_app_js_calls_batch_note_update_bridge():
-    """Phase 3B.7: app.js must call the batch_update_timeline_activities_note
+    """app.js must call the batch_update_timeline_activities_note
     bridge method."""
     source = read_all_js()
     assert "batch_update_timeline_activities_note" in source, (
@@ -2007,7 +1973,7 @@ def test_app_js_calls_batch_note_update_bridge():
 
 
 def test_index_html_has_batch_note_section():
-    """Phase 3B.7: index.html must contain the batch note section in the
+    """index.html must contain the batch note section in the
     correction shell."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "批量备注覆盖" in source, (
@@ -2032,7 +1998,7 @@ def test_index_html_has_batch_note_section():
 
 
 def test_index_html_batch_note_hint_only_overwrite():
-    """Phase 3B.7: the batch note hint must state that only overwrite is
+    """the batch note hint must state that only overwrite is
     supported (no append / merge)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "覆盖" in source, (
@@ -2045,7 +2011,7 @@ def test_index_html_batch_note_hint_only_overwrite():
 
 
 def test_index_html_batch_note_textarea_placeholder():
-    """Phase 3B.7: the batch note textarea must have a placeholder."""
+    """the batch note textarea must have a placeholder."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "placeholder" in source, (
         "batch note textarea must have a placeholder attribute"
@@ -2054,7 +2020,7 @@ def test_index_html_batch_note_textarea_placeholder():
 
 
 def test_index_html_no_batch_note_append_merge_controls():
-    """Phase 3B.7: index.html must not contain append / merge note mode
+    """index.html must not contain append / merge note mode
     controls."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
@@ -2070,8 +2036,8 @@ def test_index_html_no_batch_note_append_merge_controls():
 
 
 def test_index_html_no_batch_hide_delete_time_split_merge_controls_3b7():
-    """Phase 3B.7: index.html must not contain batch hide / delete / time /
-    split / merge control identifiers (re-asserted for Phase 3B.7)."""
+    """index.html must not contain batch hide / delete / time /
+    split / merge control identifiers (re-asserted for the batch note scope)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
     for forbidden in (
@@ -2087,7 +2053,7 @@ def test_index_html_no_batch_hide_delete_time_split_merge_controls_3b7():
 
 
 def test_app_js_batch_note_save_disabled_for_fewer_than_two():
-    """Phase 3B.7: the batch note save button must be disabled when fewer
+    """the batch note save button must be disabled when fewer
     than two activities are selected."""
     source = read_all_js()
     save_start = source.find("function updateBatchNoteSaveButtonState")
@@ -2101,7 +2067,7 @@ def test_app_js_batch_note_save_disabled_for_fewer_than_two():
 
 
 def test_app_js_batch_note_save_blocked_by_dirty_edit():
-    """Phase 3B.7: saveBatchNote must block when isEditDirty() is true."""
+    """saveBatchNote must block when isEditDirty() is true."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
     assert save_start != -1
@@ -2117,7 +2083,7 @@ def test_app_js_batch_note_save_blocked_by_dirty_edit():
 
 
 def test_app_js_batch_note_success_refreshes_timeline():
-    """Phase 3B.7: a successful batch note save must refresh the Timeline."""
+    """a successful batch note save must refresh the Timeline."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
     save_end = source.find("\n    function ", save_start + 1)
@@ -2129,7 +2095,7 @@ def test_app_js_batch_note_success_refreshes_timeline():
 
 
 def test_app_js_batch_note_failure_preserves_selection():
-    """Phase 3B.7: a failed batch note save must preserve the selection,
+    """a failed batch note save must preserve the selection,
     detail list, and note textarea so the user can retry."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
@@ -2143,7 +2109,7 @@ def test_app_js_batch_note_failure_preserves_selection():
 
 
 def test_app_js_batch_note_catch_resets_saving():
-    """Phase 3B.7: the .catch path in saveBatchNote must reset saving."""
+    """the .catch path in saveBatchNote must reset saving."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
     save_end = source.find("\n    function ", save_start + 1)
@@ -2160,7 +2126,7 @@ def test_app_js_batch_note_catch_resets_saving():
 
 
 def test_app_js_clear_edit_panel_resets_batch_note_state():
-    """Phase 3B.7: clearEditPanel must call resetBatchNoteState."""
+    """clearEditPanel must call resetBatchNoteState."""
     source = read_all_js()
     clear_start = source.find("function clearEditPanel")
     clear_end = source.find("\n    function ", clear_start + 1)
@@ -2172,7 +2138,7 @@ def test_app_js_clear_edit_panel_resets_batch_note_state():
 
 
 def test_app_js_reset_correction_shell_resets_batch_note_state():
-    """Phase 3B.7: resetCorrectionShellState must call
+    """resetCorrectionShellState must call
     resetBatchNoteState."""
     source = read_all_js()
     reset_start = source.find("function resetCorrectionShellState")
@@ -2185,7 +2151,7 @@ def test_app_js_reset_correction_shell_resets_batch_note_state():
 
 
 def test_app_js_batch_note_rechecks_stale_ids():
-    """Phase 3B.7: saveBatchNote must re-check selected ids against the
+    """saveBatchNote must re-check selected ids against the
     currently rendered shell activity rows before calling the bridge."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
@@ -2201,7 +2167,7 @@ def test_app_js_batch_note_rechecks_stale_ids():
 
 
 def test_app_js_batch_note_empty_allowed():
-    """Phase 3B.7: the batch note save must allow empty string (to clear
+    """the batch note save must allow empty string (to clear
     notes). The save function must not reject an empty note."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
@@ -2216,7 +2182,7 @@ def test_app_js_batch_note_empty_allowed():
 
 
 def test_app_js_batch_note_saving_disables_controls():
-    """Phase 3B.7: setBatchNoteSaving must disable the textarea, save
+    """setBatchNoteSaving must disable the textarea, save
     button, and checkboxes during save."""
     source = read_all_js()
     save_start = source.find("function setBatchNoteSaving")
@@ -2235,7 +2201,7 @@ def test_app_js_batch_note_saving_disables_controls():
 
 
 def test_app_js_batch_note_count_uses_max_length():
-    """Phase 3B.7: updateBatchNoteCount must use NOTE_MAX_LENGTH."""
+    """updateBatchNoteCount must use NOTE_MAX_LENGTH."""
     source = read_all_js()
     count_start = source.find("function updateBatchNoteCount")
     count_end = source.find("\n    function ", count_start + 1)
@@ -2247,7 +2213,7 @@ def test_app_js_batch_note_count_uses_max_length():
 
 
 def test_app_js_batch_note_bind_controls_called_in_init():
-    """Phase 3B.7: bindBatchNoteControls must be called during init."""
+    """bindBatchNoteControls must be called during init."""
     source = read_all_js()
     # The bind call should be in the initButtons function (where other
     # bind calls live).
@@ -2261,7 +2227,7 @@ def test_app_js_batch_note_bind_controls_called_in_init():
 
 
 def test_app_js_batch_note_no_local_storage():
-    """Phase 3B.7: the batch note code must not use browser storage
+    """the batch note code must not use browser storage
     (re-asserted for the whole app.js)."""
     source = read_all_js()
     assert not re.search(r"localStorage|sessionStorage", source), (
@@ -2271,7 +2237,7 @@ def test_app_js_batch_note_no_local_storage():
 
 
 def test_app_js_batch_note_no_external_links():
-    """Phase 3B.7: the batch note code must not introduce external links
+    """the batch note code must not introduce external links
     (re-asserted for all frontend resources)."""
     for filename in FRONTEND_RESOURCE_FILES:
         source = read_resource(filename)
@@ -2282,9 +2248,9 @@ def test_app_js_batch_note_no_external_links():
 
 
 def test_app_js_batch_note_no_restore_permanent_auto_rule_overlap():
-    """Phase 3B.7: the batch note code must not introduce batch restore,
+    """the batch note code must not introduce batch restore,
     restore all, undo restore, permanent delete, auto-rule, or overlap
-    handlers (re-asserted for Phase 3B.8: single ``saveActivityRestore`` is
+    handlers (re-asserted: single ``saveActivityRestore`` is
     now implemented, but batch/undo/permanent variants remain forbidden)."""
     source = read_all_js()
     for forbidden in ("batchRestore", "batch_restore", "restoreAll",
@@ -2300,7 +2266,7 @@ def test_app_js_batch_note_no_restore_permanent_auto_rule_overlap():
 
 
 def test_styles_css_has_batch_note_section_styles():
-    """Phase 3B.7: styles.css must define the batch note section styles."""
+    """styles.css must define the batch note section styles."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell-batch-note-text" in source, (
         "styles.css must define .correction-shell-batch-note-text"
@@ -2309,9 +2275,9 @@ def test_styles_css_has_batch_note_section_styles():
 
 
 def test_bridge_has_batch_note_update_method():
-    """Phase 3B.7: the bridge must define the
+    """the bridge must define the
     batch_update_timeline_activities_note method."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     assert "def batch_update_timeline_activities_note" in bridge_src, (
@@ -2321,9 +2287,9 @@ def test_bridge_has_batch_note_update_method():
 
 
 def test_bridge_batch_note_error_messages_dict():
-    """Phase 3B.7: the bridge must define the _BATCH_NOTE_ERROR_MESSAGES
+    """the bridge must define the _BATCH_NOTE_ERROR_MESSAGES
     dict with all stable error code -> Chinese message mappings."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     assert "_BATCH_NOTE_ERROR_MESSAGES" in bridge_src, (
@@ -2346,7 +2312,7 @@ def test_bridge_batch_note_error_messages_dict():
 
 
 def test_api_has_batch_note_update_function():
-    """Phase 3B.7: the API must define the
+    """the API must define the
     batch_update_timeline_activities_note function and
     TimelineBatchNoteError class."""
     api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(
@@ -2362,7 +2328,7 @@ def test_api_has_batch_note_update_function():
 
 
 def test_service_has_batch_note_update_function():
-    """Phase 3B.7: the service must define the
+    """the service must define the
     batch_update_activity_note function and the
     MAX_BATCH_NOTE_EDIT_ACTIVITIES / BATCH_NOTE_MAX_LENGTH constants."""
     service_src = (REPO_ROOT / "worktrace" / "services" / "activity_service.py").read_text(
@@ -2381,7 +2347,7 @@ def test_service_has_batch_note_update_function():
 
 
 def test_app_js_batch_note_render_called_from_render_correction_shell():
-    """Phase 3B.7: renderBatchNoteSection must be called from
+    """renderBatchNoteSection must be called from
     renderCorrectionShell so the section is always populated when the shell
     opens."""
     source = read_all_js()
@@ -2394,11 +2360,11 @@ def test_app_js_batch_note_render_called_from_render_correction_shell():
 
 
 
-# --- Phase 3B.7.1 ------------------------------------------------
+# --- section ------------------------------------------------
 
 
 def test_app_js_batch_note_save_checks_batch_project_saving():
-    """Phase 3B.7.1: saveBatchNote must check ``batchProjectSaving`` before
+    """saveBatchNote must check ``batchProjectSaving`` before
     proceeding so two batch saves cannot compete."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
@@ -2411,7 +2377,7 @@ def test_app_js_batch_note_save_checks_batch_project_saving():
 
 
 def test_app_js_select_timeline_session_resets_batch_note():
-    """Phase 3B.7.1: selectTimelineSession must call
+    """selectTimelineSession must call
     resetCorrectionShellState (which calls resetBatchNoteState) when
     switching sessions so the note textarea does not carry over."""
     source = read_all_js()
@@ -2426,7 +2392,7 @@ def test_app_js_select_timeline_session_resets_batch_note():
 
 
 def test_app_js_date_navigation_resets_batch_note():
-    """Phase 3B.7.1: goPrevDay / goNextDay / goToday must all call
+    """goPrevDay / goNextDay / goToday must all call
     resetCorrectionShellState (which calls resetBatchNoteState) so the
     note textarea does not carry over to a different day."""
     source = read_all_js()
@@ -2443,7 +2409,7 @@ def test_app_js_date_navigation_resets_batch_note():
 
 
 def test_app_js_close_correction_shell_resets_batch_note():
-    """Phase 3B.7.1: closeCorrectionShell must call
+    """closeCorrectionShell must call
     resetCorrectionShellState (which calls resetBatchNoteState) so the
     note textarea is cleared when the user closes the shell."""
     source = read_all_js()
@@ -2458,7 +2424,7 @@ def test_app_js_close_correction_shell_resets_batch_note():
 
 
 def test_app_js_set_batch_note_saving_disables_batch_project_controls():
-    """Phase 3B.7.1: setBatchNoteSaving must disable the batch project
+    """setBatchNoteSaving must disable the batch project
     save button (and select-all / clear / project select) so the user
     cannot start a competing project save while a note save is in flight."""
     source = read_all_js()
@@ -2481,7 +2447,7 @@ def test_app_js_set_batch_note_saving_disables_batch_project_controls():
 
 
 def test_app_js_set_batch_project_saving_disables_batch_note_controls():
-    """Phase 3B.7.1: setBatchProjectSaving must disable the batch note
+    """setBatchProjectSaving must disable the batch note
     textarea so the user cannot edit the note while a project save is in
     flight."""
     source = read_all_js()
@@ -2495,7 +2461,7 @@ def test_app_js_set_batch_project_saving_disables_batch_note_controls():
 
 
 def test_app_js_reset_correction_shell_state_calls_reset_batch_note():
-    """Phase 3B.7.1: resetCorrectionShellState must call
+    """resetCorrectionShellState must call
     resetBatchNoteState so every path that resets the shell also clears
     the note textarea / count / status / saving state."""
     source = read_all_js()
@@ -2509,7 +2475,7 @@ def test_app_js_reset_correction_shell_state_calls_reset_batch_note():
 
 
 def test_app_js_reset_batch_note_state_clears_textarea_and_count():
-    """Phase 3B.7.1: resetBatchNoteState must clear the note textarea
+    """resetBatchNoteState must clear the note textarea
     value, reset the count, and hide the status area."""
     source = read_all_js()
     reset_start = source.find("function resetBatchNoteState")
@@ -2528,7 +2494,7 @@ def test_app_js_reset_batch_note_state_clears_textarea_and_count():
 
 
 def test_app_js_batch_note_no_old_or_new_note_leak_in_error_handling():
-    """Phase 3B.7.1: the batch note error handling code must not reference
+    """the batch note error handling code must not reference
     old_note or new_note variables — the bridge error is surfaced verbatim
     without echoing note content."""
     source = read_all_js()
@@ -2551,7 +2517,7 @@ def test_app_js_batch_note_no_old_or_new_note_leak_in_error_handling():
 
 
 def test_app_js_batch_note_failure_preserves_textarea():
-    """Phase 3B.7.1: the failure path in saveBatchNote must NOT clear the
+    """the failure path in saveBatchNote must NOT clear the
     note textarea — the user's input is preserved so they can retry."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
@@ -2580,7 +2546,7 @@ def test_app_js_batch_note_failure_preserves_textarea():
 
 
 def test_app_js_batch_note_success_clears_selection_and_textarea():
-    """Phase 3B.7.1: the success path in saveBatchNote must clear the
+    """the success path in saveBatchNote must clear the
     selection and the note textarea."""
     source = read_all_js()
     save_start = source.find("function saveBatchNote")
@@ -2597,11 +2563,11 @@ def test_app_js_batch_note_success_clears_selection_and_textarea():
 
 
 
-# --- Phase 3B.8 --------------------------------------------------
+# --- section --------------------------------------------------
 
 
 def test_index_html_has_restore_section():
-    """Phase 3B.8: index.html must contain the restore section in the
+    """index.html must contain the restore section in the
     correction shell."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "可恢复记录" in source, (
@@ -2620,7 +2586,7 @@ def test_index_html_has_restore_section():
 
 
 def test_index_html_restore_hint_no_batch_undo_permanent():
-    """Phase 3B.8: the restore hint must be present in index.html,
+    """the restore hint must be present in index.html,
     informing the user that restores are performed one record at a time."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     hint_start = source.find("correction-shell-restore-hint")
@@ -2634,7 +2600,7 @@ def test_index_html_restore_hint_no_batch_undo_permanent():
 
 
 def test_index_html_no_batch_restore_restore_all_permanent_undo_controls():
-    """Phase 3B.8: index.html must not contain batch restore, restore all,
+    """index.html must not contain batch restore, restore all,
     permanent delete, or undo stack controls."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     lowered = source.lower()
@@ -2652,7 +2618,7 @@ def test_index_html_no_batch_restore_restore_all_permanent_undo_controls():
 
 
 def test_app_js_has_restore_saving_state():
-    """Phase 3B.8: app.js must declare the restoreSaving state variable,
+    """app.js must declare the restoreSaving state variable,
     independent from batchProjectSaving / batchNoteSaving."""
     source = read_all_js()
     assert "restoreSaving" in source, (
@@ -2665,7 +2631,7 @@ def test_app_js_has_restore_saving_state():
 
 
 def test_app_js_has_restore_helpers():
-    """Phase 3B.8: app.js must define the restore helper functions."""
+    """app.js must define the restore helper functions."""
     source = read_all_js()
     assert "function resetRestoreState" in source, (
         "app.js must define the resetRestoreState function"
@@ -2695,7 +2661,7 @@ def test_app_js_has_restore_helpers():
 
 
 def test_app_js_calls_restore_bridge_methods():
-    """Phase 3B.8: app.js must call the restore_timeline_activity and
+    """app.js must call the restore_timeline_activity and
     get_timeline_restorable_activities bridge methods."""
     source = read_all_js()
     assert "restore_timeline_activity" in source, (
@@ -2708,7 +2674,7 @@ def test_app_js_calls_restore_bridge_methods():
 
 
 def test_app_js_restore_save_blocked_by_dirty_edit():
-    """Phase 3B.8: saveActivityRestore must block when isEditDirty() is
+    """saveActivityRestore must block when isEditDirty() is
     true and show the dirty-edit blocking message."""
     source = read_all_js()
     save_start = source.find("function saveActivityRestore")
@@ -2725,7 +2691,7 @@ def test_app_js_restore_save_blocked_by_dirty_edit():
 
 
 def test_app_js_restore_save_checks_restore_saving():
-    """Phase 3B.8: saveActivityRestore must check restoreSaving before
+    """saveActivityRestore must check restoreSaving before
     proceeding so two restores cannot compete."""
     source = read_all_js()
     save_start = source.find("function saveActivityRestore")
@@ -2738,7 +2704,7 @@ def test_app_js_restore_save_checks_restore_saving():
 
 
 def test_app_js_restore_success_refreshes_timeline():
-    """Phase 3B.8: a successful restore must refresh the Timeline."""
+    """a successful restore must refresh the Timeline."""
     source = read_all_js()
     save_start = source.find("function saveActivityRestore")
     save_end = source.find("\n    function ", save_start + 1)
@@ -2750,7 +2716,7 @@ def test_app_js_restore_success_refreshes_timeline():
 
 
 def test_app_js_restore_success_shows_restored_message():
-    """Phase 3B.8: a successful restore must show the 已恢复 message."""
+    """a successful restore must show the 已恢复 message."""
     source = read_all_js()
     save_start = source.find("function saveActivityRestore")
     save_end = source.find("\n    function ", save_start + 1)
@@ -2762,7 +2728,7 @@ def test_app_js_restore_success_shows_restored_message():
 
 
 def test_app_js_restore_failure_preserves_list():
-    """Phase 3B.8: a failed restore must preserve the restore list so the
+    """a failed restore must preserve the restore list so the
     user can retry."""
     source = read_all_js()
     save_start = source.find("function saveActivityRestore")
@@ -2780,7 +2746,7 @@ def test_app_js_restore_failure_preserves_list():
 
 
 def test_app_js_restore_catch_resets_saving():
-    """Phase 3B.8: the .catch path in saveActivityRestore must reset
+    """the .catch path in saveActivityRestore must reset
     saving."""
     source = read_all_js()
     save_start = source.find("function saveActivityRestore")
@@ -2799,7 +2765,7 @@ def test_app_js_restore_catch_resets_saving():
 
 
 def test_app_js_restore_saving_disables_buttons():
-    """Phase 3B.8: setRestoreSaving must disable all restore buttons when
+    """setRestoreSaving must disable all restore buttons when
     saving is true."""
     source = read_all_js()
     set_start = source.find("function setRestoreSaving")
@@ -2815,7 +2781,7 @@ def test_app_js_restore_saving_disables_buttons():
 
 
 def test_app_js_clear_edit_panel_resets_restore_state():
-    """Phase 3B.8: clearEditPanel must call resetRestoreState."""
+    """clearEditPanel must call resetRestoreState."""
     source = read_all_js()
     clear_start = source.find("function clearEditPanel")
     clear_end = source.find("\n    function ", clear_start + 1)
@@ -2827,7 +2793,7 @@ def test_app_js_clear_edit_panel_resets_restore_state():
 
 
 def test_app_js_reset_correction_shell_resets_restore_state():
-    """Phase 3B.8: resetCorrectionShellState must call resetRestoreState."""
+    """resetCorrectionShellState must call resetRestoreState."""
     source = read_all_js()
     reset_start = source.find("function resetCorrectionShellState")
     reset_end = source.find("\n    function ", reset_start + 1)
@@ -2839,7 +2805,7 @@ def test_app_js_reset_correction_shell_resets_restore_state():
 
 
 def test_app_js_restore_render_called_from_render_correction_shell():
-    """Phase 3B.8: renderRestoreSection must be called from
+    """renderRestoreSection must be called from
     renderCorrectionShell so the section is always populated when the shell
     opens."""
     source = read_all_js()
@@ -2853,7 +2819,7 @@ def test_app_js_restore_render_called_from_render_correction_shell():
 
 
 def test_app_js_restore_bind_called_in_init():
-    """Phase 3B.8: bindRestoreControls must be called during initButtons."""
+    """bindRestoreControls must be called during initButtons."""
     source = read_all_js()
     buttons_start = source.find("function initButtons")
     buttons_end = source.find("\n    function ", buttons_start + 1)
@@ -2865,7 +2831,7 @@ def test_app_js_restore_bind_called_in_init():
 
 
 def test_app_js_restore_uses_escape_html():
-    """Phase 3B.8: renderRestorableActivities must escape dynamic values
+    """renderRestorableActivities must escape dynamic values
     using escapeHtml."""
     source = read_all_js()
     render_start = source.find("function renderRestorableActivities")
@@ -2878,7 +2844,7 @@ def test_app_js_restore_uses_escape_html():
 
 
 def test_app_js_restore_no_local_storage():
-    """Phase 3B.8: the restore code must not use browser storage
+    """the restore code must not use browser storage
     (re-asserted for the whole app.js)."""
     source = read_all_js()
     assert not re.search(r"localStorage|sessionStorage", source), (
@@ -2888,7 +2854,7 @@ def test_app_js_restore_no_local_storage():
 
 
 def test_app_js_restore_no_external_links():
-    """Phase 3B.8: the restore code must not introduce external links
+    """the restore code must not introduce external links
     (re-asserted for all frontend resources)."""
     for filename in FRONTEND_RESOURCE_FILES:
         source = read_resource(filename)
@@ -2899,7 +2865,7 @@ def test_app_js_restore_no_external_links():
 
 
 def test_app_js_restore_no_raw_field_display():
-    """Phase 3B.8: the restore code must not display raw window_title /
+    """the restore code must not display raw window_title /
     file_path / clipboard / note fields."""
     source = read_all_js()
     render_start = source.find("function renderRestorableActivities")
@@ -2914,7 +2880,7 @@ def test_app_js_restore_no_raw_field_display():
 
 
 def test_styles_css_has_restore_section_styles():
-    """Phase 3B.8: styles.css must define the restore section styles."""
+    """styles.css must define the restore section styles."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell-restore-section" in source, (
         "styles.css must define .correction-shell-restore-section"
@@ -2935,9 +2901,9 @@ def test_styles_css_has_restore_section_styles():
 
 
 def test_bridge_has_restore_method():
-    """Phase 3B.8: the bridge must define the restore_timeline_activity
+    """the bridge must define the restore_timeline_activity
     and get_timeline_restorable_activities methods."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     assert "def restore_timeline_activity" in bridge_src, (
@@ -2950,9 +2916,9 @@ def test_bridge_has_restore_method():
 
 
 def test_bridge_restore_error_messages_dict():
-    """Phase 3B.8: the bridge must define the _RESTORE_ERROR_MESSAGES
+    """the bridge must define the _RESTORE_ERROR_MESSAGES
     dict with all stable error code -> Chinese message mappings."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     assert "_RESTORE_ERROR_MESSAGES" in bridge_src, (
@@ -2973,7 +2939,7 @@ def test_bridge_restore_error_messages_dict():
 
 
 def test_api_has_restore_function():
-    """Phase 3B.8: the API must define the restore_timeline_activity and
+    """the API must define the restore_timeline_activity and
     get_timeline_restorable_activities functions and the
     TimelineRestoreActivityError class."""
     api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(
@@ -2992,7 +2958,7 @@ def test_api_has_restore_function():
 
 
 def test_service_has_restore_function():
-    """Phase 3B.8: the service must define the restore_activity and
+    """the service must define the restore_activity and
     list_restorable_activities_for_date functions."""
     service_src = (
         REPO_ROOT / "worktrace" / "services" / "activity_service.py"
@@ -3007,15 +2973,15 @@ def test_service_has_restore_function():
 
 
 def test_app_js_restore_state_independent_from_batch_states():
-    """Phase 3B.8 / 3B.9: the restore saving STATE VARIABLE must be
+    """/ 3B.9: the restore saving STATE VARIABLE must be
     independent from batchProjectSaving / batchNoteSaving (declared as a
-    separate variable). Phase 3B.9 adds a cross-save guard so
+    separate variable). The cross-save guard means
     saveActivityRestore refuses when a batch save is in flight; that guard
-    is covered by the Phase 3B.9 cross-save tests and does not violate the
+    is covered by the cross-save tests and does not violate the
     state-variable independence."""
     source = read_all_js()
     # The restore saving variable must be declared separately.
-    # Phase R2: state vars now live on the App. namespace.
+    # state vars now live on the App. namespace.
     assert "App.restoreSaving" in source, (
         "app.js must declare restoreSaving as a separate variable"
     )
@@ -3034,7 +3000,7 @@ def test_app_js_restore_state_independent_from_batch_states():
 
 
 def test_app_js_restore_does_not_reload_during_save():
-    """Phase 3B.8: renderRestoreSection must not reload the recovery list
+    """renderRestoreSection must not reload the recovery list
     while a restore save is in flight."""
     source = read_all_js()
     render_start = source.find("function renderRestoreSection")
@@ -3047,7 +3013,7 @@ def test_app_js_restore_does_not_reload_during_save():
 
 
 def test_app_js_restore_load_shows_loading_placeholder():
-    """Phase 3B.8: loadRestorableActivities must show a loading placeholder
+    """loadRestorableActivities must show a loading placeholder
     while the list loads."""
     source = read_all_js()
     load_start = source.find("function loadRestorableActivities")
@@ -3060,7 +3026,7 @@ def test_app_js_restore_load_shows_loading_placeholder():
 
 
 def test_app_js_restore_load_failure_shows_error():
-    """Phase 3B.8: loadRestorableActivities must show 加载可恢复记录失败 on
+    """loadRestorableActivities must show 加载可恢复记录失败 on
     failure."""
     source = read_all_js()
     load_start = source.find("function loadRestorableActivities")
@@ -3073,7 +3039,7 @@ def test_app_js_restore_load_failure_shows_error():
 
 
 def test_app_js_restore_empty_list_css_fallback():
-    """Phase 3B.8: an empty restore list must rely on the CSS :empty
+    """an empty restore list must rely on the CSS :empty
     rule (no explicit 'no records' text in JS)."""
     source = read_all_js()
     render_start = source.find("function renderRestorableActivities")
@@ -3087,7 +3053,7 @@ def test_app_js_restore_empty_list_css_fallback():
 
 
 def test_styles_css_restore_empty_state():
-    """Phase 3B.8: styles.css must define the empty-state fallback for the
+    """styles.css must define the empty-state fallback for the
     restore list."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert "暂无可恢复记录" in source or ":empty" in source, (
@@ -3096,11 +3062,11 @@ def test_styles_css_restore_empty_state():
 
 
 
-# --- Phase 3B.8.1 ------------------------------------------------
+# --- section ------------------------------------------------
 
 
 def test_app_js_restore_stale_row_guard():
-    """Phase 3B.8.1: saveActivityRestore must confirm the activity row
+    """saveActivityRestore must confirm the activity row
     still exists in the current restore list before calling the bridge.
     If the row is stale (e.g. the list was reloaded by an auto-refresh and
     the activity is no longer present), a safe message must be shown and
@@ -3142,7 +3108,7 @@ def test_app_js_restore_stale_row_guard():
 
 
 def test_app_js_restore_stale_row_guard_before_dirty_check():
-    """Phase 3B.8.1: the stale-row guard must run before the dirty-edit
+    """the stale-row guard must run before the dirty-edit
     check so that a stale row is surfaced even when the user has unsaved
     edits (the stale row message is more specific than the dirty-edit
     block message)."""
@@ -3164,7 +3130,7 @@ def test_app_js_restore_stale_row_guard_before_dirty_check():
 
 
 def test_app_js_restore_auto_refresh_reload_guard():
-    """Phase 3B.8.1: the auto-refresh path that re-renders the correction
+    """the auto-refresh path that re-renders the correction
     shell (and thus the restore section) must be guarded by:
       1. shell open (correctionShellOpen),
       2. session match (correctionShellSessionId === found.session_id),
@@ -3214,7 +3180,7 @@ def test_app_js_restore_auto_refresh_reload_guard():
 
 
 def test_app_js_restore_saving_guard_in_render_returns_early():
-    """Phase 3B.8.1: when restoreSaving is true, renderRestoreSection must
+    """when restoreSaving is true, renderRestoreSection must
     return immediately (skip the loadRestorableActivities call) so the
     in-flight save's success/failure handler can complete the reload
     itself. This prevents an auto-refresh from overwriting the list while
@@ -3224,7 +3190,7 @@ def test_app_js_restore_saving_guard_in_render_returns_early():
     render_end = source.find("\n    function ", render_start + 1)
     render_body = source[render_start:render_end]
     # The guard must be an early return: "if (App.restoreSaving) return;"
-    # Phase R2: state vars now live on the App. namespace.
+    # state vars now live on the App. namespace.
     assert re.search(r"if\s*\(\s*App\.restoreSaving\s*\)\s*return", render_body), (
         "renderRestoreSection must early-return when restoreSaving is true"
     )
@@ -3232,7 +3198,7 @@ def test_app_js_restore_saving_guard_in_render_returns_early():
 
 
 def test_app_js_restore_stale_guard_does_not_change_selected_session():
-    """Phase 3B.8.1: the stale-row refusal path must not change the
+    """the stale-row refusal path must not change the
     selected session (only show a safe message and return). This mirrors
     the dirty-state refusal semantics."""
     source = read_all_js()
@@ -3257,7 +3223,7 @@ def test_app_js_restore_stale_guard_does_not_change_selected_session():
 
 
 def test_app_js_restore_stale_guard_no_bridge_call():
-    """Phase 3B.8.1: the stale-row guard path must not call callBridge.
+    """the stale-row guard path must not call callBridge.
     Only the path after the dirty-edit check (the actual restore path) may
     call the bridge."""
     source = read_all_js()
@@ -3278,11 +3244,11 @@ def test_app_js_restore_stale_guard_no_bridge_call():
 
 
 
-# --- Phase 3B.9 --------------------------------------------------
+# --- section --------------------------------------------------
 
 
 def test_index_html_correction_shell_has_context_card_3b9():
-    """Phase 3B.9: index.html must wrap the context block in a
+    """index.html must wrap the context block in a
     correction-shell-context-card."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-context-card"' in source, (
@@ -3295,7 +3261,7 @@ def test_index_html_correction_shell_has_context_card_3b9():
 
 
 def test_index_html_correction_shell_has_activity_card_3b9():
-    """Phase 3B.9: index.html must wrap the activities block in a
+    """index.html must wrap the activities block in a
     correction-shell-activity-card."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-activity-card"' in source, (
@@ -3306,7 +3272,7 @@ def test_index_html_correction_shell_has_activity_card_3b9():
 
 
 def test_index_html_correction_shell_has_single_action_card_3b9():
-    """Phase 3B.9: index.html must wrap the actions block in a
+    """index.html must wrap the actions block in a
     correction-shell-single-action-card."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-single-action-card"' in source, (
@@ -3317,7 +3283,7 @@ def test_index_html_correction_shell_has_single_action_card_3b9():
 
 
 def test_index_html_correction_shell_has_batch_action_card_3b9():
-    """Phase 3B.9: index.html must wrap the batch project + batch note
+    """index.html must wrap the batch project + batch note
     sections in a single correction-shell-batch-action-card."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-batch-action-card"' in source, (
@@ -3343,7 +3309,7 @@ def test_index_html_correction_shell_has_batch_action_card_3b9():
 
 
 def test_index_html_correction_shell_has_restore_card_3b9():
-    """Phase 3B.9: index.html must wrap the restore section in a
+    """index.html must wrap the restore section in a
     correction-shell-restore-card."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-restore-card"' in source, (
@@ -3372,7 +3338,7 @@ def test_index_html_correction_shell_has_restore_card_3b9():
 
 
 def test_index_html_correction_shell_has_not_implemented_card_3b9():
-    """Phase 3B.9: the not-implemented hint card was removed during
+    """the not-implemented hint card was removed during
     consolidation; index.html must NOT contain it."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="correction-shell-not-implemented-card"' not in source, (
@@ -3385,7 +3351,7 @@ def test_index_html_correction_shell_has_not_implemented_card_3b9():
 
 
 def test_index_html_correction_shell_card_headers_present_3b9():
-    """Phase 3B.9: each card must have a .correction-shell-card-header."""
+    """each card must have a .correction-shell-card-header."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "correction-shell-card-header" in source, (
         "index.html must define .correction-shell-card-header elements"
@@ -3399,7 +3365,7 @@ def test_index_html_correction_shell_card_headers_present_3b9():
 
 
 def test_index_html_correction_shell_preserves_existing_ids_3b9():
-    """Phase 3B.9: consolidation must not remove any existing IDs that
+    """consolidation must not remove any existing IDs that
     prior-phase tests depend on."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for required_id in (
@@ -3433,7 +3399,7 @@ def test_index_html_correction_shell_preserves_existing_ids_3b9():
 
 
 def test_index_html_correction_shell_no_new_forbidden_controls_3b9():
-    """Phase 3B.9: the consolidation must not introduce batch hide /
+    """the consolidation must not introduce batch hide /
     delete / restore, restore-all, undo stack, permanent delete, batch
     time / split / merge UI controls."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
@@ -3460,7 +3426,7 @@ def test_index_html_correction_shell_no_new_forbidden_controls_3b9():
 
 
 def test_index_html_correction_shell_no_external_resources_3b9():
-    """Phase 3B.9: the correction shell region must not introduce
+    """the correction shell region must not introduce
     external links, CDN, Google Fonts, or browser storage."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     shell_start = source.find('id="timeline-correction-shell"')
@@ -3476,7 +3442,7 @@ def test_index_html_correction_shell_no_external_resources_3b9():
 
 
 def test_app_js_has_safe_text_helper_3b9():
-    """Phase 3B.9: app.js must define a safeText display-safe helper."""
+    """app.js must define a safeText display-safe helper."""
     source = read_all_js()
     assert "function safeText" in source, (
         "app.js must define the safeText helper"
@@ -3485,7 +3451,7 @@ def test_app_js_has_safe_text_helper_3b9():
 
 
 def test_app_js_safe_text_returns_fallback_3b9():
-    """Phase 3B.9: safeText must return the fallback for null / undefined /
+    """safeText must return the fallback for null / undefined /
     empty values, and stringify non-empty values."""
     source = read_all_js()
     body = func_body(source, "safeText")
@@ -3497,7 +3463,7 @@ def test_app_js_safe_text_returns_fallback_3b9():
 
 
 def test_app_js_has_is_any_correction_write_saving_helper_3b9():
-    """Phase 3B.9: app.js must define an isAnyCorrectionWriteSaving
+    """app.js must define an isAnyCorrectionWriteSaving
     cross-save guard helper."""
     source = read_all_js()
     assert "function isAnyCorrectionWriteSaving" in source, (
@@ -3517,7 +3483,7 @@ def test_app_js_has_is_any_correction_write_saving_helper_3b9():
 
 
 def test_app_js_has_reset_correction_action_status_helper_3b9():
-    """Phase 3B.9: app.js must define a resetCorrectionActionStatus helper
+    """app.js must define a resetCorrectionActionStatus helper
     that clears every shell status area."""
     source = read_all_js()
     assert "function resetCorrectionActionStatus" in source, (
@@ -3540,7 +3506,7 @@ def test_app_js_has_reset_correction_action_status_helper_3b9():
 
 
 def test_app_js_open_correction_shell_calls_reset_action_status_3b9():
-    """Phase 3B.9: openCorrectionShell must call resetCorrectionActionStatus
+    """openCorrectionShell must call resetCorrectionActionStatus
     so stale messages from a previous shell session do not linger."""
     source = read_all_js()
     body = func_body(source, "openCorrectionShell")
@@ -3551,7 +3517,7 @@ def test_app_js_open_correction_shell_calls_reset_action_status_3b9():
 
 
 def test_app_js_render_correction_shell_uses_safe_text_3b9():
-    """Phase 3B.9: renderCorrectionShell must pass dynamic values through
+    """renderCorrectionShell must pass dynamic values through
     safeText so the shell never renders undefined / null."""
     source = read_all_js()
     body = func_body(source, "renderCorrectionShell")
@@ -3562,7 +3528,7 @@ def test_app_js_render_correction_shell_uses_safe_text_3b9():
 
 
 def test_app_js_render_restorable_activities_uses_safe_text_3b9():
-    """Phase 3B.9: renderRestorableActivities must pass dynamic values
+    """renderRestorableActivities must pass dynamic values
     through safeText so the restore list never renders undefined / null."""
     source = read_all_js()
     body = func_body(source, "renderRestorableActivities")
@@ -3573,7 +3539,7 @@ def test_app_js_render_restorable_activities_uses_safe_text_3b9():
 
 
 def test_app_js_render_correction_shell_still_uses_escape_html_3b9():
-    """Phase 3B.9: renderCorrectionShell must still escapeHtml every
+    """renderCorrectionShell must still escapeHtml every
     dynamic value before inserting into innerHTML."""
     source = read_all_js()
     body = func_body(source, "renderCorrectionShell")
@@ -3584,7 +3550,7 @@ def test_app_js_render_correction_shell_still_uses_escape_html_3b9():
 
 
 def test_app_js_correction_shell_no_raw_sensitive_fields_3b9():
-    """Phase 3B.9: the correction shell render path must not read raw
+    """the correction shell render path must not read raw
     window_title / file_path_hint / full_path / clipboard / note internals
     / traceback / SQL / exception text."""
     source = read_all_js()
@@ -3599,7 +3565,7 @@ def test_app_js_correction_shell_no_raw_sensitive_fields_3b9():
 
 
 def test_app_js_render_restorable_activities_no_raw_sensitive_fields_3b9():
-    """Phase 3B.9: the restore list render path must not read raw
+    """the restore list render path must not read raw
     window_title / file_path_hint / full_path / clipboard / note internals
     / traceback / SQL / exception text."""
     source = read_all_js()
@@ -3614,7 +3580,7 @@ def test_app_js_render_restorable_activities_no_raw_sensitive_fields_3b9():
 
 
 def test_app_js_save_batch_project_has_cross_save_guard_3b9():
-    """Phase 3B.9: saveBatchProject must refuse when a batch note save or
+    """saveBatchProject must refuse when a batch note save or
     single restore is in flight (cross-save guard)."""
     source = read_all_js()
     body = func_body(source, "saveBatchProject")
@@ -3631,7 +3597,7 @@ def test_app_js_save_batch_project_has_cross_save_guard_3b9():
 
 
 def test_app_js_save_batch_note_has_cross_save_guard_3b9():
-    """Phase 3B.9: saveBatchNote must refuse when a single restore is in
+    """saveBatchNote must refuse when a single restore is in
     flight (cross-save guard)."""
     source = read_all_js()
     body = func_body(source, "saveBatchNote")
@@ -3645,7 +3611,7 @@ def test_app_js_save_batch_note_has_cross_save_guard_3b9():
 
 
 def test_app_js_save_activity_restore_has_cross_save_guard_3b9():
-    """Phase 3B.9: saveActivityRestore must refuse when a batch project or
+    """saveActivityRestore must refuse when a batch project or
     batch note save is in flight (cross-save guard)."""
     source = read_all_js()
     body = func_body(source, "saveActivityRestore")
@@ -3662,9 +3628,9 @@ def test_app_js_save_activity_restore_has_cross_save_guard_3b9():
 
 
 def test_app_js_save_activity_restore_cross_save_after_dirty_check_3b9():
-    """Phase 3B.9: the cross-save guard in saveActivityRestore must come
+    """the cross-save guard in saveActivityRestore must come
     AFTER the dirty-edit check (the stale-row guard must still come before
-    the dirty-edit check, per Phase 3B.8.1)."""
+    the dirty-edit check)."""
     source = read_all_js()
     body = func_body(source, "saveActivityRestore")
     stale_pos = body.find("correction-shell-restore-list")
@@ -3683,7 +3649,7 @@ def test_app_js_save_activity_restore_cross_save_after_dirty_check_3b9():
 
 
 def test_app_js_save_activity_restore_cross_save_no_bridge_call_3b9():
-    """Phase 3B.9: the cross-save guard path in saveActivityRestore must
+    """the cross-save guard path in saveActivityRestore must
     not call callBridge."""
     source = read_all_js()
     body = func_body(source, "saveActivityRestore")
@@ -3700,7 +3666,7 @@ def test_app_js_save_activity_restore_cross_save_no_bridge_call_3b9():
 
 
 def test_app_js_reset_correction_shell_state_still_resets_all_3b9():
-    """Phase 3B.9: resetCorrectionShellState must still call the three
+    """resetCorrectionShellState must still call the three
     sub-reset helpers (batch project / batch note / restore)."""
     source = read_all_js()
     body = func_body(source, "resetCorrectionShellState")
@@ -3717,7 +3683,7 @@ def test_app_js_reset_correction_shell_state_still_resets_all_3b9():
 
 
 def test_app_js_reset_correction_shell_state_independent_of_edit_saving_3b9():
-    """Phase 3B.9: resetCorrectionShellState must not reset the edit /
+    """resetCorrectionShellState must not reset the edit /
     time / split / merge / hide / delete saving states (those are owned by
     clearEditPanel)."""
     source = read_all_js()
@@ -3732,7 +3698,7 @@ def test_app_js_reset_correction_shell_state_independent_of_edit_saving_3b9():
 
 
 def test_app_js_close_correction_shell_no_write_3b9():
-    """Phase 3B.9: closeCorrectionShell must not trigger a refresh or any
+    """closeCorrectionShell must not trigger a refresh or any
     write action."""
     source = read_all_js()
     body = func_body(source, "closeCorrectionShell")
@@ -3749,7 +3715,7 @@ def test_app_js_close_correction_shell_no_write_3b9():
 
 
 def test_app_js_correction_shell_no_local_storage_3b9():
-    """Phase 3B.9: the correction shell must not use localStorage or
+    """the correction shell must not use localStorage or
     sessionStorage."""
     source = read_all_js()
     for forbidden in ("localStorage", "sessionStorage"):
@@ -3760,7 +3726,7 @@ def test_app_js_correction_shell_no_local_storage_3b9():
 
 
 def test_app_js_correction_shell_no_external_links_3b9():
-    """Phase 3B.9: app.js must not reference external links, CDN, or
+    """app.js must not reference external links, CDN, or
     Google Fonts."""
     source = read_all_js()
     for forbidden in ("http://", "https://", "cdn.", "googleapis.com",
@@ -3772,7 +3738,7 @@ def test_app_js_correction_shell_no_external_links_3b9():
 
 
 def test_app_js_correction_shell_no_traceback_display_3b9():
-    """Phase 3B.9: app.js must not display tracebacks / SQL / raw exception
+    """app.js must not display tracebacks / SQL / raw exception
     text in the correction shell."""
     source = read_all_js()
     for forbidden in ("traceback", "Traceback", "SQL", "Exception"):
@@ -3783,7 +3749,7 @@ def test_app_js_correction_shell_no_traceback_display_3b9():
 
 
 def test_app_js_correction_shell_no_new_forbidden_handlers_3b9():
-    """Phase 3B.9: the consolidation must not introduce batch hide /
+    """the consolidation must not introduce batch hide /
     delete, batch restore, restore all, undo stack, permanent delete,
     auto-rule, or global overlap detection handlers."""
     source = read_all_js()
@@ -3802,7 +3768,7 @@ def test_app_js_correction_shell_no_new_forbidden_handlers_3b9():
 
 
 def test_app_js_batch_project_and_note_share_selection_3b9():
-    """Phase 3B.9: batch project and batch note must share the same
+    """batch project and batch note must share the same
     selectedBatchActivityIds selection (single source of truth)."""
     source = read_all_js()
     project_body = func_body(source, "saveBatchProject")
@@ -3817,7 +3783,7 @@ def test_app_js_batch_project_and_note_share_selection_3b9():
 
 
 def test_styles_css_has_correction_shell_card_styles_3b9():
-    """Phase 3B.9: styles.css must define the unified .correction-shell-card
+    """styles.css must define the unified .correction-shell-card
     style and its variants."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell-card" in source, (
@@ -3836,7 +3802,7 @@ def test_styles_css_has_correction_shell_card_styles_3b9():
 
 
 def test_styles_css_correction_shell_hidden_still_display_none_3b9():
-    """Phase 3B.9: .correction-shell[hidden] must still be display:none."""
+    """.correction-shell[hidden] must still be display:none."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell[hidden]" in source, (
         "styles.css must keep the .correction-shell[hidden] rule"
@@ -3845,7 +3811,7 @@ def test_styles_css_correction_shell_hidden_still_display_none_3b9():
 
 
 def test_styles_css_has_card_responsive_rules_3b9():
-    """Phase 3B.9: styles.css must keep the correction shell cards stable
+    """styles.css must keep the correction shell cards stable
     on narrow viewports."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     # The responsive block must reference the card class.
@@ -3856,7 +3822,7 @@ def test_styles_css_has_card_responsive_rules_3b9():
 
 
 def test_styles_css_no_external_resources_3b9():
-    """Phase 3B.9: styles.css must not reference external resources."""
+    """styles.css must not reference external resources."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     for forbidden in ("http://", "https://", "cdn.", "googleapis.com",
                       "fonts.googleapis", "@import"):
@@ -3867,10 +3833,10 @@ def test_styles_css_no_external_resources_3b9():
 
 
 def test_bridge_no_new_methods_for_phase_3b_9():
-    """Phase 3B.9: the bridge must not gain new methods. The existing
+    """the bridge must not gain new methods. The existing
     project / note / time / split / merge / hide / delete / batch project /
     batch note / restore methods must still be present."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     for required in (
@@ -3899,10 +3865,10 @@ def test_bridge_no_new_methods_for_phase_3b_9():
 
 
 def test_bridge_imports_only_allowed_modules_3b_9():
-    """Phase 3B.9: the bridge must still only import worktrace.api and
+    """the bridge must still only import worktrace.api and
     worktrace.formatters; no direct service / db / collector / security /
     runtime / config imports."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     for forbidden in ("from ..services", "from ..db",
@@ -3916,11 +3882,11 @@ def test_bridge_imports_only_allowed_modules_3b_9():
 
 
 
-# --- Phase 3B.9.1 ------------------------------------------------
+# --- section ------------------------------------------------
 
 
 def test_app_js_save_batch_note_cross_save_uses_unified_message_3b9_1():
-    """Phase 3B.9.1: saveBatchNote must use the unified cross-save message
+    """saveBatchNote must use the unified cross-save message
     '请等待当前操作完成' for BOTH batchProjectSaving and restoreSaving, not
     '操作失败' for batchProjectSaving."""
     source = read_all_js()
@@ -3940,8 +3906,8 @@ def test_app_js_save_batch_note_cross_save_uses_unified_message_3b9_1():
 
 
 
-def test_app_js_save_batch_note_no_legacy_failure_message_for_cross_save_3b9_1():
-    """Phase 3B.9.1: saveBatchNote must NOT use '操作失败' for the
+def test_app_js_save_batch_note_no_removed_failure_message_for_cross_save_3b9_1():
+    """saveBatchNote must NOT use '操作失败' for the
     batchProjectSaving cross-save (that was the pre-hardening behavior)."""
     source = read_all_js()
     body = func_body(source, "saveBatchNote")
@@ -3958,7 +3924,7 @@ def test_app_js_save_batch_note_no_legacy_failure_message_for_cross_save_3b9_1()
 
 
 def test_app_js_auto_refresh_checks_correction_write_saving_3b9_1():
-    """Phase 3B.9.1: the auto-refresh re-render path must check
+    """the auto-refresh re-render path must check
     isAnyCorrectionWriteSaving() so a save in flight is not overwritten."""
     source = read_all_js()
     # The auto-refresh guard is in the session-found branch of the
@@ -3986,7 +3952,7 @@ def test_app_js_auto_refresh_checks_correction_write_saving_3b9_1():
 
 
 def test_app_js_render_batch_project_section_status_guard_3b9_1():
-    """Phase 3B.9.1: renderBatchProjectSection must not clear the batch
+    """renderBatchProjectSection must not clear the batch
     project status while a batch project save is in flight."""
     source = read_all_js()
     body = func_body(source, "renderBatchProjectSection")
@@ -4010,7 +3976,7 @@ def test_app_js_render_batch_project_section_status_guard_3b9_1():
 
 
 def test_app_js_render_batch_note_section_status_guard_3b9_1():
-    """Phase 3B.9.1: renderBatchNoteSection must not clear the batch note
+    """renderBatchNoteSection must not clear the batch note
     status while a batch note save is in flight."""
     source = read_all_js()
     body = func_body(source, "renderBatchNoteSection")
@@ -4031,7 +3997,7 @@ def test_app_js_render_batch_note_section_status_guard_3b9_1():
 
 
 def test_app_js_cross_save_guard_order_dirty_before_cross_save_3b9_1():
-    """Phase 3B.9.1: in all three consolidated write paths, the dirty guard
+    """in all three consolidated write paths, the dirty guard
     (isEditDirty) must come BEFORE the cross-save guard."""
     source = read_all_js()
     for func_name, cross_marker in [
@@ -4055,7 +4021,7 @@ def test_app_js_cross_save_guard_order_dirty_before_cross_save_3b9_1():
 
 
 def test_app_js_cross_save_guard_no_bridge_call_3b9_1():
-    """Phase 3B.9.1: none of the three cross-save guard paths may call
+    """none of the three cross-save guard paths may call
     callBridge before returning."""
     source = read_all_js()
     for func_name, cross_marker in [
@@ -4078,7 +4044,7 @@ def test_app_js_cross_save_guard_no_bridge_call_3b9_1():
 
 
 def test_app_js_cross_save_guard_preserves_state_3b9_1():
-    """Phase 3B.9.1: the cross-save guard paths must not clear selection,
+    """the cross-save guard paths must not clear selection,
     textarea, or restore list (they only show a status and return)."""
     source = read_all_js()
     for func_name, cross_marker in [
@@ -4102,7 +4068,7 @@ def test_app_js_cross_save_guard_preserves_state_3b9_1():
 
 
 def test_app_js_is_any_correction_write_saving_covers_three_states_3b9_1():
-    """Phase 3B.9.1: isAnyCorrectionWriteSaving must cover batchProjectSaving,
+    """isAnyCorrectionWriteSaving must cover batchProjectSaving,
     batchNoteSaving, and restoreSaving."""
     source = read_all_js()
     body = func_body(source, "isAnyCorrectionWriteSaving")
@@ -4119,7 +4085,7 @@ def test_app_js_is_any_correction_write_saving_covers_three_states_3b9_1():
 
 
 def test_app_js_reset_correction_shell_state_calls_sub_resets_3b9_1():
-    """Phase 3B.9.1: resetCorrectionShellState must still call all three
+    """resetCorrectionShellState must still call all three
     sub-reset helpers."""
     source = read_all_js()
     body = func_body(source, "resetCorrectionShellState")
@@ -4136,7 +4102,7 @@ def test_app_js_reset_correction_shell_state_calls_sub_resets_3b9_1():
 
 
 def test_app_js_reset_paths_cover_all_contexts_3b9_1():
-    """Phase 3B.9.1: resetCorrectionShellState must be called on close,
+    """resetCorrectionShellState must be called on close,
     date switch, session switch, and session disappear paths."""
     source = read_all_js()
     # closeCorrectionShell must call resetCorrectionShellState.
@@ -4160,7 +4126,7 @@ def test_app_js_reset_paths_cover_all_contexts_3b9_1():
 
 
 def test_app_js_close_correction_shell_preserves_selected_session_3b9_1():
-    """Phase 3B.9.1: closeCorrectionShell must NOT clear selectedSessionId
+    """closeCorrectionShell must NOT clear selectedSessionId
     (the user returns to the same session context)."""
     source = read_all_js()
     body = func_body(source, "closeCorrectionShell")
@@ -4176,7 +4142,7 @@ def test_app_js_close_correction_shell_preserves_selected_session_3b9_1():
 
 
 def test_app_js_safe_text_still_used_in_correction_shell_3b9_1():
-    """Phase 3B.9.1: renderCorrectionShell and renderRestorableActivities
+    """renderCorrectionShell and renderRestorableActivities
     must still use safeText for dynamic values."""
     source = read_all_js()
     render_body = func_body(source, "renderCorrectionShell")
@@ -4191,22 +4157,22 @@ def test_app_js_safe_text_still_used_in_correction_shell_3b9_1():
 
 
 def test_app_js_correction_shell_no_raw_sensitive_fields_3b9_1():
-    """Phase 3B.9.1: app.js must not reference raw sensitive backend column
+    """app.js must not reference raw sensitive backend column
     names anywhere (window_title, file_path_hint, full_path, clipboard).
 
-    Phase 6A exception: ``clipboard_capture_enabled`` is the JSON status
+    Exception: ``clipboard_capture_enabled`` is the JSON status
     flag returned by the Settings / Privacy read-only facade; it is the
     only allowed ``clipboard`` reference. All other uses remain forbidden.
 
-    Phase 6B exception: the Settings / Privacy clipboard capture toggle
+    Exception: the Settings / Privacy clipboard capture toggle
     introduces ``settings-clipboard-toggle`` DOM ids and ``clipboardtoggle``
     function names (e.g. ``setClipboardToggleStatus``). These are UI
     identifiers, not raw backend field names, so they are also whitelisted.
     """
     source = read_all_js().lower()
-    # Phase 6A: only the legitimate JSON status flag name is whitelisted.
+    # only the legitimate JSON status flag name is whitelisted.
     source_without_capture_flag = source.replace("clipboard_capture_enabled", "")
-    # Phase 6B: whitelist the toggle DOM id prefix and camelCase function
+    # whitelist the toggle DOM id prefix and camelCase function
     # names (lowercased) so they are not confused with the raw "clipboard"
     # content field.
     source_without_capture_flag = source_without_capture_flag.replace("clipboard-toggle", "")
@@ -4220,7 +4186,7 @@ def test_app_js_correction_shell_no_raw_sensitive_fields_3b9_1():
 
 
 def test_app_js_correction_shell_escape_html_still_used_3b9_1():
-    """Phase 3B.9.1: escapeHtml must still be used in correction shell
+    """escapeHtml must still be used in correction shell
     rendering paths."""
     source = read_all_js()
     render_body = func_body(source, "renderCorrectionShell")
@@ -4235,7 +4201,7 @@ def test_app_js_correction_shell_escape_html_still_used_3b9_1():
 
 
 def test_app_js_correction_shell_no_local_storage_3b9_1():
-    """Phase 3B.9.1: app.js must not use localStorage or sessionStorage."""
+    """app.js must not use localStorage or sessionStorage."""
     source = read_all_js().lower()
     assert "localstorage" not in source, (
         "app.js must not use localStorage"
@@ -4247,7 +4213,7 @@ def test_app_js_correction_shell_no_local_storage_3b9_1():
 
 
 def test_app_js_correction_shell_no_external_links_3b9_1():
-    """Phase 3B.9.1: app.js must not reference external http/https/CDN
+    """app.js must not reference external http/https/CDN
     resources."""
     source = read_all_js()
     for forbidden in ("http://", "https://", "//cdn", "googleapis"):
@@ -4258,7 +4224,7 @@ def test_app_js_correction_shell_no_external_links_3b9_1():
 
 
 def test_index_html_correction_shell_cards_still_present_3b9_1():
-    """Phase 3B.9.1: the remaining correction shell cards must still be
+    """the remaining correction shell cards must still be
     present in index.html, and the not-implemented card must NOT exist."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for card_id in (
@@ -4278,7 +4244,7 @@ def test_index_html_correction_shell_cards_still_present_3b9_1():
 
 
 def test_index_html_correction_shell_existing_ids_preserved_3b9_1():
-    """Phase 3B.9.1: all existing JS-dependent ids must still be present."""
+    """all existing JS-dependent ids must still be present."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for element_id in (
         "timeline-correction-shell",
@@ -4311,7 +4277,7 @@ def test_index_html_correction_shell_existing_ids_preserved_3b9_1():
 
 
 def test_index_html_no_forbidden_batch_ui_3b9_1():
-    """Phase 3B.9.1: index.html must not contain batch hide / batch delete /
+    """index.html must not contain batch hide / batch delete /
     batch restore / undo stack / permanent delete UI controls."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for forbidden in (
@@ -4333,20 +4299,19 @@ def test_index_html_no_forbidden_batch_ui_3b9_1():
 
 def test_index_html_no_not_implemented_card():
     """The 'not-implemented' card must NOT exist in index.html. The card
-    previously listed future features like 批量隐藏 / 批量删除 / 批量恢复 /
-    撤销栈 / 永久删除 / 批量时间 / 批量拆分 / 批量合并 — this dev-phase
-    '暂未开放' list has been removed per the productization cleanup. Only
-    currently-available capabilities are shown."""
+    must not list unavailable features like 批量隐藏 / 批量删除 / 批量恢复 /
+    撤销栈 / 永久删除 / 批量时间 / 批量拆分 / 批量合并. Only currently-available
+    capabilities are shown."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "correction-shell-not-implemented-card" not in source, (
         "index.html must not contain the not-implemented card; "
-        "the dev-phase '暂未开放' feature list has been removed"
+        "unavailable feature list must not be rendered"
     )
 
 
 
 def test_styles_css_correction_shell_hidden_display_none_3b9_1():
-    """Phase 3B.9.1: .correction-shell[hidden] must remain display:none."""
+    """.correction-shell[hidden] must remain display:none."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".correction-shell[hidden]" in source, (
         "styles.css must have .correction-shell[hidden] rule"
@@ -4360,7 +4325,7 @@ def test_styles_css_correction_shell_hidden_display_none_3b9_1():
 
 
 def test_styles_css_card_classes_present_3b9_1():
-    """Phase 3B.9.1: unified card CSS classes must still be present."""
+    """unified card CSS classes must still be present."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     for cls in (
         ".correction-shell-card",
@@ -4375,7 +4340,7 @@ def test_styles_css_card_classes_present_3b9_1():
 
 
 def test_styles_css_no_external_resources_3b9_1():
-    """Phase 3B.9.1: styles.css must not reference external resources."""
+    """styles.css must not reference external resources."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8").lower()
     for forbidden in ("http://", "https://", "@import", "googleapis",
                       "cdn"):
@@ -4386,7 +4351,7 @@ def test_styles_css_no_external_resources_3b9_1():
 
 
 def test_styles_css_highlight_still_present_3b9_1():
-    """Phase 3B.9.1: the transient highlight CSS must still be present."""
+    """the transient highlight CSS must still be present."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert "detail-item-highlight" in source, (
         "styles.css must retain .detail-item-highlight"
@@ -4398,8 +4363,8 @@ def test_styles_css_highlight_still_present_3b9_1():
 
 
 def test_bridge_no_new_methods_for_phase_3b9_1():
-    """Phase 3B.9.1: no new bridge methods beyond the known set."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    """no new bridge methods beyond the known set."""
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     known_methods = (
@@ -4434,9 +4399,9 @@ def test_bridge_no_new_methods_for_phase_3b9_1():
 
 
 def test_bridge_imports_only_allowed_modules_3b9_1():
-    """Phase 3B.9.1: the bridge must still only import worktrace.api and
+    """the bridge must still only import worktrace.api and
     worktrace.formatters."""
-    # Phase M4: scan all 8 bridge mixin files (method bodies / constants
+    # scan all 8 bridge mixin files (method bodies / constants
     # moved out of bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
     for forbidden in ("from ..services", "from ..db",

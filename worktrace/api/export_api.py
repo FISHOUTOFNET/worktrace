@@ -3,11 +3,11 @@
 Wraps ``export_service``. ``openpyxl`` is imported lazily inside the service
 functions, so importing this module does not load the workbook stack.
 
-Phase 4B adds ``export_statistics_csv`` for the controlled CSV write action
-on the Statistics / Export page. It converts service-layer ``ValueError``
-codes and ``OSError`` / ``PermissionError`` into stable
-``StatisticsExportError`` codes so the WebView bridge can map them to
-Chinese messages without echoing tracebacks, paths, SQL, or raw exception
+``export_statistics_csv`` is the controlled CSV write path for the
+Statistics / Export page. It converts service-layer ``ValueError`` codes
+and ``OSError`` / ``PermissionError`` into stable ``StatisticsExportError``
+codes so the WebView bridge can map them to Chinese messages without
+echoing tracebacks, paths, SQL, or raw exception text.
 text.
 """
 
@@ -19,12 +19,12 @@ from ..services import export_service
 
 
 class StatisticsExportError(ValueError):
-    """Raised by the Phase 4B statistics CSV export for known, user-facing
+    """Raised by the statistics CSV export for known user-facing failures.
     failure modes.
 
     The ``code`` attribute is a stable token the WebView bridge maps to a
-    Chinese user-facing message. Using a dedicated exception (instead of
-    echoing ``ValueError`` text) keeps internal paths, field names, ids,
+    Chinese message, so internal paths, field names, ids, and SQL details
+    never reach the bridge.
     and SQL details out of bridge responses.
 
     Stable ``code`` values:
@@ -65,20 +65,20 @@ _EXPORT_VALUE_ERROR_CODES = {
 def export_statistics_csv(date_from: str, date_to: str, output_path) -> dict[str, Any]:
     """Export a display-safe CSV for the statistics date range.
 
-    Phase 4B controlled write path. Delegates date validation, row
-    building, and file writing to ``export_service.write_statistics_csv``.
-    The service raises ``ValueError`` with a stable code token for date /
-    empty-data / path failures; ``PermissionError`` and other ``OSError``
-    subclasses propagate for the API to map.
+    Delegates date validation, row building, and file writing to
+    ``export_service.write_statistics_csv``. The service raises
+    ``ValueError`` with a stable code token for date / empty-data / path
+    failures; ``PermissionError`` and other ``OSError`` subclasses
+    propagate for the API to map.
 
     On success returns ``{"activity_count": int, "duration_seconds": int,
     "filename": str}`` where ``filename`` is the basename only (never the
     full local path). On failure raises ``StatisticsExportError`` with a
     stable ``code``.
 
-    This method never writes to the DB, never opens a folder, never opens
-    the exported file, and never surfaces tracebacks, SQL, full paths, raw
-    exception text, window titles, file paths, or notes.
+    Never writes to the DB, never opens a folder, never opens the exported
+    file, and never surfaces tracebacks, SQL, full paths, raw exception
+    text, window titles, file paths, or notes.
     """
     try:
         return export_service.write_statistics_csv(date_from, date_to, output_path)

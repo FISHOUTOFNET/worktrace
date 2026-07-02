@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.7 Timeline batch note editing API and service.
+"""Tests for the Timeline batch note editing API and service.
 
 Covers ``worktrace.api.timeline_api.batch_update_timeline_activities_note``
 and the underlying ``worktrace.services.activity_service.batch_update_activity_note``
@@ -677,7 +677,7 @@ def test_service_batch_non_positive_id(temp_db):
     assert str(exc.value) == "invalid_activity_ids"
 
 
-# --- Phase 3B.7 hardening: exception rollback + non-leak ----------------
+# --- hardening: exception rollback + non-leak ----------------
 
 
 class _FailingConn:
@@ -831,7 +831,7 @@ def test_batch_no_new_db_schema(temp_db):
     assert before == after
 
 
-# --- Phase 3B.7.1: batch note editing hardening --------------------------
+# --- batch note editing hardening --------------------------
 #
 # These tests explicitly verify the hardening invariants that distinguish
 # batch note overwrite from the single ``update_activity_note`` path and
@@ -840,7 +840,7 @@ def test_batch_no_new_db_schema(temp_db):
 
 
 def test_batch_source_not_changed_to_manual(temp_db):
-    """Phase 3B.7.1: batch note overwrite must NOT set ``source = 'manual'``.
+    """batch note overwrite must NOT set ``source = 'manual'``.
 
     The single ``update_activity_note`` path sets ``source = 'manual'`` as a
     side effect. The batch path must NOT do this — it is a pure note-only
@@ -861,7 +861,7 @@ def test_batch_source_not_changed_to_manual(temp_db):
 
 
 def test_batch_api_return_does_not_leak_note_content(temp_db):
-    """Phase 3B.7.1: the API return payload must not contain the note value.
+    """the API return payload must not contain the note value.
 
     The API returns ``{"updated_count": n}`` only. The new note content must
     not appear in any key or value of the return dict, and the dict must not
@@ -881,7 +881,7 @@ def test_batch_api_return_does_not_leak_note_content(temp_db):
 
 
 def test_batch_all_selected_notes_equal_target(temp_db):
-    """Phase 3B.7.1: every selected activity's note must equal the target.
+    """every selected activity's note must equal the target.
 
     After a batch note overwrite, every activity in the batch must have
     exactly the target note — not a concatenation, not a prefix, not a
@@ -895,7 +895,7 @@ def test_batch_all_selected_notes_equal_target(temp_db):
 
 
 def test_batch_empty_note_clears_all_selected(temp_db):
-    """Phase 3B.7.1: empty string must clear the note on every selected
+    """empty string must clear the note on every selected
     activity, not just the first one."""
     ids = _seed_n_closed_activities(3)
     # Set non-empty notes first.
@@ -909,7 +909,7 @@ def test_batch_empty_note_clears_all_selected(temp_db):
 
 
 def test_service_batch_note_update_failed_code_on_rowcount_mismatch(temp_db):
-    """Phase 3B.7.1: the service must raise ``note_update_failed`` when the
+    """the service must raise ``note_update_failed`` when the
     UPDATE rowcount does not match the expected count (race condition).
 
     This verifies the stable error code that the API maps to
@@ -959,7 +959,7 @@ def test_service_batch_note_update_failed_code_on_rowcount_mismatch(temp_db):
 
 
 def test_batch_api_maps_note_update_failed_to_operation_failed(temp_db):
-    """Phase 3B.7.1: the API must map ``note_update_failed`` to
+    """the API must map ``note_update_failed`` to
     ``operation_failed``."""
     ids = _seed_two_closed_activities()
     with patch.object(
@@ -972,7 +972,7 @@ def test_batch_api_maps_note_update_failed_to_operation_failed(temp_db):
 
 
 def test_batch_api_maps_all_stable_service_codes(temp_db):
-    """Phase 3B.7.1: verify the complete service → API error code mapping
+    """verify the complete service → API error code mapping
     table. Every stable service ValueError code must map to a stable
     TimelineBatchNoteError code.
     """
@@ -1003,7 +1003,7 @@ def test_batch_api_maps_all_stable_service_codes(temp_db):
 
 
 def test_batch_api_non_value_error_exception_collapse(temp_db):
-    """Phase 3B.7.1: a non-ValueError service exception (e.g.
+    """a non-ValueError service exception (e.g.
     ``sqlite3.OperationalError``) must collapse to ``operation_failed``
     without leaking the exception text."""
     ids = _seed_two_closed_activities()
@@ -1019,7 +1019,7 @@ def test_batch_api_non_value_error_exception_collapse(temp_db):
 
 
 def test_batch_updated_at_refreshed_on_all_selected(temp_db):
-    """Phase 3B.7.1: ``updated_at`` must be refreshed on every selected
+    """``updated_at`` must be refreshed on every selected
     activity, not just the first one."""
     ids = _seed_n_closed_activities(3)
     originals = {}

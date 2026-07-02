@@ -3,10 +3,10 @@
 Wraps ``project_service`` for project listing, creation, update, enable/disable,
 archive, and delete operations used by the Project Rules page and dialogs.
 
-The Phase M2 refactor moved the shared write-path validation / fail
-payload / success payload logic into ``worktrace.api._write_contract`` so
-every Project Rules project-lifecycle facade uses the same "true positive
-int", "true bool", "true non-empty str", and stable
+Shared write-path validation / fail / success payloads come from
+``worktrace.api._write_contract`` so every Project Rules project-lifecycle
+facade uses the same "true positive int", "true bool", "true non-empty str",
+and stable ``{"ok": False, "error": code}`` / ``{"ok": True, ...}`` shapes.
 ``{"ok": False, "error": code}`` / ``{"ok": True, ...}`` shapes. Behavior
 is unchanged; only the duplicated inline checks were replaced with helper
 calls.
@@ -82,7 +82,7 @@ def delete_project(project_id: int) -> None:
     project_service.delete_project(project_id)
 
 
-# --- Phase 5G: Project lifecycle foundation (create / edit / toggle / archive) ---
+# --- Project lifecycle foundation (create / edit / toggle / archive) ---
 
 
 def _is_system_or_special_project(project: dict[str, Any]) -> bool:
@@ -123,10 +123,10 @@ def _project_lifecycle_payload(project_id: int) -> dict[str, Any]:
 def create_project_for_rules(name: Any, description: Any = "") -> dict[str, Any]:
     """Create one new user project from the Project Rules page.
 
-    Phase 5G narrow WebView-facing facade. It only creates a user project;
-    it does NOT create folder/keyword rules, edit/delete existing projects,
-    or perform conflict preview / backfill / automatic rules / DB schema
-    changes / native dialogs / file writes / network access.
+    Narrow WebView-facing facade. Only creates a user project; does NOT
+    create folder/keyword rules, edit/delete existing projects, or perform
+    conflict preview / backfill / automatic rules / DB schema changes /
+    native dialogs / file writes / network access.
 
     ``name`` must be a real non-empty ``str`` after trim. ``description``
     must be a real ``str`` (empty allowed) and is trimmed before save. An
@@ -174,8 +174,8 @@ def create_project_for_rules(name: Any, description: Any = "") -> dict[str, Any]
 def update_project_for_rules(project_id: Any, name: Any, description: Any = "") -> dict[str, Any]:
     """Update one existing user project's name and description.
 
-    Phase 5G narrow WebView-facing facade. It only edits a user project's
-    name/description; it does NOT touch ``enabled`` / ``is_archived`` /
+    Narrow WebView-facing facade. Only edits a user project's
+    name/description; does NOT touch ``enabled`` / ``is_archived`` /
     ``created_by`` / ``created_at``, create/delete projects, or perform
     conflict preview / backfill / automatic rules / DB schema changes /
     native dialogs / file writes / network access.
@@ -238,11 +238,11 @@ def update_project_for_rules(project_id: Any, name: Any, description: Any = "") 
 def set_project_enabled_for_rules(project_id: Any, enabled: Any) -> dict[str, Any]:
     """Enable or disable one existing user project.
 
-    Phase 5G narrow WebView-facing facade. It only toggles a user project's
-    ``enabled`` flag; it does NOT touch ``name`` / ``description`` /
-    ``is_archived`` / ``created_by`` / ``created_at``, create/delete/edit
-    projects, or perform conflict preview / backfill / automatic rules /
-    DB schema changes / native dialogs / file writes / network access.
+    Narrow WebView-facing facade. Only toggles a user project's ``enabled``
+    flag; does NOT touch ``name`` / ``description`` / ``is_archived`` /
+    ``created_by`` / ``created_at``, create/delete/edit projects, or
+    perform conflict preview / backfill / automatic rules / DB schema
+    changes / native dialogs / file writes / network access.
 
     ``project_id`` must be a real positive ``int`` (bool rejected).
     ``enabled`` must be a real ``bool``. System/special projects
@@ -250,11 +250,11 @@ def set_project_enabled_for_rules(project_id: Any, enabled: Any) -> dict[str, An
     ``system_project`` — in particular, ``排除规则`` must never be enabled
     via this path.
 
-    The existing ``project_service.set_project_enabled`` already triggers
-    the folder rule cache, keyword rule cache, and privacy exclude cache
-    invalidation hooks on success; this facade does not add or remove any
-    cache invalidation. Rejections (invalid / not_found / system) do not
-    trigger the cache hooks.
+    ``project_service.set_project_enabled`` already triggers the folder
+    rule cache, keyword rule cache, and privacy exclude cache invalidation
+    hooks on success; this facade does not add or remove any cache
+    invalidation. Rejections (invalid / not_found / system) do not trigger
+    the cache hooks.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
 
@@ -287,24 +287,24 @@ def set_project_enabled_for_rules(project_id: Any, enabled: Any) -> dict[str, An
 def archive_project_for_rules(project_id: Any) -> dict[str, Any]:
     """Archive one existing user project.
 
-    Phase 5G narrow WebView-facing facade. It only sets ``is_archived = 1``
-    on a user project; it does NOT physically delete the project, its
-    folder rules, its keyword rules, or any activity rows. It does NOT
-    touch ``name`` / ``description`` / ``enabled`` / ``created_by`` /
-    ``created_at``, create/delete/edit projects, or perform conflict
-    preview / backfill / automatic rules / DB schema changes / native
-    dialogs / file writes / network access.
+    Narrow WebView-facing facade. Only sets ``is_archived = 1`` on a user
+    project; does NOT physically delete the project, its folder rules, its
+    keyword rules, or any activity rows. Does NOT touch ``name`` /
+    ``description`` / ``enabled`` / ``created_by`` / ``created_at``,
+    create/delete/edit projects, or perform conflict preview / backfill /
+    automatic rules / DB schema changes / native dialogs / file writes /
+    network access.
 
     ``project_id`` must be a real positive ``int`` (bool rejected).
     System/special projects (``created_by == "system"``, ``未归类``,
     ``排除规则``) are rejected as ``system_project``.
 
-    The existing ``project_service.archive_project`` triggers the folder
-    rule cache, keyword rule cache, and privacy exclude cache invalidation
-    hooks on success (added in Phase 5G) because archiving a project
-    removes it from the rule target list and so invalidates the cached
-    rule target / inference / exclude state. Rejections (invalid /
-    not_found / system) do not trigger the cache hooks.
+    ``project_service.archive_project`` triggers the folder rule cache,
+    keyword rule cache, and privacy exclude cache invalidation hooks on
+    success because archiving a project removes it from the rule target
+    list and so invalidates the cached rule target / inference / exclude
+    state. Rejections (invalid / not_found / system) do not trigger the
+    cache hooks.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
 

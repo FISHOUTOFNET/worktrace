@@ -1,6 +1,6 @@
-"""Tests for the Phase 1B encrypted local backup export/import service.
+"""Tests for the encrypted local backup export/import service.
 
-Includes Phase 1B.1 import guard, DB safety, and logging hygiene tests.
+Includes import guard, DB safety, and logging hygiene tests.
 """
 
 from __future__ import annotations
@@ -636,12 +636,12 @@ def test_export_uses_atomic_write(temp_db, tmp_path):
 
 
 # =========================================================================
-# Phase 1B.1: Encrypted Import Safety Hardening tests
+# Encrypted Import Safety Hardening tests
 # =========================================================================
 #
 # These tests verify the secure import guard, DB safety on failure,
 # collector write-path protection, and logging hygiene introduced in
-# Phase 1B.1. See docs/v0.2-local-security-design.md.
+# See docs/v0.2-local-security-design.md.
 
 
 # --- helpers -------------------------------------------------------------

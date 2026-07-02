@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WorkTrace affected-test runner (Phase TG1).
+"""WorkTrace affected-test runner.
 
 Selects a narrow, conservative set of pytest targets based on which files
 changed relative to a git base (default ``HEAD``). Pure standard library
@@ -76,7 +76,7 @@ CONFTEST_BROAD_SUITE: list[str] = [
 
 
 # ---------------------------------------------------------------------------
-# Path -> tests mapping (sections A..N; C refined into C1..C9 in Phase TG2/5H/5I).
+# Path -> tests mapping (sections A..N; C refined into C1..C9).
 #
 # Each rule is a dict with:
 #   id        : human label
@@ -267,7 +267,7 @@ RULES: list[dict] = [
         "warnings": [],
     },
     {
-        "id": "C7. Rule impact service (Phase 5H)",
+        "id": "C7. Rule impact service",
         "triggers": [
             "worktrace/services/rule_impact_service.py",
         ],
@@ -280,7 +280,7 @@ RULES: list[dict] = [
         "warnings": [],
     },
     {
-        "id": "C8. Automatic rules service (Phase 5I)",
+        "id": "C8. Automatic rules service",
         "triggers": [
             "worktrace/services/rule_automation_service.py",
         ],
@@ -293,7 +293,7 @@ RULES: list[dict] = [
         "warnings": [],
     },
     {
-        "id": "C9. Batch operations service (Phase 5I)",
+        "id": "C9. Batch operations service",
         "triggers": [
             "worktrace/services/rule_batch_service.py",
         ],
@@ -488,7 +488,7 @@ RULES: list[dict] = [
         "warnings": [],
     },
     {
-        "id": "K2. WebView main / startup gate (Phase 6E)",
+        "id": "K2. WebView main / startup gate",
         "triggers": [
             "worktrace/webview_main.py",
             "worktrace/main.py",
@@ -622,7 +622,7 @@ def _matches_trigger(changed: str, trigger: str) -> bool:
 def select_targets(changed_files: Iterable[str]) -> Selection:
     """Map changed files to a conservative, ordered, de-duplicated test set.
 
-    Sections A..N (C refined into C1..C9 in Phase TG2/5H/5I) are matched against
+    Sections A..N (C refined into C1..C9) are matched against
     every non-test changed file. Test-file
     changes (section L) are matched first so the most directly-affected test
     runs first. Unknown ``worktrace/`` source changes (section K) fall back

@@ -1,8 +1,7 @@
 """Settings, privacy, and collector-status facade for the UI.
 
 Wraps ``settings_service`` and the reset-database path from ``export_service``.
-Also consolidates the duplicated current-activity snapshot JSON parsing that
-previously lived inside each UI view.
+Also consolidates the current-activity snapshot JSON parsing used by UI views.
 """
 
 from __future__ import annotations
@@ -134,15 +133,15 @@ def clear_all_local_data(confirm: bool) -> None:
     export_service.clear_all_local_data(confirm=confirm)
 
 
-# --- settings / privacy read-only status (Phase 6A) ---------------------
+# --- settings / privacy read-only status ---------------------
 
 def get_settings_privacy_status() -> dict[str, Any]:
     """Return a read-only status snapshot for the Settings / Privacy WebView page.
 
-    Phase 6E. Exposes only safety-status booleans and a display-safe
-    first-run notice sub-dict. No path, no clipboard content, no
-    passphrase, no DB write, no backup export/import action is surfaced
-    here. All return values must be JSON-serializable.
+    Exposes only safety-status booleans and a display-safe first-run notice
+    sub-dict. No path, no clipboard content, no passphrase, no DB write, no
+    backup export/import action is surfaced here. All return values must be
+    JSON-serializable.
     """
     try:
         export_path_configured = bool(get_export_path())
@@ -152,10 +151,10 @@ def get_settings_privacy_status() -> dict[str, Any]:
         except Exception:
             # Defensive: never let the backup facade leak tracebacks to the UI.
             secure_import_in_progress = False
-        # Phase 6E: display-safe first-run notice state. The raw DB setting
-        # key name (``first_run_notice_accepted``) is NOT exposed; only the
-        # boolean + view/accept availability flags are surfaced. The
-        # ``view_available_in_webview`` flag is always true (the Settings
+        # Display-safe first-run notice state. The raw DB setting key name
+        # (``first_run_notice_accepted``) is NOT exposed; only the boolean +
+        # view/accept availability flags are surfaced. ``accept_required``
+        # is the negation of ``accepted`` so the frontend can decide whether
         # page offers a read-only notice viewer). ``accept_required`` is
         # the negation of ``accepted`` so the frontend can decide whether
         # to show the blocking first-run gate.
@@ -193,7 +192,7 @@ def get_settings_privacy_status() -> dict[str, Any]:
         return {"ok": False, "error": "加载设置状态失败"}
 
 
-# --- Settings / Privacy encrypted backup export (Phase 6C) -------------
+# --- Settings / Privacy encrypted backup export -------------
 
 
 def export_encrypted_backup_for_webview(
@@ -203,8 +202,8 @@ def export_encrypted_backup_for_webview(
 ) -> dict[str, Any]:
     """Export an encrypted ``.wtbackup`` file from the WebView UI.
 
-    Phase 6C narrow write facade. Accepts a non-empty ``output_path`` string,
-    a non-empty ``passphrase`` string, and a ``confirm_passphrase`` string
+    Narrow write facade. Accepts a non-empty ``output_path`` string, a
+    non-empty ``passphrase`` string, and a ``confirm_passphrase`` string
     that must exactly match ``passphrase``. If the chosen path does not end
     with ``.wtbackup`` (case-insensitive) the suffix is appended before
     calling the backend.
@@ -257,7 +256,7 @@ def export_encrypted_backup_for_webview(
     return {"ok": True, "filename": filename, "message": "加密备份已导出"}
 
 
-# --- Settings / Privacy encrypted backup manifest preview (Phase 6C) ---
+# --- Settings / Privacy encrypted backup manifest preview ---
 
 
 def preview_encrypted_backup_manifest_for_webview(
@@ -265,9 +264,9 @@ def preview_encrypted_backup_manifest_for_webview(
 ) -> dict[str, Any]:
     """Preview the non-sensitive manifest of a ``.wtbackup`` file.
 
-    Phase 6C narrow read facade. Accepts a non-empty ``input_path`` string
-    that looks like a ``.wtbackup`` file path (case-insensitive suffix).
-    Does not require a passphrase and does not decrypt the payload.
+    Narrow read facade. Accepts a non-empty ``input_path`` string that
+    looks like a ``.wtbackup`` file path (case-insensitive suffix). Does
+    not require a passphrase and does not decrypt the payload.
 
     On success returns ``{"ok": True, "filename": "<basename.wtbackup>",
     "manifest": {...}}`` where ``manifest`` contains only display-safe
@@ -316,7 +315,7 @@ def preview_encrypted_backup_manifest_for_webview(
     return {"ok": True, "filename": filename, "manifest": manifest}
 
 
-# --- Settings / Privacy encrypted backup import (Phase 6D) ------------
+# --- Settings / Privacy encrypted backup import ------------
 
 
 def import_encrypted_backup_for_webview(
@@ -326,11 +325,11 @@ def import_encrypted_backup_for_webview(
 ) -> dict[str, Any]:
     """Import an encrypted ``.wtbackup`` file from the WebView UI.
 
-    Phase 6D narrow write facade. Replace-only: accepts a non-empty
-    ``input_path`` string that ends with ``.wtbackup`` (case-insensitive),
-    a non-empty ``passphrase`` string, and a ``confirm_text`` string whose
-    stripped value must be exactly ``导入并替换``. The suffix is NOT
-    auto-appended; a wrong suffix is rejected outright.
+    Narrow write facade. Replace-only: accepts a non-empty ``input_path``
+    string that ends with ``.wtbackup`` (case-insensitive), a non-empty
+    ``passphrase`` string, and a ``confirm_text`` string whose stripped
+    value must be exactly ``导入并替换``. The suffix is NOT auto-appended;
+    a wrong suffix is rejected outright.
 
     On success returns the narrow payload ``{"ok": True, "message":
     "加密备份已导入，WorkTrace 已暂停，请检查数据后手动恢复记录",
@@ -405,19 +404,19 @@ def import_encrypted_backup_for_webview(
     }
 
 
-# --- Settings / Privacy clear-all-local-data (Phase 6D) ---------------
+# --- Settings / Privacy clear-all-local-data ---------------
 
 
 def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
     """Clear all local data from the WebView UI.
 
-    Phase 6D narrow write facade. ``confirm_text`` must be a real string
-    whose stripped value is exactly ``清空本地数据``; bool / None / int /
-    list / dict / object / empty / whitespace-only are all rejected.
-    Only when the confirmation matches does this facade call the existing
+    Narrow write facade. ``confirm_text`` must be a real string whose
+    stripped value is exactly ``清空本地数据``; bool / None / int / list
+    / dict / object / empty / whitespace-only are all rejected. Only when
+    the confirmation matches does this facade call
     ``clear_all_local_data(confirm=True)``, which runs inside a
-    destructive reset guard that pauses the collector and blocks
-    collector writes for the duration of the DB replacement.
+    destructive reset guard that pauses the collector and blocks collector
+    writes for the duration of the DB replacement.
 
     On success returns ``{"ok": True, "message": "本地数据已清空",
     "status": <get_settings_privacy_status()["status"]>}`` so the frontend
@@ -465,14 +464,14 @@ def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
     return {"ok": True, "message": "本地数据已清空"}
 
 
-# --- Settings / Privacy clipboard capture toggle write (Phase 6B) -------
+# --- Settings / Privacy clipboard capture toggle write -------
 
 
 def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
     """Write the ``clipboard_capture_enabled`` flag from the WebView UI.
 
-    Phase 6B narrow write facade. Accepts only a real ``bool``; any other
-    type (``None``, ``"true"`` / ``"false"`` strings, ``0`` / ``1`` ints,
+    Narrow write facade. Accepts only a real ``bool``; any other type
+    (``None``, ``"true"`` / ``"false"`` strings, ``0`` / ``1`` ints,
     lists, dicts, objects, etc.) is rejected with a stable Chinese message
     and does NOT mutate the underlying setting. On success the updated
     Settings / Privacy status snapshot is returned so the frontend can
@@ -502,10 +501,10 @@ def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
         return {"ok": False, "error": "设置剪贴板记录失败"}
 
 
-# --- Settings / Privacy first-run notice (Phase 6E) ---------------------
+# --- Settings / Privacy first-run notice ---------------------
 
 
-# Highlights aligned with the legacy Tkinter first-run dialog so the
+# Highlights shown in the WebView notice view.
 # WebView notice view stays consistent with the prior UI semantics.
 _FIRST_RUN_NOTICE_HIGHLIGHTS: list[str] = [
     "本地保存",
@@ -527,10 +526,8 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
     - ``accepted`` comes from ``first_run_notice_accepted()``; a brand new
       database seeds ``first_run_notice_accepted="false"`` so the first
       run returns ``accepted=False``.
-    - ``notice_text`` is sourced from ``PRIVACY_NOTICE_TEXT`` (the same
-      constant the legacy Tkinter dialog uses).
-    - ``highlights`` is the fixed list aligned with the legacy first-run
-      dialog (``["本地保存", "不截屏录屏", "不主动读正文", "用户可清空"]``).
+    - ``notice_text`` is sourced from ``PRIVACY_NOTICE_TEXT``.
+    - ``highlights`` is the fixed list above.
 
     Strict fail-closed: if reading ``accepted`` raises (e.g. settings
     hiccup), the method returns ``{"ok": False, "error": "<stable
@@ -570,7 +567,7 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
 def accept_first_run_notice_for_webview() -> dict[str, Any]:
     """Accept the first-run privacy notice from the WebView UI.
 
-    Phase 6E narrow write facade. Zero parameters. Calls the existing
+    Narrow write facade. Zero parameters. Calls
     ``accept_first_run_notice()`` which writes
     ``first_run_notice_accepted="true"`` through the standard
     ``set_setting`` path (so the settings cache is refreshed in-process
@@ -612,13 +609,13 @@ def accept_first_run_notice_for_webview() -> dict[str, Any]:
         return {"ok": False, "error": "确认隐私说明失败"}
 
 
-# --- Lightweight refresh-state (Phase 6H-followup heartbeat) -------------
+# --- Lightweight refresh-state (frontend heartbeat) -------------
 
 
 def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
     """Return a lightweight refresh-state payload for the frontend heartbeat.
 
-    Unified live-display model. The ``refresh_revision`` is computed by
+    The ``refresh_revision`` is computed by
     ``live_display_api.compute_refresh_revision`` so it covers ALL
     structural changes affecting Overview / Recent / Timeline display:
 
@@ -636,8 +633,8 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
     ``snapshot_updated_at`` advance without any structural change.
 
     ``report_date`` scopes the structural signature to the currently
-    viewed Timeline date (verification item 8: ``get_refresh_state``
-    supports the current Timeline date, not just today). When
+    viewed Timeline date. When ``report_date`` is ``None`` it defaults to
+    today, matching the Overview / Recent default.
     ``report_date`` is ``None`` it defaults to today, matching the
     Overview / Recent default.
 
@@ -680,12 +677,12 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
         persisted_activity_id = int(debug_inputs.get("persisted_id") or 0)
         inferred_project_name = str(debug_inputs.get("inferred_project") or "")
         latest_activity_id = int(debug_inputs.get("latest_id") or 0)
-        # Unified live clock (scheme A): build the current-activity
-        # summary from the SAME snapshot sample so the frontend ticker
-        # can use ``live_started_at_epoch_ms`` + ``carry_seconds``
-        # without a separate bridge call. The live clock fields come
-        # from the same snapshot as the refresh_revision, guaranteeing
-        # a single-sample contract (verification items 6, 9).
+        # Unified live clock: build the current-activity summary from the
+        # SAME snapshot sample so the frontend ticker can use
+        # ``live_started_at_epoch_ms`` + ``carry_seconds`` without a
+        # separate bridge call. The live clock fields come from the same
+        # snapshot as the refresh_revision, guaranteeing a single-sample
+        # contract.
         live_summary = live_display_api.build_current_activity_summary(
             snapshot, report_date=scoped_report_date, today=today
         )
@@ -712,14 +709,14 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
             "today": today,
             "report_date": scoped_report_date,
             "latest_activity_id": latest_activity_id,
-            # Unified live clock fields (scheme A). The frontend ticker
-            # computes ``carry_seconds + floor((Date.now() -
+            # Live clock fields. The frontend ticker computes
+            # ``carry_seconds + floor((Date.now() -
             # live_started_at_epoch_ms) / 1000)``. These come from the
-            # SAME snapshot sample as ``refresh_revision`` so there is
-            # no clock drift between the revision check and the ticker
-            # (verification items 6, 9). The ``stable_live_key`` /
-            # ``stable_live_key_hash`` let the frontend bind its
-            # continuity key to a stable live identity that survives
+            # SAME snapshot sample as ``refresh_revision`` so there is no
+            # clock drift between the revision check and the ticker. The
+            # ``stable_live_key`` / ``stable_live_key_hash`` let the
+            # frontend bind its continuity key to a stable live identity
+            # that survives the virtual → persisted_open transition.
             # the virtual → persisted_open transition (item 12, 16).
             "live_started_at_epoch_ms": int(live_summary.get("live_started_at_epoch_ms") or 0),
             "carry_seconds": int(live_summary.get("carry_seconds") or 0),

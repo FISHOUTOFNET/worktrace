@@ -1,32 +1,32 @@
-"""Phase 5I: Automatic Project Rules application foundation.
+"""Automatic Project Rules application foundation.
 
 This module is the **named, documented entry point** for the automatic
 application of enabled folder / keyword Project Rules to new eligible
 activities. It does NOT re-implement matching or inference: the real work
 lives in :mod:`worktrace.services.project_inference_service`, which the
 collector / activity_service hook (``finalize_created_activity`` ->
-``process_new_activity`` -> ``assign_project_for_activity``) already calls
-when an activity is persisted. Phase 5I normalizes that existing path as
+``process_new_activity`` -> ``assign_project_for_activity``) calls
+when an activity is persisted.
 the supported automatic-rules contract and ships regression locks + docs
 rather than a second divergent matcher.
 
 Why a thin facade (and not a re-implementation)?
 
-- The existing ``assign_project_for_activity`` already reuses the single
-  folder / keyword matching code paths
+- ``assign_project_for_activity`` already reuses the single folder / keyword
+  matching code paths
   (``folder_rule_service.find_matching_folder_rule`` for folder rules and
   ``_enabled_keyword_rules`` + ``_safe_classification_text`` +
   ``keyword_pattern_matches`` for keyword rules), so there is no second
   matcher to maintain.
-- It already implements the deterministic priority locked by Phase 5I:
-  folder rules before keyword rules; within each kind, rules are read in
-  ``created_at, id`` order (stable). The first match wins and no later
+- It already implements the deterministic priority: folder rules before
+  keyword rules; within each kind, rules are read in ``created_at, id``
+  order (stable). The first match wins and no later rule overwrites it.
   rule overwrites it.
 - It already skips ``manual_override = 1`` / ``is_manual = 1`` activities
   and non-normal activities, never sets ``manual_override = 1``, writes
   ``auto_classified = 1`` for ``folder_rule`` / ``keyword_rule`` sources,
   and upserts the assignment with ``is_manual = 0``, the rule source, and
-  the inference confidence (85 folder / 80 keyword) — matching the Phase
+  the inference confidence (85 folder / 80 keyword).
   5H single-rule backfill contract.
 - The enabled-rule / available-project gating is already enforced by the
   read paths: ``_enabled_keyword_rules`` filters on
@@ -34,7 +34,7 @@ Why a thin facade (and not a re-implementation)?
   ``find_matching_folder_rule`` only returns enabled rules on enabled,
   non-excluded projects.
 
-Phase 5I scope (locked by ``tests/test_project_rules_automatic_rules.py``):
+Scope (locked by ``tests/test_project_rules_automatic_rules.py``):
 
 - Automatic application of enabled folder / keyword rules to future
   eligible closed activities is SUPPORTED. The hook fires at activity
@@ -56,8 +56,8 @@ from typing import Any
 from . import project_inference_service
 
 # Folder / keyword inference confidences — identical to the values used by
-# ``project_inference_service._infer_project_resource_first`` and the Phase
-# 5H single-rule backfill. Exposed as module constants so tests can lock
+# ``project_inference_service._infer_project_resource_first`` and the
+# single-rule backfill. Exposed as module constants so tests can lock
 # them without reaching into the inference module's privates.
 FOLDER_RULE_CONFIDENCE = 85
 KEYWORD_RULE_CONFIDENCE = 80
@@ -78,8 +78,8 @@ def apply_automatic_rules_to_activity(activity_id: int) -> dict[str, Any]:
     """Apply enabled folder / keyword Project Rules to one activity.
 
     Thin, documented delegation to
-    ``project_inference_service.process_new_activity`` (the Phase 5I
-    automatic-rules entry point) so Phase 5I has a named automatic-rules
+    ``project_inference_service.process_new_activity`` (the automatic-rules
+    entry point). The automatic path applies narrow skip guards for hidden /
     facade. The automatic path applies narrow skip guards for hidden /
     deleted / in-progress activities before delegating to
     ``assign_project_for_activity``; the inference itself reuses the

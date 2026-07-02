@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend — timeline module (Phase R2 split).
+// WorkTrace WebView frontend — timeline module.
 // Timeline page: session list, detail list, edit panel, per-activity
 // inline editors (time / split / merge / hide / delete), session-level
 // correction sections, date navigation.
@@ -43,10 +43,10 @@
                 listEl.innerHTML = '<div class="timeline-empty">正在加载当前活动…</div>';
             } else {
                 listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
-                // Verification item 22: invalidate any pending detail request so
-                // a stale ``get_timeline_session_details`` response does not
-                // backfill the cleared detail panel. Also clear the detail cache
-                // so the ticker does not project against a stale payload.
+                // Invalidate any pending detail request so a stale
+                // ``get_timeline_session_details`` response does not backfill
+                // the cleared detail panel. Also clear the detail cache so the
+                // ticker does not project against a stale payload.
                 ++App.detailsRequestToken;
                 App.lastSessionDetailsData = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
@@ -60,8 +60,8 @@
 
         // Build the full HTML string before replacing to avoid flicker.
         var html = "";
-        // Phase 6H-followup: collect continuity keys to reset after the
-        // innerHTML swap so the fresh backend snapshot duration replaces any prior ticker
+        // Collect continuity keys to reset after the innerHTML swap so the
+        // fresh backend snapshot duration replaces any prior ticker
         // projection without a false "rollback" guard.
         var sessionContinuityKeys = [];
         for (var i = 0; i < sessions.length; i++) {
@@ -114,8 +114,8 @@
             sessionContinuityKeys.push({ key: App.liveContinuityKey(s, "session"), sec: isNaN(sDurSec) ? 0 : sDurSec });
         }
         listEl.innerHTML = html;
-        // Phase 6H-followup: reset + seed the monotonic render state for
-        // each session so the fresh backend snapshot duration replaces any prior ticker
+        // Reset + seed the monotonic render state for each session so the
+        // fresh backend snapshot duration replaces any prior ticker
         // projection and the ticker's first delta does not appear to roll back.
         for (var ci = 0; ci < sessionContinuityKeys.length; ci++) {
             var ck = sessionContinuityKeys[ci];
@@ -137,7 +137,7 @@
             })(items[j]);
         }
 
-        // If the previously selected session still exists, reload its details.
+        // If the last selected session still exists, reload its details.
         // Selection continuity: when the virtual → persisted_open transition
         // happens, the session_id changes from "virtual-live:<hash>" to the
         // real DB session id. We preserve the selection by checking
@@ -174,13 +174,13 @@
                 // (after the transition) can still find the session.
                 App.selectedSessionId = found.session_id;
                 App.selectedSessionLiveKey = found.stable_live_key_hash || null;
-                // Phase R3 issues 11/17: skip the detail reload when any
-                // Timeline editing is active — unsaved session edits, open
-                // inline time/split editors, saving states, or correction
-                // shell. Auto-refresh / revision-change refresh must never
-                // wipe in-progress edits or overwrite user input. After a
-                // successful save the baseline is updated so isEditDirty()
-                // returns false and the reload proceeds normally.
+                // Skip the detail reload when any Timeline editing is
+                // active — unsaved session edits, open inline time/split
+                // editors, saving states, or correction shell. Auto-refresh
+                // / revision-change refresh must never wipe in-progress
+                // edits or overwrite user input. After a successful save the
+                // baseline is updated so isEditDirty() returns false and the
+                // reload proceeds normally.
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
                     && App._timelineEditingActive());
                 if (!skipDetailReload) {
@@ -197,14 +197,13 @@
                     // panel since it cannot be edited.
                     clearEditPanel();
                 }
-                // Phase 3B.5B: if the correction shell is open for this
-                // session, refresh its context summary from the updated
-                // session object. The activity summary is re-read from the
-                // rendered detail rows. No write is performed.
-                // Phase 3B.9.1: also skip the re-render while any
-                // correction-shell write is in flight (batch project / batch
-                // note / single restore) so the saving state, selection,
-                // textarea, and status messages are not overwritten mid-save.
+                // If the correction shell is open for this session, refresh
+                // its context summary from the updated session object. The
+                // activity summary is re-read from the rendered detail rows.
+                // No write is performed. Also skip the re-render while any
+                // correction-shell write is in flight so the saving state,
+                // selection, textarea, and status messages are not
+                // overwritten mid-save.
                 if (App.correctionShellOpen
                     && App.correctionShellSessionId === found.session_id
                     && !isEditDirty()
@@ -219,9 +218,9 @@
             } else {
                 // Selected session disappeared (e.g. session ended and was
                 // re-grouped). Clear selection gracefully without throwing.
-                // Verification item 22: invalidate any pending detail request
-                // and clear the detail cache so a stale response does not
-                // backfill the cleared detail panel.
+                // Invalidate any pending detail request and clear the detail
+                // cache so a stale response does not backfill the cleared
+                // detail panel.
                 ++App.detailsRequestToken;
                 App.lastSessionDetailsData = null;
                 App.selectedSessionId = null;
@@ -236,9 +235,9 @@
 
     function selectTimelineSession(sessionId, sessions) {
         App.selectedSessionId = sessionId;
-        // Phase 3B.5B: switching sessions closes the correction shell so
-        // the shell context does not get confused across sessions. The
-        // shell is a per-session workspace.
+        // Switching sessions closes the correction shell so the shell
+        // context does not get confused across sessions. The shell is a
+        // per-session workspace.
         if (App.correctionShellOpen && App.correctionShellSessionId !== sessionId) {
             App.resetCorrectionShellState();
         }
@@ -269,10 +268,10 @@
         var found = newSelected;
         if (found) {
             loadSessionDetails(found.activity_ids, App.timelineDate);
-            // Verification item 4: virtual live sessions are display-only.
-            // A manual click on a virtual session must NOT open the edit
-            // panel — it has no persisted activity_ids and cannot be
-            // edited. Clear the edit panel instead so any prior session's
+            // Virtual live sessions are display-only. A manual click on a
+            // virtual session must NOT open the edit panel — it has no
+            // persisted activity_ids and cannot be edited. Clear the edit
+            // panel instead so any prior session's edit panel is dismissed.
             // edit panel is dismissed.
             if (found.edit_disabled === true || found.is_virtual === true) {
                 clearEditPanel();
@@ -315,17 +314,17 @@
     App.loadSessionDetails = loadSessionDetails;
 
     function renderSessionDetails(data) {
-        // Phase R3 issue 17: skip the full re-render when the user has
-        // unsaved inline editor / split editor input or a save is in
-        // progress. The heartbeat / revision refresh must not overwrite
-        // user input by re-rendering the detail list (which would reset
-        // inline editor inputs to backend values). After a successful
-        // save, isEditDirty() returns false so the re-render proceeds.
+        // Skip the full re-render when the user has unsaved inline editor /
+        // split editor input or a save is in progress. The heartbeat /
+        // revision refresh must not overwrite user input by re-rendering the
+        // detail list (which would reset inline editor inputs to backend
+        // values). After a successful save, isEditDirty() returns false so
+        // the re-render proceeds.
         //
-        // Verification item 14: when the DOM render is skipped, ALSO skip
-        // the cache update. Previously ``App.lastSessionDetailsData`` was set
-        // BEFORE the dirty-editor guard, so the ticker would project against
-        // a newer payload while the DOM still showed the old one, causing
+        // When the DOM render is skipped, ALSO skip the cache update. The
+        // cache is updated only when the DOM is actually rendered, keeping
+        // them atomic so the ticker never projects against a newer payload
+        // while the DOM still shows the old one.
         // cache/DOM desync. Now the cache is updated only when the DOM is
         // actually rendered, keeping them atomic.
         if ((App.editingActivityId !== null || App.editingSplitActivityId !== null)
@@ -335,11 +334,11 @@
         if (App.activityTimeSaving || App.activitySplitSaving) {
             return;
         }
-        // Phase 6H-followup: cache the session-details payload so the
-        // 1-second heartbeat ticker can increment the live-projected
-        // detail row's duration without a bridge round-trip. The ticker
-        // only updates DOM text; it never re-renders the whole list so
-        // inline edit state is preserved across heartbeat refreshes.
+        // Cache the session-details payload so the 1-second heartbeat
+        // ticker can increment the live-projected detail row's duration
+        // without a bridge round-trip. The ticker only updates DOM text; it
+        // never re-renders the whole list so inline edit state is preserved
+        // across heartbeat refreshes.
         App.lastSessionDetailsData = data;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
@@ -351,7 +350,7 @@
         }
         detailsHeader.textContent = "活动详情（" + activities.length + " 条）";
         var html = "";
-        // Phase 6H-followup: collect detail continuity keys for seeding.
+        // Collect detail continuity keys for seeding.
         var detailContinuityKeys = [];
         for (var i = 0; i < activities.length; i++) {
             var a = activities[i];
@@ -386,14 +385,14 @@
                 + '<div class="detail-item-project" title="' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '">' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '</div>'
                 + '<div class="detail-item-duration" data-duration-seconds="' + (isNaN(aDurSec) ? 0 : aDurSec) + '">' + App.escapeHtml(aDurText) + '</div>'
                 + '</div>';
-            // Phase 6H-followup: collect this row's continuity key so the
-            // monotonic state can be seeded after the innerHTML swap.
+            // Collect this row's continuity key so the monotonic state can
+            // be seeded after the innerHTML swap.
             detailContinuityKeys.push({ index: i, sec: isNaN(aDurSec) ? 0 : aDurSec });
         }
         detailsList.innerHTML = html;
-        // Phase 6H-followup: seed the monotonic render state for each detail
-        // row so the ticker's first projection does not appear to roll back.
-        // The continuity key MUST use App.liveContinuityKey() so the ticker
+        // Seed the monotonic render state for each detail row so the
+        // ticker's first projection does not appear to roll back. The
+        // continuity key MUST use App.liveContinuityKey() so the ticker
         // (which also uses liveContinuityKey) can locate the seeded state.
         // Using "detail-" + activity_id would break the virtual →
         // persisted_open transition because the ticker key is based on
@@ -413,15 +412,15 @@
     }
     App.renderSessionDetails = renderSessionDetails;
 
-    // --- Phase 3B.1: per-activity inline time editor -------------------
+    // --- per-activity inline time editor -------------------
 
     function openActivityTimeEditor(activityId, startVal, endVal, btn) {
         if (!btn) return;
         // Close any other open inline editor first so only one is visible
         // at a time. This keeps the editing context unambiguous.
         closeAllActivityTimeEditors(activityId);
-        // Phase 3B.2: also close any open split editor so the time editor is
-        // the only inline editor visible.
+        // Also close any open split editor so the time editor is the only
+        // inline editor visible.
         closeAllActivitySplitEditors(activityId);
         App.editingActivityId = activityId;
         var row = btn.closest(".detail-item");
@@ -579,7 +578,7 @@
     }
     App.saveActivityTime = saveActivityTime;
 
-    // --- Phase 3B.2: per-activity inline split editor ------------------
+    // --- per-activity inline split editor ------------------
 
     function openActivitySplitEditor(activityId, startVal, endVal, btn) {
         if (!btn) return;
@@ -746,7 +745,7 @@
     }
     App.saveActivitySplit = saveActivitySplit;
 
-    // --- Phase 3B.3: per-activity merge with next activity ------------
+    // --- per-activity merge with next activity ------------
 
     function setMergeStatus(btn, message, isError) {
         if (!btn) return;
@@ -792,9 +791,9 @@
             setMergeStatus(btn, "活动 ID 无效", true);
             return;
         }
-        // Phase 3B.5A: guard against unsaved edits, consistent with hide /
-        // delete. Merge triggers a refresh that would wipe unsaved
-        // project/note/time/split inputs, so require the user to save or
+        // Guard against unsaved edits, consistent with hide / delete. Merge
+        // triggers a refresh that would wipe unsaved project/note/time/split
+        // inputs, so require the user to save or cancel first.
         // cancel first.
         if (isEditDirty()) {
             setMergeStatus(btn, "请先保存或取消当前编辑", true);
@@ -835,7 +834,7 @@
     }
     App.saveActivityMerge = saveActivityMerge;
 
-    // --- Phase 3B.4: per-activity hide / soft delete ------------------
+    // --- per-activity hide / soft delete ------------------
 
     function setVisibilityStatus(btn, message, isError) {
         if (!btn) return;
@@ -974,7 +973,7 @@
     }
     App.saveActivityDelete = saveActivityDelete;
 
-    // --- Phase 3B.4: session-level hide / soft delete -----------------
+    // --- session-level hide / soft delete -----------------
 
     function populateSessionVisibilitySection(session) {
         var singleEl = document.getElementById("edit-visibility-single");
@@ -1137,7 +1136,7 @@
     }
     App.saveSessionDelete = saveSessionDelete;
 
-    // --- Phase 3A: Timeline editing (project reclassification + note) ----
+    // --- Timeline editing (project reclassification + note) ----
 
     function loadProjects() {
         // Load the selectable projects list once and cache it. Subsequent
@@ -1195,14 +1194,14 @@
             clearEditPanel();
             return;
         }
-        // Phase 3B.1: when switching to a different session, reset the
-        // per-activity inline editor state so a stale editingActivityId
-        // from the previous session does not leak into the new one. The
-        // detail list DOM will be rebuilt by renderSessionDetails.
+        // When switching to a different session, reset the per-activity
+        // inline editor state so a stale editingActivityId from the
+        // previous session does not leak into the new one. The detail list
+        // DOM will be rebuilt by renderSessionDetails.
         if (App.editingSession && App.editingSession.session_id !== session.session_id) {
             App.editingActivityId = null;
             App.activityTimeSaving = false;
-            // Phase 3B.2: reset per-activity inline split editor state too.
+            // Reset per-activity inline split editor state too.
             App.editingSplitActivityId = null;
             App.activitySplitSaving = false;
         }
@@ -1274,37 +1273,37 @@
         App.editingSession = null;
         App.editSaving = false;
         App.timeSaving = false;
-        // Phase 3B.1: reset per-activity inline editor state. The detail
-        // list DOM is typically rebuilt by renderSessionDetails, but the
-        // tracking variables must be cleared so a stale editingActivityId
-        // does not leak into the next session.
+        // Reset per-activity inline editor state. The detail list DOM is
+        // typically rebuilt by renderSessionDetails, but the tracking
+        // variables must be cleared so a stale editingActivityId does not
+        // leak into the next session.
         App.editingActivityId = null;
         App.activityTimeSaving = false;
-        // Phase 3B.2: reset per-activity inline split editor state too.
+        // Reset per-activity inline split editor state too.
         App.editingSplitActivityId = null;
         App.activitySplitSaving = false;
         App.sessionSplitSaving = false;
-        // Phase 3B.3: reset per-activity merge state too.
+        // Reset per-activity merge state too.
         App.mergeSaving = false;
         App.mergingActivityId = null;
-        // Phase 3B.4: reset per-activity hide / delete state too.
+        // Reset per-activity hide / delete state too.
         App.hideSaving = false;
         App.hidingActivityId = null;
         App.deleteSaving = false;
         App.deletingActivityId = null;
-        // Phase 3B.6: reset batch project selection state so a stale batch
-        // selection from the previous session does not leak into the next
-        // session. The reset also clears the project select / status so the
-        // panel returns to a clean baseline.
+        // Reset batch project selection state so a stale batch selection
+        // from the previous session does not leak into the next session.
+        // The reset also clears the project select / status so the panel
+        // returns to a clean baseline.
         App.resetBatchProjectState();
-        // Phase 3B.7: reset batch note state too so a stale note textarea /
-        // saving flag does not leak into the next session.
+        // Reset batch note state too so a stale note textarea / saving flag
+        // does not leak into the next session.
         App.resetBatchNoteState();
-        // Phase 3B.8: reset restore state too so a stale restore list /
-        // saving flag does not leak into the next session.
+        // Reset restore state too so a stale restore list / saving flag
+        // does not leak into the next session.
         App.resetRestoreState();
-        // Phase 3B.5B: reset the correction shell state too so a stale
-        // shell does not leak into the next session.
+        // Reset the correction shell state too so a stale shell does not
+        // leak into the next session.
         App.resetCorrectionShellState();
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
@@ -1332,11 +1331,11 @@
         if (saveBtn) saveBtn.disabled = true;
         if (cancelBtn) cancelBtn.disabled = true;
         showEditStatus("", false);
-        // Phase 3B.1: reset the session-level time-correction section.
+        // Reset the session-level time-correction section.
         resetSessionTimeSection();
-        // Phase 3B.2: reset the session-level split section.
+        // Reset the session-level split section.
         resetSessionSplitSection();
-        // Phase 3B.4: reset the session-level hide / soft-delete section.
+        // Reset the session-level hide / soft-delete section.
         resetSessionVisibilitySection();
     }
     App.clearEditPanel = clearEditPanel;
@@ -1536,10 +1535,10 @@
             for (var i = 0; i < results.length; i++) {
                 if (results[i].status === "rejected") {
                     hasError = true;
-                    // Phase 3C.1: never read .message from a rejected
-                    // promise — it could be a raw pywebview exception.
-                    // Use the stable "保存失败" fallback so internal
-                    // details never leak into the UI.
+                    // Never read .message from a rejected promise — it
+                    // could be a raw pywebview exception. Use the stable
+                    // "保存失败" fallback so internal details never leak
+                    // into the UI.
                     errorMsg = "保存失败";
                     break;
                 }
@@ -1586,7 +1585,7 @@
     }
     App.saveEdit = saveEdit;
 
-    // --- Phase 3B.2: session-level activity split ---------------------
+    // --- session-level activity split ---------------------
 
     function populateSessionSplitSection(session) {
         var singleEl = document.getElementById("edit-split-single");
@@ -1737,7 +1736,7 @@
             App.clearTimelineError();
         }).catch(function () {
             if (token !== App.timelineRequestToken) return;
-            // Phase 3C.1: use the stable "刷新失败" fallback.
+            // Use the stable "刷新失败" fallback.
             App.showTimelineError("刷新失败");
         });
     }
@@ -1754,7 +1753,7 @@
     }
     App.cancelEdit = cancelEdit;
 
-    // --- Phase 3B.1: session-level time correction ---------------------
+    // --- session-level time correction ---------------------
 
     function populateSessionTimeSection(session) {
         var singleEl = document.getElementById("edit-time-single");
@@ -1916,8 +1915,8 @@
         }).catch(function () {
             if (token !== App.timelineRequestToken) return;  // stale response
             App.setTimelineLoading(false);
-            // Phase 3C.1: never surface raw exception text; use the stable
-            // fallback so internal details do not leak into the UI.
+            // Never surface raw exception text; use the stable fallback so
+            // internal details do not leak into the UI.
             App.showTimelineError("加载时间线失败");
         });
     }
@@ -1942,7 +1941,7 @@
         }).catch(function () {
             if (token !== App.timelineRequestToken) return;  // stale response
             // Only show error banner; keep lastTimelineData on screen.
-            // Phase 3C.1: use the stable "刷新失败" fallback.
+            // Use the stable "刷新失败" fallback.
             App.showTimelineError("刷新失败");
         });
     }
@@ -1956,13 +1955,13 @@
         App.timelineDate = App.shiftDate(current, -1);
         App.selectedSessionId = null;
         App.selectedSessionLiveKey = null;
-        // Verification item 22: invalidate pending detail requests and clear
-        // the detail cache on date switch so a stale response from the
-        // previous date does not backfill the new date's detail panel.
+        // Invalidate pending detail requests and clear the detail cache on
+        // date switch so a stale response from the previous date does not
+        // backfill the new date's detail panel.
         ++App.detailsRequestToken;
         App.lastSessionDetailsData = null;
-        // Phase 3B.5B: close the correction shell on date switch so the
-        // shell context does not carry over to a different day.
+        // Close the correction shell on date switch so the shell context
+        // does not carry over to a different day.
         App.resetCorrectionShellState();
         loadTimeline(App.timelineDate);
     }
@@ -1974,11 +1973,11 @@
         App.timelineDate = App.shiftDate(current, 1);
         App.selectedSessionId = null;
         App.selectedSessionLiveKey = null;
-        // Verification item 22: invalidate pending detail requests and clear
-        // the detail cache on date switch.
+        // Invalidate pending detail requests and clear the detail cache on
+        // date switch.
         ++App.detailsRequestToken;
         App.lastSessionDetailsData = null;
-        // Phase 3B.5B: close the correction shell on date switch.
+        // Close the correction shell on date switch.
         App.resetCorrectionShellState();
         loadTimeline(App.timelineDate);
     }
@@ -1988,11 +1987,11 @@
         App.timelineDate = null;
         App.selectedSessionId = null;
         App.selectedSessionLiveKey = null;
-        // Verification item 22: invalidate pending detail requests and clear
-        // the detail cache on date switch.
+        // Invalidate pending detail requests and clear the detail cache on
+        // date switch.
         ++App.detailsRequestToken;
         App.lastSessionDetailsData = null;
-        // Phase 3B.5B: close the correction shell on date switch.
+        // Close the correction shell on date switch.
         App.resetCorrectionShellState();
         loadTimeline(null);
     }

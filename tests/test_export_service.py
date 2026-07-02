@@ -71,7 +71,7 @@ def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):
         raise AssertionError("clear_all_local_data should require confirmation")
 
 
-# --- Phase 6D: clear-all destructive reset guard -----------------------
+# --- clear-all destructive reset guard -----------------------
 
 
 def _seed_business_data() -> int:
@@ -209,9 +209,9 @@ def test_clear_all_failure_restores_prior_state_and_clears_guard(
 
 
 def test_clear_all_success_invalidates_context_recompute_cache(temp_db) -> None:
-    # The context recompute cache was previously missing from the
-    # clear-all path. After a successful clear-all it must be invalidated
-    # so the next Timeline / Statistics load does not see pre-clear data.
+    # After a successful clear-all the context recompute cache must be
+    # invalidated so the next Timeline / Statistics load does not see
+    # pre-clear data.
     # Seed data, then clear-all and assert the post-clear activity list
     # is empty (the cache invalidation is verified indirectly: without
     # invalidation the context recompute cache would still point at the

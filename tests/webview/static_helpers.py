@@ -5,12 +5,6 @@ These tests read the bundled frontend resources (``index.html`` /
 constants and helpers here are intentionally lightweight so every themed
 test module under ``tests/webview/`` can import the same paths without
 re-declaring them.
-
-Phase R2 split the monolithic ``app.js`` into classic modules under
-``worktrace/webview_ui/js/`` (core / overview / timeline /
-timeline_correction / statistics / rules / init). Tests that previously read
-``app.js`` should now use :func:`read_all_js` (concatenated source in
-load order) so per-function substring contracts keep working.
 """
 
 from __future__ import annotations
@@ -25,12 +19,11 @@ HISTORY_PATH = REPO_ROOT / "docs" / "history" / "webview-phases.md"
 RELEASE_VALIDATION_PATH = REPO_ROOT / "docs" / "release-validation.md"
 README_PATH = REPO_ROOT / "README.md"
 
-# JS modules in the exact load order used by
-# index.html. read_all_js() concatenates them in this order so that
-# func_body() and substring checks see the same logical source the
-# browser would execute.
+# JS modules in the exact load order used by index.html. read_all_js()
+# concatenates them in this order so func_body() and substring checks
+# see the same logical source the browser would execute.
 #
-# Phase MC2 split the Project Rules surface into:
+# Project Rules logic is split across:
 #   rules.js (core load / refresh / wiring)
 #   rules_render.js (render helpers)
 #   rules_rule_actions.js (rule toggle)
@@ -68,11 +61,11 @@ NO_STORAGE_FILES = (
     + ["js/" + name for name in ALL_JS_FILES]
 )
 
-# Bridge mixin files (Phase M4 page-level split). ``bridge.py`` is now a
-# thin composition class that inherits from six mixins; the method bodies
-# live in the mixin files below. The combined-source and per-method helpers
-# let static source-level tests keep working after the split without
-# hard-coding which mixin holds each method.
+# Bridge mixin files. ``bridge.py`` is a thin composition class that
+# inherits from the mixins below; the method bodies live in those mixin
+# files. The combined-source and per-method helpers let static source-level
+# tests scan every bridge file without hard-coding which mixin holds each
+# method.
 BRIDGE_FILES = [
     "bridge.py",
     "bridge_common.py",
@@ -102,10 +95,9 @@ def read_js(filename: str) -> str:
 def read_all_js() -> str:
     """Return the concatenated UTF-8 text of every ``js/`` module in load order.
 
-    Replaces the old ``read_resource("app.js")`` pattern used before
-    Phase R2. Function bodies and substring contracts that spanned the
-    monolithic app.js continue to work because the concatenation
-    preserves the IIFE-per-module structure and load order.
+    Concatenation preserves the IIFE-per-module structure and load order
+    so function-body and substring contracts see the same logical source
+    the browser would execute.
     """
     return "\n".join(read_js(name) for name in ALL_JS_FILES)
 
@@ -113,8 +105,7 @@ def read_all_js() -> str:
 def read_rules_module_js() -> str:
     """Return the concatenated source of all Project Rules JS modules.
 
-    After the Phase MC2 split, Project Rules logic spans six classic
-    IIFE modules loaded in order:
+    Project Rules logic spans six IIFE modules loaded in order:
       rules.js                (core load / refresh / wiring)
       rules_render.js         (render helpers)
       rules_rule_actions.js  (rule toggle)
@@ -124,8 +115,7 @@ def read_rules_module_js() -> str:
                                 toggle / archive)
     Tests that need to check substring contracts or ``func_body`` across
     the full Project Rules surface should use this helper instead of
-    ``read_js("rules.js")`` so the split does not silently break
-    contracts that moved.
+    ``read_js("rules.js")``.
     """
     names = [
         "rules.js",
@@ -163,11 +153,9 @@ def func_body(source: str, name: str) -> str:
 
 
 def read_bridge_sources_combined() -> str:
-    """Return the concatenated UTF-8 source of all 8 bridge mixin files.
+    """Return the concatenated UTF-8 source of all bridge mixin files.
 
-    Phase M4 split ``bridge.py`` into multiple mixin files. Tests that
-    previously did ``(WEBVIEW_UI_DIR / "bridge.py").read_text()`` and
-    then ran substring checks (e.g. ``assert "def foo" in src`` or
+    Tests that need substring checks (e.g. ``assert "def foo" in src`` or
     ``assert "from ..services" not in src``) should use this helper so
     the checks scan every bridge file instead of just the slim
     composition class.
@@ -183,12 +171,6 @@ def read_bridge_sources_combined() -> str:
 def read_bridge_method_body(method_name: str, *, max_chars: int = 4000) -> str:
     """Return the body slice of ``def <method_name>`` from whichever bridge
     mixin file defines it.
-
-    Phase M4 split ``bridge.py`` into multiple mixin files. Tests that
-    previously did ``bridge_source.find("def <method_name>")`` then
-    sliced to ``find("\\n    def ", pos + 1)`` should use this helper so
-    the body is extracted from the correct mixin file (not the slim
-    composition ``bridge.py``).
 
     Returns the slice from ``def <method_name>`` up to the next
     ``\\n    def `` at indent 4 (or ``max_chars`` characters if no next

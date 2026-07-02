@@ -1,4 +1,4 @@
-"""Phase 6G privacy gate tests for ``AppRuntime.start_background_workers``.
+"""privacy gate tests for ``AppRuntime.start_background_workers``.
 
 These tests verify the folder index worker is NOT started during
 ``AppRuntime.initialize()`` and is only started via the separate
@@ -40,7 +40,7 @@ def test_initialize_does_not_start_folder_index_worker(temp_db, tmp_path, monkey
     """``AppRuntime.initialize()`` must NOT call
     ``folder_index_service.start_folder_index_worker``.
 
-    Phase 6G privacy gate: ``initialize`` only does DB init, single-instance
+    Privacy gate: ``initialize`` only does DB init, single-instance
     lock, and recovery. The folder index worker is started separately via
     ``start_background_workers()`` only after the first-run privacy notice
     has been accepted.

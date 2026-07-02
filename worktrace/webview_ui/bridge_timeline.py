@@ -1,4 +1,4 @@
-"""Timeline bridge mixin, split out of ``bridge.py``.
+"""Timeline bridge mixin.
 
 Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 
@@ -12,7 +12,7 @@ Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 - Methods do not log window titles, file paths, notes, or copied text.
 
 ``WebViewBridge`` in ``bridge.py`` inherits ``TimelineBridgeMixin`` so the
-Timeline page method names stay on ``WebViewBridge`` and the frontend /
+Timeline page method names stay on ``WebViewBridge``.
 tests see no API-surface change.
 """
 
@@ -61,8 +61,8 @@ _TIME_ERROR_MESSAGES = {
 }
 
 # Maps ``TimelineSplitError.code`` to stable Chinese user-facing messages for
-# the Phase 3B.2 activity split. Unknown codes collapse to the generic
-# "操作失败" so internal details are never surfaced.
+# the activity split. Unknown codes collapse to the generic "操作失败" so
+# internal details are never surfaced.
 _SPLIT_ERROR_MESSAGES = {
     "in_progress": "进行中记录暂不支持拆分",
     "multi_activity": "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动",
@@ -73,8 +73,8 @@ _SPLIT_ERROR_MESSAGES = {
 }
 
 # Maps ``TimelineMergeError.code`` to stable Chinese user-facing messages for
-# the Phase 3B.3 activity merge. Unknown codes collapse to the generic
-# "操作失败" so internal details are never surfaced.
+# the activity merge. Unknown codes collapse to the generic "操作失败" so
+# internal details are never surfaced.
 _MERGE_ERROR_MESSAGES = {
     "invalid_selection": "请选择两个活动进行合并",
     "invalid_id": "操作失败",
@@ -88,8 +88,8 @@ _MERGE_ERROR_MESSAGES = {
 }
 
 # Maps ``TimelineVisibilityError.code`` to stable Chinese user-facing messages
-# for the Phase 3B.4 hide / soft delete. Unknown codes collapse to the generic
-# "操作失败" so internal details are never surfaced.
+# for the hide / soft delete. Unknown codes collapse to the generic "操作失败"
+# so internal details are never surfaced.
 _VISIBILITY_ERROR_MESSAGES = {
     "invalid_id": "操作失败",
     "in_progress": "进行中记录暂不支持隐藏或删除",
@@ -99,8 +99,8 @@ _VISIBILITY_ERROR_MESSAGES = {
 }
 
 # Maps ``TimelineBatchProjectError.code`` to stable Chinese user-facing
-# messages for the Phase 3B.6 batch project reassignment. Unknown codes
-# collapse to the generic "操作失败" so internal details are never surfaced.
+# messages for the batch project reassignment. Unknown codes collapse to
+# the generic "操作失败" so internal details are never surfaced.
 _BATCH_PROJECT_ERROR_MESSAGES = {
     "invalid_selection": "请选择至少两个活动",
     "batch_too_large": "一次最多修改 100 条活动",
@@ -111,8 +111,8 @@ _BATCH_PROJECT_ERROR_MESSAGES = {
 }
 
 # Maps ``TimelineBatchNoteError.code`` to stable Chinese user-facing
-# messages for the Phase 3B.7 batch note overwrite. Unknown codes collapse
-# to the generic "操作失败" so internal details are never surfaced.
+# messages for the batch note overwrite. Unknown codes collapse to the
+# generic "操作失败" so internal details are never surfaced.
 _BATCH_NOTE_ERROR_MESSAGES = {
     "invalid_selection": "请选择至少两个活动",
     "batch_too_large": "一次最多修改 100 条活动",
@@ -124,8 +124,8 @@ _BATCH_NOTE_ERROR_MESSAGES = {
 }
 
 # Maps ``TimelineRestoreActivityError.code`` to stable Chinese user-facing
-# messages for the Phase 3B.8 single activity restore. Unknown codes
-# collapse to the load-focused "恢复失败" so internal details are never
+# messages for the single activity restore. Unknown codes collapse to the
+# load-focused "恢复失败" so internal details are never surfaced.
 # surfaced.
 _RESTORE_ERROR_MESSAGES = {
     "invalid_activity": "请选择有效的活动",
@@ -138,11 +138,11 @@ _RESTORE_ERROR_MESSAGES = {
 
 
 class TimelineBridgeMixin:
-    """Timeline page bridge methods, split out of ``WebViewBridge``.
+    """Timeline page bridge methods.
 
-    The mixin is mixed into ``WebViewBridge`` in ``bridge.py`` so the
-    Timeline page method names stay on ``WebViewBridge``. The mixin
-    must NOT add ``__init__``; it relies on the host class.
+    Mixed into ``WebViewBridge`` in ``bridge.py`` so the Timeline page
+    method names stay on ``WebViewBridge``. The mixin must NOT add
+    ``__init__``; it relies on the host class.
     """
 
     def get_timeline(self, date: str | None = None) -> dict[str, Any]:
@@ -386,26 +386,24 @@ class TimelineBridgeMixin:
             today = timeline_api.get_default_report_date()
             snapshot = settings_api.get_current_activity_snapshot()
             # Build the unified live-display summary from the same snapshot
-            # sample so the detail ticker can compute its own live delta
-            # (verification item 8). This is built before the virtual-row
-            # branch so both the virtual-row return and the DB-row return
-            # carry the same ``live_display`` payload.
+            # sample so the detail ticker can compute its own live delta.
+            # This is built before the virtual-row branch so both the
+            # virtual-row return and the DB-row return carry the same
+            # ``live_display`` payload.
             live_display = live_display_api.build_current_activity_summary(
                 snapshot, report_date=date, today=today
             )
-            # Detail payload carries its OWN live_projection (verification
-            # item 五.3: detail ticker must NOT reuse the Timeline main
-            # payload's projection). The detail payload and the Timeline
-            # main payload are separate bridge calls that may arrive at
-            # different times; using the main payload's projection for the
-            # detail ticker caused the detail duration to drift relative
-            # to its own baseline.
+            # Detail payload carries its OWN live_projection. The detail
+            # payload and the Timeline main payload are separate bridge
+            # calls that may arrive at different times; using the main
+            # payload's projection for the detail ticker would let the
+            # detail duration drift relative to its own timing anchor.
             detail_live_projection = live_display_api.build_live_projection(
                 snapshot, report_date=date, today=today
             )
             # Build the persisted-open overlay once so every DB detail row
             # that matches the persisted_activity_id can carry the same
-            # stable live fields as the virtual detail row (verification
+            # stable live fields as the virtual detail row.
             # items 12, 16, 21).
             persisted_overlay = live_display_api.build_persisted_open_overlay(
                 snapshot, report_date=date, today=today
@@ -442,7 +440,7 @@ class TimelineBridgeMixin:
                             "live_display_key": str(virtual_row.get("live_display_key") or ""),
                             # Stable live identity so the frontend continuity
                             # key survives the virtual → persisted_open
-                            # transition (verification items 12, 16, 21).
+                            # transition.
                             "stable_live_key": str(virtual_row.get("stable_live_key") or ""),
                             "stable_live_key_hash": str(virtual_row.get("stable_live_key_hash") or ""),
                             # Unified live clock fields (scheme A).
@@ -457,13 +455,13 @@ class TimelineBridgeMixin:
                 return {
                     "ok": True,
                     "activities": activities,
-                    # Unified live-display payload for the detail ticker
-                    # (verification item 8: detail ticker must not use
-                    # Timeline main payload delta).
+                    # Unified live-display payload for the detail ticker.
+                    # The detail ticker must not reuse the Timeline main
+                    # payload's delta.
                     "live_display": live_display,
-                    # Detail payload's OWN live projection (verification
-                    # item 五.3: detail ticker must use the detail
-                    # payload's own projection, NOT the Timeline main
+                    # Detail payload's OWN live projection. The detail
+                    # ticker must use this projection, NOT the Timeline
+                    # main payload's projection.
                     # payload's projection).
                     "live_projection": detail_live_projection,
                     "sample_id": str(detail_live_projection.get("stable_live_key_hash") or ""),
@@ -529,16 +527,16 @@ class TimelineBridgeMixin:
                 # Unified live-display payload so the detail ticker can
                 # compute its own live delta from ``live_started_at_epoch_ms``
                 # + ``carry_seconds`` instead of reusing the Timeline main
-                # payload's delta (verification item 8). The detail payload
-                # and the Timeline main payload are separate bridge calls
-                # that may arrive at different times; using the main
-                # payload's delta for the detail ticker caused the detail
-                # duration to drift relative to its own baseline.
+                # payload's delta. The detail payload and the Timeline
+                # main payload are separate bridge calls that may arrive
+                # at different times; using the main payload's delta for
+                # the detail ticker would let the detail duration drift
+                # relative to its own timing anchor.
                 "live_display": live_display,
-                # Detail payload's OWN live projection (verification item
-                # 五.3). Detail ticker must use this projection, NOT the
-                # Timeline main payload's projection, so the detail
-                # duration does not drift relative to its own baseline.
+                # Detail payload's OWN live projection. The detail ticker
+                # must use this projection, NOT the Timeline main
+                # payload's projection, so the detail duration does not
+                # drift relative to its own timing anchor.
                 "live_projection": detail_live_projection,
                 "sample_id": str(detail_live_projection.get("stable_live_key_hash") or ""),
             }
@@ -546,7 +544,7 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge get_timeline_session_details failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Phase 3A: Timeline basic editing (project reclassification + note) ---
+    # --- Timeline basic editing (project reclassification + note) ------
 
     def list_projects_for_timeline(self) -> dict[str, Any]:
         """Return the list of projects selectable for Timeline reclassification.
@@ -580,9 +578,9 @@ class TimelineBridgeMixin:
         """Reclassify a Timeline session's activities to a project.
 
         ``activity_ids`` is the session's full activity id list (all
-        activities move together, matching the legacy Tkinter behavior).
-        ``project_id`` must be one of the ids returned by
-        ``list_projects_for_timeline``; the frontend must never pass a
+        activities move together). ``project_id`` must be one of the ids
+        returned by ``list_projects_for_timeline``; the frontend must
+        never pass a free-form value.
         free-form value.
 
         Returns ``{"ok": true}`` on success or
@@ -623,9 +621,9 @@ class TimelineBridgeMixin:
         ``activity_ids`` is the session's activity id list; the first id is
         used as the session-note key (``first_activity_id``). ``note`` is the
         new note text. ``report_date`` is the ``YYYY-MM-DD`` date being
-        viewed. The note is stored in ``project_session_note`` (the same
-        model the legacy Tkinter Timeline uses). Legitimate newlines inside
-        the note are preserved; whitespace-only notes delete the row.
+        viewed. The note is stored in ``project_session_note``. Legitimate
+        newlines inside the note are preserved; whitespace-only notes
+        delete the row.
 
         Returns ``{"ok": true}`` on success or
         ``{"ok": false, "error": "操作失败"}`` on any failure.
@@ -716,7 +714,7 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge update_timeline_note_and_duration failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Phase 3B.1: Timeline time correction (single-activity foundation) ---
+    # --- Timeline time correction (single-activity foundation) --------
 
     def update_timeline_activity_time(
         self,
@@ -767,8 +765,8 @@ class TimelineBridgeMixin:
     ) -> dict[str, Any]:
         """Apply a session-level time correction.
 
-        ``activity_ids`` is the session's full activity id list. Phase 3B.1
-        only supports sessions that resolve to a single activity (after
+        ``activity_ids`` is the session's full activity id list. Only
+        supports sessions that resolve to a single activity (after
         deduplication); multi-activity sessions return a clear Chinese
         message directing the user to per-activity editing.
 
@@ -796,7 +794,7 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge update_timeline_session_time failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Phase 3B.2: Timeline activity split (single-activity foundation) ---
+    # --- Timeline activity split (single-activity foundation) ---------
 
     def split_timeline_activity(
         self,
@@ -849,8 +847,8 @@ class TimelineBridgeMixin:
     ) -> dict[str, Any]:
         """Apply a session-level split.
 
-        ``activity_ids`` is the session's full activity id list. Phase 3B.2
-        only supports sessions that resolve to a single activity (after
+        ``activity_ids`` is the session's full activity id list. Only
+        supports sessions that resolve to a single activity (after
         deduplication); multi-activity sessions return a clear Chinese
         message directing the user to per-activity splitting.
 
@@ -883,7 +881,7 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge split_timeline_session failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Phase 3B.3: Timeline activity merge (two-activity foundation) ---
+    # --- Timeline activity merge (two-activity foundation) -------------
 
     def merge_timeline_activities(self, activity_ids) -> dict[str, Any]:
         """Merge exactly two closed activities into one.
@@ -928,7 +926,7 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge merge_timeline_activities failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Phase 3B.4: Timeline hide / soft delete (single-activity foundation) ---
+    # --- Timeline hide / soft delete (single-activity foundation) ------
 
     def hide_timeline_activity(self, activity_id) -> dict[str, Any]:
         """Hide a single closed activity from the default Timeline.
@@ -998,8 +996,8 @@ class TimelineBridgeMixin:
     def hide_timeline_session(self, activity_ids) -> dict[str, Any]:
         """Apply a session-level hide.
 
-        ``activity_ids`` is the session's full activity id list. Phase 3B.4
-        only supports sessions that resolve to a single activity (after
+        ``activity_ids`` is the session's full activity id list. Only
+        supports sessions that resolve to a single activity (after
         deduplication); multi-activity sessions return a clear Chinese
         message directing the user to per-activity hiding.
 
@@ -1027,8 +1025,8 @@ class TimelineBridgeMixin:
     def soft_delete_timeline_session(self, activity_ids) -> dict[str, Any]:
         """Apply a session-level soft delete.
 
-        ``activity_ids`` is the session's full activity id list. Phase 3B.4
-        only supports sessions that resolve to a single activity (after
+        ``activity_ids`` is the session's full activity id list. Only
+        supports sessions that resolve to a single activity (after
         deduplication); multi-activity sessions return a clear Chinese
         message directing the user to per-activity deletion.
 
@@ -1052,7 +1050,7 @@ class TimelineBridgeMixin:
             return dict(_GENERIC_ERROR)
 
     def batch_update_timeline_activities_project(self, activity_ids, project_id) -> dict[str, Any]:
-        """Phase 3B.6: batch reclassify multiple closed activities to a project.
+        """Batch reclassify multiple closed activities to a project.
 
         ``activity_ids`` must be a list of at least two positive ints after
         deduplication (``bool`` rejected); ``project_id`` must be a positive
@@ -1091,7 +1089,7 @@ class TimelineBridgeMixin:
             return dict(_GENERIC_ERROR)
 
     def batch_update_timeline_activities_note(self, activity_ids, note) -> dict[str, Any]:
-        """Phase 3B.7: batch overwrite the note on multiple closed activities.
+        """Batch overwrite the note on multiple closed activities.
 
         ``activity_ids`` must be a list of at least two positive ints after
         deduplication (``bool`` rejected). ``note`` must be a ``str``
@@ -1126,7 +1124,7 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge batch_update_timeline_activities_note failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Phase 3B.8: Timeline single activity restore foundation ---
+    # --- Timeline single activity restore foundation -------------------
 
     def restore_timeline_activity(self, activity_id) -> dict[str, Any]:
         """Restore a single hidden or soft-deleted activity.

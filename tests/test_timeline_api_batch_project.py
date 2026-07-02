@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.6 Timeline batch project editing API and service.
+"""Tests for the Timeline batch project editing API and service.
 
 Covers ``worktrace.api.timeline_api.batch_update_timeline_activities_project``
 and the underlying ``worktrace.services.activity_service.batch_update_activity_project``
@@ -610,9 +610,9 @@ def test_service_batch_non_positive_id(temp_db):
     assert str(exc.value) == "invalid_activity_ids"
 
 
-# --- Phase 3B.6.1: batch project editing hardening ----------------------
+# --- batch project editing hardening ----------------------
 #
-# These tests harden the Phase 3B.6 batch project reassignment by verifying:
+# These tests harden the batch project reassignment by verifying:
 # mixed invalid selection rejection (no partial write), exact max boundary
 # (100 activities), assignment confidence/source matching single-edit
 # semantics, resource rows unchanged, session notes unchanged, exception

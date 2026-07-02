@@ -1,8 +1,8 @@
-"""Phase 5E API / service regression locks for folder rule CRUD.
+"""API / service regression locks for folder rule CRUD.
 
 These tests lock the narrow ``rule_api.create_project_folder_rule``,
 ``rule_api.update_project_folder_rule``, and
-``rule_api.delete_project_folder_rule`` facades introduced in Phase 5E.
+``rule_api.delete_project_folder_rule`` facades. They cover valid creation, input validation, project-eligibility rejection,
 They cover valid creation, input validation, project-eligibility rejection,
 create-or-update semantics, update / delete isolation between folder and
 keyword rules, exception collapse, no-side-effect guarantees (no keyword
@@ -720,7 +720,7 @@ def test_existing_delete_project_keyword_rule_still_works(temp_db):
     assert _keyword_rule_row(keyword_id) is None
 
 
-# --- Phase 5E.1: normalized key collision / update-by-id boundary ---------
+# --- normalized key collision / update-by-id boundary ---------
 #
 # Regression-only locks for the folder rule CRUD hardening. These tests lock
 # the create-or-update normalized-key semantics, the update-by-id boundary
@@ -732,7 +732,7 @@ def test_existing_delete_project_keyword_rule_still_works(temp_db):
 
 
 def test_update_folder_rule_to_existing_normalized_key_returns_operation_failed(temp_db):
-    # Phase 5E.1 regression lock: updating a folder rule's path so that its
+    # Regression lock: updating a folder rule's path so that its
     # normalized key collides with another existing folder rule must collapse
     # to ``operation_failed`` (the service raises ``IntegrityError`` on the
     # UNIQUE constraint). The update path must NOT merge or delete the other
@@ -757,7 +757,7 @@ def test_update_folder_rule_to_existing_normalized_key_returns_operation_failed(
 
 
 def test_update_folder_rule_preserves_rule_id_when_normalized_key_changes(temp_db):
-    # Phase 5E.1 regression lock: the update-by-id path must preserve the
+    # Regression lock: the update-by-id path must preserve the
     # row id even when the new folder_path produces a different
     # normalized_folder_key. This is what distinguishes update from
     # create-or-update (which would reuse the existing row for the same
@@ -778,7 +778,7 @@ def test_update_folder_rule_preserves_rule_id_when_normalized_key_changes(temp_d
 
 
 def test_update_folder_rule_preserves_enabled_state_when_disabled(temp_db):
-    # Phase 5E.1 regression lock: the update path must preserve the existing
+    # Regression lock: the update path must preserve the existing
     # ``enabled`` state. The existing test only verifies ``project_id``
     # preservation; this lock explicitly disables the rule first, then
     # updates the path, and confirms ``enabled`` stays ``0``.
@@ -797,7 +797,7 @@ def test_update_folder_rule_preserves_enabled_state_when_disabled(temp_db):
 
 
 def test_create_folder_rule_recursive_update_on_same_normalized_key(temp_db):
-    # Phase 5E.1 regression lock: creating a folder rule with the same
+    # Regression lock: creating a folder rule with the same
     # normalized key as an existing one but a different ``recursive`` value
     # must update the existing row's ``recursive`` field in place (this is
     # the create-or-update semantics). The existing test covers project_id
@@ -817,7 +817,7 @@ def test_create_folder_rule_recursive_update_on_same_normalized_key(temp_db):
 
 
 def test_create_folder_rule_payload_excludes_sensitive_fields(temp_db):
-    # Phase 5E.1 regression lock: the create success payload must not expose
+    # Regression lock: the create success payload must not expose
     # internal DB columns (``normalized_folder_key``, ``created_at``,
     # ``updated_at``) or any sensitive metadata. The bridge further narrows
     # the payload, but the API layer must already be clean.
@@ -844,7 +844,7 @@ def test_create_folder_rule_payload_excludes_sensitive_fields(temp_db):
 
 
 def test_update_folder_rule_payload_excludes_sensitive_fields(temp_db):
-    # Phase 5E.1 regression lock: the update success payload must not expose
+    # Regression lock: the update success payload must not expose
     # internal DB columns or sensitive metadata.
     project = project_service.create_project("Client")
     created = rule_api.create_project_folder_rule(project, r"D:\Old", True)
@@ -871,7 +871,7 @@ def test_update_folder_rule_payload_excludes_sensitive_fields(temp_db):
 
 
 def test_delete_folder_rule_payload_excludes_sensitive_fields(temp_db):
-    # Phase 5E.1 regression lock: the delete success payload must not expose
+    # Regression lock: the delete success payload must not expose
     # internal DB columns or sensitive metadata. Note: ``deleted`` is the
     # legitimate success flag and is allowed; the forbidden ``delete`` SQL
     # keyword is checked via the key-set assertion (no ``delete`` key) rather
@@ -901,11 +901,11 @@ def test_delete_folder_rule_payload_excludes_sensitive_fields(temp_db):
         assert forbidden not in lowered
 
 
-# --- Phase 5E.1: cache invalidation / privacy exclude / index rebuild ----
+# --- cache invalidation / privacy exclude / index rebuild ----
 
 
 def test_create_folder_rule_invokes_cache_invalidation_hooks(temp_db, monkeypatch):
-    # Phase 5E.1 regression lock: the create path must call
+    # Regression lock: the create path must call
     # ``invalidate_folder_rule_cache``, ``clear_exclude_rules_cache``, and
     # ``request_rebuild_for_rule`` so the folder rule cache, the privacy
     # exclude cache, and the folder index all reflect the new rule.
@@ -938,7 +938,7 @@ def test_create_folder_rule_invokes_cache_invalidation_hooks(temp_db, monkeypatc
 
 
 def test_update_folder_rule_invokes_cache_invalidation_hooks(temp_db, monkeypatch):
-    # Phase 5E.1 regression lock: the update path must call
+    # Regression lock: the update path must call
     # ``invalidate_folder_rule_cache``, ``clear_exclude_rules_cache``, and
     # ``request_rebuild_for_rule`` so the folder rule cache, the privacy
     # exclude cache, and the folder index all reflect the updated rule.
@@ -972,7 +972,7 @@ def test_update_folder_rule_invokes_cache_invalidation_hooks(temp_db, monkeypatc
 
 
 def test_delete_folder_rule_invokes_cache_invalidation_and_index_delete_hooks(temp_db, monkeypatch):
-    # Phase 5E.1 regression lock: the delete path must call
+    # Regression lock: the delete path must call
     # ``invalidate_folder_rule_cache``, ``clear_exclude_rules_cache``, and
     # ``delete_index_for_rule`` (NOT ``request_rebuild_for_rule``) so the
     # folder rule cache, the privacy exclude cache, and the folder index
@@ -1014,7 +1014,7 @@ def test_delete_folder_rule_invokes_cache_invalidation_and_index_delete_hooks(te
 
 
 def test_folder_crud_cache_hooks_not_invoked_on_invalid_input(temp_db, monkeypatch):
-    # Phase 5E.1 regression lock: when the API rejects input before reaching
+    # Regression lock: when the API rejects input before reaching
     # the service, none of the cache invalidation hooks may fire. This locks
     # the boundary so a validation rejection never produces a stale cache
     # flush that could mask a real bug.
@@ -1060,11 +1060,11 @@ def test_folder_crud_cache_hooks_not_invoked_on_invalid_input(temp_db, monkeypat
     }
 
 
-# --- Phase 6G: excluded-folder rule creation facade --------------------
+# --- excluded-folder rule creation facade --------------------
 
 
 def test_create_excluded_folder_rule_for_webview_success(temp_db):
-    # Phase 6G regression lock: the dedicated facade creates a folder rule on
+    # Regression lock: the dedicated facade creates a folder rule on
     # the special ``排除规则`` project, trims the path, passes ``recursive``
     # through as a real bool, and returns the narrow created-rule summary. It
     # does NOT accept a project_id from the caller.
@@ -1122,7 +1122,7 @@ def test_create_excluded_folder_rule_for_webview_success(temp_db):
 def test_create_excluded_folder_rule_for_webview_rejects_invalid_input(
     temp_db, bad_path, bad_recursive
 ):
-    # Phase 6G regression lock: non-str / whitespace-only folder_path or
+    # Regression lock: non-str / whitespace-only folder_path or
     # non-bool recursive collapses to ``invalid_input`` and creates no row.
     before = _counts()
     result = rule_api.create_excluded_folder_rule_for_webview(bad_path, bad_recursive)
@@ -1135,7 +1135,7 @@ def test_create_excluded_folder_rule_for_webview_rejects_invalid_input(
 def test_create_excluded_folder_rule_for_webview_exception_collapses(
     temp_db, monkeypatch
 ):
-    # Phase 6G regression lock: an unexpected service failure collapses to
+    # Regression lock: an unexpected service failure collapses to
     # ``operation_failed`` without surfacing the exception text, traceback,
     # SQL, or sensitive metadata.
     def _raise(*args, **kwargs):

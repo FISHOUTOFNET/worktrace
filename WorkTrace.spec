@@ -26,8 +26,8 @@ datas = [
 ]
 binaries = []
 hiddenimports = ['win32timezone']
-# pywebview is the WebView backend used by the default UI entry point as of
-# Phase 1. collect_all('webview') is a no-op if pywebview is not installed;
+# pywebview is the WebView backend used by the default UI entry point.
+# collect_all('webview') is a no-op if pywebview is not installed;
 # pywebview>=5.0 is declared in requirements.txt and is required for WorkTrace
 # to start.
 _wv_ret = collect_all('webview')

@@ -118,7 +118,7 @@ def test_resource_switch_under_30s_shows_new_resource_but_inherited_display_proj
 
 
 def test_candidate_confirmed_after_30_seconds_when_different(temp_db):
-    """Section 一.2: >=30s after the switch, when the candidate differs
+    """>=30s after the switch, when the candidate differs
     from the last confirmed project, the candidate is confirmed and
     becomes the display project (``pending = False``)."""
     _setup_two_projects(temp_db)
@@ -161,7 +161,7 @@ def test_candidate_confirmed_after_30_seconds_when_different(temp_db):
 
 
 def test_candidate_same_as_last_confirmed_no_pending(temp_db):
-    """Section 一.2: when the candidate matches the last confirmed
+    """when the candidate matches the last confirmed
     project, no pending window opens — the display project is unchanged
     and ``pending`` stays ``False``."""
     _setup_two_projects(temp_db)
@@ -197,7 +197,7 @@ def test_candidate_same_as_last_confirmed_no_pending(temp_db):
 
 
 def test_uncategorized_candidate_under_30s_inherits_last_confirmed(temp_db):
-    """Section 一.2: when the new resource's candidate is uncategorized,
+    """when the new resource's candidate is uncategorized,
     the display project continues to show the last confirmed project
     during the 30-second pending window (avoids long-term polluting the
     previous project)."""
@@ -229,7 +229,7 @@ def test_uncategorized_candidate_under_30s_inherits_last_confirmed(temp_db):
 
 
 def test_uncategorized_candidate_confirmed_after_30_seconds(temp_db):
-    """Section 一.2: >=30s after the switch to an uncategorized
+    """>=30s after the switch to an uncategorized
     candidate, the display project switches to uncategorized (avoids
     long-term polluting the previous project)."""
     _setup_two_projects(temp_db)
@@ -325,7 +325,7 @@ def test_clipboard_force_persist_under_30s_persists_db_row_but_display_still_pen
 
 
 def test_stop_clears_ownership_state_so_next_session_does_not_inherit(temp_db):
-    """Section 四.6: ``stop`` is a session boundary — the ownership state
+    """``stop`` is a session boundary — the ownership state
     is cleared so the previous session's display project is NOT inherited
     into a new session."""
     _setup_two_projects(temp_db)
@@ -359,7 +359,7 @@ def test_stop_clears_ownership_state_so_next_session_does_not_inherit(temp_db):
 
 
 def test_pause_clears_ownership_state(temp_db):
-    """Section 四.6: ``pause`` is a session boundary — the ownership
+    """``pause`` is a session boundary — the ownership
     state is cleared so the previous session's display project is NOT
     inherited after resume."""
     _setup_two_projects(temp_db)
@@ -391,7 +391,7 @@ def test_pause_clears_ownership_state(temp_db):
 
 
 def test_idle_does_not_inherit_previous_normal_project(temp_db):
-    """Section 四.4: ``idle`` is a system status — it does not
+    """``idle`` is a system status — it does not
     participate in normal project pending and must not inherit the
     previous normal session's display project."""
     _setup_two_projects(temp_db)
@@ -418,7 +418,7 @@ def test_idle_does_not_inherit_previous_normal_project(temp_db):
 
 
 def test_midnight_split_does_not_inherit_previous_project(temp_db):
-    """Section 四.6: midnight split is a session boundary — the ownership
+    """midnight split is a session boundary — the ownership
     state is cleared and re-confirmed for the continuing resource. A
     pending transition from before midnight does NOT leak into the new
     day: the new day starts with the current resource's candidate as
@@ -459,7 +459,7 @@ def test_midnight_split_does_not_inherit_previous_project(temp_db):
 
 
 def test_time_jump_clears_ownership_state(temp_db):
-    """Section 四.6: time jump recovery is a session boundary — the
+    """time jump recovery is a session boundary — the
     ownership state is cleared so the pre-jump session's display project
     is NOT inherited into the post-jump session."""
     _setup_two_projects(temp_db)
@@ -495,7 +495,7 @@ def test_time_jump_clears_ownership_state(temp_db):
 
 
 def test_first_activity_no_pending_when_candidate_is_uncategorized(temp_db):
-    """Section 四.3: the first activity of a session has no prior
+    """the first activity of a session has no prior
     confirmed project, so display == candidate immediately (no pending
     window). When the candidate is uncategorized, display is
     uncategorized."""
@@ -513,7 +513,7 @@ def test_first_activity_no_pending_when_candidate_is_uncategorized(temp_db):
 
 
 def test_first_activity_no_pending_when_candidate_is_concrete_project(temp_db):
-    """Section 四.3: the first activity of a session has no prior
+    """the first activity of a session has no prior
     confirmed project, so display == candidate immediately (no pending
     window) even when the candidate is a concrete project."""
     project_a, _ = _setup_two_projects(temp_db)
@@ -531,13 +531,13 @@ def test_first_activity_no_pending_when_candidate_is_concrete_project(temp_db):
 
 
 # ---------------------------------------------------------------------------
-# Legacy inferred_project_name mirrors display_project.name
+# inferred_project_name mirrors display_project.name
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_inferred_project_name_mirrors_display_project(temp_db):
-    """During the transition the legacy ``inferred_project_name`` field
-    mirrors ``display_project.name`` so legacy readers (statistics live
+def test_inferred_project_name_mirrors_display_project(temp_db):
+    """The ``inferred_project_name`` field
+    mirrors ``display_project.name`` so readers (statistics live
     projection, refresh-revision) see the display project, not the
     candidate."""
     _setup_two_projects(temp_db)

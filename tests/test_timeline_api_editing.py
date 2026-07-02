@@ -1,4 +1,4 @@
-"""Tests for the Phase 3A Timeline editing API layer.
+"""Tests for the Timeline editing API layer.
 
 Covers ``worktrace.api.timeline_api.reclassify_timeline_session_project``
 and ``worktrace.api.timeline_api.update_timeline_session_note``:
@@ -160,7 +160,7 @@ def test_update_note_preserves_newlines(temp_db):
 
 def test_update_note_whitespace_only_deletes(temp_db):
     """A whitespace-only note should delete the existing note row (matching
-    legacy set_session_note behavior)."""
+    set_session_note behavior)."""
     ids = _seed_session()
     # First set a real note
     timeline_api.update_timeline_session_note("2026-06-25", ids[0], "real note")
@@ -348,7 +348,7 @@ def test_update_note_only_preserves_existing_duration(temp_db):
     assert fields["adjusted_duration_seconds"] == 3600
 
 
-# --- Phase 3A.1: API input validation hardening --------------------------
+# --- API input validation hardening --------------------------
 
 
 def test_reclassify_activity_ids_not_a_list(temp_db):

@@ -399,14 +399,13 @@ class AutoActivityRecorder:
         candidate_project_dict = candidate_label.to_dict()
         project_transition_pending = bool(transition_dict.get("pending"))
 
-        # Legacy ``inferred_project_name`` now mirrors the display
-        # project name so legacy readers (statistics_service live
-        # projection, refresh-revision) see the display project rather
+        # ``inferred_project_name`` mirrors the display project name;
+        # consumed by statistics_service live projection and
+        # refresh-revision.
         # than the candidate. New readers should use ``display_project``.
         inferred_project_name = display_label.name or UNCATEGORIZED_PROJECT
 
         payload = {
-            # ---- Legacy fields (kept for transition) ----
             "app_name": self.current_payload.get("app_name") or "",
             "process_name": self.current_payload.get("process_name") or "",
             "window_title": self.current_payload.get("window_title") or "",

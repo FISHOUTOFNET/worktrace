@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.1 Timeline time-correction bridge methods.
+"""Tests for the Timeline time-correction bridge methods.
 
 Covers ``WebViewBridge.update_timeline_activity_time`` and
 ``WebViewBridge.update_timeline_session_time``:
@@ -221,11 +221,11 @@ def test_update_activity_time_error_has_no_sensitive_keys(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- Phase 3B.1.1: race-condition hardening ------------------------------
+# --- race-condition hardening ------------------------------
 
 
 def test_update_activity_time_race_condition_returns_generic_error(bridge):
-    """Phase 3B.1.1: when the API raises ``TimelineTimeEditError("invalid_id")``
+    """when the API raises ``TimelineTimeEditError("invalid_id")``
     because the activity was deleted/reopened between validation and write
     (race condition), the bridge must return the generic ``操作失败`` message
     without exposing that a race occurred or any internal detail."""
@@ -248,7 +248,7 @@ def test_update_activity_time_race_condition_returns_generic_error(bridge):
 
 
 def test_update_session_time_race_condition_returns_generic_error(bridge):
-    """Phase 3B.1.1: session-level time correction race condition must also
+    """session-level time correction race condition must also
     return the generic ``操作失败`` message."""
     from worktrace.api.timeline_api import TimelineTimeEditError
 

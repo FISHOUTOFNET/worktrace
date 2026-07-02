@@ -1,4 +1,4 @@
-"""Tests for the Phase 3B.1 Timeline time-correction API layer.
+"""Tests for the Timeline time-correction API layer.
 
 Covers ``worktrace.api.timeline_api.update_timeline_activity_time`` and
 ``worktrace.api.timeline_api.update_timeline_session_time``:
@@ -373,7 +373,7 @@ def test_update_activity_time_reread_timeline_reflects_change(temp_db):
     assert found, "modified activity must still appear in the timeline"
 
 
-# --- Phase 3B.1.1: hardening tests -------------------------------------
+# --- hardening tests -------------------------------------
 
 
 def test_update_activity_time_t_separator_rejected(temp_db):

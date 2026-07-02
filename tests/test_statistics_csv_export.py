@@ -1,4 +1,4 @@
-"""Phase 4B Statistics CSV export tests.
+"""Statistics CSV export tests.
 
 Covers the new controlled write path on the Statistics / Export page:
 
@@ -892,7 +892,7 @@ def test_bridge_export_does_not_import_backend_internals():
     formatters and the lazily-resolved pywebview UI dependency). They must
     NOT import services / db / collector / runtime / config / security.
 
-    Phase M4: ``bridge.py`` is now a thin composition class; the method
+    ``bridge.py`` is now a thin composition class; the method
     bodies live in the mixin files (``bridge_common.py``,
     ``bridge_dialogs.py``, ``bridge_overview.py``, ``bridge_settings.py``,
     ``bridge_statistics.py``, ``bridge_timeline.py``, ``bridge_rules.py``).
@@ -987,7 +987,7 @@ def test_bridge_export_error_messages_are_stable_chinese():
         )
 
 
-# --- Phase 4B.1: native save dialog hardening --------------------------
+# --- native save dialog hardening --------------------------
 # Precision tests for the pywebview save-dialog return-shape variants and
 # the dialog-constant / dialog-exception collapse paths. The bridge must
 # handle every documented ``create_file_dialog`` return shape (None, empty
@@ -1016,7 +1016,7 @@ class _FakeDialogWindow:
 
 
 def test_bridge_export_dialog_returns_single_string(temp_db, tmp_path, bridge):
-    """Phase 4B.1: when ``create_file_dialog`` returns a bare string (not
+    """when ``create_file_dialog`` returns a bare string (not
     wrapped in a tuple/list), the bridge must accept it as a valid path."""
     _seed_closed_activity(day="2026-06-25")
     out = tmp_path / "report.csv"
@@ -1029,7 +1029,7 @@ def test_bridge_export_dialog_returns_single_string(temp_db, tmp_path, bridge):
 
 
 def test_bridge_export_dialog_returns_empty_tuple(temp_db, tmp_path, bridge):
-    """Phase 4B.1: an empty tuple from the dialog is treated as a cancel
+    """an empty tuple from the dialog is treated as a cancel
     (not as a failure and not as a write attempt)."""
     _seed_closed_activity(day="2026-06-25")
     out_dir = tmp_path / "exports"
@@ -1047,7 +1047,7 @@ def test_bridge_export_dialog_returns_empty_tuple(temp_db, tmp_path, bridge):
 
 
 def test_bridge_export_dialog_returns_empty_list(temp_db, tmp_path, bridge):
-    """Phase 4B.1: an empty list from the dialog is treated as a cancel."""
+    """an empty list from the dialog is treated as a cancel."""
     _seed_closed_activity(day="2026-06-25")
     out_dir = tmp_path / "exports"
     out_dir.mkdir()
@@ -1064,7 +1064,7 @@ def test_bridge_export_dialog_returns_empty_list(temp_db, tmp_path, bridge):
 
 
 def test_bridge_export_dialog_returns_list_with_path(temp_db, tmp_path, bridge):
-    """Phase 4B.1: a list (not just a tuple) containing a path is accepted."""
+    """a list (not just a tuple) containing a path is accepted."""
     _seed_closed_activity(day="2026-06-25")
     out = tmp_path / "report.csv"
     bridge.set_window(_FakeDialogWindow(return_value=[str(out)]))
@@ -1075,7 +1075,7 @@ def test_bridge_export_dialog_returns_list_with_path(temp_db, tmp_path, bridge):
 
 
 def test_bridge_export_dialog_raises_exception(temp_db, tmp_path, bridge):
-    """Phase 4B.1: when ``create_file_dialog`` raises, the bridge collapses
+    """when ``create_file_dialog`` raises, the bridge collapses
     to ``导出失败`` and never leaks the raw exception text."""
     _seed_closed_activity(day="2026-06-25")
     bridge.set_window(
@@ -1094,7 +1094,7 @@ def test_bridge_export_dialog_raises_exception(temp_db, tmp_path, bridge):
 def test_bridge_export_dialog_missing_file_dialog_constant(
     temp_db, tmp_path, bridge, monkeypatch
 ):
-    """Phase 4B.1: when the installed pywebview exposes neither
+    """when the installed pywebview exposes neither
     ``FileDialog.SAVE`` nor the deprecated ``SAVE_DIALOG``, the bridge
     collapses to ``导出失败`` and never opens the dialog."""
     _seed_closed_activity(day="2026-06-25")
@@ -1115,7 +1115,7 @@ def test_bridge_export_dialog_missing_file_dialog_constant(
 def test_bridge_export_dialog_file_dialog_without_save_constant(
     temp_db, tmp_path, bridge, monkeypatch
 ):
-    """Phase 4B.1: when ``webview.FileDialog`` exists but has no ``SAVE``
+    """when ``webview.FileDialog`` exists but has no ``SAVE``
     attribute (and no ``SAVE_DIALOG`` fallback), the bridge collapses to
     ``导出失败``."""
     _seed_closed_activity(day="2026-06-25")
@@ -1135,10 +1135,10 @@ def test_bridge_export_dialog_file_dialog_without_save_constant(
     assert window.dialog_calls == 0
 
 
-def test_bridge_export_dialog_uses_legacy_save_dialog_fallback(
+def test_bridge_export_dialog_uses_deprecated_save_dialog_fallback(
     temp_db, tmp_path, bridge, monkeypatch
 ):
-    """Phase 4B.1: when ``FileDialog`` is absent but the deprecated
+    """when ``FileDialog`` is absent but the deprecated
     ``SAVE_DIALOG`` constant exists, the bridge must use it and the export
     must succeed. This locks the documented fallback behavior."""
     _seed_closed_activity(day="2026-06-25")
@@ -1157,11 +1157,11 @@ def test_bridge_export_dialog_uses_legacy_save_dialog_fallback(
     assert out.exists()
 
 
-# --- Phase 4B.1: service path-extension hardening ---------------------
+# --- service path-extension hardening ---------------------
 
 
 def test_write_csv_preserves_uppercase_csv_extension(temp_db, tmp_path):
-    """Phase 4B.1: an uppercase ``.CSV`` suffix must be preserved (not
+    """an uppercase ``.CSV`` suffix must be preserved (not
     double-suffixed to ``.CSV.csv``). ``with_suffix`` is only applied when
     the lowercased suffix is not ``.csv``."""
     _seed_closed_activity(day="2026-06-25")
@@ -1175,7 +1175,7 @@ def test_write_csv_preserves_uppercase_csv_extension(temp_db, tmp_path):
 
 
 def test_write_csv_preserves_mixed_case_csv_extension(temp_db, tmp_path):
-    """Phase 4B.1: a mixed-case ``.Csv`` suffix must also be preserved."""
+    """a mixed-case ``.Csv`` suffix must also be preserved."""
     _seed_closed_activity(day="2026-06-25")
     out = tmp_path / "report.Csv"
     result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
@@ -1184,7 +1184,7 @@ def test_write_csv_preserves_mixed_case_csv_extension(temp_db, tmp_path):
 
 
 def test_write_csv_preserves_lowercase_csv_extension(temp_db, tmp_path):
-    """Phase 4B.1: an existing lowercase ``.csv`` suffix is unchanged
+    """an existing lowercase ``.csv`` suffix is unchanged
     (regression lock for the suffix normalization branch)."""
     _seed_closed_activity(day="2026-06-25")
     out = tmp_path / "report.csv"
@@ -1194,7 +1194,7 @@ def test_write_csv_preserves_lowercase_csv_extension(temp_db, tmp_path):
 
 
 def test_api_export_uppercase_csv_extension(temp_db, tmp_path):
-    """Phase 4B.1: the API layer must preserve an uppercase ``.CSV`` suffix
+    """the API layer must preserve an uppercase ``.CSV`` suffix
     and return it as the basename (no double-suffixing)."""
     _seed_closed_activity(day="2026-06-25")
     out = tmp_path / "report.CSV"
@@ -1204,7 +1204,7 @@ def test_api_export_uppercase_csv_extension(temp_db, tmp_path):
 
 
 def test_write_csv_chinese_and_space_path(temp_db, tmp_path):
-    """Phase 4B.1: a path containing Chinese characters and spaces must be
+    """a path containing Chinese characters and spaces must be
     written successfully. This locks the Windows Chinese-path / space-path
     write behavior without requiring a real Windows filesystem."""
     _seed_closed_activity(day="2026-06-25")

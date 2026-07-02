@@ -1,8 +1,8 @@
-"""Phase 1 default WebView entry behavior tests.
+"""default WebView entry behavior tests.
 
-These tests cover the destructive Phase 1 migration invariants:
+These tests cover the migration invariants:
 
-- ``worktrace.main.main([])`` defaults to WebView, not the legacy Tkinter
+- ``worktrace.main.main([])`` defaults to WebView, not the Tkinter
   ``WorkTraceApp``;
 - ``main`` ignores any command-line args (there is no argparse layer;
   WebView is the only UI);
@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_main_defaults_to_webview_without_instantiating_tkinter():
     """``main([])`` must delegate to ``webview_main.main()`` and must not
-    reference the legacy Tkinter ``WorkTraceApp``."""
+    reference the Tkinter ``WorkTraceApp``."""
     import worktrace.main as main_mod
 
     called = {"count": 0}
@@ -106,7 +106,7 @@ def test_webview_main_returns_nonzero_when_runtime_missing(monkeypatch, capsys):
 def test_webview_main_returns_nonzero_when_pywebview_missing(monkeypatch, capsys):
     """When pywebview is not installed, ``webview_main.main`` must return a
     non-zero exit code with a clear install prompt and must not fall back to
-    any Tkinter UI (Phase 6F: the legacy ``worktrace.ui`` package is deleted,
+    any Tkinter UI (the ``worktrace.ui`` package is deleted,
     so there is nothing to fall back to)."""
     import worktrace.webview_main as webview_main
 
@@ -188,7 +188,7 @@ def test_bridge_only_imports_worktrace_api():
     """The bridge module must only import from ``worktrace.api`` (and
     ``worktrace.formatters``). It must not import services, db, collector,
     security, runtime, or config directly. This complements
-    ``test_ui_backend_boundary.py`` with a focused Phase 1 assertion."""
+    ``test_ui_backend_boundary.py`` with a focused assertion."""
     bridge_path = REPO_ROOT / "worktrace" / "webview_ui" / "bridge.py"
     source = bridge_path.read_text(encoding="utf-8")
     forbidden = [
@@ -212,7 +212,7 @@ def test_bridge_only_imports_worktrace_api():
 
 def test_overview_bridge_methods_return_json_serializable_no_traceback(temp_db):
     """All Overview bridge methods must return JSON-serializable dicts and
-    must never leak tracebacks on error. This is a focused Phase 1 assertion;
+    must never leak tracebacks on error. This is a focused assertion;
     see ``test_webview_bridge.py`` for the full per-method coverage."""
     from worktrace.services import settings_service
     from worktrace.webview_ui.bridge import WebViewBridge
@@ -232,7 +232,7 @@ def test_overview_bridge_methods_return_json_serializable_no_traceback(temp_db):
             assert "traceback" not in str(result).lower()
 
 
-# --- Phase 6E: First-run startup gate --------------------------------
+# --- First-run startup gate --------------------------------
 #
 # These tests verify the first-run privacy notice gate added to
 # ``webview_main.main()``. The gate checks
@@ -419,7 +419,7 @@ def test_webview_main_starts_background_workers_before_collector_when_notice_acc
     """When the notice is accepted, webview_main.main() must call
     ``app_api.start_background_workers()`` BEFORE ``app_api.start_collector()``
     so the folder index is warm by the time the collector starts matching
-    activities (Phase 6G)."""
+    activities (the privacy gate)."""
     _stub_webview_main_environment(monkeypatch, tmp_path)
     call_order: list[str] = []
 

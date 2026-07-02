@@ -1,11 +1,11 @@
-// WorkTrace WebView frontend - Project Rules project-lifecycle actions (Phase 5G).
+// WorkTrace WebView frontend - Project Rules project-lifecycle actions.
 // Project create / edit / toggle / archive; loaded after rules.js, before init.js.
 
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Phase 5G: Project lifecycle (create / edit / toggle / archive) ---
+    // --- Project lifecycle (create / edit / toggle / archive) ---
 
     function showProjectCreateStatus(message, isError) {
         var el = document.getElementById("rules-project-create-status");
@@ -28,7 +28,7 @@
     App.clearProjectCreateStatus = clearProjectCreateStatus;
 
     function setProjectCreateCreating(creating) {
-        // Phase 5G: toggle the project create saving state. The state is
+        // toggle the project create saving state. The state is
         // intentionally separate from all rule write states and from the
         // other project lifecycle states so the write paths can never
         // pollute each other's button / input disabled state.
@@ -46,7 +46,7 @@
     App.setProjectCreateCreating = setProjectCreateCreating;
 
     function handleProjectCreateSubmit() {
-        // Phase 5G: validate name + description locally, then call the
+        // validate name + description locally, then call the
         // bridge. Only one project create may be in flight at a time. The
         // name is trimmed before validation and before the bridge call.
         // On success both inputs are cleared and the Project Rules list is
@@ -84,7 +84,7 @@
     App.handleProjectCreateSubmit = handleProjectCreateSubmit;
 
     function bindProjectLifecycleEvents() {
-        // Phase 5G: event-delegated binding for project edit / toggle /
+        // event-delegated binding for project edit / toggle /
         // archive / edit-save / edit-cancel. Re-uses the same #rules-list
         // container as the other rule bindings so no extra per-card
         // listeners are needed. Bound once per page lifecycle via the data
@@ -97,7 +97,7 @@
     App.bindProjectLifecycleEvents = bindProjectLifecycleEvents;
 
     function handleProjectLifecycleEvent(event) {
-        // Phase 5G: single delegated click handler for all project lifecycle
+        // single delegated click handler for all project lifecycle
         // operations (edit start, edit save, edit cancel, toggle, archive).
         // Routes to the matching sub-handler based on the button class. The
         // catch path never reads .message.
@@ -136,7 +136,7 @@
     }
 
     function handleProjectEditStart(button) {
-        // Phase 5G: enter inline edit mode for one user project. Only one
+        // enter inline edit mode for one user project. Only one
         // project edit may be in flight at a time. Setting the editing id
         // triggers a re-render of that card into the edit form.
         if (App.rulesEditingProjectId) return;
@@ -152,7 +152,7 @@
     App.handleProjectEditStart = handleProjectEditStart;
 
     function handleProjectEditSave(button) {
-        // Phase 5G: save the inline project edit. Validates the edited name
+        // save the inline project edit. Validates the edited name
         // locally, then calls the bridge. On success the editing state
         // clears and the Project Rules list refreshes; on failure the
         // editing form is preserved so the user can retry. The catch path
@@ -196,7 +196,7 @@
     App.handleProjectEditSave = handleProjectEditSave;
 
     function handleProjectEditCancel(button) {
-        // Phase 5G: cancel the inline project edit. Just clears the editing
+        // cancel the inline project edit. Just clears the editing
         // state and re-renders. No bridge call is made.
         if (!App.rulesEditingProjectId) return;
         App.setProjectEditing(null);
@@ -205,7 +205,7 @@
     App.handleProjectEditCancel = handleProjectEditCancel;
 
     function handleProjectToggle(button) {
-        // Phase 5G: enable/disable one user project. Validates the project
+        // enable/disable one user project. Validates the project
         // id locally, then calls the bridge. On success the Project Rules
         // list refreshes; on failure the rendered list is kept. The catch
         // path never reads .message.
@@ -247,7 +247,7 @@
     App.handleProjectToggle = handleProjectToggle;
 
     function handleProjectArchive(button) {
-        // Phase 5G: archive one user project. Confirms first, then
+        // archive one user project. Confirms first, then
         // validates the project id locally before calling the bridge. On
         // success the Project Rules list refreshes; on failure the rendered
         // list is kept. The catch path never reads .message.
@@ -279,7 +279,7 @@
     App.handleProjectArchive = handleProjectArchive;
 
     function setProjectEditing(projectId) {
-        // Phase 5G: enter / leave inline edit mode for one user project.
+        // enter / leave inline edit mode for one user project.
         // Setting the id triggers a re-render of the list from cached data
         // so the edit form appears / disappears immediately.
         App.rulesEditingProjectId = projectId || null;
@@ -288,7 +288,7 @@
     App.setProjectEditing = setProjectEditing;
 
     function setProjectSaving(projectId) {
-        // Phase 5G: toggle the in-flight state for a project edit save.
+        // toggle the in-flight state for a project edit save.
         // Flips the save / cancel button disabled state on the edit form
         // so the user cannot double-submit. State is separate from the
         // editing id (which stays set until success clears it).
@@ -307,7 +307,7 @@
     App.setProjectSaving = setProjectSaving;
 
     function setProjectToggling(projectId) {
-        // Phase 5G: toggle the project enable/disable saving state. Updates
+        // toggle the project enable/disable saving state. Updates
         // every project lifecycle button disabled state so the four write
         // paths cannot run concurrently.
         App.rulesTogglingProjectId = projectId || null;
@@ -316,7 +316,7 @@
     App.setProjectToggling = setProjectToggling;
 
     function setProjectArchiving(projectId) {
-        // Phase 5G: toggle the project archive saving state. Updates every
+        // toggle the project archive saving state. Updates every
         // project lifecycle button disabled state so the four write paths
         // cannot run concurrently.
         App.rulesArchivingProjectId = projectId || null;
@@ -325,7 +325,7 @@
     App.setProjectArchiving = setProjectArchiving;
 
     function _refreshProjectLifecycleButtons() {
-        // Phase 5G: internal helper that disables all project lifecycle
+        // internal helper that disables all project lifecycle
         // buttons while any project lifecycle write is in flight, and
         // flips the matching button's label to its in-progress text.
         var writeInProgress = !!(

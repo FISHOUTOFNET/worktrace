@@ -12,7 +12,7 @@ def session_note_key(session: dict) -> tuple[str, int] | None:
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatible note-only accessors (used by legacy callers).
+# Note-only accessors (read/write only the note field).
 # ---------------------------------------------------------------------------
 
 
@@ -24,9 +24,9 @@ def get_session_note(report_date: str, first_activity_id: int) -> str:
 def set_session_note(report_date: str, first_activity_id: int, note: str) -> None:
     """Note-only write that preserves any existing duration override.
 
-    Previously this function deleted the entire ``project_session_note``
-    row when ``note`` was empty. With the addition of
-    ``adjusted_duration_seconds`` that behaviour would silently destroy a
+    The row is deleted only when ``note`` is empty AND
+    ``adjusted_duration_seconds`` is ``None``; an empty note alone does
+    not destroy an existing duration override.
     user's duration override. Now the row is only deleted when BOTH the
     note is empty AND no duration override is set.
     """
@@ -40,7 +40,7 @@ def set_session_note(report_date: str, first_activity_id: int, note: str) -> Non
 
 
 def attach_session_notes(sessions: list[dict]) -> list[dict]:
-    """Attach only ``session_note`` (backward-compat wrapper)."""
+    """Attach only ``session_note`` to each session dict."""
     fields_map = _user_fields_for_sessions(sessions)
     for session in sessions:
         key = session_note_key(session)
@@ -51,7 +51,7 @@ def attach_session_notes(sessions: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# New primary API: note + adjusted duration as a unified "user fields" model.
+# Unified "user fields" API: note + adjusted duration.
 # ---------------------------------------------------------------------------
 
 

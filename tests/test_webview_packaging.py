@@ -1,14 +1,14 @@
-"""Phase 1 packaging, default WebView entry, and WebView2 runtime detection tests.
+"""packaging, default WebView entry, and WebView2 runtime detection tests.
 
-Phase 1 made the WebView UI the default and only shipping UI. These tests
+WebView is the default and only shipping UI. These tests
 cover:
 
 - WorkTrace.spec bundles webview_ui static resources + retains schema.sql,
-  open_files_helper, customtkinter (legacy), win32timezone;
+  open_files_helper, customtkinter, win32timezone;
 - pyinstaller_entry.py forwards to worktrace.main.main (which now defaults
   to WebView);
 - ``python -m worktrace.main`` defaults to the WebView entry point and does
-  not instantiate the legacy Tkinter ``WorkTraceApp``;
+  not instantiate the Tkinter ``WorkTraceApp``;
 - importing worktrace.main does not start the GUI;
 - WebView2 runtime_check is importable, never raises, and does not block
   non-Windows;
@@ -45,24 +45,24 @@ def _read(path: Path) -> str:
 
 
 def test_spec_bundles_webview_ui_static_resources():
-    """Phase MC2: the spec must bundle index.html, styles.css, and every
+    """the spec must bundle index.html, styles.css, and every
     ``js/`` module listed in ``static_helpers.ALL_JS_FILES`` (the single
-    source of truth). The old monolithic app.js must no longer be
+    source of truth). app.js must no longer be
     referenced since the file was removed."""
     spec = _read(SPEC_PATH)
     for name in ("index.html", "styles.css"):
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/{name}"
-    # Phase MC2: every JS module in ALL_JS_FILES must be bundled.
+    # every JS module in ALL_JS_FILES must be bundled.
     for name in ALL_JS_FILES:
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/js/{name}"
-    # The removed monolithic app.js must no longer be referenced.
+    # The removed app.js must no longer be referenced.
     assert "app.js" not in spec, (
         "WorkTrace.spec must not reference the removed app.js"
     )
 
 
 def test_index_html_loads_all_js_in_order():
-    """Phase MC2: index.html must load every file in ``ALL_JS_FILES`` and in
+    """index.html must load every file in ``ALL_JS_FILES`` and in
     the exact same order. This guards against a new JS module being added
     to ``ALL_JS_FILES`` without being wired into ``index.html`` (or vice
     versa)."""
@@ -79,7 +79,7 @@ def test_index_html_loads_all_js_in_order():
 
 
 def test_all_js_files_exist_on_disk():
-    """Phase MC2: every entry in ``ALL_JS_FILES`` must resolve to an actual
+    """every entry in ``ALL_JS_FILES`` must resolve to an actual
     JS module on disk so the static-contract tests and PyInstaller spec
     never silently reference a missing file."""
     js_dir = REPO_ROOT / "worktrace" / "webview_ui" / "js"
@@ -109,8 +109,8 @@ def test_spec_retains_open_files_helper():
 
 
 def test_spec_does_not_bundle_customtkinter():
-    """customtkinter must NOT be bundled: the legacy worktrace.ui package was
-    removed in Phase 6F and no production code imports customtkinter."""
+    """customtkinter must NOT be bundled: the worktrace.ui package was
+    removed and no production code imports customtkinter."""
     spec = _read(SPEC_PATH)
     assert "customtkinter" not in spec
 
@@ -122,7 +122,7 @@ def test_spec_retains_win32timezone():
 
 def test_entry_script_forwards_to_worktrace_main():
     """The entry script must fall through to worktrace.main.main for the
-    default invocation. WebView is the default and only UI as of Phase 1."""
+    default invocation. WebView is the default and only UI."""
     source = _read(ENTRY_PATH)
     assert "--open-files-helper" in source
     assert "from worktrace.main import main" in source
@@ -132,16 +132,16 @@ def test_entry_script_forwards_to_worktrace_main():
 
 
 def test_main_module_does_not_import_worktrace_app():
-    """main.py must not import or instantiate the legacy Tkinter WorkTraceApp.
+    """main.py must not import or instantiate the Tkinter WorkTraceApp.
 
-    As of Phase 1 the default path is the WebView UI. Phase 6F deleted the
-    legacy ``worktrace.ui`` package entirely, so the default entry point
+    The default path is the WebView UI. The
+    ``worktrace.ui`` package has been deleted entirely, so the default entry point
     must not depend on it (and no such module exists to import).
     """
     source = _read(MAIN_PATH)
     assert "WorkTraceApp" not in source, (
         "worktrace.main must not import or reference WorkTraceApp; "
-        "WebView is the default UI as of Phase 1."
+        "WebView is the default UI as of WebView UI."
     )
     assert "from .ui.app" not in source
     assert "from worktrace.ui.app" not in source
@@ -150,7 +150,7 @@ def test_main_module_does_not_import_worktrace_app():
 def test_main_defaults_to_webview_without_flag():
     """``main([])`` must delegate to ``webview_main.main()``.
 
-    This is the core Phase 1 invariant: the default entry point starts the
+    This is the core invariant: the default entry point starts the
     WebView UI. There is no Tkinter path in ``main``.
     """
     import worktrace.main as main_mod
@@ -328,7 +328,7 @@ def test_missing_runtime_message_mentions_webview2():
 
 def test_missing_runtime_message_has_no_tkinter_or_fallback_wording():
     """The missing-runtime message must not reference Tkinter, fallback, or
-    any ``继续使用默认`` wording. Phase 1 removed the fallback path."""
+    any ``继续使用默认`` wording. The fallback path has been removed."""
     from worktrace.webview_ui.runtime_check import missing_runtime_message
 
     msg = missing_runtime_message()

@@ -1,4 +1,4 @@
-"""Settings / Privacy bridge mixin, split out of ``bridge.py``.
+"""Settings / Privacy bridge mixin.
 
 Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 
@@ -29,17 +29,17 @@ logger = logging.getLogger(__name__)
 
 
 class SettingsBridgeMixin:
-    """Settings / Privacy bridge methods, split out of ``WebViewBridge``.
+    """Settings / Privacy bridge methods.
 
-    The mixin is mixed into ``WebViewBridge`` in ``bridge.py`` so the
-    Settings / Privacy method names stay on ``WebViewBridge``. The mixin
-    must NOT add ``__init__``; it relies on the host class.
+    Mixed into ``WebViewBridge`` in ``bridge.py`` so the Settings / Privacy
+    method names stay on ``WebViewBridge``. The mixin must NOT add
+    ``__init__``; it relies on the host class.
     """
 
     def get_first_run_notice(self) -> dict[str, Any]:
         """Return the display-safe first-run privacy notice payload.
 
-        Phase 6E narrow bridge method. Zero parameters. Calls
+        Zero parameters. Calls
         ``settings_api.get_first_run_notice_for_webview()`` and
         transparently forwards its display-safe payload.
 
@@ -61,11 +61,11 @@ class SettingsBridgeMixin:
     def accept_first_run_notice(self) -> dict[str, Any]:
         """Accept the first-run privacy notice and start the collector.
 
-        Phase 6E narrow bridge method. Zero parameters. Calls
+        Zero parameters. Calls
         ``settings_api.accept_first_run_notice_for_webview()``; only when
         that API returns ``ok=True`` does this method call
-        ``app_api.start_collector()`` so the collector follows the
-        legacy Tkinter ``_accept_notice`` semantics (accept then start).
+        ``app_api.start_collector()`` so the collector starts only after
+        the notice has been accepted.
 
         On success returns a narrow payload that includes the refreshed
         status snapshot. If the status refresh fails after a successful
@@ -91,11 +91,11 @@ class SettingsBridgeMixin:
                 return result
             # API succeeded: start background workers (folder index)
             # and the collector so the user sees recording begin
-            # immediately after accepting the notice, mirroring the
-            # legacy Tkinter flow. Phase 6G: background workers are
-            # started before the collector so the index is warm by the
-            # time the collector starts matching activities. The worker
-            # is gated by the same privacy notice as the collector
+            # immediately after accepting the notice. Background workers
+            # are started before the collector so the index is warm by
+            # the time the collector starts matching activities. The
+            # worker is gated by the same privacy notice as the
+            # collector (now accepted).
             # (now accepted).
             try:
                 app_api.start_background_workers()
@@ -141,12 +141,12 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge accept_first_run_notice failed")
             return {"ok": False, "error": "确认隐私说明失败"}
 
-    # --- Phase 6A: Settings / Privacy read-only status ------------------
+    # --- Settings / Privacy read-only status ---------------------------
 
     def get_settings_privacy_status(self) -> dict[str, Any]:
         """Return the read-only Settings / Privacy status snapshot.
 
-        Phase 6A only surfaces safety-status booleans. It does not save
+        Only surfaces safety-status booleans. It does not save
         settings, toggle clipboard capture, export / import encrypted
         backups, parse the backup manifest, or clear local data. The
         payload never carries paths, database locations, backup file paths,
@@ -165,15 +165,15 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge get_settings_privacy_status failed")
             return {"ok": False, "error": "加载设置状态失败"}
 
-    # --- Phase 6B: Settings / Privacy clipboard capture toggle write -----
+    # --- Settings / Privacy clipboard capture toggle write ------------
 
     def set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]:
         """Write the ``clipboard_capture_enabled`` flag from the WebView UI.
 
-        Phase 6B narrow write path. ``enabled`` must be a real ``bool``;
-        any other type (``None``, ``"true"`` / ``"false"`` strings,
-        ``0`` / ``1`` ints, lists, dicts, objects) is rejected with a
-        stable Chinese message and does NOT mutate the underlying setting.
+        ``enabled`` must be a real ``bool``; any other type (``None``,
+        ``"true"`` / ``"false"`` strings, ``0`` / ``1`` ints, lists,
+        dicts, objects) is rejected with a stable Chinese message and
+        does NOT mutate the underlying setting.
 
         On success the bridge returns ``{"ok": True, "status": {...}}``
         where ``status`` is the updated Settings / Privacy status snapshot
@@ -200,16 +200,16 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge set_clipboard_capture_enabled failed")
             return {"ok": False, "error": "设置剪贴板记录失败"}
 
-    # --- Phase 6C: Settings / Privacy encrypted backup export ------------
+    # --- Settings / Privacy encrypted backup export -------------------
 
     def export_encrypted_backup(self, passphrase, confirm_passphrase) -> dict[str, Any]:
         """Export an encrypted ``.wtbackup`` file from the WebView UI.
 
-        Phase 6C controlled write path. ``passphrase`` and
-        ``confirm_passphrase`` are the two required parameters (no optional
-        args, no ``*args`` / ``**kwargs``). The save path is chosen by the
-        user through the native pywebview save dialog (the window is
-        injected via ``set_window``); the bridge never writes to a
+        ``passphrase`` and ``confirm_passphrase`` are the two required
+        parameters (no optional args, no ``*args`` / ``**kwargs``). The
+        save path is chosen by the user through the native pywebview
+        save dialog (the window is injected via ``set_window``); the
+        bridge never writes to a hard-coded location.
         hard-coded location.
 
         Returns one of:
@@ -245,12 +245,12 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge export_encrypted_backup failed")
             return {"ok": False, "error": "导出加密备份失败"}
 
-    # --- Phase 6C: Settings / Privacy encrypted backup manifest preview --
+    # --- Settings / Privacy encrypted backup manifest preview --------
 
     def preview_encrypted_backup_manifest(self) -> dict[str, Any]:
         """Preview the non-sensitive manifest of a ``.wtbackup`` file.
 
-        Phase 6C controlled read path. Takes no required parameters. The
+        Controlled read path. Takes no required parameters. The
         open path is chosen by the user through the native pywebview open
         file dialog (the window is injected via ``set_window``); the bridge
         never reads a hard-coded location. Does not require a passphrase
@@ -292,12 +292,12 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge preview_encrypted_backup_manifest failed")
             return {"ok": False, "error": "读取备份清单失败"}
 
-    # --- Phase 6D: Settings / Privacy encrypted backup import -----------
+    # --- Settings / Privacy encrypted backup import ------------------
 
     def import_encrypted_backup(self, passphrase, confirm_text) -> dict[str, Any]:
         """Import an encrypted ``.wtbackup`` file from the WebView UI.
 
-        Phase 6D controlled write path. ``passphrase`` and ``confirm_text``
+        Controlled write path. ``passphrase`` and ``confirm_text``
         are the two required parameters (no optional args, no ``*args`` /
         ``**kwargs``). The open path is chosen by the user through the
         native pywebview open file dialog (reuses the existing
@@ -342,12 +342,12 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge import_encrypted_backup failed")
             return {"ok": False, "error": "导入加密备份失败"}
 
-    # --- Phase 6D: Settings / Privacy clear-all-local-data --------------
+    # --- Settings / Privacy clear-all-local-data ---------------------
 
     def clear_all_local_data(self, confirm_text) -> dict[str, Any]:
         """Clear all local data from the WebView UI.
 
-        Phase 6D controlled write path. ``confirm_text`` is the single
+        Controlled write path. ``confirm_text`` is the single
         required parameter (no optional args, no ``*args`` / ``**kwargs``).
         No native dialog is opened; the API facade requires the literal
         confirmation phrase ``清空本地数据`` (after strip). The underlying

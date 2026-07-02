@@ -277,12 +277,12 @@ def close_activity(activity_id: int, end_time: str, duration_seconds: int | None
 def increment_activity_duration(activity_id: int, seconds: int) -> None:
     """Increment an open activity row's ``duration_seconds``.
 
-    Phase R3 verification item 7: this write is a *natural growth* update
-    on an open row — the duration is derived from
-    ``now - start_time`` and is NOT a structural change. The
-    ``updated_at`` column is therefore NOT bumped, so
-    ``compute_refresh_revision`` (which excludes ``updated_at`` from
-    the per-row structural signature) does not trigger a heavy refresh
+    This write is a *natural growth* update on an open row — the
+    duration is derived from ``now - start_time`` and is NOT a
+    structural change. The ``updated_at`` column is therefore NOT
+    bumped, so ``compute_refresh_revision`` (which excludes
+    ``updated_at`` from the per-row structural signature) does not
+    trigger a heavy refresh on every collector tick.
     on every collector tick.
 
     A subsequent structural write (close, project edit, time edit, etc.)
@@ -312,12 +312,12 @@ def increment_activity_duration(activity_id: int, seconds: int) -> None:
 def set_activity_duration(activity_id: int, seconds: int) -> None:
     """Set an open activity row's ``duration_seconds`` (monotonic max).
 
-    Phase R3 verification item 7: this write is a *natural growth* update
-    on an open row — the duration is derived from
-    ``now - start_time`` and is NOT a structural change. The
-    ``updated_at`` column is therefore NOT bumped, so
-    ``compute_refresh_revision`` (which excludes ``updated_at`` from
-    the per-row structural signature) does not trigger a heavy refresh
+    This write is a *natural growth* update on an open row — the
+    duration is derived from ``now - start_time`` and is NOT a
+    structural change. The ``updated_at`` column is therefore NOT
+    bumped, so ``compute_refresh_revision`` (which excludes
+    ``updated_at`` from the per-row structural signature) does not
+    trigger a heavy refresh on every collector tick.
     on every collector tick.
 
     A subsequent structural write (close, project edit, time edit, etc.)
@@ -448,7 +448,7 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> Non
 def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_hint: str) -> None:
     """Re-infer the resource after a path hint update and sync activity_resource.
 
-    When a real full path becomes available for an activity that previously only
+    When a real full path becomes available for an activity that only
     had a name-only resource (e.g. ``合同.docx`` from the window title), we
     re-run detection and upgrade the stored resource so that path-based
     identity keys, ``path_hint`` and ``path_key`` are populated. Excluded
@@ -492,7 +492,7 @@ def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_
     # now have a real local file path, upgrade to a path-based identity so
     # that the stored resource reflects the newly-available path. We keep the
     # existing resource kind/subtype when the detector didn't surface a file
-    # (e.g. generic app) so that we don't accidentally downgrade a previously
+    # (e.g. generic app) so that we don't accidentally downgrade an already
     # classified resource.
     from ..path_utils import looks_like_local_file_path
 
@@ -605,12 +605,12 @@ MAX_BATCH_PROJECT_EDIT_ACTIVITIES = 100
 def batch_update_activity_project(activity_ids: list[int], project_id: int) -> int:
     """Atomically reclassify multiple closed activities to a project.
 
-    Phase 3B.6 batch project editing foundation. Writes the effective
-    project for every activity in ``activity_ids`` as a manual assignment
-    within a single transaction, matching the semantics of the existing
-    single-activity / session-level manual project reassignment (both
-    ``activity_log.project_id`` and ``activity_project_assignment`` are
-    updated, ``manual_override`` is set, ``updated_at`` is refreshed).
+    Writes the effective project for every activity in ``activity_ids``
+    as a manual assignment within a single transaction, matching the
+    semantics of the single-activity / session-level manual project
+    reassignment (both ``activity_log.project_id`` and
+    ``activity_project_assignment`` are updated, ``manual_override`` is
+    set, ``updated_at`` is refreshed).
 
     Input validation (raises ``ValueError`` with a stable code suffix on
     any failure; no partial write is performed):
@@ -785,12 +785,12 @@ BATCH_NOTE_MAX_LENGTH = 2000
 def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
     """Atomically overwrite the note on multiple closed activities.
 
-    Phase 3B.7 batch note editing foundation. This is the second batch
-    write capability: it overwrites ``activity_log.note`` for every
-    activity in ``activity_ids`` with the same ``note`` value within a
-    single transaction. Only the ``note`` column and ``updated_at`` are
-    touched; ``source`` is intentionally NOT modified (unlike the single
-    ``update_activity_note`` path which sets ``source = 'manual'``) so the
+    Overwrites ``activity_log.note`` for every activity in
+    ``activity_ids`` with the same ``note`` value within a single
+    transaction. Only the ``note`` column and ``updated_at`` are touched;
+    ``source`` is intentionally NOT modified (unlike the single
+    ``update_activity_note`` path which sets ``source = 'manual'``) so
+    the batch overwrite is a pure note-only change.
     batch overwrite is a pure note-only change.
 
     Input validation (raises ``ValueError`` with a stable code suffix on
@@ -965,8 +965,8 @@ def update_activity_time(activity_id: int, start_time: str, end_time: str) -> No
     """Atomically update an activity's ``start_time``, ``end_time``, and
     ``duration_seconds``.
 
-    This is the low-level write used by the Phase 3B.1 Timeline time-correction
-    path. The caller (the API layer) is responsible for input validation
+    This is the low-level write used by the Timeline time-correction path.
+    The caller (the API layer) is responsible for input validation
     (format, existence, not-deleted, not-in-progress, ``start < end``); this
     method defensively re-derives ``duration_seconds`` from the new range and
     restricts the UPDATE to non-deleted, already-closed rows so a stale or
@@ -1032,7 +1032,7 @@ def split_activity(activity_id: int, split_time: str) -> dict:
       activity. The primary note mechanism is ``project_session_note`` keyed
       by ``(report_date, first_activity_id)``; the front-half keeps the
       original id and thus keeps any session note. The new back-half starts
-      without a note. See docs/ui-webview-migration.md Phase 3B.2.
+      without a note.
 
     The write is a single transaction; any failure rolls back so the original
     activity is untouched and no half-created new activity remains.
@@ -1249,12 +1249,11 @@ def merge_activities(first_activity_id: int, second_activity_id: int) -> dict:
       ``is_deleted = 0`` filtering.
     - ``activity_log.note`` is NOT copied or concatenated from the later
       activity; the kept activity's note is preserved as-is.
-    - ``project_session_note`` is NOT migrated. If the later activity was a
+    - ``project_session_note`` is NOT moved. If the later activity was a
       ``first_activity_id`` for a session note, that note row remains keyed
       to the now-deleted activity id. Timeline sessions are rebuilt by
       ``timeline_service`` from live (non-deleted) activities, so the
-      orphaned note does not surface in the UI. See
-      docs/ui-webview-migration.md Phase 3B.3.
+      orphaned note does not surface in the UI.
 
     The write is a single transaction; any failure rolls back so both
     activities keep their original state.
@@ -1451,13 +1450,13 @@ def soft_delete_activity(activity_id: int) -> None:
 def restore_activity(activity_id: int) -> dict:
     """Atomically restore a single hidden or soft-deleted activity.
 
-    Phase 3B.8 single activity restore foundation. Sets ``is_hidden = 0``
-    AND ``is_deleted = 0`` for the given activity in a single UPDATE so a
-    hidden, soft-deleted, or hidden+deleted activity becomes visible and
-    not-deleted again. The row is not physically modified beyond the two
-    visibility flags and ``updated_at``; assignment / resource / note /
-    session-note rows are untouched. Only rows that are currently hidden or
-    deleted (``is_hidden = 1 OR is_deleted = 1``) and already closed (raw
+    Sets ``is_hidden = 0`` AND ``is_deleted = 0`` for the given activity
+    in a single UPDATE so a hidden, soft-deleted, or hidden+deleted
+    activity becomes visible and not-deleted again. The row is not
+    physically modified beyond the two visibility flags and
+    ``updated_at``; assignment / resource / note / session-note rows are
+    untouched. Only rows that are currently hidden or deleted
+    (``is_hidden = 1 OR is_deleted = 1``) and already closed (raw
     ``end_time IS NOT NULL``) are affected, so a stale or racing call
     cannot restore a normal or in-progress record.
 
@@ -1545,12 +1544,12 @@ def restore_activity(activity_id: int) -> dict:
 def list_restorable_activities_for_date(date: str) -> list[dict]:
     """Return display-safe summaries of hidden / deleted activities for a date.
 
-    Phase 3B.8 recovery list read path. Returns closed activities that are
-    hidden (``is_hidden = 1``) or soft-deleted (``is_deleted = 1``) whose
-    ``start_time`` falls within the given date, sorted by ``start_time``
-    then ``id``. In-progress hidden/deleted activities are excluded so the
-    restore button is never offered on an open record (keeping restore
-    symmetric with hide / soft delete, which both require
+    Returns closed activities that are hidden (``is_hidden = 1``) or
+    soft-deleted (``is_deleted = 1``) whose ``start_time`` falls within
+    the given date, sorted by ``start_time`` then ``id``. In-progress
+    hidden/deleted activities are excluded so the restore button is
+    never offered on an open record (keeping restore symmetric with
+    hide / soft delete, which both require ``end_time IS NOT NULL``).
     ``end_time IS NOT NULL``).
 
     This is a read-only path: it performs no writes and introduces no new

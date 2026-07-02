@@ -3,10 +3,10 @@
 Wraps ``rule_service`` (keyword rules) and ``folder_rule_service`` (folder
 rules) used by the Project Rules page and the project/rule dialog.
 
-The Phase M2 refactor moved the shared write-path validation / fail
-payload / success payload logic into ``worktrace.api._write_contract`` so
-every Project Rules facade uses the same "true positive int", "true bool",
-"true non-empty str", and stable ``{"ok": False, "error": code}`` /
+Shared write-path validation / fail / success payloads come from
+``worktrace.api._write_contract`` so every Project Rules facade uses the
+same "true positive int", "true bool", "true non-empty str", and stable
+``{"ok": False, "error": code}`` / ``{"ok": True, ...}`` shapes.
 ``{"ok": True, ...}`` shapes. Behavior is unchanged; only the duplicated
 inline checks were replaced with helper calls.
 """
@@ -60,8 +60,8 @@ def _rule_exists(rule_type: str, rule_id: int) -> bool:
 def set_project_rule_enabled(rule_type: str, rule_id: int, enabled: bool) -> dict[str, Any]:
     """Enable or disable one existing folder/keyword rule.
 
-    This facade is intentionally narrower than the legacy Tkinter API: it
-    rejects bool-as-int ids, non-bool enabled values, unknown rule types, and
+    Rejects bool-as-int ids, non-bool enabled values, unknown rule types,
+    and missing rules before delegating to the existing service write paths.
     missing rules before delegating to the existing service write paths.
     Returned errors are stable codes for the bridge to map to Chinese text.
     """
@@ -94,15 +94,15 @@ def set_project_rule_enabled(rule_type: str, rule_id: int, enabled: bool) -> dic
 def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]:
     """Create one new keyword rule on an existing rule-target project.
 
-    Phase 5C narrow WebView-facing facade. It only creates a keyword rule;
-    it does not create folder rules, projects, or edit/delete existing
-    rules. ``project_id`` must identify a project returned by
-    ``project_api.list_rule_target_projects()`` (the same eligibility rule
-    the legacy Tkinter dialog uses), so the special local ``排除规则``
-    project — which is created with ``enabled = 0`` and is therefore not a
-    rule target — is rejected as ``project_not_found`` without bypassing
-    the service. The keyword is trimmed before creation and an exact
-    duplicate (same ``project_id`` + same trimmed keyword) is rejected as
+    Narrow WebView-facing facade. Only creates a keyword rule; does not
+    create folder rules, projects, or edit/delete existing rules.
+    ``project_id`` must identify a project returned by
+    ``project_api.list_rule_target_projects()``, so the special local
+    ``排除规则`` project — which is created with ``enabled = 0`` and is
+    therefore not a rule target — is rejected as ``project_not_found``
+    without bypassing the service. The keyword is trimmed before creation
+    and an exact duplicate (same ``project_id`` + same trimmed keyword) is
+    rejected as ``duplicate_rule``.
     ``duplicate_rule``.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
@@ -153,16 +153,16 @@ def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]
 def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
     """Delete one existing keyword rule.
 
-    Phase 5D narrow WebView-facing facade. It only deletes a keyword rule;
-    it does not delete folder rules, projects, or edit/enable/disable any
-    rule or project. ``rule_id`` must identify an existing row in
-    ``project_rule`` (the keyword rule table). A ``rule_id`` that points at
-    a folder rule (``folder_project_rule``) is rejected as ``not_found``
-    rather than deleting the folder rule — the keyword delete path must
-    never touch folder rules. The facade delegates to the existing
-    ``rule_service.delete_rule`` write path, which performs a hard
-    ``DELETE FROM project_rule`` and preserves the existing keyword rule
-    cache invalidation and privacy exclude cache clearing. No soft-delete
+    Narrow WebView-facing facade. Only deletes a keyword rule; does not
+    delete folder rules, projects, or edit/enable/disable any rule or
+    project. ``rule_id`` must identify an existing row in ``project_rule``
+    (the keyword rule table). A ``rule_id`` that points at a folder rule
+    (``folder_project_rule``) is rejected as ``not_found`` rather than
+    deleting the folder rule — the keyword delete path must never touch
+    folder rules. The facade delegates to ``rule_service.delete_rule``,
+    which performs a hard ``DELETE FROM project_rule`` and preserves the
+    existing keyword rule cache invalidation and privacy exclude cache
+    clearing.
     is invented.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
@@ -198,7 +198,7 @@ def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
-# --- Phase 5F: Project Rules keyword rule edit foundation ----------------
+# --- Project Rules keyword rule edit foundation ----------------
 
 
 def _keyword_rule_row(rule_id: int) -> dict | None:
@@ -216,9 +216,9 @@ def _keyword_rule_row(rule_id: int) -> dict | None:
 def update_project_keyword_rule(rule_id: Any, keyword: Any) -> dict[str, Any]:
     """Update one existing keyword rule's ``keyword`` text.
 
-    Phase 5F narrow WebView-facing facade. ``rule_id`` must identify an
-    existing row in ``project_rule`` (the keyword rule table). A ``rule_id``
-    that points at a folder rule (``folder_project_rule``) is rejected as
+    Narrow WebView-facing facade. ``rule_id`` must identify an existing
+    row in ``project_rule`` (the keyword rule table). A ``rule_id`` that
+    points at a folder rule (``folder_project_rule``) is rejected as
     ``not_found`` rather than modifying the folder rule — the keyword edit
     path must never touch folder rules. The keyword rule's ``project_id``
     is intentionally preserved: this facade does not support moving a
@@ -226,19 +226,19 @@ def update_project_keyword_rule(rule_id: Any, keyword: Any) -> dict[str, Any]:
     (use the existing ``set_project_rule_enabled`` toggle path to change
     enabled state). ``created_by`` and ``created_at`` are preserved as-is.
 
-    The existing ``rule_service.update_rule`` write path performs a direct
-    ``UPDATE`` on the row identified by ``rule_id`` (guarded by
-    ``rule_type = 'keyword'``), updating only ``pattern`` and ``updated_at``.
-    The keyword rule cache invalidation and privacy exclude cache clearing
-    hooks fire exactly as they do on create.
+    ``rule_service.update_rule`` performs a direct ``UPDATE`` on the row
+    identified by ``rule_id`` (guarded by ``rule_type = 'keyword'``),
+    updating only ``pattern`` and ``updated_at``. The keyword rule cache
+    invalidation and privacy exclude cache clearing hooks fire exactly as
+    they do on create.
 
     An exact duplicate (same ``project_id`` + same trimmed keyword) bound to
     a different keyword rule in the same project is rejected as
     ``duplicate_rule``. Updating a rule to its own current trimmed keyword
     is allowed and succeeds. Different projects may share the same keyword.
 
-    It does NOT create projects or folder rules, edit/delete existing rules
-    or projects, or perform conflict preview / backfill / automatic rules /
+    Does NOT create projects or folder rules, edit/delete existing rules or
+    projects, or perform conflict preview / backfill / automatic rules /
     DB schema changes / native dialogs / file writes / network access.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
@@ -296,7 +296,7 @@ def update_project_keyword_rule(rule_id: Any, keyword: Any) -> dict[str, Any]:
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
-# --- Phase 5E: Project Rules folder rule CRUD foundation -----------------
+# --- Project Rules folder rule CRUD foundation -----------------
 
 
 def _folder_rule_row(rule_id: int) -> dict | None:
@@ -316,11 +316,11 @@ def create_project_folder_rule(
 ) -> dict[str, Any]:
     """Create one new folder rule on an existing rule-target project.
 
-    Phase 5E narrow WebView-facing facade. ``project_id`` must identify a
-    project returned by ``project_api.list_rule_target_projects()`` (the
-    same eligibility rule the legacy Tkinter dialog and Phase 5C keyword
-    creation use), so the special local ``排除规则`` project — which is
-    created with ``enabled = 0`` and is therefore not a rule target — is
+    Narrow WebView-facing facade. ``project_id`` must identify a project
+    returned by ``project_api.list_rule_target_projects()``, so the special
+    local ``排除规则`` project — which is created with ``enabled = 0`` and
+    is therefore not a rule target — is rejected as ``project_not_found``
+    without bypassing the service. ``folder_rule_service.create_or_update_folder_rule``
     rejected as ``project_not_found`` without bypassing the service. The
     existing ``folder_rule_service.create_or_update_folder_rule`` write path
     uses ``INSERT ... ON CONFLICT(normalized_folder_key) DO UPDATE`` and so
@@ -332,9 +332,9 @@ def create_project_folder_rule(
     resulting rule id, so callers cannot distinguish a fresh insert from an
     in-place update at the API boundary.
 
-    It does NOT create projects, keyword rules, or edit/delete existing
-    folder rules; it does NOT perform conflict preview, backfill,
-    automatic rules, DB schema changes, native file picker dialogs, or
+    Does NOT create projects, keyword rules, or edit/delete existing folder
+    rules; does NOT perform conflict preview, backfill, automatic rules,
+    DB schema changes, native file picker dialogs, or network access.
     network access.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
@@ -386,30 +386,30 @@ def update_project_folder_rule(
 ) -> dict[str, Any]:
     """Update one existing folder rule's ``folder_path`` and ``recursive``.
 
-    Phase 5E narrow WebView-facing facade. ``rule_id`` must identify an
-    existing row in ``folder_project_rule`` (the folder rule table). A
-    ``rule_id`` that points at a keyword rule (``project_rule``) is rejected
-    as ``not_found`` rather than modifying the keyword rule — the folder
+    Narrow WebView-facing facade. ``rule_id`` must identify an existing
+    row in ``folder_project_rule`` (the folder rule table). A ``rule_id``
+    that points at a keyword rule (``project_rule``) is rejected as
+    ``not_found`` rather than modifying the keyword rule — the folder
     update path must never touch keyword rules. The folder rule's
     ``project_id`` is intentionally preserved: this facade does not support
     moving a folder rule to a different project. ``enabled`` is preserved
     as-is (use the existing ``set_project_rule_enabled`` toggle path to
     change enabled state).
 
-    The existing ``folder_rule_service.update_folder_rule`` write path
-    performs a direct ``UPDATE`` on the row identified by ``rule_id`` so
-    the row id is preserved even when the new ``folder_path`` produces a
-    different ``normalized_folder_key``. If the new normalized key already
-    belongs to a different folder rule, the service's
-    ``UNIQUE`` constraint raises ``IntegrityError`` which this facade
-    collapses to ``operation_failed`` — the update path does NOT merge or
-    delete the other rule. The folder rule cache invalidation, privacy
-    exclude cache clearing, and folder index rebuild hooks fire exactly as
+    ``folder_rule_service.update_folder_rule`` performs a direct ``UPDATE``
+    on the row identified by ``rule_id`` so the row id is preserved even
+    when the new ``folder_path`` produces a different
+    ``normalized_folder_key``. If the new normalized key already belongs
+    to a different folder rule, the service's ``UNIQUE`` constraint raises
+    ``IntegrityError`` which this facade collapses to ``operation_failed``
+    — the update path does NOT merge or delete the other rule. The folder
+    rule cache invalidation, privacy exclude cache clearing, and folder
+    index rebuild hooks fire exactly as they do on create.
     they do on create.
 
-    It does NOT create projects or keyword rules, edit/delete existing
-    rules or projects, or perform conflict preview / backfill / automatic
-    rules / DB schema changes / native dialogs / file writes / network
+    Does NOT create projects or keyword rules, edit/delete existing rules
+    or projects, or perform conflict preview / backfill / automatic rules /
+    DB schema changes / native dialogs / file writes / network access.
     access.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
@@ -469,17 +469,17 @@ def update_project_folder_rule(
 def delete_project_folder_rule(rule_id: Any) -> dict[str, Any]:
     """Delete one existing folder rule.
 
-    Phase 5E narrow WebView-facing facade. It only deletes a folder rule;
-    it does not delete keyword rules, projects, or edit/enable/disable any
-    rule or project. ``rule_id`` must identify an existing row in
+    Narrow WebView-facing facade. Only deletes a folder rule; does not
+    delete keyword rules, projects, or edit/enable/disable any rule or
+    project. ``rule_id`` must identify an existing row in
     ``folder_project_rule`` (the folder rule table). A ``rule_id`` that
     points at a keyword rule (``project_rule``) is rejected as
     ``not_found`` rather than deleting the keyword rule — the folder delete
-    path must never touch keyword rules. The facade delegates to the
-    existing ``folder_rule_service.delete_folder_rule`` write path, which
-    performs a hard ``DELETE FROM folder_project_rule`` and preserves the
-    existing folder rule cache invalidation, privacy exclude cache
-    clearing, and folder index deletion. No soft-delete is invented.
+    path must never touch keyword rules. The facade delegates to
+    ``folder_rule_service.delete_folder_rule``, which performs a hard
+    ``DELETE FROM folder_project_rule`` and preserves the existing folder
+    rule cache invalidation, privacy exclude cache clearing, and folder
+    index deletion.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
 
@@ -514,29 +514,29 @@ def delete_project_folder_rule(rule_id: Any) -> dict[str, Any]:
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
-# --- Phase 5H: rule impact preview + safe single-rule backfill ----------
+# --- Rule impact preview + safe single-rule backfill ----------
 
 
 def preview_project_rule_impact(rule_type: Any, rule_id: Any) -> dict[str, Any]:
     """Preview the impact of applying one existing folder / keyword rule.
 
-    Phase 5H narrow WebView-facing facade. ``rule_type`` must be a real
-    ``str`` in ``{"folder", "keyword"}``; ``rule_id`` must be a real positive
-    ``int`` (bool / float / numeric string / ``None`` / container / zero /
-    negative rejected as ``invalid_input``). A folder id resolved on the
-    keyword path (or vice versa) is ``not_found`` — the keyword path only
-    resolves ids in ``project_rule`` and the folder path only resolves ids in
+    Narrow WebView-facing facade. ``rule_type`` must be a real ``str`` in
+    ``{"folder", "keyword"}``; ``rule_id`` must be a real positive ``int``
+    (bool / float / numeric string / ``None`` / container / zero / negative
+    rejected as ``invalid_input``). A folder id resolved on the keyword path
+    (or vice versa) is ``not_found`` — the keyword path only resolves ids in
+    ``project_rule`` and the folder path only resolves ids in
     ``folder_project_rule``, so the two paths can never touch each other's
     rules.
 
-    The facade delegates the read-only preview to
+    Delegates the read-only preview to
     ``rule_impact_service.preview_rule_impact`` and wraps its result in the
     stable ``ok_payload(impact=...)`` envelope. Disabled rules and
     unavailable target projects return ``ok`` with zero counts and empty
     samples (availability is surfaced in the rule summary). Only ``not_found``
     and unexpected service failures produce a fail payload.
 
-    It does NOT write anything, NOT perform backfill / automatic rules /
+    Does NOT write anything, does NOT perform backfill / automatic rules /
     batch operations / DB schema changes, and does NOT expose
     ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard / note /
     SQL / traceback / raw activity rows in the payload.
@@ -568,15 +568,15 @@ def preview_project_rule_impact(rule_type: Any, rule_id: Any) -> dict[str, Any]:
 def backfill_project_rule(rule_type: Any, rule_id: Any) -> dict[str, Any]:
     """Apply one existing enabled folder / keyword rule to eligible history.
 
-    Phase 5H narrow WebView-facing facade. ``rule_type`` must be a real
-    ``str`` in ``{"folder", "keyword"}``; ``rule_id`` must be a real positive
-    ``int`` (bool / float / numeric string / ``None`` / container / zero /
-    negative rejected as ``invalid_input``). A folder id resolved on the
-    keyword path (or vice versa) is ``not_found``.
+    Narrow WebView-facing facade. ``rule_type`` must be a real ``str`` in
+    ``{"folder", "keyword"}``; ``rule_id`` must be a real positive ``int``
+    (bool / float / numeric string / ``None`` / container / zero / negative
+    rejected as ``invalid_input``). A folder id resolved on the keyword path
+    (or vice versa) is ``not_found``.
 
-    The facade delegates to ``rule_impact_service.backfill_rule_impact``,
-    which only affects eligible existing activities (not deleted / hidden /
-    in-progress / non-normal / manual_override / is_manual), never sets
+    Delegates to ``rule_impact_service.backfill_rule_impact``, which only
+    affects eligible existing activities (not deleted / hidden / in-progress
+    / non-normal / manual_override / is_manual), never sets
     ``manual_override = 1``, writes ``auto_classified = 1`` and upserts the
     assignment with ``is_manual = 0``, ``source = "folder_rule" |
     "keyword_rule"``, and the inference confidence (85 folder / 80 keyword).
@@ -585,7 +585,7 @@ def backfill_project_rule(rule_type: Any, rule_id: Any) -> dict[str, Any]:
     write runs in one transaction with a rowcount guard so any partial write
     is rolled back.
 
-    It does NOT perform automatic rules / batch Project Rules operations /
+    Does NOT perform automatic rules / batch Project Rules operations /
     hard delete project / project restore / DB schema changes, does NOT
     modify Timeline / Statistics / Export / collector / privacy / encrypted
     backup behavior, and does NOT expose ``window_title`` / ``file_path_hint``
@@ -621,18 +621,18 @@ def backfill_project_rule(rule_type: Any, rule_id: Any) -> dict[str, Any]:
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
-# --- Phase 5I: selected-rule batch operations + automatic rules ---------
+# --- Selected-rule batch operations + automatic rules ---------
 #
 # These facades wrap ``rule_batch_service`` (batch preview / batch apply /
 # batch enable-disable) and ``rule_automation_service`` (automatic rules
-# status). They follow the same stable-code contract as the Phase 5H
-# single-rule facades: ``invalid_input`` / ``not_found`` / ``rule_disabled``
-# / ``project_not_available`` / ``too_many_matches`` /
-# ``too_many_rules`` / ``operation_failed`` are the only error codes; any
-# unexpected exception collapses to ``operation_failed``. The success
-# payload is always a narrow, display-safe projection — no raw
-# ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard / note
-# / SQL / traceback / raw activity row is ever returned.
+# status). They follow the same stable-code contract as the single-rule
+# facades: ``invalid_input`` / ``not_found`` / ``rule_disabled`` /
+# ``project_not_available`` / ``too_many_matches`` / ``too_many_rules`` /
+# ``operation_failed`` are the only error codes; any unexpected exception
+# collapses to ``operation_failed``. The success payload is always a
+# narrow, display-safe projection — no raw ``window_title`` /
+# ``file_path_hint`` / ``path_hint`` / clipboard / note / SQL / traceback
+# / raw activity row is ever returned.
 #
 # ``rules`` must be a non-empty ``list[dict]`` of
 # ``{"rule_type": "folder" | "keyword", "rule_id": positive int}`` items.
@@ -647,9 +647,9 @@ def backfill_project_rule(rule_type: Any, rule_id: Any) -> dict[str, Any]:
 def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
     """Read-only aggregate impact preview across the selected rules.
 
-    Phase 5I narrow WebView-facing facade. ``rules`` must be a non-empty
-    list of ``{"rule_type": "folder" | "keyword", "rule_id": positive int}``
-    dicts. Returns aggregate counts + per-rule summaries + up to
+    Narrow WebView-facing facade. ``rules`` must be a non-empty list of
+    ``{"rule_type": "folder" | "keyword", "rule_id": positive int}`` dicts.
+    Returns aggregate counts + per-rule summaries + up to
     ``MAX_BATCH_SAMPLE_ROWS`` (20) display-safe sample rows across the
     whole batch. Does NOT write anything. Disabled rules and unavailable
     target projects return zero counts for that rule (availability is
@@ -683,9 +683,9 @@ def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
 def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
     """Apply the selected enabled rules to eligible history in one batch.
 
-    Phase 5I narrow WebView-facing facade. ``rules`` must be a non-empty
-    list of ``{"rule_type": "folder" | "keyword", "rule_id": positive int}``
-    dicts. The facade delegates to
+    Narrow WebView-facing facade. ``rules`` must be a non-empty list of
+    ``{"rule_type": "folder" | "keyword", "rule_id": positive int}`` dicts.
+    Delegates to ``rule_batch_service.backfill_project_rules_batch``, which:
     ``rule_batch_service.backfill_project_rules_batch``, which:
 
     - runs a full preflight (existence / enabled / project available) on
@@ -741,11 +741,11 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
 def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:
     """Enable or disable every selected rule in one all-or-nothing batch.
 
-    Phase 5I narrow WebView-facing facade. ``rules`` must be a non-empty
-    list of ``{"rule_type": "folder" | "keyword", "rule_id": positive int}``
-    dicts. ``enabled`` must be a real ``bool`` (``0`` / ``1`` / numeric
-    string / ``None`` rejected as ``invalid_input``). The facade delegates
-    to ``rule_batch_service.set_project_rules_batch_enabled``, which:
+    Narrow WebView-facing facade. ``rules`` must be a non-empty list of
+    ``{"rule_type": "folder" | "keyword", "rule_id": positive int}`` dicts.
+    ``enabled`` must be a real ``bool`` (``0`` / ``1`` / numeric string /
+    ``None`` rejected as ``invalid_input``). Delegates to
+    ``rule_batch_service.set_project_rules_batch_enabled``, which:
 
     - preflights every rule's existence (any missing -> ``not_found``,
       no writes);
@@ -788,16 +788,17 @@ def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:
 def automatic_rules_status() -> dict[str, Any]:
     """Return a display-safe status payload for the automatic-rules engine.
 
-    Phase 5I narrow WebView-facing facade. The Project Rules page uses this
-    to render a status note explaining that enabled folder / keyword rules
+    Narrow WebView-facing facade. The Project Rules page uses this to
+    render a status note explaining that enabled folder / keyword rules
     are automatically applied to future eligible closed activities. The
-    payload is intentionally narrow: it only carries boolean / string fields
-    the frontend needs. It never exposes raw rule rows, project rows,
-    window titles, file paths, notes, clipboard text, SQL, or tracebacks.
+    payload is intentionally narrow: it only carries boolean / string
+    fields the frontend needs. It never exposes raw rule rows, project
+    rows, window titles, file paths, notes, clipboard text, SQL, or
+    tracebacks.
 
-    Always succeeds — the underlying ``rule_automation_service`` is a thin
-    documented facade over the existing inference path and performs no DB
-    access. Any unexpected exception collapses to ``operation_failed``.
+    Always succeeds — ``rule_automation_service`` is a thin documented
+    facade over the existing inference path and performs no DB access. Any
+    unexpected exception collapses to ``operation_failed``.
     """
 
     try:
@@ -841,13 +842,13 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict[str
     return folder_rule_service.preview_folder_rule_conflicts(folder_path, project_id)
 
 
-# --- Phase 6G: Excluded-rule creation facades ----------------------------
+# --- Excluded-rule creation facades ----------------------------
 
 
 def create_excluded_keyword_rule_for_webview(keyword: Any) -> dict[str, Any]:
     """Create one new keyword rule on the special ``排除规则`` project.
 
-    Phase 6G narrow WebView-facing facade. The normal
+    Narrow WebView-facing facade. The normal
     ``create_project_keyword_rule`` facade rejects the ``排除规则``
     project because it is created with ``enabled = 0`` and is therefore
     not a rule target. This dedicated facade provides the only legitimate
@@ -900,7 +901,7 @@ def create_excluded_folder_rule_for_webview(
 ) -> dict[str, Any]:
     """Create one new folder rule on the special ``排除规则`` project.
 
-    Phase 6G narrow WebView-facing facade. The normal
+    Narrow WebView-facing facade. The normal
     ``create_project_folder_rule`` facade rejects the ``排除规则``
     project because it is created with ``enabled = 0`` and is therefore
     not a rule target. This dedicated facade provides the only legitimate
@@ -909,10 +910,10 @@ def create_excluded_folder_rule_for_webview(
     and does NOT accept any ``project_id`` from the caller, so the
     frontend cannot inject an arbitrary project_id.
 
-    The existing ``folder_rule_service.create_or_update_folder_rule``
-    write path uses ``INSERT ... ON CONFLICT(normalized_folder_key) DO
-    UPDATE`` and so has create-or-update semantics: if a folder rule with
-    the same normalized folder key already exists, it is updated in place.
+    ``folder_rule_service.create_or_update_folder_rule`` uses
+    ``INSERT ... ON CONFLICT(normalized_folder_key) DO UPDATE`` and so has
+    create-or-update semantics: if a folder rule with the same normalized
+    folder key already exists, it is updated in place.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
 
