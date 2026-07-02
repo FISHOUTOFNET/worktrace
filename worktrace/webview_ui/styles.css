@@ -308,6 +308,24 @@ body {
     font-variant-numeric: tabular-nums;
 }
 
+/* Simplified Timeline: the date display is now an <input type="date">. */
+.date-input {
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 14px;
+    font-family: inherit;
+    color: #0f172a;
+    background: #ffffff;
+    cursor: pointer;
+}
+
+.date-input:focus {
+    outline: none;
+    border-color: #818cf8;
+    box-shadow: 0 0 0 2px #e0e7ff;
+}
+
 .timeline-loading {
     font-size: 13px;
     color: #64748b;
@@ -455,6 +473,14 @@ body {
 .timeline-item-count {
     font-size: 11px;
     color: #94a3b8;
+    margin-top: 2px;
+}
+
+/* Simplified Timeline: "已修正" badge shown when a session has a
+   duration override. Low-weight so it does not dominate the row. */
+.timeline-item-adjusted {
+    font-size: 11px;
+    color: #2563eb;
     margin-top: 2px;
 }
 
@@ -677,6 +703,52 @@ body {
 
 .edit-shell-open-btn:hover:not(:disabled) {
     background: #eef2ff;
+}
+
+/* Simplified Timeline: duration override input (minutes) in the edit
+   panel. Lets the user declare a display / reporting duration without
+   touching the backend's real activity records. */
+.edit-duration-section {
+    margin-top: 8px;
+}
+
+.edit-duration-input {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 13px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #1e293b;
+    font-variant-numeric: tabular-nums;
+    font-family: inherit;
+}
+
+.edit-duration-input:disabled {
+    background: #f1f5f9;
+    cursor: not-allowed;
+}
+
+.edit-duration-input:focus {
+    outline: none;
+    border-color: #818cf8;
+    box-shadow: 0 0 0 2px #e0e7ff;
+}
+
+.edit-duration-hint {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.5;
+}
+
+/* "已修正" status text shown next to the duration input when an override
+   is in effect. */
+.edit-duration-badge {
+    font-size: 12px;
+    color: #2563eb;
+    font-weight: 500;
 }
 
 /* Phase 3B.5A: correction-section labels (项目与备注 / 时间修正 / 拆分 / 可见性).

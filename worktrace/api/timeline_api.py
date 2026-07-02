@@ -243,6 +243,11 @@ def preview_session_project_update(
 # bound to keep the WebView editing surface bounded and testable.
 TIMELINE_NOTE_MAX_LENGTH = 2000
 
+# Maximum allowed value for ``adjusted_duration_seconds``. A single day has
+# 86400 seconds; allowing up to that keeps the override sane without
+# rejecting long but legitimate sessions.
+TIMELINE_ADJUSTED_DURATION_MAX_SECONDS = 24 * 60 * 60
+
 
 def reclassify_timeline_session_project(
     activity_ids: list[int],
@@ -304,6 +309,37 @@ def update_timeline_session_note(
     first_id = _validate_first_activity_id(first_activity_id)
     text = _validate_note(note)
     timeline_service.update_session_note(date, first_id, text)
+
+
+def update_timeline_session_note_and_duration(
+    report_date: str,
+    first_activity_id: int,
+    note: str,
+    adjusted_duration_seconds: int | None,
+) -> None:
+    """Validate and write note + user-adjusted duration for a Timeline session.
+
+    The user-adjusted duration is stored in
+    ``project_session_note.adjusted_duration_seconds`` — it never touches
+    ``activity_log``. ``None`` means "no override" (display raw duration);
+    a positive integer means "display this many seconds instead".
+
+    Validation:
+    - ``report_date`` must be a ``YYYY-MM-DD`` string.
+    - ``first_activity_id`` must be a positive integer referencing an
+      existing, non-deleted activity.
+    - ``note`` must be a string, length <= ``TIMELINE_NOTE_MAX_LENGTH``.
+    - ``adjusted_duration_seconds`` may be ``None``; if non-None it must be
+      an ``int`` (``bool`` rejected), positive, and <=
+      ``TIMELINE_ADJUSTED_DURATION_MAX_SECONDS``. ``0`` is rejected.
+
+    Raises ``ValueError`` on any invalid input.
+    """
+    date = _validate_report_date(report_date)
+    first_id = _validate_first_activity_id(first_activity_id)
+    text = _validate_note(note)
+    duration = _validate_adjusted_duration(adjusted_duration_seconds)
+    timeline_service.update_session_note_and_duration(date, first_id, text, duration)
 
 
 # --- Phase 3B.1: Timeline time correction (single-activity foundation) ---
@@ -1369,6 +1405,33 @@ def _validate_note(note: str) -> str:
     return note
 
 
+def _validate_adjusted_duration(adjusted_duration_seconds: int | None) -> int | None:
+    """Validate ``adjusted_duration_seconds``.
+
+    Returns ``None`` when no override is requested. Returns a positive
+    ``int`` when a valid override is provided.
+
+    Raises ``ValueError``:
+    - ``bool`` is rejected (``isinstance(True, int)`` is ``True`` in Python).
+    - ``0`` and negative values are rejected.
+    - Non-integer values are rejected.
+    - Values exceeding ``TIMELINE_ADJUSTED_DURATION_MAX_SECONDS`` are rejected.
+    """
+    if adjusted_duration_seconds is None:
+        return None
+    if isinstance(adjusted_duration_seconds, bool):
+        raise ValueError("adjusted_duration_seconds must be an integer")
+    try:
+        value = int(adjusted_duration_seconds)
+    except (TypeError, ValueError):
+        raise ValueError("adjusted_duration_seconds must be an integer")
+    if value <= 0:
+        raise ValueError("adjusted_duration_seconds must be a positive integer")
+    if value > TIMELINE_ADJUSTED_DURATION_MAX_SECONDS:
+        raise ValueError("adjusted_duration_seconds exceeds maximum")
+    return value
+
+
 # --- Phase 3B.1 time-correction validators --------------------------------
 
 
@@ -1495,6 +1558,7 @@ def is_snapshot_unconfirmed(snapshot: dict[str, Any] | None) -> bool:
 
 
 __all__ = [
+    "TIMELINE_ADJUSTED_DURATION_MAX_SECONDS",
     "TIMELINE_NOTE_MAX_LENGTH",
     "TimelineBatchNoteError",
     "TimelineBatchProjectError",
@@ -1537,5 +1601,6 @@ __all__ = [
     "update_session_project",
     "update_timeline_activity_time",
     "update_timeline_session_note",
+    "update_timeline_session_note_and_duration",
     "update_timeline_session_time",
 ]

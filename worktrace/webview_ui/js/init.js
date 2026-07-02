@@ -162,9 +162,9 @@
 
     function refreshTimeline() {
         return new Promise(function (resolve, reject) {
-            var dateEl = document.getElementById("timeline-date-display");
-            var date = App.timelineDate || (dateEl ? dateEl.textContent : null);
-            if (date === "--") date = null;
+            var dateEl = document.getElementById("timeline-date-input");
+            var date = App.timelineDate || (dateEl ? dateEl.value : null);
+            if (date === "--" || date === "") date = null;
             var token = ++App.timelineRequestToken;
             App.callBridge("get_timeline", date).then(function (result) {
                 if (token !== App.timelineRequestToken) { resolve(); return; }  // stale
@@ -374,6 +374,20 @@
         document.getElementById("timeline-prev-btn").addEventListener("click", App.goPrevDay);
         document.getElementById("timeline-next-btn").addEventListener("click", App.goNextDay);
         document.getElementById("timeline-today-btn").addEventListener("click", App.goToday);
+        // Date input: typing/picking a date reloads the timeline for that
+        // day. Mirrors the prev/next/today token + cache reset behavior so
+        // a stale detail response cannot backfill the new date's panel.
+        var dateInput = document.getElementById("timeline-date-input");
+        if (dateInput) {
+            dateInput.addEventListener("change", function (e) {
+                App.timelineDate = e.target.value || null;
+                App.selectedSessionId = null;
+                App.detailsRequestToken++;
+                App.lastSessionDetailsData = null;
+                App.resetCorrectionShellState();
+                App.loadTimeline(App.timelineDate);
+            });
+        }
         // Phase 3A: Timeline editing handlers
         document.getElementById("edit-save-btn").addEventListener("click", App.saveEdit);
         document.getElementById("edit-cancel-btn").addEventListener("click", App.cancelEdit);

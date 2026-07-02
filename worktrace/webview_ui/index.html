@@ -79,7 +79,7 @@
                     <h1>时间详情</h1>
                     <div class="timeline-date-nav">
                         <button id="timeline-prev-btn" class="date-nav-btn" type="button">&lt;</button>
-                        <span id="timeline-date-display" class="date-display">--</span>
+                        <input id="timeline-date-input" type="date" class="date-display date-input">
                         <button id="timeline-next-btn" class="date-nav-btn" type="button">&gt;</button>
                         <button id="timeline-today-btn" class="date-nav-btn today-btn" type="button">今日</button>
                     </div>
@@ -91,7 +91,6 @@
                         <span class="timeline-total-label">当日总时长</span>
                         <span id="timeline-total" class="timeline-total-value">00:00:00</span>
                     </div>
-                    <div id="timeline-current" class="timeline-current">当前活动：无</div>
                 </div>
                 <div class="timeline-layout">
                     <div class="timeline-sessions">
@@ -108,15 +107,22 @@
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
                             <div class="edit-panel-title">编辑当前时段</div>
                             <div class="edit-panel-header-actions">
-                                <button id="open-correction-shell-btn" class="edit-btn edit-shell-open-btn" type="button">打开纠错面板</button>
+                                <button id="open-correction-shell-btn" class="edit-btn edit-shell-open-btn" type="button">高级纠错</button>
                             </div>
-                            <div class="edit-section-label">项目与备注</div>
+                            <div class="edit-section-label">项目</div>
                             <div class="edit-field">
                                 <label for="edit-project-select" class="edit-label">项目</label>
                                 <select id="edit-project-select" class="edit-select" disabled>
                                     <option value="">加载中…</option>
                                 </select>
                             </div>
+                            <div class="edit-section-label">时长（分钟）</div>
+                            <div class="edit-field edit-duration-section">
+                                <input type="number" id="edit-duration-input" class="edit-input edit-duration-input" min="0" step="1" placeholder="留空使用真实时长" disabled>
+                                <div class="edit-duration-hint">仅修改显示/申报时长，不改变后台真实活动记录。</div>
+                                <span id="edit-duration-status" class="edit-duration-hint"></span>
+                            </div>
+                            <div class="edit-section-label">备注</div>
                             <div class="edit-field">
                                 <label for="edit-note-text" class="edit-label">备注</label>
                                 <textarea id="edit-note-text" class="edit-note" rows="3" placeholder="为该时段添加备注" disabled></textarea>
@@ -129,7 +135,7 @@
                                 <button id="edit-cancel-btn" class="edit-btn edit-cancel-btn" type="button" disabled>取消</button>
                             </div>
                             <div id="edit-status" class="edit-status" hidden></div>
-                            <div class="edit-field edit-time-section" id="edit-time-section">
+                            <div class="edit-field edit-time-section" id="edit-time-section" hidden>
                                 <div class="edit-section-label">时间修正</div>
                                 <div id="edit-time-single" hidden>
                                     <div class="edit-time-row">
@@ -149,7 +155,7 @@
                                 </div>
                                 <div id="edit-time-status" class="edit-status" hidden></div>
                             </div>
-                            <div class="edit-field edit-split-section" id="edit-split-section">
+                            <div class="edit-field edit-split-section" id="edit-split-section" hidden>
                                 <div class="edit-section-label">拆分</div>
                                 <div id="edit-split-single" hidden>
                                     <div class="edit-time-row">
@@ -165,7 +171,7 @@
                                 </div>
                                 <div id="edit-split-status" class="edit-status" hidden></div>
                             </div>
-                            <div class="edit-field edit-visibility-section" id="edit-visibility-section">
+                            <div class="edit-field edit-visibility-section" id="edit-visibility-section" hidden>
                                 <div class="edit-section-label">可见性</div>
                                 <div id="edit-visibility-single" hidden>
                                     <div class="edit-time-actions">

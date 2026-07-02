@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS project_session_note (
     report_date TEXT NOT NULL,
     first_activity_id INTEGER NOT NULL,
     note TEXT NOT NULL,
+    adjusted_duration_seconds INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (first_activity_id) REFERENCES activity_log(id),

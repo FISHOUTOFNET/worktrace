@@ -410,3 +410,183 @@ def test_update_timeline_note_does_not_return_old_note(bridge):
     assert "second note" not in str(result)
     assert "first note" not in str(result)
     assert "note" not in result  # no "note" key at top level
+
+
+# --- update_timeline_note_and_duration ----------------------------------
+
+
+def test_update_timeline_note_and_duration_success(bridge):
+    """Writing both note and adjusted duration must succeed and persist."""
+    from worktrace.services import session_note_service
+
+    ids = _seed_session()
+    result = bridge.update_timeline_note_and_duration(
+        ids, "joint note", 3600, "2026-06-25"
+    )
+    assert result["ok"] is True
+    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    assert fields["note"] == "joint note"
+    assert fields["adjusted_duration_seconds"] == 3600
+
+
+def test_update_timeline_note_and_duration_null_clears_override(bridge):
+    """Passing ``None`` for the duration clears an existing override."""
+    from worktrace.services import session_note_service
+
+    ids = _seed_session()
+    # Set an override first.
+    bridge.update_timeline_note_and_duration(ids, "with override", 3600, "2026-06-25")
+    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    assert fields["adjusted_duration_seconds"] == 3600
+    # Clear it with None (note preserved).
+    result = bridge.update_timeline_note_and_duration(ids, "with override", None, "2026-06-25")
+    assert result["ok"] is True
+    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    assert fields["adjusted_duration_seconds"] is None
+    assert fields["note"] == "with override"
+
+
+def test_update_timeline_note_and_duration_zero_rejected(bridge):
+    """``0`` is not a positive override and must be rejected with 时长无效."""
+    ids = _seed_session()
+    result = bridge.update_timeline_note_and_duration(
+        ids, "note", 0, "2026-06-25"
+    )
+    assert result["ok"] is False
+    assert result["error"] == "时长无效"
+
+
+def test_update_timeline_note_and_duration_negative_rejected(bridge):
+    """Negative durations must be rejected with 时长无效."""
+    ids = _seed_session()
+    result = bridge.update_timeline_note_and_duration(
+        ids, "note", -60, "2026-06-25"
+    )
+    assert result["ok"] is False
+    assert result["error"] == "时长无效"
+
+
+def test_update_timeline_note_and_duration_bool_rejected(bridge):
+    """``bool`` must not be coerced to ``1``/``0``; reject with 时长无效."""
+    ids = _seed_session()
+    result = bridge.update_timeline_note_and_duration(
+        ids, "note", True, "2026-06-25"
+    )
+    assert result["ok"] is False
+    assert result["error"] == "时长无效"
+    result = bridge.update_timeline_note_and_duration(
+        ids, "note", False, "2026-06-25"
+    )
+    assert result["ok"] is False
+    assert result["error"] == "时长无效"
+
+
+def test_update_timeline_note_and_duration_invalid_date(bridge):
+    """Malformed dates must be rejected with 日期无效."""
+    ids = _seed_session()
+    for malformed in ("", None, "not-a-date", "2026/06/25", "26-06-25"):
+        result = bridge.update_timeline_note_and_duration(
+            ids, "note", 3600, malformed
+        )
+        assert result["ok"] is False
+        assert result["error"] == "日期无效", (
+            f"expected '日期无效' for malformed date {malformed!r}, "
+            f"got {result.get('error')!r}"
+        )
+
+
+def test_update_timeline_note_and_duration_too_long_note(bridge):
+    """Notes exceeding the max length must be rejected with 备注过长."""
+    from worktrace.api import timeline_api
+
+    ids = _seed_session()
+    long_note = "x" * (timeline_api.TIMELINE_NOTE_MAX_LENGTH + 1)
+    result = bridge.update_timeline_note_and_duration(
+        ids, long_note, 3600, "2026-06-25"
+    )
+    assert result["ok"] is False
+    assert result["error"] == "备注过长"
+
+
+def test_update_timeline_note_and_duration_no_traceback_on_error(bridge):
+    """Unexpected exceptions must return a generic error without leaking
+    the underlying exception message or traceback text."""
+    ids = _seed_session()
+    with patch(
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_session_note_and_duration",
+        side_effect=RuntimeError("boom with secret"),
+    ):
+        result = bridge.update_timeline_note_and_duration(
+            ids, "note", 3600, "2026-06-25"
+        )
+    assert result["ok"] is False
+    assert result["error"] == "操作失败"
+    assert "boom" not in str(result)
+    assert "traceback" not in str(result).lower()
+
+
+def test_update_timeline_note_and_duration_is_json_serializable(bridge):
+    """Both success and error payloads must be JSON-serializable."""
+    ids = _seed_session()
+    success = bridge.update_timeline_note_and_duration(
+        ids, "note", 3600, "2026-06-25"
+    )
+    json.dumps(success)
+    error = bridge.update_timeline_note_and_duration(
+        ids, "note", 0, "2026-06-25"
+    )
+    json.dumps(error)
+
+
+def test_update_timeline_note_and_duration_error_has_no_sensitive_keys(bridge):
+    """Error payloads must not expose sensitive raw fields at any level."""
+    ids = _seed_session()
+    with patch(
+        "worktrace.webview_ui.bridge_timeline.timeline_api.update_timeline_session_note_and_duration",
+        side_effect=RuntimeError("boom"),
+    ):
+        result = bridge.update_timeline_note_and_duration(
+            ids, "note", 3600, "2026-06-25"
+        )
+    _assert_no_sensitive_keys(result)
+
+
+def test_update_timeline_note_and_duration_does_not_return_note(bridge):
+    """The bridge success result must not echo the note content."""
+    ids = _seed_session()
+    result = bridge.update_timeline_note_and_duration(
+        ids, "secret joint note", 3600, "2026-06-25"
+    )
+    assert result["ok"] is True
+    assert "secret joint note" not in str(result)
+    assert "note" not in result  # no "note" key at top level
+
+
+def test_update_timeline_note_and_duration_exceeds_max_rejected(bridge):
+    """Durations above ``TIMELINE_ADJUSTED_DURATION_MAX_SECONDS`` must be
+    rejected with 时长无效."""
+    from worktrace.api import timeline_api
+
+    ids = _seed_session()
+    too_big = timeline_api.TIMELINE_ADJUSTED_DURATION_MAX_SECONDS + 1
+    result = bridge.update_timeline_note_and_duration(
+        ids, "note", too_big, "2026-06-25"
+    )
+    assert result["ok"] is False
+    assert result["error"] == "时长无效"
+
+
+def test_update_timeline_note_and_duration_invalid_activity_ids(bridge):
+    """Invalid ``activity_ids`` shapes must be rejected."""
+    result = bridge.update_timeline_note_and_duration(
+        [], "note", 3600, "2026-06-25"
+    )
+    assert result["ok"] is False
+    result = bridge.update_timeline_note_and_duration(
+        "not a list", "note", 3600, "2026-06-25"
+    )
+    assert result["ok"] is False
+    result = bridge.update_timeline_note_and_duration(
+        [0], "note", 3600, "2026-06-25"
+    )
+    assert result["ok"] is False

@@ -49,12 +49,17 @@ def test_index_html_timeline_page_is_not_placeholder():
 
 
 def test_index_html_timeline_page_has_date_navigation():
-    """Phase 2: the Timeline page must have prev/today/next date navigation."""
+    """Phase 2: the Timeline page must have prev/today/next date navigation.
+
+    The date element is now an ``<input type="date">`` (id
+    ``timeline-date-input``) instead of a static display span, so the user
+    can pick a date directly from the native date picker.
+    """
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="timeline-prev-btn"' in source
     assert 'id="timeline-next-btn"' in source
     assert 'id="timeline-today-btn"' in source
-    assert 'id="timeline-date-display"' in source
+    assert 'id="timeline-date-input"' in source
 
 
 
@@ -78,12 +83,19 @@ def test_index_html_timeline_page_has_error_and_empty_and_loading_states():
 
 
 
-def test_index_html_timeline_page_has_total_and_current():
-    """Phase 2: the Timeline page must show the daily total duration and a
-    current activity summary."""
+def test_index_html_timeline_page_has_total():
+    """Phase 2: the Timeline page must show the daily total duration.
+
+    The current-activity summary (``timeline-current``) has been removed
+    from the Timeline page — current-activity display is handled by the
+    Overview page only.
+    """
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="timeline-total"' in source
-    assert 'id="timeline-current"' in source
+    assert 'id="timeline-current"' not in source, (
+        "timeline-current must not appear in index.html; current-activity "
+        "display is handled by the Overview page only"
+    )
 
 
 
@@ -966,10 +978,15 @@ def test_save_activity_time_resets_saving_before_refresh():
 
 
 
-def test_is_edit_dirty_covers_session_level_time_inputs():
-    """Phase 3B.1.1: ``isEditDirty`` must check the session-level time inputs
-    (``edit-start-time`` / ``edit-end-time``) so auto-refresh does not
-    overwrite unsaved time edits."""
+def test_is_edit_dirty_covers_duration_input():
+    """``isEditDirty`` must check the ``edit-duration-input`` field so
+    auto-refresh does not overwrite an unsaved duration override.
+
+    The session-level time inputs (``edit-start-time`` / ``edit-end-time``)
+    have moved to the correction shell in the simplified view, so they are
+    no longer checked by the main ``isEditDirty``. The duration override
+    input is now the third field in the main edit panel alongside note
+    and project."""
     source = read_all_js()
     start = source.find("function isEditDirty(")
     assert start != -1, "isEditDirty must exist"
@@ -986,19 +1003,19 @@ def test_is_edit_dirty_covers_session_level_time_inputs():
                 end = i + 1
                 break
     body = source[start:end]
-    assert "edit-start-time" in body, (
-        "isEditDirty must check edit-start-time for unsaved time edits"
-    )
-    assert "edit-end-time" in body, (
-        "isEditDirty must check edit-end-time for unsaved time edits"
+    assert "edit-duration-input" in body, (
+        "isEditDirty must check edit-duration-input for unsaved duration "
+        "overrides so auto-refresh does not wipe them"
     )
 
 
 
-def test_is_edit_dirty_covers_per_activity_inline_editor():
-    """Phase 3B.1.1: ``isEditDirty`` must also check the per-activity inline
-    time editor so auto-refresh does not re-render the detail list and lose
-    unsaved inline edits."""
+def test_is_edit_dirty_no_longer_checks_inline_editors():
+    """The main ``isEditDirty`` no longer checks ``editingActivityId`` because
+    per-activity inline editors have moved to the correction shell (opened
+    via the ``高级纠错`` button). The correction shell has its own dirty /
+    saving guards; the main edit panel only tracks note, project, and
+    duration."""
     source = read_all_js()
     start = source.find("function isEditDirty(")
     assert start != -1
@@ -1015,9 +1032,12 @@ def test_is_edit_dirty_covers_per_activity_inline_editor():
                 end = i + 1
                 break
     body = source[start:end]
-    assert "editingActivityId" in body, (
-        "isEditDirty must check editingActivityId so an open inline editor "
-        "is treated as dirty and auto-refresh does not wipe it"
+    # The simplified isEditDirty must still check note and project.
+    assert "edit-note-text" in body, (
+        "isEditDirty must still check edit-note-text"
+    )
+    assert "edit-project-select" in body, (
+        "isEditDirty must still check edit-project-select"
     )
 
 
@@ -1385,10 +1405,13 @@ def test_app_js_split_has_no_merge_delete_batch_auto_rule_handlers():
 
 
 
-def test_app_js_is_edit_dirty_covers_split_inputs():
-    """Phase 3B.2: ``isEditDirty`` must check the session-level split input
-    and the per-activity inline split editor so auto-refresh does not wipe
-    unsaved split edits."""
+def test_is_edit_dirty_no_longer_checks_split_inputs():
+    """The main ``isEditDirty`` no longer checks the session-level split
+    input (``edit-split-time``) or the per-activity inline split editor
+    (``editingSplitActivityId``) because the split UI has moved to the
+    correction shell (opened via the ``高级纠错`` button). The correction
+    shell has its own dirty / saving guards; the main edit panel only
+    tracks note, project, and duration."""
     source = read_all_js()
     start = source.find("function isEditDirty(")
     assert start != -1, "isEditDirty must exist"
@@ -1405,12 +1428,13 @@ def test_app_js_is_edit_dirty_covers_split_inputs():
                 end = i + 1
                 break
     body = source[start:end]
-    assert "edit-split-time" in body, (
-        "isEditDirty must check edit-split-time for unsaved session-level split"
+    assert "edit-split-time" not in body, (
+        "isEditDirty must no longer check edit-split-time; the split UI has "
+        "moved to the correction shell"
     )
-    assert "editingSplitActivityId" in body, (
-        "isEditDirty must check editingSplitActivityId so an open inline "
-        "split editor is treated as dirty"
+    assert "editingSplitActivityId" not in body, (
+        "isEditDirty must no longer check editingSplitActivityId; per-activity "
+        "inline split editors have moved to the correction shell"
     )
 
 
@@ -1495,12 +1519,37 @@ def test_app_js_has_merge_functions():
 
 
 
-def test_app_js_has_merge_button_in_detail_rows():
-    """Phase 3B.3: the renderSessionDetails function must generate a merge
-    button (与下一条合并) for each closed activity."""
+def test_app_js_no_merge_button_in_rendered_detail_rows():
+    """The simplified ``renderSessionDetails`` no longer renders a per-
+    activity merge button (``detail-merge-btn`` / ``与下一条合并``) in
+    the detail rows. Per-activity merge has moved to the correction shell
+    (opened via the ``高级纠错`` button). The merge bridge call and
+    saving-state helpers may still exist for the correction shell, but
+    the rendered detail rows must be read-only."""
     source = read_all_js()
-    assert "detail-merge-btn" in source
-    assert "与下一条合并" in source
+    start = source.find("function renderSessionDetails(")
+    assert start != -1, "renderSessionDetails must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "detail-merge-btn" not in body, (
+        "renderSessionDetails must no longer render detail-merge-btn; "
+        "per-activity merge has moved to the correction shell"
+    )
+    assert "与下一条合并" not in body, (
+        "renderSessionDetails must no longer render the 与下一条合并 button "
+        "label; per-activity merge has moved to the correction shell"
+    )
 
 
 
@@ -1560,11 +1609,14 @@ def test_app_js_merge_preserves_state_on_save_failure():
 
 
 
-def test_app_js_merge_disables_in_progress_activity():
-    """Phase 3B.3: in-progress activities must have their merge button
-    disabled."""
+def test_app_js_render_session_details_no_merge_button_disabled_logic():
+    """The simplified ``renderSessionDetails`` no longer computes a
+    ``mergeBtnDisabled`` flag because per-activity merge buttons are no
+    longer rendered in the detail rows (merge has moved to the correction
+    shell). The function may still reference ``is_in_progress`` for row
+    class purposes, but must not contain the per-activity merge-button
+    disabled logic."""
     source = read_all_js()
-    # The merge button disabled logic must check is_in_progress
     start = source.find("function renderSessionDetails(")
     assert start != -1
     brace_start = source.find("{", start)
@@ -1580,8 +1632,10 @@ def test_app_js_merge_disables_in_progress_activity():
                 end = i + 1
                 break
     body = source[start:end]
-    assert "is_in_progress" in body
-    assert "mergeBtnDisabled" in body
+    assert "mergeBtnDisabled" not in body, (
+        "renderSessionDetails must no longer compute a mergeBtnDisabled flag; "
+        "per-activity merge buttons have moved to the correction shell"
+    )
 
 
 
@@ -1834,22 +1888,30 @@ def test_app_js_multi_activity_session_disables_whole_hide_delete():
 
 
 
-def test_app_js_in_progress_activity_disables_hide_delete():
-    """Phase 3B.4: an in-progress activity must disable the hide / delete
-    buttons (or show the "进行中" hint). The renderSessionDetails and
-    populateSessionVisibilitySection functions must check
-    ``is_in_progress``."""
+def test_app_js_render_session_details_no_visibility_button_logic():
+    """The simplified ``renderSessionDetails`` no longer computes a
+    ``visibilityBtnDisabled`` flag because per-activity hide / delete
+    buttons are no longer rendered in the detail rows (they have moved
+    to the correction shell).
+
+    The session-level ``populateSessionVisibilitySection`` (used by the
+    correction shell / edit panel) must still check ``is_in_progress``
+    so an in-progress session shows the "进行中" hint instead of the
+    hide / delete buttons."""
     source = read_all_js()
-    # renderSessionDetails must set a visibilityBtnDisabled flag for
-    # in-progress activities.
+    # renderSessionDetails must no longer compute a visibilityBtnDisabled
+    # flag for in-progress activities (per-activity buttons are gone).
     render_start = source.find("function renderSessionDetails(")
     assert render_start != -1, "renderSessionDetails must exist"
     render_next = source.find("\n    function ", render_start + 1)
     render_body = source[render_start:render_next] if render_next != -1 else source[render_start:]
-    assert "visibilityBtnDisabled" in render_body, (
-        "renderSessionDetails must compute a visibilityBtnDisabled flag"
+    assert "visibilityBtnDisabled" not in render_body, (
+        "renderSessionDetails must no longer compute a visibilityBtnDisabled "
+        "flag; per-activity hide / delete buttons have moved to the correction shell"
     )
-    # populateSessionVisibilitySection must check is_in_progress.
+    # populateSessionVisibilitySection must still check is_in_progress so
+    # the session-level hide / delete UI in the correction shell refuses
+    # in-progress sessions.
     vis_start = source.find("function populateSessionVisibilitySection(")
     assert vis_start != -1, "populateSessionVisibilitySection must exist"
     vis_next = source.find("\n    function ", vis_start + 1)
@@ -2038,18 +2100,31 @@ def test_app_js_visibility_buttons_bound_in_init():
 
 
 
-def test_app_js_per_activity_visibility_buttons_rendered():
-    """Phase 3B.4: renderSessionDetails must render per-activity hide /
-    delete buttons with the ``detail-hide-btn`` / ``detail-delete-btn``
-    classes and a ``data-activity-id`` attribute."""
+def test_app_js_no_per_activity_visibility_buttons_in_rendered_detail_rows():
+    """The simplified ``renderSessionDetails`` no longer renders per-
+    activity hide / delete buttons (``detail-hide-btn`` /
+    ``detail-delete-btn``) in the detail rows. Per-activity hide / delete
+    has moved to the correction shell (opened via the ``高级纠错``
+    button). The ``data-activity-id`` attribute is still rendered on
+    each detail row for identification / ticker purposes."""
     source = read_all_js()
     start = source.find("function renderSessionDetails(")
     assert start != -1, "renderSessionDetails must exist"
     next_func = source.find("\n    function ", start + 1)
     body = source[start:next_func] if next_func != -1 else source[start:]
-    assert "detail-hide-btn" in body
-    assert "detail-delete-btn" in body
-    assert "data-activity-id" in body
+    assert "detail-hide-btn" not in body, (
+        "renderSessionDetails must no longer render detail-hide-btn; "
+        "per-activity hide has moved to the correction shell"
+    )
+    assert "detail-delete-btn" not in body, (
+        "renderSessionDetails must no longer render detail-delete-btn; "
+        "per-activity delete has moved to the correction shell"
+    )
+    # data-activity-id is still rendered on each row for identification.
+    assert "data-activity-id" in body, (
+        "renderSessionDetails must still render data-activity-id on each "
+        "detail row for identification / ticker purposes"
+    )
 
 
 
@@ -2879,9 +2954,10 @@ def test_app_js_no_local_http_server_3c1():
 
 
 def test_bridge_no_new_methods_for_phase_3c1():
-    """Phase 3C.1 / 4A: no new bridge methods beyond the known 22-method set
+    """Phase 3C.1 / 4A: no new bridge methods beyond the known method set
     (regression lock — Phase 4A adds get_statistics_export_summary as a
-    read-only method; no other methods may be added)."""
+    read-only method; the time-details simplification adds
+    update_timeline_note_and_duration for joint note + duration writes)."""
     # Phase M4: scan all 8 bridge mixin files (method bodies moved out of
     # bridge.py into the mixins).
     bridge_src = read_bridge_sources_combined()
@@ -2890,6 +2966,7 @@ def test_bridge_no_new_methods_for_phase_3c1():
         "get_recent_activities", "get_timeline",
         "get_timeline_session_details", "list_projects_for_timeline",
         "update_timeline_project", "update_timeline_note",
+        "update_timeline_note_and_duration",
         "update_timeline_activity_time", "update_timeline_session_time",
         "split_timeline_activity", "split_timeline_session",
         "merge_timeline_activities", "hide_timeline_activity",
@@ -2926,7 +3003,9 @@ def test_bridge_imports_only_allowed_modules_3c1():
 
 def test_api_has_no_new_methods_for_phase_3c1():
     """Phase 3C.1: the timeline API must still expose the known method set
-    and error classes (regression lock — no new API methods)."""
+    and error classes (regression lock — the time-details simplification
+    adds update_timeline_session_note_and_duration for joint note +
+    duration writes)."""
     api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(
         encoding="utf-8"
     )
@@ -2940,6 +3019,7 @@ def test_api_has_no_new_methods_for_phase_3c1():
         "class TimelineRestoreActivityError",
         "def reclassify_timeline_session_project",
         "def update_timeline_session_note",
+        "def update_timeline_session_note_and_duration",
         "def update_timeline_activity_time",
         "def update_timeline_session_time",
         "def split_timeline_activity",
@@ -3148,4 +3228,135 @@ def test_detail_item_mobile_layout_actions_on_own_row():
     assert found, (
         "mobile @media (max-width: 900px) .detail-item must place actions "
         'on its own row ("actions") inside grid-template-areas'
+    )
+
+
+# --- Time details page simplification ----------------------------------
+#
+# The Timeline edit panel has been simplified to surface a duration-
+# override input (``edit-duration-input``) alongside the note textarea,
+# and the date nav is now an ``<input type="date">`` so the user can pick
+# a date directly. The current-activity summary (``timeline-current``)
+# has been removed from the Timeline page — current-activity display is
+# handled by the Overview page only. The advanced correction shell is
+# opened via the ``高级纠错`` button inside the edit panel.
+
+
+def test_index_html_timeline_has_date_input():
+    """The Timeline date nav must use an ``<input type="date">`` (id
+    ``timeline-date-input``) so the user can pick a date directly from the
+    native date picker instead of relying only on prev/next/today."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="timeline-date-input"' in source, (
+        "index.html must have a timeline-date-input element"
+    )
+    assert 'type="date"' in source, (
+        "timeline-date-input must be a date input"
+    )
+
+
+def test_index_html_timeline_no_current_activity():
+    """The Timeline page must not contain a ``timeline-current`` element —
+    current-activity display is handled by the Overview page only."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="timeline-current"' not in source, (
+        "timeline-current must not appear in index.html; current-activity "
+        "display is handled by the Overview page only"
+    )
+
+
+def test_index_html_timeline_has_duration_input():
+    """The edit panel must contain a duration-override input
+    (``edit-duration-input``) so the user can set a display/申报时长 that
+    differs from the raw collected duration."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="edit-duration-input"' in source, (
+        "index.html must have an edit-duration-input element in the edit panel"
+    )
+
+
+def test_index_html_timeline_edit_panel_has_advanced_correction_button():
+    """The edit panel must contain a ``高级纠错`` button (id
+    ``open-correction-shell-btn``) that opens the advanced correction
+    shell for time/split/merge/visibility operations."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="open-correction-shell-btn"' in source, (
+        "index.html must have an open-correction-shell-btn button"
+    )
+    assert "高级纠错" in source, (
+        "the advanced correction button must display '高级纠错'"
+    )
+
+
+def test_index_html_time_sections_hidden_by_default():
+    """The time-correction, split, and visibility sections must be
+    ``hidden`` by default in the static HTML. They are shown dynamically
+    by app.js only when a session is selected and the section applies."""
+    source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    for section_id in (
+        "edit-time-section",
+        "edit-split-section",
+        "edit-visibility-section",
+    ):
+        pos = source.find('id="' + section_id + '"')
+        assert pos != -1, (
+            "index.html must contain section: " + section_id
+        )
+        # The hidden attribute must appear on the same element as the id.
+        # Search backwards from the id to find the opening tag start, then
+        # forwards to find the closing > of the opening tag.
+        tag_start = source.rfind("<", 0, pos)
+        tag_end = source.find(">", pos)
+        assert tag_start != -1 and tag_end != -1, (
+            "could not locate opening tag for " + section_id
+        )
+        opening_tag = source[tag_start:tag_end + 1]
+        assert " hidden" in opening_tag, (
+            section_id + " must have the 'hidden' attribute in its opening "
+            "tag so it is hidden by default; got: " + opening_tag
+        )
+
+
+def test_app_js_has_format_start_time_only():
+    """app.js must define ``formatStartTimeOnly`` so the Timeline session
+    list and detail list show only the start time (HH:MM) of each
+    activity, not the full datetime."""
+    source = read_all_js()
+    assert "formatStartTimeOnly" in source, (
+        "app.js must define formatStartTimeOnly helper"
+    )
+
+
+def test_app_js_has_update_note_and_duration_bridge_call():
+    """app.js must call the ``update_timeline_note_and_duration`` bridge
+    method so the note and adjusted duration are saved together in a
+    single write."""
+    source = read_all_js()
+    assert "update_timeline_note_and_duration" in source, (
+        "app.js must call update_timeline_note_and_duration bridge method"
+    )
+
+
+def test_app_js_dirty_state_includes_duration():
+    """``isEditDirty`` must check the ``edit-duration-input`` field so
+    auto-refresh does not overwrite an unsaved duration override."""
+    source = read_all_js()
+    start = source.find("function isEditDirty(")
+    assert start != -1, "isEditDirty must exist"
+    brace_start = source.find("{", start)
+    depth = 0
+    end = brace_start
+    for i in range(brace_start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    body = source[start:end]
+    assert "edit-duration-input" in body, (
+        "isEditDirty must check edit-duration-input for unsaved duration "
+        "overrides so auto-refresh does not wipe them"
     )

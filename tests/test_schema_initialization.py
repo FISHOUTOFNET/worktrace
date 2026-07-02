@@ -78,6 +78,12 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "rule" not in tables
 
 
+def test_project_session_note_has_adjusted_duration_column(temp_db):
+    with db.get_connection() as conn:
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(project_session_note)").fetchall()}
+        assert "adjusted_duration_seconds" in columns
+
+
 def test_reset_database_clears_current_schema_tables(temp_db):
     from worktrace.services import activity_service
 

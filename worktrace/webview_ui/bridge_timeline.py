@@ -148,25 +148,22 @@ class TimelineBridgeMixin:
     def get_timeline(self, date: str | None = None) -> dict[str, Any]:
         """Return read-only timeline data for a single date.
 
-        Unified live-display model. The payload supports three session kinds:
+        The Timeline page is a daily correction /补记 interface — it shows
+        only closed historical sessions. Virtual live sessions and
+        in-progress (persisted-open) sessions are NOT included so the user
+        cannot accidentally edit an unfinished activity. Current-activity
+        display is handled by the Overview page.
 
-        - **virtual live session** — prepended when the viewed date is today
-          AND the current snapshot is a normal unpersisted <30s activity.
-          ``is_virtual`` / ``is_virtual_live`` are true, ``activity_id`` is
-          ``0``, ``source`` is ``"snapshot"``, ``edit_disabled`` is true,
-          and the time range shows "进行中". The DB is NEVER written.
-        - **persisted open session** — a real DB session whose
-          ``is_in_progress`` is true. ``duration_seconds`` already includes
-          the live seconds from ``timeline_service._live_duration_for_row``.
-        - **closed DB session** — a finalized session row.
+        Each session carries:
+        - ``duration_seconds`` / ``duration``: display duration (override
+          if set, else raw).
+        - ``raw_duration_seconds`` / ``raw_duration``: true collected
+          duration (never modified by the user).
+        - ``adjusted_duration_seconds``: user override or ``None``.
+        - ``has_duration_override``: ``True`` when an override is set.
 
-        ``today_total_seconds`` includes the virtual live session's fetched
-        snapshot duration so the displayed total matches the sum of session
-        durations. The frontend ticker adds the unified live clock delta
-        (``live_started_at_epoch_ms`` + ``carry_seconds``) only to the
-        virtual / in-progress session. Historical dates are never projected.
-        idle / paused / excluded / error snapshots never produce a virtual
-        session.
+        ``total_seconds`` / ``total_duration`` use display duration;
+        ``raw_total_seconds`` / ``raw_total_duration`` use raw duration.
         """
         try:
             report_date = date or timeline_api.get_default_report_date()
@@ -175,94 +172,50 @@ class TimelineBridgeMixin:
                 include_hidden=False,
                 ensure_context=True,
             )
-            total_seconds = sum(s.get("duration_seconds") or 0 for s in sessions_raw)
             snapshot = settings_api.get_current_activity_snapshot()
             today = timeline_api.get_default_report_date()
             current = _snapshot_summary(snapshot)
             live_display = live_display_api.build_current_activity_summary(
                 snapshot, report_date=report_date, today=today
             )
-            # Unified live projection built from the SAME snapshot sample
-            # so the Timeline session / detail ticker uses a single
-            # source of truth (verification item 五.3: Timeline must
-            # return sessions + same-sample live_projection). The detail
-            # payload carries its own live_projection; the main Timeline
-            # payload's projection is NOT reused for the detail ticker.
             live_projection = live_display_api.build_live_projection(
                 snapshot, report_date=report_date, today=today
             )
-            # Build the persisted-open overlay once so every DB session
-            # that matches the persisted_activity_id can carry the same
-            # stable live fields as the virtual session (verification
-            # items 12, 16, 21).
-            persisted_overlay = live_display_api.build_persisted_open_overlay(
-                snapshot, report_date=report_date, today=today
-            )
             sessions: list[dict[str, Any]] = []
-            virtual_session_seconds = 0
-            # Prepend a virtual live session when the current snapshot is a
-            # normal unpersisted activity on today's date. This is
-            # display-only; the DB is never written.
-            virtual_session = live_display_api.build_virtual_session(
-                snapshot, report_date=report_date, today=today
-            )
-            if virtual_session is not None:
-                vseconds = int(virtual_session.get("duration_seconds") or 0)
-                virtual_session_seconds = vseconds
-                sessions.append(
-                    {
-                        "session_id": str(virtual_session.get("session_id") or "virtual-live"),
-                        "project_name": str(virtual_session.get("project_name") or "未归类"),
-                        "project_description": str(virtual_session.get("project_description") or ""),
-                        "project_id": int(virtual_session.get("project_id") or 0),
-                        "start_time": str(virtual_session.get("start_time") or ""),
-                        "end_time": "",
-                        "duration": str(virtual_session.get("duration") or "00:00:00"),
-                        "duration_seconds": vseconds,
-                        "status": "进行中",
-                        "event_count": int(virtual_session.get("event_count") or 0),
-                        "is_uncategorized": bool(virtual_session.get("is_uncategorized")),
-                        "is_in_progress": True,
-                        "is_live_projected": True,
-                        "is_virtual": True,
-                        "is_virtual_live": True,
-                        "live_display_key": str(virtual_session.get("live_display_key") or ""),
-                        # Stable live identity so the frontend continuity
-                        # key survives the virtual → persisted_open
-                        # transition (verification items 12, 16, 21).
-                        "stable_live_key": str(virtual_session.get("stable_live_key") or ""),
-                        "stable_live_key_hash": str(virtual_session.get("stable_live_key_hash") or ""),
-                        # Unified live clock fields (scheme A).
-                        "live_state": "virtual",
-                        "live_started_at_epoch_ms": int(virtual_session.get("live_started_at_epoch_ms") or 0),
-                        "carry_seconds": int(virtual_session.get("carry_seconds") or 0),
-                        "activity_ids": [],
-                        "first_activity_id": None,
-                        "session_note": "",
-                        "edit_disabled": True,
-                        "disable_reason": str(virtual_session.get("disable_reason") or ""),
-                        "source": "snapshot",
-                    }
-                )
+            display_total_seconds = 0
+            raw_total_seconds = 0
             for session in sessions_raw:
+                # Filter out in-progress sessions — the Timeline page only
+                # shows closed historical sessions.
+                if bool(session.get("is_in_progress")):
+                    continue
                 start_time = str(session.get("start_time") or "")
-                end_time = str(session.get("end_time") or "")
-                session_seconds = int(session.get("duration_seconds") or 0)
-                is_in_progress = bool(session.get("is_in_progress"))
+                raw_seconds = int(session.get("raw_duration_seconds") or session.get("duration_seconds") or 0)
+                adjusted = session.get("adjusted_duration_seconds")
+                if adjusted is not None:
+                    adjusted = int(adjusted)
+                has_override = adjusted is not None
+                display_seconds = adjusted if has_override else raw_seconds
+                display_total_seconds += display_seconds
+                raw_total_seconds += raw_seconds
                 row = {
                     "session_id": str(session.get("session_id") or ""),
                     "project_name": str(session.get("project_name") or "未归类"),
                     "project_description": str(session.get("project_description") or ""),
                     "project_id": int(session.get("project_id") or 0),
                     "start_time": start_time,
-                    "end_time": end_time,
-                    "duration": format_duration(session_seconds),
-                    "duration_seconds": session_seconds,
+                    "end_time": str(session.get("end_time") or ""),
+                    "duration": format_duration(display_seconds),
+                    "duration_seconds": display_seconds,
+                    "raw_duration": format_duration(raw_seconds),
+                    "raw_duration_seconds": raw_seconds,
+                    "adjusted_duration_seconds": adjusted,
+                    "has_duration_override": has_override,
                     "status": str(session.get("status_summary") or session.get("status") or ""),
                     "event_count": int(session.get("event_count") or 0),
                     "is_uncategorized": bool(session.get("is_uncategorized")),
-                    "is_in_progress": is_in_progress,
-                    "is_live_projected": is_in_progress,
+                    "is_in_progress": False,
+                    "is_live_projected": False,
                     "is_virtual": False,
                     "is_virtual_live": False,
                     "live_display_key": "",
@@ -278,34 +231,19 @@ class TimelineBridgeMixin:
                     "disable_reason": "",
                     "source": "db",
                 }
-                # Apply the persisted-open overlay so the matching DB
-                # session carries the same stable live fields as the
-                # virtual session. No-op for closed / non-matching rows.
-                live_display_api.apply_persisted_open_overlay_to_row(row, persisted_overlay)
                 sessions.append(row)
-            # Include the virtual session's fetched snapshot duration in
-            # the totals so the displayed total matches the sum of session
-            # durations. The frontend ticker only adds the unified live
-            # clock delta on top, so there is no double-counting.
-            display_total_seconds = total_seconds + virtual_session_seconds
             return {
                 "ok": True,
                 "date": report_date,
                 "total_duration": format_duration(display_total_seconds),
                 "total_seconds": display_total_seconds,
+                "raw_total_duration": format_duration(raw_total_seconds),
+                "raw_total_seconds": raw_total_seconds,
                 "current_activity": current,
                 "live_display": live_display,
-                # Unified live projection (single source of truth for the
-                # Timeline session ticker). Built from the SAME snapshot
-                # sample as ``live_display`` / ``current_activity`` /
-                # sessions so the frontend ticker computes display seconds
-                # once and distributes to every consumer.
                 "live_projection": live_projection,
                 "sample_id": str(live_projection.get("stable_live_key_hash") or ""),
                 "sessions": sessions,
-                # Raw seconds for the 1-second local ticker. The ticker
-                # only updates DOM text; it never calls a bridge method or
-                # writes the DB.
                 "today_total_seconds": display_total_seconds,
                 "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
             }
@@ -607,6 +545,67 @@ class TimelineBridgeMixin:
             return {"ok": False, "error": "操作失败"}
         except Exception:
             logger.exception("webview bridge update_timeline_note failed")
+            return dict(_GENERIC_ERROR)
+
+    def update_timeline_note_and_duration(
+        self,
+        activity_ids: list[int],
+        note: str,
+        adjusted_duration_seconds: int | None,
+        report_date: str,
+    ) -> dict[str, Any]:
+        """Write note + user-adjusted duration for a Timeline session.
+
+        ``activity_ids`` is the session's activity id list; the first id is
+        used as the session key (``first_activity_id``). ``note`` is the new
+        note text. ``adjusted_duration_seconds`` is the user-accepted
+        duration in seconds (``None`` clears the override, restoring the
+        raw collected duration). ``report_date`` is the ``YYYY-MM-DD`` date
+        being viewed.
+
+        The adjusted duration is stored in
+        ``project_session_note.adjusted_duration_seconds`` and NEVER
+        modifies ``activity_log``. Clearing the duration input (passing
+        ``None``) removes the override.
+
+        Returns ``{"ok": true}`` on success or
+        ``{"ok": false, "error": "<chinese message>"}`` on failure.
+        """
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "请选择有效的活动"}
+            if not isinstance(note, str):
+                return {"ok": False, "error": "备注内容无效"}
+            if len(note) > timeline_api.TIMELINE_NOTE_MAX_LENGTH:
+                return {"ok": False, "error": "备注过长"}
+            if not isinstance(report_date, str) or not report_date:
+                return {"ok": False, "error": "日期无效"}
+            if not _DATE_SHAPE_RE.match(report_date):
+                return {"ok": False, "error": "日期无效"}
+            # Validate adjusted duration: allow None; non-None must be a
+            # positive int (reject bool, 0, negative, non-numeric).
+            duration_value: int | None = None
+            if adjusted_duration_seconds is not None:
+                if isinstance(adjusted_duration_seconds, bool):
+                    return {"ok": False, "error": "时长无效"}
+                try:
+                    duration_value = int(adjusted_duration_seconds)
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "时长无效"}
+                if duration_value <= 0:
+                    return {"ok": False, "error": "时长无效"}
+                if duration_value > timeline_api.TIMELINE_ADJUSTED_DURATION_MAX_SECONDS:
+                    return {"ok": False, "error": "时长无效"}
+            first_activity_id = ids[0]
+            timeline_api.update_timeline_session_note_and_duration(
+                report_date, first_activity_id, note, duration_value
+            )
+            return {"ok": True}
+        except ValueError:
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge update_timeline_note_and_duration failed")
             return dict(_GENERIC_ERROR)
 
     # --- Phase 3B.1: Timeline time correction (single-activity foundation) ---

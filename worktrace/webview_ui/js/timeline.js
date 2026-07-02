@@ -12,15 +12,9 @@
     function showTimeline(data) {
         if (!data) return;
         App.lastTimelineData = data;
-        document.getElementById("timeline-date-display").textContent = data.date || "--";
+        var dateInput = document.getElementById("timeline-date-input");
+        if (dateInput) dateInput.value = data.date || "";
         document.getElementById("timeline-total").textContent = data.total_duration || "00:00:00";
-        var current = data.current_activity || {};
-        var currentEl = document.getElementById("timeline-current");
-        if (current.active) {
-            currentEl.textContent = "当前活动：" + current.display;
-        } else {
-            currentEl.textContent = "当前活动：无";
-        }
 
         var listEl = document.getElementById("timeline-sessions-list");
         var sessions = data.sessions || [];
@@ -48,12 +42,14 @@
         var sessionContinuityKeys = [];
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
-            var timeRange = App.formatTimeRange(s.start_time, s.end_time, s.is_in_progress);
+            // Defensive: backend now filters virtual / in-progress sessions,
+            // but skip any virtual session that slips through so the
+            // simplified list stays clean.
+            if (s.is_virtual === true) continue;
+            var startTimeOnly = App.formatStartTimeOnly(s.start_time);
             var projectLabel = App.formatProjectLabel(s.project_name, s.project_description);
-            // Phase 6H-followup: prefer ``duration_seconds`` (raw int from
-            // the backend) over the pre-formatted ``duration`` string so
-            // the ticker / monotonic helper can recompute from a stable
-            // baseline. The ``duration`` string is kept as a fallback.
+            // ``duration_seconds`` is already the display value (adjusted
+            // when a duration override exists, raw otherwise).
             var sDurSec = parseInt(s.duration_seconds, 10);
             var sDurText = (!isNaN(sDurSec) && sDurSec >= 0)
                 ? App.formatDuration(sDurSec)
@@ -62,15 +58,14 @@
             if (s.is_uncategorized) cls += " uncategorized";
             if (s.is_in_progress) cls += " in-progress";
             if (s.is_live_projected === true) cls += " live-projected";
-            if (s.is_virtual === true) cls += " virtual-live";
             if (s.session_id === App.selectedSessionId) cls += " selected";
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
-                + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(timeRange) + '｜' + App.escapeHtml(sDurText) + '"'
+                + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startTimeOnly) + '｜' + App.escapeHtml(sDurText) + '"'
                 + '>'
                 + '<div class="timeline-item-main">'
                 + '<div class="timeline-item-project">' + App.escapeHtml(projectLabel) + '</div>'
-                + '<div class="timeline-item-time">' + App.escapeHtml(timeRange) + '</div>'
-                + '<div class="timeline-item-status">' + App.escapeHtml(s.status || "") + '</div>'
+                + '<div class="timeline-item-time">' + App.escapeHtml(startTimeOnly) + '</div>'
+                + (s.has_duration_override ? '<div class="timeline-item-adjusted">已修正</div>' : '')
                 + '</div>'
                 + '<div class="timeline-item-side">'
                 + '<div class="timeline-item-duration" data-duration-seconds="' + (isNaN(sDurSec) ? 0 : sDurSec) + '">' + App.escapeHtml(sDurText) + '</div>'
@@ -202,8 +197,7 @@
             }
         }
         if (found) {
-            var dateEl = document.getElementById("timeline-date-display");
-            loadSessionDetails(found.activity_ids, dateEl ? dateEl.textContent : null);
+            loadSessionDetails(found.activity_ids, App.timelineDate);
             // Verification item 4: virtual live sessions are display-only.
             // A manual click on a virtual session must NOT open the edit
             // panel — it has no persisted activity_ids and cannot be
@@ -290,12 +284,13 @@
         var detailContinuityKeys = [];
         for (var i = 0; i < activities.length; i++) {
             var a = activities[i];
-            var timeRange = App.formatTimeRange(a.start_time, a.end_time, a.is_in_progress);
+            // Simplified read-only detail row: show display name, start
+            // time only, raw activity duration, and project name. No edit
+            // / split / merge / hide / delete buttons and no inline editors
+            // — advanced correction is reached via the "高级纠错" button
+            // in the edit panel, which opens the correction shell.
+            var startTimeOnly = App.formatStartTimeOnly(a.start_time);
             var displayName = a.resource_name || a.app_name || "未知";
-            // Phase 6H-followup: prefer ``duration_seconds`` (raw int from
-            // the backend) over the pre-formatted ``duration`` string so
-            // the ticker / monotonic helper can recompute from a stable
-            // baseline. The ``duration`` string is kept as a fallback.
             var aDurSec = parseInt(a.duration_seconds, 10);
             var aDurText = (!isNaN(aDurSec) && aDurSec >= 0)
                 ? App.formatDuration(aDurSec)
@@ -303,140 +298,14 @@
             var cls = "detail-item";
             if (a.is_in_progress) cls += " in-progress";
             if (a.is_virtual === true) cls += " virtual-live";
-            // Per-activity inline time editor (Phase 3B.1). The button is
-            // disabled for in-progress activities because their displayed
-            // end_time may be a projected value. The editor container is
-            // hidden by default and only shown when the user clicks the
-            // button. Only one inline editor can be open at a time.
-            // Phase 3B.2 also adds an inline split editor with the same
-            // in-progress/missing-id disable rules.
-            // Phase R3: virtual detail rows (edit_disabled) also disable
-            // all action buttons since the activity is not yet persisted.
             var aid = a.activity_id || 0;
-            var editBtnDisabled = a.is_in_progress || !aid || a.edit_disabled === true;
-            var disableReason = a.disable_reason || "";
-            var editBtnTitle = disableReason
-                ? disableReason
-                : (a.is_in_progress
-                    ? "进行中记录无法修改时间"
-                    : (aid ? "编辑该活动时间" : "活动 ID 缺失，无法编辑"));
-            var splitBtnTitle = disableReason
-                ? disableReason
-                : (a.is_in_progress
-                    ? "进行中记录无法拆分"
-                    : (aid ? "在该时间点拆分此活动" : "活动 ID 缺失，无法拆分"));
-            // Phase 3B.3: per-activity "与下一条合并" button. The button is
-            // disabled when there is no next activity, when either the
-            // current or next activity is in-progress, or when the current
-            // activity id is missing. The backend re-validates all merge
-            // preconditions (project, resource, status, adjacency).
-            var hasNext = i < activities.length - 1;
-            var nextInProgress = hasNext && activities[i + 1].is_in_progress;
-            var mergeBtnDisabled = !aid || a.is_in_progress || !hasNext || nextInProgress || a.edit_disabled === true;
-            var mergeBtnTitle = disableReason
-                ? disableReason
-                : (!aid
-                    ? "活动 ID 缺失，无法合并"
-                    : (a.is_in_progress
-                        ? "进行中记录无法合并"
-                        : (!hasNext
-                            ? "已是最后一条活动，没有下一条可合并"
-                            : (nextInProgress
-                                ? "下一条活动进行中，无法合并"
-                                : "将此活动与下一条活动合并"))));
-            // Phase 3B.4: per-activity "隐藏" and "删除" buttons. Both are
-            // disabled for in-progress activities (raw end_time IS NULL) and
-            // when the activity id is missing. The delete button uses a
-            // confirmation dialog (window.confirm) before calling the bridge.
-            var visibilityBtnDisabled = a.is_in_progress || !aid || a.edit_disabled === true;
-            var visibilityBtnTitle = disableReason
-                ? disableReason
-                : (a.is_in_progress
-                    ? "进行中记录无法隐藏或删除"
-                    : (aid ? "从 Timeline 隐藏或删除此活动" : "活动 ID 缺失，无法操作"));
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
                 + ' data-detail-index="' + i + '"'
                 + '>'
-                + '<div class="detail-item-time">' + App.escapeHtml(timeRange) + '</div>'
+                + '<div class="detail-item-time">' + App.escapeHtml(startTimeOnly) + '</div>'
                 + '<div class="detail-item-name" title="' + App.escapeHtml(displayName) + '">' + App.escapeHtml(displayName) + '</div>'
-                + '<div class="detail-item-meta">'
-                + '<span class="detail-item-type">' + App.escapeHtml(a.resource_type || "") + '</span>'
-                + '<span class="detail-item-app">' + App.escapeHtml(a.app_name || "") + '</span>'
-                + '</div>'
                 + '<div class="detail-item-project" title="' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '">' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '</div>'
                 + '<div class="detail-item-duration" data-duration-seconds="' + (isNaN(aDurSec) ? 0 : aDurSec) + '">' + App.escapeHtml(aDurText) + '</div>'
-                // Phase 3B.5A: per-activity correction actions are grouped
-                // into three visually distinct groups with a stable order:
-                // edit group (编辑时间 → 拆分) → merge group (与下一条合并)
-                // → danger group (隐藏 → 删除). No new actions are added;
-                // the wrappers only consolidate existing buttons so the
-                // destructive actions are clearly separated from edits.
-                + '<div class="detail-item-actions">'
-                + '<div class="detail-action-edit-group">'
-                + '<button type="button" class="detail-edit-time-btn"'
-                + ' data-activity-id="' + App.escapeHtml(String(aid)) + '"'
-                + ' data-start="' + App.escapeHtml(a.start_time || "") + '"'
-                + ' data-end="' + App.escapeHtml(a.end_time || "") + '"'
-                + (editBtnDisabled ? ' disabled' : '')
-                + ' title="' + App.escapeHtml(editBtnTitle) + '"'
-                + '>编辑时间</button>'
-                + '<button type="button" class="detail-split-btn"'
-                + ' data-activity-id="' + App.escapeHtml(String(aid)) + '"'
-                + ' data-start="' + App.escapeHtml(a.start_time || "") + '"'
-                + ' data-end="' + App.escapeHtml(a.end_time || "") + '"'
-                + (editBtnDisabled ? ' disabled' : '')
-                + ' title="' + App.escapeHtml(splitBtnTitle) + '"'
-                + '>拆分</button>'
-                + '</div>'
-                + '<div class="detail-action-merge-group">'
-                + '<button type="button" class="detail-merge-btn"'
-                + ' data-activity-id="' + App.escapeHtml(String(aid)) + '"'
-                + ' data-next-activity-id="' + App.escapeHtml(String(hasNext ? (activities[i + 1].activity_id || 0) : 0)) + '"'
-                + (mergeBtnDisabled ? ' disabled' : '')
-                + ' title="' + App.escapeHtml(mergeBtnTitle) + '"'
-                + '>与下一条合并</button>'
-                + '</div>'
-                + '<div class="detail-action-danger-group">'
-                + '<button type="button" class="detail-hide-btn"'
-                + ' data-activity-id="' + App.escapeHtml(String(aid)) + '"'
-                + (visibilityBtnDisabled ? ' disabled' : '')
-                + ' title="' + App.escapeHtml(visibilityBtnTitle) + '"'
-                + '>隐藏</button>'
-                + '<button type="button" class="detail-delete-btn"'
-                + ' data-activity-id="' + App.escapeHtml(String(aid)) + '"'
-                + (visibilityBtnDisabled ? ' disabled' : '')
-                + ' title="' + App.escapeHtml(visibilityBtnTitle) + '"'
-                + '>删除</button>'
-                + '</div>'
-                + '</div>'
-                + '<div class="detail-time-editor" hidden>'
-                + '<div class="detail-time-row">'
-                + '<label>开始</label>'
-                + '<input type="datetime-local" class="detail-time-input detail-time-start" step="1">'
-                + '</div>'
-                + '<div class="detail-time-row">'
-                + '<label>结束</label>'
-                + '<input type="datetime-local" class="detail-time-input detail-time-end" step="1">'
-                + '</div>'
-                + '<div class="detail-time-actions">'
-                + '<button type="button" class="detail-time-save-btn">保存</button>'
-                + '<button type="button" class="detail-time-cancel-btn">取消</button>'
-                + '</div>'
-                + '<div class="detail-time-status edit-status" hidden></div>'
-                + '</div>'
-                + '<div class="detail-split-editor" hidden>'
-                + '<div class="detail-time-row">'
-                + '<label>拆分点</label>'
-                + '<input type="datetime-local" class="detail-time-input detail-split-time" step="1">'
-                + '</div>'
-                + '<div class="detail-time-actions">'
-                + '<button type="button" class="detail-split-save-btn">拆分</button>'
-                + '<button type="button" class="detail-split-cancel-btn">取消</button>'
-                + '</div>'
-                + '<div class="detail-split-status edit-status" hidden></div>'
-                + '</div>'
-                + '<div class="detail-merge-status edit-status" hidden></div>'
-                + '<div class="detail-visibility-status edit-status" hidden></div>'
                 + '</div>';
             // Phase 6H-followup: collect this row's continuity key so the
             // monotonic state can be seeded after the innerHTML swap.
@@ -457,180 +326,11 @@
             var detailKey = App.liveContinuityKey(detailItem, "detail");
             App._monotonicRenderState[detailKey] = { lastSeconds: dk.sec };
         }
-
-        // Bind per-activity "编辑时间" button handlers. Event delegation is
-        // used so re-rendering the list does not leak listeners.
-        var editBtns = detailsList.querySelectorAll(".detail-edit-time-btn");
-        for (var j = 0; j < editBtns.length; j++) {
-            (function (btn) {
-                btn.addEventListener("click", function () {
-                    if (btn.disabled) return;
-                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
-                    var startVal = btn.getAttribute("data-start") || "";
-                    var endVal = btn.getAttribute("data-end") || "";
-                    openActivityTimeEditor(id, startVal, endVal, btn);
-                });
-            })(editBtns[j]);
-        }
-
-        // Phase 3B.2: bind per-activity "拆分" button handlers.
-        var splitBtns = detailsList.querySelectorAll(".detail-split-btn");
-        for (var s = 0; s < splitBtns.length; s++) {
-            (function (btn) {
-                btn.addEventListener("click", function () {
-                    if (btn.disabled) return;
-                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
-                    var startVal = btn.getAttribute("data-start") || "";
-                    var endVal = btn.getAttribute("data-end") || "";
-                    openActivitySplitEditor(id, startVal, endVal, btn);
-                });
-            })(splitBtns[s]);
-        }
-
-        // Phase 3B.3: bind per-activity "与下一条合并" button handlers.
-        var mergeBtns = detailsList.querySelectorAll(".detail-merge-btn");
-        for (var mIdx = 0; mIdx < mergeBtns.length; mIdx++) {
-            (function (btn) {
-                btn.addEventListener("click", function () {
-                    if (btn.disabled || App.mergeSaving) return;
-                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
-                    var nextId = parseInt(btn.getAttribute("data-next-activity-id"), 10);
-                    if (!id || !nextId) return;
-                    saveActivityMerge(btn, id, nextId);
-                });
-            })(mergeBtns[mIdx]);
-        }
-
-        // Phase 3B.3: if a merge save is in progress for an activity that
-        // still exists, re-apply the saving state to the refreshed button so
-        // the user sees consistent "合并中…" feedback across auto-refresh.
-        // If the activity disappeared (session regroup), reset the merge
-        // state so the UI does not get stuck.
-        if (App.mergingActivityId !== null && App.mergeSaving) {
-            var mergeStillThere = false;
-            for (var mCheck = 0; mCheck < mergeBtns.length; mCheck++) {
-                if (parseInt(mergeBtns[mCheck].getAttribute("data-activity-id"), 10) === App.mergingActivityId) {
-                    mergeStillThere = true;
-                    setMergeSaving(mergeBtns[mCheck], true);
-                    break;
-                }
-            }
-            if (!mergeStillThere) {
-                App.mergingActivityId = null;
-                App.mergeSaving = false;
-            }
-        }
-
-        // Phase 3B.4: bind per-activity "隐藏" and "删除" button handlers.
-        var hideBtns = detailsList.querySelectorAll(".detail-hide-btn");
-        for (var hIdx = 0; hIdx < hideBtns.length; hIdx++) {
-            (function (btn) {
-                btn.addEventListener("click", function () {
-                    if (btn.disabled || App.hideSaving) return;
-                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
-                    if (!id) return;
-                    saveActivityHide(btn, id);
-                });
-            })(hideBtns[hIdx]);
-        }
-        var deleteBtns = detailsList.querySelectorAll(".detail-delete-btn");
-        for (var dIdx = 0; dIdx < deleteBtns.length; dIdx++) {
-            (function (btn) {
-                btn.addEventListener("click", function () {
-                    if (btn.disabled || App.deleteSaving) return;
-                    var id = parseInt(btn.getAttribute("data-activity-id"), 10);
-                    if (!id) return;
-                    saveActivityDelete(btn, id);
-                });
-            })(deleteBtns[dIdx]);
-        }
-
-        // Phase 3B.4: if a hide or delete save is in progress for an
-        // activity that still exists, re-apply the saving state so the user
-        // sees consistent feedback across auto-refresh. If the activity
-        // disappeared (session regroup), reset the state so the UI does not
-        // get stuck.
-        if (App.hidingActivityId !== null && App.hideSaving) {
-            var hideStillThere = false;
-            for (var hCheck = 0; hCheck < hideBtns.length; hCheck++) {
-                if (parseInt(hideBtns[hCheck].getAttribute("data-activity-id"), 10) === App.hidingActivityId) {
-                    hideStillThere = true;
-                    setHideSaving(hideBtns[hCheck], true);
-                    break;
-                }
-            }
-            if (!hideStillThere) {
-                App.hidingActivityId = null;
-                App.hideSaving = false;
-            }
-        }
-        if (App.deletingActivityId !== null && App.deleteSaving) {
-            var deleteStillThere = false;
-            for (var dCheck = 0; dCheck < deleteBtns.length; dCheck++) {
-                if (parseInt(deleteBtns[dCheck].getAttribute("data-activity-id"), 10) === App.deletingActivityId) {
-                    deleteStillThere = true;
-                    setDeleteSaving(deleteBtns[dCheck], true);
-                    break;
-                }
-            }
-            if (!deleteStillThere) {
-                App.deletingActivityId = null;
-                App.deleteSaving = false;
-            }
-        }
-
-        // If an inline editor was open for an activity that still exists,
-        // re-open it with the refreshed values so the user's editing context
-        // is preserved across auto-refresh. If the activity disappeared, the
-        // editor state is cleared below.
-        if (App.editingActivityId !== null) {
-            var stillOpen = false;
-            var refreshedBtn = null;
-            for (var k = 0; k < editBtns.length; k++) {
-                if (parseInt(editBtns[k].getAttribute("data-activity-id"), 10) === App.editingActivityId) {
-                    stillOpen = true;
-                    refreshedBtn = editBtns[k];
-                    break;
-                }
-            }
-            if (stillOpen && refreshedBtn && !refreshedBtn.disabled && !App.activityTimeSaving) {
-                openActivityTimeEditor(
-                    App.editingActivityId,
-                    refreshedBtn.getAttribute("data-start") || "",
-                    refreshedBtn.getAttribute("data-end") || "",
-                    refreshedBtn
-                );
-            } else if (!stillOpen) {
-                // Activity disappeared (e.g. session regroup). Reset state.
-                App.editingActivityId = null;
-                App.activityTimeSaving = false;
-            }
-        }
-
-        // Phase 3B.2: re-open the inline split editor if it was open and the
-        // activity still exists. If the activity disappeared, reset state.
-        if (App.editingSplitActivityId !== null) {
-            var splitStillOpen = false;
-            var refreshedSplitBtn = null;
-            for (var m = 0; m < splitBtns.length; m++) {
-                if (parseInt(splitBtns[m].getAttribute("data-activity-id"), 10) === App.editingSplitActivityId) {
-                    splitStillOpen = true;
-                    refreshedSplitBtn = splitBtns[m];
-                    break;
-                }
-            }
-            if (splitStillOpen && refreshedSplitBtn && !refreshedSplitBtn.disabled && !App.activitySplitSaving) {
-                openActivitySplitEditor(
-                    App.editingSplitActivityId,
-                    refreshedSplitBtn.getAttribute("data-start") || "",
-                    refreshedSplitBtn.getAttribute("data-end") || "",
-                    refreshedSplitBtn
-                );
-            } else if (!splitStillOpen) {
-                App.editingSplitActivityId = null;
-                App.activitySplitSaving = false;
-            }
-        }
+        // Simplified detail rows are read-only: no per-activity edit / split
+        // / merge / hide / delete buttons and no inline editors are rendered,
+        // so there is nothing to bind here. Advanced correction is reached
+        // via the "高级纠错" button in the edit panel, which opens the
+        // correction shell (where the per-activity actions still live).
     }
     App.renderSessionDetails = renderSessionDetails;
 
@@ -1446,6 +1146,26 @@
             renderProjectSelect(App.projectsCache, session.project_id);
         }
 
+        // Duration override input (minutes). Derived from the session's
+        // adjusted / raw / display seconds so the user sees the current
+        // value. An empty input on save means "use real duration" (clear
+        // the override).
+        var durInput = document.getElementById("edit-duration-input");
+        if (durInput) {
+            var durSrc = (session.adjusted_duration_seconds != null)
+                ? session.adjusted_duration_seconds
+                : ((session.raw_duration_seconds != null)
+                    ? session.raw_duration_seconds
+                    : session.duration_seconds);
+            var durMin = Math.round((parseInt(durSrc, 10) || 0) / 60);
+            durInput.value = isNaN(durMin) ? "" : String(durMin);
+            durInput.disabled = false;
+        }
+        var durStatusEl = document.getElementById("edit-duration-status");
+        if (durStatusEl) {
+            durStatusEl.textContent = session.has_duration_override ? "已修正" : "";
+        }
+
         // Note textarea: load existing note (the editing target only).
         var noteEl = document.getElementById("edit-note-text");
         if (noteEl) {
@@ -1461,12 +1181,10 @@
         if (cancelBtn) cancelBtn.disabled = false;
         if (noteEl) updateNoteCount();
 
-        // Phase 3B.1: populate the session-level time-correction section.
-        populateSessionTimeSection(session);
-        // Phase 3B.2: populate the session-level split section.
-        populateSessionSplitSection(session);
-        // Phase 3B.4: populate the session-level hide / soft-delete section.
-        populateSessionVisibilitySection(session);
+        // The session-level time / split / visibility sections are hidden in
+        // the simplified edit panel (their HTML is retained with ``hidden``
+        // so the correction shell can still reach them). Skip populating
+        // them here; their state is reset by clearEditPanel when needed.
 
         // Clear any prior status message
         showEditStatus("", false);
@@ -1521,6 +1239,15 @@
             select.innerHTML = '<option value="">加载中…</option>';
             select.disabled = true;
         }
+        var durInput = document.getElementById("edit-duration-input");
+        if (durInput) {
+            durInput.value = "";
+            durInput.disabled = true;
+        }
+        var durStatusEl = document.getElementById("edit-duration-status");
+        if (durStatusEl) {
+            durStatusEl.textContent = "";
+        }
         var saveBtn = document.getElementById("edit-save-btn");
         var cancelBtn = document.getElementById("edit-cancel-btn");
         if (saveBtn) saveBtn.disabled = true;
@@ -1549,72 +1276,21 @@
             var originalProjectId = String(App.editingSession.project_id || 0);
             if (currentProjectId !== originalProjectId) return true;
         }
-        // Phase 3B.1: session-level time inputs. If the user has modified
-        // either the start or end time, the edit panel is dirty so
-        // auto-refresh does not revert the inputs to the server values.
-        var startEl = document.getElementById("edit-start-time");
-        var endEl = document.getElementById("edit-end-time");
-        if (startEl && !startEl.disabled) {
-            var currentStart = App.datetimeLocalToBackend(startEl.value);
-            var originalStart = App.editingSession.start_time || "";
-            if (currentStart !== originalStart) return true;
+        // Duration override input. If the user has changed the minutes away
+        // from the baseline (adjusted / raw seconds → minutes), the panel is
+        // dirty so auto-refresh does not revert the input.
+        var durInput = document.getElementById("edit-duration-input");
+        if (durInput && !durInput.disabled) {
+            var durBaselineSrc = (App.editingSession.adjusted_duration_seconds != null)
+                ? App.editingSession.adjusted_duration_seconds
+                : App.editingSession.raw_duration_seconds;
+            var durBaselineMin = Math.round((parseInt(durBaselineSrc, 10) || 0) / 60);
+            var durBaselineStr = isNaN(durBaselineMin) ? "" : String(durBaselineMin);
+            if ((durInput.value || "") !== durBaselineStr) return true;
         }
-        if (endEl && !endEl.disabled) {
-            var currentEnd = App.datetimeLocalToBackend(endEl.value);
-            var originalEnd = App.editingSession.end_time || "";
-            if (currentEnd !== originalEnd) return true;
-        }
-        // Phase 3B.1: per-activity inline editor. If an editor is open and
-        // the user has modified the inputs, treat the panel as dirty so the
-        // detail list is not re-rendered (which would lose the edits).
-        if (App.editingActivityId !== null) {
-            var editorRow = document.querySelector(
-                '#timeline-details-list .detail-item[data-activity-id="'
-                + App.editingActivityId + '"]'
-            );
-            if (editorRow) {
-                var editor = editorRow.querySelector(".detail-time-editor");
-                if (editor && !editor.hidden) {
-                    var actStart = editor.querySelector(".detail-time-start");
-                    var actEnd = editor.querySelector(".detail-time-end");
-                    var actBtn = editorRow.querySelector(".detail-edit-time-btn");
-                    if (actStart && actEnd && actBtn) {
-                        var curActStart = App.datetimeLocalToBackend(actStart.value);
-                        var curActEnd = App.datetimeLocalToBackend(actEnd.value);
-                        var origActStart = actBtn.getAttribute("data-start") || "";
-                        var origActEnd = actBtn.getAttribute("data-end") || "";
-                        if (curActStart !== origActStart || curActEnd !== origActEnd) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        // Phase 3B.2: session-level split input. If the user has entered a
-        // split time, the edit panel is dirty so auto-refresh does not wipe
-        // the unsaved split input.
-        var splitEl = document.getElementById("edit-split-time");
-        if (splitEl && !splitEl.disabled && splitEl.value) {
-            return true;
-        }
-        // Phase 3B.2: per-activity inline split editor. If an editor is open
-        // and has a non-empty split time, treat the panel as dirty so the
-        // detail list is not re-rendered (which would lose the edit).
-        if (App.editingSplitActivityId !== null) {
-            var splitEditorRow = document.querySelector(
-                '#timeline-details-list .detail-item[data-activity-id="'
-                + App.editingSplitActivityId + '"]'
-            );
-            if (splitEditorRow) {
-                var splitEditor = splitEditorRow.querySelector(".detail-split-editor");
-                if (splitEditor && !splitEditor.hidden) {
-                    var splitInput = splitEditor.querySelector(".detail-split-time");
-                    if (splitInput && splitInput.value) {
-                        return true;
-                    }
-                }
-            }
-        }
+        // The session-level time / split inputs and per-activity inline
+        // editors are no longer rendered in the simplified view (their
+        // sections are hidden), so their dirty checks are removed.
         return false;
     }
     App.isEditDirty = isEditDirty;
@@ -1663,6 +1339,7 @@
         var cancelBtn = document.getElementById("edit-cancel-btn");
         var select = document.getElementById("edit-project-select");
         var noteEl = document.getElementById("edit-note-text");
+        var durInput = document.getElementById("edit-duration-input");
         if (saveBtn) {
             saveBtn.disabled = saving;
             saveBtn.textContent = saving ? "保存中…" : "保存";
@@ -1670,6 +1347,7 @@
         if (cancelBtn) cancelBtn.disabled = saving;
         if (select) select.disabled = saving;
         if (noteEl) noteEl.disabled = saving;
+        if (durInput) durInput.disabled = saving;
         // When stopping a save, re-apply the note-length limit so the
         // button stays disabled if the user typed past the limit during
         // the save (the textarea is disabled during save, but this is a
@@ -1713,16 +1391,39 @@
         var projectChanged = projectIdStr !== originalProjectId;
         var noteChanged = note !== originalNote;
 
-        if (!projectChanged && !noteChanged) {
+        // Duration override: empty input clears the override (null); a
+        // non-empty value is parsed as minutes and converted to seconds.
+        var durInput = document.getElementById("edit-duration-input");
+        var durRawValue = durInput ? (durInput.value || "").trim() : "";
+        var adjustedDurationSeconds = null;
+        if (durRawValue !== "") {
+            var durMinutes = parseInt(durRawValue, 10);
+            if (isNaN(durMinutes) || durMinutes < 0) {
+                showEditStatus("时长需为非负整数", true);
+                return;
+            }
+            adjustedDurationSeconds = durMinutes * 60;
+        }
+        // Duration is considered changed when the input differs from the
+        // baseline (adjusted / raw seconds → minutes), matching isEditDirty.
+        var durBaselineSrc = (App.editingSession.adjusted_duration_seconds != null)
+            ? App.editingSession.adjusted_duration_seconds
+            : App.editingSession.raw_duration_seconds;
+        var durBaselineMin = Math.round((parseInt(durBaselineSrc, 10) || 0) / 60);
+        var durBaselineStr = isNaN(durBaselineMin) ? "" : String(durBaselineMin);
+        var durationChanged = durRawValue !== durBaselineStr;
+        var noteOrDurationChanged = noteChanged || durationChanged;
+
+        if (!projectChanged && !noteOrDurationChanged) {
             showEditStatus("没有需要保存的更改", false);
             return;
         }
 
-        var dateEl = document.getElementById("timeline-date-display");
-        var reportDate = App.timelineDate || (dateEl ? dateEl.textContent : null);
-        if (reportDate === "--") reportDate = null;
-        if (noteChanged && !reportDate) {
-            showEditStatus("无法保存备注：日期无效", true);
+        var dateEl = document.getElementById("timeline-date-input");
+        var reportDate = App.timelineDate || (dateEl ? dateEl.value : null);
+        if (reportDate === "--" || reportDate === "") reportDate = null;
+        if (noteOrDurationChanged && !reportDate) {
+            showEditStatus("无法保存：日期无效", true);
             return;
         }
 
@@ -1737,10 +1438,15 @@
                 }
             }));
         }
-        if (noteChanged) {
-            promises.push(App.callBridge("update_timeline_note", activityIds, note, reportDate).then(function (result) {
+        if (noteOrDurationChanged) {
+            // The note and the duration override are saved together so the
+            // declared / display duration and the note stay consistent.
+            promises.push(App.callBridge(
+                "update_timeline_note_and_duration",
+                activityIds, note, adjustedDurationSeconds, reportDate
+            ).then(function (result) {
                 if (!result || result.ok === false) {
-                    throw new Error(result && result.error ? result.error : "保存备注失败");
+                    throw new Error(result && result.error ? result.error : "保存备注/时长失败");
                 }
             }));
         }
@@ -1774,8 +1480,21 @@
                 if (projectChanged) {
                     App.editingSession.project_id = projectId;
                 }
-                if (noteChanged) {
+                if (noteOrDurationChanged) {
                     App.editingSession.session_note = note;
+                    App.editingSession.adjusted_duration_seconds = adjustedDurationSeconds;
+                    App.editingSession.has_duration_override = (adjustedDurationSeconds != null);
+                    // display_duration_seconds follows the override when set,
+                    // otherwise it falls back to the raw duration.
+                    App.editingSession.display_duration_seconds = (adjustedDurationSeconds != null)
+                        ? adjustedDurationSeconds
+                        : (App.editingSession.raw_duration_seconds != null
+                            ? App.editingSession.raw_duration_seconds
+                            : App.editingSession.duration_seconds);
+                    // Keep duration_seconds (used by the session list render)
+                    // aligned with the display value so a stale snapshot is
+                    // not rendered before the refresh arrives.
+                    App.editingSession.duration_seconds = App.editingSession.display_duration_seconds;
                 }
             }
             showEditStatus("保存成功", false);
@@ -1925,9 +1644,9 @@
     App.saveSessionSplit = saveSessionSplit;
 
     function refreshTimelineAfterEdit() {
-        var dateEl = document.getElementById("timeline-date-display");
-        var date = App.timelineDate || (dateEl ? dateEl.textContent : null);
-        if (date === "--") date = null;
+        var dateEl = document.getElementById("timeline-date-input");
+        var date = App.timelineDate || (dateEl ? dateEl.value : null);
+        if (date === "--" || date === "") date = null;
         var token = ++App.timelineRequestToken;
         App.callBridge("get_timeline", date).then(function (result) {
             if (token !== App.timelineRequestToken) return;
@@ -2129,9 +1848,9 @@
         // Silent refresh: do not show loading spinner, just reload data.
         // On error, keep showing the previous data so the user is not left
         // looking at an empty list; only the error banner is shown.
-        var dateEl = document.getElementById("timeline-date-display");
-        var date = App.timelineDate || (dateEl ? dateEl.textContent : null);
-        if (date === "--") date = null;
+        var dateEl = document.getElementById("timeline-date-input");
+        var date = App.timelineDate || (dateEl ? dateEl.value : null);
+        if (date === "--" || date === "") date = null;
         var token = ++App.timelineRequestToken;
         App.callBridge("get_timeline", date).then(function (result) {
             if (token !== App.timelineRequestToken) return;  // stale response
@@ -2153,8 +1872,8 @@
     // --- Timeline date navigation ---------------------------------------
 
     function goPrevDay() {
-        var dateEl = document.getElementById("timeline-date-display");
-        var current = App.timelineDate || (dateEl ? dateEl.textContent : null);
+        var dateEl = document.getElementById("timeline-date-input");
+        var current = App.timelineDate || (dateEl ? dateEl.value : null);
         App.timelineDate = App.shiftDate(current, -1);
         App.selectedSessionId = null;
         // Verification item 22: invalidate pending detail requests and clear
@@ -2170,8 +1889,8 @@
     App.goPrevDay = goPrevDay;
 
     function goNextDay() {
-        var dateEl = document.getElementById("timeline-date-display");
-        var current = App.timelineDate || (dateEl ? dateEl.textContent : null);
+        var dateEl = document.getElementById("timeline-date-input");
+        var current = App.timelineDate || (dateEl ? dateEl.value : null);
         App.timelineDate = App.shiftDate(current, 1);
         App.selectedSessionId = null;
         // Verification item 22: invalidate pending detail requests and clear

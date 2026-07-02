@@ -33,8 +33,10 @@ def _activity(app, process, title, start, project_id=None, status="normal"):
 
 
 def _seed_session(project_id=None):
-    """Seed a simple two-activity session on 2026-06-25."""
+    """Seed a simple two-activity closed session on 2026-06-25."""
     a1 = _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_id)
+    activity_service.close_activity(a1, "2026-06-25 09:10:00")
+
     a2 = _activity("Word", "winword.exe", "A2.docx", "09:10:00", project_id)
     activity_service.close_activity(a2, "2026-06-25 09:30:00")
     return [a1, a2]
@@ -224,6 +226,123 @@ def test_update_note_non_string_raises(temp_db):
     ids = _seed_session()
     with pytest.raises(ValueError):
         timeline_api.update_timeline_session_note("2026-06-25", ids[0], 12345)
+
+
+# --- update_timeline_session_note_and_duration ---
+
+
+def test_update_note_and_duration_success(temp_db):
+    ids = _seed_session()
+    timeline_api.update_timeline_session_note_and_duration(
+        "2026-06-25", ids[0], "test note", 3600
+    )
+    from worktrace.services import session_note_service
+    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    assert fields["note"] == "test note"
+    assert fields["adjusted_duration_seconds"] == 3600
+
+
+def test_update_note_and_duration_null_duration_clears_override(temp_db):
+    ids = _seed_session()
+    # Set override first
+    timeline_api.update_timeline_session_note_and_duration(
+        "2026-06-25", ids[0], "test", 3600
+    )
+    # Clear override with None
+    timeline_api.update_timeline_session_note_and_duration(
+        "2026-06-25", ids[0], "test", None
+    )
+    from worktrace.services import session_note_service
+    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    assert fields["adjusted_duration_seconds"] is None
+
+
+def test_update_note_and_duration_zero_rejected(temp_db):
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note_and_duration(
+            "2026-06-25", ids[0], "note", 0
+        )
+
+
+def test_update_note_and_duration_negative_rejected(temp_db):
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note_and_duration(
+            "2026-06-25", ids[0], "note", -1
+        )
+
+
+def test_update_note_and_duration_bool_rejected(temp_db):
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note_and_duration(
+            "2026-06-25", ids[0], "note", True
+        )
+
+
+def test_update_note_and_duration_exceeds_max_rejected(temp_db):
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note_and_duration(
+            "2026-06-25", ids[0], "note", timeline_api.TIMELINE_ADJUSTED_DURATION_MAX_SECONDS + 1
+        )
+
+
+def test_update_note_and_duration_invalid_date(temp_db):
+    ids = _seed_session()
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note_and_duration(
+            "not-a-date", ids[0], "note", 3600
+        )
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note_and_duration(
+            "", ids[0], "note", 3600
+        )
+
+
+def test_update_note_and_duration_nonexistent_activity(temp_db):
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note_and_duration(
+            "2026-06-25", 999999, "note", 3600
+        )
+
+
+def test_update_note_and_duration_too_long_note(temp_db):
+    ids = _seed_session()
+    long_note = "x" * (timeline_api.TIMELINE_NOTE_MAX_LENGTH + 1)
+    with pytest.raises(ValueError):
+        timeline_api.update_timeline_session_note_and_duration(
+            "2026-06-25", ids[0], long_note, 3600
+        )
+
+
+def test_update_note_and_duration_empty_note_with_duration(temp_db):
+    """Empty note + duration override should preserve row with duration."""
+    ids = _seed_session()
+    timeline_api.update_timeline_session_note_and_duration(
+        "2026-06-25", ids[0], "", 3600
+    )
+    from worktrace.services import session_note_service
+    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    assert fields["note"] == ""
+    assert fields["adjusted_duration_seconds"] == 3600
+
+
+def test_update_note_only_preserves_existing_duration(temp_db):
+    """Set note + duration, then call update_timeline_session_note with a new
+    note. The duration override must be preserved."""
+    ids = _seed_session()
+    # Set both note and duration
+    timeline_api.update_timeline_session_note_and_duration(
+        "2026-06-25", ids[0], "first note", 3600
+    )
+    # Update only the note via the note-only API
+    timeline_api.update_timeline_session_note("2026-06-25", ids[0], "second note")
+    from worktrace.services import session_note_service
+    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    assert fields["note"] == "second note"
+    assert fields["adjusted_duration_seconds"] == 3600
 
 
 # --- Phase 3A.1: API input validation hardening --------------------------

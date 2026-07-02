@@ -65,6 +65,7 @@ def initialize_database(path: str | Path | None = None) -> None:
     configure_database(path)
     with get_connection() as conn:
         conn.executescript(read_schema_sql())
+        ensure_schema_migrations(conn)
         seed_defaults(conn)
     logging.info("database initialized")
 
@@ -122,7 +123,34 @@ def reset_database() -> None:
     with get_connection() as conn:
         drop_all_tables(conn)
         conn.executescript(read_schema_sql())
+        ensure_schema_migrations(conn)
         seed_defaults(conn)
+
+
+def ensure_schema_migrations(conn: sqlite3.Connection) -> None:
+    """Run idempotent schema migrations for older databases.
+
+    ``CREATE TABLE IF NOT EXISTS`` in ``schema.sql`` does not add new
+    columns to existing tables. This function checks for and adds any
+    columns introduced after the initial table creation. Each migration
+    is idempotent: it uses ``PRAGMA table_info`` to check whether the
+    column already exists before running ``ALTER TABLE``.
+    """
+    ensure_project_session_note_adjusted_duration_column(conn)
+
+
+def ensure_project_session_note_adjusted_duration_column(conn: sqlite3.Connection) -> None:
+    """Add ``adjusted_duration_seconds`` to ``project_session_note`` if missing.
+
+    Idempotent: checks ``PRAGMA table_info(project_session_note)`` before
+    running ``ALTER TABLE``. Safe to call on both new and already-migrated
+    databases.
+    """
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(project_session_note)").fetchall()}
+    if "adjusted_duration_seconds" not in columns:
+        conn.execute(
+            "ALTER TABLE project_session_note ADD COLUMN adjusted_duration_seconds INTEGER"
+        )
 
 
 def drop_all_tables(conn: sqlite3.Connection) -> None:

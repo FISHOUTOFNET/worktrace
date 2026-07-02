@@ -189,8 +189,8 @@
         // (titles, paths, copy buffers, note internals). Only display-safe
         // fields (date, project label, time range, duration, count, status)
         // are used.
-        var dateEl = document.getElementById("timeline-date-display");
-        var dateTxt = App.safeText(dateEl ? dateEl.textContent : "", "");
+        var dateEl = document.getElementById("timeline-date-input");
+        var dateTxt = App.safeText(App.timelineDate || (dateEl ? dateEl.value : ""), "");
         var projectLabel = App.safeText(session.project_name, "未归类");
         if (session.project_description) {
             projectLabel += " (" + App.safeText(session.project_description, "") + ")";
@@ -847,8 +847,8 @@
     // re-rendered with the updated activity list; otherwise the shell is
     // closed safely.
     function refreshTimelineForBatchSave() {
-        var dateEl = document.getElementById("timeline-date-display");
-        var date = App.timelineDate || (dateEl ? dateEl.textContent : null);
+        var dateEl = document.getElementById("timeline-date-input");
+        var date = App.timelineDate || (dateEl ? dateEl.value : null);
         // Defer the shell re-render to after the timeline reloads; the
         // loadTimeline path's auto-refresh branch already re-renders the
         // shell if it is still open for the refreshed session.
@@ -1236,9 +1236,9 @@
         // success / failure handler will trigger a reload after the save
         // completes.
         if (App.restoreSaving) return;
-        var dateEl = document.getElementById("timeline-date-display");
-        var date = App.timelineDate || (dateEl ? dateEl.textContent : null);
-        if (date === "--") date = null;
+        var dateEl = document.getElementById("timeline-date-input");
+        var date = App.timelineDate || (dateEl ? dateEl.value : null);
+        if (date === "--" || date === "") date = null;
         loadRestorableActivities(date);
     }
     App.renderRestoreSection = renderRestoreSection;

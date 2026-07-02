@@ -39,11 +39,97 @@ EXPECTED_DEFAULT_SETTINGS = {
 }
 
 
+def _get_columns(conn, table: str) -> set[str]:
+    return {
+        str(row["name"])
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+
+
 def _get_tables(conn) -> set[str]:
     return {
-        row["name"]
+        str(row["name"])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
+
+
+def _drop_adjusted_duration_column(conn) -> None:
+    """Remove ``adjusted_duration_seconds`` from ``project_session_note``.
+
+    Uses the rename-and-recreate pattern so the migration test works on
+    SQLite versions that do not support ``ALTER TABLE ... DROP COLUMN``
+    (pre 3.35.0). The schema for ``project_session_note`` matches the
+    pre-migration shape (no ``adjusted_duration_seconds`` column).
+    """
+    conn.execute("ALTER TABLE project_session_note RENAME TO project_session_note_old")
+    conn.execute(
+        """
+        CREATE TABLE project_session_note(
+            report_date TEXT NOT NULL,
+            first_activity_id INTEGER NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (report_date, first_activity_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO project_session_note(report_date, first_activity_id, note, created_at, updated_at)
+        SELECT report_date, first_activity_id, note, created_at, updated_at
+        FROM project_session_note_old
+        """
+    )
+    conn.execute("DROP TABLE project_session_note_old")
+
+
+def test_old_database_without_adjusted_duration_gets_migrated(tmp_path):
+    """An old database missing adjusted_duration_seconds gets the column added."""
+    from worktrace.db import initialize_database, get_connection, ensure_schema_migrations
+    db_path = str(tmp_path / "test.db")
+    # Create a new-style database, then strip the column to simulate an
+    # old database that predates the migration.
+    initialize_database(db_path)
+    conn = get_connection()
+    try:
+        _drop_adjusted_duration_column(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    # Verify column is gone
+    conn = get_connection()
+    try:
+        columns = _get_columns(conn, "project_session_note")
+        assert "adjusted_duration_seconds" not in columns
+    finally:
+        conn.close()
+    # Run migration
+    conn = get_connection()
+    try:
+        ensure_schema_migrations(conn)
+    finally:
+        conn.close()
+    # Verify column is back
+    conn = get_connection()
+    try:
+        columns = _get_columns(conn, "project_session_note")
+        assert "adjusted_duration_seconds" in columns
+    finally:
+        conn.close()
+
+
+def test_migration_is_idempotent(tmp_path):
+    """Running the migration twice does not fail."""
+    from worktrace.db import initialize_database, get_connection, ensure_schema_migrations
+    db_path = str(tmp_path / "test.db")
+    initialize_database(db_path)
+    conn = get_connection()
+    try:
+        ensure_schema_migrations(conn)
+        ensure_schema_migrations(conn)  # Should not raise
+    finally:
+        conn.close()
 
 
 def test_initialize_creates_all_current_schema_tables(temp_db):

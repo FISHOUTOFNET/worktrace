@@ -39,7 +39,7 @@ def get_project_sessions_by_range(
     uncategorized_id = get_or_create_uncategorized_project()
     rows = get_report_activity_rows(start_date, end_date, include_hidden=include_hidden, ensure_context=ensure_context)
     sessions = _build_sessions_from_rows(rows, uncategorized_id, _boundary_times_for_rows(rows))
-    session_note_service.attach_session_notes(sessions)
+    session_note_service.attach_session_user_fields(sessions)
     return sorted(sessions, key=_session_sort_key, reverse=True)
 
 
@@ -154,6 +154,17 @@ def update_session_project(session_activity_ids: list[int], project_id: int) -> 
 
 def update_session_note(report_date: str, first_activity_id: int, note: str) -> None:
     session_note_service.set_session_note(report_date, first_activity_id, note)
+
+
+def update_session_note_and_duration(
+    report_date: str,
+    first_activity_id: int,
+    note: str,
+    adjusted_duration_seconds: int | None,
+) -> None:
+    session_note_service.set_session_user_fields(
+        report_date, first_activity_id, note, adjusted_duration_seconds
+    )
 
 
 def update_activity_group_project(

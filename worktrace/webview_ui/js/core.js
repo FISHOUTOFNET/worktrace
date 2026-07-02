@@ -480,6 +480,15 @@
     }
     App.formatTimeRange = formatTimeRange;
 
+    // Display-only start time (HH:MM) extracted from a backend
+    // "YYYY-MM-DD HH:MM:SS" timestamp. Used by the simplified Timeline
+    // session list and read-only detail rows where the end time is no
+    // longer shown.
+    function formatStartTimeOnly(start_time) {
+        return (start_time || "").slice(11, 16);
+    }
+    App.formatStartTimeOnly = formatStartTimeOnly;
+
     function shiftDate(dateStr, days) {
         // dateStr is "YYYY-MM-DD" or null (meaning today)
         var base;

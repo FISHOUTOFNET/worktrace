@@ -406,6 +406,102 @@ def test_project_session_note_can_be_cleared(temp_db):
     assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["session_note"] == ""
 
 
+# --- session note + adjusted duration (unified user fields) ---
+
+
+def test_session_has_display_and_raw_duration_fields(temp_db):
+    """Sessions carry raw_duration_seconds, display_duration_seconds,
+    adjusted_duration_seconds, has_duration_override."""
+    project = project_service.create_project("Client")
+    _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    activity_service.close_all_open_rows("2026-06-18 09:02:00")
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    session = sessions[0]
+    assert "raw_duration_seconds" in session
+    assert "display_duration_seconds" in session
+    assert "adjusted_duration_seconds" in session
+    assert "has_duration_override" in session
+
+
+def test_display_duration_uses_override_when_set(temp_db):
+    """When adjusted_duration_seconds is set, display_duration_seconds uses it."""
+    project = project_service.create_project("Client")
+    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    activity_service.close_all_open_rows("2026-06-18 09:02:00")  # 120 seconds raw
+
+    timeline_service.update_session_note_and_duration("2026-06-18", first, "", 60)
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    session = sessions[0]
+    assert session["raw_duration_seconds"] == 120
+    assert session["adjusted_duration_seconds"] == 60
+    assert session["display_duration_seconds"] == 60
+    assert session["has_duration_override"] is True
+
+
+def test_display_duration_uses_raw_when_no_override(temp_db):
+    """When no override, display_duration_seconds == raw_duration_seconds."""
+    project = project_service.create_project("Client")
+    _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    activity_service.close_all_open_rows("2026-06-18 09:02:00")  # 120 seconds raw
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    session = sessions[0]
+    assert session["raw_duration_seconds"] == 120
+    assert session["adjusted_duration_seconds"] is None
+    assert session["display_duration_seconds"] == 120
+    assert session["has_duration_override"] is False
+
+
+def test_update_session_note_and_duration_writes_both(temp_db):
+    """update_session_note_and_duration writes both note and duration."""
+    project = project_service.create_project("Client")
+    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    activity_service.close_all_open_rows("2026-06-18 09:02:00")
+
+    timeline_service.update_session_note_and_duration("2026-06-18", first, "test", 60)
+    from worktrace.services import session_note_service
+    fields = session_note_service.get_session_user_fields("2026-06-18", first)
+
+    assert fields["note"] == "test"
+    assert fields["adjusted_duration_seconds"] == 60
+
+
+def test_empty_note_preserves_duration_override(temp_db):
+    """Setting empty note does not delete row when duration override exists."""
+    project = project_service.create_project("Client")
+    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    activity_service.close_all_open_rows("2026-06-18 09:02:00")
+
+    # Set both note and duration
+    timeline_service.update_session_note_and_duration("2026-06-18", first, "test", 60)
+    # Set note to empty - should preserve adjusted=60
+    timeline_service.update_session_note_and_duration("2026-06-18", first, "", 60)
+    from worktrace.services import session_note_service
+    fields = session_note_service.get_session_user_fields("2026-06-18", first)
+
+    assert fields["note"] == ""
+    assert fields["adjusted_duration_seconds"] == 60
+
+
+def test_empty_note_and_null_duration_deletes_row(temp_db):
+    """Setting empty note and None duration deletes the row."""
+    project = project_service.create_project("Client")
+    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    activity_service.close_all_open_rows("2026-06-18 09:02:00")
+
+    # Set both note and duration
+    timeline_service.update_session_note_and_duration("2026-06-18", first, "test", 60)
+    # Set note to empty and duration to None - should delete row
+    timeline_service.update_session_note_and_duration("2026-06-18", first, "", None)
+    from worktrace.services import session_note_service
+    fields = session_note_service.get_session_user_fields("2026-06-18", first)
+
+    assert fields["note"] == ""
+    assert fields["adjusted_duration_seconds"] is None
+
+
 # --- Shared anchor predicate reuse (timeline_service ↔ anchor_predicates) ---
 
 def test_is_project_anchor_delegates_to_shared_file_context_predicate():
