@@ -104,7 +104,6 @@ def _seed_closed_activity_with_resource(
     return aid
 
 
-# --- restore_timeline_activity: success ---------------------------------
 
 
 def test_restore_timeline_activity_hidden_success(bridge):
@@ -148,7 +147,6 @@ def test_restore_timeline_activity_hidden_and_deleted_success(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- restore_timeline_activity: invalid input ----------------------------
 
 
 def test_restore_timeline_activity_bool_id(bridge):
@@ -183,7 +181,6 @@ def test_restore_timeline_activity_none(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- restore_timeline_activity: known error codes -----------------------
 
 
 def test_restore_timeline_activity_nonexistent(bridge):
@@ -222,7 +219,6 @@ def test_restore_timeline_activity_in_progress(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- restore_timeline_activity: operation_failed / unknown --------------
 
 
 def test_restore_timeline_activity_operation_failed(bridge):
@@ -269,7 +265,6 @@ def test_restore_timeline_activity_unknown_error_code_collapses(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- restore_timeline_activity: error payload has no raw fields ---------
 
 
 def test_restore_timeline_activity_error_has_no_raw_fields(bridge):
@@ -309,7 +304,6 @@ def test_restore_timeline_activity_not_restorable_error_has_no_raw_fields(bridge
     assert "excel" not in payload_str.lower()
 
 
-# --- get_timeline_restorable_activities: success ------------------------
 
 
 def test_get_timeline_restorable_activities_returns_hidden(bridge):
@@ -468,7 +462,6 @@ def test_get_timeline_restorable_activities_empty(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- get_timeline_restorable_activities: failure -------------------------
 
 
 def test_get_timeline_restorable_activities_invalid_date(bridge):
@@ -565,7 +558,6 @@ def test_get_timeline_restorable_activities_unexpected_exception_collapses(bridg
     _assert_no_sensitive_keys(result)
 
 
-# --- Bridge import boundary ----------------------------------------------
 
 
 def test_bridge_does_not_import_backend_internals():

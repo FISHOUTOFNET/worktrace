@@ -658,16 +658,6 @@ def _activity_summary_label(row: dict) -> str:
 
 
 def _display_duration(row: dict) -> int:
-    # Unified live-clock routing: open rows that match the current
-    # snapshot are routed through ``live_display_service.persisted_open_live_seconds``
-    # via ``_live_duration_for_row``. Closed rows use their stored
-    # ``duration_seconds``. Rows without a stored duration and without a
-    # live-duration match return 0, a safe display value that does not
-    # affect the live ticker or refresh_revision.
-    # ``refresh_revision`` (verification item 17). It is removed; rows
-    # without a stored duration and without a live-duration match now
-    # return 0, which is a safe display value that does not affect the
-    # live ticker or refresh_revision.
     live_duration = _live_duration_for_row(row)
     if live_duration is not None:
         stored = int(row.get("duration_seconds") or 0)

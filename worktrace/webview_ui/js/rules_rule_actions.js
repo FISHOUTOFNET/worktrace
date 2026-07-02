@@ -6,7 +6,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- existing rule enable / disable toggle ----------------
 
     function bindProjectRuleToggles() {
         var list = document.getElementById("rules-list");
@@ -60,7 +59,6 @@
     }
     App.setProjectRuleSaving = setProjectRuleSaving;
 
-    // --- rule impact preview + safe single-rule backfill ------
 
     function bindProjectRuleImpactEvents() {
         var list = document.getElementById("rules-list");
@@ -195,7 +193,6 @@
     }
     App.clearProjectRuleImpactPanel = clearProjectRuleImpactPanel;
 
-    // --- selected-rule batch operations ----------------------
 
     function bindProjectRuleBatchEvents() {
         // Bind delegated listeners for the batch toolbar buttons (on

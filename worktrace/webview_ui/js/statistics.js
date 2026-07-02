@@ -1,12 +1,11 @@
 // WorkTrace WebView frontend — statistics module.
-// Statistics / Export page: read-only summary loading + CSV export.
+// Statistics page: read-only summary loading + controlled CSV download.
 // The single controlled write action; the frontend never writes a file itself.
 
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Statistics / Export read-only page -------------------
 
     function showStatisticsError(message) {
         var banner = document.getElementById("statistics-error");
@@ -32,7 +31,7 @@
         if (el) el.hidden = !loading;
         var btn = document.getElementById("statistics-load-btn");
         if (btn) btn.disabled = loading;
-        // Also disable the CSV export button while statistics are loading
+        // Also disable the CSV download button while statistics are loading
         // so a write cannot be triggered mid-load.
         var exportBtn = document.getElementById("stats-export-action-btn");
         if (exportBtn) exportBtn.disabled = loading || App.statisticsExportSaving;
@@ -199,14 +198,7 @@
     }
     App.initStatisticsDefaults = initStatisticsDefaults;
 
-    // --- Statistics CSV export --------------------------------
-    // The single controlled write action on the Statistics / Export page.
-    // The save path is chosen by the user through the native save dialog
-    // (opened by the bridge); the frontend never writes a file itself.
-    // statisticsExportSaving is a separate guard so a CSV write cannot be
-    // double-triggered or overlap a statistics load. The promise catch
-    // never reads the raw exception text; an unexpected failure collapses
-    // to the generic "导出失败" so internal details are never surfaced.
+    // Statistics CSV download
 
     function setStatisticsExportStatus(message, kind) {
         var el = document.getElementById("stats-export-status");

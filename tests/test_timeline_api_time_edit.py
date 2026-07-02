@@ -57,7 +57,6 @@ def _seed_session(project_id=None):
     return [a1, a2]
 
 
-# --- update_timeline_activity_time: validation ---------------------------
 
 
 def test_update_activity_time_non_positive_id(temp_db):
@@ -143,7 +142,6 @@ def test_update_activity_time_in_progress(temp_db):
     assert exc.value.code == "in_progress"
 
 
-# --- update_timeline_activity_time: success ------------------------------
 
 
 def test_update_activity_time_success(temp_db):
@@ -191,7 +189,6 @@ def test_update_activity_time_does_not_mutate_other_fields(temp_db):
     assert after.get("note") == "my note"
 
 
-# --- update_timeline_activity_time: cross-day ----------------------------
 
 
 def test_update_activity_time_cross_day_assigned_to_correct_report_dates(temp_db):
@@ -238,7 +235,6 @@ def test_update_activity_time_back_to_single_day(temp_db):
     assert not day2_has, "activity pulled back must not appear on 2026-06-26"
 
 
-# --- update_timeline_session_time ---------------------------------------
 
 
 def test_update_session_time_single_activity_success(temp_db):
@@ -320,7 +316,6 @@ def test_update_session_time_start_ge_end(temp_db):
     assert exc.value.code == "invalid_time"
 
 
-# --- No partial writes ---------------------------------------------------
 
 
 def test_update_activity_time_no_partial_write_on_bad_time(temp_db):
@@ -373,7 +368,6 @@ def test_update_activity_time_reread_timeline_reflects_change(temp_db):
     assert found, "modified activity must still appear in the timeline"
 
 
-# --- hardening tests -------------------------------------
 
 
 def test_update_activity_time_t_separator_rejected(temp_db):

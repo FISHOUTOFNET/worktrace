@@ -257,7 +257,6 @@ def test_excluded_project_existing_rules_can_be_toggled(temp_db):
     assert _enabled("folder_project_rule", folder_rule) == 0
 
 
-# --- hardening regression locks -------------------------------
 
 
 def test_keyword_service_exception_is_folded_to_operation_failed(temp_db, monkeypatch):

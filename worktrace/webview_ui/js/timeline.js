@@ -7,7 +7,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Timeline rendering ---------------------------------------------
 
     function showTimeline(data) {
         if (!data) return;
@@ -19,13 +18,6 @@
         var listEl = document.getElementById("timeline-sessions-list");
         var sessions = data.sessions || [];
         App.currentSessions = sessions;
-        // Live projection detection: when sessions is empty BUT a live
-        // projection exists (virtual or persisted_open), we still want to
-        // surface the live session instead of clearing the panel. The
-        // backend's get_timeline() injects the live session into the
-        // sessions list for today, so an empty list with a non-empty
-        // live_projection means the snapshot is not eligible (e.g. idle)
-        // — in that case the empty state is correct.
         var liveProjection = data.live_projection || null;
         var hasLiveProjection = !!(
             liveProjection
@@ -33,13 +25,6 @@
         );
         if (sessions.length === 0) {
             if (hasLiveProjection) {
-                // Live projection exists but the backend did not inject a
-                // session (e.g. snapshot is persisted_open but the DB row
-                // has not yet been grouped into a session). Keep the
-                // detail cache intact so a subsequent refresh can render
-                // the live session. Show a neutral placeholder instead of
-                // "当日暂无活动记录" so the user does not think the day is
-                // empty.
                 listEl.innerHTML = '<div class="timeline-empty">正在加载当前活动…</div>';
             } else {
                 listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
@@ -135,14 +120,6 @@
             })(items[j]);
         }
 
-        // If the last selected session still exists, reload its details.
-        // Selection continuity: when the virtual → persisted_open transition
-        // happens, the session_id changes from "virtual-live:<hash>" to the
-        // real DB session id. We preserve the selection by checking
-        // ``selectedSessionLiveKey`` (stable_live_key_hash) FIRST, falling
-        // back to ``selectedSessionId`` for closed sessions. This keeps
-        // the detail panel visible across the transition instead of
-        // clearing it.
         if (App.selectedSessionId !== null || App.selectedSessionLiveKey) {
             var found = null;
             // First try to match by stable_live_key_hash (handles
@@ -172,13 +149,6 @@
                 // (after the transition) can still find the session.
                 App.selectedSessionId = found.session_id;
                 App.selectedSessionLiveKey = found.stable_live_key_hash || null;
-                // Skip the detail reload when any Timeline editing is
-                // active — unsaved session edits, open inline time/split
-                // editors, saving states, or correction shell. Auto-refresh
-                // / revision-change refresh must never wipe in-progress
-                // edits or overwrite user input. After a successful save the
-                // baseline is updated so isEditDirty() returns false and the
-                // reload proceeds normally.
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
                     && App._timelineEditingActive());
                 if (!skipDetailReload) {
@@ -195,13 +165,6 @@
                     // panel since it cannot be edited.
                     clearEditPanel();
                 }
-                // If the correction shell is open for this session, refresh
-                // its context summary from the updated session object. The
-                // activity summary is re-read from the rendered detail rows.
-                // No write is performed. Also skip the re-render while any
-                // correction-shell write is in flight so the saving state,
-                // selection, textarea, and status messages are not
-                // overwritten mid-save.
                 if (App.correctionShellOpen
                     && App.correctionShellSessionId === found.session_id
                     && !isEditDirty()
@@ -311,18 +274,6 @@
     App.loadSessionDetails = loadSessionDetails;
 
     function renderSessionDetails(data) {
-        // Skip the full re-render when the user has unsaved inline editor /
-        // split editor input or a save is in progress. The heartbeat /
-        // revision refresh must not overwrite user input by re-rendering the
-        // detail list (which would reset inline editor inputs to backend
-        // values). After a successful save, isEditDirty() returns false so
-        // the re-render proceeds.
-        //
-        // When the DOM render is skipped, ALSO skip the cache update. The
-        // cache is updated only when the DOM is actually rendered, keeping
-        // them atomic so the ticker never projects against a newer payload
-        // while the DOM still shows the old one. The cache is updated only
-        // when the DOM is actually rendered, keeping them atomic.
         if ((App.editingActivityId !== null || App.editingSplitActivityId !== null)
             && typeof App.isEditDirty === "function" && App.isEditDirty()) {
             return;
@@ -386,13 +337,7 @@
             detailContinuityKeys.push({ index: i, sec: isNaN(aDurSec) ? 0 : aDurSec });
         }
         detailsList.innerHTML = html;
-        // Seed the monotonic render state for each detail row so the
-        // ticker's first projection does not appear to roll back. The
-        // continuity key MUST use App.liveContinuityKey() so the ticker
-        // (which also uses liveContinuityKey) can locate the seeded state.
-        // Using "detail-" + activity_id would break the virtual →
-        // persisted_open transition because the ticker key is based on
-        // stable_live_key_hash, not activity_id.
+        // Detail rows use App.liveContinuityKey() so virtual-to-persisted keys stay stable.
         for (var di = 0; di < detailContinuityKeys.length; di++) {
             var dk = detailContinuityKeys[di];
             var activitiesRef = data.activities || [];
@@ -408,7 +353,6 @@
     }
     App.renderSessionDetails = renderSessionDetails;
 
-    // --- per-activity inline time editor -------------------
 
     function openActivityTimeEditor(activityId, startVal, endVal, btn) {
         if (!btn) return;
@@ -574,7 +518,6 @@
     }
     App.saveActivityTime = saveActivityTime;
 
-    // --- per-activity inline split editor ------------------
 
     function openActivitySplitEditor(activityId, startVal, endVal, btn) {
         if (!btn) return;
@@ -741,7 +684,6 @@
     }
     App.saveActivitySplit = saveActivitySplit;
 
-    // --- per-activity merge with next activity ------------
 
     function setMergeStatus(btn, message, isError) {
         if (!btn) return;
@@ -830,7 +772,6 @@
     }
     App.saveActivityMerge = saveActivityMerge;
 
-    // --- per-activity hide / soft delete ------------------
 
     function setVisibilityStatus(btn, message, isError) {
         if (!btn) return;
@@ -969,7 +910,6 @@
     }
     App.saveActivityDelete = saveActivityDelete;
 
-    // --- session-level hide / soft delete -----------------
 
     function populateSessionVisibilitySection(session) {
         var singleEl = document.getElementById("edit-visibility-single");
@@ -1132,7 +1072,6 @@
     }
     App.saveSessionDelete = saveSessionDelete;
 
-    // --- Timeline editing (project reclassification + note) ----
 
     function loadProjects() {
         // Load the selectable projects list once and cache it. Subsequent
@@ -1581,7 +1520,6 @@
     }
     App.saveEdit = saveEdit;
 
-    // --- session-level activity split ---------------------
 
     function populateSessionSplitSection(session) {
         var singleEl = document.getElementById("edit-split-single");
@@ -1749,7 +1687,6 @@
     }
     App.cancelEdit = cancelEdit;
 
-    // --- session-level time correction ---------------------
 
     function populateSessionTimeSection(session) {
         var singleEl = document.getElementById("edit-time-single");
@@ -1893,7 +1830,6 @@
     }
     App.saveSessionTime = saveSessionTime;
 
-    // --- Timeline loading -----------------------------------------------
 
     function loadTimeline(date) {
         App.setTimelineLoading(true);
@@ -1943,7 +1879,6 @@
     }
     App.refreshTimeline = refreshTimeline;
 
-    // --- Timeline date navigation ---------------------------------------
 
     function goPrevDay() {
         var dateEl = document.getElementById("timeline-date-input");

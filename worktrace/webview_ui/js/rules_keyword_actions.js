@@ -6,7 +6,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- keyword rule deletion -------------------------------
 
     function bindProjectRuleDelete() {
         // event-delegated binding for keyword delete buttons.
@@ -86,7 +85,6 @@
     }
     App.setRuleDeleting = setRuleDeleting;
 
-    // --- keyword rule edit -----------------------------------
 
     function bindProjectRuleKeywordEditEvents() {
         // event-delegated binding for keyword edit / edit-save /
@@ -229,18 +227,8 @@
     }
     App.setKeywordSaving = setKeywordSaving;
 
-    // --- keyword rule creation -------------------------------
 
     function populateKeywordCreateProjectSelector(projects) {
-        // populate the keyword-create project selector from the
-        // freshly loaded Project Rules data. Only enabled, non-excluded
-        // projects with a positive id are valid targets — this mirrors the
-        // ``project_api.list_rule_target_projects()`` eligibility rule the
-        // API uses, so the selector only ever offers targets the API will
-        // accept. Re-population is skipped entirely while a keyword create
-        // is in flight so the user's selection is never displaced by an
-        // auto-refresh, and the previous selection is preserved when the
-        // list is re-rendered.
         if (App.rulesCreatingKeyword) return;
         var select = document.getElementById("rules-keyword-create-project");
         var submitBtn = document.getElementById("rules-keyword-create-submit");
@@ -368,7 +356,6 @@
     }
     App.clearKeywordCreateStatus = clearKeywordCreateStatus;
 
-    // --- excluded keyword rule creation ----------------------
 
     function bindExcludedKeywordRuleEvents() {
         // event-delegated binding for the excluded keyword

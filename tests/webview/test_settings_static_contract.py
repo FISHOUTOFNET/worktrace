@@ -33,7 +33,6 @@ from static_helpers import (
 )
 
 
-# --- Page migration + sidebar nav ---------------------------------------
 
 
 def test_index_html_settings_nav_entry_exists() -> None:
@@ -140,7 +139,6 @@ def test_index_html_settings_required_dom_ids() -> None:
         )
 
 
-# --- JS load order + packaging ------------------------------------------
 
 
 def test_index_html_loads_settings_js() -> None:
@@ -188,7 +186,6 @@ def test_settings_js_exists_on_disk() -> None:
     )
 
 
-# --- JS contract: read-only status load ----------------------------------
 
 
 def test_settings_js_defines_load_settings_privacy_status() -> None:
@@ -368,7 +365,6 @@ def test_settings_js_no_refresh_button_binding_in_init_buttons() -> None:
     )
 
 
-# --- Stylesheet ----------------------------------------------------------
 
 
 def test_styles_css_has_settings_scoped_classes() -> None:
@@ -390,7 +386,6 @@ def test_styles_css_has_settings_scoped_classes() -> None:
         assert cls in source, "styles.css must define class: " + cls
 
 
-# --- clipboard capture toggle write contract ------------------
 
 
 def test_core_js_declares_settings_write_in_progress() -> None:
@@ -524,7 +519,6 @@ def test_styles_css_has_toggle_classes() -> None:
         )
 
 
-# --- encrypted backup export + manifest preview contract ------
 
 
 def test_core_js_declares_settings_backup_state() -> None:
@@ -703,7 +697,6 @@ def test_settings_js_backup_no_network_storage_clipboard() -> None:
         )
 
 
-# --- encrypted backup import + clear-all-local-data contract ---
 
 
 def test_core_js_declares_settings_import_and_clear_state() -> None:
@@ -910,7 +903,6 @@ def test_styles_css_has_import_and_clear_scoped_classes() -> None:
         )
 
 
-# --- First-run privacy notice contract -----------------------
 
 
 def test_index_html_defines_first_run_notice_overlay_dom_ids() -> None:
@@ -1328,7 +1320,6 @@ def test_first_run_notice_resources_no_external_fonts_or_cdn() -> None:
             )
 
 
-# --- Settings controls not dependent on settingsLoaded --------
 
 
 def test_settings_js_backup_controls_not_dependent_on_settingsLoaded() -> None:
@@ -1415,7 +1406,6 @@ def test_settings_js_clipboard_toggle_still_uses_settingsLoaded() -> None:
     )
 
 
-# --- First-run notice JS fallback ----------------------------
 
 
 def test_settings_js_has_no_first_run_notice_fallback_text() -> None:
@@ -1436,7 +1426,6 @@ def test_settings_js_has_no_first_run_notice_fallback_text() -> None:
     )
 
 
-# --- init.js awaits loadFirstRunNotice before refresh ---------
 
 
 def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
@@ -1488,16 +1477,7 @@ def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
     )
 
 
-# --- init.js gates init() on pywebview bridge ready ----------
-#
-# On cold start, pywebview injects ``window.pywebview.api`` AFTER the
-# frontend scripts load. The old wiring called ``init()`` directly on
-# DOMContentLoaded, so ``App.loadFirstRunNotice()`` -> ``App.callBridge()``
-# ran before the bridge existed, ``callBridge`` rejected with
-# "bridge unavailable", and ``loadFirstRunNotice``'s catch branch rendered
-# a false "隐私说明加载失败" blocking overlay. The bootstrap must now wait
-# for the ``pywebviewready`` event (or detect the bridge already injected)
-# before calling ``init()``.
+# init.js gates init() on pywebview bridge ready
 
 
 def test_init_js_gates_bootstrap_on_pywebviewready_event() -> None:
@@ -1625,16 +1605,7 @@ def test_init_js_does_not_use_storage_or_network_apis() -> None:
         )
 
 
-# --- notice load failure does not start main UI refresh --------
-#
-# loadFirstRunNotice() now resolves to a boolean: ``true`` when the notice
-# state was successfully confirmed, ``false`` on backend ``ok:false`` or
-# bridge rejection. init() must only start refreshAll / startAutoRefresh /
-# startLocalTicker when the boolean is true. On failure the blocking error
-# overlay is already shown by loadFirstRunNotice; the collector and main UI
 # auto-refresh must NOT start (fail-closed). Additionally, the catch branch
-# of loadFirstRunNotice must NOT set ``firstRunNoticeLoaded = true`` so a
-# transient bridge rejection does not permanently lock the frontend state.
 
 
 def test_init_js_does_not_start_refresh_on_notice_load_failure() -> None:

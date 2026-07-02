@@ -55,7 +55,6 @@ SENSITIVE_CLIPBOARD_TOKEN = "TestClipboard-Epsilon-Secret-1W4"
 SENSITIVE_PASSPHRASE = "TestPassphrase-Delta-Secret-9XK"
 
 
-# --- API success payload -------------------------------------------------
 
 
 def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
@@ -225,7 +224,6 @@ def test_api_does_not_change_schema(temp_db) -> None:
     assert expected_tables == actual_tables
 
 
-# --- Bridge --------------------------------------------------------------
 
 
 def test_bridge_method_exists_on_composed_webview_bridge() -> None:
@@ -307,7 +305,6 @@ def test_bridge_method_signature_has_no_required_args() -> None:
         )
 
 
-# --- API write facade -----------------------------------------
 
 
 def test_api_write_true_success_status_reflects_setting(temp_db) -> None:
@@ -466,7 +463,6 @@ def test_api_write_does_not_change_schema(temp_db) -> None:
     assert expected_tables == actual_tables
 
 
-# --- Bridge write method --------------------------------------
 
 
 def test_bridge_write_method_exists_on_composed_webview_bridge() -> None:
@@ -650,7 +646,6 @@ def test_bridge_write_api_ok_false_passes_error_through(temp_db) -> None:
     assert result == api_result
 
 
-# --- API export facade ---------------------------------------
 
 
 def test_api_export_success_returns_narrow_payload(temp_db) -> None:
@@ -776,7 +771,6 @@ def test_api_export_does_not_call_import_or_manifest_or_clear_or_set(temp_db) ->
         mock_set_value.assert_not_called()
 
 
-# --- API manifest preview facade -----------------------------
 
 
 def _fake_manifest_info() -> BackupManifestInfo:
@@ -907,7 +901,6 @@ def test_api_manifest_does_not_require_passphrase(temp_db) -> None:
     assert result["ok"] is True
 
 
-# --- Bridge export + manifest methods ------------------------
 
 
 def test_bridge_export_method_exists() -> None:
@@ -1179,7 +1172,6 @@ def test_bridge_preview_uses_open_dialog_with_wtbackup_filter(temp_db) -> None:
     assert "save_filename" not in call
 
 
-# --- API import facade --------------------------------------
 
 
 def test_api_import_success_returns_narrow_payload(temp_db) -> None:
@@ -1447,7 +1439,6 @@ def test_api_import_round_trip_smoke(temp_db, tmp_path) -> None:
         assert token not in serialized, f"import smoke leaks: {token!r}"
 
 
-# --- Bridge import method -----------------------------------
 
 
 def test_bridge_import_method_exists() -> None:
@@ -1654,7 +1645,6 @@ def test_bridge_import_payload_never_leaks_full_path_or_passphrase(temp_db) -> N
         assert token not in serialized, f"bridge import leaks: {token!r}"
 
 
-# --- API clear-all facade -----------------------------------
 
 
 def test_api_clear_success_returns_narrow_payload(temp_db) -> None:
@@ -1787,7 +1777,6 @@ def test_api_clear_round_trip_smoke(temp_db) -> None:
         assert token not in serialized, f"clear smoke leaks: {token!r}"
 
 
-# --- Bridge clear-all method --------------------------------
 
 
 def test_bridge_clear_method_exists() -> None:
@@ -1884,7 +1873,6 @@ def test_bridge_clear_does_not_call_backup_actions_directly(temp_db) -> None:
         mock_manifest.assert_not_called()
 
 
-# --- First-run notice API facade ----------------------------
 
 
 def test_api_first_run_notice_default_is_false_for_new_db(temp_db) -> None:
@@ -1987,7 +1975,6 @@ def test_api_first_run_notice_fail_closed_on_accepted_read_exception(temp_db) ->
         assert token not in serialized, f"notice fail-closed leaks: {token!r}"
 
 
-# --- First-run notice fail-closed + success path -----------
 
 
 def test_api_first_run_notice_success_path_returns_full_notice_text(temp_db) -> None:
@@ -2119,7 +2106,6 @@ def test_api_status_does_not_expose_raw_first_run_setting_key(temp_db) -> None:
     assert "first_run_notice_accepted" not in serialized
 
 
-# --- Bridge first-run notice methods ------------------------
 
 
 def test_bridge_get_first_run_notice_method_exists() -> None:
@@ -2236,7 +2222,6 @@ def test_bridge_accept_first_run_notice_does_not_call_backup_or_set_setting(temp
         mock_clear.assert_not_called()
 
 
-# --- toggle_pause first-run guard ---------------------------
 
 
 def test_bridge_toggle_pause_does_not_start_collector_when_notice_unaccepted(temp_db) -> None:

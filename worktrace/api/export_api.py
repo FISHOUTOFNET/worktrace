@@ -18,29 +18,7 @@ from ..services import export_service
 
 
 class StatisticsExportError(ValueError):
-    """Raised by the statistics CSV export for known user-facing failures.
-
-    The ``code`` attribute is a stable token the WebView bridge maps to a
-    Chinese message, so internal paths, field names, ids, and SQL details
-    never enter bridge responses.
-
-    Stable ``code`` values:
-
-    - ``invalid_date`` — ``date_from`` / ``date_to`` is not a valid
-      ``YYYY-MM-DD`` string (``None`` / ``bool`` / non-string rejected).
-    - ``invalid_range`` — ``date_from`` is after ``date_to``.
-    - ``range_too_large`` — the inclusive span exceeds
-      ``STATISTICS_SUMMARY_MAX_RANGE_DAYS`` calendar days.
-    - ``empty_data`` — the selected range has no closed activities to
-      export (no file is created).
-    - ``invalid_path`` — the save path is a directory or its parent
-      directory does not exist.
-    - ``permission_denied`` — the file cannot be written because the
-      location is not writable.
-    - ``file_busy`` — the file is busy / locked or another ``OSError``
-      occurred during the write.
-    - ``operation_failed`` — race condition or unexpected service failure.
-    """
+    """Raised by the statistics CSV export for known user-facing failures."""
 
     def __init__(self, code: str):
         super().__init__(code)

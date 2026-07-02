@@ -13,9 +13,7 @@ from worktrace.resources.local_file_detector import LocalFileDetector
 from worktrace.resources.office_wps_detector import OfficeWpsDetector
 
 
-# ---------------------------------------------------------------------------
 # 1. winword.exe + 合同.docx -> office_document/word_document
-# ---------------------------------------------------------------------------
 
 class TestOfficeWpsDetector:
     def test_winword_docx_with_path_hint(self):
@@ -153,9 +151,7 @@ class TestOfficeWpsDetector:
         assert result.display_name != "wps.exe"
 
 
-# ---------------------------------------------------------------------------
 # 5. .py file -> local_file/code_file
-# ---------------------------------------------------------------------------
 
 class TestLocalFileDetector:
     def test_py_file_with_path(self):
@@ -265,9 +261,7 @@ class TestLocalFileDetector:
         assert result.display_name == "utils.py"
 
 
-# ---------------------------------------------------------------------------
 # 7. No file info -> generic_app fallback
-# ---------------------------------------------------------------------------
 
 class TestRegistryWithFileDetectors:
     def test_registry_order(self):

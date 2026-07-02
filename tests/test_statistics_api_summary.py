@@ -84,7 +84,6 @@ def _seed_closed_activity(
     return aid
 
 
-# --- Service: valid date range returns summary --------------------------
 
 
 def test_service_summary_valid_range_returns_aggregated_data(temp_db):
@@ -310,7 +309,6 @@ def test_service_summary_multi_day_range(temp_db):
     _assert_no_sensitive_keys(summary)
 
 
-# --- Service: date range validation ------------------------------------
 
 
 def test_service_summary_invalid_date_raises(temp_db):
@@ -364,7 +362,6 @@ def test_service_summary_max_allowed_range_succeeds(temp_db):
     _assert_no_sensitive_keys(summary)
 
 
-# --- Service: no DB writes ---------------------------------------------
 
 
 def test_service_summary_does_not_write_db(temp_db):
@@ -402,7 +399,6 @@ def test_service_summary_does_not_update_updated_at(temp_db):
     assert after == before
 
 
-# --- API layer ---------------------------------------------------------
 
 
 def test_api_summary_valid_range_returns_summary(temp_db):

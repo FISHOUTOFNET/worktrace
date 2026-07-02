@@ -19,19 +19,7 @@ HISTORY_PATH = REPO_ROOT / "docs" / "history" / "webview-phases.md"
 RELEASE_VALIDATION_PATH = REPO_ROOT / "docs" / "release-validation.md"
 README_PATH = REPO_ROOT / "README.md"
 
-# JS modules in the exact load order used by index.html. read_all_js()
-# concatenates them in this order so func_body() and substring checks
-# see the same logical source the browser would execute.
-#
-# Project Rules logic is split across:
-#   rules.js (core load / refresh / wiring)
-#   rules_render.js (render helpers)
-#   rules_rule_actions.js (rule toggle)
-#   rules_keyword_actions.js (keyword create / edit / delete)
-#   rules_folder_actions.js (folder create / edit / delete)
-#   rules_project_actions.js (project lifecycle)
-# ALL_JS_FILES is the single source of truth for both the static-contract
-# tests and the packaging tests; do not hard-code the JS list elsewhere.
+# rules_project_actions.js (project lifecycle)
 ALL_JS_FILES = [
     "core.js",
     "overview.js",

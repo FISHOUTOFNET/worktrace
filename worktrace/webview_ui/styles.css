@@ -496,13 +496,6 @@ body {
 .detail-item {
     display: grid;
     grid-template-columns: 80px 1fr auto;
-    /* Use grid-template-areas so .detail-item-actions gets its
-       own row and never overlaps with .detail-item-meta /
-       .detail-item-project. The editor / split / merge / visibility
-       status rows are only occupied when the user opens an inline editor;
-       empty rows collapse to 0 height (the 2px row gap remains). This
-       replaces the fragile fixed grid-row numbering that caused the
-       actions row to share grid-row: 2 with meta / project. */
     grid-template-areas:
         "time    name    duration"
         ".       meta    project"
@@ -900,14 +893,6 @@ body {
     border: 1px solid #bbf7d0;
 }
 
-/* --- Unified status type classes ------------------------------------- */
-/* Additional status types so loading / empty / info states share the same
-   visual vocabulary as error / success across the Timeline list, detail
-   panel, edit panel, and correction shell. These are additive: the existing
-   .edit-status-error / .edit-status-success rules above remain the primary
-   error/success styles; the new classes extend the vocabulary for info,
-   loading, and empty states so every Timeline area can express a consistent
-   set of states. */
 .edit-status-info {
     background: #eff6ff;
     color: #1d4ed8;
@@ -1327,13 +1312,6 @@ body {
 
 /* --- Timeline correction shell --------------------------------------- */
 
-/* The correction shell is a read-only context + navigation layout that
-   lives inside #timeline-details, after the edit panel. It is hidden by
-   default and only shown when the user opens it. It reuses the existing
-   edit panel / detail row controls; it does not introduce new write
-   capability. When open, the edit panel and details list are visually
-   de-emphasized but not removed, so the user can still locate the
-   existing per-activity / session-level action buttons. */
 .correction-shell {
     margin-top: 16px;
     padding: 14px 16px;
@@ -1389,13 +1367,6 @@ body {
     opacity: 0.55;
 }
 
-/* --- Unified correction shell card styles ---------------------------- */
-/* All shell sections (context / activity / single-action / batch / restore
-   / not-implemented) share the same card chrome so the visual hierarchy
-   stays consistent and the per-section CSS stays minimal. The card class
-   is additive; existing section-specific classes (e.g.
-   .correction-shell-context, .correction-shell-activities,
-   .correction-shell-restore-section) keep their inner layout rules. */
 .correction-shell-card {
     margin-top: 12px;
     padding: 12px;
@@ -2408,15 +2379,6 @@ body {
     border: 1px solid #bbf7d0;
 }
 
-/* Excluded-rule creation form. Rendered dynamically inside the
-   ``排除规则`` card (not as a static submit button — the static contract
-   test locks the static submit button count to 3). The form has two
-   sub-sections: keyword rule creation and folder rule creation. Both call
-   the dedicated excluded-rule bridge methods that do NOT accept an
-   arbitrary project_id (the API pins the project_id to EXCLUDED_PROJECT
-   internally). Mirrors the existing keyword/folder create-row visual
-   style so the excluded create form reads consistently with the rest of
-   the page. */
 .rules-excluded-create {
     margin: 12px 0;
     padding: 12px;
@@ -2686,13 +2648,7 @@ body {
     opacity: 0.65;
 }
 
-/* Rule impact preview + backfill buttons. Each folder / keyword
-   rule row gets a "预览影响" (read-only preview) and "应用到历史记录"
-   (safe single-rule backfill) button. The preview button uses a neutral
-   border; the backfill button uses an indigo accent so the write action
-   reads as the primary action on the row. Both stay disabled while any
-   rule write is in flight so the impact paths never pollute the toggle /
-   delete / edit / lifecycle write paths. */
+/* delete / edit / lifecycle write paths. */
 .rules-preview-impact-button,
 .rules-backfill-button {
     min-width: 72px;

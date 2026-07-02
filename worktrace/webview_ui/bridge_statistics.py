@@ -69,7 +69,6 @@ class StatisticsBridgeMixin:
     ``__init__``; it relies on the host class.
     """
 
-    # --- Statistics / Export read-only summary -------------------------
 
     def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:
         """Return a read-only statistics + export-preview summary.
@@ -108,38 +107,9 @@ class StatisticsBridgeMixin:
             logger.exception("webview bridge get_statistics_export_summary failed")
             return {"ok": False, "error": "加载统计失败", "summary": None}
 
-    # --- Statistics CSV export (controlled file write) ----------------
 
     def export_statistics_csv(self, date_from, date_to) -> dict[str, Any]:
-        """Export a display-safe CSV for the statistics date range.
-
-        Controlled write path. ``date_from`` / ``date_to`` must be
-        ``YYYY-MM-DD`` strings sharing the same rules as the read-only
-        summary. The save path is chosen by the user through the native
-        pywebview save dialog (the window is injected via ``set_window``);
-        the bridge never writes to a hard-coded location.
-
-        The bridge only validates the obvious date shape and opens the
-        save dialog; all deeper validation and the file write happen in
-        ``worktrace.api.export_api.export_statistics_csv`` (which goes
-        through ``export_service``). The bridge does not import services /
-        db / collector / runtime / config / security.
-
-        Returns one of:
-
-        - ``{"ok": True, "filename": "<basename.csv>", "activity_count": n,
-          "duration": "HH:MM:SS", "cancelled": False}`` on success. Only
-          the basename is surfaced; the full local path never leaves the
-          bridge.
-        - ``{"ok": False, "cancelled": True, "error": "已取消导出"}`` when
-          the user cancels the save dialog. No API write is called.
-        - ``{"ok": False, "error": "<chinese message>", "cancelled":
-          False}`` on any failure. Known failure modes map to clear
-          Chinese messages; unknown failures collapse to ``"导出失败"``.
-
-        Tracebacks, SQL, full local paths, raw exception text, window
-        titles, file paths, and notes are never surfaced to JS.
-        """
+        """Export a display-safe CSV for the statistics date range."""
         try:
             # ``isinstance(..., str)`` rejects ``None``, ``bool``, ``int``,
             # and any other non-string type (``bool`` is not a string).

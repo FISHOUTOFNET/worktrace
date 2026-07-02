@@ -6,17 +6,8 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- folder rule create ----------------------------------
 
     function populateFolderCreateProjectSelector(projects) {
-        // populate the folder-create project selector from the
-        // freshly loaded Project Rules data. Only enabled, non-excluded
-        // projects with a positive id are valid targets — this mirrors the
-        // ``project_api.list_rule_target_projects()`` eligibility rule the
-        // API uses. Re-population is skipped entirely while a folder create
-        // is in flight so the user's selection is never displaced by an
-        // auto-refresh, and the previous selection is preserved when the
-        // list is re-rendered.
         if (App.rulesCreatingFolder) return;
         var select = document.getElementById("rules-folder-create-project");
         var submitBtn = document.getElementById("rules-folder-create-submit");
@@ -149,7 +140,6 @@
     }
     App.clearFolderCreateStatus = clearFolderCreateStatus;
 
-    // --- folder rule edit / delete (event delegation) --------
 
     function bindProjectRuleFolderEvents() {
         // event-delegated binding for folder edit / delete /
@@ -372,7 +362,6 @@
     }
     App.setFolderDeleting = setFolderDeleting;
 
-    // --- excluded folder rule creation -----------------------
 
     function bindExcludedFolderRuleEvents() {
         // event-delegated binding for the excluded folder create
@@ -393,14 +382,6 @@
     App.bindExcludedFolderRuleEvents = bindExcludedFolderRuleEvents;
 
     function handleExcludedFolderCreateSubmit() {
-        // validate the excluded folder_path + recursive locally,
-        // then call the dedicated ``create_excluded_folder_rule`` bridge
-        // method. This method does NOT pass a project_id — the API pins it
-        // to EXCLUDED_PROJECT internally. Reuses ``rulesCreatingFolder`` as
-        // the in-flight guard so it stays mutually exclusive with the
-        // normal folder create path. On success the folder_path input is
-        // cleared and the Project Rules list is refreshed; on failure the
-        // folder_path input is preserved so the user can edit and retry.
         if (App.rulesCreatingFolder) return;
         var input = document.querySelector(".rules-excluded-folder-input");
         var recursiveEl = document.querySelector(".rules-excluded-folder-recursive");

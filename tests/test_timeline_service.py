@@ -406,7 +406,6 @@ def test_project_session_note_can_be_cleared(temp_db):
     assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["session_note"] == ""
 
 
-# --- session note + adjusted duration (unified user fields) ---
 
 
 def test_session_has_display_and_raw_duration_fields(temp_db):
@@ -519,7 +518,6 @@ def test_empty_note_and_null_duration_deletes_row(temp_db):
     assert fields["adjusted_duration_seconds"] is None
 
 
-# --- Shared anchor predicate reuse (timeline_service ↔ anchor_predicates) ---
 
 def test_is_project_anchor_delegates_to_shared_file_context_predicate():
     """``_is_project_anchor`` reuses ``is_file_context_anchor`` so that browser

@@ -86,13 +86,6 @@ def recompute_context_assignments_for_date(date: str) -> None:
             rows, index, carry_minutes, uncategorized_id
         )
         if target_project_id == uncategorized_id or target_project_id <= 0:
-            # Context inference found no concrete project. Preserve an
-            # existing ``suggested_project_name`` assignment instead of
-            # overwriting it with bare ``uncategorized`` — the suggested
-            # name is a higher-quality inference (resource-first anchor
-            # detection) than "no context found", and clearing it would
-            # cause Timeline / Recent / Detail displays to revert to
-            # ``未归类`` for the remainder of the activity.
             if source == "suggested_project_name":
                 continue
             source = "uncategorized"
@@ -329,45 +322,11 @@ def _set_clipboard_context_assignment(row: dict, project_id: int) -> None:
     row["assignment_is_manual"] = 0
 
 
-# ---------------------------------------------------------------------------
 # File-context-anchor short-gap carry
-# ---------------------------------------------------------------------------
 
 
 def _recompute_short_gap_anchor_rows(rows: list[dict], uncategorized_id: int) -> bool:
-    """Bridge short uncategorized file-context anchors between same-project
-    concrete effective context anchors.
-
-    For each file-context anchor row that is currently uncategorized (and
-    not manual / not a direct-rule assignment), check whether it is
-    sandwiched between two concrete (non-uncategorized) same-project
-    effective anchors with a total middle-activity duration under
-    ``REPORT_CONTEXT_SHORT_MERGE_SECONDS``. If so, persist the assignment
-    with source ``anchor_context`` and update the in-memory row so
-    subsequent non-anchor rows in the main loop see the bridged project.
-
-    This covers the real-world scenario where a brief .doc / .docx Word
-    activity (which is itself a file-context anchor) is sandwiched between
-    two same-project anchors but does not hit any folder / keyword rule.
-
-    Conditions (all must hold):
-      - The row is a file-context anchor (``is_file_context_anchor``).
-      - The row's current assignment is uncategorized (not manual, not
-        folder_rule / keyword_rule / midnight_anchor /
-        clipboard_transition_context).
-      - No manual_override or assignment_is_manual.
-      - Previous and next concrete effective anchors exist and belong to
-        the same non-uncategorized project.
-      - No interrupt status (idle / paused) between the anchors.
-      - No session boundary between prev anchor and next anchor.
-      - All middle activities (between the two anchors) are normal,
-        visible, and non-deleted.
-      - Total duration of middle activities <= threshold.
-
-    Direct assignment anchors do NOT enter this pass; they participate in
-    context carry via ``_infer_context_project`` as effective context
-    anchors with source ``same_project_context``.
-    """
+    """Bridge short uncategorized file-context anchors between same-project"""
     changed = False
     for index, row in enumerate(rows):
         if row.get("status") != STATUS_NORMAL:
@@ -470,9 +429,7 @@ def _set_short_gap_context_assignment(row: dict, project_id: int) -> None:
     row["assignment_is_manual"] = 0
 
 
-# ---------------------------------------------------------------------------
 # Context inference
-# ---------------------------------------------------------------------------
 
 
 def _is_file_context_anchor(row: dict) -> bool:

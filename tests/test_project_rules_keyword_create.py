@@ -53,7 +53,6 @@ def _keyword_rule_row(rule_id: int) -> dict:
         )
 
 
-# --- Valid creation ------------------------------------------------------
 
 
 def test_create_keyword_rule_for_normal_project(temp_db):
@@ -116,7 +115,6 @@ def test_create_keyword_rule_for_disabled_project_rejected(temp_db):
     assert result == {"ok": False, "error": "project_not_found"}
 
 
-# --- project_id input validation ----------------------------------------
 
 
 @pytest.mark.parametrize("bad_id", [True, False])
@@ -154,7 +152,6 @@ def test_create_keyword_rule_rejects_other_invalid_project_id_types(temp_db, bad
     assert result == {"ok": False, "error": "invalid_input"}
 
 
-# --- keyword input validation -------------------------------------------
 
 
 def test_create_keyword_rule_rejects_none_keyword(temp_db):
@@ -237,7 +234,6 @@ def test_create_keyword_rule_html_script_keyword_duplicate_detection(temp_db):
     assert second == {"ok": False, "error": "duplicate_rule"}
 
 
-# --- project_not_found / duplicate_rule ---------------------------------
 
 
 def test_unknown_project_returns_stable_project_not_found(temp_db):
@@ -289,7 +285,6 @@ def test_duplicate_keyword_check_is_case_sensitive_and_trim_aware(temp_db):
     }
 
 
-# --- Exception collapse --------------------------------------------------
 
 
 def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
@@ -345,7 +340,6 @@ def test_list_rules_exception_collapses_to_operation_failed(temp_db, monkeypatch
     assert result == {"ok": False, "error": "operation_failed"}
 
 
-# --- No side effects -----------------------------------------------------
 
 
 def test_create_keyword_rule_does_not_add_folder_rule_rows(temp_db):
@@ -476,7 +470,6 @@ def test_create_keyword_rule_does_not_call_folder_rule_create(temp_db, monkeypat
     assert result["ok"] is True
 
 
-# --- Cache invalidation --------------------------------------------------
 
 
 def test_create_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch):
@@ -531,7 +524,6 @@ def test_create_keyword_rule_clears_exclude_rules_cache(temp_db, monkeypatch):
     assert calls["count"] >= 1
 
 
-# --- Payload contract ----------------------------------------------------
 
 
 def test_create_keyword_rule_payload_is_json_serializable(temp_db):
@@ -578,7 +570,6 @@ def test_create_keyword_rule_failure_payloads_are_json_serializable(temp_db):
         assert "SELECT" not in repr(result)
 
 
-# --- Existing set_project_rule_enabled regression lock -------------------
 
 
 def test_existing_set_project_rule_enabled_still_works(temp_db):
@@ -629,7 +620,6 @@ def test_create_keyword_rule_does_not_toggle_existing_rules(temp_db):
     assert after == 0
 
 
-# --- excluded-keyword rule creation facade -------------------
 
 
 def test_create_excluded_keyword_rule_for_webview_success(temp_db):

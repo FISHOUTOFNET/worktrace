@@ -43,7 +43,6 @@ from static_helpers import (
 )
 
 
-# --- single heartbeat replaces parallel timers ----------------
 
 
 def test_heartbeat_single_timer_replaces_parallel_timers():
@@ -287,7 +286,6 @@ def test_page_switch_immediately_refreshes_current_page():
     )
 
 
-# --- Recent / timeline data attributes & snapshots ----------
 
 
 def test_overview_js_stores_last_recent_snapshot():
@@ -388,7 +386,6 @@ def test_timeline_session_renders_data_session_id():
     )
 
 
-# --- Ticker uses unified live clock model ------------------
 
 
 def test_core_js_defines_monotonic_render_helpers():
@@ -535,7 +532,6 @@ def test_render_duration_monotonic_allows_overwrite_on_state_change():
         )
 
 
-# --- Statistics / Export closed-only hint ---------------------
 
 
 def test_statistics_page_has_closed_only_hint():
@@ -566,7 +562,6 @@ def test_statistics_page_has_closed_only_hint_css():
     )
 
 
-# --- unified live display eligibility + page-switch guard -------
 
 
 def test_ticker_live_eligible_checks_live_state():
@@ -689,7 +684,6 @@ def test_render_session_details_skips_rerender_when_editing():
     )
 
 
-# --- unified live clock + refresh orchestration ----------------------------
 
 
 def test_ticker_uses_unified_live_clock_scheme_a():
@@ -933,7 +927,6 @@ def test_revision_check_passes_report_date():
     )
 
 
-# --- Architecture contract: unified live continuity key for seeding --------
 
 
 def _strip_js_comments(src: str) -> str:

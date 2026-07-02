@@ -8,7 +8,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Module-level state (single source of truth across all js modules) ---
     // Single 1-second heartbeat: applies the local ticker (re-renders
     // already-fetched durations with a wall-clock delta) and then runs a
     // lightweight ``get_refresh_state`` revision check. Heavy interfaces
@@ -18,7 +17,6 @@
     App.NOTE_MAX_LENGTH = 2000;
     App.heartbeatTimer = null;
 
-    // --- Live display state ---
     // The local ticker ONLY updates DOM text; it never calls a bridge
     // method, never writes the DB, and never starts / stops the collector.
     // The snapshots are set by showOverview / showRecent / showTimeline /
@@ -32,7 +30,6 @@
     // projected detail row's duration without a bridge round-trip.
     App.lastSessionDetailsData = null;
 
-    // --- Heartbeat refresh-state ---
     // ``lastRefreshState`` caches the last ``get_refresh_state`` payload so
     // the heartbeat can compare ``refresh_revision`` between ticks.
     // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard
@@ -48,18 +45,10 @@
     // skipped by the global in-flight guard.
     App.pendingPageRefresh = false;
     App.lastFullRefreshAtEpochMs = 0;
-    // Low-frequency collection reconciliation. Every
-    // ``RECONCILE_INTERVAL_MS`` the heartbeat triggers a guarded
-    // ``fullReconcileCollectionViews`` that re-pulls collector status +
-    // Overview + current Timeline so a stalled revision signal cannot
-    // freeze the UI forever. Rules / Settings / Statistics are NOT touched.
-    // The reconciliation skips Timeline re-render when an editor / split /
-    // correction shell is open so user input is preserved.
-    App.RECONCILE_INTERVAL_MS = 180000;  // 3 minutes (within 2-5 min band)
+    App.RECONCILE_INTERVAL_MS = 180000;
     App.lastReconcileAtEpochMs = 0;
     App.reconcileInFlight = false;
 
-    // --- Monotonic duration render state ---
     // Maps a continuity key (e.g. ``"recent:live:<stable_hash>"``,
     // ``"session:live:<stable_hash>"``, ``"detail:live:<stable_hash>"``,
     // ``"overview-total"``) to the last rendered seconds. Used by
@@ -67,12 +56,11 @@
     // projected seconds are 1-2s less than the DOM value.
     App._monotonicRenderState = {};
 
-    // --- Timeline state -------------------------------------------------
     App.currentPage = "overview";
-    App.timelineDate = null;       // null = today (backend decides)
-    App.timelineLoaded = false;    // whether timeline has been loaded at least once
-    App.timelineLoading = false;   // whether a timeline load is in progress
-    App.selectedSessionId = null;  // currently selected session for detail view
+    App.timelineDate = null;
+    App.timelineLoaded = false;
+    App.timelineLoading = false;
+    App.selectedSessionId = null;
     // Stable live key (stable_live_key_hash) for the currently selected
     // session. Selection continuity: when session_id changes from
     // "virtual-live:<hash>" to the real DB session id, stable_live_key_hash
@@ -80,50 +68,38 @@
     // transition.
     App.selectedSessionLiveKey = null;
 
-    // Request tokens prevent stale bridge responses from overwriting newer
-    // data when the user rapidly switches dates / pages. Each load
-    // increments the token; only the response whose token equals the
-    // current value is applied to the DOM.
-    // Per-view tokens prevent stale overlapping responses from overwriting
-    // newer data when the user switches pages or a revision-change refresh
     // races a manual refresh.
     App.timelineRequestToken = 0;
     App.detailsRequestToken = 0;
     App.overviewRequestToken = 0;
     App.recentRequestToken = 0;
 
-    // --- Timeline editing state ----------------------------------------
     App.projectsCache = null;
     App.projectsLoading = false;
     App.currentSessions = [];
     App.editingSession = null;
     App.editSaving = false;
 
-    // --- Timeline time-correction state --------------------------------
     App.timeSaving = false;
     App.editingActivityId = null;
     App.activityTimeSaving = false;
 
-    // --- Timeline activity-split state ---------------------------------
     App.sessionSplitSaving = false;
     App.editingSplitActivityId = null;
     App.activitySplitSaving = false;
 
-    // --- Timeline activity-merge state ---------------------------------
     App.mergeSaving = false;
     App.mergingActivityId = null;
 
-    // --- Timeline hide / soft delete state -----------------------------
     App.hideSaving = false;
     App.hidingActivityId = null;
     App.deleteSaving = false;
     App.deletingActivityId = null;
 
-    // --- Timeline correction shell state -------------------------------
     App.correctionShellOpen = false;
     App.correctionShellSessionId = null;
     App.correctionShellActivityId = null;
-    App.correctionShellMode = null;  // "session" | "activity" | null
+    App.correctionShellMode = null;
     App.correctionShellHighlightTimer = null;
     App.selectedBatchActivityIds = {};
     App.batchProjectSaving = false;
@@ -132,13 +108,11 @@
     App.restoreSaving = false;
     App.restoreSavingActivityId = null;
 
-    // --- Statistics / Export state -------------------------------------
     App.statisticsLoaded = false;
     App.statisticsLoading = false;
     App.statisticsRequestToken = 0;
     App.statisticsExportSaving = false;
 
-    // --- Settings / Privacy state ---
     // A single read-only load is in flight at a time; the request token
     // guards against stale responses on rapid re-entry.
     App.settingsLoaded = false;
@@ -159,22 +133,13 @@
     App.settingsBackupImportInProgress = false;
     App.settingsClearAllInProgress = false;
 
-    // --- First-run privacy notice state ---
-    // ``firstRunNoticeLoaded`` is true after the first ``get_first_run_notice``
-    // round-trip completes. ``firstRunNoticeRequired`` is true when the
-    // backend reports ``accepted === false``; the blocking overlay stays
-    // open and the sidebar pause/resume control must not start the
-    // collector. ``firstRunNoticeViewingFromSettings`` is true when the
-    // overlay was opened from the Settings "查看隐私说明" button; in that
-    // mode the close button is shown and no accept action is taken on
-    // close. State lives in JS memory only; no browser storage APIs are used.
+    // First-run privacy notice state
     App.firstRunNoticeLoaded = false;
     App.firstRunNoticeLoading = false;
     App.firstRunNoticeRequired = false;
     App.firstRunNoticeAcceptInProgress = false;
     App.firstRunNoticeViewingFromSettings = false;
 
-    // --- Project Rules state -------------------------------------------
     App.rulesLoaded = false;
     App.rulesLoading = false;
     App.rulesRequestToken = 0;
@@ -190,14 +155,14 @@
 
     // Keyword edit writes carry the "keyword:<id>" key of the row being
     // edited or saved.
-    App.rulesEditingKeywordKey = null;   // "keyword:<id>" of the row being edited
-    App.rulesUpdatingKeywordKey = null;  // "keyword:<id>" of the row being saved
+    App.rulesEditingKeywordKey = null;
+    App.rulesUpdatingKeywordKey = null;
 
     // Folder rule CRUD state. Only one folder write may be in flight per
     // kind at a time.
     App.rulesCreatingFolder = false;
-    App.rulesEditingFolderKey = null;   // "folder:<id>" of the row being edited
-    App.rulesDeletingFolderKey = null;  // "folder:<id>" of the row being deleted
+    App.rulesEditingFolderKey = null;
+    App.rulesDeletingFolderKey = null;
     // Cache of the last-loaded Project Rules data so the inline folder
     // edit form can re-render the list immediately without a round-trip
     // through loadProjectRules (which would lose input focus).
@@ -207,10 +172,10 @@
     // disabled state. Only one project lifecycle write may be in flight per
     // kind at a time.
     App.rulesCreatingProject = false;
-    App.rulesEditingProjectId = null;   // project id being edited (int or null)
-    App.rulesUpdatingProjectId = null;  // project id being saved (int or null)
-    App.rulesTogglingProjectId = null;  // project id being toggled (int or null)
-    App.rulesArchivingProjectId = null; // project id being archived (int or null)
+    App.rulesEditingProjectId = null;
+    App.rulesUpdatingProjectId = null;
+    App.rulesTogglingProjectId = null;
+    App.rulesArchivingProjectId = null;
 
     // Rule impact preview + safe single-rule backfill state.
     // ``rulesPreviewingImpactKey``: preview key currently loading.
@@ -232,7 +197,6 @@
     App.rulesBatchInFlight = false;
     App.rulesBatchPanelData = null;
 
-    // --- Unified Timeline status semantics -----------------------------
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",
         success: "edit-status-success",
@@ -249,7 +213,6 @@
     // Last successfully rendered Timeline payload.
     App.lastTimelineData = null;
 
-    // --- Bridge helper --------------------------------------------------
 
     function callBridge(method) {
         var args = Array.prototype.slice.call(arguments, 1);
@@ -260,7 +223,6 @@
     }
     App.callBridge = callBridge;
 
-    // --- Overview error banner ------------------------------------------
 
     function showError(message) {
         var banner = document.getElementById("overview-error");
@@ -280,7 +242,6 @@
     }
     App.clearError = clearError;
 
-    // --- Timeline error / loading ---------------------------------------
 
     function showTimelineError(message) {
         var banner = document.getElementById("timeline-error");
@@ -307,7 +268,6 @@
     }
     App.setTimelineLoading = setTimelineLoading;
 
-    // --- Unified Timeline status semantics -----------------------------
 
     function statusClassFor(type) {
         return App.STATUS_TYPE_CLASS[type] || App.STATUS_TYPE_CLASS.info;
@@ -375,7 +335,6 @@
     }
     App.setCorrectionStatus = setCorrectionStatus;
 
-    // --- Generic result handler -----------------------------------------
 
     function handleResult(result, onError) {
         if (result && result.ok === false) {
@@ -404,7 +363,6 @@
     }
     App.showStatus = showStatus;
 
-    // --- Consolidation helpers (display-safe text) ---------------------
 
     function safeText(value, fallback) {
         if (value === null || value === undefined || value === "") {
@@ -414,7 +372,6 @@
     }
     App.safeText = safeText;
 
-    // --- Utility --------------------------------------------------------
 
     function escapeHtml(text) {
         if (text === null || text === undefined) return "";
@@ -482,7 +439,6 @@
     }
     App.formatDuration = formatDuration;
 
-    // --- Unified projection / monotonic helpers ---
     // Shared by Overview KPI, current activity, recent, Timeline total,
     // Timeline session, and Timeline details so every live target uses the
     // same monotonic-render contract.
@@ -553,7 +509,6 @@
     }
     App.formatProjectLabel = formatProjectLabel;
 
-    // --- 1-second heartbeat local ticker ---
     // ``applyLocalTicker`` re-renders already-fetched durations with a
     // wall-clock delta so the UI updates every second without a bridge
     // round-trip. The ticker ONLY updates DOM text; it never calls a
@@ -890,7 +845,7 @@
                                     dEl, dBaseSec + detailDelta, dContinuity, false
                                 );
                             }
-                            break;  // only one live row per session
+                            break;
                         }
                     }
                 }

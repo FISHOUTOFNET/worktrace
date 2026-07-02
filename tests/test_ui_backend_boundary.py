@@ -65,9 +65,7 @@ FORBIDDEN_LABELS = [
 ]
 
 
-# ---------------------------------------------------------------------------
 # Tkinter UI package removal
-# ---------------------------------------------------------------------------
 
 _LEGACY_UI_DIR = Path(__file__).resolve().parents[1] / "worktrace" / "ui"
 
@@ -96,9 +94,7 @@ def test_removed_ui_app_import_raises_module_not_found() -> None:
         importlib.import_module("worktrace.ui.app")
 
 
-# ---------------------------------------------------------------------------
 # WebView UI boundary tests
-# ---------------------------------------------------------------------------
 
 WEBVIEW_UI_DIR = Path(__file__).resolve().parents[1] / "worktrace" / "webview_ui"
 
@@ -298,14 +294,12 @@ def test_webview_frontend_resources_have_no_external_links() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # Hardening lock: lock the four Project Rules batch / automatic-rules
 # bridge methods on the composed ``WebViewBridge`` class. The methods are
 # defined on ``ProjectRulesBridgeMixin`` (in ``bridge_rules.py``) and inherited
 # by ``WebViewBridge``. Without this lock, a future refactor that drops the
 # mixin from ``WebViewBridge``'s bases would silently remove the 5I surface
 # from the only shipping bridge class without any test failing.
-# ---------------------------------------------------------------------------
 
 
 def test_webview_bridge_exposes_automatic_rules_batch_and_automatic_methods() -> None:
@@ -332,15 +326,7 @@ def test_webview_bridge_exposes_automatic_rules_batch_and_automatic_methods() ->
         )
 
 
-# ---------------------------------------------------------------------------
 # Settings / Privacy clipboard capture toggle bridge method.
-# The new ``set_clipboard_capture_enabled`` method is defined directly on
-# ``WebViewBridge`` (no mixin), so a rename or removal would silently drop
-# the clipboard toggle write surface from the only shipping bridge. This lock also
-# confirms the error payload carries no sensitive tokens (no path / no
-# clipboard content / no passphrase / no SQL / no traceback / no raw
-# exception) so the bridge boundary stays leak-free.
-# ---------------------------------------------------------------------------
 
 
 def test_webview_bridge_exposes_settings_clipboard_toggle_method() -> None:
@@ -421,19 +407,7 @@ def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens()
         )
 
 
-# ---------------------------------------------------------------------------
 # Settings / Privacy encrypted backup export + manifest preview
-# bridge methods. The two new methods are defined directly on
-# ``WebViewBridge`` (no mixin). ``export_encrypted_backup`` takes exactly
-# two required parameters (``passphrase`` / ``confirm_passphrase``);
-# ``preview_encrypted_backup_manifest`` takes zero parameters. The error
-# payloads must collapse to stable Chinese messages and must not leak
-# traceback / str(exc) / repr / format_exc / exc_info / .message /
-# raw_exception / clipboard_content. ``passphrase`` IS allowed as a
-# parameter name, local variable, and pass-through argument to the API
-# facade; it is only forbidden in the returned payload / error payload /
-# logging (enforced by the runtime tests in test_settings_privacy_status).
-# ---------------------------------------------------------------------------
 
 
 def test_webview_bridge_exposes_backup_export_method() -> None:
@@ -615,21 +589,7 @@ def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # Settings / Privacy encrypted backup import + clear-all-local-data
-# bridge methods. The two new methods are defined directly on ``WebViewBridge``
-# (no mixin). ``import_encrypted_backup`` takes exactly two required
-# parameters (``passphrase`` / ``confirm_text``); ``clear_all_local_data``
-# takes exactly one required parameter (``confirm_text``). The error payloads
-# must collapse to stable Chinese messages and must not leak traceback /
-# str(exc) / repr / format_exc / exc_info / .message / raw_exception /
-# clipboard_content. ``passphrase`` IS allowed as a parameter name, local
-# variable, and pass-through argument to the API facade; it is only
-# forbidden in the returned payload / error payload / logging (enforced by
-# the runtime tests in test_settings_privacy_status). The method body is
-# sliced at the next ``\n def `` so the next method's passphrase
-# reference does not trigger false positives.
-# ---------------------------------------------------------------------------
 
 
 def test_webview_bridge_exposes_destructive_data_import_method() -> None:
@@ -844,22 +804,7 @@ def test_webview_bridge_clear_does_not_call_backup_actions_or_set() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # First-run privacy notice bridge methods. The two new methods are
-# defined directly on ``WebViewBridge`` (no mixin).
-# ``get_first_run_notice`` takes zero parameters and only calls
-# ``settings_api.get_first_run_notice_for_webview()``.
-# ``accept_first_run_notice`` takes zero parameters and calls
-# ``settings_api.accept_first_run_notice_for_webview()``; only on ``ok=True``
-# does it call ``app_api.start_collector()``.
-# ``toggle_pause`` was updated to gate on ``settings_api.first_run_notice_accepted()``
-# before any path that could start the collector: if not accepted (or the
-# read raises), fail closed, do not mutate ``user_paused`` /
-# ``collector_status``, return ``{"ok": False, "error": "请先确认隐私说明"}``.
-# All error payloads collapse to stable Chinese messages and must not leak
-# traceback / str(exc) / repr / format_exc / exc_info / .message /
-# raw_exception / clipboard_content / passphrase / path.
-# ---------------------------------------------------------------------------
 
 
 def test_webview_bridge_exposes_privacy_notice_first_run_notice_methods() -> None:
@@ -1145,14 +1090,12 @@ def test_webview_main_imports_settings_api() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # Privacy gate for the folder index worker. The bridge
 # ``toggle_pause`` and ``accept_first_run_notice`` methods must call
 # ``app_api.start_background_workers()`` BEFORE ``app_api.start_collector()``
 # so the folder index is warm by the time the collector starts matching
 # activities. ``app_api`` must export a ``start_background_workers`` facade
 # that delegates to ``runtime.start_background_workers()``.
-# ---------------------------------------------------------------------------
 
 
 def test_webview_bridge_toggle_pause_calls_start_background_workers_before_collector() -> None:
@@ -1247,15 +1190,7 @@ def test_app_api_exports_start_background_workers_facade() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# page-level bridge split. ``WebViewBridge`` is now a thin
-# composition class that inherits from six mixins. This test asserts the
-# runtime public method set on ``WebViewBridge()`` equals the union of all
-# public methods defined across the 8 bridge mixin files, so a future
-# refactor that drops a mixin (or adds a method to a mixin without wiring
-# it into ``WebViewBridge``) fails here instead of silently removing the
-# method from the only shipping bridge class.
-# ---------------------------------------------------------------------------
+# WebViewBridge must expose the union of public mixin methods.
 
 
 def test_webview_bridge_exposes_union_of_all_mixin_public_methods() -> None:
@@ -1306,18 +1241,6 @@ def test_webview_bridge_exposes_union_of_all_mixin_public_methods() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# fixed expected-set lock on the WebViewBridge public API
-# surface. The union-of-mixin test above guards against a mixin growing a new
-# method that fails to reach ``WebViewBridge``. It does NOT guard against a
-# historically-public method being silently dropped during a split (e.g. a
-# method that lived on ``WebViewBridge`` before the page module mapping and was accidentally
-# left out of every mixin). This fixed set closes that gap: every name listed
-# here MUST remain callable on ``WebViewBridge()``. The set is hand-curated
-# from the actual public methods declared across the 8 bridge files (verified
-# via AST at authoring time); it is intentionally NOT derived dynamically from
-# AST so a split refactor cannot silently shrink the locked surface.
-# ---------------------------------------------------------------------------
 
 EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
     # window injection
@@ -1417,16 +1340,6 @@ def test_webview_bridge_exposes_expected_fixed_public_api_surface() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Compat cleanup: ``bridge.py`` must NOT expose API facade module
-# symbols. Before the page module mapping cleanup, ``bridge.py``
-# imported ``app_api`` / ``export_api`` / ``project_api`` / ``rule_api`` /
-# ``settings_api`` / ``statistics_api`` / ``timeline_api`` at module level
-# so tests that monkeypatched ``bridge_module.<api>`` would resolve. After
-# the cleanup, each page-level mixin imports its own API facades and
-# ``bridge.py`` is a thin composition class. These tests lock the cleanup
-# so the compat imports cannot regress.
-# ---------------------------------------------------------------------------
 
 
 def test_bridge_module_does_not_expose_api_facade_symbols() -> None:
@@ -1480,10 +1393,8 @@ def test_bridge_module_all_equals_webview_bridge_only() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # Live-clock carry helper export contract. ``short_activity_carry_seconds``
 # is the public helper; ``carry_baseline_seconds`` must stay absent.
-# ---------------------------------------------------------------------------
 
 
 def test_short_activity_carry_seconds_exists_under_new_name() -> None:

@@ -12,9 +12,7 @@ from worktrace.services.resource_service import (
 )
 
 
-# ---------------------------------------------------------------------------
 # 1. create_activity writes activity_resource synchronously
-# ---------------------------------------------------------------------------
 
 class TestCreateActivityWritesResource:
     def test_normal_activity_creates_resource(self, temp_db):
@@ -66,9 +64,7 @@ class TestCreateActivityWritesResource:
         assert resource["is_anchor"] == 1
 
 
-# ---------------------------------------------------------------------------
 # 2. get_activity returns resource_* fields
-# ---------------------------------------------------------------------------
 
 class TestGetActivityReturnsResourceFields:
     def test_get_activity_includes_resource_fields(self, temp_db):
@@ -106,9 +102,7 @@ class TestGetActivityReturnsResourceFields:
         assert first["resource_kind"] == "app"
 
 
-# ---------------------------------------------------------------------------
 # 3. Excluded records do not save real resource metadata
-# ---------------------------------------------------------------------------
 
 class TestExcludedResourcePrivacy:
     def test_excluded_activity_uses_anonymous_resource(self, temp_db):
@@ -129,9 +123,7 @@ class TestExcludedResourcePrivacy:
         assert resource["uri_host"] is None
 
 
-# ---------------------------------------------------------------------------
 # 4. Duplicate create_or_update does not create duplicate rows
-# ---------------------------------------------------------------------------
 
 class TestNoDuplicateResourceRows:
     def test_upsert_does_not_duplicate(self, temp_db):

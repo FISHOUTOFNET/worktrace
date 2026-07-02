@@ -1,47 +1,4 @@
-"""Rule impact preview + safe single-rule backfill service.
-
-This module is the single backfill-capable surface exposed (via
-``worktrace.api.rule_api``) to the WebView bridge. It supports two
-user-visible operations on one *existing* folder or keyword rule:
-
-- ``preview_rule_impact`` — read-only impact preview: counts of eligible
-  existing activities the rule would hit, how many it would update, and how
-  many are skipped (manual / hidden / deleted / in_progress / non_normal /
-  already_target), plus up to 20 display-safe sample rows.
-- ``backfill_rule_impact`` — explicit, user-triggered safe backfill of the
-  matched eligible activities. Capped at ``MAX_RULE_BACKFILL_ACTIVITIES``
-  updates per call; writes nothing when the cap is exceeded
-  (``too_many_matches``). Runs in a single transaction with a rowcount guard
-  so a partial write is rolled back.
-
-Design constraints (locked by tests):
-
-- ``rule_type`` only accepts ``"folder"`` / ``"keyword"``. A folder id
-  resolved on the keyword path (or vice versa) is ``not_found``.
-- Backfill never modifies ``manual_override = 1`` or
-  ``assignment.is_manual = 1`` activities, hidden / deleted / in-progress /
-  non-normal activities, or activities already assigned to the rule's target
-  project.
-- Backfill never sets ``manual_override = 1``; it sets
-  ``auto_classified = 1`` and upserts the assignment with
-  ``is_manual = 0``, ``source = "folder_rule" | "keyword_rule"``, and the
-  inference confidence (85 folder / 80 keyword).
-- Backfill rejects disabled rules (``rule_disabled``) and unavailable target
-  projects (``project_not_available`` — disabled / archived / excluded).
-- Preview is informational: a disabled rule or unavailable target project
-  returns ``ok`` with zero counts and empty samples (the rule / project
-  availability is surfaced in the rule summary so the user understands why).
-- No raw ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard
-  text / note / SQL / traceback / raw row is ever returned in a payload.
-  Clipboard text may be used internally for keyword matching but is never
-  surfaced. Sample rows use ``format_safe_display_name`` for the resource
-  name so the unsafe ``window_title`` fallback never leaks.
-
-Keyword matching reuses ``project_inference_service.keyword_pattern_matches``
-so there is a single keyword text-building code path (no divergent second
-matcher). Folder matching reuses ``folder_rule_service._activity_matches_folder``
-so recursive / index semantics stay identical to the folder backfill.
-"""
+"""Rule impact preview + safe single-rule backfill service."""
 
 from __future__ import annotations
 
@@ -77,9 +34,7 @@ class RuleImpactError(Exception):
         self.code = code
 
 
-# ---------------------------------------------------------------------------
 # Rule + project resolution
-# ---------------------------------------------------------------------------
 
 
 def _resolve_folder_rule(conn, rule_id: int) -> dict | None:
@@ -148,9 +103,7 @@ def _rule_summary(rule: dict, rule_type: str, *, project_available: bool) -> dic
     }
 
 
-# ---------------------------------------------------------------------------
 # Activity fetch + eligibility classification
-# ---------------------------------------------------------------------------
 
 _ACTIVITY_SQL = """
 SELECT
@@ -266,9 +219,7 @@ def _classify_activities(activities: list[dict], rule: dict, rule_type: str, con
     return counts
 
 
-# ---------------------------------------------------------------------------
 # Display-safe sample rows
-# ---------------------------------------------------------------------------
 
 
 def _sample_row(activity: dict, rule: dict, rule_type: str) -> dict[str, Any]:
@@ -304,9 +255,7 @@ def _sample_rows(would_update: list[dict], rule: dict, rule_type: str, limit: in
     ]
 
 
-# ---------------------------------------------------------------------------
 # Public API
-# ---------------------------------------------------------------------------
 
 
 def preview_rule_impact(

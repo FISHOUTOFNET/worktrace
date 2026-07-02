@@ -1,34 +1,4 @@
-"""selected-rule batch operations service / API tests.
-
-Covers ``worktrace.services.rule_batch_service`` and the stable
-``worktrace.api.rule_api.preview_project_rules_batch_impact`` /
-``backfill_project_rules_batch`` /
-``set_project_rules_batch_enabled`` facades. The bridge layer is covered
-by ``tests/test_webview_project_rules_bridge.py``.
-
-Locked behavior:
-
-- ``rules`` input: non-empty ``list[dict]`` of
-  ``{"rule_type": "folder" | "keyword", "rule_id": positive int}``.
-  bool-as-int ids, non-int ids, non-positive ids, unknown rule types,
-  non-dict items, non-list inputs -> ``invalid_input``.
-- De-duplication preserves first occurrence order; max 20 rules ->
-  ``too_many_rules``.
-- Folder id on keyword path / keyword id on folder path -> ``not_found``.
-- Batch preview: read-only, aggregate counts + per-rule summaries, up to
-  20 display-safe sample rows across the whole batch, no DB write.
-- Batch apply: explicit trigger, full preflight, max 100 total updates
-  (``too_many_matches`` writes nothing), first-rule-wins on collision,
-  all-or-nothing transaction with rowcount guard rollback, never sets
-  ``manual_override = 1``, writes ``auto_classified = 1``,
-  ``is_manual = 0``, source + confidence matching the single-rule backfill.
-- Batch enable / disable: all-or-nothing, no delete / create / edit /
-  backfill, no project enabled state change, cache invalidation hooks
-  fire after commit.
-- No raw ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard /
-  note / SQL / traceback / raw row is ever returned in a payload.
-- All payloads are JSON-serializable.
-"""
+"""selected-rule batch operations service / API tests."""
 
 from __future__ import annotations
 
@@ -48,9 +18,7 @@ from worktrace.services import (
     rule_service,
 )
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _create_closed_activity(
@@ -73,12 +41,6 @@ def _create_closed_activity(
         project_id=project_id,
     )
     # Set end_time directly via SQL instead of calling ``close_activity``.
-    # made ``close_activity`` re-trigger ``process_new_activity``
-    # so automatic rules apply to just-closed activities. The batch /
-    # rule-impact tests need a closed-but-unassigned activity so they can
-    # verify batch apply / preview / backfill behaviour from a clean state.
-    # Bypassing ``close_activity`` keeps the helper's original contract
-    # (closed activity, no automatic rule application).
     from datetime import datetime
 
     from worktrace.db import get_connection, now_str
@@ -200,9 +162,7 @@ def _assert_json_serializable(payload: dict) -> None:
     json.dumps(payload, ensure_ascii=False, default=str)
 
 
-# ---------------------------------------------------------------------------
 # Input validation
-# ---------------------------------------------------------------------------
 
 
 def test_batch_preview_rejects_non_list(temp_db):
@@ -276,9 +236,7 @@ def test_batch_too_many_rules(temp_db):
     assert result["error"] == "too_many_rules"
 
 
-# ---------------------------------------------------------------------------
 # Cross-path resolution: folder id on keyword path / vice versa
-# ---------------------------------------------------------------------------
 
 
 def test_folder_id_on_keyword_path_returns_not_found(temp_db):
@@ -311,9 +269,7 @@ def test_nonexistent_rule_id_returns_not_found(temp_db):
     assert result["error"] == "not_found"
 
 
-# ---------------------------------------------------------------------------
 # Batch preview success
-# ---------------------------------------------------------------------------
 
 
 def test_batch_preview_success(temp_db):
@@ -412,9 +368,7 @@ def test_batch_preview_disabled_rule_returns_zero_counts(temp_db):
     assert rule_summary["counts"]["matched_count"] == 0
 
 
-# ---------------------------------------------------------------------------
 # Batch apply success
-# ---------------------------------------------------------------------------
 
 
 def test_batch_apply_success(temp_db):
@@ -474,9 +428,7 @@ def test_batch_apply_json_serializable(temp_db):
     _assert_json_serializable(result)
 
 
-# ---------------------------------------------------------------------------
 # Batch apply: total cap 100 + too_many_matches writes nothing
-# ---------------------------------------------------------------------------
 
 
 def test_batch_apply_total_cap_100(temp_db):
@@ -518,9 +470,7 @@ def test_batch_apply_too_many_matches_writes_nothing(temp_db):
         assert int(activity["auto_classified"]) == 0
 
 
-# ---------------------------------------------------------------------------
 # Batch apply: collision first-rule-wins
-# ---------------------------------------------------------------------------
 
 
 def test_batch_apply_collision_first_rule_wins(temp_db):
@@ -564,9 +514,7 @@ def test_batch_apply_dedupe_stable_order(temp_db):
     assert int(_activity_row(aid)["project_id"]) == project
 
 
-# ---------------------------------------------------------------------------
 # Batch apply: skips
-# ---------------------------------------------------------------------------
 
 
 def test_batch_apply_skips_manual_override(temp_db):
@@ -650,9 +598,7 @@ def test_batch_apply_skips_already_target(temp_db):
     assert result["result"]["counts"]["updated_count"] == 0
 
 
-# ---------------------------------------------------------------------------
 # Batch apply: preflight rejections
-# ---------------------------------------------------------------------------
 
 
 def test_batch_apply_rejects_disabled_rule(temp_db):
@@ -706,9 +652,7 @@ def test_batch_apply_rejects_too_many_rules(temp_db):
     assert result["error"] == "too_many_rules"
 
 
-# ---------------------------------------------------------------------------
 # Batch enable / disable
-# ---------------------------------------------------------------------------
 
 
 def test_batch_enable_success(temp_db):
@@ -849,9 +793,7 @@ def test_batch_toggle_folder_id_on_keyword_path_not_found(temp_db):
     assert result["error"] == "not_found"
 
 
-# ---------------------------------------------------------------------------
 # No schema change
-# ---------------------------------------------------------------------------
 
 
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "worktrace" / "schema.sql"
@@ -869,9 +811,7 @@ def test_no_schema_change_batch_service(temp_db):
     assert _SCHEMA_PATH.read_text(encoding="utf-8").strip() != ""
 
 
-# ---------------------------------------------------------------------------
 # Hardening lock: validation variants + preview/apply/toggle guarantees
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

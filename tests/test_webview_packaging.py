@@ -41,7 +41,6 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-# --- packaging resource tests -------------------------------------------
 
 
 def test_spec_bundles_webview_ui_static_resources():
@@ -128,7 +127,6 @@ def test_entry_script_forwards_to_worktrace_main():
     assert "from worktrace.main import main" in source
 
 
-# --- startup tests ------------------------------------------------------
 
 
 def test_main_module_does_not_import_worktrace_app():
@@ -257,7 +255,6 @@ print(json.dumps({"started": False, "has_main": hasattr(worktrace.webview_main, 
     assert loaded["has_main"] is True
 
 
-# --- WebView2 runtime detection tests -----------------------------------
 
 
 def test_runtime_check_module_importable():

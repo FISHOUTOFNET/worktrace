@@ -292,17 +292,6 @@ def test_clipboard_transition_expires_after_ten_seconds(temp_db):
     assert _assignment_source(target) == "same_project_context"
 
 
-# --- Short-gap same-project anchor bridging ---------------------------
-# When a brief uncategorized context anchor (e.g. a short .doc / .docx
-# Word activity) is sandwiched between two same-project anchors with a
-# total middle duration under ``REPORT_CONTEXT_SHORT_MERGE_SECONDS``
-# (5 * 60 = 300s), the middle anchor is bridged to the surrounding
-# project using the existing ``anchor_context`` source. This covers the
-# real-world bug where ``_is_context_anchor(row)`` caused a direct
-# ``continue`` in the main loop, leaving the short Word document
-# uncategorized and also blocking context carry for later auxiliary
-# activities. The bridging is persisted to ``activity_project_assignment``
-# and synced to ``activity_log.project_id``.
 
 
 def test_short_gap_same_project_bridges_middle_word_docx(temp_db):
@@ -497,9 +486,7 @@ def test_short_gap_bridges_multiple_middle_anchors(temp_db):
     assert activity_service.get_activity(middle2)["project_id"] == project
 
 
-# ---------------------------------------------------------------------------
 # Direct assignment anchor bridge (keyword_rule / folder_rule / manual)
-# ---------------------------------------------------------------------------
 
 def _set_direct_assignment_source(activity_id: int, source: str, project_id: int) -> None:
     """Override a browser activity's assignment source to a direct-assignment

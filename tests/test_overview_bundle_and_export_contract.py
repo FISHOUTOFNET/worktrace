@@ -36,9 +36,7 @@ from worktrace.services import settings_service, statistics_service, timeline_se
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
-# ---------------------------------------------------------------------------
 # Fixtures & helpers
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -188,9 +186,7 @@ def _pending_snapshot() -> dict:
     )
 
 
-# ---------------------------------------------------------------------------
 # 1. Overview bundle — single sample (section 九.4)
-# ---------------------------------------------------------------------------
 
 
 def test_overview_bundle_returns_all_required_payloads(bridge):
@@ -279,9 +275,7 @@ def test_overview_bundle_is_display_safe(bridge):
             assert key not in sensitive_keys, f"bundle sub-payload leaked key: {key}"
 
 
-# ---------------------------------------------------------------------------
 # 2. Timeline / Detail (section 九.5)
-# ---------------------------------------------------------------------------
 
 
 def test_timeline_returns_live_projection(bridge):
@@ -359,9 +353,7 @@ def test_timeline_detail_pending_uses_display_project_not_candidate(bridge):
             assert detail_row["project_name"] != "ProjectB"
 
 
-# ---------------------------------------------------------------------------
 # 3. Statistics / Export (section 九.6)
-# ---------------------------------------------------------------------------
 
 
 def test_overview_kpi_include_live_uses_display_project(bridge):

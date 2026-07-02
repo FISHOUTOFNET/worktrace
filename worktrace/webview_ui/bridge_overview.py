@@ -177,28 +177,7 @@ class OverviewBridgeMixin:
             return dict(_GENERIC_ERROR)
 
     def get_recent_activities(self) -> dict[str, Any]:
-        """Return up to 20 recent project sessions for today.
-
-        Unified live-display model. The payload supports three item kinds:
-
-        - **virtual live item** — prepended when the current snapshot is a
-          normal unpersisted <30s activity. ``is_virtual`` /
-          ``is_virtual_live`` are true, ``activity_id`` is ``0``,
-          ``source`` is ``"snapshot"``, ``edit_disabled`` is true, and the
-          time range shows "进行中". The DB is NEVER written.
-        - **persisted open live item** — a real DB session whose
-          ``is_in_progress`` is true. ``duration_seconds`` already includes
-          the live seconds from ``timeline_service._live_duration_for_row``.
-        - **closed DB item** — a finalized session row.
-
-        Each item carries ``duration_seconds`` (fetched snapshot duration),
-        ``is_in_progress``, ``is_live_projected`` (true for virtual live
-        items), ``is_virtual``, ``is_virtual_live``, ``live_display_key``,
-        ``activity_id``, ``source``, and ``edit_disabled``. The frontend
-        ticker locates the live item by flag (not by a single-scenario index)
-        and increments its ``duration_seconds`` by the unified live clock
-        delta (``live_started_at_epoch_ms`` + ``carry_seconds``).
-        """
+        """Return up to 20 recent project sessions for today."""
         try:
             today = timeline_api.get_default_report_date()
             snapshot = settings_api.get_current_activity_snapshot()
@@ -296,32 +275,7 @@ class OverviewBridgeMixin:
         }
 
     def get_overview_live_bundle(self) -> dict[str, Any]:
-        """Return Overview KPI + current activity + recent activities + live
-        projection in a SINGLE backend call from a SINGLE snapshot sample.
-
-        Reading the snapshot ONCE (instead of one call per sub-payload)
-        avoids the two-sample drift where the recent live row could be
-        1-2 seconds ahead of the current activity, which made the
-        frontend freeze the current activity while waiting for it to
-        catch up.
-
-        The bundle derives every sub-payload from that one sample:
-        from it:
-
-        - ``live_projection`` — the unified live projection (single
-          source of truth for the frontend ticker);
-        - ``overview`` — KPI totals (with ``include_live=True`` so the
-          live projection's display project is counted);
-        - ``current_activity`` — the current-activity summary;
-        - ``activities`` — the recent-activities list;
-        - ``sample_id`` — ``stable_live_key_hash`` so the frontend can
-          verify all sub-payloads came from the same sample.
-
-        Pending project transitions are honored: the recent live row
-        uses the display project (NOT the candidate project), so it
-        never appears as a separate candidate-project row during the
-        30-second pending window.
-        """
+        """Return Overview KPI + current activity + recent activities + live"""
         try:
             today = timeline_api.get_default_report_date()
             snapshot = settings_api.get_current_activity_snapshot()
@@ -364,37 +318,7 @@ class OverviewBridgeMixin:
             return dict(_GENERIC_ERROR)
 
     def get_refresh_state(self, report_date=None) -> dict[str, Any]:
-        """Return a lightweight refresh-state snapshot for the heartbeat.
-
-        The frontend heartbeat calls this once per second after running the
-        local ticker. It compares the returned ``refresh_revision`` with
-        the previous tick's value: if unchanged, no heavy interface
-        (``get_overview`` / ``get_recent_activities`` / ``get_timeline``)
-        is invoked. If changed, only the data needed by the current page
-        is re-pulled.
-
-        ``report_date`` (optional) scopes the structural signature to the
-        currently viewed Timeline date. When omitted the facade defaults
-        to today.
-
-        The payload is display-safe: no raw ``window_title``,
-        ``file_path_hint``, ``note``, ``clipboard``, ``traceback`` or SQL
-        is surfaced. ``refresh_revision`` is a structural-only signature
-        (it excludes ``elapsed_seconds`` / ``extra_seconds`` /
-        ``snapshot_updated_at`` / ``Date.now()``) so natural time
-        progression within the same activity does not trigger a heavy
-        refresh.
-
-        The payload also carries the unified live clock fields
-        (``live_started_at_epoch_ms``, ``carry_seconds``,
-        ``stable_live_key``, ``stable_live_key_hash``) so the frontend
-        ticker can compute the live duration from a stable start-time
-        anchor.
-
-        The bridge method only calls the ``settings_api.get_refresh_state``
-        facade and wraps the result with a stable error payload. It does
-        not import services / db / collector / runtime / config / security.
-        """
+        """Return a lightweight refresh-state snapshot for the heartbeat."""
         try:
             return settings_api.get_refresh_state(report_date)
         except Exception:

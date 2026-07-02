@@ -1,57 +1,4 @@
-"""ActivityLifecycle Command Facade — sole owner of open-row state transitions.
-
-Architecture boundary (see architecture.md §"Write side"):
-
-    collector / recovery / clipboard / shutdown / runtime lifecycle
-        ↓
-    activity_lifecycle_service   (THIS module — command facade)
-        ↓
-    activity_service + project_inference_service + resource_service
-    + session_boundary_service
-
-Responsibilities
-----------------
-This service is the single command owner for every open-row lifecycle
-transition in WorkTrace:
-
-- creating a new open activity (closes pre-existing open rows first);
-- closing an open activity;
-- virtual → persisted_open persistence (30-second threshold);
-- clipboard force-persist (bypasses the 30-second threshold, STATUS_NORMAL
-  only);
-- midnight split / midnight-anchor persistence;
-- recovery close / recovery cross-midnight split;
-- close-finalize convergence (project inference / automatic rules) on
-  every row that transitions open → closed.
-
-``activity_service`` is now a pure low-level CRUD helper
-(``insert_activity_row``, ``close_activity_row``, ``close_all_open_rows``,
-``create_activity`` / ``close_activity`` as low-level helpers). It does
-NOT close pre-existing open rows, does NOT run project inference, and
-does NOT import this module. Production callers (collector, recovery,
-clipboard, shutdown) route through this facade so the open-row state
-machine has exactly one owner.
-
-Design rules
-------------
-- The facade is **stateless**. Callers (e.g. ``AutoActivityRecorder``)
-  continue to own their in-memory state (``persisted_activity_id``,
-  ``current_extra_seconds`` …); the facade only owns the DB transition.
-- Inference / automatic-rules convergence runs **outside** the DB
-  transaction (lazy connection) to avoid nested-connection / lock issues.
-- An inference failure on one row is logged and never blocks the
-  remaining rows or the new activity creation.
-- Manual assignments / ``manual_override`` / concrete DB assignments are
-  never overridden (guaranteed by ``process_new_activity`` /
-  ``sync_persisted_open_activity_project`` guards).
-- ``suggested_project_name`` never auto-creates a project.
-- The 30-second persistence threshold (``HISTORY_PERSIST_THRESHOLD_SECONDS``)
-  is enforced by the *caller*, not here — the facade only executes the
-  persist command once the caller has decided the threshold is met.
-- Clipboard force-persist bypasses the threshold but is restricted to
-  ``STATUS_NORMAL`` by the caller; the facade does not re-check the
-  threshold.
-"""
+"""ActivityLifecycle Command Facade — sole owner of open-row state transitions."""
 
 from __future__ import annotations
 
@@ -62,9 +9,7 @@ from ..constants import STATUS_NORMAL
 from . import activity_service, session_boundary_service
 
 
-# ---------------------------------------------------------------------------
 # Unified close-finalize helper
-# ---------------------------------------------------------------------------
 
 
 def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
@@ -100,9 +45,7 @@ def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
             )
 
 
-# ---------------------------------------------------------------------------
 # Open-row lifecycle commands
-# ---------------------------------------------------------------------------
 
 
 def start_activity(
@@ -145,28 +88,7 @@ def persist_open_activity_if_ready(
     source: str,
     payload: dict[str, Any],
 ) -> int:
-    """Persist a virtual activity as a new open DB row.
-
-    This is the normal 30-second-threshold persistence path. The caller
-    (``AutoActivityRecorder``) is responsible for enforcing the threshold;
-    this facade only executes the persist command.
-
-    Steps (in order):
-
-    1. ``insert_activity_row`` — inserts the open row (pure CRUD, no
-       close-old-rows, no finalize).
-    2. ``finalize_created_activity`` — routes through
-       ``process_new_activity``. For an open row this is effectively a
-       no-op (``process_new_activity`` skips in-progress rows) but is kept
-       for contract symmetry with the close path.
-    3. ``sync_persisted_open_activity_project`` — converges the open row's
-       project assignment so the virtual → persisted_open transition does
-       not revert a concrete inferred project to ``未归类``. This is a
-       no-op for rows that are already concrete (folder_rule /
-       keyword_rule / midnight_anchor) or manually assigned.
-
-    Returns the new activity_id.
-    """
+    """Persist a virtual activity as a new open DB row."""
     activity_id = activity_service.insert_activity_row(
         start_time=start_time,
         source=source,
@@ -331,9 +253,7 @@ def recover_first_half_close(
     )
 
 
-# ---------------------------------------------------------------------------
 # Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _sync_open_row_project_safely(activity_id: int, *, status: str | None) -> None:

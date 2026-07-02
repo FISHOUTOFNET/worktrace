@@ -45,9 +45,7 @@ def runner():
     return module
 
 
-# ---------------------------------------------------------------------------
 # A / C. rules.js -> Project Rules static contract + bridge + boundary + webview
-# ---------------------------------------------------------------------------
 
 
 def test_rules_js_selects_project_rules_bridge_boundary_and_webview(runner):
@@ -67,9 +65,7 @@ def test_rules_js_adds_import_smoke(runner):
     )
 
 
-# ---------------------------------------------------------------------------
 # B. bridge.py -> bridge tests + boundary
-# ---------------------------------------------------------------------------
 
 
 def test_bridge_py_selects_bridge_tests_and_boundary(runner):
@@ -92,9 +88,7 @@ def test_bridge_py_selects_bridge_tests_and_boundary(runner):
     )
 
 
-# ---------------------------------------------------------------------------
 # B (the page module mapping). New split mixin files -> bridge tests + boundary
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("bridge_file", [
@@ -105,15 +99,7 @@ def test_bridge_py_selects_bridge_tests_and_boundary(runner):
     "worktrace/webview_ui/bridge_timeline.py",
 ])
 def test_bridge_mixin_file_selects_bridge_tests_and_boundary(runner, bridge_file):
-    # each new split mixin file must trigger section B (WebView
-    # bridge) so the broad bridge test suite + boundary tests run when any
-    # mixin body changes. These mixins are not frontend resources, so no
-    # import smoke is expected from section B.
-    # section B now also carries the per-feature split-
-    # sensitive bridge tests (time_edit / split / visibility / statistics /
-    # csv_export) plus the settings-privacy / default-entry / app-runtime-
-    # privacy-gate tests so a mixin body change can never silently drop a
-    # specialized bridge test from the feature-specific D / E / K1 sections.
+    # csv_export) plus the settings-privacy / default-entry / app-runtime
     sel = runner.select_targets([bridge_file])
     for expected in [
         "tests/test_webview_bridge.py",
@@ -167,12 +153,10 @@ def test_m4_bridge_settings_py_also_selects_k1_settings_suite(runner):
     )
 
 
-# ---------------------------------------------------------------------------
 # B/D/E/K1 (the page module mapping). Per-split-file specialized test locks.
 # Each split mixin file is a trigger for its own feature section (D / E / K1)
 # in addition to section B. These tests lock the feature-specific specialized
 # tests so a future runner refactor cannot silently drop them.
-# ---------------------------------------------------------------------------
 
 
 def test_bridge_timeline_py_selects_timeline_specialized_tests(runner):
@@ -275,11 +259,9 @@ def test_bridge_py_and_bridge_overview_py_select_broad_bridge_and_boundary(runne
         )
 
 
-# ---------------------------------------------------------------------------
 # C. rule_api.py -> Project Rules keyword + folder API/service/bridge tests
 # (rule_api.py no longer triggers frontend/static contract tests;
 # it triggers C2 keyword + C3 folder + bridge + boundary only.)
-# ---------------------------------------------------------------------------
 
 
 def test_rule_api_py_selects_project_rules_suite(runner):
@@ -316,9 +298,7 @@ def test_rule_api_py_does_not_trigger_project_lifecycle_tests(runner):
     assert "tests/test_project_rules_project_lifecycle.py" not in sel.pytest_targets
 
 
-# ---------------------------------------------------------------------------
 # C1. _write_contract.py -> broad Project Rules suite (shared helper)
-# ---------------------------------------------------------------------------
 
 
 def test_write_contract_helper_selects_broad_project_rules_suite(runner):
@@ -339,9 +319,7 @@ def test_write_contract_helper_selects_broad_project_rules_suite(runner):
     assert any("Shared Project Rules contract helper" in w for w in sel.warnings)
 
 
-# ---------------------------------------------------------------------------
 # C2. rule_service.py -> keyword rule tests (no folder, no lifecycle, no static)
-# ---------------------------------------------------------------------------
 
 
 def test_rule_service_py_selects_keyword_tests_only(runner):
@@ -364,9 +342,7 @@ def test_rule_service_py_selects_keyword_tests_only(runner):
     assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
 
 
-# ---------------------------------------------------------------------------
 # C3. folder_rule_service.py -> folder rule tests (no keyword, no lifecycle)
-# ---------------------------------------------------------------------------
 
 
 def test_folder_rule_service_py_selects_folder_tests_only(runner):
@@ -385,9 +361,7 @@ def test_folder_rule_service_py_selects_folder_tests_only(runner):
     assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
 
 
-# ---------------------------------------------------------------------------
 # C4. project_api.py / project_service.py -> project lifecycle tests only
-# ---------------------------------------------------------------------------
 
 
 def test_project_api_py_selects_lifecycle_tests_only(runner):
@@ -421,9 +395,7 @@ def test_project_service_py_selects_lifecycle_tests_only(runner):
     assert "tests/webview/test_project_rules_static_contract.py" not in sel.pytest_targets
 
 
-# ---------------------------------------------------------------------------
 # C5. bridge_rules.py -> Project Rules bridge tests + boundary only
-# ---------------------------------------------------------------------------
 
 
 def test_bridge_rules_py_selects_project_rules_bridge_tests_only(runner):
@@ -445,9 +417,7 @@ def test_bridge_rules_py_selects_project_rules_bridge_tests_only(runner):
     assert sel.smoke_commands == []
 
 
-# ---------------------------------------------------------------------------
 # C6. rules_project_actions.js -> Project Rules static contract + smoke
-# ---------------------------------------------------------------------------
 
 
 def test_rules_project_actions_js_selects_static_contract_and_smoke(runner):
@@ -464,9 +434,7 @@ def test_rules_project_actions_js_selects_static_contract_and_smoke(runner):
     )
 
 
-# ---------------------------------------------------------------------------
 # C6 (the modular split). New split modules -> Project Rules static contract + smoke
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("js_module", [
@@ -520,9 +488,7 @@ def test_rules_split_module_does_not_trigger_api_or_service_tests(runner, js_mod
         )
 
 
-# ---------------------------------------------------------------------------
 # C7. rule_impact_service.py -> rule impact tests + bridge + boundary (the impact)
-# ---------------------------------------------------------------------------
 
 
 def test_rule_impact_service_py_selects_impact_tests(runner):
@@ -548,10 +514,8 @@ def test_rule_impact_service_py_selects_impact_tests(runner):
     assert sel.smoke_commands == []
 
 
-# ---------------------------------------------------------------------------
 # C8. rule_automation_service.py -> automatic rules tests + bridge + boundary
 # (the rule automation)
-# ---------------------------------------------------------------------------
 
 
 def test_rule_automation_service_py_selects_automatic_rules_tests(runner):
@@ -581,10 +545,8 @@ def test_rule_automation_service_py_selects_automatic_rules_tests(runner):
     assert sel.smoke_commands == []
 
 
-# ---------------------------------------------------------------------------
 # C9. rule_batch_service.py -> batch operations tests + bridge + boundary
 # (the rule automation)
-# ---------------------------------------------------------------------------
 
 
 def test_rule_batch_service_py_selects_batch_operations_tests(runner):
@@ -613,9 +575,7 @@ def test_rule_batch_service_py_selects_batch_operations_tests(runner):
     assert sel.smoke_commands == []
 
 
-# ---------------------------------------------------------------------------
 # I. docs-only -> not full pytest
-# ---------------------------------------------------------------------------
 
 
 def test_docs_only_does_not_select_full_pytest(runner):
@@ -623,6 +583,7 @@ def test_docs_only_does_not_select_full_pytest(runner):
     # Finite target set, not a bare full-suite invocation.
     assert sel.pytest_targets, "docs-only should select a finite target set"
     assert "tests/test_release_docs.py" in sel.pytest_targets
+    assert "tests/test_comment_hygiene.py" in sel.pytest_targets
     cmd = runner.build_pytest_command(sel.pytest_targets, [])
     assert cmd != ["python", "-m", "pytest"], "docs-only must not be full suite"
 
@@ -630,11 +591,10 @@ def test_docs_only_does_not_select_full_pytest(runner):
 def test_docs_directory_prefix_matches(runner):
     sel = runner.select_targets(["docs/current-state.md"])
     assert "tests/test_release_docs.py" in sel.pytest_targets
+    assert "tests/test_comment_hygiene.py" in sel.pytest_targets
 
 
-# ---------------------------------------------------------------------------
 # F. DB/schema -> broad suite + warning
-# ---------------------------------------------------------------------------
 
 
 def test_db_schema_change_gives_broad_suite_and_warning(runner):
@@ -663,14 +623,13 @@ def test_db_py_triggers_same_broad_suite(runner):
     assert any("DB/schema" in w for w in sel.warnings)
 
 
-# ---------------------------------------------------------------------------
 # L. test file changes -> run that test file directly
-# ---------------------------------------------------------------------------
 
 
 def test_changed_test_file_runs_directly(runner):
     sel = runner.select_targets(["tests/test_rule_service.py"])
     assert "tests/test_rule_service.py" in sel.pytest_targets
+    assert "tests/test_comment_hygiene.py" in sel.pytest_targets
 
 
 def test_changed_webview_test_file_also_runs_webview_suite(runner):
@@ -691,23 +650,20 @@ def test_changed_conftest_selects_broad_suite(runner):
         assert expected in sel.pytest_targets, f"missing {expected}"
 
 
-# ---------------------------------------------------------------------------
 # K. unknown worktrace/ source -> smoke + boundary + warning
-# ---------------------------------------------------------------------------
 
 
 def test_unknown_worktrace_source_selects_smoke_and_boundary(runner):
     sel = runner.select_targets(["worktrace/formatters.py"])
     assert "tests/test_startup_imports.py" in sel.pytest_targets
     assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets
+    assert "tests/test_comment_hygiene.py" in sel.pytest_targets
     assert any("Unknown worktrace/" in w for w in sel.warnings), (
         "expected unknown-source warning"
     )
 
 
-# ---------------------------------------------------------------------------
 # H. collector / platform / resource model
-# ---------------------------------------------------------------------------
 
 
 def test_resource_helper_change_selects_resource_tests(runner):
@@ -722,9 +678,7 @@ def test_collector_directory_prefix_matches(runner):
     assert "tests/test_collector.py" in sel.pytest_targets
 
 
-# ---------------------------------------------------------------------------
 # existing_targets filtering
-# ---------------------------------------------------------------------------
 
 
 def test_existing_targets_filters_nonexistent(runner, tmp_path):
@@ -741,9 +695,7 @@ def test_existing_targets_filters_nonexistent(runner, tmp_path):
     assert "tests/__totally_fake__.py" not in out
 
 
-# ---------------------------------------------------------------------------
 # De-duplication + stable order
-# ---------------------------------------------------------------------------
 
 
 def test_targets_are_deduped_and_stable(runner):
@@ -763,9 +715,7 @@ def test_overlapping_rules_dedup(runner):
     assert sel.pytest_targets.count("tests/test_ui_backend_boundary.py") == 1
 
 
-# ---------------------------------------------------------------------------
 # build_pytest_command
-# ---------------------------------------------------------------------------
 
 
 def test_build_pytest_command_appends_extra_args(runner):
@@ -787,9 +737,7 @@ def test_build_pytest_command_empty_targets_is_full_suite(runner):
     assert runner.build_pytest_command([], []) == ["python", "-m", "pytest"]
 
 
-# ---------------------------------------------------------------------------
 # No changed files -> light smoke set (not full suite)
-# ---------------------------------------------------------------------------
 
 
 def test_no_changed_files_uses_smoke_set(runner):
@@ -797,6 +745,7 @@ def test_no_changed_files_uses_smoke_set(runner):
     assert "tests/test_startup_imports.py" in sel.pytest_targets
     assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets
     assert "tests/webview/" in sel.pytest_targets
+    assert "tests/test_comment_hygiene.py" in sel.pytest_targets
     assert any("No changed files" in w for w in sel.warnings)
     cmd = runner.build_pytest_command(sel.pytest_targets, [])
     assert cmd != ["python", "-m", "pytest"], (
@@ -811,9 +760,29 @@ def test_no_changed_files_adds_import_smoke(runner):
     )
 
 
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("changed", [
+    "worktrace/services/activity_service.py",
+    "worktrace/webview_ui/js/core.js",
+    "README.md",
+])
+def test_common_changes_select_comment_hygiene(runner, changed):
+    sel = runner.select_targets([changed])
+    assert "tests/test_comment_hygiene.py" in sel.pytest_targets
+
+
+@pytest.mark.parametrize("changed", [
+    "comment_policy.json",
+    "scripts/comment_hygiene.py",
+    ".ai/comment-hygiene-fixer.md",
+    "tests/test_comment_hygiene.py",
+])
+def test_comment_hygiene_owner_changes_select_self_tests(runner, changed):
+    sel = runner.select_targets([changed])
+    assert "tests/test_comment_hygiene.py" in sel.pytest_targets
+    assert "tests/test_run_affected_tests.py" in sel.pytest_targets
+
+
 # Normalization + misc invariants
-# ---------------------------------------------------------------------------
 
 
 def test_backslash_paths_are_normalized(runner):
@@ -842,9 +811,7 @@ def test_split_passthrough_without_separator(runner):
     assert extra == []
 
 
-# ---------------------------------------------------------------------------
 # K1 Settings / Privacy WebView -> settings + boundary + packaging
-# ---------------------------------------------------------------------------
 
 
 def test_settings_api_py_selects_settings_tests(runner):
@@ -964,9 +931,7 @@ def test_k1_does_not_trigger_project_rules_suite(runner):
         )
 
 
-# ---------------------------------------------------------------------------
 # K2 (the first-run notice). WebView main / startup gate -> entry + startup + boundary
-# ---------------------------------------------------------------------------
 
 
 def test_webview_main_py_selects_startup_tests(runner):
@@ -1094,9 +1059,7 @@ def test_k2_does_not_trigger_timeline_static_contract(runner):
     )
 
 
-# ---------------------------------------------------------------------------
 # L1. Context assignment service -> context_service tests + timeline service
-# ---------------------------------------------------------------------------
 
 
 def test_context_service_py_selects_l1_targets(runner):
@@ -1115,10 +1078,8 @@ def test_context_service_py_selects_l1_targets(runner):
         )
 
 
-# ---------------------------------------------------------------------------
 # N. Activity lifecycle boundary -> lifecycle + collector + recovery + state
 # machine + clipboard + automatic rules + live display + timeline + statistics
-# ---------------------------------------------------------------------------
 
 
 def test_activity_lifecycle_service_py_selects_lifecycle_boundary_suite(runner):
@@ -1211,9 +1172,7 @@ def test_app_runtime_py_selects_lifecycle_boundary_suite(runner):
         )
 
 
-# ---------------------------------------------------------------------------
 # M (strengthened). Bridge overview / timeline -> live display contract
-# ---------------------------------------------------------------------------
 
 
 def test_bridge_overview_py_selects_live_display_contract(runner):

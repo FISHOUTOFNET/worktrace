@@ -27,7 +27,6 @@ from static_helpers import (
 )
 
 
-# --- section -------------------------------------------------
 
 
 def test_frontend_js_detail_rows_are_read_only():
@@ -388,7 +387,6 @@ def test_index_html_consolidation_has_no_forbidden_controls():
 
 
 
-# --- section -------------------------------------------------
 
 
 def test_index_html_has_correction_shell_container():
@@ -852,7 +850,6 @@ def test_bridge_imports_only_allowed_modules():
 
 
 
-# --- section -----------------------------------------------
 
 
 def test_frontend_js_correction_shell_highlight_timer_variable_declared():
@@ -1216,7 +1213,6 @@ def test_bridge_no_unexpected_methods_for_contract():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_frontend_js_has_batch_selection_state():
@@ -1582,7 +1578,6 @@ def test_frontend_js_batch_save_rechecks_stale_ids():
 
 
 
-# --- section ------------------------------------------------
 
 
 def test_frontend_js_batch_saving_independent_state_var():
@@ -1917,7 +1912,6 @@ def test_styles_css_has_batch_disabled_states():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_frontend_js_has_batch_note_saving_state():
@@ -2358,7 +2352,6 @@ def test_frontend_js_batch_note_render_called_from_render_correction_shell():
 
 
 
-# --- section ------------------------------------------------
 
 
 def test_frontend_js_batch_note_save_checks_batch_project_saving():
@@ -2561,7 +2554,6 @@ def test_frontend_js_batch_note_success_clears_selection_and_textarea():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_index_html_has_restore_section():
@@ -3060,7 +3052,6 @@ def test_styles_css_restore_empty_state():
 
 
 
-# --- section ------------------------------------------------
 
 
 def test_frontend_js_restore_stale_row_guard():
@@ -3242,7 +3233,6 @@ def test_frontend_js_restore_stale_guard_no_bridge_call():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_index_html_correction_shell_has_context_card_3b9():
@@ -3880,7 +3870,6 @@ def test_bridge_imports_only_allowed_modules_contract_2():
 
 
 
-# --- section ------------------------------------------------
 
 
 def test_frontend_js_save_batch_note_cross_save_uses_unified_message():

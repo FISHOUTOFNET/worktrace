@@ -105,17 +105,7 @@
     }
     App.renderProjectRuleProject = renderProjectRuleProject;
 
-    // Excluded-rule creation form. Rendered dynamically inside the
-    // ``排除规则`` card so it does NOT count as a static submit button
-    // (the static contract test locks the static submit button count to 3).
-    // The form has two sub-sections: keyword rule creation and folder rule
-    // creation. Both call the dedicated excluded-rule bridge methods that
-    // do NOT accept an arbitrary project_id (the API pins the project_id
     // to EXCLUDED_PROJECT internally). Project lifecycle buttons are NOT
-    // rendered for the excluded card (``editable`` / ``can_toggle`` /
-    // ``can_archive`` are all false for system projects), but rule-level
-    // CRUD (edit / delete / toggle) remains available in the rules row
-    // list below.
     function renderExcludedRuleCreateForm() {
         var writeInProgress = !!(App.rulesCreatingKeyword || App.rulesCreatingFolder);
         var kwDisabled = writeInProgress ? " disabled" : "";
@@ -200,15 +190,7 @@
             folderButtons = '  <button class="rules-folder-edit-button" type="button" data-rule-kind="folder" data-rule-id="' + count(ruleId) + '"' + folderBtnDisabled + '>' + editLabel + '</button>';
             folderButtons += '  <button class="rules-folder-delete-button" type="button" data-rule-kind="folder" data-rule-id="' + count(ruleId) + '"' + folderBtnDisabled + '>' + folderDeleteLabel + '</button>';
         }
-        // Every folder / keyword rule with a valid id gets a "预览影响"
-        // (read-only impact preview) and "应用到历史记录" (safe single-rule
-        // backfill) button. The preview button stays enabled for disabled
-        // rules (preview is informational and returns zero counts); the
-        // backfill button is disabled for disabled rules because backfill
-        // refuses to apply a disabled rule (``rule_disabled``). Both buttons
-        // are disabled while any rule write is in flight so the impact paths
         // can never pollute the toggle / delete / edit / lifecycle write
-        // paths, and vice versa.
         var impactButtons = "";
         if (ruleId) {
             var impactWriteInProgress = !!(
@@ -233,13 +215,6 @@
             impactButtons = '  <button class="rules-preview-impact-button" type="button" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + previewBtnDisabled + '>' + previewLabel + '</button>';
             impactButtons += '  <button class="rules-backfill-button" type="button" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + backfillDisabled + '>' + backfillLabel + '</button>';
         }
-        // Every folder / keyword rule with a valid id gets a batch-selection
-        // checkbox as the first element of the row. The checkbox is disabled
-        // while any batch operation is in flight OR while any per-rule write
-        // is in flight on this row, so the batch selection state can never
-        // pollute an in-flight per-rule write (and vice versa). Selection
-        // lives in ``App.rulesBatchSelectedKeys`` (JS memory only — no
-        // browser storage APIs).
         var batchCheckbox = "";
         var batchSelected = false;
         if (ruleId) {
@@ -317,7 +292,6 @@
     }
     App.renderProjectRuleRow = renderProjectRuleRow;
 
-    // --- rule impact preview / backfill result panel render ---
 
     function renderProjectRuleImpactPreview(ruleKey, impact) {
         // Render the read-only impact preview panel below the rules list.
@@ -432,18 +406,8 @@
     }
     App.renderProjectRuleBackfillResult = renderProjectRuleBackfillResult;
 
-    // --- selected-rule batch operations toolbar + panel -------
 
     function renderProjectRulesBatchToolbar() {
-        // Render the batch toolbar (selected count + 5 buttons). The
-        // toolbar is rendered into ``#rules-batch-toolbar`` by ``rules.js``
-        // on every list render. Buttons are disabled when there is no
-        // selection OR any batch operation is in flight. The clear button
-        // is only enabled when there is a selection (it stays enabled
-        // during in-flight so the user can cancel a pending selection —
-        // but the batch in-flight guard in the handler still refuses to
-        // act while a batch op is running, so this is purely visual).
-        // visual).
         var selectedCount = Object.keys(App.rulesBatchSelectedKeys || {}).length;
         var hasSelection = selectedCount > 0;
         var inFlight = !!App.rulesBatchInFlight;
@@ -567,7 +531,6 @@
     }
     App.renderProjectRulesBatchPanel = renderProjectRulesBatchPanel;
 
-    // --- Private render helpers (used only by render functions above) ---
 
     function text(value, fallback) {
         return App.escapeHtml(App.safeText(value, fallback));

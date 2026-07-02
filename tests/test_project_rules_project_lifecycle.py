@@ -36,7 +36,6 @@ from worktrace.services import (
 )
 
 
-# --- helpers -------------------------------------------------------------
 
 
 def _counts() -> dict[str, int]:
@@ -108,7 +107,6 @@ def _assert_no_sensitive_tokens(rendered: str) -> None:
         assert forbidden not in lowered, forbidden
 
 
-# --- create_project_for_rules -------------------------------------------
 
 
 def test_create_project_success_trims_name_and_description(temp_db):
@@ -230,7 +228,6 @@ def test_create_project_payload_is_json_serializable(temp_db):
     json.dumps(result, ensure_ascii=False)
 
 
-# --- update_project_for_rules -------------------------------------------
 
 
 def test_update_project_success_trims_name_and_description(temp_db):
@@ -380,7 +377,6 @@ def test_update_project_payload_is_json_serializable(temp_db):
     json.dumps(result, ensure_ascii=False)
 
 
-# --- set_project_enabled_for_rules --------------------------------------
 
 
 def test_set_enabled_success_true(temp_db):
@@ -478,7 +474,6 @@ def test_set_enabled_payload_is_json_serializable(temp_db):
     json.dumps(result, ensure_ascii=False)
 
 
-# --- archive_project_for_rules ------------------------------------------
 
 
 def test_archive_success_sets_is_archived(temp_db):
@@ -596,7 +591,6 @@ def test_archive_payload_is_json_serializable(temp_db):
     json.dumps(result, ensure_ascii=False)
 
 
-# --- cache invalidation locks -------------------------------------------
 
 
 def _install_cache_spies(monkeypatch):
@@ -777,7 +771,6 @@ def test_archive_system_project_does_not_trigger_cache_hooks(temp_db, monkeypatc
     assert counts["exclude"] == 0
 
 
-# --- no-side-effect / no-cross-call locks -------------------------------
 
 
 def test_lifecycle_writes_do_not_touch_rules_or_activities(temp_db):
@@ -833,7 +826,6 @@ def test_delete_project_not_exposed_on_api_facade(temp_db):
     assert _project_row(project_id)["is_archived"] == 1
 
 
-# --- existing rule CRUD still works -------------------------------------
 
 
 def test_existing_keyword_rule_crud_still_works_after_lifecycle(temp_db):
@@ -864,7 +856,6 @@ def test_existing_folder_rule_crud_still_works_after_lifecycle(temp_db):
     assert rule_api.delete_project_folder_rule(rule_id)["ok"] is True
 
 
-# --- read payload display-safe flags ------------------------------------
 
 
 def test_get_project_rules_payload_includes_display_safe_flags(temp_db):
@@ -886,7 +877,6 @@ def test_get_project_rules_payload_includes_display_safe_flags(temp_db):
     assert UNCATEGORIZED_PROJECT not in by_name
 
 
-# --- excluded-project rule-target eligibility locks ----------
 
 
 def test_list_rule_target_projects_excludes_excluded_project(temp_db):

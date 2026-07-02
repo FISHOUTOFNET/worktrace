@@ -163,7 +163,6 @@ class TimelineRestoreActivityError(ValueError):
         self.code = code
 
 
-# --- timeline / sessions -------------------------------------------------
 
 def get_default_report_date() -> str:
     return timeline_service.get_default_report_date()
@@ -230,7 +229,6 @@ def preview_session_project_update(
     return timeline_service.preview_session_project_update(session_activity_ids, project_id)
 
 
-# --- Validated Timeline editing (project reclassification + note) ---
 
 # Maximum length for a session note. The ``project_session_note`` table has
 # no length constraint, so the API enforces a reasonable upper bound to
@@ -247,27 +245,7 @@ def reclassify_timeline_session_project(
     activity_ids: list[int],
     project_id: int,
 ) -> None:
-    """Validate and apply a project reclassification to a Timeline session.
-
-    Reclassifies every activity in ``activity_ids`` to ``project_id`` as a
-    manual assignment. Explicit input validation keeps the WebView bridge from
-    performing a partial or invalid write.
-
-    Validation:
-    - ``activity_ids`` must be a non-empty list of positive integers; every
-      id must reference an existing, non-deleted activity. If any id is
-      missing the whole call raises ``ValueError`` before any write.
-    - ``project_id`` must be a positive integer referencing an existing
-      project. "未归类" is represented by the existing system
-      ``UNCATEGORIZED_PROJECT`` row id (surfaced via
-      ``list_selectable_projects``), never by ``None``.
-
-    Raises ``ValueError`` on any invalid input. The underlying service write
-    is atomic (single transaction), so a validated call either fully
-    succeeds or fully rolls back. No partial writes are ever performed:
-    if any ``activity_id`` is missing or deleted the whole call raises
-    before any database write occurs.
-    """
+    """Validate and apply a project reclassification to a Timeline session."""
     ids = _validate_activity_ids(activity_ids)
     pid = _validate_project_id(project_id)
     timeline_service.update_session_project(ids, pid)
@@ -307,26 +285,7 @@ def update_timeline_session_note_and_duration(
     note: str,
     adjusted_duration_seconds: int | None,
 ) -> None:
-    """Validate and write note + user-adjusted duration for a Timeline session.
-
-    The user-adjusted duration is stored in
-    ``project_session_note.adjusted_duration_seconds`` — it never touches
-    ``activity_log``. ``None`` means "no override" / clear override;
-    ``0`` is a valid explicit override to zero display/declared duration;
-    a positive integer means "display this many seconds instead".
-
-    Validation:
-    - ``report_date`` must be a ``YYYY-MM-DD`` string.
-    - ``first_activity_id`` must be a positive integer referencing an
-      existing, non-deleted activity.
-    - ``note`` must be a string, length <= ``TIMELINE_NOTE_MAX_LENGTH``.
-    - ``adjusted_duration_seconds`` may be ``None``; if non-None it must be
-      an integer (``bool`` rejected), ``0`` or positive, and <=
-      ``TIMELINE_ADJUSTED_DURATION_MAX_SECONDS``. Negative values and
-      non-integer values are invalid.
-
-    Raises ``ValueError`` on any invalid input.
-    """
+    """Validate and write note + user-adjusted duration for a Timeline session."""
     date = _validate_report_date(report_date)
     first_id = _validate_first_activity_id(first_activity_id)
     text = _validate_note(note)
@@ -334,25 +293,6 @@ def update_timeline_session_note_and_duration(
     timeline_service.update_session_note_and_duration(date, first_id, text, duration)
 
 
-# --- Timeline time correction (single-activity foundation) ---
-#
-# - ``update_timeline_activity_time`` corrects a single closed activity's
-#   ``start_time`` and ``end_time`` and recomputes ``duration_seconds``.
-# - ``update_timeline_session_time`` exposes a session-level write but only
-#   supports sessions that resolve to a single activity. Multi-activity
-#   sessions raise ``TimelineTimeEditError("multi_activity")`` so the user
-#   is pointed to per-activity editing instead.
-#
-# Data semantics:
-# - ``start_time`` and ``end_time`` must be ``YYYY-MM-DD HH:MM:SS`` strings.
-# - ``start_time < end_time`` (zero and negative durations are rejected).
-# - In-progress activities (``end_time IS NULL``) cannot be edited: their
-#   displayed ``end_time`` may be a projected value and must not be
-#   persisted. The API reads the raw ``end_time`` from the row to decide.
-# - Deleted activities cannot be edited.
-# - Cross-day results are handled by ``timeline_service`` projection
-#   (``_split_calendar_report_rows``); the API/bridge never copies rows.
-# - Overlap detection against other activities is NOT performed here.
 
 
 def update_timeline_activity_time(
@@ -390,29 +330,7 @@ def update_timeline_session_time(
     start_time: str,
     end_time: str,
 ) -> None:
-    """Validate and apply a session-level time correction.
-
-    A session is an aggregate of one or more activities; it is not an
-    independent DB record. Whole-session time correction is supported only
-    when the session resolves to a single activity (after deduplication),
-    in which case the call is equivalent to
-    ``update_timeline_activity_time`` on that activity. Multi-activity
-    sessions raise ``TimelineTimeEditError("multi_activity")`` — the
-    frontend must direct the user to per-activity editing instead.
-
-    Validation:
-    - ``activity_ids`` must be a non-empty list of positive integers
-      (``bool`` rejected); every id must reference an existing, non-deleted
-      activity. Duplicate ids are deduplicated.
-    - After deduplication, exactly one id must remain; otherwise
-      ``multi_activity`` is raised.
-    - The single activity must not be in-progress.
-    - ``start_time`` and ``end_time`` must be ``YYYY-MM-DD HH:MM:SS`` strings
-      with ``start_time < end_time``.
-
-    Raises ``TimelineTimeEditError`` with a stable ``code``. No partial
-    writes are performed: validation completes before any UPDATE.
-    """
+    """Validate and apply a session-level time correction."""
     ids = _validate_activity_ids(activity_ids)
     start = _validate_time_string(start_time)
     end = _validate_time_string(end_time)
@@ -432,32 +350,6 @@ def update_timeline_session_time(
         raise TimelineTimeEditError("invalid_id")
 
 
-# --- Timeline activity split (single-activity foundation) ---
-#
-# - ``split_timeline_activity`` splits a single closed activity at a given
-#   ``split_time`` into two closed activities. The original activity keeps
-#   its id and becomes the front half ``[start, split_time)``; a new activity
-#   is inserted for the back half ``[split_time, end)``.
-# - ``split_timeline_session`` exposes a session-level split but only supports
-#   sessions that resolve to a single activity. Multi-activity sessions raise
-#   ``TimelineSplitError("multi_activity")`` so the user is pointed to
-#   per-activity splitting instead.
-#
-# Data semantics:
-# - ``split_time`` must be a ``YYYY-MM-DD HH:MM:SS`` string strictly between
-#   the activity's ``start_time`` and ``end_time``.
-# - In-progress activities (``end_time IS NULL``) cannot be split.
-# - Deleted activities cannot be split.
-# - The new activity inherits ``app_name``, ``process_name``, ``status``,
-#   ``source``, ``project_id``, ``activity_project_assignment``, and
-#   ``activity_resource`` from the original so it does not become
-#   "未归类" and keeps its resource display name.
-# - The ``activity_log.note`` column is NOT copied to the new activity. The
-#   primary note mechanism is ``project_session_note`` keyed by
-#   ``(report_date, first_activity_id)``; the front-half keeps the original
-#   id and thus keeps any session note.
-# - Cross-day results are handled by ``timeline_service`` projection.
-# - Overlap detection against other activities is NOT performed here.
 
 
 def split_timeline_activity(activity_id: int, split_time: str) -> dict:
@@ -496,28 +388,7 @@ def split_timeline_activity(activity_id: int, split_time: str) -> dict:
 
 
 def split_timeline_session(activity_ids: list[int], split_time: str) -> dict:
-    """Validate and apply a session-level split.
-
-    A session is an aggregate of one or more activities. Whole-session
-    split is supported only when the session resolves to a single activity
-    (after deduplication), in which case the call is equivalent to
-    ``split_timeline_activity`` on that activity. Multi-activity sessions
-    raise ``TimelineSplitError("multi_activity")`` — the frontend must direct
-    the user to per-activity splitting instead.
-
-    Validation:
-    - ``activity_ids`` must be a non-empty list of positive integers
-      (``bool`` rejected); every id must reference an existing, non-deleted
-      activity. Duplicate ids are deduplicated.
-    - After deduplication, exactly one id must remain; otherwise
-      ``multi_activity`` is raised.
-    - The single activity must not be in-progress.
-    - ``split_time`` must be a ``YYYY-MM-DD HH:MM:SS`` string strictly
-      between the activity's ``start_time`` and ``end_time``.
-
-    Returns ``{"original_activity_id": int, "new_activity_id": int}`` on
-    success. Raises ``TimelineSplitError`` with a stable ``code``.
-    """
+    """Validate and apply a session-level split."""
     ids = _validate_activity_ids(activity_ids)
     split = _validate_time_string_for_split(split_time)
     if len(ids) > 1:
@@ -591,58 +462,11 @@ def _validate_split_range(split_time: str, start_time: str, end_time: str) -> No
         raise TimelineSplitError("outside_range")
 
 
-# --- Timeline activity merge (two-activity foundation) ---
-#
-# - ``merge_timeline_activities`` merges exactly two closed activities into
-#   one. The earlier activity (by start_time, then id) is kept: its
-#   start_time is unchanged, its end_time becomes the later activity's
-#   end_time, and duration_seconds is recomputed. The later activity is
-#   soft-deleted.
-# - Only two activities can be merged per call. Arbitrary-length batch
-#   merge is NOT supported.
-# - Multi-activity session whole-merge is NOT supported; the frontend
-#   directs the user to merge pairs of adjacent activities one at a time.
-#
-# Data semantics:
-# - Both activities must be closed (raw ``end_time IS NOT NULL``).
-# - Both must not be deleted.
-# - The two activities must not overlap and must be adjacent within
-#   ``MERGE_GAP_TOLERANCE_SECONDS`` (2 seconds).
-# - Both must have the same project_id, resource identity_key, status, and
-#   source.
-# - The kept activity's note is preserved; the later activity's note is NOT
-#   copied or concatenated.
-# - project_session_note rows are NOT moved.
-# - The write is a single atomic transaction; any failure rolls back.
-# - Overlap detection is NOT performed as a global feature; only the two
-#   activities being merged are checked for overlap against each other.
+# The write is a single atomic transaction; any failure rolls back.
 
 
 def merge_timeline_activities(activity_ids: list[int]) -> dict:
-    """Validate and merge exactly two closed activities into one.
-
-    Validation:
-    - ``activity_ids`` must be a list of positive integers (``bool``
-      rejected); every id must reference an existing, non-deleted activity.
-      Duplicate ids are deduplicated.
-    - After deduplication, exactly two ids must remain; otherwise
-      ``invalid_selection`` is raised.
-    - Both activities must be closed (``end_time IS NOT NULL``); otherwise
-      ``in_progress`` is raised.
-    - The two activities must not overlap and must be adjacent within
-      ``MERGE_GAP_TOLERANCE_SECONDS``; otherwise ``invalid_time`` (overlap)
-      or ``not_adjacent`` (gap too large) is raised.
-    - Both must have the same project_id; otherwise ``different_project``.
-    - Both must have the same resource identity_key; otherwise
-      ``different_resource``.
-    - Both must have the same status and source; otherwise
-      ``incompatible_activity``.
-
-    Returns ``{"kept_activity_id": int, "merged_activity_id": int}`` on
-    success. Raises ``TimelineMergeError`` with a stable ``code`` for known
-    failure modes. The write is a single atomic transaction; no partial
-    writes are possible.
-    """
+    """Validate and merge exactly two closed activities into one."""
     ids = _validate_merge_activity_ids(activity_ids)
     if len(ids) != 2:
         raise TimelineMergeError("invalid_selection")
@@ -718,33 +542,6 @@ def _validate_merge_activity_ids(activity_ids: list[int]) -> list[int]:
     return ids
 
 
-# --- Timeline hide / soft delete (single-activity foundation) ---
-#
-# - ``hide_timeline_activity`` hides a single closed activity by setting
-#   ``is_hidden = 1``. Hidden activities do not appear in the default
-#   Timeline.
-# - ``soft_delete_timeline_activity`` soft-deletes a single closed activity by
-#   setting ``is_deleted = 1``. Soft-deleted activities do not appear in the
-#   Timeline and are not physically removed.
-# - ``hide_timeline_session`` / ``soft_delete_timeline_session`` expose
-#   session-level writes but only support sessions that resolve to a single
-#   activity. Multi-activity sessions raise ``TimelineVisibilityError`` with
-#   ``multi_activity_hide`` / ``multi_activity_delete`` so the user is pointed
-#   to per-activity editing instead.
-#
-# Data semantics:
-# - Neither operation physically deletes the DB row.
-# - Neither operation deletes assignment / resource / note / session-note rows.
-# - Neither operation modifies start_time / end_time / duration_seconds /
-#   project_id / note / status / source.
-# - In-progress activities (raw ``end_time IS NULL``) cannot be hidden or
-#   deleted. The API reads the raw ``end_time`` from the row to decide.
-# - Deleted activities cannot be hidden or soft-deleted.
-# - Hide is idempotent: hiding an already-hidden activity succeeds.
-# - Soft delete is NOT idempotent: deleting an already-deleted activity fails
-#   with ``invalid_id`` (the activity is treated as missing).
-# - project_session_note rows are NOT moved.
-# - The write is a single atomic UPDATE; no partial writes are possible.
 
 
 def hide_timeline_activity(activity_id: int) -> None:
@@ -788,25 +585,7 @@ def soft_delete_timeline_activity(activity_id: int) -> None:
 
 
 def hide_timeline_session(activity_ids: list[int]) -> None:
-    """Validate and apply a session-level hide.
-
-    A session is an aggregate of one or more activities. Whole-session hide
-    is supported only when the session resolves to a single activity (after
-    deduplication), in which case the call is equivalent to
-    ``hide_timeline_activity`` on that activity. Multi-activity sessions
-    raise ``TimelineVisibilityError("multi_activity_hide")`` — the frontend
-    must direct the user to per-activity hiding instead.
-
-    Validation:
-    - ``activity_ids`` must be a non-empty list of positive integers
-      (``bool`` rejected); every id must reference an existing, non-deleted
-      activity. Duplicate ids are deduplicated.
-    - After deduplication, exactly one id must remain; otherwise
-      ``multi_activity_hide`` is raised.
-    - The single activity must not be in-progress.
-
-    Raises ``TimelineVisibilityError`` with a stable ``code``.
-    """
+    """Validate and apply a session-level hide."""
     ids = _validate_visibility_activity_ids(activity_ids)
     if len(ids) > 1:
         raise TimelineVisibilityError("multi_activity_hide")
@@ -820,25 +599,7 @@ def hide_timeline_session(activity_ids: list[int]) -> None:
 
 
 def soft_delete_timeline_session(activity_ids: list[int]) -> None:
-    """Validate and apply a session-level soft delete.
-
-    A session is an aggregate of one or more activities. Whole-session soft
-    delete is supported only when the session resolves to a single activity
-    (after deduplication), in which case the call is equivalent to
-    ``soft_delete_timeline_activity`` on that activity. Multi-activity
-    sessions raise ``TimelineVisibilityError("multi_activity_delete")`` — the
-    frontend must direct the user to per-activity deletion instead.
-
-    Validation:
-    - ``activity_ids`` must be a non-empty list of positive integers
-      (``bool`` rejected); every id must reference an existing, non-deleted
-      activity. Duplicate ids are deduplicated.
-    - After deduplication, exactly one id must remain; otherwise
-      ``multi_activity_delete`` is raised.
-    - The single activity must not be in-progress.
-
-    Raises ``TimelineVisibilityError`` with a stable ``code``.
-    """
+    """Validate and apply a session-level soft delete."""
     ids = _validate_visibility_activity_ids(activity_ids)
     if len(ids) > 1:
         raise TimelineVisibilityError("multi_activity_delete")
@@ -914,19 +675,7 @@ def _validate_visibility_activity_ids(activity_ids: list[int]) -> list[int]:
     return ids
 
 
-# --- Timeline batch project editing foundation ---
-#
-# - ``batch_update_timeline_activities_project`` sets the same project on
-#   multiple closed, non-hidden, non-deleted activities in a single atomic
-#   transaction.
-# - The write semantics match the existing single-activity / session-level
-#   manual project reassignment: both ``activity_log.project_id`` and
-#   ``activity_project_assignment`` are updated, ``manual_override`` is set,
-#   ``updated_at`` is refreshed.
-# - At least 2 activities are required (after dedup); the max is
-#   ``MAX_BATCH_PROJECT_EDIT_ACTIVITIES`` (100).
-# - In-progress, hidden, and deleted activities are rejected.
-# - No new DB schema is introduced.
+# Batch project edits are atomic and only accept closed visible activities.
 
 
 def batch_update_timeline_activities_project(
@@ -1041,22 +790,7 @@ def _validate_batch_project_id(project_id: int) -> int:
     return pid
 
 
-# --- Timeline batch note editing foundation ---
-#
-# - ``batch_update_timeline_activities_note`` overwrites the note on
-#   multiple closed, non-hidden, non-deleted activities with the same note
-#   value in a single atomic transaction.
-# - The write semantics are note-only: only ``activity_log.note`` and
-#   ``updated_at`` are updated. ``source`` is NOT modified (unlike the
-#   single ``update_activity_note`` path). ``start_time`` / ``end_time`` /
-#   ``duration_seconds`` / ``status`` / ``project_id`` / resource rows /
-#   assignment rows / session notes / ``is_hidden`` / ``is_deleted`` are
-#   not touched.
-# - Empty string is allowed and is used to batch-clear notes.
-# - At least 2 activities are required (after dedup); the max is
-#   ``MAX_BATCH_NOTE_EDIT_ACTIVITIES`` (100).
-# - In-progress, hidden, and deleted activities are rejected.
-# - No new DB schema is introduced.
+# value in a single atomic transaction.
 
 
 def batch_update_timeline_activities_note(
@@ -1167,29 +901,6 @@ def _validate_batch_note(note: str) -> str:
     return note
 
 
-# --- Timeline single activity restore foundation ---
-#
-# - ``restore_timeline_activity`` restores a single hidden or soft-deleted
-#   activity by setting ``is_hidden = 0`` AND ``is_deleted = 0`` in a single
-#   atomic UPDATE. The row is not physically modified beyond the two
-#   visibility flags and ``updated_at``; assignment / resource / note /
-#   session-note rows are untouched.
-# - ``get_timeline_restorable_activities`` returns a display-safe recovery
-#   list of hidden / deleted activities for a given date so the user can
-#   select which activity to restore.
-#
-# Data semantics:
-# - Restore only modifies ``is_hidden``, ``is_deleted``, and ``updated_at``.
-# - Restore does NOT modify ``start_time`` / ``end_time`` /
-#   ``duration_seconds`` / ``project_id`` / ``note`` / ``status`` /
-#   ``source`` / resource rows / assignment rows / ``project_session_note``.
-# - Restore does NOT physically delete data.
-# - In-progress activities (raw ``end_time IS NULL``) cannot be restored.
-# - Activities that are neither hidden nor deleted are rejected as
-#   ``not_restorable`` (restore is not a no-op).
-# - The write is a single atomic UPDATE with a rowcount guard; no partial
-#   writes are possible.
-# - The recovery list is read-only and returns display-safe fields only.
 
 
 def restore_timeline_activity(activity_id: int) -> dict:
@@ -1401,7 +1112,6 @@ def _validate_adjusted_duration(adjusted_duration_seconds: int | None) -> int | 
     return value
 
 
-# --- Time-correction validators --------------------------------
 
 
 def _validate_activity_id_for_time_edit(activity_id: int) -> int:
@@ -1456,7 +1166,6 @@ def _validate_time_order(start_time: str, end_time: str) -> None:
         raise TimelineTimeEditError("invalid_time")
 
 
-# --- activity editing ----------------------------------------------------
 
 def update_activity_note(activity_id: int, note: str) -> None:
     activity_service.update_activity_note(activity_id, note)
@@ -1466,13 +1175,11 @@ def soft_delete_activity(activity_id: int) -> None:
     activity_service.soft_delete_activity(activity_id)
 
 
-# --- project selection (for timeline menus) ------------------------------
 
 def list_selectable_projects() -> list[dict[str, Any]]:
     return project_service.list_selectable_projects()
 
 
-# --- live-time helpers (pure functions over snapshot dicts) --------------
 
 def get_snapshot_elapsed_seconds(snapshot: dict[str, Any] | None) -> int:
     return snapshot_elapsed_seconds(snapshot)

@@ -36,9 +36,7 @@ from worktrace.platforms.base import ActiveWindow
 from worktrace.services import folder_rule_service, project_service, settings_service
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _snapshot() -> dict:
@@ -62,9 +60,7 @@ def _setup_two_projects(temp_db):
     return project_a, project_b
 
 
-# ---------------------------------------------------------------------------
 # Resource identity immediate + project ownership delayed (<30s)
-# ---------------------------------------------------------------------------
 
 
 def test_resource_switch_under_30s_shows_new_resource_but_inherited_display_project(temp_db):
@@ -191,9 +187,7 @@ def test_candidate_same_as_last_confirmed_no_pending(temp_db):
     assert snap["project_transition"]["pending"] is False
 
 
-# ---------------------------------------------------------------------------
 # Uncategorized candidate
-# ---------------------------------------------------------------------------
 
 
 def test_uncategorized_candidate_under_30s_inherits_last_confirmed(temp_db):
@@ -262,9 +256,7 @@ def test_uncategorized_candidate_confirmed_after_30_seconds(temp_db):
     assert snap["project_transition"]["pending"] is False
 
 
-# ---------------------------------------------------------------------------
 # History persistence independent (clipboard force-persist)
-# ---------------------------------------------------------------------------
 
 
 def test_clipboard_force_persist_under_30s_persists_db_row_but_display_still_pending(temp_db):
@@ -319,9 +311,7 @@ def test_clipboard_force_persist_under_30s_persists_db_row_but_display_still_pen
     assert snap["project_transition"]["pending"] is False
 
 
-# ---------------------------------------------------------------------------
 # Session boundaries clear ownership state
-# ---------------------------------------------------------------------------
 
 
 def test_stop_clears_ownership_state_so_next_session_does_not_inherit(temp_db):
@@ -489,9 +479,7 @@ def test_time_jump_clears_ownership_state(temp_db):
     assert snap["display_project"]["is_uncategorized"] is True
 
 
-# ---------------------------------------------------------------------------
 # First activity: no prior confirmed project -> display == candidate
-# ---------------------------------------------------------------------------
 
 
 def test_first_activity_no_pending_when_candidate_is_uncategorized(temp_db):
@@ -530,9 +518,7 @@ def test_first_activity_no_pending_when_candidate_is_concrete_project(temp_db):
     assert snap["project_transition"]["pending"] is False
 
 
-# ---------------------------------------------------------------------------
 # inferred_project_name mirrors display_project.name
-# ---------------------------------------------------------------------------
 
 
 def test_inferred_project_name_mirrors_display_project(temp_db):

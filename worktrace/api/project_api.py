@@ -83,7 +83,6 @@ def delete_project(project_id: int) -> None:
     project_service.delete_project(project_id)
 
 
-# --- Project lifecycle foundation (create / edit / toggle / archive) ---
 
 
 def _is_system_or_special_project(project: dict[str, Any]) -> bool:
@@ -122,28 +121,7 @@ def _project_lifecycle_payload(project_id: int) -> dict[str, Any]:
 
 
 def create_project_for_rules(name: Any, description: Any = "") -> dict[str, Any]:
-    """Create one new user project from the Project Rules page.
-
-    Narrow WebView-facing facade. Only creates a user project; does NOT
-    create folder/keyword rules, edit/delete existing projects, or perform
-    conflict preview / backfill / automatic rules / DB schema changes /
-    native dialogs / file writes / network access.
-
-    ``name`` must be a real non-empty ``str`` after trim. ``description``
-    must be a real ``str`` (empty allowed) and is trimmed before save. An
-    exact duplicate project name (trim-compared) is rejected as
-    ``duplicate_project``; a SQLite ``IntegrityError`` from the underlying
-    ``UNIQUE(name)`` constraint is also collapsed to ``duplicate_project``
-    so a race cannot leak a raw SQL error.
-
-    Returned errors are stable codes for the bridge to map to Chinese text:
-
-    - ``invalid_input`` — ``name`` is not a real non-empty ``str`` after
-      trim, or ``description`` is not a real ``str``.
-    - ``duplicate_project`` — another project already has the same trimmed
-      name.
-    - ``operation_failed`` — any unexpected service failure.
-    """
+    """Create one new user project from the Project Rules page."""
     # ``valid_nonempty_str`` returns the trimmed name or ``None`` (rejecting
     # non-strings and empty-after-trim in one helper call). ``valid_str``
     # rejects non-strings so a non-string description never reaches the
@@ -173,36 +151,7 @@ def create_project_for_rules(name: Any, description: Any = "") -> dict[str, Any]
 
 
 def update_project_for_rules(project_id: Any, name: Any, description: Any = "") -> dict[str, Any]:
-    """Update one existing user project's name and description.
-
-    Narrow WebView-facing facade. Only edits a user project's
-    name/description; does NOT touch ``enabled`` / ``is_archived`` /
-    ``created_by`` / ``created_at``, create/delete projects, or perform
-    conflict preview / backfill / automatic rules / DB schema changes /
-    native dialogs / file writes / network access.
-
-    ``project_id`` must be a real positive ``int`` (bool rejected).
-    ``name`` must be a real non-empty ``str`` after trim. ``description``
-    must be a real ``str`` (empty allowed) and is trimmed before save.
-    System/special projects (``created_by == "system"``, ``未归类``,
-    ``排除规则``) are rejected as ``system_project``. An exact duplicate
-    project name (trim-compared, excluding the project being edited) is
-    rejected as ``duplicate_project``; a SQLite ``IntegrityError`` from the
-    underlying ``UNIQUE(name)`` constraint is also collapsed to
-    ``duplicate_project``.
-
-    Returned errors are stable codes for the bridge to map to Chinese text:
-
-    - ``invalid_input`` — ``project_id`` is not a real positive ``int``
-      (bool / float / numeric string / ``None`` / list / dict / zero /
-      negative), ``name`` is not a real non-empty ``str`` after trim, or
-      ``description`` is not a real ``str``.
-    - ``not_found`` — no project exists with this id.
-    - ``system_project`` — the project is a system/special project.
-    - ``duplicate_project`` — another project already has the same trimmed
-      name.
-    - ``operation_failed`` — any unexpected service failure.
-    """
+    """Update one existing user project's name and description."""
     # ``type(...) is not int`` rejects ``bool`` (``type(True) is bool``),
     # ``float``, ``str``, ``None``, and container types in one check.
     if not valid_int(project_id):
@@ -237,35 +186,7 @@ def update_project_for_rules(project_id: Any, name: Any, description: Any = "") 
 
 
 def set_project_enabled_for_rules(project_id: Any, enabled: Any) -> dict[str, Any]:
-    """Enable or disable one existing user project.
-
-    Narrow WebView-facing facade. Only toggles a user project's ``enabled``
-    flag; does NOT touch ``name`` / ``description`` / ``is_archived`` /
-    ``created_by`` / ``created_at``, create/delete/edit projects, or
-    perform conflict preview / backfill / automatic rules / DB schema
-    changes / native dialogs / file writes / network access.
-
-    ``project_id`` must be a real positive ``int`` (bool rejected).
-    ``enabled`` must be a real ``bool``. System/special projects
-    (``created_by == "system"``, ``未归类``, ``排除规则``) are rejected as
-    ``system_project`` — in particular, ``排除规则`` must never be enabled
-    via this path.
-
-    ``project_service.set_project_enabled`` already triggers the folder
-    rule cache, keyword rule cache, and privacy exclude cache invalidation
-    hooks on success; this facade does not add or remove any cache
-    invalidation. Rejections (invalid / not_found / system) do not trigger
-    the cache hooks.
-
-    Returned errors are stable codes for the bridge to map to Chinese text:
-
-    - ``invalid_input`` — ``project_id`` is not a real positive ``int``
-      (bool / float / numeric string / ``None`` / list / dict / zero /
-      negative), or ``enabled`` is not a real ``bool``.
-    - ``not_found`` — no project exists with this id.
-    - ``system_project`` — the project is a system/special project.
-    - ``operation_failed`` — any unexpected service failure.
-    """
+    """Enable or disable one existing user project."""
     if not valid_int(project_id):
         return fail_payload(ERROR_INVALID_INPUT)
     if not valid_bool(enabled):
@@ -286,36 +207,7 @@ def set_project_enabled_for_rules(project_id: Any, enabled: Any) -> dict[str, An
 
 
 def archive_project_for_rules(project_id: Any) -> dict[str, Any]:
-    """Archive one existing user project.
-
-    Narrow WebView-facing facade. Only sets ``is_archived = 1`` on a user
-    project; does NOT physically delete the project, its folder rules, its
-    keyword rules, or any activity rows. Does NOT touch ``name`` /
-    ``description`` / ``enabled`` / ``created_by`` / ``created_at``,
-    create/delete/edit projects, or perform conflict preview / backfill /
-    automatic rules / DB schema changes / native dialogs / file writes /
-    network access.
-
-    ``project_id`` must be a real positive ``int`` (bool rejected).
-    System/special projects (``created_by == "system"``, ``未归类``,
-    ``排除规则``) are rejected as ``system_project``.
-
-    ``project_service.archive_project`` triggers the folder rule cache,
-    keyword rule cache, and privacy exclude cache invalidation hooks on
-    success because archiving a project removes it from the rule target
-    list and so invalidates the cached rule target / inference / exclude
-    state. Rejections (invalid / not_found / system) do not trigger the
-    cache hooks.
-
-    Returned errors are stable codes for the bridge to map to Chinese text:
-
-    - ``invalid_input`` — ``project_id`` is not a real positive ``int``
-      (bool / float / numeric string / ``None`` / list / dict / zero /
-      negative).
-    - ``not_found`` — no project exists with this id.
-    - ``system_project`` — the project is a system/special project.
-    - ``operation_failed`` — any unexpected service failure.
-    """
+    """Archive one existing user project."""
     if not valid_int(project_id):
         return fail_payload(ERROR_INVALID_INPUT)
     try:

@@ -56,7 +56,6 @@ def _keyword_rule_exists(rule_id: int) -> bool:
     return row["c"] == 1
 
 
-# --- Valid deletion ------------------------------------------------------
 
 
 def test_delete_keyword_rule_for_normal_project(temp_db):
@@ -130,7 +129,6 @@ def test_delete_keyword_rule_under_excluded_project(temp_db):
     assert _keyword_rule_exists(rule_id) is False
 
 
-# --- rule_id input validation -------------------------------------------
 
 
 @pytest.mark.parametrize("bad_id", [True, False])
@@ -170,7 +168,6 @@ def test_delete_keyword_rule_rejects_other_invalid_rule_id_types(temp_db, bad_id
     assert result == {"ok": False, "error": "invalid_input"}
 
 
-# --- not_found -----------------------------------------------------------
 
 
 def test_unknown_keyword_rule_returns_stable_not_found(temp_db):
@@ -215,7 +212,6 @@ def test_keyword_rule_id_does_not_delete_folder_rule(temp_db):
     assert any(int(r.get("id") or 0) == folder_rule_id for r in folder_rules)
 
 
-# --- Exception collapse --------------------------------------------------
 
 
 def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
@@ -248,7 +244,6 @@ def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
         assert forbidden not in lowered
 
 
-# --- No side effects -----------------------------------------------------
 
 
 def test_delete_keyword_rule_does_not_add_or_delete_folder_rule_rows(temp_db):
@@ -399,7 +394,6 @@ def test_delete_keyword_rule_does_not_call_folder_delete(temp_db, monkeypatch):
     assert result["ok"] is True
 
 
-# --- Cache invalidation --------------------------------------------------
 
 
 def test_delete_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch):
@@ -454,7 +448,6 @@ def test_delete_keyword_rule_clears_exclude_rules_cache(temp_db, monkeypatch):
     assert calls["count"] >= 1
 
 
-# --- Payload contract ----------------------------------------------------
 
 
 def test_delete_keyword_rule_payload_is_json_serializable(temp_db):
@@ -514,7 +507,6 @@ def test_delete_keyword_rule_failure_payloads_are_json_serializable(temp_db):
         assert "SELECT" not in repr(result)
 
 
-# --- Existing keyword create / rule enable-disable regression lock -------
 
 
 def test_existing_create_project_keyword_rule_still_works(temp_db):
@@ -569,7 +561,6 @@ def test_delete_then_recreate_same_keyword_works(temp_db):
     assert recreate_result["rule"]["keyword"] == "Spec"
 
 
-# --- keyword deletion hardening regression locks ------------
 
 
 def test_delete_keyword_rule_second_delete_is_not_treated_as_success(temp_db):

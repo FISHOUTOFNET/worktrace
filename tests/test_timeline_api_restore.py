@@ -35,7 +35,6 @@ from worktrace.db import get_connection
 from worktrace.services import activity_service
 
 
-# --- Seed helpers --------------------------------------------------------
 
 
 def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
@@ -99,7 +98,6 @@ def _get_session_note(report_date: str, first_activity_id: int) -> str | None:
     return row["note"] if row else None
 
 
-# --- restore_timeline_activity: validation --------------------------------
 
 
 def test_restore_activity_bool_id(temp_db):
@@ -153,7 +151,6 @@ def test_restore_activity_in_progress(temp_db):
     assert exc.value.code == "in_progress"
 
 
-# --- restore_timeline_activity: success -----------------------------------
 
 
 def test_restore_hidden_activity_success(temp_db):
@@ -272,7 +269,6 @@ def test_restore_activity_reappears_in_default_timeline(temp_db):
     assert any(aid in (s.get("activity_ids") or []) for s in sessions_restored)
 
 
-# --- restore_timeline_activity: already-restored is not_restorable ---------
 
 
 def test_restore_already_restored_rejects(temp_db):
@@ -286,7 +282,6 @@ def test_restore_already_restored_rejects(temp_db):
     assert exc.value.code == "not_restorable"
 
 
-# --- Race condition / operation_failed ------------------------------------
 
 
 def test_restore_activity_race_condition_operation_failed(temp_db):
@@ -329,7 +324,6 @@ def test_restore_activity_does_not_leak_exception_text(temp_db):
     assert exc.value.code == "operation_failed"
 
 
-# --- No partial writes on validation failure ------------------------------
 
 
 def test_restore_activity_validation_failure_leaves_activity_unchanged(temp_db):
@@ -345,7 +339,6 @@ def test_restore_activity_validation_failure_leaves_activity_unchanged(temp_db):
     assert _count_activities() == before_count
 
 
-# --- Service layer rowcount guard -----------------------------------------
 
 
 def test_service_restore_activity_zero_rowcount_raises(temp_db):
@@ -400,7 +393,6 @@ def test_service_restore_activity_non_positive_id_rejects(temp_db):
     assert str(exc.value) == "invalid_activity_id"
 
 
-# --- get_timeline_restorable_activities: success --------------------------
 
 
 def test_get_restorable_activities_returns_hidden(temp_db):
@@ -549,7 +541,6 @@ def test_get_restorable_activities_excludes_other_dates(temp_db):
     assert not any(a["activity_id"] == a1 for a in result_26["activities"])
 
 
-# --- restore hardening tests --------------------------------
 
 
 def test_service_restore_activity_write_exception_propagates(temp_db):

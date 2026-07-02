@@ -85,7 +85,6 @@ def _seed_session():
     return [a1, a2]
 
 
-# --- update_timeline_activity_time ---------------------------------------
 
 
 def test_update_activity_time_success(bridge):
@@ -221,7 +220,6 @@ def test_update_activity_time_error_has_no_sensitive_keys(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- race-condition hardening ------------------------------
 
 
 def test_update_activity_time_race_condition_returns_generic_error(bridge):
@@ -266,7 +264,6 @@ def test_update_session_time_race_condition_returns_generic_error(bridge):
     assert "invalid_id" not in str(result)
 
 
-# --- update_timeline_session_time ----------------------------------------
 
 
 def test_update_session_time_single_activity_success(bridge):
@@ -366,7 +363,6 @@ def test_update_session_time_is_json_serializable(bridge):
     json.dumps(result)
 
 
-# --- Bridge import boundary ----------------------------------------------
 
 
 def test_bridge_does_not_import_backend_internals():

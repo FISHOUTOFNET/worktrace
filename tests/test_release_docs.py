@@ -41,9 +41,7 @@ def _line_count(path: Path) -> int:
     return len(_read_text(path).splitlines())
 
 
-# ---------------------------------------------------------------------------
 # Existing release / build-dependency consistency (preserved).
-# ---------------------------------------------------------------------------
 
 
 def test_readme_packaging_commands_have_matching_build_dependency_file():
@@ -126,9 +124,7 @@ def test_ci_workflow_contains_required_release_smoke_steps(phrase):
     assert phrase in workflow, f"CI workflow missing phrase: {phrase}"
 
 
-# ---------------------------------------------------------------------------
 # release-checklist stub tests.
-# ---------------------------------------------------------------------------
 
 
 def test_release_checklist_points_to_release_validation():
@@ -190,9 +186,7 @@ def test_release_validation_contains_privacy_acceptance_phrase(phrase):
     assert phrase in validation, f"release validation missing privacy phrase: {phrase}"
 
 
-# ---------------------------------------------------------------------------
 # CSV-only release doc test.
-# ---------------------------------------------------------------------------
 
 
 def test_release_validation_contains_csv_export():
@@ -222,9 +216,7 @@ def test_release_validation_does_not_contain_positive_excel_acceptance(phrase):
     )
 
 
-# ---------------------------------------------------------------------------
 # README doc diet tests.
-# ---------------------------------------------------------------------------
 
 
 def test_readme_points_to_current_state():
@@ -265,9 +257,7 @@ def test_readme_does_not_contain_project_rules_chronology(chronology_label):
     )
 
 
-# ---------------------------------------------------------------------------
 # current-state one-screen test.
-# ---------------------------------------------------------------------------
 
 
 def test_current_state_line_count_under_hard_max():
@@ -322,9 +312,7 @@ def test_current_state_retains_affected_test_command():
     )
 
 
-# ---------------------------------------------------------------------------
 # ui-webview-migration slimness test.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -368,9 +356,7 @@ def test_ui_webview_migration_status_section_has_no_stale_facades():
         )
 
 
-# ---------------------------------------------------------------------------
 # AI context governance test.
-# ---------------------------------------------------------------------------
 
 
 def test_ai_context_guide_marks_current_state_as_default_reading_source():
@@ -410,9 +396,7 @@ def test_ai_context_guide_marks_research_docs_as_non_default_context():
     )
 
 
-# ---------------------------------------------------------------------------
 # README Current Limitations residual contradiction regression.
-# ---------------------------------------------------------------------------
 
 # Project Rules capabilities that the current-state capability matrix lists
 # as SUPPORTED. The README Current Limitations section must NOT list any of

@@ -41,7 +41,6 @@ from worktrace.services import settings_service
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
-# --- fixtures --------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -94,7 +93,6 @@ def _normal_snapshot(
     }
 
 
-# --- get_refresh_state: payload shape --------------------------------------
 
 
 def test_get_refresh_state_attached_to_webview_bridge(bridge):
@@ -183,7 +181,6 @@ def test_get_refresh_state_returns_generic_error_on_failure(bridge):
     assert "traceback" not in json.dumps(result).lower()
 
 
-# --- refresh_revision semantics -------------------------------------------
 
 
 def test_refresh_revision_unchanged_when_only_elapsed_advances(bridge):
@@ -294,7 +291,6 @@ def test_refresh_revision_changes_on_user_paused(bridge):
     )
 
 
-# --- get_recent_activities: projection ------------------------------------
 
 
 def test_get_recent_activities_returns_required_fields(bridge):
@@ -365,7 +361,6 @@ def test_get_recent_activities_no_projection_for_persisted_snapshot(bridge):
         assert item["is_virtual"] is False
 
 
-# --- get_timeline: projection ---------------------------------------------
 
 
 def test_get_timeline_returns_required_projection_fields(bridge):
@@ -445,7 +440,6 @@ def test_get_timeline_no_projection_for_paused_snapshot(bridge):
             assert s["is_virtual_live"] is False
 
 
-# --- get_timeline_session_details: duration_seconds -----------------------
 
 
 def test_get_timeline_session_details_returns_duration_seconds(bridge):
@@ -476,7 +470,6 @@ def test_get_timeline_session_details_no_sensitive_fields(bridge):
         assert forbidden not in serialized
 
 
-# --- bridge boundary: get_refresh_state only uses facade -----------------
 
 
 def test_get_refresh_state_bridge_method_is_on_webview_bridge():
@@ -495,7 +488,6 @@ def test_get_refresh_state_is_json_serializable_with_snapshot(bridge):
     json.dumps(bridge.get_refresh_state())
 
 
-# --- unified virtual live display contract --------------------
 
 
 def test_get_recent_activities_prepends_virtual_item_for_normal_snapshot(bridge):
@@ -658,7 +650,6 @@ def test_refresh_revision_changes_on_date_rollover(bridge):
     )
 
 
-# --- Section 六.2: Timeline bridge live session convergence ----------------
 
 
 def _pending_persisted_open_snapshot(

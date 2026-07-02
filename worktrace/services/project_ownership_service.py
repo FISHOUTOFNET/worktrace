@@ -1,53 +1,4 @@
-"""Project ownership state machine — display-safe project label contract.
-
-This service owns the **pure project-ownership state machine** and the
-display-safe project label contract. It does NOT own DB open-row
-lifecycle — that remains the sole responsibility of
-``activity_lifecycle_service``.
-
-The in-memory ownership state is held by ``AutoActivityRecorder`` (like
-its other in-memory state: ``current_payload`` / ``current_signature``
-/ ``current_start_time`` / ``persisted_activity_id`` /
-``current_extra_seconds``). This service only provides the logic; the
-recorder owns the state lifecycle.
-
-Boundary rules
---------------
-- This service lives in ``worktrace.services`` so it may import other
-  services (``project_inference_service``, ``project_service``) and
-  stdlib only. It MUST NOT be imported by ``worktrace.webview_ui.*``
-  directly.
-- It NEVER creates / closes / splits / reopens an ``activity_log`` row.
-  DB open-row lifecycle is the exclusive responsibility of
-  ``activity_lifecycle_service``.
-- It NEVER auto-creates a suggested project.
-- Candidate inference reuses ``project_inference_service`` — folder /
-  keyword / suggested-project logic is never re-implemented here.
-- It returns display-safe fields only (no raw ``window_title`` /
-  ``file_path_hint`` / clipboard / note / SQL / traceback).
-
-Ownership model
----------------
-When a resource signature changes the recorder immediately switches the
-current resource (resource identity is immediate). The *project
-ownership*, however, enters a 30-second confirmation period:
-
-- ``display_project`` continues to show the last confirmed project so
-  the UI does not flap between projects on every window switch;
-- ``candidate_project`` holds the newly-inferred project for the new
-  resource;
-- ``project_transition.pending`` is ``True`` until either 30 seconds
-  elapse (candidate is confirmed) or a newer resource produces a
-  candidate that matches the display project (pending is cancelled).
-
-The 30-second project-ownership confirmation threshold
-(``PROJECT_OWNERSHIP_CONFIRM_SECONDS``) is **orthogonal** to the
-history-persistence threshold (``HISTORY_PERSIST_THRESHOLD_SECONDS``).
-Both are 30 seconds today but are semantically independent. A clipboard
-force-persist can turn a virtual activity into ``persisted_open`` before
-the 30-second ownership threshold, but the live display still follows
-``display_project`` until the pending window elapses or the activity ends.
-"""
+"""Project ownership state machine — display-safe project label contract."""
 
 from __future__ import annotations
 
@@ -62,9 +13,7 @@ from ..constants import (
 )
 
 
-# ---------------------------------------------------------------------------
 # Dataclasses
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -157,9 +106,7 @@ class ProjectOwnershipState:
         }
 
 
-# ---------------------------------------------------------------------------
 # Label helpers
-# ---------------------------------------------------------------------------
 
 
 def uncategorized_label() -> ProjectLabel:
@@ -235,9 +182,7 @@ def _resource_dict(resource: Any) -> dict | None:
         return None
 
 
-# ---------------------------------------------------------------------------
 # State machine
-# ---------------------------------------------------------------------------
 
 
 def _parse_time(value: str) -> datetime:
@@ -357,9 +302,7 @@ def empty_state() -> ProjectOwnershipState:
     return ProjectOwnershipState()
 
 
-# ---------------------------------------------------------------------------
 # Serialization
-# ---------------------------------------------------------------------------
 
 
 def serialize_project_ownership(state: ProjectOwnershipState | None) -> dict[str, Any]:

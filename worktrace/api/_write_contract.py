@@ -25,9 +25,7 @@ from __future__ import annotations
 from typing import Any
 
 
-# ---------------------------------------------------------------------------
 # Stable error codes.
-# ---------------------------------------------------------------------------
 # Centralizing the code literals here makes a typo surface as ``NameError``
 # at import time instead of silently producing an unmapped bridge error.
 
@@ -44,9 +42,7 @@ ERROR_TOO_MANY_MATCHES = "too_many_matches"
 ERROR_TOO_MANY_RULES = "too_many_rules"
 
 
-# ---------------------------------------------------------------------------
 # Input validators.
-# ---------------------------------------------------------------------------
 
 
 def valid_int(value: Any) -> bool:
@@ -92,9 +88,7 @@ def valid_nonempty_str(value: Any) -> str | None:
     return trimmed if trimmed else None
 
 
-# ---------------------------------------------------------------------------
 # Stable payload builders.
-# ---------------------------------------------------------------------------
 
 
 def fail_payload(code: str) -> dict[str, Any]:

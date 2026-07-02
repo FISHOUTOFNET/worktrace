@@ -603,60 +603,7 @@ MAX_BATCH_PROJECT_EDIT_ACTIVITIES = 100
 
 
 def batch_update_activity_project(activity_ids: list[int], project_id: int) -> int:
-    """Atomically reclassify multiple closed activities to a project.
-
-    Writes the effective project for every activity in ``activity_ids``
-    as a manual assignment within a single transaction, matching the
-    semantics of the single-activity / session-level manual project
-    reassignment (both ``activity_log.project_id`` and
-    ``activity_project_assignment`` are updated, ``manual_override`` is
-    set, ``updated_at`` is refreshed).
-
-    Input validation (raises ``ValueError`` with a stable code suffix on
-    any failure; no partial write is performed):
-
-    - ``activity_ids`` must be a list; after deduplication it must contain
-      at least 2 positive integers; ``bool`` elements are rejected; the
-      deduplicated count must not exceed ``MAX_BATCH_PROJECT_EDIT_ACTIVITIES``.
-    - ``project_id`` must be a positive integer (``bool`` rejected).
-    - Each activity must exist, ``is_deleted = 0``, ``is_hidden = 0``, and
-      ``end_time IS NOT NULL`` (closed). In-progress, hidden, and deleted
-      activities are rejected so the user cannot modify records that are
-      not visible / editable in the Timeline.
-
-    Write guarantees:
-
-    - The write is a single transaction; any failure rolls back so no
-      activity's project assignment changes.
-    - Each activity's ``project_id`` and ``manual_override`` are updated,
-      and an ``activity_project_assignment`` row is upserted with
-      ``source = 'manual'``, ``confidence = 100``, ``is_manual = 1``.
-    - ``updated_at`` is refreshed on every touched row.
-    - ``start_time`` / ``end_time`` / ``duration_seconds`` / ``status`` /
-      ``source`` / ``note`` / resource rows / session notes are NOT
-      modified.
-    - A rowcount guard ensures every UPDATE affects exactly the expected
-      number of rows; a 0-row UPDATE (race condition) raises
-      ``ValueError("project_update_failed")`` and the transaction rolls
-      back.
-
-    Returns the number of activities successfully updated (the deduplicated
-    count). Does not return raw rows or any sensitive fields.
-
-    Raises ``ValueError`` with a stable code suffix:
-    - ``invalid_activity_ids`` — not a list, empty after dedup, < 2, or
-      contains non-int / bool / non-positive values.
-    - ``batch_too_large`` — deduplicated count exceeds the max.
-    - ``invalid_project`` — ``project_id`` is not a positive int or
-      ``bool``.
-    - ``activity_not_found`` — any id does not reference an existing row.
-    - ``activity_deleted`` — any activity has ``is_deleted = 1``.
-    - ``activity_hidden`` — any activity has ``is_hidden = 1``.
-    - ``activity_in_progress`` — any activity has ``end_time IS NULL``.
-    - ``project_update_failed`` — a rowcount guard tripped (race) or an
-      unexpected write failure.
-    """
-    # --- Validate activity_ids ---
+    """Atomically reclassify multiple closed activities to a project."""
     if isinstance(activity_ids, bool) or not isinstance(activity_ids, list):
         raise ValueError("invalid_activity_ids")
     ids: list[int] = []
@@ -679,7 +626,6 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
     if len(ids) > MAX_BATCH_PROJECT_EDIT_ACTIVITIES:
         raise ValueError("batch_too_large")
 
-    # --- Validate project_id ---
     if isinstance(project_id, bool):
         raise ValueError("invalid_project")
     try:
@@ -692,7 +638,6 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
     ts = now_str()
     placeholders = ",".join("?" for _ in ids)
     with get_connection() as conn:
-        # --- Validate project exists, is not archived, and is enabled ---
         project_row = conn.execute(
             "SELECT id, is_archived, enabled FROM project WHERE id = ?",
             (pid,),
@@ -702,7 +647,6 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
         if int(project_row["is_archived"] or 0) or not int(project_row["enabled"] or 0):
             raise ValueError("invalid_project")
 
-        # --- Validate every activity: exists, not deleted, not hidden, closed ---
         rows = conn.execute(
             f"""
             SELECT id, is_deleted, is_hidden, end_time
@@ -725,7 +669,6 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
             if aid not in found_ids:
                 raise ValueError("activity_not_found")
 
-        # --- Atomic write: update activity_log.project_id + manual_override ---
         cur = conn.execute(
             f"""
             UPDATE activity_log
@@ -746,7 +689,6 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
             # error.
             raise ValueError("project_update_failed")
 
-        # --- Upsert activity_project_assignment for each activity ---
         source = "manual"
         confidence = 100
         for aid in ids:
@@ -783,61 +725,7 @@ BATCH_NOTE_MAX_LENGTH = 2000
 
 
 def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
-    """Atomically overwrite the note on multiple closed activities.
-
-    Overwrites ``activity_log.note`` for every activity in
-    ``activity_ids`` with the same ``note`` value within a single
-    transaction. Only the ``note`` column and ``updated_at`` are touched;
-    ``source`` is intentionally NOT modified (unlike the single
-    ``update_activity_note`` path which sets ``source = 'manual'``) so
-    the batch overwrite is a pure note-only change.
-    batch overwrite is a pure note-only change.
-
-    Input validation (raises ``ValueError`` with a stable code suffix on
-    any failure; no partial write is performed):
-
-    - ``activity_ids`` must be a list; after deduplication it must contain
-      at least 2 positive integers; ``bool`` elements are rejected; the
-      deduplicated count must not exceed ``MAX_BATCH_NOTE_EDIT_ACTIVITIES``.
-    - ``note`` must be a ``str`` (``None`` rejected). Empty string is
-      allowed and is used to batch-clear notes. The length must not exceed
-      ``BATCH_NOTE_MAX_LENGTH``.
-    - Each activity must exist, ``is_deleted = 0``, ``is_hidden = 0``, and
-      ``end_time IS NOT NULL`` (closed). In-progress, hidden, and deleted
-      activities are rejected.
-
-    Write guarantees:
-
-    - The write is a single transaction; any failure rolls back so no
-      activity's note changes.
-    - Each activity's ``note`` is overwritten (not appended / merged) with
-      the new value; ``updated_at`` is refreshed on every touched row.
-    - ``start_time`` / ``end_time`` / ``duration_seconds`` / ``status`` /
-      ``source`` / ``project_id`` / resource rows / assignment rows /
-      session notes / ``is_hidden`` / ``is_deleted`` are NOT modified.
-    - The old note is never read, never concatenated, and never returned.
-    - A rowcount guard ensures every UPDATE affects exactly the expected
-      number of rows; a 0-row UPDATE (race condition) raises
-      ``ValueError("note_update_failed")`` and the transaction rolls back.
-
-    Returns the number of activities successfully updated (the deduplicated
-    count). Does not return raw rows, the old note, the new note, or any
-    sensitive fields.
-
-    Raises ``ValueError`` with a stable code suffix:
-    - ``invalid_activity_ids`` — not a list, empty after dedup, < 2, or
-      contains non-int / bool / non-positive values.
-    - ``batch_too_large`` — deduplicated count exceeds the max.
-    - ``invalid_note`` — ``note`` is not a ``str`` or is ``None``.
-    - ``note_too_long`` — ``note`` exceeds ``BATCH_NOTE_MAX_LENGTH``.
-    - ``activity_not_found`` — any id does not reference an existing row.
-    - ``activity_deleted`` — any activity has ``is_deleted = 1``.
-    - ``activity_hidden`` — any activity has ``is_hidden = 1``.
-    - ``activity_in_progress`` — any activity has ``end_time IS NULL``.
-    - ``note_update_failed`` — a rowcount guard tripped (race) or an
-      unexpected write failure.
-    """
-    # --- Validate activity_ids ---
+    """Atomically overwrite the note on multiple closed activities."""
     if isinstance(activity_ids, bool) or not isinstance(activity_ids, list):
         raise ValueError("invalid_activity_ids")
     ids: list[int] = []
@@ -860,7 +748,6 @@ def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
     if len(ids) > MAX_BATCH_NOTE_EDIT_ACTIVITIES:
         raise ValueError("batch_too_large")
 
-    # --- Validate note ---
     if not isinstance(note, str):
         raise ValueError("invalid_note")
     if len(note) > BATCH_NOTE_MAX_LENGTH:
@@ -869,7 +756,6 @@ def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
     ts = now_str()
     placeholders = ",".join("?" for _ in ids)
     with get_connection() as conn:
-        # --- Validate every activity: exists, not deleted, not hidden, closed ---
         rows = conn.execute(
             f"""
             SELECT id, is_deleted, is_hidden, end_time
@@ -892,7 +778,6 @@ def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
             if aid not in found_ids:
                 raise ValueError("activity_not_found")
 
-        # --- Atomic write: overwrite note + refresh updated_at ---
         cur = conn.execute(
             f"""
             UPDATE activity_log
@@ -1002,47 +887,7 @@ def update_activity_time(activity_id: int, start_time: str, end_time: str) -> No
 
 
 def split_activity(activity_id: int, split_time: str) -> dict:
-    """Atomically split a closed activity into two at ``split_time``.
-
-    The original activity is updated to ``[original_start, split_time)`` and a
-    new activity is inserted for ``[split_time, original_end)``. Both
-    ``duration_seconds`` values are recomputed precisely from the new ranges.
-
-    Field inheritance (conservative):
-    - The new activity copies ``app_name``, ``process_name``, ``window_title``,
-      ``file_path_hint``, ``status``, ``source``, ``auto_classified``,
-      ``manual_override``, ``project_id``, ``is_hidden``, ``is_deleted`` from
-      the original row. These are DB-internal fields required for record
-      integrity and classification; they are never surfaced to the bridge.
-    - ``created_at`` and ``updated_at`` are set to the current write time
-      (``now_str()``) for the new activity — they are NOT copied from the
-      original. The new row is a new record, so its creation timestamp
-      reflects when the split was performed. The original activity's
-      ``updated_at`` is also refreshed to the write time (its ``end_time``
-      and ``duration_seconds`` changed); its ``created_at`` is untouched.
-    - ``activity_project_assignment`` is copied to the new activity so manual
-      and automatic assignments are preserved. The new activity does not
-      become "未归类" unless the original was. If the original has no
-      assignment row, no assignment is created for the new activity either.
-    - ``activity_resource`` is copied to the new activity (a new row with the
-      same ``identity_key``, ``display_name``, ``path_hint`` etc.) so the
-      resource display name is preserved on both halves. Excluded activities
-      keep their anonymous resource.
-    - ``note`` (the activity_log.note column) is NOT copied to the new
-      activity. The primary note mechanism is ``project_session_note`` keyed
-      by ``(report_date, first_activity_id)``; the front-half keeps the
-      original id and thus keeps any session note. The new back-half starts
-      without a note.
-
-    The write is a single transaction; any failure rolls back so the original
-    activity is untouched and no half-created new activity remains.
-
-    Returns ``{"original_activity_id": int, "new_activity_id": int}``.
-
-    Raises ``ValueError`` if the activity is missing, deleted, in-progress, or
-    if the UPDATE affects 0 rows (race condition). The caller (API layer) is
-    responsible for input validation (format, range).
-    """
+    """Atomically split a closed activity into two at ``split_time``."""
     split_dt = _parse_time(split_time)
     ts = now_str()
     with get_connection() as conn:
@@ -1214,67 +1059,7 @@ MERGE_GAP_TOLERANCE_SECONDS = 2
 
 
 def merge_activities(first_activity_id: int, second_activity_id: int) -> dict:
-    """Atomically merge two closed activities into one.
-
-    The earlier activity (by ``start_time``, then ``id``) is kept: its
-    ``start_time`` is unchanged, its ``end_time`` becomes the later
-    activity's ``end_time``, and its ``duration_seconds`` is recomputed
-    precisely from the merged range. The later activity is soft-deleted
-    (``is_deleted = 1``); it is NOT physically removed.
-
-    Conservative preconditions (the API layer validates most of these before
-    calling; the service re-checks the critical DB state guards so a race
-    between validation and write cannot corrupt data):
-
-    - The two ids must be different.
-    - Both activities must exist and ``is_deleted = 0``.
-    - Both must be closed (raw ``end_time IS NOT NULL``).
-    - The two activities must not overlap: ``earlier.end_time <= later.start_time``.
-    - The two activities must be adjacent within ``MERGE_GAP_TOLERANCE_SECONDS``:
-      ``later.start_time - earlier.end_time <= tolerance``.
-    - Both must have the same ``project_id``.
-    - Both must have the same ``activity_resource.identity_key``.
-    - Both must have the same ``status``.
-    - Both must have the same ``source``.
-
-    Field inheritance (conservative):
-    - The kept (earlier) activity keeps its ``id``, ``start_time``,
-      ``created_at``, ``app_name``, ``process_name``, ``window_title``,
-      ``file_path_hint``, ``status``, ``source``, ``project_id``, ``note``,
-      and all other fields. Only ``end_time``, ``duration_seconds``, and
-      ``updated_at`` change.
-    - The merged (later) activity is soft-deleted (``is_deleted = 1``) and
-      its ``updated_at`` is refreshed. Its assignment / resource rows are
-      left in place (not physically deleted); timeline reads exclude it via
-      ``is_deleted = 0`` filtering.
-    - ``activity_log.note`` is NOT copied or concatenated from the later
-      activity; the kept activity's note is preserved as-is.
-    - ``project_session_note`` is NOT moved. If the later activity was a
-      ``first_activity_id`` for a session note, that note row remains keyed
-      to the now-deleted activity id. Timeline sessions are rebuilt by
-      ``timeline_service`` from live (non-deleted) activities, so the
-      orphaned note does not surface in the UI.
-
-    The write is a single transaction; any failure rolls back so both
-    activities keep their original state.
-
-    Returns ``{"kept_activity_id": int, "merged_activity_id": int}`` where
-    ``kept_activity_id`` is the earlier activity's id and
-    ``merged_activity_id`` is the later (now soft-deleted) activity's id.
-
-    Raises ``ValueError`` with a stable code suffix for known failure modes:
-    - ``activity_merge_same_id`` — the two ids are identical.
-    - ``activity_merge_not_found_or_deleted`` — either activity is missing
-      or already deleted.
-    - ``activity_merge_in_progress`` — either activity is still open.
-    - ``activity_merge_overlap`` — the two activities overlap in time.
-    - ``activity_merge_not_adjacent`` — the gap exceeds tolerance.
-    - ``activity_merge_different_project`` — project_id differs.
-    - ``activity_merge_different_resource`` — resource identity_key differs.
-    - ``activity_merge_incompatible_activity`` — status or source differs.
-    - ``activity_merge_update_affected_zero_rows`` — race condition: a row
-      was deleted/reopened between the SELECT and the UPDATE.
-    """
+    """Atomically merge two closed activities into one."""
     if first_activity_id == second_activity_id:
         raise ValueError("activity_merge_same_id")
     ts = now_str()
@@ -1448,58 +1233,7 @@ def soft_delete_activity(activity_id: int) -> None:
 
 
 def restore_activity(activity_id: int) -> dict:
-    """Atomically restore a single hidden or soft-deleted activity.
-
-    Sets ``is_hidden = 0`` AND ``is_deleted = 0`` for the given activity
-    in a single UPDATE so a hidden, soft-deleted, or hidden+deleted
-    activity becomes visible and not-deleted again. The row is not
-    physically modified beyond the two visibility flags and
-    ``updated_at``; assignment / resource / note / session-note rows are
-    untouched. Only rows that are currently hidden or deleted
-    (``is_hidden = 1 OR is_deleted = 1``) and already closed (raw
-    ``end_time IS NOT NULL``) are affected, so a stale or racing call
-    cannot restore a normal or in-progress record.
-
-    This operation is idempotent in the sense that restoring an
-    already-restored activity is rejected as ``activity_not_restorable``
-    (the activity is neither hidden nor deleted, so there is nothing to
-    restore). This avoids misleading the user into thinking a restore
-    happened when nothing changed.
-
-    Input validation (raises ``ValueError`` with a stable code suffix on
-    any failure; no write is performed):
-
-    - ``activity_id`` must be a positive integer; ``bool`` is rejected.
-    - The activity must exist (``activity_not_found``).
-    - The activity must be hidden or deleted (``activity_not_restorable``).
-    - The activity must be closed (``activity_in_progress`` — raw
-      ``end_time IS NULL``). In-progress hidden/deleted activities are
-      rejected to keep restore symmetric with hide / soft delete, which
-      both require ``end_time IS NOT NULL``.
-
-    Write guarantees:
-
-    - ``start_time`` / ``end_time`` / ``duration_seconds`` / ``project_id``
-      / ``note`` / ``status`` / ``source`` are NOT modified.
-    - ``activity_resource`` rows are NOT modified.
-    - ``activity_project_assignment`` rows are NOT modified.
-    - ``project_session_note`` rows are NOT modified.
-    - The row is NOT physically deleted.
-    - A rowcount guard ensures the UPDATE affects exactly 1 row; a 0-row
-      UPDATE (race condition) raises ``ValueError("restore_failed")``.
-
-    Returns ``{"restored": True, "activity_id": int}`` on success. Does not
-    return raw rows or any sensitive fields.
-
-    Raises ``ValueError`` with a stable code suffix:
-    - ``invalid_activity_id`` — not a positive int or ``bool``.
-    - ``activity_not_found`` — the id does not reference an existing row.
-    - ``activity_not_restorable`` — the activity is neither hidden nor
-      deleted.
-    - ``activity_in_progress`` — the activity is still open.
-    - ``restore_failed`` — a rowcount guard tripped (race) or an
-      unexpected write failure.
-    """
+    """Atomically restore a single hidden or soft-deleted activity."""
     if isinstance(activity_id, bool):
         raise ValueError("invalid_activity_id")
     try:
@@ -1542,44 +1276,7 @@ def restore_activity(activity_id: int) -> dict:
 
 
 def list_restorable_activities_for_date(date: str) -> list[dict]:
-    """Return display-safe summaries of hidden / deleted activities for a date.
-
-    Returns closed activities that are hidden (``is_hidden = 1``) or
-    soft-deleted (``is_deleted = 1``) whose ``start_time`` falls within
-    the given date, sorted by ``start_time`` then ``id``. In-progress
-    hidden/deleted activities are excluded so the restore button is
-    never offered on an open record (keeping restore symmetric with
-    hide / soft delete, which both require ``end_time IS NOT NULL``).
-    ``end_time IS NOT NULL``).
-
-    This is a read-only path: it performs no writes and introduces no new
-    DB schema.
-
-    Only display-safe fields are returned — no raw ``window_title``,
-    ``file_path_hint`` / ``full_path``, ``clipboard``, ``note``, or
-    exception details. The ``resource_name`` uses the sanitized
-    ``resource_display_name`` → ``activity_display_name`` → ``app_name``
-    → ``process_name`` fallback chain (same as the bridge's
-    ``_safe_resource_display_name``); the raw ``window_title`` column is
-    never surfaced.
-
-    Input validation:
-    - ``date`` must be a ``YYYY-MM-DD`` string. Raises
-      ``ValueError("invalid_date")`` otherwise.
-
-    Returns a list of dicts with keys:
-    - ``activity_id`` — int.
-    - ``start_time`` / ``end_time`` — ``YYYY-MM-DD HH:MM:SS`` strings.
-    - ``duration_seconds`` — int.
-    - ``app_name`` — str.
-    - ``resource_kind`` / ``resource_subtype`` — str (raw DB values for
-      the API/bridge to format via ``format_resource_type``).
-    - ``resource_display_name`` — sanitized display name.
-    - ``project_name`` — str.
-    - ``status`` — str.
-    - ``restore_state`` — ``"hidden"`` / ``"deleted"`` / ``"hidden+deleted"``.
-    - ``is_hidden`` / ``is_deleted`` — int (0/1).
-    """
+    """Return display-safe summaries of hidden / deleted activities for a date."""
     from datetime import date as date_type
 
     if not isinstance(date, str) or not date:

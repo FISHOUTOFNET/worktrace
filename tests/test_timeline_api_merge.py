@@ -29,7 +29,6 @@ from worktrace.db import get_connection
 from worktrace.services import activity_service
 
 
-# --- Seed helpers --------------------------------------------------------
 
 
 def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
@@ -86,7 +85,6 @@ def _get_resource_identity(activity_id: int) -> str | None:
     return row["identity_key"] if row else None
 
 
-# --- merge_timeline_activities: validation --------------------------------
 
 
 def test_merge_non_list_activity_ids(temp_db):
@@ -183,7 +181,6 @@ def test_merge_in_progress_activity(temp_db):
     assert exc.value.code == "in_progress"
 
 
-# --- merge_timeline_activities: success -----------------------------------
 
 
 def test_merge_success(temp_db):
@@ -298,7 +295,6 @@ def test_merge_within_gap_tolerance(temp_db):
     assert result["kept_activity_id"] == ids[0]
 
 
-# --- merge_timeline_activities: rejection paths ---------------------------
 
 
 def test_merge_different_project_rejected(temp_db):
@@ -380,7 +376,6 @@ def test_merge_gap_too_large_rejected(temp_db):
     assert exc.value.code == "not_adjacent"
 
 
-# --- Cross-day merge ------------------------------------------------------
 
 
 def test_merge_cross_day_adjacent_activities(temp_db):
@@ -410,7 +405,6 @@ def test_merge_cross_day_adjacent_activities(temp_db):
     assert found, "merged activity must appear on 2026-06-25 via projection"
 
 
-# --- No partial writes ----------------------------------------------------
 
 
 def test_merge_no_partial_write_on_validation_failure(temp_db):
@@ -452,7 +446,6 @@ def test_merge_no_partial_write_on_overlap(temp_db):
         assert after["end_time"] == originals[aid]["end_time"]
 
 
-# --- Note / session note semantics ----------------------------------------
 
 
 def test_merge_note_not_concatenated(temp_db):
@@ -506,7 +499,6 @@ def test_merge_session_note_not_migrated(temp_db):
     assert kept_row is None
 
 
-# --- Race condition -------------------------------------------------------
 
 
 def test_merge_race_condition_returns_operation_failed(temp_db):
@@ -530,7 +522,6 @@ def test_merge_race_condition_returns_operation_failed(temp_db):
     assert exc.value.code == "operation_failed"
 
 
-# --- Service-layer direct tests ------------------------------------------
 
 
 def test_service_merge_same_id_raises(temp_db):
@@ -731,13 +722,7 @@ def test_service_merge_assignment_resource_not_complex_merged(temp_db):
     assert after_resources == before_resources
 
 
-# --- merge hardening tests ----------------------------------
-#
-# These tests cover the hardening edge cases the foundation
-# tests did not explicitly exercise: excluded vs non-excluded rejection,
-# no-partial-write for every rejection path, kept-fields-unchanged on
 # validation failure, soft-delete UPDATE exception rollback, and the
-# full service-ValueError → API-error-code mapping table.
 
 
 def test_merge_excluded_vs_non_excluded_rejected(temp_db):

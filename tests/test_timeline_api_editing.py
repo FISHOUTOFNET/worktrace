@@ -42,7 +42,6 @@ def _seed_session(project_id=None):
     return [a1, a2]
 
 
-# --- reclassify_timeline_session_project ---------------------------------
 
 
 def test_reclassify_success(temp_db):
@@ -126,7 +125,6 @@ def test_reclassify_then_reread_timeline_reflects_change(temp_db):
     assert any(s["project_name"] == "NewProject" for s in sessions)
 
 
-# --- update_timeline_session_note ----------------------------------------
 
 
 def test_update_note_success(temp_db):
@@ -228,7 +226,6 @@ def test_update_note_non_string_raises(temp_db):
         timeline_api.update_timeline_session_note("2026-06-25", ids[0], 12345)
 
 
-# --- update_timeline_session_note_and_duration ---
 
 
 def test_update_note_and_duration_success(temp_db):
@@ -348,7 +345,6 @@ def test_update_note_only_preserves_existing_duration(temp_db):
     assert fields["adjusted_duration_seconds"] == 3600
 
 
-# --- API input validation hardening --------------------------
 
 
 def test_reclassify_activity_ids_not_a_list(temp_db):

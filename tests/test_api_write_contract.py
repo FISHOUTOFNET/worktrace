@@ -12,9 +12,7 @@ from __future__ import annotations
 from worktrace.api import _write_contract as wc
 
 
-# ---------------------------------------------------------------------------
 # valid_int: true positive int, bool must reject.
-# ---------------------------------------------------------------------------
 
 
 def test_valid_int_accepts_positive_int():
@@ -45,9 +43,7 @@ def test_valid_int_rejects_float_str_none_containers():
     assert wc.valid_int((1,)) is False
 
 
-# ---------------------------------------------------------------------------
 # valid_bool: true bool only.
-# ---------------------------------------------------------------------------
 
 
 def test_valid_bool_accepts_true_and_false():
@@ -69,9 +65,7 @@ def test_valid_bool_rejects_str_none_containers():
     assert wc.valid_bool([True]) is False
 
 
-# ---------------------------------------------------------------------------
 # valid_str / valid_nonempty_str: true str, non-empty after trim.
-# ---------------------------------------------------------------------------
 
 
 def test_valid_str_accepts_real_str():
@@ -109,9 +103,7 @@ def test_valid_nonempty_str_returns_none_for_non_str():
     assert wc.valid_nonempty_str(True) is None
 
 
-# ---------------------------------------------------------------------------
 # fail_payload / ok_payload: stable shapes.
-# ---------------------------------------------------------------------------
 
 
 def test_fail_payload_shape():

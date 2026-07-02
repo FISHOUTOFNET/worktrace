@@ -1,49 +1,4 @@
-"""Statistics CSV export tests.
-
-Covers the new controlled write path on the Statistics / Export page:
-
-- ``worktrace.services.export_service.build_statistics_csv_rows``
-- ``worktrace.services.export_service.write_statistics_csv``
-- ``worktrace.api.export_api.export_statistics_csv``
-- ``worktrace.api.export_api.StatisticsExportError``
-- ``worktrace.webview_ui.bridge.WebViewBridge.export_statistics_csv``
-- ``worktrace.webview_ui.bridge.WebViewBridge._choose_csv_save_path``
-
-Scope covered:
-
-Service / API layer:
-
-- CSV export success: UTF-8 BOM, Chinese headers, correct row count, total duration;
-- multi-day range export correct;
-- hidden / deleted / in-progress activities are excluded;
-- normal / idle / paused / excluded / error statuses are all exported;
-- empty data returns ``empty_data`` and creates NO file;
-- invalid date / invalid range / range too large reuse the summary rules;
-- bool / None / non-string inputs are rejected;
-- CSV never contains raw ``window_title`` / ``file_path_hint`` / ``full_path`` /
-  clipboard / note / traceback / SQL;
-- CSV formula injection is escaped (``=`` / ``+`` / ``-`` / ``@`` / tab);
-- permission / file-busy / OSError mapped to stable error codes;
-- export writes only the chosen CSV file (no DB write, no ``updated_at``
-  mutation, no resource / assignment / session-note side effects);
-- missing ``.csv`` suffix is auto-appended; directory / missing-parent
-  paths are rejected.
-
-Bridge layer:
-
-- success returns basename only (no full local path);
-- cancel save dialog does NOT call the API write;
-- invalid date / invalid range / range too large return stable Chinese;
-- empty data / permission / file busy / unexpected exception return stable
-  Chinese;
-- payload never contains traceback / SQL / full path / raw exception /
-  window title / file path / note;
-- bridge imports only ``worktrace.api`` plus the allowed formatter /
-  external UI dialog dependency (no services / db / collector / runtime /
-  config / security);
-- the existing ``get_statistics_export_summary`` remains read-only (no
-  write, no save dialog, no file touch).
-"""
+"""Statistics CSV export tests."""
 
 from __future__ import annotations
 
@@ -150,7 +105,6 @@ def _read_csv(path: Path) -> tuple[list[str], list[list[str]]]:
     return rows[0], rows[1:]
 
 
-# --- Service: build_statistics_csv_rows ---------------------------------
 
 
 def test_build_csv_rows_returns_display_safe_dicts(temp_db):
@@ -305,7 +259,6 @@ def test_build_csv_rows_none_rejected(temp_db):
         export_service.build_statistics_csv_rows("2026-06-25", None)
 
 
-# --- Service: write_statistics_csv -------------------------------------
 
 
 def test_write_csv_success_creates_utf8_bom_file(temp_db, tmp_path):
@@ -531,7 +484,6 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
         )
 
 
-# --- API layer ---------------------------------------------------------
 
 
 def test_api_export_success_returns_payload(temp_db, tmp_path):
@@ -679,7 +631,6 @@ def test_api_export_error_message_never_leaks_internals(temp_db, tmp_path):
                 )
 
 
-# --- Bridge layer ------------------------------------------------------
 
 
 @pytest.fixture()
@@ -962,7 +913,6 @@ def test_bridge_set_window_does_not_start_gui():
     assert bridge._window is not None
 
 
-# --- Bridge: error messages are stable Chinese -------------------------
 
 
 def test_bridge_export_error_messages_are_stable_chinese():
@@ -987,7 +937,6 @@ def test_bridge_export_error_messages_are_stable_chinese():
         )
 
 
-# --- native save dialog hardening --------------------------
 # Precision tests for the pywebview save-dialog return-shape variants and
 # the dialog-constant / dialog-exception collapse paths. The bridge must
 # handle every documented ``create_file_dialog`` return shape (None, empty
@@ -1157,7 +1106,6 @@ def test_bridge_export_dialog_uses_deprecated_save_dialog_fallback(
     assert out.exists()
 
 
-# --- service path-extension hardening ---------------------
 
 
 def test_write_csv_preserves_uppercase_csv_extension(temp_db, tmp_path):

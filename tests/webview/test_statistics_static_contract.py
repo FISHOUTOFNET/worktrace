@@ -28,7 +28,6 @@ from static_helpers import (
 )
 
 
-# --- statistics ----------------------------------------------------
 
 
 def test_index_html_statistics_nav_entry_exists():
@@ -672,7 +671,6 @@ def test_default_webview_entry_preserved():
 
 
 
-# --- statistics --------------------------------------------------
 
 
 def test_frontend_js_statistics_loading_double_click_guard():
@@ -989,7 +987,6 @@ def test_removed_ui_files_deleted_duplicate_lock():
 
 
 
-# --- statistics ----------------------------------------------------
 
 
 def test_frontend_js_statistics_export_calls_bridge_export_statistics_csv():
@@ -1295,7 +1292,6 @@ def test_index_html_statistics_export_no_external_links():
 
 
 
-# --- wording regression lock --------------------------------
 # This test prevents stale "must" phrasing from creeping back
 # prevents the old monolithic-file "must" phrasing from creeping back
 # into this file's docstrings / assertion messages and misleading readers.
@@ -1311,7 +1307,6 @@ def test_no_stale_app_js_must_wording_in_this_file():
     )
 
 
-# --- independent state variable hardening ------------------
 # The statistics load and the CSV export must use SEPARATE state variables
 # (``statisticsLoading`` vs ``statisticsExportSaving``) and each must
 # cross-disable the other's button so a load and a write can never overlap.

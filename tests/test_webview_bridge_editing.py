@@ -74,7 +74,6 @@ def _seed_session(project_id=None):
     return [a1, a2]
 
 
-# --- list_projects_for_timeline ------------------------------------------
 
 
 def test_list_projects_for_timeline_returns_json_serializable(bridge):
@@ -113,7 +112,6 @@ def test_list_projects_for_timeline_no_traceback_on_error(bridge):
     assert "traceback" not in str(result).lower()
 
 
-# --- update_timeline_project ---------------------------------------------
 
 
 def test_update_timeline_project_success(bridge):
@@ -198,7 +196,6 @@ def test_update_timeline_project_validation_error_no_sensitive_details(bridge):
     assert "does not exist" not in str(result).lower()
 
 
-# --- update_timeline_note ------------------------------------------------
 
 
 def test_update_timeline_note_success(bridge):
@@ -291,7 +288,6 @@ def test_update_timeline_note_validation_error_no_sensitive_details(bridge):
     assert "first_activity_id" not in str(result).lower()
 
 
-# --- bridge import boundary (regression) ---------------------------------
 
 
 def test_bridge_module_does_not_import_backend_internals():
@@ -318,7 +314,6 @@ def test_bridge_module_does_not_import_backend_internals():
         )
 
 
-# --- Bridge input validation hardening -----------------------
 
 
 def test_update_timeline_project_rejects_bool_project_id(bridge):
@@ -412,7 +407,6 @@ def test_update_timeline_note_does_not_return_old_note(bridge):
     assert "note" not in result  # no "note" key at top level
 
 
-# --- update_timeline_note_and_duration ----------------------------------
 
 
 def test_update_timeline_note_and_duration_success(bridge):

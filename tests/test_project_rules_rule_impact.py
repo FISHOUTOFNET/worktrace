@@ -41,9 +41,7 @@ from worktrace.services import (
     rule_service,
 )
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _create_closed_activity(
@@ -67,12 +65,6 @@ def _create_closed_activity(
         project_id=project_id,
     )
     # Set end_time directly via SQL instead of calling ``close_activity``.
-    # made ``close_activity`` re-trigger ``process_new_activity``
-    # so automatic rules apply to just-closed activities. The rule-impact
-    # tests need a closed-but-unassigned activity so they can verify
-    # preview / backfill behaviour from a clean state. Bypassing
-    # ``close_activity`` keeps the helper's original contract (closed
-    # activity, no automatic rule application).
     from datetime import datetime
 
     from worktrace.db import get_connection, now_str
@@ -191,9 +183,7 @@ def _assert_no_sensitive_tokens(payload: dict) -> None:
             assert token_lower not in serialized, f"forbidden token '{token}' found in payload"
 
 
-# ---------------------------------------------------------------------------
 # Preview: folder rule
-# ---------------------------------------------------------------------------
 
 
 def test_preview_folder_rule_success(temp_db):
@@ -301,9 +291,7 @@ def test_preview_folder_rule_counts_skips_correctly(temp_db):
     assert counts["non_normal_skipped_count"] == 1
 
 
-# ---------------------------------------------------------------------------
 # Preview: keyword rule
-# ---------------------------------------------------------------------------
 
 
 def test_preview_keyword_rule_success(temp_db):
@@ -347,9 +335,7 @@ def test_preview_keyword_rule_no_sensitive_leak(temp_db):
     assert "select" not in serialized
 
 
-# ---------------------------------------------------------------------------
 # Preview: invalid input
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("bad_rule_type", [None, 123, True, False, [], {}, "invalid", "FOLDER"])
@@ -382,9 +368,7 @@ def test_preview_keyword_id_on_folder_path_returns_not_found(temp_db):
     assert exc_info.value.code == "not_found"
 
 
-# ---------------------------------------------------------------------------
 # Preview: disabled rule + unavailable project
-# ---------------------------------------------------------------------------
 
 
 def test_preview_disabled_rule_returns_zero_counts(temp_db):
@@ -430,9 +414,7 @@ def test_preview_excluded_project_returns_zero_counts(temp_db):
     assert result["counts"]["would_update_count"] == 0
 
 
-# ---------------------------------------------------------------------------
 # Backfill: folder rule success
-# ---------------------------------------------------------------------------
 
 
 def test_backfill_folder_rule_success(temp_db):
@@ -488,9 +470,7 @@ def test_backfill_folder_rule_modifies_only_expected_fields(temp_db):
     assert before["file_path_hint"] == after["file_path_hint"]
 
 
-# ---------------------------------------------------------------------------
 # Backfill: keyword rule success
-# ---------------------------------------------------------------------------
 
 
 def test_backfill_keyword_rule_success(temp_db):
@@ -515,9 +495,7 @@ def test_backfill_keyword_rule_success(temp_db):
     assert int(assignment["is_manual"]) == 0
 
 
-# ---------------------------------------------------------------------------
 # Backfill: rejects disabled rule / unavailable project
-# ---------------------------------------------------------------------------
 
 
 def test_backfill_rejects_disabled_rule(temp_db):
@@ -562,9 +540,7 @@ def test_backfill_rejects_excluded_project(temp_db):
     assert exc_info.value.code == "project_not_available"
 
 
-# ---------------------------------------------------------------------------
 # Backfill: does not modify ineligible activities
-# ---------------------------------------------------------------------------
 
 
 def test_backfill_does_not_modify_manual_override_activity(temp_db):
@@ -631,9 +607,7 @@ def test_backfill_does_not_modify_already_target_activity(temp_db):
     assert result["already_target_count"] == 1
 
 
-# ---------------------------------------------------------------------------
 # Backfill: too_many_matches
-# ---------------------------------------------------------------------------
 
 
 def test_backfill_too_many_matches_writes_nothing(temp_db):
@@ -657,9 +631,7 @@ def test_backfill_too_many_matches_writes_nothing(temp_db):
     assert int(count["c"]) == 0
 
 
-# ---------------------------------------------------------------------------
 # Backfill: transaction rollback on rowcount guard
-# ---------------------------------------------------------------------------
 
 
 def test_backfill_rolls_back_on_rowcount_guard(temp_db, monkeypatch):
@@ -703,9 +675,7 @@ def test_backfill_rolls_back_on_rowcount_guard(temp_db, monkeypatch):
     assert int(activity["auto_classified"]) == 0
 
 
-# ---------------------------------------------------------------------------
 # API layer: stable facades
-# ---------------------------------------------------------------------------
 
 
 def test_api_preview_folder_rule_success(temp_db):
@@ -760,9 +730,7 @@ def test_api_backfill_keyword_rule_success(temp_db):
     assert _activity_row(aid)["project_id"] == project
 
 
-# ---------------------------------------------------------------------------
 # API layer: invalid input rejection
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("bad_rule_type", [None, 123, True, False, [], {}, "invalid"])
@@ -813,9 +781,7 @@ def test_api_preview_keyword_id_on_folder_path_not_found(temp_db):
     assert result == {"ok": False, "error": "not_found"}
 
 
-# ---------------------------------------------------------------------------
 # API layer: disabled rule / unavailable project / too_many_matches
-# ---------------------------------------------------------------------------
 
 
 def test_api_backfill_rejects_disabled_rule(temp_db):
@@ -847,9 +813,7 @@ def test_api_backfill_too_many_matches(temp_db):
     assert result == {"ok": False, "error": "too_many_matches"}
 
 
-# ---------------------------------------------------------------------------
 # API layer: JSON serializable + no sensitive payload
-# ---------------------------------------------------------------------------
 
 
 def test_api_preview_payload_json_serializable(temp_db):
@@ -913,9 +877,7 @@ def test_api_backfill_exception_collapse(temp_db, monkeypatch):
     _assert_no_sensitive_tokens(result)
 
 
-# ---------------------------------------------------------------------------
 # Regression: existing CRUD / toggle / lifecycle still work
-# ---------------------------------------------------------------------------
 
 
 def test_existing_folder_crud_still_works(temp_db):

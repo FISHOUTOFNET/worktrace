@@ -182,7 +182,6 @@ def test_live_persisted_snapshot_is_not_double_counted(temp_db):
     assert statistics_service.get_project_stats(today, today, include_live=True) == []
 
 
-# --- Section 六.4: Overview / Statistics include_live convergence ---------
 
 
 def _pending_persisted_open_snapshot(
@@ -405,7 +404,6 @@ def test_statistics_export_excludes_in_progress_live_rows(temp_db):
     assert export_summary["by_status"] == []
 
 
-# --- Section 六.5: Threshold constant independence -----------------------
 
 
 def test_project_ownership_confirm_seconds_is_separate_constant_from_history_persist():

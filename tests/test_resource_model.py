@@ -24,9 +24,7 @@ from worktrace.resources.resource_policy import (
 from worktrace.resources.types import DetectedResource
 
 
-# ---------------------------------------------------------------------------
 # 1. idle / paused / excluded / error -> system resource
-# ---------------------------------------------------------------------------
 
 class TestSystemDetector:
     @pytest.mark.parametrize(
@@ -55,9 +53,7 @@ class TestSystemDetector:
         assert detector.detect(aw) is None
 
 
-# ---------------------------------------------------------------------------
 # 2. Normal app -> app / generic_app fallback
-# ---------------------------------------------------------------------------
 
 class TestGenericAppDetector:
     def test_generic_app_with_app_name(self):
@@ -84,9 +80,7 @@ class TestGenericAppDetector:
         assert result.display_name == "未知应用"
 
 
-# ---------------------------------------------------------------------------
 # 3. Registry & detect_resource
-# ---------------------------------------------------------------------------
 
 class TestRegistry:
     def test_registry_prefers_system_detector(self):
@@ -114,9 +108,7 @@ class TestRegistry:
         assert result.display_name == "微信"
 
 
-# ---------------------------------------------------------------------------
 # 4. attach_resource_identity fills resource_* and activity_* fields
-# ---------------------------------------------------------------------------
 
 class TestAttachResourceIdentity:
     def test_attaches_resource_fields_for_generic_app(self):
@@ -171,9 +163,7 @@ class TestAttachResourceIdentity:
         assert set(row.keys()) == original_keys
 
 
-# ---------------------------------------------------------------------------
 # 5. infer_resource_from_active_window / infer_resource_for_activity
-# ---------------------------------------------------------------------------
 
 class TestInferResource:
     def test_infer_from_active_window(self):
@@ -192,9 +182,7 @@ class TestInferResource:
         assert result.display_name == "微信"
 
 
-# ---------------------------------------------------------------------------
 # 6. safe_metadata_json removes body-like fields
-# ---------------------------------------------------------------------------
 
 class TestSafeMetadataJson:
     def test_removes_forbidden_keys(self):
@@ -235,9 +223,7 @@ class TestSafeMetadataJson:
         assert parsed == {"file_ext": ".docx", "line_count": 100}
 
 
-# ---------------------------------------------------------------------------
 # 7. validate_resource_kind / validate_resource_subtype
-# ---------------------------------------------------------------------------
 
 class TestValidation:
     def test_valid_kinds(self):

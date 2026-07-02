@@ -232,17 +232,7 @@ def test_overview_bridge_methods_return_json_serializable_no_traceback(temp_db):
             assert "traceback" not in str(result).lower()
 
 
-# --- First-run startup gate --------------------------------
-#
 # These tests verify the first-run privacy notice gate added to
-# ``webview_main.main()``. The gate checks
-# ``settings_api.first_run_notice_accepted()`` after
-# ``runtime.initialize()`` / ``app_api.set_runtime(runtime)`` and before
-# the WebView window is created. If accepted, the collector is
-# auto-started; if not accepted (or the read raises), the collector is
-# NOT started and the frontend overlay is responsible for showing the
-# notice. ``runtime.shutdown()`` must still be called in the finally
-# block regardless of the gate outcome.
 
 
 def _stub_webview_main_environment(monkeypatch, tmp_path):

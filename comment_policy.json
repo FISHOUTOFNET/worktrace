@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "scan": {
+    "include_paths": [
+      "worktrace",
+      "tests",
+      "scripts",
+      "WorkTrace.spec",
+      ".github/workflows"
+    ],
+    "include_extensions": [
+      ".py",
+      ".js",
+      ".css",
+      ".html",
+      ".ps1",
+      ".spec",
+      ".sql",
+      ".yml",
+      ".yaml"
+    ],
+    "exclude_paths": [
+      ".git",
+      ".venv",
+      "venv",
+      "__pycache__",
+      ".pytest_cache",
+      "build",
+      "dist",
+      "docs/history",
+      "docs/research"
+    ]
+  },
+  "thresholds": {
+    "repo_ordinary_comment_ratio_max": 0.1,
+    "file_ordinary_comment_ratio_max": 0.2,
+    "max_contiguous_ordinary_comment_block": 6,
+    "max_inline_comments_per_file": 12,
+    "max_docstring_lines_default": 18,
+    "max_module_docstring_lines": 28
+  },
+  "stale_markers": {
+    "fail_patterns": [
+      "\\bPhase\\s+[0-9A-Za-z.]+\\b",
+      "\\bphase\\s+[0-9A-Za-z.]+\\b",
+      "UI migration",
+      "migration phase",
+      "old behavior",
+      "old read-only",
+      "backward compatible",
+      "compatibility shim",
+      "now allowed",
+      "now provides",
+      "previously required",
+      "legacy migration",
+      "历史阶段",
+      "迁移阶段",
+      "旧行为",
+      "旧架构",
+      "旧结构",
+      "临时兼容"
+    ],
+    "todo_patterns": [
+      "\\bTODO\\b",
+      "\\bFIXME\\b",
+      "\\bXXX\\b"
+    ]
+  },
+  "preserve_comment_classes": [
+    "privacy/security boundary",
+    "non-obvious invariant",
+    "data-loss prevention constraint",
+    "transaction or rollback safety",
+    "concurrency, timing, race-condition, or lifecycle explanation",
+    "external API, OS, packaging, or pywebview caveat",
+    "test intent for non-obvious regression",
+    "public API docstring explaining current contract, parameters, return value, or failure semantics"
+  ],
+  "delete_comment_classes": [
+    "comment restates nearby code",
+    "historical phase narrative",
+    "migration story in runtime or test code",
+    "old architecture explanation",
+    "temporary compatibility note with no current contract",
+    "commented-out code",
+    "duplicated explanation already expressed by function name, test name, type, assertion, or nearby code",
+    "vague filler comment such as handle error, update state, call API, parse result, return response"
+  ],
+  "condense_comment_classes": [
+    "long explanatory comment that can become one invariant sentence",
+    "repeated boundary explanation across files",
+    "test setup explanation longer than necessary"
+  ]
+}

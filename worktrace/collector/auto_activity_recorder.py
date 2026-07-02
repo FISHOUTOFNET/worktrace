@@ -57,13 +57,6 @@ class AutoActivityRecorder:
     persisted_activity_id: int | None = None
     current_extra_seconds: int = 0
     resume_after_short_activity: dict | None = None
-    # Project ownership state machine. The recorder owns the in-memory
-    # state (consistent with current_payload / current_signature /
-    # current_start_time / persisted_activity_id /
-    # current_extra_seconds); the pure logic lives in
-    # ``project_ownership_service``. This state drives the
-    # display_project / candidate_project / project_transition fields
-    # written into the current-activity snapshot.
     project_ownership_state: ProjectOwnershipState | None = field(default=None)
 
     def observe(
@@ -213,21 +206,6 @@ class AutoActivityRecorder:
 
         source = SOURCE_AUTO if status == STATUS_NORMAL else SOURCE_SYSTEM
         # Persist via the ActivityLifecycle Command Facade so the open-row
-        # state machine has a single owner. The facade handles create +
-        # finalize + open-row project sync (for STATUS_NORMAL). The
-        # 30-second threshold gate stays here (the facade does not
-        # re-check it); clipboard force-persist bypasses the threshold
-        # but is restricted to STATUS_NORMAL by the ``allowed_statuses``
-        # set above.
-        #
-        # NOTE: clipboard force-persist may create a real open DB row
-        # BEFORE the 30-second project-ownership pending window elapses.
-        # The DB row's project assignment is converged by the facade's
-        # open-row sync, but the live UI display still follows the
-        # snapshot's ``display_project`` (driven by the ownership state
-        # machine) until the pending window elapses or the activity
-        # ends. The two concerns (DB persistence / project ownership)
-        # are intentionally orthogonal.
         if force:
             activity_id = force_persist_open_activity_for_clipboard(
                 start_time=self.current_start_time,
@@ -284,13 +262,6 @@ class AutoActivityRecorder:
         return HISTORY_PERSIST_THRESHOLD_SECONDS
 
     def _merge_or_pend_short_seconds(self, seconds: int) -> None:
-        # Short-activity blind merge: seconds are absorbed into the
-        # latest closed normal activity (regardless of project) or
-        # pended for the next persistence. This is intentionally
-        # project-blind — short activities exist to avoid fragmenting
-        # the activity log with sub-30s rows. Project ownership pending
-        # is a separate, display-level concern and does NOT change this
-        # merge policy.
         if seconds <= 0:
             return
         target = activity_service.get_latest_closed_auto_normal_activity(
@@ -384,7 +355,6 @@ class AutoActivityRecorder:
             )
         status = self.current_payload.get("status") or STATUS_NORMAL
 
-        # ---- Project ownership ----
         ownership = self.project_ownership_state
         if status in SYSTEM_STATUSES or ownership is None or ownership.display_project is None:
             display_label = uncategorized_label()
@@ -424,7 +394,6 @@ class AutoActivityRecorder:
             "extra_seconds": self.current_extra_seconds,
             "persisted_activity_id": self.persisted_activity_id,
             "is_persisted": self.persisted_activity_id is not None,
-            # ---- Project ownership fields ----
             "display_project": display_project_dict,
             "candidate_project": candidate_project_dict,
             "project_transition": transition_dict,

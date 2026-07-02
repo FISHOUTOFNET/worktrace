@@ -64,15 +64,7 @@ class LocalFileDetector:
         ext_lower = ext.casefold()
         is_full_local_path = looks_like_local_file_path(file_path)
 
-        # Bare file names must still be gated by the extension whitelist so
-        # that ordinary window titles are not mistaken for file names. Full
-        # local paths are trusted regardless of extension — once the complete
-        # path is known the file is a valid anchor even for extensions like
-        # .dwg, .psd, .ai, .indd, .sldprt, images, archives, etc.
         # Office document extensions are the one exception on full paths: they
-        # are handled by OfficeWpsDetector / FallbackFileDetector with dedicated
-        # subtypes (word_document, spreadsheet, presentation), so deferring them
-        # preserves those subtypes instead of degrading to "unknown".
         if not is_full_local_path:
             if ext_lower not in _LOCAL_FILE_EXTENSIONS:
                 return None

@@ -231,7 +231,6 @@ def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInf
     return BackupManifestInfo.from_manifest(manifest)
 
 
-# --- payload construction ------------------------------------------------
 
 
 @dataclass
@@ -254,33 +253,7 @@ class _ImportGuardState:
 
 @contextmanager
 def _secure_import_guard() -> Iterator[_ImportGuardState]:
-    """Context manager that blocks collector writes during a secure import.
-
-    On enter:
-      - reject if another import is already in progress;
-      - snapshot the current ``user_paused``, ``collector_status`` and
-        ``current_activity_snapshot`` values;
-      - force ``user_paused=true``, ``collector_status=paused``,
-        ``current_activity_snapshot=""`` and
-        ``secure_import_in_progress=true`` so the collector loop skips its
-        normal write path.
-
-    On exit (always):
-      - clear ``secure_import_in_progress`` so the collector can resume;
-      - clear the settings cache so subsequent reads see the new values.
-
-    On success (``guard.mark_succeeded()`` was called):
-      - leave ``user_paused=true`` and ``collector_status=paused`` so the
-        user must manually resume recording after verifying the imported data.
-
-    On failure (exception propagated out of the ``with`` block):
-      - restore ``user_paused``, ``collector_status`` and
-        ``current_activity_snapshot`` to their prior values so the app
-        returns to its pre-import state.
-
-    The guard never logs passphrase, payload, window title, path, note, or
-    copied text. It only logs the operation name, result, and exception type.
-    """
+    """Context manager that blocks collector writes during a secure import."""
     if get_bool_setting(SECURE_IMPORT_GUARD_KEY, False):
         logging.warning("encrypted backup import rejected: already in progress")
         raise BackupImportInProgressError("another encrypted backup import is already in progress")
@@ -396,7 +369,6 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
     return data
 
 
-# --- import implementation -----------------------------------------------
 
 
 def _replace_import(data: dict[str, Any]) -> dict[str, int]:
@@ -471,7 +443,6 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
     return [row["name"] for row in rows]
 
 
-# --- decryption / error mapping ------------------------------------------
 
 
 def _read_and_decrypt(blob: bytes, passphrase: str) -> bytes:
@@ -499,7 +470,6 @@ def _classify_format_error(exc: BackupFormatError) -> SecureBackupError:
     return BackupCorruptedError("backup file is invalid or corrupted")
 
 
-# --- cache invalidation ---------------------------------------------------
 
 
 def _invalidate_caches() -> None:
@@ -519,7 +489,6 @@ def _invalidate_caches() -> None:
     invalidate_context_recompute_cache()
 
 
-# --- file helpers ---------------------------------------------------------
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:

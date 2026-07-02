@@ -32,7 +32,6 @@ from worktrace.db import get_connection
 from worktrace.services import activity_service
 
 
-# --- Seed helpers --------------------------------------------------------
 
 
 def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
@@ -88,7 +87,6 @@ def _get_resource(activity_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-# --- split_timeline_activity: validation ---------------------------------
 
 
 def test_split_activity_non_positive_id(temp_db):
@@ -196,7 +194,6 @@ def test_split_activity_split_ge_end(temp_db):
     assert exc2.value.code == "outside_range"
 
 
-# --- split_timeline_activity: success ------------------------------------
 
 
 def test_split_activity_success(temp_db):
@@ -366,7 +363,6 @@ def test_split_activity_session_note_not_copied_to_new_half(temp_db):
     assert back_row is None
 
 
-# --- Cross-day split -----------------------------------------------------
 
 
 def test_split_activity_cross_day_split_report_date_slices(temp_db):
@@ -404,7 +400,6 @@ def test_split_activity_cross_day_split_report_date_slices(temp_db):
     assert day2_has_back, "back half must appear on 2026-06-26"
 
 
-# --- No partial writes ---------------------------------------------------
 
 
 def test_split_activity_no_partial_write_on_validation_failure(temp_db):
@@ -446,7 +441,6 @@ def test_split_activity_no_partial_write_on_in_progress(temp_db):
     assert _count_activities() == before_count
 
 
-# --- split_timeline_session ---------------------------------------------
 
 
 def test_split_session_single_activity_success(temp_db):
@@ -525,7 +519,6 @@ def test_split_session_split_outside_range(temp_db):
     assert exc.value.code == "outside_range"
 
 
-# --- Race condition ------------------------------------------------------
 
 
 def test_split_activity_race_condition_returns_operation_failed(temp_db):
@@ -567,7 +560,6 @@ def test_split_session_race_condition_returns_operation_failed(temp_db):
     assert exc.value.code == "operation_failed"
 
 
-# --- Service-layer direct tests -----------------------------------------
 
 
 def test_service_split_activity_raises_on_deleted_activity(temp_db):
@@ -673,7 +665,6 @@ def test_service_split_activity_atomic_rollback_on_zero_row_update(temp_db):
     assert _count_activities() == before_count
 
 
-# --- hardening tests ---------------------------------------
 
 
 def test_split_activity_no_assignment_does_not_create_assignment(temp_db):

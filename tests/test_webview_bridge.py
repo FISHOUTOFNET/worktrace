@@ -222,9 +222,7 @@ def test_toggle_pause_resumes_when_paused(bridge):
     assert settings_service.get_bool_setting("user_paused") is False
 
 
-# ---------------------------------------------------------------------------
 # Timeline read-only validation hardening
-# ---------------------------------------------------------------------------
 
 
 def _seed_activity_with_sensitive_metadata(
@@ -478,7 +476,6 @@ def test_bridge_module_does_not_import_unsafe_display_helper():
     )
 
 
-# --- P0 privacy gate + P2 ticker payload tests ---
 
 
 # P0: toggle_pause + start_background_workers
@@ -808,14 +805,6 @@ def test_get_timeline_returns_total_seconds_and_snapshot_fields(bridge):
         assert isinstance(session["duration_seconds"], int)
 
 
-# --- Overview ticker: classified / uncategorized raw seconds -----------
-# The 1-second local ticker must update kpi-total / kpi-classified /
-# kpi-uncategorized on the same口径 (same basis). The backend
-# ``get_overview`` payload must include numeric ``classified_seconds``
-# and ``uncategorized_seconds`` fields (raw ints, not parsed from
-# ``HH:MM:SS`` strings) plus ``current_activity.is_classified`` /
-# ``current_activity.is_uncategorized`` so the frontend knows which
-# KPI to increment.
 
 
 def test_get_overview_returns_classified_and_uncategorized_seconds(bridge):

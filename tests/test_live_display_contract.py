@@ -44,7 +44,6 @@ from worktrace.services import timeline_service
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
-# --- fixtures --------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -91,7 +90,6 @@ def _normal_snapshot(
     }
 
 
-# --- unified live clock single sample ---------------
 
 
 def test_stable_live_key_consistent_across_overview_recent_timeline_detail(bridge):
@@ -133,7 +131,6 @@ def test_stable_live_key_consistent_across_overview_recent_timeline_detail(bridg
     assert dt_virtual["stable_live_key_hash"] == ov_ld["stable_live_key_hash"]
 
 
-# --- virtual → persisted open keeps stable_live_key -------------------------
 
 
 def test_stable_live_key_survives_virtual_to_persisted_transition(bridge):
@@ -172,7 +169,6 @@ def test_stable_live_key_changes_on_start_time_change(bridge):
     assert _stable_live_key(s1) != _stable_live_key(s2)
 
 
-# --- get_refresh_state unified live clock fields ----
 
 
 def test_get_refresh_state_returns_unified_live_clock_fields(bridge):
@@ -199,7 +195,6 @@ def test_get_refresh_state_returns_unified_live_clock_fields(bridge):
     assert int(state["live_started_at_epoch_ms"]) > 0
 
 
-# --- date-scoped revision ---------------------------
 
 
 def test_get_refresh_state_accepts_report_date(bridge):
@@ -228,7 +223,6 @@ def test_get_refresh_state_bridge_method_accepts_report_date(bridge):
     assert result["report_date"] == "2026-06-15"
 
 
-# --- persisted open display project -----------------
 
 
 def _create_real_open_activity(
@@ -298,7 +292,6 @@ def test_persisted_open_display_project_does_not_revert(bridge):
     assert not summary["is_uncategorized"]
 
 
-# --- open-row project sync (real DB row tests) ------------------------------
 
 
 def test_persisted_open_display_project_does_not_revert_with_real_uncategorized_row(bridge):
@@ -638,7 +631,6 @@ def test_open_project_sync_supports_suggested_project_name_without_creating_proj
     assert details["activities"][0]["project_name"] == "SuggestedProject"
 
 
-# --- refresh_revision is structural-only -----------
 
 
 def test_persisted_open_natural_duration_does_not_change_revision(bridge):
@@ -708,7 +700,6 @@ def test_time_edit_changes_revision(bridge):
     assert r1 != r2
 
 
-# --- virtual session/detail display-only -----------
 
 
 def test_virtual_session_and_detail_are_display_only(bridge):
@@ -731,7 +722,6 @@ def test_virtual_session_and_detail_are_display_only(bridge):
     assert virtual_row["source"] == "snapshot"
 
 
-# --- timeline service no datetime.now() fallback ----
 
 
 def test_timeline_service_no_datetime_now_fallback():
@@ -755,7 +745,6 @@ def test_timeline_service_no_datetime_now_fallback():
     )
 
 
-# --- persisted_open contract fields ----------
 
 
 def test_persisted_open_recent_item_carries_stable_live_fields(bridge):
@@ -932,7 +921,6 @@ def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
     )
 
 
-# --- Section 六.1: apply_persisted_open_overlay_to_row overlays ALL project fields ---
 
 
 def _pending_persisted_open_snapshot(

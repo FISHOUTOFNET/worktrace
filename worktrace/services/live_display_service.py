@@ -52,9 +52,7 @@ from .live_time_service import (
 from .settings_service import get_setting
 
 
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 
 # Maximum look-back for the open-row live-duration recompute. Prevents a
 # stale snapshot start_time from producing an absurd 100-hour live value
@@ -71,9 +69,7 @@ _VIRTUAL_EDIT_DISABLE_REASON = "当前活动尚未进入历史，暂不能编辑
 _VIRTUAL_ACTIVITY_ID = 0
 
 
-# ---------------------------------------------------------------------------
 # Live-state classification
-# ---------------------------------------------------------------------------
 
 
 def _snapshot_status(snapshot: dict[str, Any] | None) -> str:
@@ -160,9 +156,7 @@ def _snapshot_total_seconds(snapshot: dict[str, Any] | None) -> int:
     return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
 
 
-# ---------------------------------------------------------------------------
 # Display-safe field extraction
-# ---------------------------------------------------------------------------
 
 
 def _display_resource_name(snapshot: dict[str, Any] | None) -> str:
@@ -205,27 +199,7 @@ def _snapshot_display_project_dict(snapshot: dict[str, Any] | None) -> dict[str,
 
 
 def _display_project_name(snapshot: dict[str, Any] | None) -> str:
-    """Return the unified display project name for a snapshot.
-
-    Resolution order:
-
-    1. The snapshot's structured ``display_project.name`` block (written
-       by the project-ownership state machine). This is the authoritative
-       display project for BOTH virtual and persisted_open snapshots.
-       During a 30-second pending transition the display project is the
-       *inherited* last-confirmed project, NOT the candidate — this
-       ensures clipboard force-persist does not bypass the pending
-       window on the display side.
-    2. For persisted_open rows without a ``display_project`` block: the
-       real DB row's concrete ``project_name``, then
-       ``suggested_project_name``, then ``inferred_project_name``.
-    3. For virtual snapshots without a ``display_project`` block: the
-       snapshot's ``inferred_project_name``.
-    4. ``UNCATEGORIZED_PROJECT``.
-
-    Empty / whitespace-only maps to ``UNCATEGORIZED_PROJECT`` so an
-    unnamed current activity aligns with the ``未归类`` session row.
-    """
+    """Return the unified display project name for a snapshot."""
     if not snapshot:
         return UNCATEGORIZED_PROJECT
     dp = _snapshot_display_project_dict(snapshot)
@@ -376,9 +350,7 @@ def _live_display_key(snapshot: dict[str, Any] | None) -> str:
     return "|".join(parts)
 
 
-# ---------------------------------------------------------------------------
 # Short-activity carry integration
-# ---------------------------------------------------------------------------
 
 
 def _read_pending_short_seconds() -> int:
@@ -518,9 +490,7 @@ def sync_carry_state(
     return sync_short_activity_carry(carry, previous_snapshot, snapshot)
 
 
-# ---------------------------------------------------------------------------
 # Unified live-display payload builders
-# ---------------------------------------------------------------------------
 
 
 def build_current_activity_summary(
@@ -990,9 +960,7 @@ def build_persisted_open_overlay(
     }
 
 
-# ---------------------------------------------------------------------------
 # Unified refresh-revision computation
-# ---------------------------------------------------------------------------
 
 
 def compute_refresh_revision(
@@ -1002,39 +970,7 @@ def compute_refresh_revision(
     today: str,
     report_date: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Compute the unified refresh-revision signature.
-
-    Returns ``(revision_sha1, debug_inputs)`` where ``debug_inputs`` is a
-    display-safe dict of the structural fields that contributed to the
-    signature. The debug dict is safe to log internally but MUST NOT be
-    surfaced to the frontend (only the sha1 is surfaced).
-
-    The revision MUST change when:
-
-    - the current snapshot identity / status / persisted state /
-      persisted id / inferred project changes;
-    - the carry / pending_short_seconds state changes (so a short
-      activity that just crossed the threshold and persisted triggers a
-      refresh);
-    - ANY visible activity for the report date changes structurally
-      (covers manual project edit, time edit, split, merge, hide,
-      delete, restore, note edit, open row persisted, project
-      assignment, open-row close);
-    - collector status / paused state changes;
-    - the report date crosses midnight (``today`` changes).
-
-    The revision MUST NOT change when only:
-
-    - ``elapsed_seconds`` / ``extra_seconds`` naturally increase;
-    - ``duration_seconds`` naturally grows on an open row (the
-      ``set_activity_duration`` / ``increment_activity_duration``
-      writes are excluded from the per-row structural signature);
-    - ``updated_at`` advances on a duration-only write (the
-      ``updated_at`` column is excluded from the per-row structural
-      signature);
-    - Date.now advances without any structural change;
-    - snapshot_updated_at advances without any structural change.
-    """
+    """Compute the unified refresh-revision signature."""
     if report_date is None:
         report_date = today
     # Current snapshot structural identity (display-safe).
@@ -1055,19 +991,6 @@ def compute_refresh_revision(
             safe_int(carry.get("base_seconds")),
             safe_int(carry.get("completed_seconds")),
         )
-    # Structural signature for EVERY visible activity on the report date.
-    # This covers ALL structural DB writes (manual project edit, time
-    # edit, split, merge, hide, delete, restore, note edit, open row
-    # persisted, project assignment, open-row close). The signature
-    # EXCLUDES ``duration_seconds`` and ``updated_at`` so a
-    # duration-only natural-growth write on an open row does NOT
-    # pollute the revision. The structural fields per row are: id,
-    # start_time, end_time (NULL vs not NULL is structural — open→close
-    # transition), status, project_id, source, is_deleted, is_hidden,
-    # note, app_name, process_name, file_path_hint, manual_override,
-    # auto_classified. We also include the row count so a new/removed
-    # row triggers a revision change even
-    # if its structural signature happens to collide.
     latest_id = 0
     latest_updated_at = ""
     latest_kind = ""
@@ -1166,21 +1089,8 @@ def compute_refresh_revision(
     return revision, debug_inputs
 
 
-# ---------------------------------------------------------------------------
 # Live-row contract helpers
-# ---------------------------------------------------------------------------
 
-#: The display-safe fields every live row exposed to the frontend MUST
-#: carry, regardless of whether the row is virtual (unpersisted snapshot)
-#: or persisted_open (real DB row). Raw ``window_title`` /
-#: ``file_path_hint`` / ``note`` / ``clipboard`` are NEVER included.
-#:
-#: The contract includes display-facing project fields so that virtual and
-#: persisted_open rows share the SAME project attribution source — the
-#: snapshot's ``display_project`` block — rather than the DB row's
-#: candidate assignment. This prevents the project label from flipping to
-#: the candidate during the 30-second pending window when a clipboard
-#: force-persist turns a virtual activity into persisted_open.
 LIVE_ROW_CONTRACT_FIELDS = (
     "live_state",
     "stable_live_key",
@@ -1215,38 +1125,7 @@ def apply_persisted_open_overlay_to_row(
     row: dict[str, Any],
     overlay: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Merge persisted-open live overlay fields into a DB row payload.
-
-    Mutates and returns ``row``. When ``overlay`` is None or the row does
-    not match the overlay's ``persisted_activity_id``, the row is
-    unchanged (it is a closed/historical row or a different open row).
-
-    Matching supports two row shapes:
-
-    - **Detail rows** — matched by ``activity_id`` / ``id``.
-    - **Session rows** — matched by ``first_activity_id`` or membership
-      in ``activity_ids``. A session is marked persisted_open when the
-      in-progress persisted activity is one of its activities (typically
-      the last one).
-
-    The project fields are overlaid from the snapshot's ``display_project``
-    block. ``candidate_project`` is surfaced as a separate field but NEVER
-    overrides ``project_name`` / ``project_id``.
-    ``candidate_project``, ``project_transition``,
-    ``project_transition_pending``, ``is_uncategorized``,
-    ``is_classified``) are overlaid from the snapshot's
-    ``display_project`` block so the live UI shows the inherited display
-    project during the 30-second pending window, not the DB row's
-    candidate assignment. ``candidate_project`` is surfaced as a separate
-    field but NEVER overrides ``project_name`` / ``project_id``.
-
-    The DB row itself is never changed — this is a read-side projection
-    only. ``duration_seconds`` is NOT overlaid: the persisted_open row's
-    real DB duration (or projected live duration from
-    ``timeline_service``) is already correct and should not be replaced
-    by the overlay's snapshot-based ``live_seconds`` (which would
-    double-count).
-    """
+    """Merge persisted-open live overlay fields into a DB row payload."""
     if not overlay:
         return row
     persisted_id = int(overlay.get("persisted_activity_id") or 0)
@@ -1462,9 +1341,7 @@ def assert_live_row_contract(row: dict[str, Any]) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # Unified live projection (single source of truth for live UI)
-# ---------------------------------------------------------------------------
 
 
 def build_live_projection(
@@ -1472,27 +1349,7 @@ def build_live_projection(
     report_date: str | None = None,
     today: str | None = None,
 ) -> dict[str, Any]:
-    """Build the unified live projection — the single source of truth for
-    every live UI consumer (Overview / Recent / Timeline / Detail / live
-    KPI).
-
-    The projection is derived from ONE snapshot sample. It carries the
-    display-safe ``display_project`` / ``candidate_project`` /
-    ``project_transition`` contract, the unified live clock
-    (``live_started_at_epoch_ms`` / ``carry_seconds`` / ``display_seconds``),
-    and the stable live identity (``stable_live_key`` /
-    ``stable_live_key_hash``).
-
-    ``live_state`` and ``project_transition_pending`` are intentionally
-    orthogonal: a clipboard force-persist can make the activity
-    ``persisted_open`` while ``project_transition_pending`` is still
-    ``True`` (the DB row exists, but the display project is still the
-    inherited last-confirmed project until the 30-second window
-    elapses).
-
-    The payload is display-safe: no raw ``window_title`` /
-    ``file_path_hint`` / clipboard / note / SQL / traceback.
-    """
+    """Build the unified live projection — the single source of truth for"""
     summary = build_current_activity_summary(snapshot, report_date=report_date, today=today)
     return {
         "resource_name": str(summary.get("resource_name") or ""),
@@ -1561,9 +1418,7 @@ __all__ = [
 ]
 
 
-# ---------------------------------------------------------------------------
 # Public aliases for the stable live-identity helpers
-# ---------------------------------------------------------------------------
 
 # These aliases expose the underscore-prefixed helpers through the public
 # namespace so the bridge layer (via ``live_display_api``) can read the stable

@@ -1,64 +1,4 @@
-"""Selected-rule batch operations service.
-
-This module is the single batch-capable surface exposed (via
-``worktrace.api.rule_api``) to the WebView bridge. It supports three
-user-visible operations on a **selection** of existing folder / keyword
-rules:
-
-- ``preview_project_rules_batch_impact`` — read-only aggregate impact
-  preview across the selected rules: total counts, per-rule summaries,
-  and up to ``MAX_BATCH_SAMPLE_ROWS`` display-safe sample rows across the
-  whole batch.
-- ``backfill_project_rules_batch`` — explicit, user-triggered safe batch
-  backfill. Capped at ``MAX_BATCH_BACKFILL_ACTIVITIES`` total updates
-  across the whole batch; writes nothing when the cap is exceeded
-  (``too_many_matches``). Runs in a single transaction with a per-row
-  rowcount guard so a partial write is rolled back. When one activity
-  matches several selected rules, the **first rule in selection order**
-  wins and later rules count the activity as ``collision_skipped``.
-- ``set_project_rules_batch_enabled`` — all-or-nothing batch enable /
-  disable. Preflight resolves every rule (any missing -> ``not_found``,
-  no writes); the writes run in one transaction and the existing keyword
-  rule cache / privacy exclude cache / folder rule cache invalidation
-  hooks fire after commit.
-
-Design constraints (locked by tests):
-
-- ``rules`` must be a non-empty ``list[dict]``. Each item must be a
-  ``{"rule_type": "folder" | "keyword", "rule_id": positive int}`` dict
-  (or an equivalent narrow structure normalized by the API / bridge).
-  bool-as-int ids, non-int ids, non-positive ids, unknown rule types,
-  and non-dict items are ``invalid_input``.
-- After de-duplication (first occurrence wins, preserving selection
-  order) the rule count must not exceed ``MAX_BATCH_PROJECT_RULES`` (20)
-  -> ``too_many_rules``.
-- A folder id resolved on the keyword path (or vice versa) is
-  ``not_found`` — the keyword resolver only resolves ids in
-  ``project_rule`` and the folder resolver only resolves ids in
-  ``folder_project_rule``, so the two paths can never touch each other's
-  rules.
-- Batch apply rejects disabled rules (``rule_disabled``) and unavailable
-  target projects (``project_not_available`` — disabled / archived /
-  excluded) as a **preflight** failure: nothing is written. Preview is
-  informational and returns zero counts for disabled rules / unavailable
-  projects (availability surfaced in the per-rule summary).
-- Batch apply never modifies ``manual_override = 1`` or
-  ``assignment.is_manual = 1`` activities, hidden / deleted / in-progress
-  / non-normal activities, or activities already assigned to the rule's
-  target project. It never sets ``manual_override = 1``; it sets
-  ``auto_classified = 1`` and upserts the assignment with
-  ``is_manual = 0``, ``source = "folder_rule" | "keyword_rule"``, and the
-  inference confidence (85 folder / 80 keyword) — identical to the
-  single-rule backfill.
-- No raw ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard
-  text / note / SQL / traceback / raw row is ever returned in a payload.
-
-Folder / keyword matching and activity classification reuse
-``rule_impact_service`` helpers (``_resolve_folder_rule`` /
-``_resolve_keyword_rule`` / ``_project_available`` /
-``_classify_activities`` / ``_sample_row``) so there is a single matcher
-code path shared with the single-rule preview / backfill.
-"""
+"""Selected-rule batch operations service."""
 
 from __future__ import annotations
 
@@ -94,9 +34,7 @@ class RuleBatchError(Exception):
         self.code = code
 
 
-# ---------------------------------------------------------------------------
 # Input normalization + validation
-# ---------------------------------------------------------------------------
 
 
 def _normalize_rules(rules: Any) -> list[dict[str, Any]]:
@@ -144,9 +82,7 @@ def _normalize_rules(rules: Any) -> list[dict[str, Any]]:
     return deduped
 
 
-# ---------------------------------------------------------------------------
 # Rule resolution (reuses rule_impact_service helpers)
-# ---------------------------------------------------------------------------
 
 
 def _resolve_rule(conn, rule_type: str, rule_id: int) -> dict | None:
@@ -167,9 +103,7 @@ def _classify_for_rule(
     return rule_impact_service._classify_activities(activities, rule, rule_type, conn)
 
 
-# ---------------------------------------------------------------------------
 # Public API: batch preview
-# ---------------------------------------------------------------------------
 
 
 def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
@@ -258,9 +192,7 @@ def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
 # Public API: batch backfill
-# ---------------------------------------------------------------------------
 
 
 def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
@@ -409,9 +341,7 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
 # Public API: batch enable / disable
-# ---------------------------------------------------------------------------
 
 
 def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:

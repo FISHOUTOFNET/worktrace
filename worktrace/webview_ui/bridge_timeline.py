@@ -144,37 +144,7 @@ class TimelineBridgeMixin:
     """
 
     def get_timeline(self, date: str | None = None) -> dict[str, Any]:
-        """Return read-only timeline data for a single date.
-
-        For TODAY's view the Timeline includes the current live session so
-        the user can see and select the in-progress activity:
-
-        - **virtual live** (unpersisted normal snapshot): a display-only
-          virtual session is prepended to the session list. It carries
-          ``is_virtual=True``, ``edit_disabled=True``, and the snapshot's
-          ``display_project``.
-        - **persisted_open** (real open DB row): the matching DB session is
-          kept (NOT filtered out) and the persisted-open overlay is applied
-          so its project fields come from the snapshot's ``display_project``
-          block, not the DB row's candidate assignment. ``edit_disabled``
-          is ``True`` so the user cannot modify the unfinished activity.
-
-        For HISTORICAL dates the Timeline shows only closed historical
-        sessions — no live projection is injected.
-
-        Each session carries:
-        - ``duration_seconds`` / ``duration``: display duration (override
-          if set, else raw).
-        - ``raw_duration_seconds`` / ``raw_duration``: true collected
-          duration (never modified by the user).
-        - ``adjusted_duration_seconds``: user override or ``None``.
-        - ``has_duration_override``: ``True`` when an override is set.
-
-        ``total_seconds`` / ``total_duration`` use display duration and
-        include today's live session duration. For persisted_open the live
-        duration is NOT double-counted (the DB session already carries it).
-        ``raw_total_seconds`` / ``raw_total_duration`` use raw duration.
-        """
+        """Return read-only timeline data for a single date."""
         try:
             report_date = date or timeline_api.get_default_report_date()
             sessions_raw = timeline_api.get_project_sessions_by_date(
@@ -255,16 +225,6 @@ class TimelineBridgeMixin:
                     )
                     virtual_injected = True
             for session in sessions_raw:
-                # Real DB sessions (including in-progress / persisted_open
-                # ones) are kept for BOTH today and historical dates. The
-                # spec only forbids *injecting* live projection (virtual
-                # session + persisted_open overlay) on historical dates;
-                # ``build_persisted_open_overlay`` already returns ``None``
-                # when ``report_date != today``, so the overlay is a no-op
-                # for history and the row is shown with its DB project
-                # fields as-is. We must NOT blanket-filter ``is_in_progress``
-                # sessions, otherwise pre-existing in-progress DB rows on
-                # historical dates vanish from the Timeline.
                 is_session_in_progress = bool(session.get("is_in_progress"))
                 start_time = str(session.get("start_time") or "")
                 raw_seconds = int(session.get("raw_duration_seconds") or session.get("duration_seconds") or 0)
@@ -352,32 +312,7 @@ class TimelineBridgeMixin:
         activity_ids: list[int],
         report_date: str | None = None,
     ) -> dict[str, Any]:
-        """Return read-only activity detail rows for a session.
-
-        Unified live-display model. When ``activity_ids`` is empty AND the
-        viewed date is today AND the current snapshot is a normal
-        unpersisted <30s activity, the bridge returns a single display-only
-        **virtual detail row** (``is_virtual`` / ``is_virtual_live`` true,
-        ``activity_id`` ``0``, ``source`` ``"snapshot"``,
-        ``edit_disabled`` true). The virtual row uses the snapshot's
-        display-safe resource / app / project — it is NEVER projected onto
-        an old DB row. The DB is never written.
-
-        For real DB activity ids, each row exposes display-safe fields
-        only: time range, duration, app name, resource type, resource
-        display name, project name, and status. The ``resource_name`` is
-        built from sanitized display fields and **never** falls back to
-        the raw ``window_title`` column. Raw window titles, file paths,
-        and notes are not surfaced.
-
-        Each row carries ``duration_seconds`` (fetched snapshot duration),
-        ``is_in_progress``, ``is_virtual``, ``is_virtual_live``,
-        ``live_display_key``, ``activity_id``, ``source``,
-        ``edit_disabled``, and ``disable_reason`` so the frontend ticker
-        can locate the live row by flag and increment its duration by the
-        unified live clock delta (``live_started_at_epoch_ms`` +
-        ``carry_seconds``).
-        """
+        """Return read-only activity detail rows for a session."""
         try:
             ids = [int(aid) for aid in (activity_ids or [])]
             date = report_date or timeline_api.get_default_report_date()
@@ -522,13 +457,6 @@ class TimelineBridgeMixin:
             return {
                 "ok": True,
                 "activities": activities,
-                # Unified live-display payload so the detail ticker can
-                # compute its own live delta from ``live_started_at_epoch_ms``
-                # + ``carry_seconds`` instead of reusing the Timeline main
-                # payload's delta. The detail payload and the Timeline
-                # main payload are separate bridge calls that may arrive
-                # at different times; using the main payload's delta for
-                # the detail ticker would let the detail duration drift
                 # relative to its own timing anchor.
                 "live_display": live_display,
                 # Detail payload's OWN live projection. The detail ticker
@@ -542,7 +470,6 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge get_timeline_session_details failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Timeline basic editing (project reclassification + note) ------
 
     def list_projects_for_timeline(self) -> dict[str, Any]:
         """Return the list of projects selectable for Timeline reclassification.
@@ -712,7 +639,6 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge update_timeline_note_and_duration failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Timeline time correction (single-activity foundation) --------
 
     def update_timeline_activity_time(
         self,
@@ -792,7 +718,6 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge update_timeline_session_time failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Timeline activity split (single-activity foundation) ---------
 
     def split_timeline_activity(
         self,
@@ -879,28 +804,9 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge split_timeline_session failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Timeline activity merge (two-activity foundation) -------------
 
     def merge_timeline_activities(self, activity_ids) -> dict[str, Any]:
-        """Merge exactly two closed activities into one.
-
-        ``activity_ids`` must be a list of exactly two positive integers
-        (``bool`` rejected). The earlier activity (by start_time, then id)
-        is kept: its start_time is unchanged and its end_time is extended
-        to the later activity's end_time. The later activity is
-        soft-deleted.
-
-        The two activities must be closed, non-overlapping, adjacent
-        (within ``MERGE_GAP_TOLERANCE_SECONDS``), and share the same
-        project, resource, status, and source. In-progress activities
-        cannot be merged.
-
-        Returns ``{"ok": true, "kept_activity_id": int, "merged_activity_id": int}``
-        on success or ``{"ok": false, "error": "<chinese message>"}`` on
-        failure. Known failure modes map to clear Chinese messages; unknown
-        failures collapse to ``"操作失败"``. Tracebacks, SQL errors, file
-        paths, window titles, and notes are never surfaced.
-        """
+        """Merge exactly two closed activities into one."""
         try:
             ids = _coerce_activity_ids(activity_ids)
             if ids is None:
@@ -924,7 +830,6 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge merge_timeline_activities failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Timeline hide / soft delete (single-activity foundation) ------
 
     def hide_timeline_activity(self, activity_id) -> dict[str, Any]:
         """Hide a single closed activity from the default Timeline.
@@ -1122,7 +1027,6 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge batch_update_timeline_activities_note failed")
             return dict(_GENERIC_ERROR)
 
-    # --- Timeline single activity restore foundation -------------------
 
     def restore_timeline_activity(self, activity_id) -> dict[str, Any]:
         """Restore a single hidden or soft-deleted activity.

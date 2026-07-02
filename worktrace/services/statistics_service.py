@@ -65,13 +65,6 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True, inc
         if row.get("status") == STATUS_EXCLUDED
     )
     live = _live_projection(start_date, end_date) if include_live else None
-    # Virtual live: the snapshot is unpersisted, so its duration is NOT in
-    # the DB rows. Add it to total / effective so the KPI reflects the
-    # current in-progress activity.
-    # Persisted_open live: the open DB row IS already in the rows above, so
-    # its duration is already in total / effective. Do NOT add it again
-    # (would double-count). The project attribution overlay is handled via
-    # get_project_stats(include_live=True) below.
     if live is not None and live.get("live_state") == "virtual":
         live_duration = int(live["duration_seconds"])
         total += live_duration
@@ -169,31 +162,7 @@ def _ensure_context_range(start_date: str, end_date: str) -> None:
 
 
 def _live_projection(start_date: str, end_date: str) -> dict | None:
-    """Project the current live snapshot for KPI attribution.
-
-    Uses ``build_live_projection`` so virtual and persisted_open share the
-    SAME display_project source — the snapshot's ``display_project`` block.
-    source — the snapshot's ``display_project`` block — rather than the DB
-    row's candidate assignment.
-
-    Returns a dict carrying:
-
-    - ``live_state``: ``"virtual"`` / ``"persisted_open"`` / ``"none"``.
-    - ``status``: ``STATUS_NORMAL`` (idle / paused / excluded / error are
-      never projected).
-    - ``duration_seconds``: the live duration. For virtual this is added
-      to KPI totals; for persisted_open it is NOT (see ``get_summary``).
-      carries it — adding would double-count).
-    - ``project`` / ``project_description``: the display_project name and
-      description.
-      DB row's candidate assignment).
-    - ``persisted_activity_id``: for persisted_open, the real DB row id
-      used to match the session for project overlay.
-    - ``is_uncategorized``: ``True`` when display_project is uncategorized.
-
-    Returns ``None`` when the snapshot is not eligible (no snapshot, not
-    normal, not today, idle / paused / excluded / error).
-    """
+    """Project the current live snapshot for KPI attribution."""
     snapshot = _read_current_activity_snapshot()
     if not snapshot:
         return None
@@ -259,31 +228,6 @@ def _read_current_activity_snapshot() -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-# --- Read-only statistics / export preview -------------------------------
-#
-# ``get_statistics_export_summary`` is a READ-ONLY aggregation used by the
-# WebView Statistics / Export page. It never writes to the DB, never writes a
-# file, and never opens a save dialog. It only reads closed activities via
-# ``timeline_service.get_report_activity_rows`` (which already excludes
-# ``is_deleted = 1`` and, with ``include_hidden=False``, ``is_hidden = 1``).
-#
-# In-progress activities (``end_time IS NULL``) are excluded: they have no
-# finalized duration. The read-only preview intentionally does NOT project
-# live time so it stays stable and deterministic.
-#
-# Status inclusion semantics (locked by tests):
-#   - ``normal``  → included
-#   - ``idle``    → included
-#   - ``paused``  → included
-#   - ``excluded``→ included
-#   - ``error``   → included
-#   All closed, non-hidden, non-deleted activities are aggregated regardless
-#   of status. The ``by_status`` breakdown surfaces each status group with a
-#   display label so the user can see how time was spent across states.
-#
-# The payload is display-safe: it contains only aggregated numbers and
-# display names (project name, app name, status label). Raw ``window_title``,
-# ``file_path_hint``, ``full_path``, ``clipboard``, ``note``, SQL, and
 # tracebacks are never surfaced.
 
 

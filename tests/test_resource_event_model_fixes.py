@@ -35,9 +35,7 @@ def _enable_excluded_project_with_keyword(keyword: str) -> int:
     return excluded_project
 
 
-# ---------------------------------------------------------------------------
 # 1. Excluded resource is forced anonymous even when a real resource is passed
-# ---------------------------------------------------------------------------
 
 
 class TestExcludedResourceForcedAnonymous:
@@ -107,9 +105,7 @@ class TestExcludedResourceForcedAnonymous:
         assert resource["path_hint"] is None
 
 
-# ---------------------------------------------------------------------------
 # 2. privacy_service.is_resource_excluded
-# ---------------------------------------------------------------------------
 
 
 class TestResourceExclusion:
@@ -230,9 +226,7 @@ class TestResourceExclusion:
         assert resource["uri_host"] is None
 
 
-# ---------------------------------------------------------------------------
 # 3. EmailDetector detects email_file from window_title .eml/.msg
-# ---------------------------------------------------------------------------
 
 
 class TestEmailFileFromWindowTitle:
@@ -299,9 +293,7 @@ class TestEmailFileFromWindowTitle:
         assert result.path_hint == "D:\\Emails\\通知.eml"
 
 
-# ---------------------------------------------------------------------------
 # 4. IDE workspace is_anchor=True and suggests project
-# ---------------------------------------------------------------------------
 
 
 class TestIdeWorkspaceAnchorAndProject:
@@ -342,9 +334,7 @@ class TestIdeWorkspaceAnchorAndProject:
         assert assignment["suggested_project_name"] == "MyProject"
 
 
-# ---------------------------------------------------------------------------
 # 5. Current activity snapshot uses resource display name
-# ---------------------------------------------------------------------------
 
 
 def _snapshot():
@@ -394,9 +384,7 @@ class TestCurrentSnapshotUsesResourceDisplayName:
         assert snap["inferred_project_name"] == "MyProject"
 
 
-# ---------------------------------------------------------------------------
 # 6. update_activity_file_path_hint syncs activity_resource
-# ---------------------------------------------------------------------------
 
 
 class TestUpdateFilePathHintUpdatesActivityResource:

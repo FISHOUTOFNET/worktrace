@@ -92,7 +92,6 @@ def _seed_two_closed_activities(
     return [a1, a2]
 
 
-# --- hide_timeline_activity: success -------------------------------------
 
 
 def test_hide_timeline_activity_success(bridge):
@@ -114,7 +113,6 @@ def test_hide_timeline_activity_idempotent(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- soft_delete_timeline_activity: success -------------------------------
 
 
 def test_soft_delete_timeline_activity_success(bridge):
@@ -131,7 +129,6 @@ def test_soft_delete_timeline_activity_success(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- hide_timeline_session / soft_delete_timeline_session: success --------
 
 
 def test_hide_timeline_session_single_activity_success(bridge):
@@ -156,7 +153,6 @@ def test_soft_delete_timeline_session_single_activity_success(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- hide_timeline_activity / soft_delete_timeline_activity: invalid id ---
 
 
 def test_hide_timeline_activity_bool_id(bridge):
@@ -201,7 +197,6 @@ def test_soft_delete_timeline_activity_non_positive(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- in-progress ---------------------------------------------------------
 
 
 def test_hide_timeline_activity_in_progress(bridge):
@@ -228,7 +223,6 @@ def test_soft_delete_timeline_activity_in_progress(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- session-level invalid input -----------------------------------------
 
 
 def test_hide_timeline_session_non_list(bridge):
@@ -275,7 +269,6 @@ def test_soft_delete_timeline_session_bool_id_in_list(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- multi-activity session ---------------------------------------------
 
 
 def test_hide_timeline_session_multi_activity(bridge):
@@ -304,7 +297,6 @@ def test_soft_delete_timeline_session_multi_activity(bridge):
         assert int(activity.get("is_deleted") or 0) == 0
 
 
-# --- session-level in-progress ------------------------------------------
 
 
 def test_hide_timeline_session_in_progress(bridge):
@@ -333,7 +325,6 @@ def test_soft_delete_timeline_session_in_progress(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- operation_failed ----------------------------------------------------
 
 
 def test_hide_timeline_activity_operation_failed(bridge):
@@ -386,7 +377,6 @@ def test_soft_delete_timeline_session_operation_failed(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- Bridge error mapping exhaustiveness ---------------------------------
 
 
 def test_hide_timeline_activity_unknown_error_code_collapses(bridge):
@@ -417,7 +407,6 @@ def test_soft_delete_timeline_activity_unknown_error_code_collapses(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- Bridge import boundary ----------------------------------------------
 
 
 def test_bridge_does_not_import_backend_internals():
@@ -445,7 +434,6 @@ def test_bridge_does_not_import_backend_internals():
         )
 
 
-# --- Sensitive data not in any error payload -----------------------------
 
 
 def test_hide_timeline_activity_error_has_no_raw_fields(bridge):
@@ -513,7 +501,6 @@ def test_soft_delete_timeline_session_multi_activity_error_has_no_raw_fields(bri
     assert "winword" not in payload_str.lower()
 
 
-# --- bridge-layer hardening ---------------------------------
 
 
 def test_hide_timeline_session_multi_activity_does_not_call_api(bridge):

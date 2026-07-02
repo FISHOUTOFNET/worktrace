@@ -57,9 +57,7 @@ from worktrace.services.project_inference_service import (
 )
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -71,9 +69,7 @@ def temp_db_setup(temp_db):
     return temp_db
 
 
-# ---------------------------------------------------------------------------
 # start_activity closes old open rows + triggers inference
-# ---------------------------------------------------------------------------
 
 
 def test_start_activity_finalizes_closed_rows_with_folder_rule(temp_db_setup):
@@ -170,9 +166,7 @@ def test_create_activity_no_open_rows_does_not_fail(temp_db_setup):
     assert activity_service.get_activity(aid) is not None
 
 
-# ---------------------------------------------------------------------------
 # lifecycle.close_activity triggers inference
-# ---------------------------------------------------------------------------
 
 
 def test_lifecycle_close_activity_triggers_inference(temp_db_setup):
@@ -193,9 +187,7 @@ def test_lifecycle_close_activity_triggers_inference(temp_db_setup):
     assert assignment["source"] == "folder_rule"
 
 
-# ---------------------------------------------------------------------------
 # lifecycle.persist_open_activity_if_ready
-# ---------------------------------------------------------------------------
 
 
 def test_persist_open_activity_if_ready_syncs_open_row_project(temp_db_setup):
@@ -246,9 +238,7 @@ def test_force_persist_open_activity_for_clipboard_creates_open_row(temp_db_setu
     assert row["end_time"] is None
 
 
-# ---------------------------------------------------------------------------
 # lifecycle.persist_midnight_anchor
-# ---------------------------------------------------------------------------
 
 
 def test_persist_midnight_anchor_applies_midnight_anchor_assignment(temp_db_setup):
@@ -274,9 +264,7 @@ def test_persist_midnight_anchor_applies_midnight_anchor_assignment(temp_db_setu
     assert activity_service.get_activity(aid)["end_time"] is None
 
 
-# ---------------------------------------------------------------------------
 # lifecycle.recover_cross_midnight_segment
-# ---------------------------------------------------------------------------
 
 
 def test_recover_cross_midnight_segment_creates_and_closes(temp_db_setup):
@@ -306,9 +294,7 @@ def test_recover_cross_midnight_segment_creates_and_closes(temp_db_setup):
     assert assignment["source"] == "midnight_anchor"
 
 
-# ---------------------------------------------------------------------------
 # Recovery cross-midnight convergence (no second lifecycle path)
-# ---------------------------------------------------------------------------
 
 
 def test_recovery_cross_midnight_converges_project(temp_db_setup):
@@ -339,9 +325,7 @@ def test_recovery_cross_midnight_converges_project(temp_db_setup):
     assert segment_assignment["source"] == "midnight_anchor"
 
 
-# ---------------------------------------------------------------------------
 # finalize_closed_activity_ids resilience
-# ---------------------------------------------------------------------------
 
 
 def test_finalize_closed_activity_ids_empty_list_is_noop(temp_db_setup):
@@ -398,9 +382,7 @@ def test_finalize_closed_activity_ids_inference_failure_does_not_block(temp_db_s
     assert call_count[0] == 2  # Both rows were attempted
 
 
-# ---------------------------------------------------------------------------
 # 30-second threshold preservation (collector behavior unchanged)
-# ---------------------------------------------------------------------------
 
 
 def test_persist_open_activity_if_ready_does_not_recheck_threshold(temp_db_setup):

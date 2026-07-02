@@ -13,9 +13,7 @@ from worktrace.services import activity_service, folder_rule_service, project_se
 from worktrace.services.project_inference_service import assign_project_for_activity
 
 
-# ---------------------------------------------------------------------------
 # Full local path with non-whitelisted extension -> local_file anchor
-# ---------------------------------------------------------------------------
 
 class TestFullLocalPathUnknownExtension:
     @pytest.mark.parametrize(
@@ -77,9 +75,7 @@ class TestFullLocalPathUnknownExtension:
         assert result.path_hint == r"C:\Cases\A\mockup.psd"
 
 
-# ---------------------------------------------------------------------------
 # Bare file name with unknown extension -> NOT local_file
-# ---------------------------------------------------------------------------
 
 class TestBareFileNameUnknownExtension:
     def test_bare_unknown_ext_not_detected_by_local_file_detector(self):
@@ -106,9 +102,7 @@ class TestBareFileNameUnknownExtension:
         assert result.is_anchor is False
 
 
-# ---------------------------------------------------------------------------
 # Existing whitelist behavior preserved
-# ---------------------------------------------------------------------------
 
 class TestWhitelistPreserved:
     def test_full_path_pdf_still_pdf(self):
@@ -174,9 +168,7 @@ class TestWhitelistPreserved:
         assert result.resource_subtype == "text_file"
 
 
-# ---------------------------------------------------------------------------
 # Office document extensions are deferred to OfficeWpsDetector / FallbackFileDetector
-# ---------------------------------------------------------------------------
 
 class TestOfficeExtensionDeferral:
     @pytest.mark.parametrize("ext", [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"])
@@ -193,9 +185,7 @@ class TestOfficeExtensionDeferral:
         assert LocalFileDetector().detect(aw) is None
 
 
-# ---------------------------------------------------------------------------
 # Folder rule inference for unknown-extension full paths
-# ---------------------------------------------------------------------------
 
 class TestFolderRuleWithUnknownExtension:
     def test_folder_rule_matches_dwg_full_path(self, temp_db):

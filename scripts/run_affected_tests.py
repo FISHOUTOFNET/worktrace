@@ -1,37 +1,5 @@
 #!/usr/bin/env python3
-"""WorkTrace affected-test runner.
-
-Selects a narrow, conservative set of pytest targets based on which files
-changed relative to a git base (default ``HEAD``). Pure standard library
-only; introduces no new dependencies.
-
-Purpose
--------
-This is a **local development accelerator**. The WorkTrace test suite has
-grown past 2000 cases; running the full ``pytest`` on every small change is
-wasteful. This runner picks a finite, obviously-relevant subset so an
-iteration loop stays fast.
-
-It is NOT release validation. Release validation still requires the full
-``pytest`` suite plus the PyInstaller exe and per-user installer builds
-(see ``docs/release-validation.md``). This runner never invokes PyInstaller
-or the installer script.
-
-Usage
------
-
-    python scripts/run_affected_tests.py
-    python scripts/run_affected_tests.py --list
-    python scripts/run_affected_tests.py --print-only
-    python scripts/run_affected_tests.py --all
-    python scripts/run_affected_tests.py --base HEAD
-    python scripts/run_affected_tests.py --staged
-    python scripts/run_affected_tests.py -- --maxfail=1 -q
-
-The pure selection logic lives in :func:`select_targets`,
-:func:`build_pytest_command`, and :func:`existing_targets` so it can be
-unit-tested without invoking git or pytest.
-"""
+"""WorkTrace affected-test runner."""
 
 from __future__ import annotations
 
@@ -65,6 +33,8 @@ SMOKE_FALLBACK_TARGETS: list[str] = [
     "tests/webview/",
 ]
 
+COMMENT_HYGIENE_TARGET = "tests/test_comment_hygiene.py"
+
 # Broad-but-finite suite used when tests/conftest.py itself changes.
 CONFTEST_BROAD_SUITE: list[str] = [
     "tests/test_db_migration.py",
@@ -75,23 +45,6 @@ CONFTEST_BROAD_SUITE: list[str] = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Path -> tests mapping (sections A..N; C refined into C1..C9).
-#
-# Each rule is a dict with:
-#   id        : human label
-#   triggers  : repo-relative paths. A trigger ending with "/" is a
-#               directory prefix match; otherwise an exact file match.
-#               Paths use forward slashes and are matched against the
-#               normalized changed-file path.
-#   tests     : suggested pytest targets (files or directories).
-#   smoke     : extra non-pytest commands to run (list of argv lists).
-#   warnings  : human-readable notes printed with the selection.
-#
-# The mapping is intentionally conservative: when unsure, run a bit more
-# rather than miss an obviously-relevant test. Nonexistent suggested test
-# paths are filtered out at run time by existing_targets().
-# ---------------------------------------------------------------------------
 
 RULES: list[dict] = [
     {
@@ -574,6 +527,20 @@ RULES: list[dict] = [
         "smoke": [],
         "warnings": [],
     },
+    {
+        "id": "O. Comment hygiene gate",
+        "triggers": [
+            "comment_policy.json",
+            "scripts/comment_hygiene.py",
+            ".ai/comment-hygiene-fixer.md",
+        ],
+        "tests": [
+            COMMENT_HYGIENE_TARGET,
+            "tests/test_run_affected_tests.py",
+        ],
+        "smoke": [],
+        "warnings": [],
+    },
 ]
 
 
@@ -596,9 +563,7 @@ class Selection:
     warnings: list[str] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
 # Pure selection logic (no filesystem / git access; unit-testable).
-# ---------------------------------------------------------------------------
 
 
 def _normalize(path: str) -> str:
@@ -676,6 +641,9 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
         elif c.startswith("tests/webview/"):
             add_target(c)
             add_target("tests/webview/")
+        elif c == COMMENT_HYGIENE_TARGET:
+            add_target(c)
+            add_target("tests/test_run_affected_tests.py")
         else:
             add_target(c)
 
@@ -709,6 +677,8 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
             "No changed files detected; running light smoke set. "
             "Use --all for full pytest."
         )
+
+    add_target(COMMENT_HYGIENE_TARGET)
 
     return Selection(
         changed_files=files,
@@ -749,9 +719,7 @@ def build_pytest_command(targets: Iterable[str], extra_args: Iterable[str]) -> l
     return cmd
 
 
-# ---------------------------------------------------------------------------
 # Git integration.
-# ---------------------------------------------------------------------------
 
 
 def _is_git_repo(repo_root: Path) -> bool:
@@ -788,9 +756,7 @@ def _git_changed_files(repo_root: Path, base: str, staged: bool) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-# ---------------------------------------------------------------------------
 # CLI.
-# ---------------------------------------------------------------------------
 
 
 def _split_passthrough(argv: list[str]) -> tuple[list[str], list[str]]:

@@ -11,9 +11,7 @@ def session_note_key(session: dict) -> tuple[str, int] | None:
     return report_date, int(activity_ids[0])
 
 
-# ---------------------------------------------------------------------------
 # Note-only accessors (read/write only the note field).
-# ---------------------------------------------------------------------------
 
 
 def get_session_note(report_date: str, first_activity_id: int) -> str:
@@ -48,9 +46,7 @@ def attach_session_notes(sessions: list[dict]) -> list[dict]:
     return sessions
 
 
-# ---------------------------------------------------------------------------
 # Unified "user fields" API: note + adjusted duration.
-# ---------------------------------------------------------------------------
 
 
 def get_session_user_fields(report_date: str, first_activity_id: int) -> dict:
@@ -152,9 +148,7 @@ def attach_session_user_fields(sessions: list[dict]) -> list[dict]:
     return sessions
 
 
-# ---------------------------------------------------------------------------
 # Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _user_fields_for_sessions(sessions: list[dict]) -> dict[tuple[str, int], dict]:

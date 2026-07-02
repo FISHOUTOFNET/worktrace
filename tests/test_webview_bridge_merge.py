@@ -98,7 +98,6 @@ def _seed_two_adjacent_activities(
     return [a1, a2]
 
 
-# --- merge_timeline_activities: success ----------------------------------
 
 
 def test_merge_success(bridge):
@@ -125,7 +124,6 @@ def test_merge_is_json_serializable(bridge):
     json.dumps(result)
 
 
-# --- merge_timeline_activities: invalid selection ------------------------
 
 
 def test_merge_non_list_activity_ids(bridge):
@@ -194,7 +192,6 @@ def test_merge_same_id_duplicated(bridge):
     assert result["error"] == "请选择两个活动进行合并"
 
 
-# --- merge_timeline_activities: clear error messages ---------------------
 
 
 def test_merge_nonexistent_id_returns_generic(bridge):
@@ -314,7 +311,6 @@ def test_merge_operation_failed_returns_generic(bridge):
     assert "operation_failed" not in str(result)
 
 
-# --- merge_timeline_activities: privacy / safety -------------------------
 
 
 def test_merge_no_traceback_on_error(bridge):
@@ -358,7 +354,6 @@ def test_merge_reversed_argument_order_still_correct(bridge):
     assert result["merged_activity_id"] == ids[1]
 
 
-# --- Bridge import boundary ----------------------------------------------
 
 
 def test_bridge_does_not_import_backend_internals():

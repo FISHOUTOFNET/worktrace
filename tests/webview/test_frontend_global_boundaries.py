@@ -40,7 +40,6 @@ from static_helpers import (
 )
 
 
-# --- existence tests -----------------------------------------------------
 
 
 def test_index_html_exists():
@@ -67,7 +66,6 @@ def test_bridge_py_exists():
     assert (WEBVIEW_UI_DIR / "bridge.py").is_file()
 
 
-# --- global boundary tests (parametrized) --------------------------------
 # These parametrized tests cover every frontend resource file for every
 # prohibited pattern.
 
@@ -115,7 +113,6 @@ def test_frontend_resource_has_no_traceback_text(filename):
     )
 
 
-# --- index.html structural anchors ---------------------------------------
 
 
 def test_index_html_references_local_resources():
@@ -153,7 +150,6 @@ def test_index_html_has_no_migration_placeholder():
     assert "WebView 迁移中" not in source
 
 
-# --- Overview page production contract -----------------------------------
 
 
 def test_index_html_overview_page_has_required_kpis():
@@ -220,7 +216,6 @@ def test_frontend_js_does_not_expose_tracebacks():
     assert "traceback" not in source.lower()
 
 
-# --- startup tests -------------------------------------------------------
 
 
 def test_import_webview_main_does_not_start_gui():
@@ -259,7 +254,6 @@ def test_webview_main_check_pywebview_missing_gives_clear_error(monkeypatch):
     assert "未安装" in msg
 
 
-# --- doc-mention regression locks ----------------------------------------
 # Documentation resources are allowed to preserve historical records, but
 # frontend boundary tests should only lock current documentation surfaces.
 
@@ -399,7 +393,6 @@ def test_frontend_module_no_app_js_references_remain_in_js_files():
     )
 
 
-# --- CRITICAL behavior-preservation guards --------------------
 
 
 def test_frontend_module_all_functions_still_defined():
@@ -531,7 +524,6 @@ def test_frontend_module_state_variables_only_accessed_via_app_namespace():
     )
 
 
-# --- init.js does not start refresh before notice loaded -----
 
 
 def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
@@ -579,7 +571,6 @@ def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
     )
 
 
-# --- local ticker (1-second DOM-only refresh) ----------------
 
 
 def test_core_js_does_not_define_removed_ticker_interval() -> None:

@@ -139,3 +139,11 @@ past 2000 cases, so do **not** default to the full `pytest` on every change.
 
 See [`docs/release-validation.md`](release-validation.md) for the release
 baseline the affected runner does **not** replace.
+
+## 10. Comment Hygiene Gate
+
+After each AI coding pass, run `python scripts/comment_hygiene.py --check`.
+If it fails, use `python scripts/comment_hygiene.py --json` together with
+[`.ai/comment-hygiene-fixer.md`](../.ai/comment-hygiene-fixer.md) to fix it
+automatically; no manual review is required. Do not add historical migration
+narratives or comments that restate nearby code.

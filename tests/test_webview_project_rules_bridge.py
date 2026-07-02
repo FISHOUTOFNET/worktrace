@@ -864,7 +864,6 @@ def test_project_rules_bridge_import_boundary():
             )
 
 
-# --- Project Rules keyword rule creation foundation ------------
 
 
 def test_create_project_keyword_rule_success_payload(monkeypatch):
@@ -1272,7 +1271,6 @@ def test_create_project_keyword_rule_does_not_regress_set_project_rule_enabled(m
     }
 
 
-# --- keyword creation hardening regression locks -------------
 
 
 def test_create_project_keyword_rule_bridge_passes_trimmed_keyword_to_api(monkeypatch):
@@ -1352,7 +1350,6 @@ def test_create_project_keyword_rule_bridge_rejects_tuple_and_set_keyword():
         assert result == {"ok": False, "error": "操作无效"}
 
 
-# --- Project Rules keyword rule deletion foundation ------------
 
 
 def test_delete_project_keyword_rule_success_payload(monkeypatch):
@@ -1729,7 +1726,6 @@ def test_delete_project_keyword_rule_does_not_regress_create_project_keyword_rul
     assert result["rule"]["keyword"] == "Spec"
 
 
-# --- keyword deletion hardening regression locks ------------
 
 
 def test_delete_project_keyword_rule_success_payload_strips_extra_api_keys(monkeypatch):
@@ -1849,7 +1845,6 @@ def test_delete_project_keyword_rule_bridge_input_validation_payloads_json_seria
             assert forbidden not in lowered
 
 
-# --- folder rule create bridge tests ---------------------------
 
 
 def test_create_project_folder_rule_success_payload(monkeypatch):
@@ -2242,7 +2237,6 @@ def test_create_project_folder_rule_does_not_regress_delete_project_keyword_rule
     assert delete_result["ok"] is True
 
 
-# --- folder rule update bridge tests ---------------------------
 
 
 def test_update_project_folder_rule_success_payload(monkeypatch):
@@ -2496,7 +2490,6 @@ def test_update_project_folder_rule_never_calls_other_project_rules_write_apis(m
     assert called == {"update_folder": 1}
 
 
-# --- folder rule delete bridge tests ---------------------------
 
 
 def test_delete_project_folder_rule_success_payload(monkeypatch):
@@ -2810,14 +2803,7 @@ def test_delete_project_folder_rule_does_not_regress_delete_project_keyword_rule
     assert keyword_result["ok"] is True
 
 
-# --- folder rule CRUD bridge hardening regression locks -------
-#
-# These locks consolidate the bool-as-int rejection, the error-message-map
-# consistency, the API-call boundary (the bridge never forwards bool /
-# non-int / non-bool values to the API), the failure-path JSON
-# serializability, and the cross-method state isolation that guarantees
-# the three folder bridge methods do not pollute each other or the
-# keyword / toggle bridge methods.
+# consistency, the API-call boundary (the bridge never forwards bool
 
 
 @pytest.mark.parametrize("bad_id", [True, False])
@@ -3042,7 +3028,6 @@ def test_folder_bridge_success_payloads_never_include_api_error_keys(monkeypatch
         assert "rules" not in result
 
 
-# --- keyword rule edit bridge tests ----------------------------
 
 
 def test_update_project_keyword_rule_success_payload(monkeypatch):
@@ -3473,7 +3458,6 @@ def test_update_project_keyword_rule_failure_payloads_json_serializable(monkeypa
         assert "Traceback" not in repr(result)
 
 
-# --- Project lifecycle foundation bridge regression locks -----
 
 
 _PROJECT_LIFECYCLE_SUMMARY = {
@@ -4183,9 +4167,7 @@ def test_get_project_rules_read_payload_excludes_sensitive_internal_fields(monke
             )
 
 
-# ---------------------------------------------------------------------------
 # rule impact preview + safe single-rule backfill bridge tests
-# ---------------------------------------------------------------------------
 
 # Sensitive tokens that must never appear in any bridge payload (success or
 # failure). The bridge must collapse verbose backend exceptions to stable
@@ -4727,9 +4709,7 @@ def test_bridge_rules_5h_message_maps_are_stable_chinese():
     assert _PROJECT_RULE_BACKFILL_MESSAGES["operation_failed"] == "应用规则失败"
 
 
-# ---------------------------------------------------------------------------
 # selected-rule batch operations bridge tests
-# ---------------------------------------------------------------------------
 
 
 def test_preview_project_rules_batch_impact_success_returns_narrow_payload(monkeypatch):
@@ -5357,7 +5337,6 @@ def test_bridge_rules_5i_batch_message_maps_are_stable_chinese():
     assert _PROJECT_RULE_BATCH_TOGGLE_MESSAGES["operation_failed"] == "批量操作失败"
 
 
-# --- excluded-rule creation bridge regression locks ----------
 
 
 def test_create_excluded_keyword_rule_success_returns_narrow_payload(monkeypatch):

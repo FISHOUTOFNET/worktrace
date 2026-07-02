@@ -1,33 +1,4 @@
-"""Automatic Project Rules application foundation tests.
-
-Locks the behavior of the automatic-rules engine. The supported
-automatic-rules contract normalizes the existing inference path (``activity_service.finalize_created_activity`` ->
-``project_inference_service.process_new_activity`` ->
-``assign_project_for_activity``) as the **supported** automatic-rules
-contract. The thin facade
-``worktrace.services.rule_automation_service.apply_automatic_rules_to_activity``
-delegates to that path without re-implementing matching.
-
-Locked behavior:
-
-- Enabled folder rule auto-applies to a new closed eligible activity
-  (source ``folder_rule``, confidence 85, ``auto_classified = 1``,
-  ``is_manual = 0``, ``manual_override`` never set to 1).
-- Enabled keyword rule auto-applies (source ``keyword_rule``, confidence 80).
-- Disabled rule does not apply.
-- Disabled / archived / excluded target project does not apply.
-- ``manual_override = 1`` activity is not overwritten.
-- ``activity_project_assignment.is_manual = 1`` activity is not overwritten.
-- Hidden / deleted / in-progress / non-normal activities are not touched.
-- Activity already on the target project is not re-written.
-- Multi-rule deterministic priority: folder rules before keyword rules;
-  within each kind, ``created_at, id`` ascending; first match wins and no
-  later matching rules are ignored.
-- No DB schema change (no new table / column / migration).
-- The bridge ``automatic_rules_status`` payload is display-safe (no raw
-  ``window_title`` / ``file_path_hint`` / ``path_hint`` / clipboard / note /
-  SQL / traceback leak).
-"""
+"""Automatic Project Rules application foundation tests."""
 
 from __future__ import annotations
 
@@ -50,9 +21,7 @@ from worktrace.services import (
 )
 from worktrace.webview_ui.bridge_rules import ProjectRulesBridgeMixin
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _create_closed_activity(
@@ -152,9 +121,7 @@ def _schema_sql_text() -> str:
     return schema_path.read_text(encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
 # Foundation: rule_automation_service constants + facade
-# ---------------------------------------------------------------------------
 
 
 def test_rule_automation_service_confidence_constants_match_inference_contract(temp_db):
@@ -196,9 +163,7 @@ def test_apply_automatic_rules_to_activity_delegates_to_inference(temp_db):
     assert int(facade_result["is_manual"]) == int(inference_result["is_manual"])
 
 
-# ---------------------------------------------------------------------------
 # Automatic application: enabled folder rule
-# ---------------------------------------------------------------------------
 
 
 def test_enabled_folder_rule_auto_applies_to_new_closed_activity(temp_db):
@@ -238,9 +203,7 @@ def test_enabled_keyword_rule_auto_applies_to_new_closed_activity(temp_db):
     assert int(assignment["is_manual"]) == 0
 
 
-# ---------------------------------------------------------------------------
 # Automatic application: skips
-# ---------------------------------------------------------------------------
 
 
 def test_disabled_folder_rule_does_not_apply(temp_db):
@@ -433,9 +396,7 @@ def test_already_target_activity_not_rewritten(temp_db):
     assert assignment["source"] != "folder_rule"
 
 
-# ---------------------------------------------------------------------------
 # Multi-rule deterministic priority
-# ---------------------------------------------------------------------------
 
 
 def test_folder_rule_wins_over_keyword_rule(temp_db):
@@ -504,9 +465,7 @@ def test_first_match_wins_no_later_rule_overwrites(temp_db):
     assert first_assignment["source"] == "folder_rule"
 
 
-# ---------------------------------------------------------------------------
 # Field correctness: confidence / source / auto_classified / is_manual
-# ---------------------------------------------------------------------------
 
 
 def test_folder_rule_fields_correct(temp_db):
@@ -541,9 +500,7 @@ def test_keyword_rule_fields_correct(temp_db):
     assert int(assignment["is_manual"]) == 0
 
 
-# ---------------------------------------------------------------------------
 # No schema change
-# ---------------------------------------------------------------------------
 
 
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "worktrace" / "schema.sql"
@@ -567,9 +524,7 @@ def test_no_schema_change_for_automatic_rules(temp_db):
     assert _SCHEMA_PATH.read_text(encoding="utf-8").strip() != ""
 
 
-# ---------------------------------------------------------------------------
 # Bridge: automatic_rules_status payload is display-safe
-# ---------------------------------------------------------------------------
 
 
 _FORBIDDEN_TOKENS = [
@@ -659,9 +614,7 @@ def test_automatic_rules_status_payload_json_serializable(temp_db):
     json.dumps(result, ensure_ascii=False, default=str)
 
 
-# ---------------------------------------------------------------------------
 # Hardening lock: thin facade + hook-chain guard order + no toggle
-# ---------------------------------------------------------------------------
 
 
 def test_apply_automatic_rules_facade_source_has_no_separate_matcher(temp_db):
@@ -777,14 +730,6 @@ def test_automatic_rules_status_payload_has_no_on_off_toggle_field(temp_db):
 
 
 def test_close_activity_triggers_automatic_rules_for_in_progress_activity(temp_db):
-    # regression fix: when an activity is created in-progress
-    # (``end_time IS NULL``), ``finalize_created_activity`` calls
-    # ``process_new_activity`` but the in-progress guard skips it. When the
-    # activity is later closed via ``close_activity``, the automatic-rules
-    # entry point must be re-triggered so enabled folder / keyword rules
-    # apply to the just-closed activity. Without this, activities created
-    # in-progress and later closed would never receive automatic rule
-    # application.
     project = project_service.create_project("CloseTrigger")
     folder_rule_service.create_or_update_folder_rule(
         "D:\\CloseTriggerFolder", project

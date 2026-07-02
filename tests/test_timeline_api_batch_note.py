@@ -31,7 +31,6 @@ from worktrace.db import get_connection
 from worktrace.services import activity_service, project_service
 
 
-# --- Seed helpers --------------------------------------------------------
 
 
 def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
@@ -175,7 +174,6 @@ def _seed_activity_with_note(note_text: str, start="09:00:00", end="09:30:00"):
     return aid
 
 
-# --- batch_update_timeline_activities_note: validation ----------------
 
 
 def test_batch_non_list_activity_ids(temp_db):
@@ -309,7 +307,6 @@ def test_batch_in_progress_activity(temp_db):
     assert exc.value.code == "in_progress"
 
 
-# --- batch_update_timeline_activities_note: success ----------------------
 
 
 def test_batch_success(temp_db):
@@ -582,7 +579,6 @@ def test_batch_exact_max_100_success(temp_db):
         assert _get_activity_note(aid) == "note"
 
 
-# --- Service layer direct tests ------------------------------------------
 
 
 def test_service_batch_success(temp_db):
@@ -677,7 +673,6 @@ def test_service_batch_non_positive_id(temp_db):
     assert str(exc.value) == "invalid_activity_ids"
 
 
-# --- hardening: exception rollback + non-leak ----------------
 
 
 class _FailingConn:
@@ -804,7 +799,6 @@ def test_batch_mixed_valid_and_nonexistent_rejects_all(temp_db):
     assert _get_activity_note(aid) == "original"
 
 
-# --- No new DB schema ---
 
 
 def test_batch_no_new_db_schema(temp_db):
@@ -831,7 +825,6 @@ def test_batch_no_new_db_schema(temp_db):
     assert before == after
 
 
-# --- batch note editing hardening --------------------------
 #
 # These tests explicitly verify the hardening invariants that distinguish
 # batch note overwrite from the single ``update_activity_note`` path and

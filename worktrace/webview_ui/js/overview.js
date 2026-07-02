@@ -1,17 +1,13 @@
 // WorkTrace WebView frontend — overview module.
-// Overview page rendering: KPIs, current activity, recent activities list.
 
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Overview rendering ---------------------------------------------
 
     function showOverview(overview) {
         if (!overview) return;
-        // Store the overview snapshot so the 1-second heartbeat ticker can
         // increment the displayed durations without a bridge round-trip.
-        // The ticker only updates DOM text.
         App.lastOverviewSnapshot = overview;
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-total").textContent = overview.total_duration || "00:00:00";
@@ -25,8 +21,6 @@
         } else {
             currentEl.textContent = "当前活动：无";
         }
-        // Seed the monotonic render state for the KPI elements so the
-        // ticker's first delta after a backend refresh does not appear to
         // roll back against a stale prior ticker projection.
         App._monotonicRenderState["overview-total"] = {
             lastSeconds: parseInt(overview.today_total_seconds, 10) || 0
@@ -41,9 +35,7 @@
     App.showOverview = showOverview;
 
     function showRecent(recentResult) {
-        // Cache the recent snapshot so the 1-second heartbeat ticker can
         // increment the live-projected item's duration without a bridge
-        // round-trip. The ticker only updates DOM text.
         App.lastRecentSnapshot = recentResult;
         var listEl = document.getElementById("recent-list");
         if (!recentResult || !recentResult.activities || recentResult.activities.length === 0) {
@@ -53,15 +45,10 @@
         var html = "";
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
-            // Prefer ``is_in_progress`` over the ``!end_time`` heuristic so
             // the bridge's explicit contract drives the in-progress
-            // rendering.
             var inProgress = item.is_in_progress === true || (!item.end_time && item.is_in_progress !== false);
             var timeRange = App.formatTimeRange(item.start_time, item.end_time, inProgress);
             // Prefer ``duration_seconds`` (raw int from the backend) over
-            // the pre-formatted ``duration`` string so the ticker /
-            // monotonic helper can recompute from a stable baseline. The
-            // ``duration`` string is kept as a fallback.
             var durSec = parseInt(item.duration_seconds, 10);
             var durText = (!isNaN(durSec) && durSec >= 0)
                 ? App.formatDuration(durSec)
@@ -80,18 +67,9 @@
                 + '</div>'
                 + '<div class="recent-item-duration">' + App.escapeHtml(durText) + '</div>'
                 + '</div>';
-            // Reset the monotonic render state for this recent row so the
-            // fresh backend snapshot duration can replace any prior
             // ticker-projected value without a false "rollback" guard.
-            // The continuity key MUST use App.liveContinuityKey() so the
-            // ticker (which also uses liveContinuityKey) can locate the
-            // seeded state. Using the array index ("recent-" + i) would
-            // break the virtual → persisted_open transition because the
-            // ticker key is based on stable_live_key_hash, not the index.
             var recentKey = App.liveContinuityKey(item, "recent");
             App.resetMonotonicRenderState(recentKey);
-            // Seed the monotonic state with the fresh backend snapshot duration so the
-            // ticker's first projection does not appear to roll back.
             App._monotonicRenderState[recentKey] = { lastSeconds: isNaN(durSec) ? 0 : durSec };
         }
         listEl.innerHTML = html;

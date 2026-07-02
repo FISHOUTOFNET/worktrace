@@ -1,48 +1,4 @@
-"""Python bridge exposed to the WebView frontend via pywebview.
-
-Boundary rules (enforced by tests/test_ui_backend_boundary.py):
-
-- This module composes the page-level bridge mixins and does NOT import
-  ``worktrace.api`` directly; each mixin imports the API facades it needs
-  from its own module namespace. It must not import ``worktrace.services``,
-  ``worktrace.db``, ``worktrace.collector``, ``worktrace.security``,
-  ``worktrace.runtime``, or ``worktrace.config``.
-- Methods return JSON-serializable dicts/lists only.
-- Methods catch exceptions and return ``{"ok": false, "error": "操作失败"}``
-  without tracebacks. Errors must not leak traceback, SQL, or raw sensitive
-  fields.
-- Methods do not log window titles, file paths, notes, or copied text.
-
-``WebViewBridge`` is the JS/Python bridge layer and the only data path
-between JS and Python. It composes the page-level bridge mixins.
-
-Composition structure:
-
-``WebViewBridge`` is a thin composition class that inherits from six
-mixins, each owning a page-level slice of the bridge surface:
-
-- ``BridgeDialogMixin`` (``bridge_dialogs.py``): native save / open file
-  dialog helpers (``_choose_csv_save_path`` / ``_choose_backup_save_path``
-  / ``_choose_backup_open_path``).
-- ``OverviewBridgeMixin`` (``bridge_overview.py``): ``get_status``,
-  ``toggle_pause``, ``get_overview``, ``get_recent_activities``.
-- ``SettingsBridgeMixin`` (``bridge_settings.py``): first-run notice,
-  settings / privacy status, clipboard capture toggle, encrypted backup
-  export / import / manifest preview, clear-all-local-data.
-- ``StatisticsBridgeMixin`` (``bridge_statistics.py``):
-  ``get_statistics_export_summary``, ``export_statistics_csv``.
-- ``TimelineBridgeMixin`` (``bridge_timeline.py``): all timeline read /
-  edit / split / merge / hide / delete / batch / restore methods.
-- ``ProjectRulesBridgeMixin`` (``bridge_rules.py``): the Project Rules
-  bridge methods.
-
-Shared helpers (``_coerce_activity_ids``, ``_validate_datetime_inputs``,
-``_safe_resource_display_name``, ``_snapshot_summary``,
-``_statistics_summary_payload``, ``_GENERIC_ERROR``, ``_RECENT_LIMIT``,
-``_DATE_SHAPE_RE``, ``_DATETIME_SHAPE_RE``) live in ``bridge_common.py``.
-Each mixin imports what it needs from its own owning module; this module
-only exposes ``WebViewBridge``.
-"""
+"""Python bridge exposed to the WebView frontend via pywebview."""
 
 from __future__ import annotations
 
@@ -74,7 +30,7 @@ class WebViewBridge(
 
     Inherits from six mixins, each owning a page-level slice.
     ``WebViewBridge`` itself only owns ``__init__`` and ``set_window``; every
-    public bridge method is inherited.
+    public bridge method is inherited, including get_statistics_export_summary.
     """
 
     def __init__(self) -> None:

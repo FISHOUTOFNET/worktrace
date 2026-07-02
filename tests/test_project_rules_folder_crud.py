@@ -64,7 +64,6 @@ def _keyword_rule_row(rule_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-# --- Valid creation ------------------------------------------------------
 
 
 def test_create_folder_rule_for_normal_project(temp_db):
@@ -178,7 +177,6 @@ def test_create_folder_rule_create_or_update_semantics(temp_db):
     assert row["enabled"] == 1
 
 
-# --- project_id input validation ----------------------------------------
 
 
 @pytest.mark.parametrize("bad_id", [True, False])
@@ -211,7 +209,6 @@ def test_create_folder_rule_rejects_other_invalid_project_id_types(temp_db, bad_
     assert result == {"ok": False, "error": "invalid_input"}
 
 
-# --- folder_path input validation --------------------------------------
 
 
 def test_create_folder_rule_rejects_none_folder_path(temp_db):
@@ -240,7 +237,6 @@ def test_create_folder_rule_rejects_whitespace_only_folder_path(temp_db, bad_pat
     assert result == {"ok": False, "error": "invalid_input"}
 
 
-# --- recursive input validation ----------------------------------------
 
 
 @pytest.mark.parametrize("bad_recursive", [None, "true", 1, 0, 1.0, [], {}, (), {1, 2}, (1,), frozenset({1})])
@@ -250,7 +246,6 @@ def test_create_folder_rule_rejects_non_bool_recursive(temp_db, bad_recursive):
     assert result == {"ok": False, "error": "invalid_input"}
 
 
-# --- project_not_found ---------------------------------------------------
 
 
 def test_create_folder_rule_unknown_project_returns_stable_project_not_found(temp_db):
@@ -258,7 +253,6 @@ def test_create_folder_rule_unknown_project_returns_stable_project_not_found(tem
     assert result == {"ok": False, "error": "project_not_found"}
 
 
-# --- Exception collapse --------------------------------------------------
 
 
 def test_create_folder_rule_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
@@ -277,7 +271,6 @@ def test_create_folder_rule_service_exception_collapses_to_operation_failed(temp
         assert forbidden not in lowered
 
 
-# --- No side effects ----------------------------------------------------
 
 
 def test_create_folder_rule_no_side_effects_on_other_tables(temp_db):
@@ -308,7 +301,6 @@ def test_create_folder_rule_does_not_create_keyword_rule(temp_db):
     assert count == 0
 
 
-# --- JSON serializable ---------------------------------------------------
 
 
 def test_create_folder_rule_payload_json_serializable(temp_db):
@@ -319,7 +311,6 @@ def test_create_folder_rule_payload_json_serializable(temp_db):
     json.dumps(result, ensure_ascii=False)
 
 
-# --- Update folder rule --------------------------------------------------
 
 
 def test_update_folder_rule_success(temp_db):
@@ -471,7 +462,6 @@ def test_update_folder_rule_service_exception_collapses_to_operation_failed(temp
         assert forbidden not in lowered
 
 
-# --- Delete folder rule --------------------------------------------------
 
 
 def test_delete_folder_rule_success(temp_db):
@@ -582,7 +572,6 @@ def test_delete_folder_rule_service_exception_collapses_to_operation_failed(temp
         assert forbidden not in lowered
 
 
-# --- No cross-contamination with keyword / toggle paths ----------------
 
 
 def test_folder_crud_does_not_trigger_keyword_create(temp_db, monkeypatch):
@@ -685,7 +674,6 @@ def test_folder_crud_does_not_modify_project_rows(temp_db):
     assert before == after
 
 
-# --- Existing regression locks ------------------------------------------
 
 
 def test_existing_set_project_rule_enabled_still_works(temp_db):
@@ -720,15 +708,7 @@ def test_existing_delete_project_keyword_rule_still_works(temp_db):
     assert _keyword_rule_row(keyword_id) is None
 
 
-# --- normalized key collision / update-by-id boundary ---------
-#
-# Regression-only locks for the folder rule CRUD hardening. These tests lock
-# the create-or-update normalized-key semantics, the update-by-id boundary
-# (including the IntegrityError collapse when the new normalized key already
-# belongs to a different rule), the enabled-preservation guarantee, the
-# rule_id preservation guarantee when the normalized key changes, the
 # cache-invalidation / privacy-exclude-cache / folder-index-rebuild hooks,
-# and the sensitive-field absence in the returned payload.
 
 
 def test_update_folder_rule_to_existing_normalized_key_returns_operation_failed(temp_db):
@@ -901,7 +881,6 @@ def test_delete_folder_rule_payload_excludes_sensitive_fields(temp_db):
         assert forbidden not in lowered
 
 
-# --- cache invalidation / privacy exclude / index rebuild ----
 
 
 def test_create_folder_rule_invokes_cache_invalidation_hooks(temp_db, monkeypatch):
@@ -1060,7 +1039,6 @@ def test_folder_crud_cache_hooks_not_invoked_on_invalid_input(temp_db, monkeypat
     }
 
 
-# --- excluded-folder rule creation facade --------------------
 
 
 def test_create_excluded_folder_rule_for_webview_success(temp_db):

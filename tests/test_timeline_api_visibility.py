@@ -37,7 +37,6 @@ from worktrace.db import get_connection
 from worktrace.services import activity_service
 
 
-# --- Seed helpers --------------------------------------------------------
 
 
 def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
@@ -101,7 +100,6 @@ def _get_session_note(report_date: str, first_activity_id: int) -> str | None:
     return row["note"] if row else None
 
 
-# --- hide_timeline_activity: validation ----------------------------------
 
 
 def test_hide_activity_bool_id(temp_db):
@@ -153,7 +151,6 @@ def test_hide_activity_in_progress(temp_db):
     assert exc.value.code == "in_progress"
 
 
-# --- soft_delete_timeline_activity: validation ---------------------------
 
 
 def test_soft_delete_activity_bool_id(temp_db):
@@ -201,7 +198,6 @@ def test_soft_delete_activity_in_progress(temp_db):
     assert exc.value.code == "in_progress"
 
 
-# --- hide_timeline_activity: success -------------------------------------
 
 
 def test_hide_activity_success_sets_is_hidden(temp_db):
@@ -294,7 +290,6 @@ def test_hide_activity_visible_with_include_hidden(temp_db):
     assert any(aid in (s.get("activity_ids") or []) for s in sessions)
 
 
-# --- soft_delete_timeline_activity: success ------------------------------
 
 
 def test_soft_delete_activity_success_sets_is_deleted(temp_db):
@@ -376,7 +371,6 @@ def test_soft_delete_activity_removes_from_default_timeline(temp_db):
     assert not any(aid in (s.get("activity_ids") or []) for s in sessions_after)
 
 
-# --- session-level hide / soft delete ------------------------------------
 
 
 def test_hide_session_single_activity_success(temp_db):
@@ -446,7 +440,6 @@ def test_soft_delete_session_in_progress_rejected(temp_db):
     assert exc.value.code == "in_progress"
 
 
-# --- session-level validation --------------------------------------------
 
 
 def test_hide_session_non_list(temp_db):
@@ -516,7 +509,6 @@ def test_soft_delete_session_bool_id_in_list(temp_db):
     assert exc.value.code == "invalid_id"
 
 
-# --- Race condition / operation_failed -----------------------------------
 
 
 def test_hide_activity_race_condition_operation_failed(temp_db):
@@ -564,7 +556,6 @@ def test_soft_delete_session_race_condition_operation_failed(temp_db):
     assert exc.value.code == "operation_failed"
 
 
-# --- No partial writes on validation failure -----------------------------
 
 
 def test_hide_activity_validation_failure_leaves_activity_unchanged(temp_db):
@@ -619,7 +610,6 @@ def test_soft_delete_session_validation_failure_leaves_activities_unchanged(temp
         assert after["end_time"] == before[aid]["end_time"]
 
 
-# --- Service layer rowcount guard ----------------------------------------
 
 
 def test_service_hide_activity_zero_rowcount_raises(temp_db):
@@ -656,13 +646,7 @@ def test_service_hide_activity_in_progress_zero_rowcount(temp_db):
         activity_service.hide_activity(aid)
 
 
-# --- service-layer hardening --------------------------------
-#
-# These tests directly exercise the service-layer ``hide_activity`` /
 # ``soft_delete_activity`` write paths to confirm the hardening invariants
-# hold at the lowest layer (not just through the API/bridge facade). They
-# cover: idempotent hide, non-idempotent soft delete, in-progress soft
-# delete rejection, and core-field preservation for both operations.
 
 
 def test_service_hide_activity_idempotent(temp_db):

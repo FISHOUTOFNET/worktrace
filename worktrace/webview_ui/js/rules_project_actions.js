@@ -5,7 +5,6 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // --- Project lifecycle (create / edit / toggle / archive) ---
 
     function showProjectCreateStatus(message, isError) {
         var el = document.getElementById("rules-project-create-status");

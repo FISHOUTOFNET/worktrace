@@ -1,36 +1,4 @@
-"""Live display project-transition contract tests.
-
-Locks the project ownership fields returned by
-``live_display_service.build_live_projection`` /
-``build_current_activity_summary`` /
-``build_virtual_session`` /
-``build_virtual_detail_row``.
-
-Locked behavior:
-
-- **Orthogonality** — ``live_state`` (virtual | persisted_open | idle |
-  paused | excluded | error | none) and ``project_transition_pending``
-  (True | False) are independent axes. A clipboard force-persist can
-  make an activity ``persisted_open`` while ``project_transition_pending``
-  is still ``True``.
-- **Pending virtual** — during a 30-second pending window the virtual
-  projection surfaces the *inherited* display project, NOT the
-  candidate. ``candidate_project`` is exposed as a separate field for
-  the "确认中" indicator.
-- **Pending persisted_open** — same as pending virtual: the DB row may
-  exist (clipboard force-persist) but the display project still follows
-  the inherited last-confirmed project until the pending window
-  elapses.
-- **Virtual session/detail description** — ``project_description`` is
-  no longer hardcoded to ``""``; it comes from
-  ``display_project.description``.
-- **Candidate does not preempt display** — ``candidate_project`` NEVER
-  overwrites ``display_project`` in the projection, even when the
-  candidate is a concrete project and the display is uncategorized.
-- **Display-safe** — the projection / virtual session / virtual detail
-  payloads MUST NOT leak raw ``window_title`` / ``file_path_hint`` /
-  clipboard / note / SQL / traceback.
-"""
+"""Live display project-transition contract tests."""
 
 from __future__ import annotations
 
@@ -50,9 +18,7 @@ from worktrace.services.live_display_service import (
 from worktrace.services import timeline_service
 
 
-# ---------------------------------------------------------------------------
 # Snapshot helpers
-# ---------------------------------------------------------------------------
 
 
 def _set_snapshot(snapshot: dict | None) -> None:
@@ -207,9 +173,7 @@ def _pending_snapshot(
     )
 
 
-# ---------------------------------------------------------------------------
 # 1. live_state / project_transition_pending orthogonality
-# ---------------------------------------------------------------------------
 
 
 def test_empty_snapshot_returns_none_live_state_and_not_pending():
@@ -266,9 +230,7 @@ def test_confirmed_virtual_live_state_is_virtual_and_pending_false():
     assert projection["project_transition_pending"] is False
 
 
-# ---------------------------------------------------------------------------
 # 2. Pending virtual / persisted_open surface the INHERITED display project
-# ---------------------------------------------------------------------------
 
 
 def test_pending_virtual_display_project_is_inherited_not_candidate():
@@ -312,9 +274,7 @@ def test_current_activity_summary_pending_surfaces_inherited_display():
     assert summary["project_description"] == "Project A description"
 
 
-# ---------------------------------------------------------------------------
 # 3. Virtual session / detail description no longer hardcoded empty
-# ---------------------------------------------------------------------------
 
 
 def _today_report_date() -> str:
@@ -370,9 +330,7 @@ def test_virtual_session_description_empty_when_display_project_has_no_descripti
     assert session["project_description"] == ""
 
 
-# ---------------------------------------------------------------------------
 # 4. Candidate project NEVER preempts display project
-# ---------------------------------------------------------------------------
 
 
 def test_candidate_does_not_preempt_display_in_projection():
@@ -434,9 +392,7 @@ def test_candidate_does_not_preempt_display_in_virtual_detail():
     assert detail["project_name"] != "ProjectB"
 
 
-# ---------------------------------------------------------------------------
 # 5. Display-safe: no raw sensitive fields leak
-# ---------------------------------------------------------------------------
 
 
 SENSITIVE_KEYS = {
@@ -515,9 +471,7 @@ def test_virtual_detail_does_not_leak_sensitive_fields():
     _assert_no_sensitive_values(detail, "virtual_detail")
 
 
-# ---------------------------------------------------------------------------
 # 6. live_projection carries all required contract fields
-# ---------------------------------------------------------------------------
 
 
 REQUIRED_PROJECTION_FIELDS = {
@@ -585,9 +539,7 @@ def test_live_projection_project_transition_block_is_surfacable():
     assert transition["to_project_id"] == 18
 
 
-# ---------------------------------------------------------------------------
 # 7. Idle / paused / excluded / error do NOT carry a normal display project
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

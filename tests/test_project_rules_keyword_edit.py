@@ -49,7 +49,6 @@ def _keyword_rule_row(rule_id: int) -> dict:
     return dict(row) if row else {}
 
 
-# --- Valid update --------------------------------------------------------
 
 
 def test_update_keyword_rule_succeeds(temp_db):
@@ -115,7 +114,6 @@ def test_update_keyword_rule_preserves_created_by_and_created_at(temp_db):
     assert after["created_at"] == original_created_at
 
 
-# --- rule_id input validation -------------------------------------------
 
 
 @pytest.mark.parametrize("bad_id", [True, False])
@@ -150,7 +148,6 @@ def test_update_keyword_rule_rejects_other_invalid_rule_id_types(temp_db, bad_id
     assert result == {"ok": False, "error": "invalid_input"}
 
 
-# --- keyword input validation -------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -173,7 +170,6 @@ def test_update_keyword_rule_rejects_whitespace_only_keyword(temp_db, bad_keywor
     assert result == {"ok": False, "error": "invalid_input"}
 
 
-# --- not_found -----------------------------------------------------------
 
 
 def test_unknown_keyword_rule_id_returns_not_found(temp_db):
@@ -196,7 +192,6 @@ def test_folder_rule_id_returns_not_found_and_does_not_modify_folder_rule(temp_d
     assert len(matching) == 1
 
 
-# --- duplicate_rule ------------------------------------------------------
 
 
 def test_duplicate_keyword_in_same_project_returns_duplicate_rule(temp_db):
@@ -234,7 +229,6 @@ def test_updating_to_own_current_keyword_succeeds(temp_db):
     assert result["rule"]["keyword"] == "Spec"
 
 
-# --- Exception collapse --------------------------------------------------
 
 
 def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
@@ -264,7 +258,6 @@ def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
         assert forbidden not in lowered
 
 
-# --- Cache invalidation --------------------------------------------------
 
 
 def test_update_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch):
@@ -392,7 +385,6 @@ def test_duplicate_rule_does_not_trigger_cache_hooks(temp_db, monkeypatch):
     assert clear_calls["count"] == 0
 
 
-# --- Payload contract ----------------------------------------------------
 
 
 def test_update_keyword_rule_success_payload_is_json_serializable(temp_db):
@@ -466,7 +458,6 @@ def test_update_keyword_rule_success_payload_excludes_sensitive_metadata(temp_db
         assert forbidden not in rendered
 
 
-# --- No side effects -----------------------------------------------------
 
 
 def test_update_keyword_rule_does_not_modify_folder_rules(temp_db):
@@ -523,7 +514,6 @@ def test_update_keyword_rule_does_not_modify_created_by(temp_db):
     assert row["created_by"] == "user"
 
 
-# --- Existing regression locks -------------------------------------------
 
 
 def test_existing_create_keyword_rule_still_works(temp_db):

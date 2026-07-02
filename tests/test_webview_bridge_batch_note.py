@@ -96,7 +96,6 @@ def _get_activity_note(activity_id: int) -> str | None:
     return row["note"] if row else None
 
 
-# --- batch_update_timeline_activities_note: success ----------------------
 
 
 def test_batch_success(bridge):
@@ -141,7 +140,6 @@ def test_batch_empty_note_clears(bridge):
     assert _get_activity_note(a2) == ""
 
 
-# --- batch_update_timeline_activities_note: invalid selection ------------
 
 
 def test_batch_non_list_activity_ids(bridge):
@@ -198,7 +196,6 @@ def test_batch_duplicate_ids_deduped(bridge):
     assert result["error"] == "请选择至少两个活动"
 
 
-# --- batch_update_timeline_activities_note: batch_too_large --------------
 
 
 def test_batch_too_large(bridge):
@@ -210,7 +207,6 @@ def test_batch_too_large(bridge):
     assert result["error"] == "一次最多修改 100 条活动"
 
 
-# --- batch_update_timeline_activities_note: invalid_note / note_too_long --
 
 
 def test_batch_note_none(bridge):
@@ -235,7 +231,6 @@ def test_batch_note_too_long(bridge):
     assert result["error"] == "备注过长"
 
 
-# --- batch_update_timeline_activities_note: activity states --------------
 
 
 def test_batch_nonexistent_activity(bridge):
@@ -274,7 +269,6 @@ def test_batch_in_progress_activity(bridge):
     assert result["error"] == "进行中记录无法批量修改"
 
 
-# --- batch_update_timeline_activities_note: operation_failed -------------
 
 
 def test_batch_operation_failed_returns_generic(bridge):
@@ -303,7 +297,6 @@ def test_batch_unknown_error_code_returns_generic(bridge):
     assert result["error"] == "操作失败"
 
 
-# --- batch_update_timeline_activities_note: privacy / safety -------------
 
 
 def test_batch_no_traceback_on_error(bridge):
@@ -343,7 +336,6 @@ def test_batch_success_does_not_leak_note_content(bridge):
     assert "new_note" not in result
 
 
-# --- bridge import boundary -----------------------------------------------
 
 
 def test_bridge_does_not_import_backend_internals():
@@ -374,7 +366,6 @@ def test_bridge_does_not_import_backend_internals():
         )
 
 
-# --- bridge hardening --------------------------------------
 #
 # These tests verify the bridge error/success payload does not leak note
 # content, the updated_count matches the selection, and the bridge

@@ -106,20 +106,6 @@ def main() -> int:
     app_api.set_runtime(runtime)
 
     # First-run privacy gate: only auto-start the collector when the user
-    # has already accepted the first-run privacy notice. If the notice has
-    # not been accepted, leave the collector stopped; the frontend
-    # first-run overlay will display the notice and, on accept, call
-    # ``accept_first_run_notice`` through the bridge which starts the
-    # collector. Fail closed on read error: do not start the collector,
-    # log, but do not block WebView startup (the frontend will call
-    # ``get_first_run_notice`` and surface the error).
-    #
-    # The folder index worker is also gated here. The worker probes local
-    # ``os.path.exists(file_path)`` for ready indexes, which is
-    # privacy-relevant local path probing; it must not start before the
-    # user has accepted the privacy notice. Background workers are started
-    # before the collector so the index is warm by the time the collector
-    # starts matching activities.
     try:
         notice_accepted = settings_api.first_run_notice_accepted()
     except Exception:

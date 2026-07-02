@@ -14,9 +14,7 @@ from worktrace.resources.office_wps_detector import OfficeWpsDetector
 from worktrace.resources.resource_policy import safe_metadata_json
 
 
-# ---------------------------------------------------------------------------
 # 1. outlook.exe + 邮件标题 -> email/email_message
-# ---------------------------------------------------------------------------
 
 class TestEmailDetector:
     def test_outlook_email_message(self):
@@ -100,9 +98,7 @@ class TestEmailDetector:
         assert detector.detect(aw) is None
 
 
-# ---------------------------------------------------------------------------
 # 4. chrome.exe 标题 -> browser_tab/browser_page
-# ---------------------------------------------------------------------------
 
 class TestBrowserDetector:
     def test_chrome_tab(self):
@@ -199,9 +195,7 @@ class TestBrowserDetector:
         assert detector.detect(aw) is None
 
 
-# ---------------------------------------------------------------------------
 # 7. Code.exe + .py path -> ide_file/code_file
-# ---------------------------------------------------------------------------
 
 class TestIdeDetector:
     def test_vscode_python_file(self):
@@ -293,9 +287,7 @@ class TestIdeDetector:
         assert detector.detect(aw) is None
 
 
-# ---------------------------------------------------------------------------
 # 9. All detectors don't save body-like metadata keys
-# ---------------------------------------------------------------------------
 
 class TestNoBodyMetadata:
     def test_safe_metadata_json_removes_body_keys(self):
@@ -318,9 +310,7 @@ class TestNoBodyMetadata:
         assert "content" not in parsed
 
 
-# ---------------------------------------------------------------------------
 # Registry order test
-# ---------------------------------------------------------------------------
 
 class TestRegistryOrder:
     def test_full_registry_order(self):

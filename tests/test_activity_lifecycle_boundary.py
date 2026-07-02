@@ -40,9 +40,7 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
 # activity_service must not import activity_lifecycle_service
-# ---------------------------------------------------------------------------
 
 
 def test_activity_service_does_not_import_activity_lifecycle_service() -> None:
@@ -63,9 +61,7 @@ def test_activity_service_does_not_import_activity_lifecycle_service() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # activity_lifecycle_service must not delegate close-finalize to old methods
-# ---------------------------------------------------------------------------
 
 
 def test_activity_lifecycle_service_does_not_call_old_lifecycle_close_methods() -> None:
@@ -92,9 +88,7 @@ def test_activity_lifecycle_service_does_not_call_old_lifecycle_close_methods() 
         )
 
 
-# ---------------------------------------------------------------------------
 # collector / state_machine must route close-all through the lifecycle facade
-# ---------------------------------------------------------------------------
 
 
 def test_state_machine_routes_close_all_through_lifecycle_facade() -> None:
@@ -110,9 +104,7 @@ def test_state_machine_routes_close_all_through_lifecycle_facade() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # runtime / app_runtime must route close-all through the lifecycle facade
-# ---------------------------------------------------------------------------
 
 
 def test_app_runtime_routes_close_all_through_lifecycle_facade() -> None:
@@ -128,9 +120,7 @@ def test_app_runtime_routes_close_all_through_lifecycle_facade() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # recovery_service must not close open rows via direct SQL
-# ---------------------------------------------------------------------------
 
 
 def test_recovery_service_does_not_direct_sql_close_open_row() -> None:
@@ -177,9 +167,7 @@ def test_recovery_service_does_not_call_old_close_entries() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # activity_service low-level helpers must not carry finalize semantics
-# ---------------------------------------------------------------------------
 
 
 def test_activity_service_close_methods_do_not_call_finalize() -> None:

@@ -199,7 +199,6 @@ def _row_counts() -> dict[str, int]:
     return counts
 
 
-# --- payload export tests ------------------------------------------------
 
 
 def test_export_payload_contains_required_tables(temp_db, tmp_path):
@@ -267,7 +266,6 @@ def test_export_payload_is_valid_utf8_json(temp_db):
     json.loads(text)
 
 
-# --- encrypted backup export tests ---------------------------------------
 
 
 def test_encrypted_export_creates_wtbackup_file(temp_db, tmp_path):
@@ -339,7 +337,6 @@ def test_wtbackup_does_not_contain_folder_rule_file_index_data(temp_db, tmp_path
     assert "folder_rule_file_index" not in data["tables"]
 
 
-# --- encrypted backup import tests ---------------------------------------
 
 
 def test_correct_passphrase_imports(temp_db, tmp_path):
@@ -563,7 +560,6 @@ def test_import_re_seeds_defaults(temp_db, tmp_path):
             assert row is not None, f"runtime setting {key} missing after import"
 
 
-# --- API boundary tests --------------------------------------------------
 
 
 def test_api_export_returns_path_string(temp_db, tmp_path):
@@ -620,7 +616,6 @@ def test_unsupported_mode_raises(temp_db, tmp_path):
         secure_backup_service.import_encrypted_backup(out, "passphrase", mode="merge")
 
 
-# --- atomic write test ---------------------------------------------------
 
 
 def test_export_uses_atomic_write(temp_db, tmp_path):
@@ -635,16 +630,9 @@ def test_export_uses_atomic_write(temp_db, tmp_path):
     assert out.exists()
 
 
-# =========================================================================
-# Encrypted Import Safety Hardening tests
-# =========================================================================
-#
-# These tests verify the secure import guard, DB safety on failure,
-# collector write-path protection, and logging hygiene introduced in
 # See docs/v0.2-local-security-design.md.
 
 
-# --- helpers -------------------------------------------------------------
 
 
 def _reset_guard_and_pause_state() -> None:
@@ -670,7 +658,6 @@ def _corrupt_backup(out: Path) -> None:
     out.write_bytes(bytes(blob))
 
 
-# --- import guard service tests ------------------------------------------
 
 
 def test_import_sets_secure_import_in_progress_during_replacement(temp_db, tmp_path, monkeypatch):
@@ -792,7 +779,6 @@ def test_current_activity_snapshot_cleared_during_import(temp_db, tmp_path, monk
     assert captured["snapshot_during"] == ""
 
 
-# --- DB safety tests -----------------------------------------------------
 
 
 def test_wrong_passphrase_does_not_alter_row_counts(temp_db, tmp_path):
@@ -865,7 +851,6 @@ def test_after_rollback_previous_pause_status_restored(temp_db, tmp_path, monkey
     assert get_setting("current_activity_snapshot", "") == '{"app":"rollback-prior-marker"}'
 
 
-# --- logging hygiene tests ------------------------------------------------
 
 
 def test_export_success_log_does_not_contain_output_path(temp_db, tmp_path, caplog):

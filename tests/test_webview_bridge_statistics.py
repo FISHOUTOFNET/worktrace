@@ -86,7 +86,6 @@ def _seed_closed_activity(
     return aid
 
 
-# --- Success -----------------------------------------------------------
 
 
 def test_bridge_statistics_summary_success(bridge):
@@ -139,7 +138,6 @@ def test_bridge_statistics_summary_empty_range(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- Invalid input -----------------------------------------------------
 
 
 def test_bridge_statistics_summary_invalid_date_shape(bridge):
@@ -171,7 +169,6 @@ def test_bridge_statistics_summary_non_string_input(bridge):
     _assert_no_sensitive_keys(result2)
 
 
-# --- Known error codes -------------------------------------------------
 
 
 def test_bridge_statistics_summary_invalid_range(bridge):
@@ -282,7 +279,6 @@ def test_bridge_statistics_summary_unexpected_exception_collapses(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- No raw fields leak ------------------------------------------------
 
 
 def test_bridge_statistics_summary_no_raw_fields(bridge):
@@ -358,7 +354,6 @@ def test_bridge_statistics_summary_display_safe_keys_only(bridge):
     _assert_no_sensitive_keys(result)
 
 
-# --- Read-only guarantee ----------------------------------------------
 
 
 def test_bridge_statistics_summary_does_not_write_db(bridge, temp_db):
@@ -406,7 +401,6 @@ def test_bridge_statistics_summary_does_not_call_export_write(bridge):
         )
 
 
-# --- Bridge import boundary -------------------------------------------
 
 
 def test_bridge_does_not_import_backend_internals():

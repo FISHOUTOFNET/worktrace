@@ -27,7 +27,6 @@ from static_helpers import (
 )
 
 
-# --- section -----------------------------------------------------
 
 
 def test_index_html_timeline_page_is_not_placeholder():
@@ -196,7 +195,6 @@ def test_frontend_js_timeline_has_no_forbidden_edit_handlers():
 
 
 
-# --- section ----------------------------------------------------
 
 
 def test_index_html_timeline_has_edit_panel():
@@ -364,7 +362,6 @@ def test_styles_css_has_edit_panel_styles():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_frontend_js_save_success_updates_edit_baseline():
@@ -487,15 +484,6 @@ def test_frontend_js_still_has_no_forbidden_edit_handlers_after_hardening():
     assert "restore_activity" not in source
     assert "permanent_delete" not in source
     assert "auto_rule" not in source
-    # Batch / restore / permanent-delete / auto-rule buttons must not exist
-    # in the HTML either. Merge is allowed in frontend JS but
-    # still must not appear in the static index.html (the merge button is
-    # rendered dynamically by frontend JS). The soft-delete
-    # button is in index.html, so "delete" is allowed there. The
-    # batch project reassignment in the correction shell means
-    # "batch" is allowed in index.html but only in the project context;
-    # batch hide / delete / time / split / merge controls must still be
-    # absent.
     html_source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8").lower()
     for forbidden_batch in (
         "batch-hide", "batch-delete", "batch-time",
@@ -519,7 +507,6 @@ def test_frontend_js_still_has_no_forbidden_edit_handlers_after_hardening():
 
 
 
-# --- section ---------------------------------------------------
 
 
 def test_frontend_js_has_request_token_guard_for_timeline_loads():
@@ -668,7 +655,6 @@ def test_index_html_timeline_details_panel_has_initial_empty_state():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_index_html_has_time_correction_section():
@@ -839,7 +825,6 @@ def test_styles_css_has_time_correction_styles():
 
 
 
-# --- section ------------------------------------------------
 
 
 def test_refresh_timeline_after_edit_does_not_reset_edit_saving():
@@ -1149,7 +1134,6 @@ def test_save_activity_time_updates_baseline_on_success():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_index_html_has_split_section():
@@ -1480,7 +1464,6 @@ def test_styles_css_has_split_responsive_wrap():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_frontend_js_calls_merge_bridge_method():
@@ -1747,7 +1730,6 @@ def test_styles_css_has_merge_responsive_wrap():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_frontend_js_has_hide_delete_bridge_calls():
@@ -2131,7 +2113,6 @@ def test_frontend_js_delete_uses_window_confirm():
 
 
 
-# --- section ----------------------------------------------------
 
 
 def test_frontend_js_has_unified_status_type_class_map():
@@ -2518,7 +2499,6 @@ def test_frontend_js_correction_shell_no_local_storage():
 
 
 
-# --- section --------------------------------------------------
 
 
 def test_frontend_js_apply_status_type_preserves_non_status_classes():
@@ -3061,7 +3041,6 @@ def test_default_webview_entry_preserved():
     )
 
 
-# --- detail-item grid overlap regression locks ---------------
 
 
 def _extract_css_rule(source: str, selector: str) -> str:
@@ -3219,15 +3198,6 @@ def test_detail_item_mobile_layout_actions_on_own_row():
     )
 
 
-# --- Time details page simplification ----------------------------------
-#
-# The Timeline edit panel has been simplified to surface a duration-
-# override input (``edit-duration-input``) alongside the note textarea,
-# and the date nav is now an ``<input type="date">`` so the user can pick
-# a date directly. The current-activity summary (``timeline-current``)
-# has been removed from the Timeline page — current-activity display is
-# handled by the Overview page only. The advanced correction shell is
-# opened via the ``高级纠错`` button inside the edit panel.
 
 
 def test_index_html_timeline_has_date_input():
@@ -3350,7 +3320,6 @@ def test_frontend_js_dirty_state_includes_duration():
     )
 
 
-# --- Section 六.3: Frontend live projection convergence -------------------
 
 
 def test_timeline_js_does_not_skip_is_virtual_sessions():

@@ -85,7 +85,6 @@ def _seed_session():
     return [a1, a2]
 
 
-# --- split_timeline_activity --------------------------------------------
 
 
 def test_split_activity_success(bridge):
@@ -229,7 +228,6 @@ def test_split_activity_race_condition_returns_generic_error(bridge):
     assert "operation_failed" not in str(result)
 
 
-# --- split_timeline_session ---------------------------------------------
 
 
 def test_split_session_single_activity_success(bridge):
@@ -314,7 +312,6 @@ def test_split_session_is_json_serializable(bridge):
     json.dumps(result)
 
 
-# --- Bridge import boundary ----------------------------------------------
 
 
 def test_bridge_does_not_import_backend_internals():

@@ -33,9 +33,7 @@ from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
 # Chinese error-message maps.
-# ---------------------------------------------------------------------------
 # Each map translates a stable API error code into a user-facing Chinese
 # message. Unknown codes collapse to the operation-specific generic failure
 # so internal details are never surfaced.
@@ -168,13 +166,6 @@ _PROJECT_RULE_BACKFILL_MESSAGES = {
     "operation_failed": "应用规则失败",
 }
 
-# Maps selected-rule batch preview API stable codes to user-facing
-# messages. Unknown codes collapse to the generic batch-preview failure so
-# internal details are never surfaced. Preview is read-only and treats
-# disabled rules / unavailable projects as informational zero-count
-# contributions, so ``rule_disabled`` / ``project_not_available`` /
-# ``too_many_matches`` are NOT in this map (they cannot occur on the preview
-# path); they only appear in the batch-apply map below.
 _PROJECT_RULE_BATCH_PREVIEW_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "规则不存在",
@@ -230,9 +221,7 @@ _EXCLUDED_FOLDER_RULE_CREATE_MESSAGES = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Payload helpers.
-# ---------------------------------------------------------------------------
 
 
 def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
@@ -402,9 +391,7 @@ def _project_rules_list(value: Any) -> list[Any]:
     return []
 
 
-# ---------------------------------------------------------------------------
 # ProjectRulesBridgeMixin: the 12 Project Rules bridge methods.
-# ---------------------------------------------------------------------------
 
 
 class ProjectRulesBridgeMixin:
@@ -418,7 +405,6 @@ class ProjectRulesBridgeMixin:
     logging.
     """
 
-    # --- Project Rules rule enable/disable foundation -----------------
 
     def get_project_rules(self) -> dict[str, Any]:
         """Return display-safe Project Rules data for the WebView page.
@@ -474,7 +460,6 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge set_project_rule_enabled failed")
             return {"ok": False, "error": "更新规则状态失败"}
 
-    # --- Project Rules keyword rule creation foundation ---------------
 
     def create_project_keyword_rule(self, project_id, keyword) -> dict[str, Any]:
         """Create one new keyword rule on an existing rule-target project.
@@ -526,7 +511,6 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge create_project_keyword_rule failed")
             return {"ok": False, "error": "新增关键词规则失败"}
 
-    # --- Project Rules keyword rule deletion foundation ---------------
 
     def delete_project_keyword_rule(self, rule_id) -> dict[str, Any]:
         """Delete one existing keyword rule.
@@ -569,7 +553,6 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge delete_project_keyword_rule failed")
             return {"ok": False, "error": "删除关键词规则失败"}
 
-    # --- Project Rules keyword rule edit foundation -------------------
 
     def update_project_keyword_rule(self, rule_id, keyword) -> dict[str, Any]:
         """Update one existing keyword rule's ``keyword`` text.
@@ -621,7 +604,6 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge update_project_keyword_rule failed")
             return {"ok": False, "error": "保存关键词规则失败"}
 
-    # --- Project Rules folder rule CRUD foundation --------------------
 
     def create_project_folder_rule(self, project_id, folder_path, recursive) -> dict[str, Any]:
         """Create one new folder rule on an existing rule-target project.
@@ -682,7 +664,6 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge create_project_folder_rule failed")
             return {"ok": False, "error": "新增文件夹规则失败"}
 
-    # --- Excluded-rule creation (排除规则专用入口) --------------------
 
     def create_excluded_keyword_rule(self, keyword) -> dict[str, Any]:
         """Create one new keyword rule on the special ``排除规则`` project.
@@ -884,7 +865,6 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge delete_project_folder_rule failed")
             return {"ok": False, "error": "删除文件夹规则失败"}
 
-    # --- Project lifecycle foundation (create / edit / toggle / archive) --
 
     def create_project_for_rules(self, name, description) -> dict[str, Any]:
         """Create one new user project from the Project Rules page.
@@ -1063,7 +1043,6 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge archive_project_for_rules failed")
             return {"ok": False, "error": "归档项目失败"}
 
-    # --- Rule impact preview + safe single-rule backfill --------------
 
     def preview_project_rule_impact(self, rule_type, rule_id) -> dict[str, Any]:
         """Preview the impact of applying one existing folder / keyword rule.
@@ -1138,7 +1117,6 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge backfill_project_rule failed")
             return {"ok": False, "error": "应用规则失败"}
 
-    # --- Selected-rule batch operations + automatic rules -------------
 
     def _validate_batch_rules(self, rules) -> str | None:
         """Strict bridge-layer validation for the ``rules`` batch input.

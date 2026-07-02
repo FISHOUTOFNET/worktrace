@@ -1,46 +1,4 @@
-"""Thin facade for automatic Project Rules application.
-
-This module is the named entry point for applying enabled folder / keyword
-Project Rules to newly persisted eligible activities. It delegates matching
-and inference to :mod:`worktrace.services.project_inference_service` through
-``process_new_activity`` instead of maintaining a second matcher.
-
-Why a thin facade (and not a re-implementation)?
-
-- ``assign_project_for_activity`` already reuses the single folder / keyword
-  matching code paths
-  (``folder_rule_service.find_matching_folder_rule`` for folder rules and
-  ``_enabled_keyword_rules`` + ``_safe_classification_text`` +
-  ``keyword_pattern_matches`` for keyword rules), so there is no second
-  matcher to maintain.
-- It already implements the deterministic priority: folder rules before
-  keyword rules; within each kind, rules are read in ``created_at, id``
-  order (stable). The first match wins and later matching rules are ignored.
-- It already skips ``manual_override = 1`` / ``is_manual = 1`` activities
-  and non-normal activities, never sets ``manual_override = 1``, writes
-  ``auto_classified = 1`` for ``folder_rule`` / ``keyword_rule`` sources,
-  and upserts the assignment with ``is_manual = 0``, the rule source, and
-  the inference confidence (85 folder / 80 keyword).
-- The enabled-rule / available-project gating is already enforced by the
-  read paths: ``_enabled_keyword_rules`` filters on
-  ``pr.enabled = 1 AND p.enabled = 1 AND p.name <> EXCLUDED_PROJECT``;
-  ``find_matching_folder_rule`` only returns enabled rules on enabled,
-  non-excluded projects.
-
-Scope (locked by ``tests/test_project_rules_automatic_rules.py``):
-
-- Automatic application of enabled folder / keyword rules to future
-  eligible closed activities is SUPPORTED. The hook fires at activity
-  persistence (``finalize_created_activity``), which is when a closed
-  activity is written to ``activity_log``.
-- Disabled rules, disabled / archived / excluded target projects,
-  ``manual_override = 1`` / ``is_manual = 1`` activities, hidden / deleted
-  / in-progress / non-normal activities, and activities already on the
-  target project are skipped / not overwritten.
-- No DB schema change, no new dependency, no new table / column.
-- No WebView toggle is added: the foundation is always-on for enabled
-  rules. The Project Rules page surfaces this as a status note.
-"""
+"""Thin facade for automatic Project Rules application."""
 
 from __future__ import annotations
 

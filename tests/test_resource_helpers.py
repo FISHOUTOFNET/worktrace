@@ -12,9 +12,7 @@ from worktrace.resources.resource_helpers import (
 )
 
 
-# ---------------------------------------------------------------------------
 # extract_file_name_from_title
-# ---------------------------------------------------------------------------
 
 
 def test_extract_file_name_from_title_returns_last_match():
@@ -28,9 +26,7 @@ def test_extract_file_name_from_title_returns_none_for_empty():
     assert extract_file_name_from_title("没有文件的标题") is None
 
 
-# ---------------------------------------------------------------------------
 # normalize_for_key
-# ---------------------------------------------------------------------------
 
 
 def test_normalize_for_key_lowercases_and_keeps_at_sign():
@@ -44,9 +40,7 @@ def test_normalize_for_key_empty_returns_unknown():
     assert normalize_for_key("   ") == "unknown"
 
 
-# ---------------------------------------------------------------------------
 # build_path_or_name_identity: local path vs bare file name
-# ---------------------------------------------------------------------------
 
 
 def test_identity_uses_path_prefix_for_local_path():
@@ -60,9 +54,7 @@ def test_identity_uses_name_prefix_for_bare_file_name():
     assert "合同.docx".casefold() in key
 
 
-# ---------------------------------------------------------------------------
 # display_name_from_path_or_name
-# ---------------------------------------------------------------------------
 
 
 def test_display_name_extracts_basename_from_path():
@@ -70,9 +62,7 @@ def test_display_name_extracts_basename_from_path():
     assert display_name_from_path_or_name("合同.docx") == "合同.docx"
 
 
-# ---------------------------------------------------------------------------
 # resolve_file_candidate
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_file_candidate_prefers_hint():
@@ -113,9 +103,7 @@ def test_resolve_file_candidate_returns_none_when_nothing_found():
     assert resolve_file_candidate(aw, allowed_extensions=frozenset({".docx"})) is None
 
 
-# ---------------------------------------------------------------------------
 # resolve_unique_indexed_path_from_title: folder index failure safety
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_unique_indexed_path_returns_none_when_index_unavailable():

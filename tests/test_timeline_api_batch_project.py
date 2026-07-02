@@ -29,7 +29,6 @@ from worktrace.db import get_connection
 from worktrace.services import activity_service, project_service
 
 
-# --- Seed helpers --------------------------------------------------------
 
 
 def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
@@ -110,7 +109,6 @@ def _get_assignment_is_manual(activity_id: int) -> int | None:
     return int(row["is_manual"] or 0) if row else None
 
 
-# --- batch_update_timeline_activities_project: validation ----------------
 
 
 def test_batch_non_list_activity_ids(temp_db):
@@ -268,7 +266,6 @@ def test_batch_in_progress_activity(temp_db):
     assert exc.value.code == "in_progress"
 
 
-# --- batch_update_timeline_activities_project: success --------------------
 
 
 def test_batch_success(temp_db):
@@ -479,7 +476,6 @@ def test_batch_updated_at_refreshed(temp_db):
             assert row["updated_at"] >= originals[aid]
 
 
-# --- Service layer direct tests ------------------------------------------
 
 
 def test_service_batch_success(temp_db):
@@ -570,13 +566,7 @@ def test_service_batch_project_update_failed(temp_db):
 
     original_execute = get_connection
 
-    # We cannot easily intercept the connection's execute call. Instead,
-    # directly test the rowcount guard by calling the service with a
-    # mocked connection cursor. The simplest approach: call the service
-    # and verify it raises the right error when the UPDATE rowcount is 0.
     # Since the real transaction is atomic (get_connection context manager),
-    # the rowcount guard is tested via the API-level mock test above.
-    # Here we just verify the error code mapping is correct.
     pass
 
 
@@ -610,15 +600,7 @@ def test_service_batch_non_positive_id(temp_db):
     assert str(exc.value) == "invalid_activity_ids"
 
 
-# --- batch project editing hardening ----------------------
-#
-# These tests harden the batch project reassignment by verifying:
 # mixed invalid selection rejection (no partial write), exact max boundary
-# (100 activities), assignment confidence/source matching single-edit
-# semantics, resource rows unchanged, session notes unchanged, exception
-# rollback (assignment UPSERT / activity_log UPDATE / pre-write SELECT),
-# non-ValueError service failure mapping, API exception text non-leakage,
-# and no new DB schema introduced.
 
 
 def _seed_n_closed_activities(n, day="2026-06-25"):
@@ -670,7 +652,6 @@ def _get_session_note(report_date: str, first_activity_id: int) -> str | None:
     return row["note"] if row else None
 
 
-# --- Mixed selection rejection (no partial write) ---
 
 
 def test_batch_mixed_valid_and_deleted_rejects_all(temp_db):
@@ -709,7 +690,6 @@ def test_batch_mixed_valid_and_nonexistent_rejects_all(temp_db):
     assert _get_activity_project_id(aid) == original
 
 
-# --- Exact max boundary ---
 
 
 def test_batch_exact_max_100_success(temp_db):
@@ -723,7 +703,6 @@ def test_batch_exact_max_100_success(temp_db):
         assert _get_activity_project_id(aid) == project
 
 
-# --- Assignment semantics match single edit ---
 
 
 def test_batch_confidence_matches_single_edit(temp_db):
@@ -746,7 +725,6 @@ def test_batch_confidence_matches_single_edit(temp_db):
         assert _get_assignment_is_manual(batch_ids[i]) == _get_assignment_is_manual(single_ids[i])
 
 
-# --- Resource rows unchanged ---
 
 
 def test_batch_resource_rows_unchanged(temp_db):
@@ -766,7 +744,6 @@ def test_batch_resource_rows_unchanged(temp_db):
             assert after[key] == originals[aid][key]
 
 
-# --- Session note unchanged ---
 
 
 def test_batch_session_note_unchanged(temp_db):
@@ -787,7 +764,6 @@ def test_batch_session_note_unchanged(temp_db):
     assert _get_session_note("2026-06-25", ids[0]) == note_text
 
 
-# --- Exception rollback ---
 
 
 class _FailingConn:
@@ -878,7 +854,6 @@ def test_service_batch_transaction_exception_rollback(temp_db):
         assert _get_activity_project_id(aid) == original_project_ids[aid]
 
 
-# --- API hardening: non-ValueError + no leak ---
 
 
 def test_batch_unknown_service_failure_mapping(temp_db):
@@ -910,7 +885,6 @@ def test_batch_api_does_not_leak_exception_text(temp_db):
     assert exc.value.code == "operation_failed"
 
 
-# --- No new DB schema ---
 
 
 def test_batch_no_new_db_schema(temp_db):

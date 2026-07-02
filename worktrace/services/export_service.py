@@ -57,31 +57,7 @@ def _escape_csv_cell(value) -> str:
 
 
 def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
-    """Build display-safe CSV row dicts for the statistics CSV export.
-
-    Reuses the canonical ``statistics_service.validate_statistics_date_range``
-    so the export enforces the exact same date rules as the read-only
-    summary (``YYYY-MM-DD``, ``date_from <= date_to``, inclusive span <= 31
-    calendar days; ``None`` / ``bool`` / non-string rejected).
-
-    Data source is ``timeline_service.get_report_activity_rows`` with
-    ``include_hidden=False`` (hidden excluded) — the report query already
-    filters ``is_deleted = 1``. Only closed activities are exported:
-    ``is_in_progress`` rows are dropped because they have no finalized
-    duration. All statuses (``normal`` / ``idle`` / ``paused`` /
-    ``excluded`` / ``error``) are included.
-
-    The returned rows are display-safe: the resource name uses
-    ``format_safe_display_name`` (``resource_display_name`` →
-    ``activity_display_name`` → ``app_name`` → ``process_name`` → ``未知``)
-    and NEVER falls back to the raw ``window_title`` column. Raw
-    ``window_title`` / ``file_path_hint`` / ``full_path`` / clipboard /
-    ``note`` / traceback / SQL are never placed in any column.
-
-    Raises ``ValueError`` with a stable code token (``invalid_date`` /
-    ``invalid_range`` / ``range_too_large``) for invalid date input; this
-    is mapped by the API layer to a stable error code.
-    """
+    """Build display-safe CSV row dicts for the statistics CSV export."""
     statistics_service.validate_statistics_date_range(date_from, date_to)
     rows = timeline_service.get_report_activity_rows(
         date_from,
@@ -127,30 +103,7 @@ def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
 
 
 def write_statistics_csv(date_from: str, date_to: str, output_path) -> dict:
-    """Build display-safe CSV rows and write them to ``output_path``.
-
-    Date validation reuses ``statistics_service.validate_statistics_date_range``.
-    The output path is normalized to end with ``.csv`` (a missing or
-    non-csv suffix is replaced). An empty data range raises
-    ``ValueError("empty_data")`` and does NOT create a file. A path that
-    points at an existing directory, or whose parent directory does not
-    exist, raises ``ValueError("invalid_path")``. ``PermissionError`` and
-    other ``OSError`` subclasses are allowed to propagate so the API layer
-    can map them to ``permission_denied`` / ``file_busy``.
-
-    The file is written with ``newline=""`` and ``encoding="utf-8-sig"`` so
-    Excel detects the UTF-8 BOM and renders Chinese headers correctly. Each
-    text cell is passed through ``_escape_csv_cell`` to mitigate CSV
-    formula injection.
-
-    Returns ``{"activity_count": int, "duration_seconds": int,
-    "filename": str}`` on success. ``filename`` is the basename of the
-    written file only (never the full local path).
-
-    This function only writes the chosen CSV file. It never writes to the
-    DB, never updates ``activity_log.updated_at``, never opens a folder,
-    never opens the exported file, and never auto-submits a timesheet.
-    """
+    """Build display-safe CSV rows and write them to ``output_path``."""
     statistics_service.validate_statistics_date_range(date_from, date_to)
 
     path = Path(output_path)
@@ -238,31 +191,7 @@ def export_all_local_data(path: str) -> str:
 
 
 def clear_all_local_data(confirm: bool) -> None:
-    """Clear all local data by resetting the database.
-
-    When ``confirm=True`` the reset runs inside a destructive reset guard
-    that mirrors the secure-backup import guard semantics. While the guard
-    is active the collector is paused and ``secure_import_in_progress``
-    is set to ``true`` so the collector loop skips its normal write path
-    (see ``collector.is_secure_import_in_progress``). On success the app
-    is left paused so the user can verify the cleared state before
-    resuming recording; on failure the prior pause / status state is
-    best-effort restored and ``secure_import_in_progress`` is cleared so
-    the collector is never permanently blocked.
-
-    This guard is local to ``export_service``; it does NOT reuse the
-    private ``secure_backup_service._secure_import_guard`` context manager
-    (that would create a cross-service private dependency). The schema and
-    ``reset_database`` table-rebuild semantics are unchanged.
-
-    Cache invalidation after a successful reset matches the
-    ``secure_backup_service._invalidate_caches`` set: settings cache,
-    privacy exclude rules cache, uncategorized project cache, folder rule
-    cache, keyword rule cache, and context recompute cache.
-    The context recompute cache is invalidated because ``reset_database``
-    drops all activity / project /
-    rule rows that the context recompute cache is derived from.
-    """
+    """Clear all local data by resetting the database."""
     if not confirm:
         raise ValueError("confirmation is required")
     with _destructive_reset_guard():
@@ -273,34 +202,7 @@ def clear_all_local_data(confirm: bool) -> None:
 
 @contextmanager
 def _destructive_reset_guard() -> Iterator[None]:
-    """Narrow destructive reset guard for ``clear_all_local_data``.
-
-    Mirrors the secure-backup import guard semantics but stays local to
-    ``export_service`` so no cross-service private dependency is
-    introduced. On enter it rejects if another destructive operation is
-    already in progress (``secure_import_in_progress`` true), snapshots
-    the current ``user_paused`` / ``collector_status`` /
-    ``current_activity_snapshot`` values, then forces them to a safe
-    paused state and sets ``secure_import_in_progress=true`` so the
-    collector loop skips writes for the duration of the DB replacement.
-
-    On success (no exception escapes the ``with`` block) the app is left
-    paused (``user_paused=true`` / ``collector_status=paused`` /
-    ``current_activity_snapshot=""``) and ``secure_import_in_progress`` is
-    cleared, mirroring the secure-import success semantics so the user
-    must manually resume recording after verifying the cleared state.
-
-    On failure (an exception propagates out of the ``with`` block) the
-    guard best-effort restores the prior pause / status / snapshot values
-    and clears ``secure_import_in_progress`` so the collector is never
-    permanently blocked, then re-raises the exception. The exception is
-    allowed to propagate so the API facade can collapse it to the stable
-    Chinese message.
-
-    Logging records only the operation name and exception type; it never
-    records path, clipboard, window title, note, SQL, traceback, or
-    payload.
-    """
+    """Narrow destructive reset guard for ``clear_all_local_data``."""
     from ..services.settings_service import (
         clear_settings_cache,
         get_bool_setting,

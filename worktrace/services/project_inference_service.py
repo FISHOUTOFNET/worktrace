@@ -214,9 +214,7 @@ def sync_persisted_open_activity_project(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
-# ---------------------------------------------------------------------------
 # Resource-first inference
-# ---------------------------------------------------------------------------
 
 def _resource_for_activity(conn, activity_id: int, activity: dict) -> dict:
     """Return resource dict for activity, preferring activity_resource table."""
@@ -392,31 +390,7 @@ def candidate_project_label_for_activity(
     activity: dict,
     resource: dict | None = None,
 ) -> dict | None:
-    """Return a display-safe candidate project *label* for an activity.
-
-    This is the display-safe candidate helper used by the project-ownership
-    state machine (``project_ownership_service``). It reuses the existing
-    resource-first inference (``_infer_project_resource_first``) — it never
-    re-implements folder / keyword / suggested-project logic and never
-    creates a new project.
-
-    Returns a dict with the following keys (all display-safe):
-
-    - ``id``            — concrete project id, or ``None`` when the
-                          candidate is a suggested-project name or
-                          uncategorized (no concrete project row).
-    - ``name``          — display project name.
-    - ``description``   — concrete project description, or ``""`` when
-                          the candidate has no concrete project row
-                          (suggested / uncategorized).
-    - ``source``        — one of ``folder_rule`` / ``keyword_rule`` /
-                          ``suggested_project_name`` / ``uncategorized``.
-    - ``is_uncategorized`` — ``True`` when the candidate is uncategorized.
-    - ``is_suggested_project`` — ``True`` when the candidate is a
-                          suggested-project name (no concrete project).
-
-    Returns ``None`` when the activity is ``None`` / empty.
-    """
+    """Return a display-safe candidate project *label* for an activity."""
     activity_dict = dict(activity or {})
     if not activity_dict:
         return None
