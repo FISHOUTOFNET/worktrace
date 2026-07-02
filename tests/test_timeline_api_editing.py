@@ -257,12 +257,15 @@ def test_update_note_and_duration_null_duration_clears_override(temp_db):
     assert fields["adjusted_duration_seconds"] is None
 
 
-def test_update_note_and_duration_zero_rejected(temp_db):
+def test_update_note_and_duration_zero_accepted(temp_db):
+    """``0`` is a valid explicit override to zero display/declared duration."""
     ids = _seed_session()
-    with pytest.raises(ValueError):
-        timeline_api.update_timeline_session_note_and_duration(
-            "2026-06-25", ids[0], "note", 0
-        )
+    timeline_api.update_timeline_session_note_and_duration(
+        "2026-06-25", ids[0], "note", 0
+    )
+    from worktrace.services import session_note_service
+    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    assert fields["adjusted_duration_seconds"] == 0
 
 
 def test_update_note_and_duration_negative_rejected(temp_db):

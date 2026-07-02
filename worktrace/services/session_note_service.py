@@ -88,8 +88,9 @@ def set_session_user_fields(
 
     Semantics:
     - ``note`` is stripped; whitespace-only is treated as empty.
-    - ``adjusted_duration_seconds`` may be ``None`` (no override) or a
-      positive integer.
+    - ``adjusted_duration_seconds`` may be ``None`` (no override / clear
+      override) or a non-negative integer (``0`` is a valid explicit
+      override to zero display/declared duration).
     - The row is deleted only when BOTH ``note`` is empty AND
       ``adjusted_duration_seconds`` is ``None``. This prevents an empty
       note from destroying an existing duration override.

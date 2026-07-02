@@ -583,8 +583,9 @@ class TimelineBridgeMixin:
                 return {"ok": False, "error": "日期无效"}
             if not _DATE_SHAPE_RE.match(report_date):
                 return {"ok": False, "error": "日期无效"}
-            # Validate adjusted duration: allow None; non-None must be a
-            # positive int (reject bool, 0, negative, non-numeric).
+            # Validate adjusted duration: ``None`` clears the override;
+            # ``0`` is valid and means display/declare zero duration;
+            # negative is invalid. ``bool`` and non-numeric are rejected.
             duration_value: int | None = None
             if adjusted_duration_seconds is not None:
                 if isinstance(adjusted_duration_seconds, bool):
@@ -593,7 +594,7 @@ class TimelineBridgeMixin:
                     duration_value = int(adjusted_duration_seconds)
                 except (TypeError, ValueError):
                     return {"ok": False, "error": "时长无效"}
-                if duration_value <= 0:
+                if duration_value < 0:
                     return {"ok": False, "error": "时长无效"}
                 if duration_value > timeline_api.TIMELINE_ADJUSTED_DURATION_MAX_SECONDS:
                     return {"ok": False, "error": "时长无效"}

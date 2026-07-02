@@ -1408,12 +1408,18 @@ def _validate_note(note: str) -> str:
 def _validate_adjusted_duration(adjusted_duration_seconds: int | None) -> int | None:
     """Validate ``adjusted_duration_seconds``.
 
-    Returns ``None`` when no override is requested. Returns a positive
-    ``int`` when a valid override is provided.
+    Semantics:
+    - ``None`` = no override / clear override.
+    - ``0`` = valid explicit override to zero display/declared duration.
+    - positive int = valid override.
+    - negative = invalid.
+
+    Returns ``None`` when no override is requested. Returns a non-negative
+    ``int`` when a valid override is provided (``0`` is allowed).
 
     Raises ``ValueError``:
     - ``bool`` is rejected (``isinstance(True, int)`` is ``True`` in Python).
-    - ``0`` and negative values are rejected.
+    - Negative values are rejected.
     - Non-integer values are rejected.
     - Values exceeding ``TIMELINE_ADJUSTED_DURATION_MAX_SECONDS`` are rejected.
     """
@@ -1425,8 +1431,8 @@ def _validate_adjusted_duration(adjusted_duration_seconds: int | None) -> int | 
         value = int(adjusted_duration_seconds)
     except (TypeError, ValueError):
         raise ValueError("adjusted_duration_seconds must be an integer")
-    if value <= 0:
-        raise ValueError("adjusted_duration_seconds must be a positive integer")
+    if value < 0:
+        raise ValueError("adjusted_duration_seconds must be a non-negative integer")
     if value > TIMELINE_ADJUSTED_DURATION_MAX_SECONDS:
         raise ValueError("adjusted_duration_seconds exceeds maximum")
     return value

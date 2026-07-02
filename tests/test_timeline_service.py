@@ -454,6 +454,23 @@ def test_display_duration_uses_raw_when_no_override(temp_db):
     assert session["has_duration_override"] is False
 
 
+def test_display_duration_uses_zero_override(temp_db):
+    """``adjusted_duration_seconds = 0`` is a valid override and must not
+    fall back to the raw duration."""
+    project = project_service.create_project("Client")
+    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    activity_service.close_all_open_rows("2026-06-18 09:02:00")  # 120 seconds raw
+
+    timeline_service.update_session_note_and_duration("2026-06-18", first, "", 0)
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    session = sessions[0]
+    assert session["raw_duration_seconds"] == 120
+    assert session["adjusted_duration_seconds"] == 0
+    assert session["display_duration_seconds"] == 0
+    assert session["has_duration_override"] is True
+
+
 def test_update_session_note_and_duration_writes_both(temp_db):
     """update_session_note_and_duration writes both note and duration."""
     project = project_service.create_project("Client")

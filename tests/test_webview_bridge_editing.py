@@ -446,14 +446,17 @@ def test_update_timeline_note_and_duration_null_clears_override(bridge):
     assert fields["note"] == "with override"
 
 
-def test_update_timeline_note_and_duration_zero_rejected(bridge):
-    """``0`` is not a positive override and must be rejected with 时长无效."""
+def test_update_timeline_note_and_duration_zero_accepted(bridge):
+    """``0`` is a valid explicit override to zero display/declared duration."""
+    from worktrace.services import session_note_service
+
     ids = _seed_session()
     result = bridge.update_timeline_note_and_duration(
         ids, "note", 0, "2026-06-25"
     )
-    assert result["ok"] is False
-    assert result["error"] == "时长无效"
+    assert result["ok"] is True
+    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    assert fields["adjusted_duration_seconds"] == 0
 
 
 def test_update_timeline_note_and_duration_negative_rejected(bridge):
@@ -533,7 +536,7 @@ def test_update_timeline_note_and_duration_is_json_serializable(bridge):
     )
     json.dumps(success)
     error = bridge.update_timeline_note_and_duration(
-        ids, "note", 0, "2026-06-25"
+        ids, "note", -1, "2026-06-25"
     )
     json.dumps(error)
 
