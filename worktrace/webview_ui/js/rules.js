@@ -97,8 +97,7 @@
             list.innerHTML = "";
             empty.hidden = false;
             // When there are no projects at all, hide the batch toolbar so
-            // the page does not show an empty toolbar with disabled buttons.
-            // disabled buttons.
+            // the page does not show an empty toolbar with inactive controls.
             var emptyToolbar = document.getElementById("rules-batch-toolbar");
             if (emptyToolbar) emptyToolbar.hidden = true;
             App.refreshProjectRulesBatchToolbar();

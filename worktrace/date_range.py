@@ -1,8 +1,6 @@
 """Pure date-range calculation utilities.
 
-100% pure non-UI logic (no tkinter / customtkinter imports), reusable
-across UI backends.
-customtkinter imports) and is reusable across UI backends.
+Contains no tkinter/customtkinter imports and is reusable across UI backends.
 """
 
 from __future__ import annotations

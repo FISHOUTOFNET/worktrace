@@ -7,8 +7,7 @@ functions, so importing this module does not load the workbook stack.
 Statistics / Export page. It converts service-layer ``ValueError`` codes
 and ``OSError`` / ``PermissionError`` into stable ``StatisticsExportError``
 codes so the WebView bridge can map them to Chinese messages without
-echoing tracebacks, paths, SQL, or raw exception text.
-text.
+echoing tracebacks, paths, SQL, or raw exception messages.
 """
 
 from __future__ import annotations
@@ -20,12 +19,10 @@ from ..services import export_service
 
 class StatisticsExportError(ValueError):
     """Raised by the statistics CSV export for known user-facing failures.
-    failure modes.
 
     The ``code`` attribute is a stable token the WebView bridge maps to a
     Chinese message, so internal paths, field names, ids, and SQL details
-    never reach the bridge.
-    and SQL details out of bridge responses.
+    never enter bridge responses.
 
     Stable ``code`` values:
 

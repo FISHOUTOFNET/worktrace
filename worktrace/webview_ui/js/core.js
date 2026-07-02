@@ -14,8 +14,6 @@
     // lightweight ``get_refresh_state`` revision check. Heavy interfaces
     // (get_overview / get_recent_activities / get_timeline) are only called
     // when the structural revision changes.
-    // get_recent_activities / get_timeline) are only called when the
-    // structural revision changes.
     App.HEARTBEAT_INTERVAL_MS = 1000;
     App.NOTE_MAX_LENGTH = 2000;
     App.heartbeatTimer = null;
@@ -26,15 +24,12 @@
     // The snapshots are set by showOverview / showRecent / showTimeline /
     // renderSessionDetails and read by the ticker to compute the live
     // increment.
-    // respectively and read by the ticker to compute the live increment.
     App.lastOverviewSnapshot = null;
     // Recent-activities snapshot so the ticker can increment the live-
     // projected recent item's duration without a bridge round-trip.
-    // round-trip. Set by showRecent.
     App.lastRecentSnapshot = null;
     // Session-details snapshot so the ticker can increment the live-
     // projected detail row's duration without a bridge round-trip.
-    // round-trip. Set by renderSessionDetails.
     App.lastSessionDetailsData = null;
 
     // --- Heartbeat refresh-state ---
@@ -43,8 +38,6 @@
     // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard
     // overlapping revision checks and heavy page-data refreshes.
     // ``lastFullRefreshAtEpochMs`` records the last heavy-refresh completion.
-    // ``lastFullRefreshAtEpochMs`` records the last time a heavy refresh
-    // completed so a future safety net can detect a stalled heartbeat.
     App.lastRefreshState = null;
     App.refreshCheckInFlight = false;
     App.activePageRefreshInFlight = false;
@@ -53,7 +46,6 @@
     // the in-flight refresh completes, a new refresh is triggered if this
     // flag is true so a page-switch immediate refresh is never silently
     // skipped by the global in-flight guard.
-    // silently skipped by the global in-flight guard.
     App.pendingPageRefresh = false;
     App.lastFullRefreshAtEpochMs = 0;
     // Low-frequency collection reconciliation. Every
@@ -149,27 +141,21 @@
     // --- Settings / Privacy state ---
     // A single read-only load is in flight at a time; the request token
     // guards against stale responses on rapid re-entry.
-    // page rapidly; it is monotonically incremented per load attempt.
     App.settingsLoaded = false;
     App.settingsLoading = false;
     App.settingsRequestToken = 0;
     // Capture toggle write state. Separate from settingsLoading (read) so a
-    // write in flight never pollutes the read-state guard.
-    // pollutes the read-state guard. While true, both the refresh button
-    // and the capture toggle are disabled so no concurrent write or
-    // read can race the in-flight toggle write.
+    // write in flight never pollutes the read-state guard. While true, both
+    // the refresh button and the capture toggle are disabled.
     App.settingsWriteInProgress = false;
     // Encrypted backup export + manifest preview state. Separate from the
-    // capture toggle so a backup operation cannot race the toggle.
-    // operation in flight never races the capture toggle and vice versa.
+    // capture toggle so backup operations and toggle writes cannot overlap.
     // While either is true, the backup controls are disabled.
     App.settingsBackupExportInProgress = false;
     App.settingsBackupManifestInProgress = false;
-    // Backup import + clear-all state. Separate from export / manifest /
-    // capture toggle so an import / clear cannot race the other writes.
-    // settingsBackupManifestInProgress (6C manifest) so an import / clear
-    // in flight never races the export / manifest / capture toggle. While
-    // either is true, every Settings control is disabled.
+    // Backup import + clear-all state. Separate from backup manifest preview,
+    // export, and capture toggle writes so Settings operations stay mutually
+    // exclusive. While either is true, every Settings control is disabled.
     App.settingsBackupImportInProgress = false;
     App.settingsClearAllInProgress = false;
 
@@ -181,12 +167,7 @@
     // collector. ``firstRunNoticeViewingFromSettings`` is true when the
     // overlay was opened from the Settings "查看隐私说明" button; in that
     // mode the close button is shown and no accept action is taken on
-    // close. State lives in JS memory only.
-    // disabled. ``firstRunNoticeViewingFromSettings`` is true when the
-    // overlay was opened from the Settings / Privacy "查看隐私说明"
-    // button; in that mode the close button is shown and no accept
-    // action is taken on close. All variables live in JS memory only;
-    // no browser storage APIs are used.
+    // close. State lives in JS memory only; no browser storage APIs are used.
     App.firstRunNoticeLoaded = false;
     App.firstRunNoticeLoading = false;
     App.firstRunNoticeRequired = false;

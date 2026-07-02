@@ -141,7 +141,6 @@ def process_new_activity(activity_id: int) -> dict:
     activities. The general ``assign_project_for_activity`` function
     still handles manual reclassification, rule application, and backfill
     when explicitly requested by the caller.
-    activities when explicitly requested by the caller.
     """
     with get_connection() as conn:
         activity = conn.execute(
@@ -168,23 +167,14 @@ _OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
 def sync_persisted_open_activity_project(activity_id: int) -> dict:
     """Converge an open persisted row's project assignment before display.
 
-    Purpose: ensure the open persisted row's project attribution matches
-    the current resource-first inference before display.
-    crosses the 30-second persistence threshold and becomes a real open
-    DB row. ``process_new_activity`` (the regular automatic-rules entry
-    point) skips rows whose ``end_time IS NULL``, so without this helper
-    the freshly-persisted open row would keep the ``uncategorized``
-    assignment written by ``create_activity`` even when the snapshot's
-    resource-first inference had already resolved a concrete project —
-    causing Timeline / Recent / Detail / Overview KPI displays to revert
-    to ``未归类`` for the remainder of the activity.
+    Purpose: ensure an open persisted row's project attribution matches the
+    current resource-first inference before it is displayed.
 
     Conditions (all must hold; otherwise the helper is a no-op): the
-    activity exists, ``end_time IS NULL`` (still open), ``status ==
-    STATUS_NORMAL``, ``is_deleted = 0``, ``is_hidden = 0``,
-    ``manual_override = 0``, the assignment is not manual, and the
-    current assignment source is in ``_OPEN_ROW_UNCLASSIFIED_SOURCES``
-    (still effectively uncategorized).
+    activity exists, ``end_time IS NULL``, ``status == STATUS_NORMAL``,
+    ``is_deleted = 0``, ``is_hidden = 0``, ``manual_override = 0``, the
+    assignment is not manual, and the current assignment source is still
+    effectively uncategorized.
 
     Behavior: delegates to the existing resource-first inference
     (``assign_project_for_activity``). It does NOT re-implement folder /
@@ -192,20 +182,6 @@ def sync_persisted_open_activity_project(activity_id: int) -> dict:
 
     Returns the current or updated assignment dict; ``{}`` when the
     activity is missing.
-    - ``status == STATUS_NORMAL``;
-    - ``is_deleted = 0`` and ``is_hidden = 0``;
-    - ``manual_override = 0`` on the activity row;
-    - the assignment is not manual (``is_manual = 0``);
-    - the current assignment source is in
-      ``{"uncategorized", "suggested_project_name"}`` (i.e. the row is
-      still effectively uncategorized). Concrete automatic sources
-      (``folder_rule`` / ``keyword_rule`` / ``midnight_anchor``) are
-      left untouched so the open-row sync does not re-run inference on
-      an already-classified activity mid-flight.
-
-    Returns the (possibly updated) assignment dict for the activity. If
-    the activity is missing, returns ``{}`` for parity with
-    ``_assignment_dict``.
     """
     with get_connection() as conn:
         activity = conn.execute(

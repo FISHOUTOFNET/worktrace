@@ -424,7 +424,7 @@ class AutoActivityRecorder:
             "extra_seconds": self.current_extra_seconds,
             "persisted_activity_id": self.persisted_activity_id,
             "is_persisted": self.persisted_activity_id is not None,
-            # ---- New project-ownership contract ----
+            # ---- Project ownership fields ----
             "display_project": display_project_dict,
             "candidate_project": candidate_project_dict,
             "project_transition": transition_dict,

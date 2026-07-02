@@ -1,6 +1,6 @@
 """Project ownership pending state machine tests.
 
-Locks the display-level project ownership contract (section 一 / 四):
+Locks the display-level project ownership fields:
 
 - **Resource identity immediate** — a resource switch is reflected in the
   snapshot's ``resource_display_name`` / ``activity_display_name`` right

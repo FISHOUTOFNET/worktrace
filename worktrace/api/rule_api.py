@@ -7,8 +7,9 @@ Shared write-path validation / fail / success payloads come from
 ``worktrace.api._write_contract`` so every Project Rules facade uses the
 same "true positive int", "true bool", "true non-empty str", and stable
 ``{"ok": False, "error": code}`` / ``{"ok": True, ...}`` shapes.
-``{"ok": True, ...}`` shapes. Behavior is unchanged; only the duplicated
-inline checks were replaced with helper calls.
+
+Keyword-only operations never touch folder rules and never create projects
+or folders unless the function is explicitly a project lifecycle facade.
 """
 
 from __future__ import annotations
@@ -62,8 +63,7 @@ def set_project_rule_enabled(rule_type: str, rule_id: int, enabled: bool) -> dic
 
     Rejects bool-as-int ids, non-bool enabled values, unknown rule types,
     and missing rules before delegating to the existing service write paths.
-    missing rules before delegating to the existing service write paths.
-    Returned errors are stable codes for the bridge to map to Chinese text.
+    Returned errors are stable codes for bridge-side Chinese messages.
     """
 
     # ``isinstance(rule_type, str)`` short-circuits the set membership check
@@ -103,7 +103,6 @@ def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]
     without bypassing the service. The keyword is trimmed before creation
     and an exact duplicate (same ``project_id`` + same trimmed keyword) is
     rejected as ``duplicate_rule``.
-    ``duplicate_rule``.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
 
@@ -163,7 +162,6 @@ def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
     which performs a hard ``DELETE FROM project_rule`` and preserves the
     existing keyword rule cache invalidation and privacy exclude cache
     clearing.
-    is invented.
 
     Returned errors are stable codes for the bridge to map to Chinese text:
 

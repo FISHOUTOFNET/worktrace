@@ -843,16 +843,15 @@ def test_split_passthrough_without_separator(runner):
 
 
 # ---------------------------------------------------------------------------
-# K1 (the settings status / 6B / 6C / 6D). Settings / Privacy WebView -> settings + boundary + packaging
+# K1 Settings / Privacy WebView -> settings + boundary + packaging
 # ---------------------------------------------------------------------------
 
 
 def test_settings_api_py_selects_settings_tests(runner):
-    # / 6B / 6C / 6D: settings_api.py carries the read-only status
-    # facade (6A), the clipboard capture toggle write facade (6B), the
-    # encrypted backup export / manifest preview facades (6C), and the
-    # encrypted backup import / clear-all-local-data facades (6D), so it
-    # must select the full K1 target set.
+    # settings_api.py carries read-only status, clipboard capture toggle,
+    # encrypted backup export / manifest preview, and encrypted backup
+    # import / clear-all-local-data facades, so it must select the full
+    # K1 target set.
     sel = runner.select_targets(["worktrace/api/settings_api.py"])
     for expected in (
         "tests/test_settings_privacy_status.py",
@@ -881,11 +880,10 @@ def test_backup_api_py_selects_settings_tests(runner):
 
 
 def test_settings_js_selects_settings_tests_and_smoke(runner):
-    # / 6B / 6C / 6D: settings.js carries the read-only status
-    # loader (6A), the clipboard toggle write handler (6B), the encrypted
-    # backup export / manifest preview handlers (6C), and the encrypted
-    # backup import / clear-all-local-data handlers (6D), so it must
-    # select the full K1 target set plus the import smoke.
+    # settings.js carries the read-only status loader, clipboard toggle
+    # write handler, encrypted backup export / manifest preview handlers,
+    # and encrypted backup import / clear-all-local-data handlers, so it
+    # must select the full K1 target set plus the import smoke.
     sel = runner.select_targets(["worktrace/webview_ui/js/settings.js"])
     for expected in (
         "tests/test_settings_privacy_status.py",
@@ -903,14 +901,12 @@ def test_settings_js_selects_settings_tests_and_smoke(runner):
 
 
 def test_core_js_selects_settings_tests_and_smoke(runner):
-    """/ 6B / 6C / 6D: core.js declares the Settings operation
-    state flags (settingsLoaded / settingsLoading / settingsRequestToken
-    for 6A, settingsWriteInProgress for 6B, settingsBackupExportInProgress
-    / settingsBackupManifestInProgress for 6C, settingsBackupImportInProgress
-    / settingsClearAllInProgress for 6D). A change to core.js must select
-    the full K1 target set plus the import smoke so the static contract
-    suite verifies the new flags and the anySettingsOperationInProgress
-    composition."""
+    """core.js declares Settings operation flags.
+
+    A change to core.js must select the full K1 target set plus the import
+    smoke so the static contract suite verifies the flags and
+    ``anySettingsOperationInProgress`` composition.
+    """
     sel = runner.select_targets(["worktrace/webview_ui/js/core.js"])
     for expected in (
         "tests/test_settings_privacy_status.py",
@@ -929,11 +925,7 @@ def test_core_js_selects_settings_tests_and_smoke(runner):
 
 
 def test_settings_html_css_init_select_settings_tests(runner):
-    """/ 6B / 6C / 6D: index.html / styles.css / init.js triggers
-    all share the K1 settings target set (6A read-only status + 6B toggle
-    DOM / styles / change-handler binding + 6C backup export / manifest
-    DOM / styles / bindings + 6D backup import / clear-all DOM / styles /
-    bindings)."""
+    """index.html / styles.css / init.js share the K1 settings target set."""
     for changed in (
         "worktrace/webview_ui/index.html",
         "worktrace/webview_ui/styles.css",
@@ -949,7 +941,7 @@ def test_settings_html_css_init_select_settings_tests(runner):
 
 
 def test_k1_does_not_trigger_project_rules_suite(runner):
-    """/ 6B / 6C / 6D: K1 must NOT trigger the Project Rules C-series suite."""
+    """K1 must NOT trigger the Project Rules suite."""
     sel = runner.select_targets(["worktrace/api/settings_api.py"])
     for unexpected in (
         "tests/test_rule_service.py",

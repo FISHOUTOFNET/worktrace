@@ -27,8 +27,6 @@ def set_session_note(report_date: str, first_activity_id: int, note: str) -> Non
     The row is deleted only when ``note`` is empty AND
     ``adjusted_duration_seconds`` is ``None``; an empty note alone does
     not destroy an existing duration override.
-    user's duration override. Now the row is only deleted when BOTH the
-    note is empty AND no duration override is set.
     """
     existing = get_session_user_fields(report_date, first_activity_id)
     set_session_user_fields(

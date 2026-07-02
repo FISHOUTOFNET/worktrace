@@ -66,12 +66,10 @@
         var sessionContinuityKeys = [];
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
-            // Live projection convergence: virtual live sessions MUST be
-            // rendered, clickable, and selectable. Previously the
-            // ``is_virtual === true`` skip prevented virtual live sessions
-            // from appearing in the Timeline, which broke the live
-            // continuity contract. The backend marks them
-            // ``edit_disabled=True`` so the edit panel stays disabled.
+            // Live projection convergence: virtual live sessions are
+            // rendered, clickable, selectable, and display-only. The backend
+            // marks them ``edit_disabled=True`` so the edit panel stays
+            // disabled.
             var startTimeOnly = App.formatStartTimeOnly(s.start_time);
             var projectLabel = App.formatProjectLabel(s.project_name, s.project_description);
             // ``duration_seconds`` is already the display value (adjusted
@@ -272,7 +270,6 @@
             // virtual session must NOT open the edit panel — it has no
             // persisted activity_ids and cannot be edited. Clear the edit
             // panel instead so any prior session's edit panel is dismissed.
-            // edit panel is dismissed.
             if (found.edit_disabled === true || found.is_virtual === true) {
                 clearEditPanel();
             } else {
@@ -324,9 +321,8 @@
         // When the DOM render is skipped, ALSO skip the cache update. The
         // cache is updated only when the DOM is actually rendered, keeping
         // them atomic so the ticker never projects against a newer payload
-        // while the DOM still shows the old one.
-        // cache/DOM desync. Now the cache is updated only when the DOM is
-        // actually rendered, keeping them atomic.
+        // while the DOM still shows the old one. The cache is updated only
+        // when the DOM is actually rendered, keeping them atomic.
         if ((App.editingActivityId !== null || App.editingSplitActivityId !== null)
             && typeof App.isEditDirty === "function" && App.isEditDirty()) {
             return;

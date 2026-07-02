@@ -1,6 +1,6 @@
-"""Live display project-transition contract tests (section 九.3).
+"""Live display project-transition contract tests.
 
-Locks the new project-ownership contract surfaced through
+Locks the project ownership fields returned by
 ``live_display_service.build_live_projection`` /
 ``build_current_activity_summary`` /
 ``build_virtual_session`` /

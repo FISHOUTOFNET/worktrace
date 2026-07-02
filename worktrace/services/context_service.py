@@ -330,7 +330,7 @@ def _set_clipboard_context_assignment(row: dict, project_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# File-context-anchor short-gap bridge
+# File-context-anchor short-gap carry
 # ---------------------------------------------------------------------------
 
 

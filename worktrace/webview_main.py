@@ -113,7 +113,6 @@ def main() -> int:
     # collector. Fail closed on read error: do not start the collector,
     # log, but do not block WebView startup (the frontend will call
     # ``get_first_run_notice`` and surface the error).
-    # will call ``get_first_run_notice`` and surface the error).
     #
     # The folder index worker is also gated here. The worker probes local
     # ``os.path.exists(file_path)`` for ready indexes, which is

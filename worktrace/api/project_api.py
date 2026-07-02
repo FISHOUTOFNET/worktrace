@@ -7,9 +7,10 @@ Shared write-path validation / fail / success payloads come from
 ``worktrace.api._write_contract`` so every Project Rules project-lifecycle
 facade uses the same "true positive int", "true bool", "true non-empty str",
 and stable ``{"ok": False, "error": code}`` / ``{"ok": True, ...}`` shapes.
-``{"ok": False, "error": code}`` / ``{"ok": True, ...}`` shapes. Behavior
-is unchanged; only the duplicated inline checks were replaced with helper
-calls.
+
+This facade owns create/edit/toggle/archive/delete calls, rejects system or
+special-project modification, and returns stable error-code payloads without
+DB schema changes, native dialogs, or network access.
 """
 
 from __future__ import annotations

@@ -17,7 +17,7 @@ Design notes
   container types so a non-string never reaches the service.
 - The fail payload is always ``{"ok": False, "error": code}``; the success
   payload is always ``{"ok": True, ...}``. Codes are stable strings the
-  WebView bridge maps to Chinese text.
+  WebView bridge maps to localized messages.
 """
 
 from __future__ import annotations

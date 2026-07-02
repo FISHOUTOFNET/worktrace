@@ -13,12 +13,10 @@ from ..services import statistics_service
 
 class StatisticsSummaryError(ValueError):
     """Raised by the read-only statistics/export summary for known user-facing failures.
-    user-facing failure modes.
 
     The ``code`` attribute is a stable token the WebView bridge maps to a
-    Chinese message, so internal field names, ids, and SQL details never
-    reach the bridge.
-    details out of bridge responses.
+    Chinese message, so internal fields, ids, SQL, and tracebacks never
+    enter bridge responses.
 
     Stable ``code`` values:
 
@@ -72,9 +70,8 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict[str, Any
 
     Read-only path: only reads closed activities and never writes to the DB,
     never writes a file, and never opens a save dialog. The returned payload
-    is display-safe (no raw ``window_title``, ``file_path_hint``,
-    ``full_path``, ``clipboard``, ``note``, SQL, or traceback).
-    traceback).
+    is display-safe and excludes raw ``window_title``, ``file_path_hint``,
+    ``full_path``, ``clipboard``, ``note``, SQL, and tracebacks.
 
     Raises ``StatisticsSummaryError`` with a stable ``code`` for known
     failure modes so the bridge can map to Chinese messages without echoing
@@ -83,8 +80,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict[str, Any
     The service layer performs the canonical date validation; this wrapper
     maps ``ValueError`` (with its stable code token) to
     ``StatisticsSummaryError`` and collapses any unexpected exception to
-    ``operation_failed`` so internal details never reach the bridge.
-    bridge.
+    ``operation_failed`` so internal details never reach bridge responses.
     """
     try:
         return statistics_service.get_statistics_export_summary(date_from, date_to)

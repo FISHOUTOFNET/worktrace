@@ -195,7 +195,6 @@ def _snapshot_display_project_dict(snapshot: dict[str, Any] | None) -> dict[str,
     Reads the structured ``display_project`` block written by the
     project-ownership state machine. Returns ``None`` when the snapshot
     has no structured block (callers fall back to ``_display_project_name``).
-    ownership contract (callers fall back to ``_display_project_name``).
     """
     if not snapshot:
         return None
@@ -607,7 +606,7 @@ def build_current_activity_summary(
     if is_virtual_live:
         carry_seconds = short_activity_carry_seconds(snapshot, report_date)
     display_seconds = elapsed_seconds + carry_seconds
-    # Project-ownership contract fields. The snapshot carries a
+    # Project ownership fields. The snapshot carries a
     # structured ``display_project`` / ``candidate_project`` /
     # ``project_transition`` block written by the ownership state
     # machine. These are surfaced verbatim (display-safe) so the
@@ -684,7 +683,7 @@ def build_current_activity_summary(
         "source": "db" if is_in_progress else ("snapshot" if is_virtual_live else "none"),
         "is_uncategorized": bool(is_uncategorized),
         "is_classified": not bool(is_uncategorized),
-        # Project-ownership contract fields (display-safe).
+        # Project ownership fields (display-safe).
         "project_description": project_description,
         "display_project": display_project_dict,
         "candidate_project": candidate_project_dict,
@@ -834,7 +833,7 @@ def build_virtual_session(
         "edit_disabled": True,
         "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
         # Display-facing project fields.
-        # display_project block (project-ownership contract).
+        # display_project block (project ownership).
         "display_project": project_fields["display_project"],
         "candidate_project": project_fields["candidate_project"],
         "project_transition": project_fields["project_transition"],
@@ -900,7 +899,7 @@ def build_virtual_detail_row(
         "edit_disabled": True,
         "disable_reason": _VIRTUAL_EDIT_DISABLE_REASON,
         # Display-facing project fields.
-        # display_project block (project-ownership contract).
+        # display_project block (project ownership).
         "is_uncategorized": project_fields["is_uncategorized"],
         "is_classified": project_fields["is_classified"],
         "display_project": project_fields["display_project"],

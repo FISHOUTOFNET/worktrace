@@ -26,14 +26,12 @@ from ..services.live_time_service import (
 
 class TimelineTimeEditError(ValueError):
     """Raised by the time-correction methods for known user-facing failures.
-    user-facing failure modes.
 
     The ``code`` attribute is a stable token the WebView bridge maps to a
     Chinese message, so internal field names, ids, and SQL details never
     reach the bridge. The bridge catches this separately from generic
     ``ValueError`` so unknown validation failures still collapse to the
     generic ``"操作失败"`` message.
-    the generic ``"操作失败"`` message.
     """
 
     def __init__(self, code: str):
@@ -43,7 +41,6 @@ class TimelineTimeEditError(ValueError):
 
 class TimelineSplitError(ValueError):
     """Raised by the activity-split methods for known user-facing failures.
-    user-facing failure modes.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
 
@@ -62,7 +59,6 @@ class TimelineSplitError(ValueError):
 
 class TimelineMergeError(ValueError):
     """Raised by the activity-merge methods for known user-facing failures.
-    user-facing failure modes.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
 
@@ -86,7 +82,6 @@ class TimelineMergeError(ValueError):
 
 class TimelineVisibilityError(ValueError):
     """Raised by the hide / soft-delete methods for known user-facing failures.
-    user-facing failure modes.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
 
@@ -129,7 +124,6 @@ class TimelineBatchProjectError(ValueError):
 
 class TimelineBatchNoteError(ValueError):
     """Raised by the batch note overwrite methods for known user-facing failures.
-    user-facing failure modes.
 
     Stable ``code`` values mapped by the WebView bridge to Chinese messages:
 
@@ -256,10 +250,8 @@ def reclassify_timeline_session_project(
     """Validate and apply a project reclassification to a Timeline session.
 
     Reclassifies every activity in ``activity_ids`` to ``project_id`` as a
-    manual assignment (all activities in the session move together).
-    behavior (all activities in the session move together) but adds explicit
-    input validation so the WebView bridge never performs a partial or
-    invalid write.
+    manual assignment. Explicit input validation keeps the WebView bridge from
+    performing a partial or invalid write.
 
     Validation:
     - ``activity_ids`` must be a non-empty list of positive integers; every
@@ -291,7 +283,6 @@ def update_timeline_session_note(
     The session note is stored in ``project_session_note`` keyed by
     ``(report_date, first_activity_id)``. ``first_activity_id`` is the
     first activity id of the session (``activity_ids[0]``).
-    session (``activity_ids[0]``).
 
     Validation:
     - ``report_date`` must be a ``YYYY-MM-DD`` string.
@@ -300,8 +291,7 @@ def update_timeline_session_note(
     - ``note`` must be a string. It is stripped; the stripped value must not
       exceed ``TIMELINE_NOTE_MAX_LENGTH`` characters. Whitespace-only notes
       are treated as empty and delete the existing note row. Legitimate
-      newlines inside the note are preserved.
-      note are preserved.
+      newlines remain intact.
 
     Raises ``ValueError`` on any invalid input.
     """
@@ -321,7 +311,8 @@ def update_timeline_session_note_and_duration(
 
     The user-adjusted duration is stored in
     ``project_session_note.adjusted_duration_seconds`` — it never touches
-    ``activity_log``. ``None`` means "no override" (display raw duration);
+    ``activity_log``. ``None`` means "no override" / clear override;
+    ``0`` is a valid explicit override to zero display/declared duration;
     a positive integer means "display this many seconds instead".
 
     Validation:
@@ -330,8 +321,9 @@ def update_timeline_session_note_and_duration(
       existing, non-deleted activity.
     - ``note`` must be a string, length <= ``TIMELINE_NOTE_MAX_LENGTH``.
     - ``adjusted_duration_seconds`` may be ``None``; if non-None it must be
-      an ``int`` (``bool`` rejected), positive, and <=
-      ``TIMELINE_ADJUSTED_DURATION_MAX_SECONDS``. ``0`` is rejected.
+      an integer (``bool`` rejected), ``0`` or positive, and <=
+      ``TIMELINE_ADJUSTED_DURATION_MAX_SECONDS``. Negative values and
+      non-integer values are invalid.
 
     Raises ``ValueError`` on any invalid input.
     """
@@ -466,7 +458,6 @@ def update_timeline_session_time(
 #   id and thus keeps any session note.
 # - Cross-day results are handled by ``timeline_service`` projection.
 # - Overlap detection against other activities is NOT performed here.
-#   later phase.
 
 
 def split_timeline_activity(activity_id: int, split_time: str) -> dict:

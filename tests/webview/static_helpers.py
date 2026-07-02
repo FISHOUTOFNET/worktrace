@@ -169,7 +169,7 @@ def read_bridge_sources_combined() -> str:
 
 
 def read_bridge_method_body(method_name: str, *, max_chars: int = 4000) -> str:
-    """Return the body slice of ``def <method_name>`` from whichever bridge
+    """Return the body slice of ``def <method_name>`` from whichever mixin
     mixin file defines it.
 
     Returns the slice from ``def <method_name>`` up to the next

@@ -15,7 +15,6 @@
     // the current page. Rules / Settings / Statistics are NOT included in
     // background auto-refresh; they keep their own page-level load / refresh
     // buttons.
-    // their own page-level load / refresh buttons.
     //
     // ``refreshCurrentPageData`` is the unified heavy-refresh entry point
     // used by the manual refresh button, the heartbeat revision-change
@@ -41,8 +40,7 @@
     // because ``get_refresh_state`` already returns ``collector_status`` /
     // ``paused`` / ``status_display``. Falls back to refreshStatus when
     // state is null or missing required fields so the sidebar always
-    // reflects the backend truth.
-    // backend truth.
+    // reflects the latest backend state.
     function refreshStatusFromRefreshState(state) {
         if (!state || !state.ok) {
             return refreshStatus();
@@ -63,7 +61,6 @@
         // newer data when the user switches pages or a revision-change
         // refresh races a manual refresh. Only the response whose token
         // equals the current value is applied to the DOM.
-        // value is applied to the DOM.
         var token = ++App.overviewRequestToken;
         return App.callBridge("get_overview").then(function (result) {
             if (token !== App.overviewRequestToken) return;  // stale
@@ -80,7 +77,6 @@
     function refreshRecent() {
         // Request token prevents stale Recent responses from overwriting
         // newer data. Same rationale as ``refreshOverview``.
-        // ``refreshOverview``.
         var token = ++App.recentRequestToken;
         return App.callBridge("get_recent_activities").then(function (result) {
             if (token !== App.recentRequestToken) return;  // stale
@@ -97,11 +93,7 @@
     // Single-sample Overview bundle. One backend call reads the snapshot
     // once and returns ``live_projection`` + ``overview`` KPI +
     // ``current_activity`` + ``activities`` + ``sample_id`` from the same
-    // sample, so the recent live row cannot drift ahead of the current
-    // activity.
-    // to catch up). The bundle reads the snapshot ONCE in the backend
-    // and returns ``live_projection`` + ``overview`` KPI + ``current_activity``
-    // + ``activities`` + ``sample_id`` from the same sample.
+    // sample, so overview, current activity, and recent rows do not drift.
     //
     // The bundle response is split into the shapes ``showOverview`` and
     // ``showRecent`` expect: the overview sub-payload is augmented with
@@ -235,7 +227,6 @@
             // while this one was in-flight, trigger a new refresh now for
             // whatever the current page is. This ensures the page-switch
             // immediate refresh is never silently skipped.
-            // skipped.
             if (App.pendingPageRefresh) {
                 App.pendingPageRefresh = false;
                 refreshCurrentPageData();
@@ -262,7 +253,6 @@
     // refresh) so the user's input focus and button state are preserved.
     // This is the background safety net only; the manual refresh button
     // can still trigger a heavier refresh.
-    // background safety net only.
     function fullReconcileCollectionViews(reason) {
         if (App.reconcileInFlight) return Promise.resolve();
         App.reconcileInFlight = true;
@@ -450,8 +440,7 @@
         // read-only bridge call; the quick-range buttons only update the
         // in-memory date inputs and re-trigger the read. The export button
         // opens the native save dialog through the bridge and writes the
-        // chosen CSV file; the frontend never writes a file itself.
-        // file itself.
+        // chosen CSV file; the frontend never writes files directly.
         var statsLoadBtn = document.getElementById("statistics-load-btn");
         if (statsLoadBtn) {
             statsLoadBtn.addEventListener("click", App.loadStatisticsExportSummary);
@@ -494,8 +483,7 @@
         // replace mode; the clear-all button does not open a dialog and
         // only triggers the destructive reset when the user has typed the
         // explicit Chinese confirmation literal. No save-settings,
-        // set-path, or arbitrary file/folder dialog action is wired here.
-        // action is wired here.
+        // set-path, or arbitrary file/folder dialog action is registered here.
         var backupExportBtn = document.getElementById("settings-backup-export-btn");
         if (backupExportBtn) {
             backupExportBtn.addEventListener("click", App.exportEncryptedBackup);
@@ -679,7 +667,6 @@
         // start on failure (fail-closed): the collector is not running and
         // auto-refreshing the sidebar would imply data collection is
         // active.
-        // unconditionally started refresh is removed.
         App.loadFirstRunNotice().then(function (noticeConfirmed) {
             if (!noticeConfirmed) return;
             // Await the first ``refreshCurrentPageData()`` BEFORE reading

@@ -105,8 +105,7 @@ def test_index_html_no_dev_phase_copy_in_main_ui() -> None:
 
 
 def test_index_html_settings_required_dom_ids_6a() -> None:
-    """/ 6B / 6C / 6D: the page-settings section must define the
-    required DOM ids."""
+    """The page-settings section must define the required DOM ids."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     for dom_id in (
         "settings-error",
@@ -237,8 +236,7 @@ def test_settings_js_only_calls_allowed_bridge_methods_6b() -> None:
 
 
 def test_settings_js_does_not_use_network_or_storage_apis_6a() -> None:
-    """/ 6B: settings.js must not use any network, storage, or
-    browser clipboard API."""
+    """settings.js must not use any network, storage, or browser clipboard API."""
     source = read_js("settings.js")
     for forbidden in (
         "fetch(",
@@ -299,7 +297,7 @@ def test_settings_js_no_clickable_write_buttons_6a() -> None:
 
 
 def test_index_html_no_settings_write_buttons_6a() -> None:
-    """/ 6B / 6D: index.html page-settings must not include any
+    """index.html page-settings must not include any
     save / path / file-dialog write button id, and must not include the
     ambiguous shortcut ids (without the ``-backup-`` / ``-clear-local-data``
     segments). The import/clear allows the scoped ``settings-backup-import-btn``
@@ -440,7 +438,7 @@ def test_settings_js_toggle_change_handler_bound_in_init_6b() -> None:
 
 
 def test_settings_js_disables_controls_during_load_and_write_6b() -> None:
-    """/ 6C: settings.js must disable the refresh button, the
+    """settings.js must disable the refresh button, the
     capture toggle, and the backup controls while any Settings operation
     is in flight. The backup operations use ``anySettingsOperationInProgress``
     which combines ``settingsLoading``, ``settingsWriteInProgress``,

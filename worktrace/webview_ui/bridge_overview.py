@@ -14,7 +14,6 @@ Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 ``WebViewBridge`` in ``bridge.py`` inherits ``OverviewBridgeMixin`` so the
 Overview page method names (``get_status`` / ``toggle_pause`` /
 ``get_overview`` / ``get_recent_activities``) stay on ``WebViewBridge``.
-the frontend / tests see no API-surface change.
 """
 
 from __future__ import annotations

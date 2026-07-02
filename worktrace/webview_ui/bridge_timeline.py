@@ -13,7 +13,6 @@ Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 
 ``WebViewBridge`` in ``bridge.py`` inherits ``TimelineBridgeMixin`` so the
 Timeline page method names stay on ``WebViewBridge``.
-tests see no API-surface change.
 """
 
 from __future__ import annotations
@@ -125,8 +124,7 @@ _BATCH_NOTE_ERROR_MESSAGES = {
 
 # Maps ``TimelineRestoreActivityError.code`` to stable Chinese user-facing
 # messages for the single activity restore. Unknown codes collapse to the
-# load-focused "恢复失败" so internal details are never surfaced.
-# surfaced.
+# load-focused "恢复失败" so internal details are never shown to JS.
 _RESTORE_ERROR_MESSAGES = {
     "invalid_activity": "请选择有效的活动",
     "not_found": "活动不存在",
