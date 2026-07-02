@@ -21,10 +21,9 @@ import logging
 from typing import Any
 
 from ..api import (
-    live_display_api,
     project_api,
-    settings_api,
     timeline_api,
+    view_model_api,
 )
 from ..api.timeline_api import (
     TimelineBatchNoteError,
@@ -40,8 +39,6 @@ from .bridge_common import (
     _DATE_SHAPE_RE,
     _GENERIC_ERROR,
     _coerce_activity_ids,
-    _safe_resource_display_name,
-    _snapshot_summary,
     _validate_datetime_inputs,
     _validate_split_time_input,
 )
@@ -144,165 +141,15 @@ class TimelineBridgeMixin:
     """
 
     def get_timeline(self, date: str | None = None) -> dict[str, Any]:
-        """Return read-only timeline data for a single date."""
+        """Return the Timeline page ViewModel for a single date.
+
+        The complete Timeline ViewModel (sessions, live_projection,
+        live clock fields, persisted_open overlay, project transition,
+        duration override, raw/display totals) is built by
+        ``view_model_service`` from a single snapshot sample.
+        """
         try:
-            report_date = date or timeline_api.get_default_report_date()
-            sessions_raw = timeline_api.get_project_sessions_by_date(
-                report_date,
-                include_hidden=False,
-                ensure_context=True,
-            )
-            snapshot = settings_api.get_current_activity_snapshot()
-            today = timeline_api.get_default_report_date()
-            current = _snapshot_summary(snapshot)
-            live_display = live_display_api.build_current_activity_summary(
-                snapshot, report_date=report_date, today=today
-            )
-            live_projection = live_display_api.build_live_projection(
-                snapshot, report_date=report_date, today=today
-            )
-            # Build the persisted-open overlay once so matching DB sessions
-            # can carry the display_project fields. Returns None when the
-            # snapshot is not persisted_open or the date is not today.
-            persisted_overlay = live_display_api.build_persisted_open_overlay(
-                snapshot, report_date=report_date, today=today
-            )
-            is_today = (report_date == today)
-            sessions: list[dict[str, Any]] = []
-            display_total_seconds = 0
-            raw_total_seconds = 0
-            # Inject the virtual live session for today's view. The virtual
-            # session is display-only (activity_id=0, edit_disabled=True)
-            # and carries the snapshot's display_project.
-            virtual_injected = False
-            if is_today:
-                virtual_session = live_display_api.build_virtual_session(
-                    snapshot, report_date=report_date, today=today
-                )
-                if virtual_session is not None:
-                    virtual_seconds = int(virtual_session.get("duration_seconds") or 0)
-                    display_total_seconds += virtual_seconds
-                    raw_total_seconds += virtual_seconds
-                    sessions.append(
-                        {
-                            "session_id": str(virtual_session.get("session_id") or ""),
-                            "project_name": str(virtual_session.get("project_name") or "未归类"),
-                            "project_description": str(virtual_session.get("project_description") or ""),
-                            "project_id": int(virtual_session.get("project_id") or 0),
-                            "start_time": str(virtual_session.get("start_time") or ""),
-                            "end_time": "",
-                            "duration": str(virtual_session.get("duration") or "00:00:00"),
-                            "duration_seconds": virtual_seconds,
-                            "raw_duration": str(virtual_session.get("duration") or "00:00:00"),
-                            "raw_duration_seconds": virtual_seconds,
-                            "adjusted_duration_seconds": None,
-                            "has_duration_override": False,
-                            "status": str(virtual_session.get("status") or "进行中"),
-                            "event_count": 1,
-                            "is_uncategorized": bool(virtual_session.get("is_uncategorized")),
-                            "is_classified": bool(virtual_session.get("is_classified")),
-                            "is_in_progress": True,
-                            "is_live_projected": False,
-                            "is_virtual": True,
-                            "is_virtual_live": True,
-                            "live_display_key": str(virtual_session.get("live_display_key") or ""),
-                            "live_state": "virtual",
-                            "stable_live_key": str(virtual_session.get("stable_live_key") or ""),
-                            "stable_live_key_hash": str(virtual_session.get("stable_live_key_hash") or ""),
-                            "live_started_at_epoch_ms": int(virtual_session.get("live_started_at_epoch_ms") or 0),
-                            "carry_seconds": int(virtual_session.get("carry_seconds") or 0),
-                            "activity_ids": [],
-                            "first_activity_id": None,
-                            "session_note": "",
-                            "edit_disabled": True,
-                            "disable_reason": str(virtual_session.get("disable_reason") or ""),
-                            "source": "snapshot",
-                            "display_project": virtual_session.get("display_project"),
-                            "candidate_project": virtual_session.get("candidate_project"),
-                            "project_transition": virtual_session.get("project_transition"),
-                            "project_transition_pending": bool(virtual_session.get("project_transition_pending")),
-                        }
-                    )
-                    virtual_injected = True
-            for session in sessions_raw:
-                is_session_in_progress = bool(session.get("is_in_progress"))
-                start_time = str(session.get("start_time") or "")
-                raw_seconds = int(session.get("raw_duration_seconds") or session.get("duration_seconds") or 0)
-                adjusted = session.get("adjusted_duration_seconds")
-                if adjusted is not None:
-                    adjusted = int(adjusted)
-                has_override = adjusted is not None
-                display_seconds = adjusted if has_override else raw_seconds
-                display_total_seconds += display_seconds
-                raw_total_seconds += raw_seconds
-                row = {
-                    "session_id": str(session.get("session_id") or ""),
-                    "project_name": str(session.get("project_name") or "未归类"),
-                    "project_description": str(session.get("project_description") or ""),
-                    "project_id": int(session.get("project_id") or 0),
-                    "start_time": start_time,
-                    "end_time": str(session.get("end_time") or ""),
-                    "duration": format_duration(display_seconds),
-                    "duration_seconds": display_seconds,
-                    "raw_duration": format_duration(raw_seconds),
-                    "raw_duration_seconds": raw_seconds,
-                    "adjusted_duration_seconds": adjusted,
-                    "has_duration_override": has_override,
-                    "status": str(session.get("status_summary") or session.get("status") or ""),
-                    "event_count": int(session.get("event_count") or 0),
-                    "is_uncategorized": bool(session.get("is_uncategorized")),
-                    "is_classified": not bool(session.get("is_uncategorized")),
-                    "is_in_progress": is_session_in_progress,
-                    "is_live_projected": False,
-                    "is_virtual": False,
-                    "is_virtual_live": False,
-                    "live_display_key": "",
-                    "live_state": "",
-                    "stable_live_key": "",
-                    "stable_live_key_hash": "",
-                    "live_started_at_epoch_ms": 0,
-                    "carry_seconds": 0,
-                    "activity_ids": list(session.get("activity_ids") or []),
-                    "first_activity_id": int(session.get("first_activity_id") or 0) or None,
-                    "session_note": str(session.get("session_note") or ""),
-                    "edit_disabled": False,
-                    "disable_reason": "",
-                    "source": "db",
-                    "display_project": None,
-                    "candidate_project": None,
-                    "project_transition": None,
-                    "project_transition_pending": False,
-                }
-                # Apply the persisted-open overlay so the matching DB
-                # session carries display_project fields and stable live
-                # identity. No-op for closed / non-matching sessions, and
-                # a no-op on historical dates (overlay is None there).
-                live_display_api.apply_persisted_open_overlay_to_row(row, persisted_overlay)
-                # Any in-progress DB row (open end_time) must be
-                # edit-disabled regardless of date / overlay: the spec
-                # forbids modifying an unfinished activity via edit /
-                # split / merge / hide / delete / restore. The overlay
-                # already sets this for today's persisted_open; this
-                # covers historical in-progress rows the overlay skips.
-                if is_session_in_progress and not row.get("edit_disabled"):
-                    row["edit_disabled"] = True
-                    row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
-                sessions.append(row)
-            return {
-                "ok": True,
-                "date": report_date,
-                "total_duration": format_duration(display_total_seconds),
-                "total_seconds": display_total_seconds,
-                "raw_total_duration": format_duration(raw_total_seconds),
-                "raw_total_seconds": raw_total_seconds,
-                "current_activity": current,
-                "live_display": live_display,
-                "live_projection": live_projection,
-                "sample_id": str(live_projection.get("stable_live_key_hash") or ""),
-                "sessions": sessions,
-                "today_total_seconds": display_total_seconds,
-                "current_activity_elapsed_seconds": int(current.get("elapsed_seconds") or 0),
-            }
+            return view_model_api.get_timeline_view_model(date)
         except Exception:
             logger.exception("webview bridge get_timeline failed")
             return dict(_GENERIC_ERROR)
@@ -312,160 +159,17 @@ class TimelineBridgeMixin:
         activity_ids: list[int],
         report_date: str | None = None,
     ) -> dict[str, Any]:
-        """Return read-only activity detail rows for a session."""
+        """Return the Timeline Details ViewModel for a session.
+
+        The complete Details ViewModel (virtual detail row,
+        persisted_open overlay, display-safe resource/project fields,
+        edit_disabled / disable_reason, live clock fields, single-sample
+        live_display / live_projection contract) is built by
+        ``view_model_service``.
+        """
         try:
             ids = [int(aid) for aid in (activity_ids or [])]
-            date = report_date or timeline_api.get_default_report_date()
-            today = timeline_api.get_default_report_date()
-            snapshot = settings_api.get_current_activity_snapshot()
-            # Build the unified live-display summary from the same snapshot
-            # sample so the detail ticker can compute its own live delta.
-            # This is built before the virtual-row branch so both the
-            # virtual-row return and the DB-row return carry the same
-            # ``live_display`` payload.
-            live_display = live_display_api.build_current_activity_summary(
-                snapshot, report_date=date, today=today
-            )
-            # Detail payload carries its OWN live_projection. The detail
-            # payload and the Timeline main payload are separate bridge
-            # calls that may arrive at different times; using the main
-            # payload's projection for the detail ticker would let the
-            # detail duration drift relative to its own timing anchor.
-            detail_live_projection = live_display_api.build_live_projection(
-                snapshot, report_date=date, today=today
-            )
-            # Build the persisted-open overlay once so every DB detail row
-            # that matches the persisted_activity_id can carry the same
-            # stable live fields as the virtual detail row.
-            # items 12, 16, 21).
-            persisted_overlay = live_display_api.build_persisted_open_overlay(
-                snapshot, report_date=date, today=today
-            )
-            activities: list[dict[str, Any]] = []
-            # When the requested session is the virtual live session
-            # (empty activity_ids) and the snapshot is eligible, return a
-            # single virtual detail row. This avoids projecting the
-            # unpersisted activity onto an old DB row.
-            if not ids:
-                virtual_row = live_display_api.build_virtual_detail_row(
-                    snapshot, report_date=date, today=today
-                )
-                if virtual_row is not None:
-                    activities.append(
-                        {
-                            "activity_id": 0,
-                            "start_time": str(virtual_row.get("start_time") or ""),
-                            "end_time": "",
-                            "duration": str(virtual_row.get("duration") or "00:00:00"),
-                            "duration_seconds": int(virtual_row.get("duration_seconds") or 0),
-                            "app_name": str(virtual_row.get("app_name") or ""),
-                            "resource_type": str(virtual_row.get("resource_type") or ""),
-                            "resource_name": str(virtual_row.get("resource_name") or "未知"),
-                            "project_name": str(virtual_row.get("project_name") or "未归类"),
-                            # Project description for the project_label contract
-                            # (name if description empty else f"{name}（{description}）").
-                            "project_description": str(virtual_row.get("project_description") or ""),
-                            "status": str(virtual_row.get("status") or ""),
-                            "is_in_progress": True,
-                            "is_live_projected": True,
-                            "is_virtual": True,
-                            "is_virtual_live": True,
-                            "live_display_key": str(virtual_row.get("live_display_key") or ""),
-                            # Stable live identity so the frontend continuity
-                            # key survives the virtual → persisted_open
-                            # transition.
-                            "stable_live_key": str(virtual_row.get("stable_live_key") or ""),
-                            "stable_live_key_hash": str(virtual_row.get("stable_live_key_hash") or ""),
-                            # Unified live clock fields (scheme A).
-                            "live_state": "virtual",
-                            "live_started_at_epoch_ms": int(virtual_row.get("live_started_at_epoch_ms") or 0),
-                            "carry_seconds": int(virtual_row.get("carry_seconds") or 0),
-                            "source": "snapshot",
-                            "edit_disabled": True,
-                            "disable_reason": str(virtual_row.get("disable_reason") or ""),
-                        }
-                    )
-                return {
-                    "ok": True,
-                    "activities": activities,
-                    # Unified live-display payload for the detail ticker.
-                    # The detail ticker must not reuse the Timeline main
-                    # payload's delta.
-                    "live_display": live_display,
-                    # Detail payload's OWN live projection. The detail
-                    # ticker must use this projection, NOT the Timeline
-                    # main payload's projection.
-                    # payload's projection).
-                    "live_projection": detail_live_projection,
-                    "sample_id": str(detail_live_projection.get("stable_live_key_hash") or ""),
-                }
-            rows = timeline_api.get_session_activity_details(
-                ids,
-                report_date=date,
-                ensure_context=True,
-            )
-            for row in rows:
-                start_time = str(row.get("start_time") or "")
-                end_time = str(row.get("end_time") or "")
-                row_seconds = int(row.get("duration_seconds") or 0)
-                is_in_progress = bool(row.get("is_in_progress"))
-                detail_row = {
-                    "activity_id": int(row.get("id") or 0),
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "duration": format_duration(row_seconds),
-                    "duration_seconds": row_seconds,
-                    "app_name": str(row.get("app_name") or ""),
-                    "resource_type": format_resource_type(
-                        row.get("resource_kind"),
-                        row.get("resource_subtype"),
-                    ),
-                    "resource_name": _safe_resource_display_name(row),
-                    "project_name": str(row.get("project_name") or "未归类"),
-                    # Project description for the project_label contract
-                    # (name if description empty else f"{name}（{description}）").
-                    "project_description": str(row.get("project_description") or ""),
-                    "status": str(row.get("status") or ""),
-                    "is_in_progress": is_in_progress,
-                    "is_live_projected": is_in_progress,
-                    "is_virtual": False,
-                    "is_virtual_live": False,
-                    "live_display_key": "",
-                    "live_state": "",
-                    "stable_live_key": "",
-                    "stable_live_key_hash": "",
-                    "live_started_at_epoch_ms": 0,
-                    "carry_seconds": 0,
-                    "source": "db",
-                    "edit_disabled": False,
-                    "disable_reason": "",
-                }
-                # Apply the persisted-open overlay so the matching DB
-                # detail row carries the same stable live fields as the
-                # virtual detail row. No-op for closed / non-matching
-                # rows, and a no-op on historical dates (overlay is None
-                # there).
-                live_display_api.apply_persisted_open_overlay_to_row(detail_row, persisted_overlay)
-                # Any in-progress DB detail row must be edit-disabled
-                # regardless of date / overlay (see get_timeline for the
-                # same rationale). The overlay sets this for today's
-                # persisted_open; this covers historical in-progress rows.
-                if is_in_progress and not detail_row.get("edit_disabled"):
-                    detail_row["edit_disabled"] = True
-                    detail_row["disable_reason"] = detail_row.get("disable_reason") or "进行中记录暂不支持编辑"
-                activities.append(detail_row)
-            return {
-                "ok": True,
-                "activities": activities,
-                # relative to its own timing anchor.
-                "live_display": live_display,
-                # Detail payload's OWN live projection. The detail ticker
-                # must use this projection, NOT the Timeline main
-                # payload's projection, so the detail duration does not
-                # drift relative to its own timing anchor.
-                "live_projection": detail_live_projection,
-                "sample_id": str(detail_live_projection.get("stable_live_key_hash") or ""),
-            }
+            return view_model_api.get_session_details_view_model(ids, report_date)
         except Exception:
             logger.exception("webview bridge get_timeline_session_details failed")
             return dict(_GENERIC_ERROR)

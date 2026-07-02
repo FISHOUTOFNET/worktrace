@@ -32,40 +32,14 @@
     }
     App.refreshStatusFromRefreshState = refreshStatusFromRefreshState;
 
+    // ``refreshOverview`` pulls the unified Overview ViewModel (KPIs +
+    // current activity + recent activities + live_projection + sample_id)
+    // from a single backend snapshot sample. The recent list and the
+    // Overview KPIs share the same sample so there is no 1-2s drift.
     function refreshOverview() {
-        // Request token prevents stale Overview responses from overwriting
-        var token = ++App.overviewRequestToken;
-        return App.callBridge("get_overview").then(function (result) {
-            if (token !== App.overviewRequestToken) return;  // stale
-            var overview = App.handleResult(result, function (msg) {
-                throw new Error(msg);
-            });
-            App.showOverview(overview);
-        }).catch(function () {
-            if (token !== App.overviewRequestToken) return;  // stale
-            App.showError("刷新失败");
-        });
-    }
-
-    function refreshRecent() {
-        // Request token prevents stale Recent responses from overwriting
-        var token = ++App.recentRequestToken;
-        return App.callBridge("get_recent_activities").then(function (result) {
-            if (token !== App.recentRequestToken) return;  // stale
-            var recent = App.handleResult(result, function (msg) {
-                throw new Error(msg);
-            });
-            App.showRecent(recent);
-        }).catch(function () {
-            if (token !== App.recentRequestToken) return;  // stale
-            App.showError("刷新失败");
-        });
-    }
-
-    function refreshOverviewBundle() {
         var token = ++App.overviewRequestToken;
         App.recentRequestToken = token;  // single token for the bundle
-        return App.callBridge("get_overview_live_bundle").then(function (result) {
+        return App.callBridge("get_overview").then(function (result) {
             if (token !== App.overviewRequestToken) return;  // stale
             var bundle = App.handleResult(result, function (msg) {
                 throw new Error(msg);
@@ -78,7 +52,6 @@
             overview.live_projection = bundle.live_projection || overview.live_projection;
             overview.live_display = bundle.live_display || bundle.live_projection || overview.live_display;
             overview.sample_id = bundle.sample_id || overview.sample_id;
-            // shape) — copy them in when the overview sub-payload does
             if (overview.today_total_seconds === undefined) {
                 overview.today_total_seconds = bundle.today_total_seconds || 0;
             }
@@ -92,7 +65,6 @@
                 overview.current_activity_elapsed_seconds = bundle.current_activity_elapsed_seconds || 0;
             }
             App.showOverview(overview);
-            // Build the recent payload shape from the bundle's activities +
             App.showRecent({
                 activities: bundle.activities || [],
                 live_projection: bundle.live_projection || null,
@@ -104,7 +76,7 @@
             App.showError("刷新失败");
         });
     }
-    App.refreshOverviewBundle = refreshOverviewBundle;
+    App.refreshOverview = refreshOverview;
 
     function refreshTimeline() {
         return new Promise(function (resolve, reject) {
@@ -141,7 +113,7 @@
         App.pendingPageRefresh = false;
         var promises = [refreshStatus()];
         if (App.currentPage === "overview") {
-            promises.push(refreshOverviewBundle());
+            promises.push(refreshOverview());
         } else if (App.currentPage === "timeline" && App.timelineLoaded) {
             // revision-change refresh and manual refresh do not overwrite
             if (typeof App._timelineEditingActive !== "function" || !App._timelineEditingActive()) {
@@ -181,7 +153,7 @@
         if (App.reconcileInFlight) return Promise.resolve();
         App.reconcileInFlight = true;
         var promises = [refreshStatus()];
-        promises.push(refreshOverviewBundle());
+        promises.push(refreshOverview());
         // shell write is in progress so input focus is never lost. When the
         if (App.currentPage === "timeline" && App.timelineLoaded
             && !App._timelineEditingActive()) {

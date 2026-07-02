@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..constants import (
-    HISTORY_PERSIST_THRESHOLD_SECONDS,
     SOURCE_AUTO,
     SOURCE_SYSTEM,
     STATUS_ERROR,
@@ -201,11 +200,10 @@ class AutoActivityRecorder:
         if status not in allowed_statuses:
             return
         elapsed = _seconds_between(self.current_start_time, at_time)
-        if not force and elapsed < self._threshold_for_status(str(status)):
-            return
-
+        # The 30-second threshold and the STATUS_NORMAL clipboard gate are
+        # enforced by the lifecycle facade. The recorder no longer performs
+        # the threshold final check.
         source = SOURCE_AUTO if status == STATUS_NORMAL else SOURCE_SYSTEM
-        # Persist via the ActivityLifecycle Command Facade so the open-row
         if force:
             activity_id = force_persist_open_activity_for_clipboard(
                 start_time=self.current_start_time,
@@ -217,7 +215,10 @@ class AutoActivityRecorder:
                 start_time=self.current_start_time,
                 source=source,
                 payload=self.current_payload,
+                elapsed_seconds=elapsed,
             )
+        if activity_id is None:
+            return
         self.persisted_activity_id = activity_id
 
         if status == STATUS_NORMAL:
@@ -257,9 +258,6 @@ class AutoActivityRecorder:
             return
         elapsed = _seconds_between(self.current_start_time, at_time)
         activity_service.set_activity_duration(self.persisted_activity_id, elapsed + self.current_extra_seconds)
-
-    def _threshold_for_status(self, status: str) -> int:
-        return HISTORY_PERSIST_THRESHOLD_SECONDS
 
     def _merge_or_pend_short_seconds(self, seconds: int) -> None:
         if seconds <= 0:

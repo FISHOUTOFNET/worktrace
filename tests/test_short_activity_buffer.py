@@ -35,9 +35,14 @@ def test_single_auto_activity_29_seconds_has_snapshot_but_no_history_stats_or_ex
 
 
 def test_history_persist_threshold_is_shared_constant():
-    from worktrace.collector.auto_activity_recorder import HISTORY_PERSIST_THRESHOLD_SECONDS as recorder_threshold
+    """The threshold constant is defined in ``worktrace.constants`` and
+    the lifecycle facade (``activity_lifecycle_service``) enforces it.
+    The recorder no longer imports its own copy; it delegates to the
+    facade's public ``persist_open_activity_if_ready`` entry which
+    checks the threshold internally."""
+    from worktrace.constants import HISTORY_PERSIST_THRESHOLD_SECONDS as facade_threshold
 
-    assert recorder_threshold == HISTORY_PERSIST_THRESHOLD_SECONDS
+    assert facade_threshold == HISTORY_PERSIST_THRESHOLD_SECONDS
     assert HISTORY_PERSIST_THRESHOLD_SECONDS == 30
 
 

@@ -2155,9 +2155,13 @@ def test_bridge_get_first_run_notice_exception_collapses(temp_db) -> None:
 def test_bridge_accept_first_run_notice_calls_collector_on_success(temp_db) -> None:
     bridge = WebViewBridge()
     set_setting("first_run_notice_accepted", "false")
-    with patch("worktrace.api.app_api.start_collector") as mock_start:
+    # The bridge routes startup through the unified privacy-gate entry;
+    # the gate, start ordering, and fail-closed payload are owned there.
+    with patch(
+        "worktrace.api.app_api.start_collection_after_privacy_gate"
+    ) as mock_gate:
         result = bridge.accept_first_run_notice()
-    mock_start.assert_called_once()
+    mock_gate.assert_called_once()
     assert result.get("ok") is True
     assert result["accepted"] is True
     assert result["message"] == "已确认隐私说明"
@@ -2265,7 +2269,11 @@ def test_bridge_toggle_pause_works_after_notice_accepted(temp_db) -> None:
     set_setting("first_run_notice_accepted", "true")
     set_setting("user_paused", "true")
     set_setting("collector_status", "paused")
-    with patch("worktrace.api.app_api.start_collector") as mock_start:
+    # The bridge routes startup through the unified privacy-gate entry;
+    # the gate, start ordering, and fail-closed payload are owned there.
+    with patch(
+        "worktrace.api.app_api.start_collection_after_privacy_gate"
+    ) as mock_gate:
         result = bridge.toggle_pause()
-    mock_start.assert_called_once()
+    mock_gate.assert_called_once()
     assert result.get("ok") is True

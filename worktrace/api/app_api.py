@@ -8,7 +8,10 @@ object. UI code may also import the specific api modules directly.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
+
+from . import settings_api
 
 if TYPE_CHECKING:
     from ..runtime.app_runtime import AppRuntime
@@ -26,8 +29,50 @@ def get_runtime() -> "AppRuntime | None":
     return _runtime
 
 
+def start_collection_after_privacy_gate() -> dict[str, Any]:
+    """Unified startup entry that enforces the first-run privacy gate.
+
+    Fail-closed: if the notice has not been accepted (or the read raises),
+    no worker / collector starts and caller state is not mutated. On
+    success starts ``start_background_workers`` BEFORE
+    ``start_collector`` (folder index warm-up) and returns ``{"ok": True}``.
+    """
+    try:
+        notice_accepted = settings_api.first_run_notice_accepted()
+    except Exception:
+        logging.exception(
+            "app_api.start_collection_after_privacy_gate: first-run "
+            "notice read failed; failing closed"
+        )
+        return {"ok": False, "error": "请先确认隐私说明"}
+    if not notice_accepted:
+        return {"ok": False, "error": "请先确认隐私说明"}
+    try:
+        if _runtime is not None:
+            _runtime.start_background_workers()
+    except Exception:
+        logging.exception(
+            "app_api.start_collection_after_privacy_gate: background "
+            "workers start failed after gate passed"
+        )
+    try:
+        if _runtime is not None:
+            _runtime.start_collector()
+    except Exception:
+        logging.exception(
+            "app_api.start_collection_after_privacy_gate: collector "
+            "start failed after gate passed"
+        )
+    return {"ok": True}
+
+
 def start_collector() -> None:
-    """Start the collector thread if it has not been started yet."""
+    """Start the collector thread if it has not been started yet.
+
+    Runtime-internal helper. UI callers MUST go through
+    :func:`start_collection_after_privacy_gate` so the privacy gate is
+    enforced in exactly one place.
+    """
     if _runtime is not None:
         _runtime.start_collector()
 
@@ -35,13 +80,11 @@ def start_collector() -> None:
 def start_background_workers() -> bool:
     """Start background workers (folder index worker) if not started yet.
 
-    Returns ``True`` when this call actually started the worker, ``False``
-    when already running or this instance does not own the collector.
-
-    Callers must only invoke this after the first-run privacy notice has
-    been accepted: the folder index worker probes local
-    accepted: the folder index worker probes local
-    ``os.path.exists(file_path)`` paths for ready indexes.
+    Runtime-internal helper. UI callers MUST go through
+    :func:`start_collection_after_privacy_gate` so the privacy gate is
+    enforced in exactly one place. Returns ``True`` when this call
+    actually started the worker, ``False`` when already running or this
+    instance does not own the collector.
     """
     if _runtime is not None:
         return _runtime.start_background_workers()
@@ -72,5 +115,6 @@ __all__ = [
     "request_shutdown",
     "set_runtime",
     "start_background_workers",
+    "start_collection_after_privacy_gate",
     "start_collector",
 ]

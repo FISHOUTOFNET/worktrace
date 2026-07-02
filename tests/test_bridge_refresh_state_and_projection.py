@@ -170,9 +170,11 @@ def test_get_refresh_state_does_not_leak_sensitive_fields(bridge):
 
 def test_get_refresh_state_returns_generic_error_on_failure(bridge):
     """on exception, ``get_refresh_state`` must return a generic
-    error payload without traceback."""
+    error payload without traceback. The refresh-state ViewModel is built
+    by ``view_model_service``; the bridge wraps it so a transport / view
+    model error collapses to the stable Chinese message."""
     with patch(
-        "worktrace.api.settings_api.get_collector_status",
+        "worktrace.webview_ui.bridge_overview.view_model_api.get_refresh_state_view_model",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_refresh_state()
@@ -638,12 +640,24 @@ def test_refresh_revision_changes_on_pending_short_seconds(bridge):
 
 def test_refresh_revision_changes_on_date_rollover(bridge):
     """``refresh_revision`` must change when ``today`` changes
-    (date rollover at midnight)."""
+    (date rollover at midnight). The refresh-state ViewModel is built by
+    ``view_model_service``, which reads ``today`` from
+    ``timeline_service.get_default_report_date()``; the patch targets the
+    import inside ``view_model_service`` so the ViewModel sees the new
+    date and ``compute_refresh_revision`` derives a different revision."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
-    from worktrace.api import timeline_api
-    with patch.object(timeline_api, "get_default_report_date", return_value="2026-06-30"):
+    from worktrace.services import view_model_service
+    with patch.object(
+        view_model_service.timeline_service,
+        "get_default_report_date",
+        return_value="2026-06-30",
+    ):
         r1 = bridge.get_refresh_state()
-    with patch.object(timeline_api, "get_default_report_date", return_value="2026-07-01"):
+    with patch.object(
+        view_model_service.timeline_service,
+        "get_default_report_date",
+        return_value="2026-07-01",
+    ):
         r2 = bridge.get_refresh_state()
     assert r1["refresh_revision"] != r2["refresh_revision"], (
         "refresh_revision must change on date rollover"

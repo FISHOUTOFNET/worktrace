@@ -259,39 +259,12 @@ def test_webview_ui_uses_api_layer(webview_ui_files: list[Path]) -> None:
         )
 
 
-def test_webview_frontend_resources_have_no_external_links() -> None:
-    """WebView frontend resources must not contain http://, https://, CDN,
-    or Google Fonts references."""
-    resource_dir = WEBVIEW_UI_DIR / "static"
-    if not resource_dir.is_dir():
-        pytest.skip("static/ resource directory not created yet (WebView UI)")
-    forbidden_patterns = [
-        re.compile(r'https?://', re.IGNORECASE),
-        re.compile(r'cdn', re.IGNORECASE),
-        re.compile(r'google\s*fonts', re.IGNORECASE),
-    ]
-    violations: list[str] = []
-    for res_file in sorted(resource_dir.rglob("*")):
-        if not res_file.is_file():
-            continue
-        if res_file.suffix.lower() not in (".html", ".css", ".js", ".json"):
-            continue
-        try:
-            source = res_file.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        for pattern in forbidden_patterns:
-            for match in pattern.finditer(source):
-                line_no = source.count("\n", 0, match.start()) + 1
-                rel = res_file.relative_to(WEBVIEW_UI_DIR)
-                violations.append(
-                    f"static/{rel}:{line_no}: {match.group().strip()!r}"
-                )
-    assert not violations, (
-        "WebView frontend resources must not contain external links, "
-        "CDN, or Google Fonts references. Found:\n"
-        + "\n".join(violations)
-    )
+# Frontend resource external-link / CDN / Google Fonts / localStorage /
+# traceback scans live in ``tests/webview/test_frontend_global_boundaries.py``,
+# parametrized over every ``index.html``-referenced ``js/*.js`` file plus
+# ``index.html`` / ``styles.css`` via ``tests/webview/static_helpers.py``.
+# The legacy ``static/``-directory skip test was removed so a non-existent
+# ``static/`` directory can no longer mask the real resource set.
 
 
 # Hardening lock: lock the four Project Rules batch / automatic-rules
@@ -862,26 +835,37 @@ def test_webview_bridge_get_first_run_notice_calls_api_facade() -> None:
         )
 
 
-def test_webview_bridge_accept_first_run_notice_calls_api_facade_and_start_collector() -> None:
+def test_webview_bridge_accept_first_run_notice_uses_unified_privacy_gate_entry() -> None:
     """``accept_first_run_notice`` must call
-    ``settings_api.accept_first_run_notice_for_webview`` and, only on
-    ``ok=True``, must call ``app_api.start_collector()``. This is a
-    static source-level check confirming the bridge delegates to the API
-    facade for the accept write and then starts the collector (mirroring
-    the Tkinter ``_accept_notice`` flow)."""
+    ``settings_api.accept_first_run_notice_for_webview`` and then route
+    collector / background-worker startup through the unified
+    ``app_api.start_collection_after_privacy_gate()`` entry.
+
+    The privacy gate is enforced INSIDE that unified entry; the bridge
+    must NOT call ``app_api.start_collector`` /
+    ``app_api.start_background_workers`` directly and must NOT duplicate
+    the first-run notice read.
+    """
     # method body lives in bridge_settings.py (SettingsBridgeMixin).
     body = _read_bridge_method_body("accept_first_run_notice")
     assert "settings_api.accept_first_run_notice_for_webview" in body
-    # The accept method MUST call app_api.start_collector() on success.
-    assert "app_api.start_collector" in body
+    # The accept method MUST call the unified privacy-gate entry on success.
+    assert "app_api.start_collection_after_privacy_gate" in body, (
+        "accept_first_run_notice must call app_api.start_collection_after_privacy_gate() "
+        "after a successful accept (unified privacy-gate startup contract)"
+    )
     # Skip the docstring when checking for forbidden tokens, since the
     # docstring legitimately mentions the forbidden names to document
     # what the method does NOT call.
     doc_start = body.find('"""')
     doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
     code_only = body[doc_end:] if doc_end > 3 else body
-    # The accept method must NOT call backup / clear / set-setting paths.
+    # The bridge must NOT call the separated start paths directly; the
+    # unified entry is the only path so the gate / ordering lives in one place.
     for forbidden in (
+        "app_api.start_collector",
+        "app_api.start_background_workers",
+        "settings_api.first_run_notice_accepted",
         "import_encrypted_backup",
         "export_encrypted_backup",
         "preview_encrypted_backup_manifest",
@@ -961,68 +945,41 @@ def test_webview_bridge_accept_first_run_notice_error_payload_has_no_sensitive_t
         )
 
 
-def test_webview_bridge_toggle_pause_gates_on_first_run_notice() -> None:
-    """``toggle_pause`` must call
-    ``settings_api.first_run_notice_accepted()`` before any path that
-    could call ``app_api.start_collector()``. If the read returns False
-    (or raises), the method must fail closed: return
-    ``{"ok": False, "error": "请先确认隐私说明"}`` and NOT mutate
-    ``user_paused`` / ``collector_status`` / start the collector.
+def test_webview_bridge_toggle_pause_uses_unified_privacy_gate_entry() -> None:
+    """``toggle_pause`` must route collector / background-worker
+    startup through ``app_api.start_collection_after_privacy_gate()``.
 
-    This is a static source-level check confirming the gate is wired
-    into ``toggle_pause`` and the fail-closed error message is present.
+    The privacy gate is enforced INSIDE that unified entry; the bridge
+    must NOT call ``app_api.start_collector`` /
+    ``app_api.start_background_workers`` directly and must NOT duplicate
+    the first-run notice read or the fail-closed message. The gate,
+    the start ordering, and the fail-closed payload are all owned by the
+    unified entry so there is a single source of truth.
     """
     # method body lives in bridge_overview.py (OverviewBridgeMixin).
     body = _read_bridge_method_body("toggle_pause")
-    # The gate check must appear BEFORE the first ``app_api.start_collector``
-    # call. Find both positions and assert ordering.
-    gate_pos = body.find("settings_api.first_run_notice_accepted()")
-    start_pos = body.find("app_api.start_collector()")
-    assert gate_pos != -1, (
-        "toggle_pause must call settings_api.first_run_notice_accepted() "
-        "for startup gate contract"
+    # The unified privacy-gate entry must be called on the resume path.
+    assert "app_api.start_collection_after_privacy_gate" in body, (
+        "toggle_pause must call app_api.start_collection_after_privacy_gate() "
+        "for the unified privacy-gate startup contract"
     )
-    assert start_pos != -1, (
-        "toggle_pause must still call app_api.start_collector() when the "
-        "gate is open (startup gate contract does not remove the start path, only gates it)"
-    )
-    assert gate_pos < start_pos, (
-        "toggle_pause must check first_run_notice_accepted() BEFORE any "
-        "app_api.start_collector() call"
-    )
-    # The fail-closed error message must be present.
-    assert "请先确认隐私说明" in body
-
-
-def test_webview_bridge_toggle_pause_does_not_mutate_state_when_gate_closed() -> None:
-    """when the first-run notice is not accepted,
-    ``toggle_pause`` must NOT call ``set_user_paused``,
-    ``set_collector_status``, ``set_current_activity_snapshot``, or
-    ``start_collector``. The fail-closed path is a pure return."""
-    # method body lives in bridge_overview.py (OverviewBridgeMixin).
-    body = _read_bridge_method_body("toggle_pause")
-    # Find the fail-closed return block: between the gate check and the
-    # ``raw_status = settings_api.get_collector_status()`` line that
-    # follows the gate. Slice that block and assert no state mutations.
-    gate_check = body.find("settings_api.first_run_notice_accepted()")
-    assert gate_check != -1
-    # The fail-closed block ends at the next ``raw_status =`` assignment
-    # (which only runs after the gate passes).
-    raw_status_pos = body.find("raw_status = settings_api.get_collector_status()")
-    assert raw_status_pos != -1
-    fail_closed_block = body[gate_check:raw_status_pos]
-    # The fail-closed block must contain the error return.
-    assert "请先确认隐私说明" in fail_closed_block
-    # The fail-closed block must NOT mutate state or start the collector.
+    # The bridge must NOT duplicate the gate / start paths directly.
     for forbidden in (
-        "set_user_paused",
-        "set_collector_status",
-        "set_current_activity_snapshot",
+        "settings_api.first_run_notice_accepted",
         "app_api.start_collector",
+        "app_api.start_background_workers",
     ):
-        assert forbidden not in fail_closed_block, (
-            "toggle_pause fail-closed block must not call: " + forbidden
+        assert forbidden not in body, (
+            "toggle_pause must not call: "
+            + forbidden
+            + " (enforced by start_collection_after_privacy_gate)"
         )
+    # The bridge must NOT carry the fail-closed message; it is owned by
+    # the unified entry so a single source of truth exists.
+    assert "请先确认隐私说明" not in body, (
+        "toggle_pause must not duplicate the fail-closed message; "
+        "it is owned by start_collection_after_privacy_gate"
+    )
 
 
 def test_webview_bridge_first_run_notice_methods_do_not_open_file_dialog() -> None:
@@ -1046,29 +1003,39 @@ def test_webview_bridge_first_run_notice_methods_do_not_open_file_dialog() -> No
             )
 
 
-def test_webview_main_imports_settings_api() -> None:
-    """``webview_main.py`` must import ``settings_api`` from
-    ``worktrace.api`` so the first-run startup gate can read the
-    notice-accepted state. The bridge boundary is unaffected: only
-    ``webview_main`` (the entry point) is allowed to import
-    ``settings_api`` directly; the bridge must still go through
-    ``worktrace.api`` (which it already does)."""
+def test_webview_main_uses_unified_privacy_gate_entry() -> None:
+    """``webview_main.py`` must route the collector / background-worker
+    startup through ``app_api.start_collection_after_privacy_gate()``.
+
+    The privacy gate (first-run notice accepted?) is enforced INSIDE
+    that unified entry; ``webview_main.py`` must NOT duplicate the
+    gate read or the start ordering. The bridge boundary is unaffected:
+    only ``webview_main`` (the entry point) is allowed to import
+    ``app_api`` directly; the bridge must still go through
+    ``worktrace.api``."""
     webview_main_path = (
         Path(__file__).resolve().parents[1] / "worktrace" / "webview_main.py"
     )
     source = webview_main_path.read_text(encoding="utf-8")
-    # The import must be present.
-    assert "settings_api" in source, (
-        "webview_main.py must import settings_api for startup gate contract startup gate"
+    # The unified privacy-gate entry must be called.
+    assert "start_collection_after_privacy_gate" in source, (
+        "webview_main.py must call app_api.start_collection_after_privacy_gate() "
+        "for the unified privacy-gate startup contract"
     )
     # The import must come from worktrace.api (not from services / db).
     assert (
         "from .api import" in source or "from worktrace.api import" in source
-    ), "webview_main.py must import settings_api via worktrace.api"
-    # The startup gate must reference first_run_notice_accepted.
-    assert "first_run_notice_accepted" in source, (
-        "webview_main.py must call settings_api.first_run_notice_accepted() "
-        "in the startup gate contract startup gate"
+    ), "webview_main.py must import app_api via worktrace.api"
+    # webview_main.py must NOT directly call start_collector /
+    # start_background_workers — those are runtime-internal helpers.
+    # The unified entry is the only path.
+    assert "app_api.start_collector(" not in source, (
+        "webview_main.py must not call app_api.start_collector() directly; "
+        "route through start_collection_after_privacy_gate()"
+    )
+    assert "app_api.start_background_workers(" not in source, (
+        "webview_main.py must not call app_api.start_background_workers() "
+        "directly; route through start_collection_after_privacy_gate()"
     )
     # webview_main.py is the entry point and is allowed to import AppRuntime
     # / config / logging helpers, but still must NOT import services /
@@ -1090,103 +1057,50 @@ def test_webview_main_imports_settings_api() -> None:
         )
 
 
-# Privacy gate for the folder index worker. The bridge
-# ``toggle_pause`` and ``accept_first_run_notice`` methods must call
-# ``app_api.start_background_workers()`` BEFORE ``app_api.start_collector()``
-# so the folder index is warm by the time the collector starts matching
-# activities. ``app_api`` must export a ``start_background_workers`` facade
-# that delegates to ``runtime.start_background_workers()``.
+# ``app_api`` must still export ``start_background_workers`` and
+# ``start_collector`` as runtime-internal helpers (used by
+# ``start_collection_after_privacy_gate``), but the WebView bridge and
+# ``webview_main`` MUST NOT call them directly: they route through the
+# unified privacy-gated entry instead.
 
 
-def test_webview_bridge_toggle_pause_calls_start_background_workers_before_collector() -> None:
-    """``toggle_pause`` must call ``app_api.start_background_workers()``
-    BEFORE ``app_api.start_collector()`` on the resume path so the folder index
-    worker is running before the collector starts matching activities.
-
-    This is a static source-level check mirroring
-    ``test_webview_bridge_toggle_pause_gates_on_first_run_notice``: find the
-    ``toggle_pause`` body, slice to the next ``def``, and assert ordering.
-    """
-    # method body lives in bridge_overview.py (OverviewBridgeMixin).
-    body = _read_bridge_method_body("toggle_pause")
-    bg_pos = body.find("app_api.start_background_workers()")
-    start_pos = body.find("app_api.start_collector()")
-    assert bg_pos != -1, (
-        "toggle_pause must call app_api.start_background_workers() before "
-        "start_collector (live startup contract)"
-    )
-    assert start_pos != -1, (
-        "toggle_pause must still call app_api.start_collector() when the "
-        "gate is open (live startup contract does not remove the start path)"
-    )
-    assert bg_pos < start_pos, (
-        "toggle_pause must call start_background_workers() BEFORE "
-        "start_collector() so the folder index is warm before the collector"
-    )
-
-
-def test_webview_bridge_accept_first_run_notice_calls_start_background_workers() -> None:
-    """``accept_first_run_notice`` must call
-    ``app_api.start_background_workers`` after a successful accept so the
-    folder index worker starts alongside the collector. This is a static
-    source-level check mirroring
-    ``test_webview_bridge_accept_first_run_notice_calls_api_facade_and_start_collector``."""
-    # method body lives in bridge_settings.py (SettingsBridgeMixin).
-    body = _read_bridge_method_body("accept_first_run_notice")
-    assert "app_api.start_background_workers" in body, (
-        "accept_first_run_notice must call app_api.start_background_workers "
-        "after a successful accept (live startup contract)"
-    )
-
-
-def test_webview_bridge_accept_first_run_notice_starts_background_workers_before_collector() -> None:
-    """``accept_first_run_notice`` must call
-    ``app_api.start_background_workers`` BEFORE ``app_api.start_collector``
-    so the folder index is warm by the time the collector starts.
-
-    The docstring mentions ``app_api.start_collector()`` so the docstring is
-    skipped before comparing positions (mirroring the existing forbidden-token
-    pattern used by the error-payload tests).
-    """
-    # method body lives in bridge_settings.py (SettingsBridgeMixin).
-    body = _read_bridge_method_body("accept_first_run_notice")
-    # Skip the docstring because it legitimately mentions
-    # ``app_api.start_collector()`` to document the first-run notice behavior; only
-    # the executable code should be checked for ordering.
-    doc_start = body.find('"""')
-    doc_end = body.find('"""', doc_start + 3) + 3 if doc_start != -1 else 0
-    code_only = body[doc_end:] if doc_end > 3 else body
-    bg_pos = code_only.find("app_api.start_background_workers")
-    start_pos = code_only.find("app_api.start_collector")
-    assert bg_pos != -1, (
-        "accept_first_run_notice must call app_api.start_background_workers "
-        "after a successful accept (live startup contract)"
-    )
-    assert start_pos != -1, (
-        "accept_first_run_notice must still call app_api.start_collector "
-        "after a successful accept (startup gate contract)"
-    )
-    assert bg_pos < start_pos, (
-        "accept_first_run_notice must call start_background_workers BEFORE "
-        "start_collector so the folder index is warm before the collector"
-    )
-
-
-def test_app_api_exports_start_background_workers_facade() -> None:
-    """``app_api.py`` must define a ``start_background_workers``
-    facade and export it in ``__all__``. This is a static source-level check
-    confirming the facade exists and is publicly exported."""
+def test_app_api_exports_start_background_workers_internal_helper() -> None:
+    """``app_api.py`` must define ``start_background_workers`` as a
+    runtime-internal helper and export it in ``__all__`` so
+    ``start_collection_after_privacy_gate`` can call it. The bridge /
+    ``webview_main`` must NOT call it directly."""
     app_api_path = (
         Path(__file__).resolve().parents[1] / "worktrace" / "api" / "app_api.py"
     )
     source = app_api_path.read_text(encoding="utf-8")
     assert "def start_background_workers" in source, (
-        "app_api.py must define start_background_workers facade (live startup contract)"
+        "app_api.py must define start_background_workers internal helper "
+        "(used by start_collection_after_privacy_gate)"
     )
     from worktrace.api import app_api
 
     assert "start_background_workers" in app_api.__all__, (
-        "app_api.__all__ must export start_background_workers (live startup contract)"
+        "app_api.__all__ must export start_background_workers internal helper"
+    )
+
+
+def test_app_api_exports_start_collector_internal_helper() -> None:
+    """``app_api.py`` must define ``start_collector`` as a runtime-internal
+    helper and export it in ``__all__`` so
+    ``start_collection_after_privacy_gate`` can call it. The bridge /
+    ``webview_main`` must NOT call it directly."""
+    app_api_path = (
+        Path(__file__).resolve().parents[1] / "worktrace" / "api" / "app_api.py"
+    )
+    source = app_api_path.read_text(encoding="utf-8")
+    assert "def start_collector" in source, (
+        "app_api.py must define start_collector internal helper "
+        "(used by start_collection_after_privacy_gate)"
+    )
+    from worktrace.api import app_api
+
+    assert "start_collector" in app_api.__all__, (
+        "app_api.__all__ must export start_collector internal helper"
     )
 
 

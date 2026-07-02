@@ -58,6 +58,53 @@ def test_frontend_js_exists():
         )
 
 
+def test_index_html_referenced_js_files_all_exist():
+    """Every ``js/*.js`` file referenced by ``index.html`` must exist on
+    disk. The JS load list is parsed from ``index.html`` so a typo or a
+    removed file fails here instead of breaking the browser load chain."""
+    assert ALL_JS_FILES, (
+        "index.html must reference at least one js/*.js file "
+        "(ALL_JS_FILES parsed empty)"
+    )
+    for name in ALL_JS_FILES:
+        assert (JS_DIR / name).is_file(), (
+            "index.html references js/" + name
+            + " but the file does not exist under worktrace/webview_ui/js/"
+        )
+
+
+def test_no_orphan_js_files_unreferenced_by_index_html():
+    """No ``js/*.js`` file may exist on disk that ``index.html`` does not
+    reference. An orphan JS file would never execute and signals a
+    forgotten load-tag update (or a leftover from a refactor)."""
+    referenced = set(ALL_JS_FILES)
+    orphans: list[str] = []
+    if JS_DIR.is_dir():
+        for path in sorted(JS_DIR.glob("*.js")):
+            if path.name not in referenced:
+                orphans.append(path.name)
+    assert not orphans, (
+        "Orphan JS files exist under worktrace/webview_ui/js/ but are not "
+        "referenced by index.html (either add a <script> tag or delete the "
+        "file): " + ", ".join(orphans)
+    )
+
+
+def test_index_html_js_load_order_is_parseable():
+    """The JS load list parsed from ``index.html`` must be non-empty and
+    every entry must be a ``.js`` filename (no path, no query string) so
+    ``read_js()`` and the parametrized resource tests can resolve it."""
+    assert ALL_JS_FILES, "index.html must load at least one js/*.js file"
+    for name in ALL_JS_FILES:
+        assert name.endswith(".js"), (
+            "index.html JS load entry must be a .js filename, got: " + repr(name)
+        )
+        assert "/" not in name and "\\" not in name, (
+            "index.html JS load entry must not contain a path separator, "
+            "got: " + repr(name)
+        )
+
+
 def test_styles_css_exists():
     assert (WEBVIEW_UI_DIR / "styles.css").is_file()
 

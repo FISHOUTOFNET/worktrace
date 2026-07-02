@@ -1816,10 +1816,11 @@ independently. The legacy `inferred_project_name` field mirrors
 `display_project.name` for backward compatibility but is NOT the
 authoritative source.
 
-### 33.6 Overview Bundle Single-Sample
+### 33.6 Overview ViewModel Single-Sample
 
 The Overview page uses a single backend call
-`get_overview_live_bundle()` which returns:
+`view_model_service.get_overview_view_model()` (exposed to the WebView
+bridge via `view_model_api.get_overview_view_model()`) which returns:
 
 - `live_projection` (the unified live projection);
 - `overview` KPI (with `include_live=True`);

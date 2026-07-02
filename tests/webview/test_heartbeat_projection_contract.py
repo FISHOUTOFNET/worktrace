@@ -231,11 +231,9 @@ def test_low_frequency_reconciliation_exists():
     revision signal cannot freeze the UI forever. It must refresh status +
     Overview + current Timeline, but NOT Rules / Settings / Statistics.
 
-    Overview now uses the single ``get_overview_live_bundle``
-    call (fusing overview + recent into one sample). The reconciliation
-    may call either ``refreshOverviewBundle`` or the removed
-    ``refreshOverview`` / ``refreshRecent`` pair — both paths refresh
-    the Overview + recent data."""
+    Overview refresh uses the unified ``refreshOverview`` call which
+    pulls Overview KPIs + current activity + recent activities +
+    live_projection from a single backend ViewModel sample."""
     source = read_js("init.js")
     assert "function fullReconcileCollectionViews" in source, (
         "init.js must define fullReconcileCollectionViews for low-frequency "
@@ -246,15 +244,16 @@ def test_low_frequency_reconciliation_exists():
     assert "refreshStatus" in body, (
         "fullReconcileCollectionViews must refresh collector status"
     )
-    # Must refresh Overview + recent. Under the bundle contract this is
-    # done via ``refreshOverviewBundle``; the separate-call path
-    # (``refreshOverview`` + ``refreshRecent``) is also acceptable as a
-    # fallback. At least one of the two paths must be present.
-    has_bundle = "refreshOverviewBundle" in body
-    has_separate_refresh = "refreshOverview" in body and "refreshRecent" in body
-    assert has_bundle or has_separate_refresh, (
+    # Must refresh Overview + recent via the unified ``refreshOverview``
+    # entry. The legacy ``refreshOverviewBundle`` / separate
+    # ``refreshRecent`` paths no longer exist.
+    assert "refreshOverview" in body, (
         "fullReconcileCollectionViews must refresh Overview + recent via "
-        "refreshOverviewBundle (preferred) or refreshOverview + refreshRecent"
+        "refreshOverview (the unified ViewModel entry)"
+    )
+    assert "refreshOverviewBundle" not in body, (
+        "fullReconcileCollectionViews must not reference the removed "
+        "refreshOverviewBundle wrapper"
     )
     # Must NOT reference Rules / Settings / Statistics.
     assert "loadProjectRules" not in body
@@ -755,15 +754,18 @@ def test_overview_has_request_token():
 
 
 def test_recent_has_request_token():
-    """``refreshRecent`` must use a request token
-    so stale responses cannot overwrite newer ones."""
+    """The Overview refresh must use a request token so stale
+    responses cannot overwrite newer recent-activity renders. The
+    ``recentRequestToken`` is now driven by the unified ``refreshOverview``
+    entry (which fuses Overview KPIs + recent activities + live_projection
+    from one backend ViewModel sample)."""
     source = read_js("init.js")
     assert "App.recentRequestToken" in source, (
         "init.js must define App.recentRequestToken state"
     )
-    body = func_body(source, "refreshRecent")
+    body = func_body(source, "refreshOverview")
     assert "recentRequestToken" in body, (
-        "refreshRecent must use recentRequestToken for stale-response discard"
+        "refreshOverview must drive recentRequestToken for stale-response discard"
     )
 
 

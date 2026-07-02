@@ -49,21 +49,16 @@ CONFTEST_BROAD_SUITE: list[str] = [
 RULES: list[dict] = [
     {
         "id": "A. WebView frontend resources",
+        # Triggers cover the entire ``webview_ui/`` tree (HTML / CSS /
+        # every ``js/*.js`` file) so a newly added JS module or a renamed
+        # module never escapes the WebView contract test set. The JS
+        # file list is parsed from ``index.html`` at test time by
+        # ``tests/webview/static_helpers.py``; the runner keeps a
+        # directory-level trigger instead of a hardcoded file list.
         "triggers": [
             "worktrace/webview_ui/index.html",
             "worktrace/webview_ui/styles.css",
-            "worktrace/webview_ui/js/core.js",
-            "worktrace/webview_ui/js/overview.js",
-            "worktrace/webview_ui/js/timeline.js",
-            "worktrace/webview_ui/js/timeline_correction.js",
-            "worktrace/webview_ui/js/statistics.js",
-            "worktrace/webview_ui/js/rules.js",
-            "worktrace/webview_ui/js/rules_render.js",
-            "worktrace/webview_ui/js/rules_rule_actions.js",
-            "worktrace/webview_ui/js/rules_keyword_actions.js",
-            "worktrace/webview_ui/js/rules_folder_actions.js",
-            "worktrace/webview_ui/js/rules_project_actions.js",
-            "worktrace/webview_ui/js/init.js",
+            "worktrace/webview_ui/js/",
         ],
         "tests": [
             "tests/webview/",
@@ -72,6 +67,28 @@ RULES: list[dict] = [
             "tests/test_webview_bridge.py",
             "tests/test_ui_backend_boundary.py",
             "tests/test_bridge_refresh_state_and_projection.py",
+            "tests/test_live_display_contract.py",
+            "tests/test_run_affected_tests.py",
+        ],
+        "smoke": [IMPORT_SMOKE_ARGV],
+        "warnings": [],
+    },
+    {
+        "id": "A2. ViewModel service / API facade",
+        # The ViewModel service / API are the sole page-display payload
+        # constructors. Any change must trigger the Overview / Timeline /
+        # Details / Refresh State / live display / bridge boundary tests.
+        "triggers": [
+            "worktrace/services/view_model_service.py",
+            "worktrace/api/view_model_api.py",
+        ],
+        "tests": [
+            "tests/test_overview_bundle_and_export_contract.py",
+            "tests/test_bridge_refresh_state_and_projection.py",
+            "tests/webview/test_heartbeat_projection_contract.py",
+            "tests/webview/test_frontend_global_boundaries.py",
+            "tests/test_webview_bridge.py",
+            "tests/test_ui_backend_boundary.py",
             "tests/test_live_display_contract.py",
             "tests/test_run_affected_tests.py",
         ],
@@ -205,13 +222,10 @@ RULES: list[dict] = [
     },
     {
         "id": "C6. Project Rules frontend / static",
+        # Directory-level trigger so any Project Rules JS module change
+        # (rename / add / remove) triggers the static contract suite.
         "triggers": [
-            "worktrace/webview_ui/js/rules.js",
-            "worktrace/webview_ui/js/rules_render.js",
-            "worktrace/webview_ui/js/rules_rule_actions.js",
-            "worktrace/webview_ui/js/rules_keyword_actions.js",
-            "worktrace/webview_ui/js/rules_folder_actions.js",
-            "worktrace/webview_ui/js/rules_project_actions.js",
+            "worktrace/webview_ui/js/",
         ],
         "tests": [
             "tests/webview/test_project_rules_static_contract.py",
@@ -418,9 +432,7 @@ RULES: list[dict] = [
             "worktrace/webview_ui/bridge_settings.py",
             "worktrace/webview_ui/bridge_dialogs.py",
             "worktrace/webview_ui/index.html",
-            "worktrace/webview_ui/js/core.js",
-            "worktrace/webview_ui/js/settings.js",
-            "worktrace/webview_ui/js/init.js",
+            "worktrace/webview_ui/js/",
             "worktrace/webview_ui/styles.css",
             "WorkTrace.spec",
             "tests/webview/static_helpers.py",

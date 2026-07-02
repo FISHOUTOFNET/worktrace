@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..constants import STATUS_NORMAL
+from ..constants import HISTORY_PERSIST_THRESHOLD_SECONDS, STATUS_NORMAL
 from . import activity_service, session_boundary_service
 
 
@@ -87,8 +87,67 @@ def persist_open_activity_if_ready(
     start_time: str,
     source: str,
     payload: dict[str, Any],
+    elapsed_seconds: int,
+    force: bool = False,
+) -> int | None:
+    """Persist a virtual activity as a new open DB row.
+
+    The 30-second threshold (``HISTORY_PERSIST_THRESHOLD_SECONDS``) is
+    enforced INSIDE this facade. Callers MUST pass the actual
+    ``elapsed_seconds``; the facade no longer trusts callers to gate the
+    threshold.
+
+    ``force=True`` bypasses the threshold and is only legal for the
+    clipboard force-persist path (which itself re-checks ``STATUS_NORMAL``).
+    Ordinary callers must pass ``force=False`` and rely on the facade's
+    threshold check.
+
+    Returns the new ``activity_id`` on persist, or ``None`` when the
+    threshold gate rejects the persist (no-op).
+    """
+    if not force and int(elapsed_seconds) < HISTORY_PERSIST_THRESHOLD_SECONDS:
+        return None
+    return _persist_open_activity_unchecked(
+        start_time=start_time, source=source, payload=payload
+    )
+
+
+def force_persist_open_activity_for_clipboard(
+    *,
+    start_time: str,
+    source: str,
+    payload: dict[str, Any],
+) -> int | None:
+    """Force-persist a normal activity for clipboard capture.
+
+    Bypasses the 30-second threshold. The facade enforces
+    ``STATUS_NORMAL`` internally: callers cannot bypass this by passing
+    an idle / paused / excluded / error status. A non-normal payload is
+    rejected with ``None`` (no-op) and never reaches the DB.
+
+    Returns the new ``activity_id`` on persist, or ``None`` when the
+    status gate rejects the persist (no-op).
+    """
+    if payload.get("status") != STATUS_NORMAL:
+        return None
+    return _persist_open_activity_unchecked(
+        start_time=start_time, source=source, payload=payload
+    )
+
+
+def _persist_open_activity_unchecked(
+    *,
+    start_time: str,
+    source: str,
+    payload: dict[str, Any],
 ) -> int:
-    """Persist a virtual activity as a new open DB row."""
+    """Low-level persist helper with NO threshold / status gate.
+
+    Internal only — every public persistence path goes through
+    :func:`persist_open_activity_if_ready` or
+    :func:`force_persist_open_activity_for_clipboard`, which enforce the
+    threshold / status invariants. Returns the new ``activity_id``.
+    """
     activity_id = activity_service.insert_activity_row(
         start_time=start_time,
         source=source,
@@ -97,29 +156,6 @@ def persist_open_activity_if_ready(
     activity_service.finalize_created_activity(activity_id)
     _sync_open_row_project_safely(activity_id, status=payload.get("status"))
     return activity_id
-
-
-def force_persist_open_activity_for_clipboard(
-    *,
-    start_time: str,
-    source: str,
-    payload: dict[str, Any],
-) -> int:
-    """Force-persist a normal activity for clipboard capture.
-
-    Bypasses the 30-second threshold. The caller
-    (``AutoActivityRecorder.ensure_persisted_for_clipboard``) restricts
-    this to ``STATUS_NORMAL``; the facade does not re-check the status.
-
-    Semantics are identical to :func:`persist_open_activity_if_ready`
-    (the threshold gate lives in the caller, not here). Returns the new
-    activity_id.
-    """
-    return persist_open_activity_if_ready(
-        start_time=start_time,
-        source=source,
-        payload=payload,
-    )
 
 
 def close_activity(

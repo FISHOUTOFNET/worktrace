@@ -2,15 +2,13 @@
 
 Covers sections 九.4 / 九.5 / 九.6:
 
-- **Overview bundle** — ``get_overview_live_bundle()`` returns overview KPI
+- **Overview ViewModel** — ``get_overview()`` returns overview KPI
   + current activity + recent activities + live_projection from ONE
-  snapshot sample. The frontend no longer needs parallel
-  ``get_overview`` + ``get_recent_activities`` calls. The current
-  activity and the recent live row share the same ``sample_id`` /
-  ``stable_live_key_hash`` and the same first-frame seconds (no 1-2s
-  drift). During a pending project transition the recent live row uses
-  the display project (NOT the candidate), so it never appears as a
-  separate candidate-project row.
+  snapshot sample. The current activity and the recent live row share
+  the same ``sample_id`` / ``stable_live_key_hash`` and the same
+  first-frame seconds (no 1-2s drift). During a pending project
+  transition the recent live row uses the display project (NOT the
+  candidate), so it never appears as a separate candidate-project row.
 - **Timeline / Detail** — Timeline session uses display project +
   description; detail row uses current resource + display project +
   description. During pending the candidate does NOT preempt the
@@ -186,15 +184,15 @@ def _pending_snapshot() -> dict:
     )
 
 
-# 1. Overview bundle — single sample (section 九.4)
+# 1. Overview ViewModel — single sample (section 九.4)
 
 
-def test_overview_bundle_returns_all_required_payloads(bridge):
-    """``get_overview_live_bundle()`` returns ``live_projection``,
+def test_overview_view_model_returns_all_required_payloads(bridge):
+    """``get_overview()`` returns ``live_projection``,
     ``overview`` KPI, ``current_activity``, ``activities`` (recent),
     and ``sample_id`` — all from one backend call."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
-    bundle = bridge.get_overview_live_bundle()
+    bundle = bridge.get_overview()
     assert bundle["ok"] is True
     assert "live_projection" in bundle
     assert "overview" in bundle
@@ -203,12 +201,12 @@ def test_overview_bundle_returns_all_required_payloads(bridge):
     assert "sample_id" in bundle
 
 
-def test_overview_bundle_current_and_recent_share_same_sample_id(bridge):
+def test_overview_view_model_current_and_recent_share_same_sample_id(bridge):
     """The current activity and the recent live row must share the same
     ``sample_id`` / ``stable_live_key_hash`` — they came from the SAME
     snapshot sample, not two parallel bridge calls."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
-    bundle = bridge.get_overview_live_bundle()
+    bundle = bridge.get_overview()
     sample_id = bundle["sample_id"]
     assert sample_id, "bundle must carry a non-empty sample_id"
     live_projection = bundle["live_projection"]
@@ -221,12 +219,12 @@ def test_overview_bundle_current_and_recent_share_same_sample_id(bridge):
             assert virtual_live_row["stable_live_key_hash"] == sample_id
 
 
-def test_overview_bundle_current_and_recent_first_frame_seconds_consistent(bridge):
+def test_overview_view_model_current_and_recent_first_frame_seconds_consistent(bridge):
     """the current activity and the recent live row must
     NOT have a 1-2 second drift on the first frame. Both derive from
     the same snapshot, so their duration_seconds must be equal."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
-    bundle = bridge.get_overview_live_bundle()
+    bundle = bridge.get_overview()
     current_seconds = int(bundle["current_activity"].get("elapsed_seconds") or 0)
     live_projection_seconds = int(bundle["live_projection"].get("duration_seconds") or 0)
     # current_activity.elapsed_seconds and live_projection.duration_seconds
@@ -240,12 +238,12 @@ def test_overview_bundle_current_and_recent_first_frame_seconds_consistent(bridg
         assert recent_live_seconds == current_seconds
 
 
-def test_overview_bundle_pending_recent_uses_display_project_not_candidate(bridge):
+def test_overview_view_model_pending_recent_uses_display_project_not_candidate(bridge):
     """during a pending project transition the recent live
     row uses the display project (ProjectA), NOT the candidate (ProjectB).
     The candidate must NOT appear as a separate independent project row."""
     _set_snapshot(_pending_snapshot())
-    bundle = bridge.get_overview_live_bundle()
+    bundle = bridge.get_overview()
     live_projection = bundle["live_projection"]
     assert live_projection["display_project"]["name"] == "ProjectA"
     assert live_projection["candidate_project"]["name"] == "ProjectB"
@@ -260,11 +258,11 @@ def test_overview_bundle_pending_recent_uses_display_project_not_candidate(bridg
         assert "ProjectB" not in project_names
 
 
-def test_overview_bundle_is_display_safe(bridge):
+def test_overview_view_model_is_display_safe(bridge):
     """the bundle must not leak raw ``window_title`` /
     ``file_path_hint`` / clipboard / note / SQL / traceback."""
     _set_snapshot(_pending_snapshot())
-    bundle = bridge.get_overview_live_bundle()
+    bundle = bridge.get_overview()
     sensitive_keys = {"window_title", "file_path_hint", "resource_path_hint",
                       "resource_identity_key", "note", "clipboard", "sql", "traceback"}
     for key in bundle:

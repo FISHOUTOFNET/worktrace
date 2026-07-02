@@ -10,30 +10,26 @@
 
 - WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the only
   shipping UI. The legacy `worktrace/ui` package has been deleted; there is
-  no Tkinter fallback. Start with `python -m worktrace.main`.
+  no Tkinter fallback. Start with `python -m worktrace.main`. Missing
+  WebView2 Runtime is a blocking error with a clear Chinese install prompt;
+  WorkTrace never auto-downloads it.
 - The first-run privacy notice gate is **fail-closed**: the collector and
   folder-index worker must NOT start before the notice is accepted.
 - `AppRuntime.initialize()` only performs DB init, single-instance lock,
   and recovery — it does NOT start the folder-index worker.
-- The folder-index worker only starts via `start_background_workers()`,
-  and only after the first-run notice is accepted.
-- `toggle_pause` must NOT start the collector / background workers when
-  the notice has not been accepted or when the notice-status read fails.
-- `accept_first_run_notice` on success starts background workers first,
-  then starts the collector.
+- The unified entry `app_api.start_collection_after_privacy_gate()` is
+  the ONLY startup path for the folder-index worker AND the collector.
+  It enforces the first-run notice read, the start ordering (background
+  workers before collector), and the fail-closed payload in one place.
+- `start_background_workers()` / `start_collector()` are runtime-internal
+  helpers exported by `app_api` for the unified entry to call; the WebView
+  bridge and `webview_main` MUST NOT call them directly. `toggle_pause` and
+  `accept_first_run_notice` route startup through the unified entry and do
+  NOT duplicate the gate read, start ordering, or fail-closed message.
 - Both API and bridge layers collapse failures to stable Chinese messages
   and never return full paths, passphrases, salt, ciphertext, payload, SQL,
   or tracebacks. Full per-phase chronology lives in
   [`history/webview-phases.md`](history/webview-phases.md).
-
-## Default UI
-
-- WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the default and
-  only shipping UI. Start with `python -m worktrace.main`.
-- No Tkinter fallback. The legacy Tkinter UI package (`worktrace/ui`) has
-  been deleted; WebView is the only shipping UI.
-- Missing WebView2 Runtime is a blocking error with a clear Chinese install
-  prompt; WorkTrace never auto-downloads it.
 
 ## Migrated Pages
 
@@ -123,6 +119,7 @@
 
 ```
 WebView ──> bridge ──> worktrace.api ──> worktrace.services
+  view_model_service (page ViewModel sole constructor)
   activity_lifecycle_service (open-row command facade)
   live_display_service (live projection contract) + activity_service (CRUD)
   collector ──> activity_lifecycle_service
@@ -133,14 +130,20 @@ plain `<script src>` tags. No ES modules, bundler, Node/build step,
 browser storage, or network requests. Bridge imports `worktrace.api` only
 (enforced by `tests/test_ui_backend_boundary.py`).
 
+- **`view_model_service`** is the sole constructor of Overview / Timeline /
+  Details / Refresh State page ViewModels from a single snapshot sample.
+  All live display, virtual live row, persisted_open overlay, stable live
+  key, and live clock fields are built here; the bridge never constructs
+  them directly.
 - **`activity_lifecycle_service`** is the sole open-row command facade
   (collector / recovery / clipboard / midnight / shutdown); post-close
-  inference is centralised in `finalize_closed_activity_ids`.
-- **`live_display_service`** is the live projection contract owner. Every
-  live row (virtual or persisted_open) carries `stable_live_key_hash`,
-  `live_started_at_epoch_ms`, `carry_seconds`, `live_state`, etc.
-- **`App.liveContinuityKey`** is the single source of truth for frontend
-  ticker / render / seeding keys. Statistics / Export remain closed-only.
+  inference is centralised in `finalize_closed_activity_ids`. The 30-second
+  persistence threshold and the clipboard force-persist `STATUS_NORMAL`
+  restriction are enforced INSIDE the facade; callers cannot bypass them.
+- **`live_display_service`** owns the live projection contract: every live
+  row carries `stable_live_key_hash`, `live_started_at_epoch_ms`,
+  `carry_seconds`, `live_state`. **`App.liveContinuityKey`** is the
+  frontend source of truth for ticker / render / seeding keys.
 
 ## Privacy Boundary
 
@@ -149,22 +152,18 @@ browser storage, or network requests. Bridge imports `worktrace.api` only
   title, local file path hint, start/end time, duration, status, project,
   notes). No reading of document / email / webpage / browser-history bodies.
 - Clipboard text recording is off by default; when enabled it stores copied
-  text locally only and auto-clears entries older than 30 days. The Phase 6B
-  toggle only controls this flag; the page never displays clipboard content.
+  text locally only and auto-clears entries older than 30 days. The
+  clipboard toggle only controls this flag; the page never displays
+  clipboard content.
 - `.wtbackup` is a local encrypted file; WorkTrace never uploads it; the
   passphrase is not recoverable.
 
 ## Common Test Commands
 
-```powershell
-# Affected tests (default). Pure stdlib; maps changed paths to a finite
-# pytest target set and never silently runs the full suite.
-python scripts/run_affected_tests.py
-
-# Full suite — cross-cutting changes, pre-push, or release validation.
-pytest
-```
-
-Local paths: DB at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`; logs at
-`%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`; default exports at
-`Documents\WorkTrace Exports`.
+- `python scripts/run_affected_tests.py` — affected tests (default; pure
+  stdlib, maps changed paths to a finite pytest target set).
+- `pytest` — full suite (cross-cutting changes, pre-push, release
+  validation).
+- Local paths: DB at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`; logs at
+  `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`; default exports at
+  `Documents\WorkTrace Exports`.

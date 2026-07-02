@@ -1,6 +1,7 @@
 from worktrace.constants import UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection
 from worktrace.services import activity_service, folder_rule_service, project_service, timeline_service
+from worktrace.services.activity_lifecycle_service import close_activity as lifecycle_close_activity
 
 
 def _create_finalized(app, process, title, path=None):
@@ -11,8 +12,11 @@ def _create_finalized(app, process, title, path=None):
         file_path_hint=path,
         start_time="2026-06-18 09:00:00",
     )
-    activity_service.finalize_created_activity(aid)
-    activity_service.close_activity(aid, "2026-06-18 09:10:00")
+    # Inference runs via the lifecycle facade at close time (the low-level
+    # ``activity_service.close_activity`` is pure CRUD and does not apply
+    # folder / keyword rules; ``finalize_created_activity`` is a no-op on
+    # the still-open row).
+    lifecycle_close_activity(aid, "2026-06-18 09:10:00")
     return aid
 
 

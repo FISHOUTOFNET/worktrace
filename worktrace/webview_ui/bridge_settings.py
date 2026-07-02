@@ -66,27 +66,20 @@ class SettingsBridgeMixin:
                 # API reported failure (or a stable Chinese error). Do
                 # not start the collector; forward the error payload.
                 return result
-            # worker is gated by the same privacy notice as the
+            # Unified privacy-gate startup: the gate is enforced by
+            # ``app_api.start_collection_after_privacy_gate`` so the
+            # bridge does not duplicate the start ordering / gate read.
             try:
-                app_api.start_background_workers()
+                app_api.start_collection_after_privacy_gate()
             except Exception:
                 # The accept itself succeeded (setting is persisted). A
-                # background workers start failure is logged but does
-                # NOT mask the successful accept.
-                logger.exception(
-                    "webview bridge accept_first_run_notice: background "
-                    "workers start failed after successful accept"
-                )
-            try:
-                app_api.start_collector()
-            except Exception:
-                # The accept itself succeeded (setting is persisted). A
-                # collector start failure is logged but does NOT mask
-                # the successful accept: the user can press the sidebar
+                # start failure is logged but does NOT mask the
+                # successful accept: the user can press the sidebar
                 # toggle to retry start now that the gate is open.
                 logger.exception(
-                    "webview bridge accept_first_run_notice: collector "
-                    "start failed after successful accept"
+                    "webview bridge accept_first_run_notice: "
+                    "start_collection_after_privacy_gate raised after "
+                    "successful accept"
                 )
             # Build the success payload. Try to refresh the status so
             # the frontend sidebar / overview can re-render; on failure

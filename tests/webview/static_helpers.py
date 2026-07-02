@@ -5,11 +5,17 @@ These tests read the bundled frontend resources (``index.html`` /
 constants and helpers here are intentionally lightweight so every themed
 test module under ``tests/webview/`` can import the same paths without
 re-declaring them.
+
+The JS load list is parsed from ``index.html``'s ``<script src="js/...">``
+tags so the tests always reflect the real resource set the browser
+executes. A new JS file added under ``js/`` MUST be referenced by
+``index.html`` or the orphan/missing contract tests fail.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -19,22 +25,30 @@ HISTORY_PATH = REPO_ROOT / "docs" / "history" / "webview-phases.md"
 RELEASE_VALIDATION_PATH = REPO_ROOT / "docs" / "release-validation.md"
 README_PATH = REPO_ROOT / "README.md"
 
-# rules_project_actions.js (project lifecycle)
-ALL_JS_FILES = [
-    "core.js",
-    "overview.js",
-    "timeline.js",
-    "timeline_correction.js",
-    "statistics.js",
-    "settings.js",
-    "rules.js",
-    "rules_render.js",
-    "rules_rule_actions.js",
-    "rules_keyword_actions.js",
-    "rules_folder_actions.js",
-    "rules_project_actions.js",
-    "init.js",
-]
+# Regex matching ``<script src="js/<name>.js"></script>`` tags so the JS
+# load list is parsed from the real ``index.html`` instead of being
+# hand-maintained. The capture group extracts the filename without the
+# ``js/`` prefix.
+_SCRIPT_SRC_RE = re.compile(r'<script\s+src="js/([^"]+\.js)"\s*>\s*</script>')
+
+
+def _parse_js_load_order_from_index() -> list[str]:
+    """Return the JS filenames in the order ``index.html`` loads them.
+
+    Parses every ``<script src="js/<name>.js">`` tag from
+    ``worktrace/webview_ui/index.html``. The returned list is the single
+    source of truth for the JS resource set and load order; tests that
+    need the JS list must use this function (or the ``ALL_JS_FILES``
+    constant derived from it) so an orphan / missing JS file fails the
+    contract tests instead of being silently skipped.
+    """
+    index_path = WEBVIEW_UI_DIR / "index.html"
+    source = index_path.read_text(encoding="utf-8")
+    return _SCRIPT_SRC_RE.findall(source)
+
+
+# Parsed once at import time so every test module sees the same list.
+ALL_JS_FILES: list[str] = _parse_js_load_order_from_index()
 
 # Frontend resource files scanned by the parametrized global-boundary
 # tests (no external links / CDN / Google Fonts / localStorage /
@@ -84,8 +98,8 @@ def read_all_js() -> str:
     """Return the concatenated UTF-8 text of every ``js/`` module in load order.
 
     Concatenation preserves the IIFE-per-module structure and load order
-    so function-body and substring contracts see the same logical source
-    the browser would execute.
+    parsed from ``index.html`` so function-body and substring contracts
+    see the same logical source the browser would execute.
     """
     return "\n".join(read_js(name) for name in ALL_JS_FILES)
 

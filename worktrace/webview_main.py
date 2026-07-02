@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config
-from .api import app_api, settings_api
+from .api import app_api
 from .runtime.app_runtime import AppRuntime
 from .webview_ui.bridge import WebViewBridge
 from .webview_ui.runtime_check import (
@@ -105,31 +105,19 @@ def main() -> int:
     runtime.initialize()
     app_api.set_runtime(runtime)
 
-    # First-run privacy gate: only auto-start the collector when the user
+    # Unified privacy-gate startup: the gate is enforced by
+    # ``app_api.start_collection_after_privacy_gate`` so this entry does
+    # not duplicate the first-run notice read / fail-closed logic. On
+    # success it starts background workers BEFORE the collector; on
+    # failure it leaves the runtime stopped so the user can accept the
+    # notice and retry via the sidebar toggle.
     try:
-        notice_accepted = settings_api.first_run_notice_accepted()
+        app_api.start_collection_after_privacy_gate()
     except Exception:
         logging.exception(
-            "webview startup: first_run_notice_accepted read failed; "
-            "not starting collector or background workers (fail closed)"
+            "webview startup: start_collection_after_privacy_gate raised; "
+            "user can retry via sidebar toggle"
         )
-        notice_accepted = False
-    if notice_accepted:
-        try:
-            app_api.start_background_workers()
-        except Exception:
-            logging.exception(
-                "webview startup: background workers start failed after "
-                "first-run notice already accepted; user can retry via "
-                "sidebar toggle"
-            )
-        try:
-            app_api.start_collector()
-        except Exception:
-            logging.exception(
-                "webview startup: collector start failed after first-run "
-                "notice already accepted; user can retry via sidebar toggle"
-            )
 
     bridge = WebViewBridge()
     index_path = resource_path("index.html")

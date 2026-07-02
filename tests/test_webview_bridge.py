@@ -70,10 +70,12 @@ def test_get_overview_returns_dict(bridge):
     assert isinstance(result, dict)
     assert result["ok"] is True
     assert "date" in result
-    assert "total_duration" in result
-    assert "classified_duration" in result
-    assert "uncategorized_duration" in result
-    assert "project_count" in result
+    assert "overview" in result
+    overview = result["overview"]
+    assert "total_duration" in overview
+    assert "classified_duration" in overview
+    assert "uncategorized_duration" in overview
+    assert "project_count" in overview
     assert "current_activity" in result
 
 
@@ -134,7 +136,7 @@ def test_get_timeline_session_details_is_json_serializable(bridge):
 
 def test_get_timeline_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_timeline.view_model_api.get_timeline_view_model",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_timeline()
@@ -146,7 +148,7 @@ def test_get_timeline_no_traceback_on_error(bridge):
 
 def test_get_timeline_session_details_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_timeline.view_model_api.get_session_details_view_model",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_timeline_session_details([1], None)
@@ -181,7 +183,7 @@ def test_toggle_pause_no_traceback_on_error(bridge):
 
 def test_get_overview_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge_overview.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_overview.view_model_api.get_overview_view_model",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_overview()
@@ -192,7 +194,7 @@ def test_get_overview_no_traceback_on_error(bridge):
 
 def test_get_recent_activities_no_traceback_on_error(bridge):
     with patch(
-        "worktrace.webview_ui.bridge_overview.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_overview.view_model_api.get_overview_view_model",
         side_effect=RuntimeError("boom"),
     ):
         result = bridge.get_recent_activities()
@@ -440,7 +442,7 @@ def test_get_timeline_session_details_error_returns_generic_message(bridge):
     ``操作失败`` error and must not leak the underlying exception type,
     message, or any traceback."""
     with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.get_default_report_date",
+        "worktrace.webview_ui.bridge_timeline.view_model_api.get_session_details_view_model",
         side_effect=ValueError("internal secret value"),
     ):
         result = bridge.get_timeline_session_details([1, 2, 3], None)
@@ -478,20 +480,17 @@ def test_bridge_module_does_not_import_unsafe_display_helper():
 
 
 
-# P0: toggle_pause + start_background_workers
+# P0: toggle_pause + unified privacy-gated startup
 
 
-def test_toggle_pause_starts_background_workers_and_collector_when_resuming(
+def test_toggle_pause_starts_collection_after_privacy_gate_when_resuming(
     bridge, monkeypatch
 ):
-    """When the notice is accepted and the user is paused, toggling to
-    resume must call BOTH ``start_background_workers`` AND
-    ``start_collector`` so the folder index is warm before the collector
-    starts matching activities."""
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.settings_api.first_run_notice_accepted",
-        lambda: True,
-    )
+    """When the user is paused, toggling to resume must call the unified
+    ``app_api.start_collection_after_privacy_gate()`` entry so the
+    first-run privacy gate is enforced in exactly one place. The bridge
+    must NOT call ``start_background_workers`` / ``start_collector``
+    directly."""
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_overview.settings_api.get_collector_status",
         lambda: "paused",
@@ -511,31 +510,38 @@ def test_toggle_pause_starts_background_workers_and_collector_when_resuming(
         lambda x: None,
     )
 
-    calls: list[str] = []
+    gate_calls: list[bool] = []
+    monkeypatch.setattr(
+        "worktrace.webview_ui.bridge_overview.app_api.start_collection_after_privacy_gate",
+        lambda: gate_calls.append(True) or {"ok": True},
+    )
+
+    # Direct start_background_workers / start_collector must NOT be called.
+    direct_bg_calls: list[bool] = []
+    direct_collector_calls: list[bool] = []
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_overview.app_api.start_background_workers",
-        lambda: calls.append("background_workers"),
+        lambda: direct_bg_calls.append(True),
     )
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_overview.app_api.start_collector",
-        lambda: calls.append("collector"),
+        lambda: direct_collector_calls.append(True),
     )
 
     result = bridge.toggle_pause()
 
     assert result["ok"] is True
-    assert "background_workers" in calls
-    assert "collector" in calls
+    assert gate_calls == [True]
+    assert direct_bg_calls == []
+    assert direct_collector_calls == []
 
 
-def test_toggle_pause_starts_background_workers_before_collector(bridge, monkeypatch):
-    """On the resume path, ``start_background_workers`` must be called
-    BEFORE ``start_collector`` so the folder index worker is running by
-    the time the collector starts matching activities."""
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.settings_api.first_run_notice_accepted",
-        lambda: True,
-    )
+def test_toggle_pause_does_not_start_collection_when_gate_closed(
+    bridge, monkeypatch
+):
+    """When the unified privacy-gate entry returns ``ok=False`` (notice
+    not accepted or read failed), ``toggle_pause`` must forward the
+    failure payload and must NOT mutate caller state."""
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_overview.settings_api.get_collector_status",
         lambda: "paused",
@@ -544,225 +550,123 @@ def test_toggle_pause_starts_background_workers_before_collector(bridge, monkeyp
         "worktrace.webview_ui.bridge_overview.settings_api.is_user_paused", lambda: True
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.settings_api.set_user_paused", lambda x: None
+        "worktrace.webview_ui.bridge_overview.app_api.start_collection_after_privacy_gate",
+        lambda: {"ok": False, "error": "请先确认隐私说明"},
+    )
+
+    # Caller state mutators must NOT be touched when the gate fails.
+    user_paused_calls: list[bool] = []
+    status_calls: list[str] = []
+    snapshot_calls: list[str] = []
+    monkeypatch.setattr(
+        "worktrace.webview_ui.bridge_overview.settings_api.set_user_paused",
+        lambda x: user_paused_calls.append(x),
     )
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_overview.settings_api.set_collector_status",
-        lambda x: None,
+        lambda x: status_calls.append(x),
     )
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_overview.settings_api.set_current_activity_snapshot",
-        lambda x: None,
-    )
-
-    order: list[str] = []
-
-    def fake_start_background_workers() -> None:
-        order.append("background_workers")
-
-    def fake_start_collector() -> None:
-        order.append("collector")
-
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.app_api.start_background_workers",
-        fake_start_background_workers,
-    )
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.app_api.start_collector",
-        fake_start_collector,
-    )
-
-    bridge.toggle_pause()
-
-    assert order == ["background_workers", "collector"]
-
-
-def test_toggle_pause_does_not_start_background_workers_when_gate_closed(
-    bridge, monkeypatch
-):
-    """When the first-run notice has NOT been accepted, ``toggle_pause``
-    must fail closed and must NOT call ``start_background_workers`` or
-    ``start_collector``."""
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.settings_api.first_run_notice_accepted",
-        lambda: False,
-    )
-
-    bg_calls: list[bool] = []
-    collector_calls: list[bool] = []
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.app_api.start_background_workers",
-        lambda: bg_calls.append(True),
-    )
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.app_api.start_collector",
-        lambda: collector_calls.append(True),
+        lambda x: snapshot_calls.append(x),
     )
 
     result = bridge.toggle_pause()
 
     assert result["ok"] is False
     assert result["error"] == "请先确认隐私说明"
-    assert bg_calls == []
-    assert collector_calls == []
+    assert user_paused_calls == []
+    assert status_calls == []
+    assert snapshot_calls == []
 
 
-def test_toggle_pause_does_not_start_background_workers_when_gate_read_raises(
+# P0: accept_first_run_notice + unified privacy-gated startup
+
+
+def test_accept_first_run_notice_calls_unified_gate_on_success(
     bridge, monkeypatch
 ):
-    """When ``first_run_notice_accepted`` raises, ``toggle_pause`` must
-    fail closed and must NOT call ``start_background_workers`` or
-    ``start_collector`` (fail-closed on settings read error)."""
-
-    def raise_on_read() -> bool:
-        raise RuntimeError("settings read failed")
-
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.settings_api.first_run_notice_accepted",
-        raise_on_read,
-    )
-
-    bg_calls: list[bool] = []
-    collector_calls: list[bool] = []
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.app_api.start_background_workers",
-        lambda: bg_calls.append(True),
-    )
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.app_api.start_collector",
-        lambda: collector_calls.append(True),
-    )
-
-    result = bridge.toggle_pause()
-
-    assert result["ok"] is False
-    assert result["error"] == "请先确认隐私说明"
-    assert bg_calls == []
-    assert collector_calls == []
-
-
-# P0: accept_first_run_notice + start_background_workers
-
-
-def test_accept_first_run_notice_starts_background_workers_and_collector_on_success(
-    bridge, monkeypatch
-):
-    """When the API returns ``ok=True``, the bridge must call BOTH
-    ``start_background_workers`` AND ``start_collector`` so recording
-    begins immediately after the user accepts the privacy notice."""
+    """When the API returns ``ok=True``, the bridge must call the unified
+    ``app_api.start_collection_after_privacy_gate()`` entry so recording
+    begins immediately after the user accepts the privacy notice. The
+    bridge must NOT call ``start_background_workers`` /
+    ``start_collector`` directly."""
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_settings.settings_api.accept_first_run_notice_for_webview",
         lambda: {"ok": True, "accepted": True},
     )
 
-    bg_calls: list[bool] = []
-    collector_calls: list[bool] = []
+    gate_calls: list[bool] = []
+    monkeypatch.setattr(
+        "worktrace.webview_ui.bridge_settings.app_api.start_collection_after_privacy_gate",
+        lambda: gate_calls.append(True) or {"ok": True},
+    )
+
+    # Direct start_background_workers / start_collector must NOT be called.
+    direct_bg_calls: list[bool] = []
+    direct_collector_calls: list[bool] = []
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_settings.app_api.start_background_workers",
-        lambda: bg_calls.append(True),
+        lambda: direct_bg_calls.append(True),
     )
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_settings.app_api.start_collector",
-        lambda: collector_calls.append(True),
+        lambda: direct_collector_calls.append(True),
     )
 
     result = bridge.accept_first_run_notice()
 
     assert result["ok"] is True
-    assert bg_calls == [True]
-    assert collector_calls == [True]
+    assert gate_calls == [True]
+    assert direct_bg_calls == []
+    assert direct_collector_calls == []
 
 
-def test_accept_first_run_notice_starts_background_workers_before_collector(
+def test_accept_first_run_notice_does_not_call_gate_on_api_failure(
     bridge, monkeypatch
 ):
-    """On a successful accept, ``start_background_workers`` must be called
-    BEFORE ``start_collector`` so the folder index is warm before the
-    collector starts matching activities."""
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_settings.settings_api.accept_first_run_notice_for_webview",
-        lambda: {"ok": True, "accepted": True},
-    )
-
-    order: list[str] = []
-
-    def fake_start_background_workers() -> None:
-        order.append("background_workers")
-
-    def fake_start_collector() -> None:
-        order.append("collector")
-
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_settings.app_api.start_background_workers",
-        fake_start_background_workers,
-    )
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_settings.app_api.start_collector",
-        fake_start_collector,
-    )
-
-    bridge.accept_first_run_notice()
-
-    assert order == ["background_workers", "collector"]
-
-
-def test_accept_first_run_notice_does_not_start_background_workers_on_api_failure(
-    bridge, monkeypatch
-):
-    """When the API returns ``ok=False``, the bridge must NOT call
-    ``start_background_workers`` or ``start_collector``; it forwards the
-    API's error payload unchanged."""
+    """When the API returns ``ok=False``, the bridge must NOT call the
+    unified gate entry; it forwards the API's error payload unchanged."""
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_settings.settings_api.accept_first_run_notice_for_webview",
         lambda: {"ok": False, "error": "写入失败"},
     )
 
-    bg_calls: list[bool] = []
-    collector_calls: list[bool] = []
+    gate_calls: list[bool] = []
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_settings.app_api.start_background_workers",
-        lambda: bg_calls.append(True),
-    )
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_settings.app_api.start_collector",
-        lambda: collector_calls.append(True),
+        "worktrace.webview_ui.bridge_settings.app_api.start_collection_after_privacy_gate",
+        lambda: gate_calls.append(True) or {"ok": True},
     )
 
     result = bridge.accept_first_run_notice()
 
     assert result["ok"] is False
-    assert bg_calls == []
-    assert collector_calls == []
+    assert gate_calls == []
 
 
-def test_accept_first_run_notice_succeeds_even_if_background_workers_start_fails(
+def test_accept_first_run_notice_succeeds_even_if_gate_raises(
     bridge, monkeypatch
 ):
-    """The accept itself is the persisted success; a background workers
-    start failure must NOT mask it. The result must still be
-    ``{"ok": True, ...}`` and ``start_collector`` must still be called."""
+    """The accept itself is the persisted success; a unified gate
+    exception must NOT mask it. The result must still be
+    ``{"ok": True, "accepted": True}``."""
 
-    def raise_bg() -> None:
-        raise RuntimeError("worker start failed")
+    def raise_gate() -> dict:
+        raise RuntimeError("gate start failed")
 
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_settings.settings_api.accept_first_run_notice_for_webview",
         lambda: {"ok": True, "accepted": True},
     )
     monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_settings.app_api.start_background_workers", raise_bg
-    )
-    collector_calls: list[bool] = []
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_settings.app_api.start_collector",
-        lambda: collector_calls.append(True),
+        "worktrace.webview_ui.bridge_settings.app_api.start_collection_after_privacy_gate",
+        raise_gate,
     )
 
     result = bridge.accept_first_run_notice()
 
     assert result["ok"] is True
     assert result["accepted"] is True
-    assert collector_calls == [True]
 
 
 # P2: get_overview / get_timeline ticker payload
@@ -853,18 +757,19 @@ def test_get_overview_classified_plus_uncategorized_le_total(bridge):
 def test_get_overview_classified_uncategorized_match_string_durations(bridge):
     """The numeric ``classified_seconds`` / ``uncategorized_seconds``
     must be consistent with the ``classified_duration`` /
-    ``uncategorized_duration`` string fields (both derive from the same
-    underlying summary)."""
+    ``uncategorized_duration`` string fields inside ``overview`` (both
+    derive from the same underlying summary)."""
     settings_service.clear_settings_cache()
     result = bridge.get_overview()
 
     assert result["ok"] is True
+    overview = result["overview"]
     # Parse the HH:MM:SS strings and verify they match the int seconds.
     def _parse_hms(s: str) -> int:
         parts = s.split(":")
         return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
 
-    assert result["classified_seconds"] == _parse_hms(result["classified_duration"])
+    assert result["classified_seconds"] == _parse_hms(overview["classified_duration"])
     assert result["uncategorized_seconds"] == _parse_hms(
-        result["uncategorized_duration"]
+        overview["uncategorized_duration"]
     )
