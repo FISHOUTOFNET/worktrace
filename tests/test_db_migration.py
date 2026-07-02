@@ -84,6 +84,35 @@ def _drop_adjusted_duration_column(conn) -> None:
     conn.execute("DROP TABLE project_session_note_old")
 
 
+def _drop_project_language_column(conn) -> None:
+    """Remove ``language`` from ``project`` to simulate a pre-language DB."""
+    conn.execute("ALTER TABLE project RENAME TO project_old")
+    conn.execute(
+        """
+        CREATE TABLE project(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            is_archived INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT NOT NULL DEFAULT 'user' CHECK (
+                created_by IN ('system', 'user')
+            ),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO project(id, name, description, is_archived, enabled, created_by, created_at, updated_at)
+        SELECT id, name, description, is_archived, enabled, created_by, created_at, updated_at
+        FROM project_old
+        """
+    )
+    conn.execute("DROP TABLE project_old")
+
+
 def test_old_database_without_adjusted_duration_gets_migrated(tmp_path):
     """An old database missing adjusted_duration_seconds gets the column added."""
     from worktrace.db import initialize_database, get_connection, ensure_schema_migrations
@@ -115,6 +144,34 @@ def test_old_database_without_adjusted_duration_gets_migrated(tmp_path):
     try:
         columns = _get_columns(conn, "project_session_note")
         assert "adjusted_duration_seconds" in columns
+    finally:
+        conn.close()
+
+
+def test_old_database_without_project_language_gets_migrated(tmp_path):
+    from worktrace.db import initialize_database, get_connection, ensure_schema_migrations
+    db_path = str(tmp_path / "test.db")
+    initialize_database(db_path)
+    conn = get_connection()
+    try:
+        _drop_project_language_column(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+    conn = get_connection()
+    try:
+        assert "language" not in _get_columns(conn, "project")
+        ensure_schema_migrations(conn)
+        ensure_schema_migrations(conn)
+        columns = _get_columns(conn, "project")
+        assert "language" in columns
+        languages = {
+            row["name"]: row["language"]
+            for row in conn.execute("SELECT name, language FROM project").fetchall()
+        }
+        assert languages[UNCATEGORIZED_PROJECT] == "中文"
+        assert languages[EXCLUDED_PROJECT] == "中文"
     finally:
         conn.close()
 
@@ -160,9 +217,11 @@ def test_initialize_seeds_default_projects(temp_db):
 
     assert uncategorized is not None
     assert uncategorized["created_by"] == "system"
+    assert uncategorized["language"] == "中文"
     assert uncategorized["enabled"] == 1
     assert excluded is not None
     assert excluded["created_by"] == "system"
+    assert excluded["language"] == "中文"
     assert excluded["enabled"] == 0
     assert excluded["description"] == "命中后匿名记录"
 

@@ -143,6 +143,7 @@
     App.rulesLoaded = false;
     App.rulesLoading = false;
     App.rulesRequestToken = 0;
+    App.rulesSortMode = "last_used";
     App.rulesSavingRuleKey = null;
 
     // Keyword creation writes are isolated from rule toggle writes.

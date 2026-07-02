@@ -48,6 +48,30 @@
         return keys;
     }
 
+    function _sortProjectsForRulesHome(projects) {
+        var list = (projects || []).slice();
+        var mode = App.rulesSortMode || "last_used";
+        list.sort(function (a, b) {
+            if (mode === "alpha") {
+                return App.safeText(a && a.name, "").localeCompare(
+                    App.safeText(b && b.name, ""),
+                    "zh-Hans-CN"
+                );
+            }
+            var aUsed = App.safeText(a && a.last_used_at, "");
+            var bUsed = App.safeText(b && b.last_used_at, "");
+            if (aUsed && bUsed && aUsed !== bUsed) return aUsed < bUsed ? 1 : -1;
+            if (aUsed && !bUsed) return -1;
+            if (!aUsed && bUsed) return 1;
+            return App.safeText(a && a.name, "").localeCompare(
+                App.safeText(b && b.name, ""),
+                "zh-Hans-CN"
+            );
+        });
+        return list;
+    }
+    App.sortProjectsForRulesHome = _sortProjectsForRulesHome;
+
     function _pruneBatchSelection(projects) {
         // batch write handlers clear selection explicitly on success and
         if (!App.rulesBatchSelectedKeys) return;
@@ -67,35 +91,28 @@
         App.lastProjectRulesData = data || { projects: [] };
         var list = document.getElementById("rules-list");
         var empty = document.getElementById("rules-empty");
-        // re-populated when no keyword create is in flight so an in-flight
-        App.populateKeywordCreateProjectSelector((data && data.projects) || []);
-        App.populateFolderCreateProjectSelector((data && data.projects) || []);
+        if (App.refreshRulesPanelTargets) {
+            App.refreshRulesPanelTargets();
+        }
+        if (App.renderRulesAdvancedPanel) {
+            App.renderRulesAdvancedPanel();
+        }
         if (!list || !empty) return;
-        var projects = (data && data.projects) || [];
+        var projects = _sortProjectsForRulesHome((data && data.projects) || []);
         // Prune stale batch selection keys before rendering so the per-row
         _pruneBatchSelection(projects);
         if (!projects.length) {
             list.innerHTML = "";
             empty.hidden = false;
-            var emptyToolbar = document.getElementById("rules-batch-toolbar");
-            if (emptyToolbar) emptyToolbar.hidden = true;
-            App.refreshProjectRulesBatchToolbar();
             return;
         }
         empty.hidden = true;
         list.innerHTML = projects.map(function (project) {
             return App.renderProjectRuleProject(project);
         }).join("");
-        App.bindProjectRuleToggles();
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
-        App.bindProjectRuleKeywordEditEvents();
         App.bindProjectLifecycleEvents();
-        App.bindProjectRuleImpactEvents();
-        App.bindExcludedKeywordRuleEvents();
-        App.bindExcludedFolderRuleEvents();
-        App.bindProjectRuleBatchEvents();
-        App.refreshProjectRulesBatchToolbar();
     }
     App.showProjectRules = showProjectRules;
 
@@ -106,23 +123,16 @@
             App.loadProjectRules();
             return;
         }
-        var projects = (App.lastProjectRulesData && App.lastProjectRulesData.projects) || [];
+        var projects = _sortProjectsForRulesHome((App.lastProjectRulesData && App.lastProjectRulesData.projects) || []);
         if (!projects.length) {
             return;
         }
         list.innerHTML = projects.map(function (project) {
             return App.renderProjectRuleProject(project);
         }).join("");
-        App.bindProjectRuleToggles();
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
-        App.bindProjectRuleKeywordEditEvents();
         App.bindProjectLifecycleEvents();
-        App.bindProjectRuleImpactEvents();
-        App.bindExcludedKeywordRuleEvents();
-        App.bindExcludedFolderRuleEvents();
-        App.bindProjectRuleBatchEvents();
-        App.refreshProjectRulesBatchToolbar();
     }
     App.rerenderProjectRulesList = rerenderProjectRulesList;
 

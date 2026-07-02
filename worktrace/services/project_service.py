@@ -12,7 +12,12 @@ def invalidate_uncategorized_project_cache() -> None:
     _EXCLUDED_PROJECT_IDS.pop(str(get_db_path().resolve()), None)
 
 
-def create_project(name: str, description: str = "") -> int:
+def _normalize_project_language(language: str | None = None) -> str:
+    cleaned = (language or "").strip()
+    return cleaned or "中文"
+
+
+def create_project(name: str, description: str = "", language: str = "中文") -> int:
     name = name.strip()
     if not name:
         raise ValueError("project name is required")
@@ -20,15 +25,20 @@ def create_project(name: str, description: str = "") -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
-            VALUES (?, ?, 0, 1, 'user', ?, ?)
+            INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, 0, 1, 'user', ?, ?)
             """,
-            (name, description, ts, ts),
+            (name, description, _normalize_project_language(language), ts, ts),
         )
         return int(cur.lastrowid)
 
 
-def update_project(project_id: int, name: str, description: str = "") -> None:
+def update_project(
+    project_id: int,
+    name: str,
+    description: str = "",
+    language: str = "中文",
+) -> None:
     project = get_project(project_id)
     if not project:
         raise ValueError("project not found")
@@ -41,10 +51,16 @@ def update_project(project_id: int, name: str, description: str = "") -> None:
         conn.execute(
             """
             UPDATE project
-            SET name = ?, description = ?, updated_at = ?
+            SET name = ?, description = ?, language = ?, updated_at = ?
             WHERE id = ?
             """,
-            (cleaned, description.strip(), now_str(), project_id),
+            (
+                cleaned,
+                description.strip(),
+                _normalize_project_language(language),
+                now_str(),
+                project_id,
+            ),
         )
 
 
@@ -66,6 +82,19 @@ def set_project_enabled(project_id: int, enabled: bool) -> None:
     invalidate_folder_rule_cache()
     invalidate_keyword_rule_cache()
     clear_exclude_rules_cache()
+
+
+def set_excluded_project_enabled(enabled: bool) -> int:
+    project_id = get_or_create_excluded_project()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE project SET enabled = ?, updated_at = ? WHERE id = ? AND name = ?",
+            (int(enabled), now_str(), project_id, EXCLUDED_PROJECT),
+        )
+    from .privacy_service import clear_exclude_rules_cache
+
+    clear_exclude_rules_cache()
+    return project_id
 
 
 def get_project(project_id: int) -> dict | None:
@@ -138,10 +167,11 @@ def list_rule_target_projects() -> list[dict]:
             FROM project
             WHERE is_archived = 0
               AND enabled = 1
-              AND (created_by = 'user' OR name = ?)
-            ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, name COLLATE NOCASE
+              AND created_by = 'user'
+              AND name <> ?
+            ORDER BY name COLLATE NOCASE
             """,
-            (EXCLUDED_PROJECT, EXCLUDED_PROJECT),
+            (EXCLUDED_PROJECT,),
         ).fetchall()
     return dict_rows(rows)
 
@@ -162,6 +192,27 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
             (int(include_system_special), EXCLUDED_PROJECT, EXCLUDED_PROJECT),
         ).fetchall()
     projects = dict_rows(rows)
+    with get_connection() as conn:
+        last_used_rows = dict_rows(
+            conn.execute(
+                """
+                SELECT
+                    COALESCE(apa.project_id, al.project_id) AS project_id,
+                    MAX(COALESCE(al.end_time, al.start_time)) AS last_used_at
+                FROM activity_log al
+                LEFT JOIN activity_project_assignment apa
+                    ON apa.activity_id = al.id
+                WHERE al.is_deleted = 0
+                  AND COALESCE(apa.project_id, al.project_id) IS NOT NULL
+                GROUP BY COALESCE(apa.project_id, al.project_id)
+                """
+            ).fetchall()
+        )
+    last_used_by_project = {
+        int(row["project_id"]): row.get("last_used_at")
+        for row in last_used_rows
+        if row.get("project_id") is not None
+    }
     with get_connection() as conn:
         folder_rows = dict_rows(
             conn.execute(
@@ -186,7 +237,12 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
             ).fetchall()
         )
     by_project = {
-        int(project["id"]): {**project, "folder_rules": [], "keyword_rules": []}
+        int(project["id"]): {
+            **project,
+            "last_used_at": last_used_by_project.get(int(project["id"])),
+            "folder_rules": [],
+            "keyword_rules": [],
+        }
         for project in projects
     }
     for row in folder_rows:
@@ -254,8 +310,8 @@ def get_or_create_uncategorized_project() -> int:
             return project_id
         cur = conn.execute(
             """
-            INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
-            VALUES (?, '', 0, 1, 'system', ?, ?)
+            INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
+            VALUES (?, '', '中文', 0, 1, 'system', ?, ?)
             """,
             (UNCATEGORIZED_PROJECT, ts, ts),
         )
@@ -278,8 +334,8 @@ def get_or_create_excluded_project() -> int:
             return project_id
         cur = conn.execute(
             """
-            INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
-            VALUES (?, '命中后匿名记录', 0, 0, 'system', ?, ?)
+            INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
+            VALUES (?, '命中后匿名记录', '中文', 0, 0, 'system', ?, ?)
             """,
             (EXCLUDED_PROJECT, ts, ts),
         )

@@ -398,67 +398,61 @@
                 <header class="page-header rules-header">
                     <div class="rules-header-text">
                         <h1>项目规则</h1>
-                        <p class="rules-subtitle">按项目查看 folder / keyword 规则，并启用或停用已有规则。</p>
+                        <p class="rules-subtitle">用文件夹和关键词规则自动归类活动，首页只保留日常查看、新增和删除。</p>
                     </div>
                 </header>
                 <div id="rules-readonly-hint" class="rules-readonly-hint">
-                    用文件夹或关键词规则自动归类活动。你可以先预览规则影响，再应用到历史记录。支持项目与规则的新增、编辑、启用/停用、归档，以及选中规则的批量预览、批量应用、批量启用、批量停用。
+                    本页只通过本地 bridge 调用 Python 服务，不使用浏览器存储，也不会发起网络请求。
                 </div>
-                <form id="rules-project-create-form" class="rules-project-create-form" autocomplete="off" onsubmit="return false;">
-                    <div class="rules-project-create-title">新增项目</div>
-                    <div class="rules-project-create-row">
-                        <label for="rules-project-create-input" class="rules-project-create-label">项目名称</label>
-                        <input id="rules-project-create-input" class="rules-project-create-input" type="text" maxlength="100" placeholder="输入项目名称" />
-                    </div>
-                    <div class="rules-project-create-row">
-                        <label for="rules-project-create-description" class="rules-project-create-label">项目描述</label>
-                        <input id="rules-project-create-description" class="rules-project-create-description" type="text" maxlength="500" placeholder="输入项目描述（可选）" />
-                    </div>
-                    <div class="rules-project-create-actions">
-                        <button id="rules-project-create-submit" class="rules-project-create-submit" type="button">新增项目</button>
-                    </div>
-                    <div id="rules-project-create-status" class="rules-project-create-status" hidden></div>
-                </form>
-                <form id="rules-keyword-create-form" class="rules-keyword-create-form" autocomplete="off" onsubmit="return false;">
-                    <div class="rules-keyword-create-title">新增关键词规则</div>
-                    <div class="rules-keyword-create-row">
-                        <label for="rules-keyword-create-project" class="rules-keyword-create-label">目标项目</label>
-                        <select id="rules-keyword-create-project" class="rules-keyword-create-select" disabled></select>
-                    </div>
-                    <div class="rules-keyword-create-row">
-                        <label for="rules-keyword-create-input" class="rules-keyword-create-label">关键词</label>
-                        <input id="rules-keyword-create-input" class="rules-keyword-create-input" type="text" maxlength="200" placeholder="输入关键词" disabled />
-                    </div>
-                    <div class="rules-keyword-create-actions">
-                        <button id="rules-keyword-create-submit" class="rules-keyword-create-submit" type="button" disabled>新增关键词规则</button>
-                    </div>
-                    <div id="rules-keyword-create-empty" class="rules-keyword-create-empty" hidden>暂无可选目标项目，请先在项目管理中创建并启用项目。</div>
-                    <div id="rules-keyword-create-status" class="rules-keyword-create-status" hidden></div>
-                </form>
-                <form id="rules-folder-create-form" class="rules-folder-create-form" autocomplete="off" onsubmit="return false;">
-                    <div class="rules-folder-create-title">新增文件夹规则</div>
-                    <div class="rules-folder-create-row">
-                        <label for="rules-folder-create-project" class="rules-folder-create-label">目标项目</label>
-                        <select id="rules-folder-create-project" class="rules-folder-create-select" disabled></select>
-                    </div>
-                    <div class="rules-folder-create-row">
-                        <label for="rules-folder-create-input" class="rules-folder-create-label">文件夹路径</label>
-                        <input id="rules-folder-create-input" class="rules-folder-create-input" type="text" maxlength="512" placeholder="输入文件夹路径" disabled />
-                    </div>
-                    <div class="rules-folder-create-row rules-folder-create-recursive-row">
-                        <label class="rules-folder-create-recursive-label"><input id="rules-folder-create-recursive" class="rules-folder-create-recursive" type="checkbox" checked disabled /> 包含子文件夹</label>
-                    </div>
-                    <div class="rules-folder-create-actions">
-                        <button id="rules-folder-create-submit" class="rules-folder-create-submit" type="button" disabled>新增文件夹规则</button>
-                    </div>
-                    <div id="rules-folder-create-empty" class="rules-folder-create-empty" hidden>暂无可选目标项目，请先在项目管理中创建并启用项目。</div>
-                    <div id="rules-folder-create-status" class="rules-folder-create-status" hidden></div>
-                </form>
+                <div class="rules-home-toolbar">
+                    <button id="rules-open-create-rule" class="rules-primary-action" type="button">新建规则</button>
+                    <button id="rules-open-create-project" class="rules-secondary-action" type="button">新建项目</button>
+                    <label class="rules-sort-label" for="rules-sort-select">排序</label>
+                    <select id="rules-sort-select" class="rules-sort-select">
+                        <option value="last_used">按上次使用排序</option>
+                        <option value="alpha">按首字母排序</option>
+                    </select>
+                </div>
+                <details id="rules-advanced" class="rules-advanced">
+                    <summary>高级功能</summary>
+                    <div id="rules-advanced-content" class="rules-advanced-content"></div>
+                </details>
+                <div id="rules-create-panel" class="rules-create-panel" hidden>
+                    <div class="rules-create-panel-backdrop" data-rules-panel-close="1"></div>
+                    <aside class="rules-create-panel-sheet" role="dialog" aria-modal="true" aria-labelledby="rules-create-panel-title">
+                        <div class="rules-create-panel-head">
+                            <h2 id="rules-create-panel-title">新建规则</h2>
+                            <button id="rules-create-panel-close" class="rules-icon-button" type="button" aria-label="关闭">×</button>
+                        </div>
+                        <div class="rules-panel-tabs">
+                            <button id="rules-panel-rule-tab" class="rules-panel-tab is-active" type="button">规则</button>
+                            <button id="rules-panel-project-tab" class="rules-panel-tab" type="button">项目</button>
+                        </div>
+                        <div id="rules-panel-status" class="rules-panel-status" hidden></div>
+                        <section id="rules-panel-project-section" class="rules-panel-section" hidden>
+                            <label class="rules-panel-field">项目名称<input id="rules-panel-project-name" type="text" maxlength="100" autocomplete="off"></label>
+                            <label class="rules-panel-field">项目描述<input id="rules-panel-project-description" type="text" maxlength="500" autocomplete="off"></label>
+                            <label class="rules-panel-field">项目语言<select id="rules-panel-project-language"><option value="中文">中文</option><option value="英语">英语</option><option value="日语">日语</option><option value="其他">其他</option></select></label>
+                            <label id="rules-panel-project-language-other-row" class="rules-panel-field" hidden>其他语言<input id="rules-panel-project-language-other" type="text" maxlength="50" autocomplete="off"></label>
+                            <button id="rules-panel-save-project" class="rules-panel-submit" type="button">保存项目</button>
+                        </section>
+                        <section id="rules-panel-rule-section" class="rules-panel-section">
+                            <div class="rules-panel-segment">
+                                <button id="rules-panel-folder-type" class="is-active" type="button">文件夹规则</button>
+                                <button id="rules-panel-keyword-type" type="button">关键词规则</button>
+                            </div>
+                            <label class="rules-panel-field">目标项目<select id="rules-panel-target-project"></select></label>
+                            <button id="rules-panel-create-project-inline" class="rules-inline-action" type="button">在此新建项目</button>
+                            <label id="rules-panel-folder-row" class="rules-panel-field">文件夹路径<input id="rules-panel-folder-path" type="text" maxlength="512" autocomplete="off"></label>
+                            <label id="rules-panel-folder-recursive-row" class="rules-panel-check"><input id="rules-panel-folder-recursive" type="checkbox" checked> 包含子文件夹</label>
+                            <label id="rules-panel-keyword-row" class="rules-panel-field" hidden>关键词<input id="rules-panel-keyword" type="text" maxlength="200" autocomplete="off"></label>
+                            <label id="rules-panel-backfill-row" class="rules-panel-check"><input id="rules-panel-backfill" type="checkbox" checked> 应用到历史记录</label>
+                            <button id="rules-panel-save-rule" class="rules-panel-submit" type="button">新增规则</button>
+                        </section>
+                    </aside>
+                </div>
                 <div id="rules-error" class="error-banner" hidden>加载项目规则失败</div>
                 <div id="rules-loading" class="rules-loading" hidden>正在加载项目规则…</div>
-                <div id="rules-batch-toolbar" class="rules-batch-toolbar" hidden></div>
-                <div id="rules-impact-panel" class="rules-impact-panel" hidden></div>
-                <div id="rules-batch-panel" class="rules-batch-panel" hidden></div>
                 <div id="rules-list" class="rules-list"></div>
                 <div id="rules-empty" class="rules-empty" hidden>暂无项目规则。</div>
             </section>
@@ -553,6 +547,7 @@
     <script src="js/settings.js"></script>
     <script src="js/rules.js"></script>
     <script src="js/rules_render.js"></script>
+    <script src="js/rules_create_panel.js"></script>
     <script src="js/rules_rule_actions.js"></script>
     <script src="js/rules_keyword_actions.js"></script>
     <script src="js/rules_folder_actions.js"></script>

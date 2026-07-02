@@ -270,6 +270,8 @@ def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         "id": _project_rules_int(project.get("id")),
         "name": project_name,
         "description": _project_rules_text(project.get("description"), ""),
+        "language": _project_rules_text(project.get("language"), "中文"),
+        "last_used_at": _project_rules_optional_text(project.get("last_used_at")),
         "enabled": project_enabled,
         "is_excluded": is_excluded,
         "is_system": is_system,
@@ -296,6 +298,7 @@ def _project_lifecycle_summary(project: dict[str, Any]) -> dict[str, Any]:
         "id": _project_rules_int(project.get("id")),
         "name": _project_rules_text(project.get("name"), ""),
         "description": _project_rules_text(project.get("description"), ""),
+        "language": _project_rules_text(project.get("language"), "中文"),
         "enabled": _project_rules_bool(project.get("enabled"), default=True),
         "archived": _project_rules_bool(project.get("archived"), default=False),
     }
@@ -314,7 +317,7 @@ def _project_rules_folder_payload(rule: dict[str, Any], project_name: str) -> di
         "target": _project_rules_text(rule.get("folder_path"), ""),
         "enabled": enabled,
         "recursive": recursive,
-        "detail": f"归属项目：{project_name} | {scope} | {state}",
+        "detail": f"{scope} | {state}",
     }
 
 
@@ -329,7 +332,7 @@ def _project_rules_keyword_payload(rule: dict[str, Any], project_name: str) -> d
         "target": _project_rules_text(rule.get("keyword"), ""),
         "enabled": enabled,
         "recursive": None,
-        "detail": f"归属项目：{project_name} | {state}",
+        "detail": state,
     }
 
 
@@ -377,6 +380,12 @@ def _project_rules_text(value: Any, fallback: str) -> str:
     return str(value)
 
 
+def _project_rules_optional_text(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
 def _project_rules_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -416,14 +425,36 @@ class ProjectRulesBridgeMixin:
         details.
         """
         try:
-            projects = project_api.list_project_bindings()
+            rows = project_api.list_project_bindings()
+            projected = [_project_rules_project_payload(project) for project in rows]
+            excluded = None
+            projects = []
+            for project in projected:
+                if project.get("is_excluded"):
+                    excluded = project
+                else:
+                    projects.append(project)
             return {
                 "ok": True,
-                "projects": [_project_rules_project_payload(project) for project in projects],
+                "projects": projects,
+                "advanced": {
+                    "excluded_rules_enabled": bool(excluded and excluded.get("enabled")),
+                    "excluded_project": excluded,
+                    "excluded_rules": (excluded or {}).get("rules", []),
+                },
             }
         except Exception:
             logger.exception("webview bridge get_project_rules failed")
-            return {"ok": False, "error": "加载项目规则失败", "projects": []}
+            return {
+                "ok": False,
+                "error": "加载项目规则失败",
+                "projects": [],
+                "advanced": {
+                    "excluded_rules_enabled": False,
+                    "excluded_project": None,
+                    "excluded_rules": [],
+                },
+            }
 
     def set_project_rule_enabled(self, rule_type, rule_id, enabled) -> dict[str, Any]:
         """Enable/disable one existing folder or keyword rule.
@@ -866,12 +897,18 @@ class ProjectRulesBridgeMixin:
             return {"ok": False, "error": "删除文件夹规则失败"}
 
 
-    def create_project_for_rules(self, name, description) -> dict[str, Any]:
+    def create_project_for_rules(
+        self,
+        name,
+        description,
+        language="中文",
+    ) -> dict[str, Any]:
         """Create one new user project from the Project Rules page.
 
         Write path only. Strict bridge validation rejects
         non-string ``name``, whitespace-only ``name``, and non-string
-        ``description`` before calling ``project_api.create_project_for_rules``.
+        ``description`` / ``language`` before calling
+        ``project_api.create_project_for_rules``.
         The bridge never exposes raw exceptions, tracebacks, SQL, paths,
         window titles, clipboard, or notes in the payload.
 
@@ -891,13 +928,16 @@ class ProjectRulesBridgeMixin:
                 return {"ok": False, "error": "操作无效"}
             if type(description) is not str:
                 return {"ok": False, "error": "操作无效"}
+            if type(language) is not str:
+                return {"ok": False, "error": "操作无效"}
             # Pass the trimmed values to the API so the bridge never
             # forwards leading/trailing whitespace even if a future API
             # change drops the trim. Behavior-neutral: the API already trims.
             trimmed_name = name.strip()
             trimmed_description = description.strip()
+            trimmed_language = language.strip() or "中文"
             result = project_api.create_project_for_rules(
-                trimmed_name, trimmed_description
+                trimmed_name, trimmed_description, trimmed_language
             )
             if result.get("ok") is True:
                 project = result.get("project") or {}
@@ -916,13 +956,20 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge create_project_for_rules failed")
             return {"ok": False, "error": "新增项目失败"}
 
-    def update_project_for_rules(self, project_id, name, description) -> dict[str, Any]:
+    def update_project_for_rules(
+        self,
+        project_id,
+        name,
+        description,
+        language="中文",
+    ) -> dict[str, Any]:
         """Update one existing user project's name and description.
 
         Write path only. Strict bridge validation rejects
         bool-as-int ``project_id``, non-int ``project_id``, non-positive ids,
         non-string ``name``, whitespace-only ``name``, and non-string
-        ``description`` before calling ``project_api.update_project_for_rules``.
+        ``description`` / ``language`` before calling
+        ``project_api.update_project_for_rules``.
         The bridge never exposes raw exceptions, tracebacks, SQL, paths,
         window titles, clipboard, or notes in the payload.
 
@@ -944,10 +991,13 @@ class ProjectRulesBridgeMixin:
                 return {"ok": False, "error": "操作无效"}
             if type(description) is not str:
                 return {"ok": False, "error": "操作无效"}
+            if type(language) is not str:
+                return {"ok": False, "error": "操作无效"}
             trimmed_name = name.strip()
             trimmed_description = description.strip()
+            trimmed_language = language.strip() or "中文"
             result = project_api.update_project_for_rules(
-                project_id, trimmed_name, trimmed_description
+                project_id, trimmed_name, trimmed_description, trimmed_language
             )
             if result.get("ok") is True:
                 project = result.get("project") or {}
@@ -1005,6 +1055,29 @@ class ProjectRulesBridgeMixin:
         except Exception:
             logger.exception("webview bridge set_project_enabled_for_rules failed")
             return {"ok": False, "error": "更新项目状态失败"}
+
+    def set_excluded_rules_enabled(self, enabled) -> dict[str, Any]:
+        """Enable or disable the special excluded-rules project."""
+        try:
+            if type(enabled) is not bool:
+                return {"ok": False, "error": "操作无效"}
+            result = project_api.set_excluded_rules_enabled(enabled)
+            if result.get("ok") is True:
+                project = result.get("project") or {}
+                return {
+                    "ok": True,
+                    "project": _project_lifecycle_summary(project),
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_LIFECYCLE_TOGGLE_MESSAGES.get(
+                    code, "更新排除规则状态失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge set_excluded_rules_enabled failed")
+            return {"ok": False, "error": "更新排除规则状态失败"}
 
     def archive_project_for_rules(self, project_id) -> dict[str, Any]:
         """Archive one existing user project.

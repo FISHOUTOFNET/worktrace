@@ -110,6 +110,7 @@ def read_rules_module_js() -> str:
     Project Rules logic spans six IIFE modules loaded in order:
       rules.js                (core load / refresh / wiring)
       rules_render.js         (render helpers)
+      rules_create_panel.js   (unified create/edit panel)
       rules_rule_actions.js  (rule toggle)
       rules_keyword_actions.js (keyword create / edit / delete)
       rules_folder_actions.js (folder create / edit / delete)
@@ -122,6 +123,7 @@ def read_rules_module_js() -> str:
     names = [
         "rules.js",
         "rules_render.js",
+        "rules_create_panel.js",
         "rules_rule_actions.js",
         "rules_keyword_actions.js",
         "rules_folder_actions.js",

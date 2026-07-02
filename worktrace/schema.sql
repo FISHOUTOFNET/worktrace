@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS project (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     description TEXT,
+    language TEXT NOT NULL DEFAULT '中文',
     is_archived INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
     created_by TEXT NOT NULL DEFAULT 'user' CHECK (

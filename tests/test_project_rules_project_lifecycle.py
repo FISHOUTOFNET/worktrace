@@ -74,12 +74,14 @@ def _assert_payload_shape(payload: dict) -> None:
         "id",
         "name",
         "description",
+        "language",
         "enabled",
         "archived",
     }
     assert isinstance(payload["id"], int)
     assert type(payload["name"]) is str
     assert type(payload["description"]) is str
+    assert type(payload["language"]) is str
     assert type(payload["enabled"]) is bool
     assert type(payload["archived"]) is bool
 
@@ -117,12 +119,14 @@ def test_create_project_success_trims_name_and_description(temp_db):
     project = result["project"]
     assert project["name"] == "Client"
     assert project["description"] == "Billable work"
+    assert project["language"] == "中文"
     assert project["enabled"] is True
     assert project["archived"] is False
 
     row = _project_row(project["id"])
     assert row["name"] == "Client"
     assert row["description"] == "Billable work"
+    assert row["language"] == "中文"
     assert row["enabled"] == 1
     assert row["is_archived"] == 0
     assert row["created_by"] == "user"
@@ -135,6 +139,26 @@ def test_create_project_success_empty_description(temp_db):
     assert result["project"]["description"] == ""
     row = _project_row(result["project"]["id"])
     assert row["description"] == ""
+
+
+def test_create_project_language_variants(temp_db):
+    zh = project_api.create_project_for_rules("中文项目", "", "  中文  ")
+    en = project_api.create_project_for_rules("English Project", "", "英语")
+    ja = project_api.create_project_for_rules("Japanese Project", "", "日语")
+    other = project_api.create_project_for_rules("Other Project", "", "  法语  ")
+    defaulted = project_api.create_project_for_rules("Default Project", "", "   ")
+
+    assert zh["project"]["language"] == "中文"
+    assert en["project"]["language"] == "英语"
+    assert ja["project"]["language"] == "日语"
+    assert other["project"]["language"] == "法语"
+    assert defaulted["project"]["language"] == "中文"
+
+
+def test_create_project_rejects_non_str_language(temp_db):
+    for bad_language in (None, True, False, 1, 1.5, [], {}, b"zh"):
+        result = project_api.create_project_for_rules("Client", "", bad_language)
+        assert result == {"ok": False, "error": "invalid_input"}, bad_language
 
 
 def test_create_project_rejects_non_str_name(temp_db):
@@ -194,7 +218,7 @@ def test_create_project_does_not_match_system_special_names(temp_db):
 def test_create_project_service_exception_collapses_to_operation_failed(
     temp_db, monkeypatch
 ):
-    def boom(name, description=""):
+    def boom(name, description="", language="中文"):
         raise RuntimeError(
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
@@ -213,7 +237,7 @@ def test_create_project_integrity_error_collapses_to_duplicate_project(
 ):
     import sqlite3
 
-    def boom(name, description=""):
+    def boom(name, description="", language="中文"):
         raise sqlite3.IntegrityError("UNIQUE constraint failed: project.name")
 
     monkeypatch.setattr(project_service, "create_project", boom)
@@ -234,7 +258,7 @@ def test_update_project_success_trims_name_and_description(temp_db):
     project_id = project_service.create_project("Client", "old")
 
     result = project_api.update_project_for_rules(
-        project_id, "  Client Renamed  ", "  new desc  "
+        project_id, "  Client Renamed  ", "  new desc  ", "  英语  "
     )
 
     assert result["ok"] is True
@@ -243,10 +267,12 @@ def test_update_project_success_trims_name_and_description(temp_db):
     assert project["id"] == project_id
     assert project["name"] == "Client Renamed"
     assert project["description"] == "new desc"
+    assert project["language"] == "英语"
 
     row = _project_row(project_id)
     assert row["name"] == "Client Renamed"
     assert row["description"] == "new desc"
+    assert row["language"] == "英语"
     # update only touches name / description / updated_at
     assert row["enabled"] == 1
     assert row["is_archived"] == 0
@@ -300,6 +326,21 @@ def test_update_project_rejects_non_str_description(temp_db):
     for bad_desc in (None, True, False, 1, 1.5, [], {}):
         result = project_api.update_project_for_rules(project_id, "Renamed", bad_desc)
         assert result == {"ok": False, "error": "invalid_input"}, bad_desc
+
+
+def test_update_project_language_variants(temp_db):
+    project_id = project_service.create_project("Client", "old", "中文")
+
+    assert project_api.update_project_for_rules(project_id, "Client", "", "日语")["project"]["language"] == "日语"
+    assert project_api.update_project_for_rules(project_id, "Client", "", "  俄语  ")["project"]["language"] == "俄语"
+    assert project_api.update_project_for_rules(project_id, "Client", "", "   ")["project"]["language"] == "中文"
+
+
+def test_update_project_rejects_non_str_language(temp_db):
+    project_id = project_service.create_project("Client", "old")
+    for bad_language in (None, True, False, 1, 1.5, [], {}, b"zh"):
+        result = project_api.update_project_for_rules(project_id, "Renamed", "new", bad_language)
+        assert result == {"ok": False, "error": "invalid_input"}, bad_language
 
 
 def test_update_project_rejects_empty_name(temp_db):
@@ -359,7 +400,7 @@ def test_update_project_service_exception_collapses_to_operation_failed(
 ):
     project_id = project_service.create_project("Client", "old")
 
-    def boom(pid, name, description=""):
+    def boom(pid, name, description="", language="中文"):
         raise RuntimeError(
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
@@ -920,3 +961,30 @@ def test_excluded_project_cannot_be_made_rule_target_via_lifecycle(temp_db):
     targets = project_service.list_rule_target_projects()
     target_ids = [int(t["id"]) for t in targets]
     assert project_id not in target_ids
+
+
+def test_set_excluded_rules_enabled_uses_dedicated_facade(temp_db, monkeypatch):
+    project_id = project_service.get_or_create_excluded_project()
+    counts = _install_cache_spies(monkeypatch)
+
+    enable_result = project_api.set_excluded_rules_enabled(True)
+    assert enable_result["ok"] is True
+    _assert_payload_shape(enable_result["project"])
+    assert enable_result["project"]["id"] == project_id
+    assert enable_result["project"]["enabled"] is True
+    assert _project_row(project_id)["enabled"] == 1
+    assert counts["exclude"] == 1
+
+    disable_result = project_api.set_excluded_rules_enabled(False)
+    assert disable_result["ok"] is True
+    assert disable_result["project"]["enabled"] is False
+    assert _project_row(project_id)["enabled"] == 0
+    assert counts["exclude"] == 2
+
+
+def test_set_excluded_rules_enabled_rejects_non_bool(temp_db, monkeypatch):
+    counts = _install_cache_spies(monkeypatch)
+    for bad_enabled in (None, 1, 0, "true", "false", [], {}):
+        result = project_api.set_excluded_rules_enabled(bad_enabled)
+        assert result == {"ok": False, "error": "invalid_input"}, bad_enabled
+    assert counts["exclude"] == 0

@@ -101,21 +101,17 @@ def test_index_html_rules_and_settings_are_full_pages():
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     rules_start = source.find('id="page-rules"')
     assert rules_start != -1, "rules section must exist"
-    rules_end = source.find("</section>", rules_start)
+    rules_end = source.find('<section id="page-settings"', rules_start)
     rules_section = source[rules_start:rules_end]
     assert "WebView 迁移中" not in rules_section
     assert "项目规则" in rules_section
-    # boundary copy updated to mention keyword creation.
-    assert "启用/停用" in rules_section
-    assert "新增关键词规则" in rules_section
-    # boundary copy updated to mention folder creation and archiving.
-    assert "新增文件夹规则" in rules_section
-    assert "归档" in rules_section
-    assert "编辑" in rules_section
-    assert "预览规则影响" in rules_section
-    assert "批量应用" in rules_section
+    assert "新建规则" in rules_section
+    assert "新建项目" in rules_section
+    assert "高级功能" in rules_section
+    assert "按上次使用排序" in rules_section
+    assert "按首字母排序" in rules_section
     assert "自动归类" in rules_section
-    assert "批量" in rules_section
+    assert "批量" not in rules_section
 
     # Settings / Privacy is a WebView status page. The obsolete placeholder
     # copy must not appear in its section.
@@ -2474,7 +2470,7 @@ def test_index_html_no_new_top_level_pages():
         )
     rules_pos = source.find('id="page-rules"')
     assert rules_pos != -1
-    rules_end = source.find("</section>", rules_pos)
+    rules_end = source.find('<section id="page-settings"', rules_pos)
     rules_section = source[rules_pos:rules_end]
     assert "WebView 迁移中" not in rules_section
     assert "rules-list" in rules_section

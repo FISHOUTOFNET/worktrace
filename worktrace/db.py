@@ -103,16 +103,16 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         )
     conn.execute(
         """
-        INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
-        VALUES (?, '', 0, 1, 'system', ?, ?)
+        INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
+        VALUES (?, '', '中文', 0, 1, 'system', ?, ?)
         ON CONFLICT(name) DO NOTHING
         """,
         (UNCATEGORIZED_PROJECT, ts, ts),
     )
     conn.execute(
         """
-        INSERT INTO project(name, description, is_archived, enabled, created_by, created_at, updated_at)
-        VALUES (?, '命中后匿名记录', 0, 0, 'system', ?, ?)
+        INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
+        VALUES (?, '命中后匿名记录', '中文', 0, 0, 'system', ?, ?)
         ON CONFLICT(name) DO NOTHING
         """,
         (EXCLUDED_PROJECT, ts, ts),
@@ -136,7 +136,21 @@ def ensure_schema_migrations(conn: sqlite3.Connection) -> None:
     it uses ``PRAGMA table_info`` to check whether the column already
     exists before running ``ALTER TABLE``.
     """
+    ensure_project_language_column(conn)
     ensure_project_session_note_adjusted_duration_column(conn)
+
+
+def ensure_project_language_column(conn: sqlite3.Connection) -> None:
+    """Add ``language`` to ``project`` if missing.
+
+    Idempotent: checks ``PRAGMA table_info(project)`` before running
+    ``ALTER TABLE``. Existing projects receive the stable default ``中文``.
+    """
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(project)").fetchall()}
+    if "language" not in columns:
+        conn.execute(
+            "ALTER TABLE project ADD COLUMN language TEXT NOT NULL DEFAULT '中文'"
+        )
 
 
 def ensure_project_session_note_adjusted_duration_column(conn: sqlite3.Connection) -> None:

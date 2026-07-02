@@ -63,12 +63,17 @@ def get_project_by_name(name: str) -> dict[str, Any] | None:
     return project_service.get_project_by_name(name)
 
 
-def create_project(name: str, description: str = "") -> int:
-    return project_service.create_project(name, description)
+def create_project(name: str, description: str = "", language: str = "中文") -> int:
+    return project_service.create_project(name, description, language)
 
 
-def update_project(project_id: int, name: str, description: str = "") -> None:
-    project_service.update_project(project_id, name, description)
+def update_project(
+    project_id: int,
+    name: str,
+    description: str = "",
+    language: str = "中文",
+) -> None:
+    project_service.update_project(project_id, name, description, language)
 
 
 def set_project_enabled(project_id: int, enabled: bool) -> None:
@@ -115,12 +120,23 @@ def _project_lifecycle_payload(project_id: int) -> dict[str, Any]:
         "id": int(project.get("id") or 0),
         "name": str(project.get("name") or ""),
         "description": str(project.get("description") or ""),
+        "language": str(project.get("language") or "中文"),
         "enabled": bool(int(project.get("enabled") or 0)),
         "archived": bool(int(project.get("is_archived") or 0)),
     }
 
 
-def create_project_for_rules(name: Any, description: Any = "") -> dict[str, Any]:
+def _valid_project_language(language: Any) -> str | None:
+    if not valid_str(language):
+        return None
+    return language.strip() or "中文"
+
+
+def create_project_for_rules(
+    name: Any,
+    description: Any = "",
+    language: Any = "中文",
+) -> dict[str, Any]:
     """Create one new user project from the Project Rules page."""
     # ``valid_nonempty_str`` returns the trimmed name or ``None`` (rejecting
     # non-strings and empty-after-trim in one helper call). ``valid_str``
@@ -131,6 +147,9 @@ def create_project_for_rules(name: Any, description: Any = "") -> dict[str, Any]
         return fail_payload(ERROR_INVALID_INPUT)
     if not valid_str(description):
         return fail_payload(ERROR_INVALID_INPUT)
+    cleaned_language = _valid_project_language(language)
+    if cleaned_language is None:
+        return fail_payload(ERROR_INVALID_INPUT)
     trimmed_description = description.strip()
     try:
         # Conservative duplicate check: reject if another project already
@@ -139,7 +158,11 @@ def create_project_for_rules(name: Any, description: Any = "") -> dict[str, Any]
         existing = project_service.get_project_by_name(trimmed_name)
         if existing:
             return fail_payload(ERROR_DUPLICATE_PROJECT)
-        project_id = project_service.create_project(trimmed_name, trimmed_description)
+        project_id = project_service.create_project(
+            trimmed_name,
+            trimmed_description,
+            cleaned_language,
+        )
         payload = _project_lifecycle_payload(project_id)
         if not payload:
             return fail_payload(ERROR_OPERATION_FAILED)
@@ -150,7 +173,12 @@ def create_project_for_rules(name: Any, description: Any = "") -> dict[str, Any]
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
-def update_project_for_rules(project_id: Any, name: Any, description: Any = "") -> dict[str, Any]:
+def update_project_for_rules(
+    project_id: Any,
+    name: Any,
+    description: Any = "",
+    language: Any = "中文",
+) -> dict[str, Any]:
     """Update one existing user project's name and description."""
     # ``type(...) is not int`` rejects ``bool`` (``type(True) is bool``),
     # ``float``, ``str``, ``None``, and container types in one check.
@@ -160,6 +188,9 @@ def update_project_for_rules(project_id: Any, name: Any, description: Any = "") 
     if trimmed_name is None:
         return fail_payload(ERROR_INVALID_INPUT)
     if not valid_str(description):
+        return fail_payload(ERROR_INVALID_INPUT)
+    cleaned_language = _valid_project_language(language)
+    if cleaned_language is None:
         return fail_payload(ERROR_INVALID_INPUT)
     trimmed_description = description.strip()
     try:
@@ -174,7 +205,12 @@ def update_project_for_rules(project_id: Any, name: Any, description: Any = "") 
         existing = project_service.get_project_by_name(trimmed_name)
         if existing and int(existing.get("id") or 0) != project_id:
             return fail_payload(ERROR_DUPLICATE_PROJECT)
-        project_service.update_project(project_id, trimmed_name, trimmed_description)
+        project_service.update_project(
+            project_id,
+            trimmed_name,
+            trimmed_description,
+            cleaned_language,
+        )
         payload = _project_lifecycle_payload(project_id)
         if not payload:
             return fail_payload(ERROR_OPERATION_FAILED)
@@ -198,6 +234,20 @@ def set_project_enabled_for_rules(project_id: Any, enabled: Any) -> dict[str, An
         if _is_system_or_special_project(project):
             return fail_payload(ERROR_SYSTEM_PROJECT)
         project_service.set_project_enabled(project_id, enabled)
+        payload = _project_lifecycle_payload(project_id)
+        if not payload:
+            return fail_payload(ERROR_OPERATION_FAILED)
+        return ok_payload(project=payload)
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
+def set_excluded_rules_enabled(enabled: Any) -> dict[str, Any]:
+    """Enable or disable the special excluded-rules project."""
+    if not valid_bool(enabled):
+        return fail_payload(ERROR_INVALID_INPUT)
+    try:
+        project_id = project_service.set_excluded_project_enabled(enabled)
         payload = _project_lifecycle_payload(project_id)
         if not payload:
             return fail_payload(ERROR_OPERATION_FAILED)
@@ -240,6 +290,7 @@ __all__ = [
     "list_user_projects",
     "set_project_enabled",
     "set_project_enabled_for_rules",
+    "set_excluded_rules_enabled",
     "update_project",
     "update_project_for_rules",
 ]

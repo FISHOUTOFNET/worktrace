@@ -20,6 +20,8 @@ def test_get_project_rules_success_payload(monkeypatch):
                 "id": 1,
                 "name": "Client",
                 "description": "Billable work",
+                "language": "英语",
+                "last_used_at": "2026-07-01 10:00:00",
                 "enabled": 1,
                 "created_by": "user",
                 "folder_rules": [
@@ -42,6 +44,8 @@ def test_get_project_rules_success_payload(monkeypatch):
                 "id": 2,
                 "name": "Disabled",
                 "description": "",
+                "language": "日语",
+                "last_used_at": None,
                 "enabled": False,
                 "created_by": "user",
                 "folder_rules": [
@@ -70,13 +74,19 @@ def test_get_project_rules_success_payload(monkeypatch):
 
     assert result["ok"] is True
     projects = result["projects"]
-    assert len(projects) == 3
+    assert len(projects) == 2
+    advanced = result["advanced"]
+    assert advanced["excluded_rules_enabled"] is False
+    assert advanced["excluded_project"]["name"] == "排除规则"
+    assert advanced["excluded_rules"] == []
 
     client = projects[0]
     assert client["id"] == 1
     assert isinstance(client["id"], int)
     assert client["name"] == "Client"
     assert client["description"] == "Billable work"
+    assert client["language"] == "英语"
+    assert client["last_used_at"] == "2026-07-01 10:00:00"
     assert client["enabled"] is True
     assert isinstance(client["enabled"], bool)
     # raw ``created_by`` is no longer surfaced to the frontend;
@@ -86,10 +96,6 @@ def test_get_project_rules_success_payload(monkeypatch):
     assert client["editable"] is True
     assert client["is_excluded"] is False
     assert isinstance(client["is_excluded"], bool)
-    assert client["rule_count"] == 2
-    assert isinstance(client["rule_count"], int)
-    assert client["folder_rule_count"] == 1
-    assert client["keyword_rule_count"] == 1
     assert client["summary"] == "2 条规则：文件夹 1，关键词 1"
 
     folder = client["rules"][0]
@@ -99,7 +105,6 @@ def test_get_project_rules_success_payload(monkeypatch):
     assert folder["target"] == r"D:\Client"
     assert folder["enabled"] is True
     assert folder["recursive"] is True
-    assert "归属项目：Client" in folder["detail"]
     assert "包含子文件夹" in folder["detail"]
     assert "已启用" in folder["detail"]
 
@@ -110,7 +115,6 @@ def test_get_project_rules_success_payload(monkeypatch):
     assert keyword["target"] == "Spec"
     assert keyword["enabled"] is False
     assert keyword["recursive"] is None
-    assert "归属项目：Client" in keyword["detail"]
     assert "已禁用" in keyword["detail"]
 
     disabled = projects[1]
@@ -122,7 +126,7 @@ def test_get_project_rules_success_payload(monkeypatch):
     assert "仅直接文件" in disabled_folder["detail"]
     assert "已禁用" in disabled_folder["detail"]
 
-    excluded = projects[2]
+    excluded = advanced["excluded_project"]
     assert excluded["is_excluded"] is True
     # raw ``created_by`` no longer surfaced; ``is_system`` drives
     # the system-project decision instead.
@@ -140,7 +144,15 @@ def test_get_project_rules_empty_projects(monkeypatch):
 
     result = WebViewBridge().get_project_rules()
 
-    assert result == {"ok": True, "projects": []}
+    assert result == {
+        "ok": True,
+        "projects": [],
+        "advanced": {
+            "excluded_rules_enabled": False,
+            "excluded_project": None,
+            "excluded_rules": [],
+        },
+    }
 
 
 def test_get_project_rules_malformed_rows_are_safe_and_json_serializable(monkeypatch):
@@ -183,12 +195,11 @@ def test_get_project_rules_malformed_rows_are_safe_and_json_serializable(monkeyp
     assert project["id"] == 0
     assert project["name"] == "未知项目"
     assert project["description"] == ""
+    assert project["language"] == "中文"
+    assert project["last_used_at"] is None
     assert project["enabled"] is True
     # raw ``created_by`` no longer surfaced.
     assert "created_by" not in project
-    assert project["rule_count"] == 4
-    assert project["folder_rule_count"] == 2
-    assert project["keyword_rule_count"] == 2
 
     folder = project["rules"][0]
     assert folder["id"] == 0
@@ -221,9 +232,8 @@ def test_get_project_rules_missing_rule_lists_and_description(monkeypatch):
 
     project = result["projects"][0]
     assert project["description"] == ""
-    assert project["folder_rule_count"] == 0
-    assert project["keyword_rule_count"] == 0
-    assert project["rule_count"] == 0
+    assert project["language"] == "中文"
+    assert project["last_used_at"] is None
     assert project["rules"] == []
     assert project["summary"] == "暂无规则"
 
@@ -372,6 +382,11 @@ def test_get_project_rules_exception_collapses_without_sensitive_text(monkeypatc
         "ok": False,
         "error": "加载项目规则失败",
         "projects": [],
+        "advanced": {
+            "excluded_rules_enabled": False,
+            "excluded_project": None,
+            "excluded_rules": [],
+        },
     }
     lowered = repr(result).lower()
     for forbidden in (
@@ -741,9 +756,8 @@ def test_set_project_rule_enabled_get_project_rules_payload_is_unchanged(monkeyp
     project = result["projects"][0]
     assert project["id"] == 1
     assert project["name"] == "Client"
-    assert project["rule_count"] == 2
-    assert project["folder_rule_count"] == 1
-    assert project["keyword_rule_count"] == 1
+    assert project["language"] == "中文"
+    assert project["last_used_at"] is None
     json.dumps(result, ensure_ascii=False)
 
 
@@ -1243,7 +1257,8 @@ def test_create_project_keyword_rule_does_not_regress_get_project_rules(monkeypa
     project = result["projects"][0]
     assert project["id"] == 1
     assert project["name"] == "Client"
-    assert project["rule_count"] == 2
+    assert project["language"] == "中文"
+    assert project["last_used_at"] is None
     json.dumps(result, ensure_ascii=False)
 
 
@@ -1673,7 +1688,8 @@ def test_delete_project_keyword_rule_does_not_regress_get_project_rules(monkeypa
     project = result["projects"][0]
     assert project["id"] == 1
     assert project["name"] == "Client"
-    assert project["rule_count"] == 2
+    assert project["language"] == "中文"
+    assert project["last_used_at"] is None
     json.dumps(result, ensure_ascii=False)
 
 
@@ -3464,6 +3480,7 @@ _PROJECT_LIFECYCLE_SUMMARY = {
     "id": 1,
     "name": "Client",
     "description": "billable",
+    "language": "中文",
     "enabled": True,
     "archived": False,
 }
@@ -3498,8 +3515,8 @@ def test_create_project_for_rules_success_narrow_payload(monkeypatch):
         "ok": True,
         "project": _PROJECT_LIFECYCLE_SUMMARY,
     }
-    # Bridge forwards trimmed name/description.
-    assert calls == [(("Client", "billable"), {})]
+    # Bridge forwards trimmed name/description/language.
+    assert calls == [(("Client", "billable", "中文"), {})]
     json.dumps(result, ensure_ascii=False)
 
 
@@ -3541,7 +3558,7 @@ def test_create_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
         monkeypatch.setattr(
             bridge_rules_module.project_api,
             "create_project_for_rules",
-            lambda name, description, c=code: {"ok": False, "error": c},
+            lambda name, description, language="中文", c=code: {"ok": False, "error": c},
         )
         assert bridge.create_project_for_rules("Client", "") == {
             "ok": False,
@@ -3550,7 +3567,7 @@ def test_create_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
 
 
 def test_create_project_for_rules_unknown_exception_collapses(monkeypatch):
-    def boom(name, description=""):
+    def boom(name, description="", language="中文"):
         raise RuntimeError(
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
@@ -3598,7 +3615,10 @@ def test_create_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypat
     monkeypatch.setattr(
         bridge_rules_module.project_api,
         "create_project_for_rules",
-        lambda name, description="": {"ok": True, "project": dict(_PROJECT_LIFECYCLE_SUMMARY)},
+        lambda name, description="", language="中文": {
+            "ok": True,
+            "project": dict(_PROJECT_LIFECYCLE_SUMMARY),
+        },
     )
 
     WebViewBridge().create_project_for_rules("Client", "desc")
@@ -3618,7 +3638,7 @@ def test_update_project_for_rules_success_narrow_payload(monkeypatch):
     )
 
     assert result == {"ok": True, "project": _PROJECT_LIFECYCLE_SUMMARY}
-    assert calls == [((1, "Client", "billable"), {})]
+    assert calls == [((1, "Client", "billable", "中文"), {})]
     json.dumps(result, ensure_ascii=False)
 
 
@@ -3691,7 +3711,10 @@ def test_update_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
         monkeypatch.setattr(
             bridge_rules_module.project_api,
             "update_project_for_rules",
-            lambda project_id, name, description, c=code: {"ok": False, "error": c},
+            lambda project_id, name, description, language="中文", c=code: {
+                "ok": False,
+                "error": c,
+            },
         )
         assert bridge.update_project_for_rules(1, "Renamed", "new") == {
             "ok": False,
@@ -3700,7 +3723,7 @@ def test_update_project_for_rules_maps_error_codes_to_chinese(monkeypatch):
 
 
 def test_update_project_for_rules_unknown_exception_collapses(monkeypatch):
-    def boom(project_id, name, description=""):
+    def boom(project_id, name, description="", language="中文"):
         raise RuntimeError(
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
@@ -3748,7 +3771,7 @@ def test_update_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypat
     monkeypatch.setattr(
         bridge_rules_module.project_api,
         "update_project_for_rules",
-        lambda project_id, name, description="": {
+        lambda project_id, name, description="", language="中文": {
             "ok": True,
             "project": dict(_PROJECT_LIFECYCLE_SUMMARY),
         },
@@ -4095,7 +4118,8 @@ def test_get_project_rules_payload_includes_display_safe_lifecycle_flags(monkeyp
     assert client["can_toggle"] is True
     assert client["can_archive"] is True
 
-    excluded = result["projects"][1]
+    assert len(result["projects"]) == 1
+    excluded = result["advanced"]["excluded_project"]
     assert excluded["is_system"] is True
     assert excluded["editable"] is False
     assert excluded["can_toggle"] is False

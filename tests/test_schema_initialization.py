@@ -42,6 +42,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "is_confirmed" not in activity_columns
     assert "created_by" in project_columns
     assert "enabled" in project_columns
+    assert "language" in project_columns
     assert "default_billable" not in project_columns
     assert "suggested_project_name" in assignment_columns
     assert "resource" not in tables
@@ -64,8 +65,10 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert min_activity is None
     assert uncategorized is not None
     assert uncategorized["created_by"] == "system"
+    assert uncategorized["language"] == "中文"
     assert excluded is not None
     assert excluded["created_by"] == "system"
+    assert excluded["language"] == "中文"
     assert excluded["enabled"] == 0
     assert excluded["description"] == "命中后匿名记录"
     assert exclude_rule_count["c"] == 0
@@ -110,6 +113,7 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert "is_confirmed" not in activity_columns
         assert "created_by" in project_columns
         assert "enabled" in project_columns
+        assert "language" in project_columns
         assert "default_billable" not in project_columns
         assert "suggested_project_name" in assignment_columns
         assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
@@ -120,6 +124,5 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone() is None
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone() is None
         assert conn.execute("SELECT value FROM settings WHERE key = 'min_activity_seconds'").fetchone() is None
-        assert conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone() is not None
-        assert conn.execute("SELECT id FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone() is not None
-
+        assert conn.execute("SELECT language FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()["language"] == "中文"
+        assert conn.execute("SELECT language FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone()["language"] == "中文"

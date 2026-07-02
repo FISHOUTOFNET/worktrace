@@ -411,27 +411,21 @@ def test_styles_css_timeline_and_correction_shell_not_removed():
 
 
 def test_index_html_project_rules_page_migrated_after():
-    """Project Rules page is active; supports existing rule
-    toggles (5B) and keyword rule creation (5C). The boundary copy lists
-    the supported ops."""
+    """Project Rules page is active with the lightweight IA."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find('id="page-rules"')
     assert pos != -1
-    end = source.find("</section>", pos)
+    end = source.find('<section id="page-settings"', pos)
     section = source[pos:end]
     assert "WebView 迁移中" not in section
     assert "项目规则" in section
-    # boundary copy mentions keyword creation. The supported-ops clause references enable/disable.
-    # supported-ops clause still references enable/disable.
-    assert "启用/停用" in section
-    assert "新增关键词规则" in section
-    # single-rule impact preview + apply-to-history are supported alongside batch preview / apply / enable / disable.
-    # supported alongside batch preview / apply / enable / disable.
-    assert "编辑" in section
-    assert "归档" in section
-    assert "预览规则影响" in section
+    assert "新建规则" in section
+    assert "新建项目" in section
+    assert "高级功能" in section
+    assert "按上次使用排序" in section
+    assert "按首字母排序" in section
     assert "应用到历史记录" in section
-    assert "批量" in section
+    assert "批量" not in section
 
 
 

@@ -336,17 +336,8 @@
         if (clearAllBtn) {
             clearAllBtn.addEventListener("click", App.clearAllLocalData);
         }
-        var keywordCreateBtn = document.getElementById("rules-keyword-create-submit");
-        if (keywordCreateBtn) {
-            keywordCreateBtn.addEventListener("click", App.handleKeywordCreateSubmit);
-        }
-        var folderCreateBtn = document.getElementById("rules-folder-create-submit");
-        if (folderCreateBtn) {
-            folderCreateBtn.addEventListener("click", App.handleFolderCreateSubmit);
-        }
-        var projectCreateBtn = document.getElementById("rules-project-create-submit");
-        if (projectCreateBtn) {
-            projectCreateBtn.addEventListener("click", App.handleProjectCreateSubmit);
+        if (App.initRulesPanelEvents) {
+            App.initRulesPanelEvents();
         }
         // First-run privacy notice handlers. The accept button is only
         var firstRunAcceptBtn = document.getElementById("first-run-notice-accept-btn");
