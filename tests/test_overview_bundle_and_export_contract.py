@@ -278,11 +278,15 @@ def test_overview_view_model_is_display_safe(bridge):
 
 def test_timeline_returns_live_projection(bridge):
     """Timeline payload must carry a ``live_projection`` from the same
-    snapshot sample."""
+    snapshot sample. Under the unified Activity Display Model the legacy
+    ``"virtual"`` state is split into ``"virtual_pending"`` (no absorb
+    anchor) / ``"absorbed_pending"`` (absorb anchor exists); a fresh
+    unpersisted normal snapshot with no prior confirmed activity yields
+    ``"virtual_pending"``."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     timeline = bridge.get_timeline()
     assert "live_projection" in timeline
-    assert timeline["live_projection"]["live_state"] == "virtual"
+    assert timeline["live_projection"]["live_state"] == "virtual_pending"
 
 
 def test_timeline_session_uses_display_project_and_description(bridge):
@@ -314,13 +318,17 @@ def test_timeline_pending_candidate_does_not_preempt_session_project(bridge):
 def test_timeline_detail_carries_own_live_projection(bridge):
     """``get_timeline_session_details()`` must return its
     OWN ``live_projection`` — the detail ticker must NOT reuse the
-    Timeline main payload's projection."""
+    Timeline main payload's projection. Under the unified Activity
+    Display Model the legacy ``"virtual"`` state is split into
+    ``"virtual_pending"`` / ``"absorbed_pending"``; a fresh unpersisted
+    normal snapshot with no prior confirmed activity yields
+    ``"virtual_pending"``."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     timeline = bridge.get_timeline()
     # Find the virtual session id (or use empty for virtual detail).
     details = bridge.get_timeline_session_details([], None)
     assert "live_projection" in details
-    assert details["live_projection"]["live_state"] == "virtual"
+    assert details["live_projection"]["live_state"] == "virtual_pending"
     # The detail's live_projection sample_id must be present.
     assert "sample_id" in details
 

@@ -493,93 +493,123 @@ def test_get_refresh_state_is_json_serializable_with_snapshot(bridge):
 
 
 def test_get_recent_activities_prepends_virtual_item_for_normal_snapshot(bridge):
-    """when the current snapshot is a normal unpersisted
-    activity, ``get_recent_activities`` must prepend a virtual live item
-    with ``is_virtual`` / ``is_virtual_live`` True, ``activity_id`` 0,
-    ``source`` "snapshot", ``edit_disabled`` True, and a non-empty
-    ``live_display_key``. The DB is never written."""
+    """NEW unified Activity Display Model: a normal unpersisted snapshot
+    (``virtual_pending``) is ONLY visible in the "current activity" area.
+    ``get_recent_activities`` does NOT inject a virtual recent item —
+    the activities list comes purely from DB rows.
+
+    The unified live clock (``result["live_clock"]``) IS present and
+    carries ``live_state`` (``virtual_pending`` or ``absorbed_pending``)
+    plus a non-empty ``display_span_id`` so the frontend can render the
+    live activity in the current-activity area without a virtual row in
+    Recent.
+    """
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     result = bridge.get_recent_activities()
     assert result["ok"] is True
-    assert result["live_display"]["is_virtual_live"] is True
-    items = result["activities"]
-    assert len(items) >= 1, "virtual live item must be prepended"
-    virtual = items[0]
-    assert virtual["is_virtual"] is True
-    assert virtual["is_virtual_live"] is True
-    assert virtual["activity_id"] == 0
-    assert virtual["source"] == "snapshot"
-    assert virtual["edit_disabled"] is True
-    assert virtual["is_in_progress"] is True
-    assert virtual["live_display_key"]
-    assert virtual["duration_seconds"] > 0
-    # stable_live_key / stable_live_key_hash
-    assert virtual["stable_live_key"]
-    assert virtual["stable_live_key_hash"]
+    # No virtual recent item is injected for a virtual_pending snapshot.
+    for item in result["activities"]:
+        assert item.get("source") != "snapshot", (
+            "virtual_pending snapshot must NOT inject a virtual recent item "
+            "with source=='snapshot'"
+        )
+        assert item.get("activity_id") != 0, (
+            "virtual_pending snapshot must NOT inject a virtual recent item "
+            "with activity_id==0"
+        )
+        assert item.get("is_virtual") is not True, (
+            "virtual_pending snapshot must NOT inject a virtual recent item "
+            "with is_virtual==True"
+        )
+    # The unified live clock IS present even though no virtual row is
+    # injected into Recent.
+    assert "live_clock" in result, (
+        "get_recent_activities must expose the unified live_clock even for "
+        "virtual_pending (current-activity area still renders it)"
+    )
+    assert result["live_clock"]["live_state"] in (
+        "virtual_pending",
+        "absorbed_pending",
+    )
+    assert result["live_clock"]["display_span_id"], (
+        "live_clock.display_span_id must be non-empty for a normal "
+        "unpersisted snapshot"
+    )
 
 
 def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
-    """when the current snapshot is a normal unpersisted
-    activity, ``get_timeline`` must prepend a virtual live session.
-    ``today_total_seconds`` must include the virtual session's fetched
-    snapshot duration so the displayed total is non-zero even when there
-    are no DB sessions. Root-level projection fields are absent; live
-    metadata lives only on the per-row contract."""
+    """NEW unified Activity Display Model: a normal unpersisted snapshot
+    (``virtual_pending``) does NOT inject a virtual live session into the
+    Timeline. ``result["sessions"]`` comes purely from DB rows.
+
+    The unified live clock (``result["live_clock"]``) IS present with
+    ``live_state`` ``virtual_pending`` / ``absorbed_pending`` and a
+    non-empty ``display_span_id`` so the frontend can render the live
+    activity in the current-activity area without polluting the Timeline
+    sessions list.
+    """
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     result = bridge.get_timeline()
     assert result["ok"] is True
-    # Root-level projection fields must NOT be present.
-    assert "live_projected_session_id" not in result
-    assert "live_projected_seconds" not in result
-    sessions = result["sessions"]
-    assert len(sessions) >= 1, "virtual live session must be prepended"
-    virtual = sessions[0]
-    # Virtual live session contract fields.
-    assert virtual["is_virtual"] is True
-    assert virtual["is_virtual_live"] is True
-    assert virtual["live_state"] == "virtual"
-    assert virtual["session_id"].startswith("virtual-live:")
-    assert virtual["source"] == "snapshot"
-    assert virtual["edit_disabled"] is True
-    assert virtual["is_in_progress"] is True
-    assert virtual["live_display_key"]
-    # Unified live clock fields (scheme A).
-    assert virtual["stable_live_key"]
-    assert virtual["stable_live_key_hash"]
-    assert int(virtual["live_started_at_epoch_ms"]) > 0
-    assert int(virtual["carry_seconds"]) >= 0
-    assert int(virtual["duration_seconds"]) > 0
-    # Timeline total must include the virtual session's duration.
-    assert int(result["today_total_seconds"]) > 0
-    assert int(result["today_total_seconds"]) >= int(virtual["duration_seconds"])
+    # No virtual session is injected for a virtual_pending snapshot.
+    for s in result["sessions"]:
+        assert s.get("source") != "snapshot", (
+            "virtual_pending snapshot must NOT inject a virtual session "
+            "with source=='snapshot'"
+        )
+        assert not str(s.get("session_id", "")).startswith("virtual-live:"), (
+            "virtual_pending snapshot must NOT inject a session with "
+            "session_id starting with 'virtual-live:'"
+        )
+    # The unified live clock IS present even though no virtual session
+    # is injected into the Timeline.
+    assert "live_clock" in result, (
+        "get_timeline must expose the unified live_clock even for "
+        "virtual_pending (current-activity area still renders it)"
+    )
+    assert result["live_clock"]["live_state"] in (
+        "virtual_pending",
+        "absorbed_pending",
+    )
+    assert result["live_clock"]["display_span_id"], (
+        "live_clock.display_span_id must be non-empty for a normal "
+        "unpersisted snapshot"
+    )
 
 
 def test_get_timeline_session_details_returns_virtual_detail_row(bridge):
-    """when ``activity_ids`` is empty and the current snapshot
-    is a normal unpersisted activity, ``get_timeline_session_details``
-    must return a single virtual detail row. The row uses the snapshot's
-    display-safe resource/app/project — it is NEVER projected onto an old
-    DB row. ``activity_id`` must be 0 and ``edit_disabled`` must be True."""
+    """NEW unified Activity Display Model: a normal unpersisted snapshot
+    (``virtual_pending``) does NOT inject a virtual detail row into
+    ``get_timeline_session_details``. With ``activity_ids=[]`` and no
+    anchor, the activities list is empty — the live activity is only
+    visible in the current-activity area.
+
+    The unified live clock fields (``live_clock`` / ``display_span_id``)
+    ARE present on the payload so the frontend can render the live
+    activity without a virtual detail row.
+    """
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     result = bridge.get_timeline_session_details([], None)
     assert result["ok"] is True
-    rows = result["activities"]
-    assert len(rows) == 1, "exactly one virtual detail row must be returned"
-    row = rows[0]
-    assert row["is_virtual"] is True
-    assert row["is_virtual_live"] is True
-    assert row["activity_id"] == 0
-    assert row["source"] == "snapshot"
-    assert row["edit_disabled"] is True
-    assert row["is_in_progress"] is True
-    assert row["live_display_key"]
-    assert row["duration_seconds"] > 0
-    # stable_live_key / stable_live_key_hash
-    assert row["stable_live_key"]
-    assert row["stable_live_key_hash"]
-    # The virtual row must use the snapshot's display-safe project, not a
-    # stale DB row.
-    assert row["project_name"] == "TestProject"
+    # No virtual detail row is injected for a virtual_pending snapshot.
+    assert result["activities"] == [], (
+        "virtual_pending snapshot must NOT inject a virtual detail row "
+        "(activities list must be empty when activity_ids is empty)"
+    )
+    # The unified live clock IS present even though no virtual detail
+    # row is injected.
+    assert "live_clock" in result, (
+        "get_timeline_session_details must expose the unified live_clock "
+        "even for virtual_pending (current-activity area still renders it)"
+    )
+    assert result["live_clock"]["live_state"] in (
+        "virtual_pending",
+        "absorbed_pending",
+    )
+    assert result["display_span_id"], (
+        "root-level display_span_id must be non-empty for a normal "
+        "unpersisted snapshot"
+    )
 
 
 def test_virtual_items_do_not_leak_sensitive_fields(bridge):
@@ -928,39 +958,86 @@ def test_get_timeline_total_seconds_does_not_double_count_persisted_open(bridge)
 
 
 def test_get_timeline_total_seconds_includes_virtual_duration_once(bridge):
-    """Section 二.1 / 六.2: ``total_seconds`` must include the virtual
-    live session's duration exactly once. The virtual session has no DB
-    row, so its duration is added to the total.
+    """NEW unified Activity Display Model: a normal unpersisted snapshot
+    (``virtual_pending``) does NOT add a virtual session to the Timeline,
+    so its elapsed duration is NOT included in ``total_seconds`` /
+    ``today_total_seconds``. The live activity's duration is only visible
+    in the current-activity area.
+
+    ``live_clock.is_project_duration_live`` is False for
+    ``virtual_pending`` because there is no DB row to project the
+    duration onto.
     """
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
-    timeline = bridge.get_timeline()
-    assert timeline["ok"] is True
-    virtual_sessions = [s for s in timeline["sessions"] if s.get("is_virtual_live")]
-    assert len(virtual_sessions) == 1
-    virtual_seconds = int(virtual_sessions[0]["duration_seconds"])
-    assert virtual_seconds > 0
-    # total_seconds includes the virtual duration exactly once.
-    assert int(timeline["total_seconds"]) >= virtual_seconds
-    # With no DB sessions, total == virtual_seconds.
-    assert int(timeline["total_seconds"]) == virtual_seconds
+    result = bridge.get_timeline()
+    assert result["ok"] is True
+    # No virtual session is injected for a virtual_pending snapshot.
+    assert result["sessions"] == [], (
+        "virtual_pending snapshot must NOT inject a virtual session into "
+        "the Timeline (sessions list must be empty when there are no DB rows)"
+    )
+    # No DB sessions and no virtual duration added -> totals are 0.
+    assert int(result["total_seconds"]) == 0, (
+        "total_seconds must NOT include virtual_pending duration "
+        "(no DB sessions, no virtual projection)"
+    )
+    assert int(result["today_total_seconds"]) == 0, (
+        "today_total_seconds must NOT include virtual_pending duration "
+        "(no DB sessions, no virtual projection)"
+    )
+    # The unified live clock IS present, but project-duration-live is
+    # False for virtual_pending (no DB row to project onto).
+    assert "live_clock" in result
+    assert result["live_clock"]["is_project_duration_live"] is False, (
+        "is_project_duration_live must be False for virtual_pending "
+        "(no DB row to project the live duration onto)"
+    )
 
 
 def test_get_timeline_today_virtual_live_session_is_edit_disabled(bridge):
-    """Section 二.1 / 六.2: the virtual live session injected for today's
-    view must be edit-disabled with a clear ``disable_reason`` so the
-    user cannot modify the unfinished activity.
+    """NEW unified Activity Display Model: since no virtual session is
+    injected for ``virtual_pending``, this test now verifies the
+    edit-disabled contract on a ``persisted_open`` activity instead.
+
+    When the current snapshot is a persisted_open activity (the real DB
+    row exists and ``is_persisted=True`` with ``persisted_activity_id``
+    set), the live overlay is applied to the real DB session row. That
+    session must be edit-disabled with a clear ``disable_reason`` and
+    carry ``live_state == "persisted_open"`` /
+    ``is_live_projected == True``.
     """
-    _set_snapshot(_normal_snapshot(elapsed_seconds=120))
-    timeline = bridge.get_timeline()
-    assert timeline["ok"] is True
-    virtual_sessions = [s for s in timeline["sessions"] if s.get("is_virtual_live")]
-    assert len(virtual_sessions) == 1
-    virtual = virtual_sessions[0]
-    assert virtual["edit_disabled"] is True
-    assert virtual["disable_reason"]
-    assert virtual["is_in_progress"] is True
-    assert virtual["source"] == "snapshot"
-    assert virtual["activity_ids"] == []
+    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=60,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+    result = bridge.get_timeline()
+    assert result["ok"] is True
+    # Find the persisted_open session (matching by first_activity_id).
+    persisted_session = None
+    for s in result["sessions"]:
+        if int(s.get("first_activity_id") or 0) == aid:
+            persisted_session = s
+            break
+    assert persisted_session is not None, (
+        "persisted_open DB session must appear in today's Timeline"
+    )
+    assert persisted_session["edit_disabled"] is True, (
+        "persisted_open session must be edit-disabled"
+    )
+    assert persisted_session["disable_reason"], (
+        "persisted_open session must carry a non-empty disable_reason"
+    )
+    assert persisted_session["live_state"] == "persisted_open", (
+        "persisted_open session must carry live_state=='persisted_open'"
+    )
+    assert persisted_session["is_live_projected"] is True, (
+        "persisted_open session must carry is_live_projected==True"
+    )
 
 
 def test_get_timeline_persisted_open_session_is_edit_disabled(bridge):

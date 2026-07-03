@@ -45,12 +45,20 @@
                 throw new Error(msg);
             });
             if (!bundle) return;
+            // Register the unified live clock from the bundle BEFORE rendering so the 1s ticker can
+            // render KPIs, current activity, and recent items from the single registered clock. The
+            // bundle carries ``live_clock`` / ``activity_display_model`` at the top level; downstream
+            // ``showOverview`` / ``showRecent`` re-register defensively (same clock, no-op overwrite).
+            App.registerLiveClock(bundle);
             var overview = bundle.overview || {};
             // Augment the overview sub-payload with the bundle-level
             overview.date = bundle.date || overview.date;
             overview.current_activity = bundle.current_activity || overview.current_activity;
             overview.live_projection = bundle.live_projection || overview.live_projection;
             overview.live_display = bundle.live_display || bundle.live_projection || overview.live_display;
+            overview.live_clock = bundle.live_clock || overview.live_clock;
+            overview.activity_display_model = bundle.activity_display_model || overview.activity_display_model;
+            overview.display_span_id = bundle.display_span_id || overview.display_span_id;
             overview.sample_id = bundle.sample_id || overview.sample_id;
             if (overview.today_total_seconds === undefined) {
                 overview.today_total_seconds = bundle.today_total_seconds || 0;
@@ -69,6 +77,9 @@
                 activities: bundle.activities || [],
                 live_projection: bundle.live_projection || null,
                 live_display: bundle.live_display || bundle.current_activity || null,
+                live_clock: bundle.live_clock || null,
+                activity_display_model: bundle.activity_display_model || null,
+                display_span_id: bundle.display_span_id || "",
                 sample_id: bundle.sample_id || ""
             });
         }).catch(function () {
@@ -376,6 +387,11 @@
             var newRevision = state.refresh_revision;
             var isFirstCheck = prevRevision === null || prevRevision === undefined;
             App.lastRefreshState = state;
+            // Register the unified live clock from the lightweight refresh_state payload so the 1s
+            // ticker keeps rendering every live duration WITHOUT a heavy page-model refresh. This is
+            // the "live model refresh" vs "page view model refresh" split: unchanged revision → only
+            // the live clock updates; the structural page payload is NOT reloaded.
+            App.registerLiveClock(state);
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision
             if (isFirstCheck || prevRevision !== newRevision) {
@@ -430,6 +446,9 @@
                 var state = App.handleResult(result, function () { return null; });
                 if (state) {
                     App.lastRefreshState = state;
+                    // Seed the unified live clock from the initial refresh_state so the first heartbeat
+                    // tick can render live durations before the first revision-change page refresh.
+                    App.registerLiveClock(state);
                 }
                 startHeartbeat();
             }, function () {

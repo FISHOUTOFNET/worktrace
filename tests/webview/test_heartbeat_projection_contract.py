@@ -458,38 +458,45 @@ def test_ticker_does_not_use_browser_storage():
     )
 
 
-def test_ticker_locates_timeline_session_via_data_session_id():
-    """the ticker must locate each Timeline session's DOM via
-    ``data-session-id`` (querySelector), NOT via array index into a
-    ``querySelectorAll`` snapshot. This prevents a mismatch when a
-    revision change re-renders the list between ticks."""
+def test_ticker_locates_live_spans_via_data_display_span_id():
+    """the ticker must walk every DOM node carrying
+    ``data-display-span-id`` (via ``querySelectorAll``) and render it
+    with the unified ``liveSeconds`` clock. This is the single DOM-walk
+    path for every live row (recent / session / detail) — the old
+    per-region ``[data-session-id="..."]`` selectors are gone."""
     source = read_js("core.js")
-    pos = source.find("function applyLocalTicker")
-    assert pos != -1
-    end_func = source.find("\n    function ", pos + 1)
-    if end_func == -1:
-        end_func = source.find("\n    App.applyLocalTicker", pos + 1)
-    body = source[pos:end_func] if end_func != -1 else source[pos:]
-    # The ticker must use a data-session-id scoped querySelector.
-    assert '[data-session-id="' in body, (
-        "applyLocalTicker must locate timeline sessions via data-session-id"
+    body = func_body(source, "applyLocalTicker")
+    # The unified selector + DOM walk drive every live row.
+    assert '[data-display-span-id]' in body, (
+        "applyLocalTicker must use the unified [data-display-span-id] selector"
+    )
+    assert 'querySelectorAll' in body, (
+        "applyLocalTicker must walk DOM nodes via querySelectorAll"
+    )
+    assert 'liveSeconds' in body, (
+        "applyLocalTicker must render each live span via liveSeconds(clock)"
     )
 
 
 def test_ticker_skips_detail_updates_when_editing():
-    """the ticker must NOT update detail-row durations when
-    a Timeline editor / split editor / correction shell write is in
-    progress so input focus and button state are never disturbed."""
-    source = read_js("core.js")
-    pos = source.find("function applyLocalTicker")
-    assert pos != -1
-    end_func = source.find("\n    function ", pos + 1)
-    if end_func == -1:
-        end_func = source.find("\n    App.applyLocalTicker", pos + 1)
-    body = source[pos:end_func] if end_func != -1 else source[pos:]
-    assert "_timelineEditingActive" in body, (
-        "applyLocalTicker must guard detail-row updates with "
-        "App._timelineEditingActive() so editing is never disturbed"
+    """the ticker only updates DOM text and never re-renders lists,
+    so it no longer needs the ``_timelineEditingActive`` guard itself.
+    The editing guard has moved to the page-refresh / reconciliation
+    level (``refreshCurrentPageData`` / ``fullReconcileCollectionViews``)
+    which DO re-render lists. ``_timelineEditingActive`` must still be
+    defined in ``core.js`` via ``function timelineEditingActive``."""
+    core_source = read_js("core.js")
+    assert "function timelineEditingActive" in core_source, (
+        "core.js must still define function timelineEditingActive so the "
+        "page-refresh / reconciliation paths can guard against editing"
+    )
+    init_source = read_js("init.js")
+    refresh_body = func_body(init_source, "refreshCurrentPageData")
+    reconcile_body = func_body(init_source, "fullReconcileCollectionViews")
+    assert "_timelineEditingActive" in refresh_body or "_timelineEditingActive" in reconcile_body, (
+        "the editing guard must live in refreshCurrentPageData or "
+        "fullReconcileCollectionViews (the page-refresh / reconciliation paths), "
+        "not in applyLocalTicker"
     )
 
 
@@ -564,11 +571,14 @@ def test_statistics_page_has_closed_only_hint_css():
 
 
 def test_ticker_live_eligible_checks_live_state():
-    """issue 1: the ticker must only increment normal project
-    duration when ``live_display.live_state`` is ``"virtual"`` or
-    ``"persisted_open"``. idle / paused / excluded / error must NOT be
-    eligible. The ``tickerLiveEligible`` helper centralises this check so
-    Overview / Recent / Timeline all use the same eligibility decision."""
+    """``tickerLiveEligible`` now reads from the unified live-clock
+    registry via ``getActiveLiveClock()`` and returns
+    ``clock.is_project_duration_live === true``. The old ``live_state``
+    enum check (``"virtual"`` / ``"persisted_open"``) has been replaced
+    by the unified ``is_project_duration_live`` flag on the registered
+    clock — a single boolean distinguishes live-eligible states from
+    non-eligible ones (idle / paused / excluded / error /
+    virtual_pending)."""
     source = read_js("core.js")
     assert "function tickerLiveEligible" in source, (
         "core.js must define function tickerLiveEligible for unified eligibility"
@@ -577,55 +587,52 @@ def test_ticker_live_eligible_checks_live_state():
         "core.js must expose App.tickerLiveEligible"
     )
     body = func_body(source, "tickerLiveEligible")
-    # Must check live_display.live_state for "virtual" and "persisted_open".
-    assert "live_state" in body, (
-        "tickerLiveEligible must check live_display.live_state"
+    assert "getActiveLiveClock" in body, (
+        "tickerLiveEligible must read from the unified registry via "
+        "getActiveLiveClock()"
     )
-    assert "virtual" in body, (
-        "tickerLiveEligible must accept live_state === 'virtual'"
-    )
-    assert "persisted_open" in body, (
-        "tickerLiveEligible must accept live_state === 'persisted_open'"
+    assert "is_project_duration_live" in body, (
+        "tickerLiveEligible must return clock.is_project_duration_live === true"
     )
 
 
-def test_ticker_does_not_read_dom_text_as_baseline():
-    """issue 6: the ticker must NOT use DOM current text as the
-    duration baseline. The baseline must come from the cached payload's
-    ``duration_seconds`` field. This prevents the duration from
-    accelerating growth on each tick."""
+def test_ticker_uses_unified_clock_not_cached_snapshot():
+    """the ticker must NOT read from page-level cached snapshots
+    (``rItem.duration_seconds``). It reads from the unified live-clock
+    registry via ``getActiveLiveClock()`` and renders with
+    ``liveSeconds(clock)`` so all live rows share the same wall-clock
+    delta source — no per-region cached-snapshot baseline."""
     source = read_js("core.js")
-    pos = source.find("function applyLocalTicker")
-    assert pos != -1
-    end_func = source.find("\n    function ", pos + 1)
-    if end_func == -1:
-        end_func = source.find("\n    App.applyLocalTicker", pos + 1)
-    body = source[pos:end_func] if end_func != -1 else source[pos:]
-    # The recent section must use parseInt(rItem.duration_seconds) from the
-    # cached payload, not readDurationSecondsFromText(DOM element).
-    assert "rItem.duration_seconds" in body, (
-        "applyLocalTicker recent section must use rItem.duration_seconds "
-        "from the cached payload as the baseline"
+    body = func_body(source, "applyLocalTicker")
+    assert "rItem.duration_seconds" not in body, (
+        "applyLocalTicker must not read rItem.duration_seconds from a cached "
+        "page-level snapshot; the unified live clock is the single source"
+    )
+    assert "liveSeconds" in body, (
+        "applyLocalTicker must render via liveSeconds(clock) (the unified formula)"
+    )
+    assert "getActiveLiveClock" in body, (
+        "applyLocalTicker must read the active clock via getActiveLiveClock()"
     )
 
 
-def test_ticker_locates_live_detail_by_flag_not_last_row():
-    """issues 2 & 10: the ticker must locate the live detail row
-    by flag (``is_virtual_live || is_in_progress``) from the cached
-    payload, NOT by using the last row of the detail list. The detail list
-    is newest-first so the old ``detailRows[length-1]`` was wrong."""
+def test_ticker_locates_live_rows_via_display_span_id():
+    """the ticker locates every live row via the unified
+    ``data-display-span-id`` DOM walk and only renders rows whose clock
+    has ``is_live === true``. The old ``is_virtual_live`` /
+    ``is_in_progress`` flag checks are no longer used by the ticker —
+    the ``is_live`` flag on the registered clock is the single
+    eligibility signal."""
     source = read_js("core.js")
-    pos = source.find("function applyLocalTicker")
-    assert pos != -1
-    end_func = source.find("\n    function ", pos + 1)
-    if end_func == -1:
-        end_func = source.find("\n    App.applyLocalTicker", pos + 1)
-    body = source[pos:end_func] if end_func != -1 else source[pos:]
-    assert "is_virtual_live" in body, (
-        "applyLocalTicker detail section must check is_virtual_live flag"
+    body = func_body(source, "applyLocalTicker")
+    assert "data-display-span-id" in body, (
+        "applyLocalTicker must locate live rows via data-display-span-id"
     )
-    assert "is_in_progress" in body, (
-        "applyLocalTicker detail section must check is_in_progress flag"
+    assert "is_live" in body, (
+        "applyLocalTicker must check the clock's is_live flag before rendering"
+    )
+    assert "is_virtual_live" not in body, (
+        "applyLocalTicker must not reference the removed is_virtual_live flag"
     )
 
 
@@ -686,25 +693,27 @@ def test_render_session_details_skips_rerender_when_editing():
 
 
 def test_ticker_uses_unified_live_clock_scheme_a():
-    """the ticker must use the unified live clock
-    (scheme A: ``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
-    anchored on a stable start-time anchor. ``tickerDeltaSeconds`` must read
-    ``live_started_at_epoch_ms`` and ``carry_seconds`` from the payload.
-    It must NOT fall back to ``snapshot_at_epoch_ms``; when
-    ``live_started_at_epoch_ms`` is missing it returns 0."""
+    """the unified live clock formula
+    (``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
+    lives in ``liveSeconds(clock)``. ``tickerDeltaSeconds`` is now a
+    compatibility wrapper that reads the active clock from the registry
+    via ``getActiveLiveClock()`` and delegates to ``liveSeconds(clock)``
+    rather than reading ``live_started_at_epoch_ms`` /
+    ``carry_seconds`` directly from the payload."""
     source = read_js("core.js")
+    live_seconds_body = func_body(source, "liveSeconds")
+    assert "live_started_at_epoch_ms" in live_seconds_body, (
+        "liveSeconds must read live_started_at_epoch_ms from the clock"
+    )
+    assert "carry_seconds" in live_seconds_body, (
+        "liveSeconds must read carry_seconds from the clock"
+    )
     body = func_body(source, "tickerDeltaSeconds")
-    assert "live_started_at_epoch_ms" in body, (
-        "tickerDeltaSeconds must read live_started_at_epoch_ms from the payload"
+    assert "getActiveLiveClock" in body, (
+        "tickerDeltaSeconds must read the active clock via getActiveLiveClock()"
     )
-    assert "carry_seconds" in body, (
-        "tickerDeltaSeconds must read carry_seconds from the payload"
-    )
-    # The snapshot_at_epoch_ms fallback has been removed; the
-    # function returns 0 when live_started_at_epoch_ms is missing.
-    assert "snapshot_at_epoch_ms" not in body, (
-        "tickerDeltaSeconds must not fall back to snapshot_at_epoch_ms; "
-        "it returns 0 when live_started_at_epoch_ms is missing"
+    assert "liveSeconds" in body, (
+        "tickerDeltaSeconds must delegate to liveSeconds(clock)"
     )
 
 

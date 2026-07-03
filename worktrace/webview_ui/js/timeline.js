@@ -8,6 +8,11 @@
 
     function showTimeline(data) {
         if (!data) return;
+        // Register the unified live clock carried by the Timeline payload FIRST so the 1s ticker
+        // renders the live session row, the timeline total, and the current-activity area from the
+        // same single clock registered by Overview / Recent / Details. The structural cache
+        // ``lastTimelineData`` below is only for re-render on page switch, never a live-seconds source.
+        App.registerLiveClock(data);
         App.lastTimelineData = data;
         var dateInput = document.getElementById("timeline-date-input");
         if (dateInput) dateInput.value = data.date || "";
@@ -65,8 +70,12 @@
             // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
             // the virtual → persisted_open transition (stable_live_key_hash stays the same when session_id changes).
             var stableKeyHash = s.stable_live_key_hash || "";
+            // Unified live-span DOM attribute: when present, the ticker renders this row from the
+            // single registered live clock (same clock as Overview / Recent / Details).
+            var sessSpanId = s.display_span_id || "";
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
                 + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
+                + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
                 + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startTimeOnly) + '｜' + App.escapeHtml(sDurText) + '"'
                 + '>'
                 + '<div class="timeline-item-main">'
@@ -242,6 +251,10 @@
         if (App.activityTimeSaving || App.activitySplitSaving) {
             return;
         }
+        // Register the unified live clock carried by the Details payload so the 1s ticker renders the
+        // live detail row from the same single clock registered by Overview / Recent / Timeline. The
+        // structural cache below is only for re-render on page switch, never a live-seconds source.
+        App.registerLiveClock(data);
         // Cache the session-details payload so the 1s heartbeat ticker can increment the live-projected detail
         // row's duration without a bridge round-trip. The ticker only updates DOM text, never re-renders the list.
         App.lastSessionDetailsData = data;
@@ -272,8 +285,12 @@
             // Stable live key data attribute so the detail ticker locates the row across the virtual → persisted_open
             // transition (stable_live_key_hash stays the same when activity_id changes; ticker falls back to activity_id).
             var detailStableKey = a.stable_live_key_hash || "";
+            // Unified live-span DOM attribute: when present, the ticker renders this row from the
+            // single registered live clock (same clock as Overview / Recent / Timeline sessions).
+            var detailSpanId = a.display_span_id || "";
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
                 + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
+                + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
                 + ' data-detail-index="' + i + '"'
                 + '>'
                 + '<div class="detail-item-time">' + App.escapeHtml(startTimeOnly) + '</div>'

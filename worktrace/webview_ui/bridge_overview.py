@@ -113,7 +113,11 @@ class OverviewBridgeMixin:
 
         Selects the recent-activities sub-payload and the live-display
         summary from the unified Overview ViewModel so the recent list
-        and the Overview share the same snapshot sample.
+        and the Overview share the same snapshot sample. The unified
+        live clock fields (``live_clock``, ``display_span_id``,
+        ``activity_display_model``, ``live_projection``) are surfaced so
+        the Recent ViewModel carries the same contract fields as Overview
+        / Timeline / Details under the unified Activity Display Model.
         """
         try:
             vm = view_model_api.get_overview_view_model()
@@ -121,6 +125,10 @@ class OverviewBridgeMixin:
                 "ok": True,
                 "activities": vm.get("activities", []),
                 "live_display": vm.get("live_display", {}),
+                "live_clock": vm.get("live_clock", {}),
+                "display_span_id": vm.get("display_span_id", ""),
+                "activity_display_model": vm.get("activity_display_model", {}),
+                "live_projection": vm.get("live_projection", {}),
             }
         except Exception:
             logger.exception("webview bridge get_recent_activities failed")

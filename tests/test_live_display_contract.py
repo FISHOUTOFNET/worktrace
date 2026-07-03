@@ -93,42 +93,88 @@ def _normal_snapshot(
 
 
 def test_stable_live_key_consistent_across_overview_recent_timeline_detail(bridge):
-    """Overview / Recent / Timeline / Detail must
-    consume the same stable_live_key / stable_live_key_hash from the same
-    snapshot. Each bridge method delegates to
-    ``build_current_activity_summary`` / ``build_virtual_session`` /
-    ``build_virtual_detail_row``, so the key must be identical everywhere."""
-    _set_snapshot(_normal_snapshot(elapsed_seconds=120))
+    """Under the unified Activity Display Model, a ``persisted_open``
+    snapshot must surface the SAME unified ``live_clock`` identity
+    (``display_span_id``, ``stable_live_key_hash``,
+    ``live_started_at_epoch_ms``) across Overview / Recent / Timeline /
+    Details. The real persisted DB row in each list is overlaid with the
+    same ``display_span_id`` and ``stable_live_key_hash`` via
+    ``apply_live_span_to_row`` (no virtual session / virtual detail row
+    is injected anymore)."""
+    aid, start_time = _create_real_open_activity(elapsed_seconds=120)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=120,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
     overview = bridge.get_overview()
     recent = bridge.get_recent_activities()
     timeline = bridge.get_timeline()
-    details = bridge.get_timeline_session_details([], None)
+    details = bridge.get_timeline_session_details([aid], None)
 
-    # The live_display payload (from build_current_activity_summary) must
-    # carry stable_live_key / stable_live_key_hash.
-    ov_ld = overview.get("live_display", {})
-    rc_ld = recent.get("live_display", {})
-    tl_ld = timeline.get("live_display", {})
-    dt_ld = details.get("live_display", {})
+    # display_span_id must be non-empty for a persisted_open snapshot.
+    assert overview["live_clock"]["display_span_id"]
 
-    assert ov_ld["stable_live_key"]
-    assert ov_ld["stable_live_key_hash"]
+    # All four ViewModels must share the same stable_live_key_hash.
+    assert (
+        overview["live_clock"]["stable_live_key_hash"]
+        == recent["live_clock"]["stable_live_key_hash"]
+        == timeline["live_clock"]["stable_live_key_hash"]
+        == details["live_clock"]["stable_live_key_hash"]
+    )
 
-    # All four must share the same stable identity.
-    assert ov_ld["stable_live_key"] == rc_ld["stable_live_key"]
-    assert ov_ld["stable_live_key"] == tl_ld["stable_live_key"]
-    assert ov_ld["stable_live_key"] == dt_ld["stable_live_key"]
-    assert ov_ld["stable_live_key_hash"] == tl_ld["stable_live_key_hash"]
-    assert ov_ld["stable_live_key_hash"] == dt_ld["stable_live_key_hash"]
+    # live_started_at_epoch_ms must match between overview and timeline.
+    assert (
+        overview["live_clock"]["live_started_at_epoch_ms"]
+        == timeline["live_clock"]["live_started_at_epoch_ms"]
+    )
 
-    # Virtual session / detail items must also carry the same stable key.
-    tl_virtual = timeline["sessions"][0]
-    assert tl_virtual["stable_live_key"] == ov_ld["stable_live_key"]
-    assert tl_virtual["stable_live_key_hash"] == ov_ld["stable_live_key_hash"]
+    # The persisted DB row in each list carries the same display_span_id
+    # and stable_live_key_hash (via apply_live_span_to_row overlay).
+    expected_span_id = overview["live_clock"]["display_span_id"]
+    expected_hash = overview["live_clock"]["stable_live_key_hash"]
 
-    dt_virtual = details["activities"][0]
-    assert dt_virtual["stable_live_key"] == ov_ld["stable_live_key"]
-    assert dt_virtual["stable_live_key_hash"] == ov_ld["stable_live_key_hash"]
+    # Recent: find the persisted open item by activity_id.
+    recent_row = next(
+        (
+            item
+            for item in recent["activities"]
+            if int(item.get("activity_id") or 0) == aid
+        ),
+        None,
+    )
+    assert recent_row is not None, "persisted open row not found in recent"
+    assert recent_row["display_span_id"] == expected_span_id
+    assert recent_row["stable_live_key_hash"] == expected_hash
+
+    # Timeline: find the persisted open session by first_activity_id.
+    timeline_session = next(
+        (
+            s
+            for s in timeline["sessions"]
+            if int(s.get("first_activity_id") or 0) == aid
+        ),
+        None,
+    )
+    assert timeline_session is not None, "persisted open session not found in timeline"
+    assert timeline_session["display_span_id"] == expected_span_id
+    assert timeline_session["stable_live_key_hash"] == expected_hash
+
+    # Details: find the persisted open detail row by activity_id.
+    detail_row = next(
+        (
+            a
+            for a in details["activities"]
+            if int(a.get("activity_id") or 0) == aid
+        ),
+        None,
+    )
+    assert detail_row is not None, "persisted open detail row not found"
+    assert detail_row["display_span_id"] == expected_span_id
+    assert detail_row["stable_live_key_hash"] == expected_hash
 
 
 
@@ -703,23 +749,27 @@ def test_time_edit_changes_revision(bridge):
 
 
 def test_virtual_session_and_detail_are_display_only(bridge):
-    """virtual session/detail rows must be
-    display-only with ``activity_id`` 0, ``edit_disabled`` True,
-    ``source`` "snapshot"."""
-    _set_snapshot(_normal_snapshot(elapsed_seconds=120))
+    """Under the unified Activity Display Model, a normal unpersisted
+    pending snapshot (``virtual_pending``) does NOT inject virtual
+    sessions or virtual detail rows into Timeline / Details. The pending
+    resource is ONLY visible in the current-activity area. Recent /
+    Timeline / Details lists come purely from DB rows."""
+    _set_snapshot(_normal_snapshot(elapsed_seconds=10))
     timeline = bridge.get_timeline()
-    virtual_session = timeline["sessions"][0]
-    assert virtual_session["is_virtual"] is True
-    assert virtual_session["edit_disabled"] is True
-    assert virtual_session["source"] == "snapshot"
-    assert virtual_session["activity_ids"] == []
+    # No virtual session is injected for a virtual_pending snapshot.
+    assert timeline["sessions"] == []
 
     details = bridge.get_timeline_session_details([], None)
-    virtual_row = details["activities"][0]
-    assert virtual_row["is_virtual"] is True
-    assert virtual_row["edit_disabled"] is True
-    assert virtual_row["activity_id"] == 0
-    assert virtual_row["source"] == "snapshot"
+    # No virtual detail row is injected for an empty selection.
+    assert details["activities"] == []
+
+    # The current-activity area DOES show the pending resource.
+    overview = bridge.get_overview()
+    assert overview["current_activity"]["active"] is True
+    assert overview["current_activity"]["live_state"] in (
+        "virtual_pending",
+        "absorbed_pending",
+    )
 
 
 
@@ -868,57 +918,59 @@ def test_persisted_open_detail_row_carries_stable_live_fields(bridge):
 
 
 def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
-    """the stable_live_key_hash must be
-    identical for the virtual row and the persisted_open DB row when
-    only ``is_persisted`` / ``persisted_activity_id`` change. This is
-    the bridge-level version of ``test_stable_live_key_survives_virtual_to_persisted_transition``.
+    """The ``stable_live_key_hash`` must be identical for the
+    ``virtual_pending`` state and the ``persisted_open`` state when only
+    ``is_persisted`` / ``persisted_activity_id`` change. This is the
+    bridge-level version of
+    ``test_stable_live_key_survives_virtual_to_persisted_transition``.
+
+    Under the new architecture, ``virtual_pending`` is ONLY visible in
+    the current-activity area (no recent / timeline row is injected),
+    while ``persisted_open`` is visible in the current-activity area
+    AND in timeline (real DB row overlaid). The
+    ``stable_live_key_hash`` surfaced via the current-activity area must
+    be the same in both states so the frontend continuity key survives
+    the transition.
     """
     aid, start_time = _create_real_open_activity(
         app_name="AppA",
         process_name="AppA.exe",
-        elapsed_seconds=45,
+        elapsed_seconds=10,
     )
-    # Virtual snapshot (unpersisted).
+    # virtual_pending snapshot (unpersisted) — no DB row visible in lists.
     _set_snapshot(
         _normal_snapshot(
-            elapsed_seconds=45,
+            elapsed_seconds=10,
             is_persisted=False,
             start_time=start_time,
         )
     )
-    recent_virtual = bridge.get_recent_activities()
-    virtual_item = None
-    for item in recent_virtual["activities"]:
-        if item.get("is_virtual_live"):
-            virtual_item = item
-            break
-    assert virtual_item is not None
-    virtual_hash = virtual_item["stable_live_key_hash"]
-    assert virtual_hash
+    overview_virtual = bridge.get_overview()
+    virtual_hash = overview_virtual["current_activity"]["stable_live_key_hash"]
+    assert virtual_hash, "virtual_pending current_activity must carry stable_live_key_hash"
 
-    # Persisted_open snapshot (same activity identity).
+    # persisted_open snapshot (same activity identity).
     _set_snapshot(
         _normal_snapshot(
-            elapsed_seconds=45,
+            elapsed_seconds=10,
             is_persisted=True,
             persisted_activity_id=aid,
             start_time=start_time,
         )
     )
-    recent_persisted = bridge.get_recent_activities()
-    persisted_item = None
-    for item in recent_persisted["activities"]:
-        if int(item.get("activity_id") or 0) == aid:
-            persisted_item = item
-            break
-    assert persisted_item is not None
-    persisted_hash = persisted_item["stable_live_key_hash"]
-    assert persisted_hash
+    overview_persisted = bridge.get_overview()
+    persisted_hash = overview_persisted["current_activity"]["stable_live_key_hash"]
+    assert persisted_hash, "persisted_open current_activity must carry stable_live_key_hash"
 
-    # The stable_live_key_hash must be identical.
+    # The stable_live_key_hash must be identical across the transition.
     assert virtual_hash == persisted_hash, (
-        "stable_live_key_hash must not change across virtual → persisted_open"
+        "stable_live_key_hash must not change across virtual_pending -> persisted_open"
     )
+
+    # persisted_open IS visible in timeline, so timeline's live_clock
+    # must carry the same hash.
+    timeline = bridge.get_timeline()
+    assert timeline["live_clock"]["stable_live_key_hash"] == persisted_hash
 
 
 

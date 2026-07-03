@@ -692,7 +692,8 @@ def _snapshot_display_project_fields(snapshot: dict[str, Any] | None) -> dict[st
     is_uncategorized = (
         not project_name or project_name == UNCATEGORIZED_PROJECT
     )
-    display_project_dict = _snapshot_display_project_dict(snapshot) or {
+    snapshot_dp = _snapshot_display_project_dict(snapshot)
+    display_project_dict = snapshot_dp or {
         "id": None,
         "name": project_name,
         "description": project_description,
@@ -714,6 +715,19 @@ def _snapshot_display_project_fields(snapshot: dict[str, Any] | None) -> dict[st
             "to_project_id": None,
         }
     dp_id = display_project_dict.get("id")
+    # DB fallback only when the snapshot has NO structured display_project block
+    # (e.g. persisted_open with only inferred_project_name). When display_project
+    # explicitly declares id=None + is_uncategorized=True (candidate pending),
+    # honor it: do NOT pull project_id from the DB row (candidate must not override).
+    if dp_id is None and snapshot_dp is None:
+        persisted_id = snapshot_persisted_id(snapshot) if snapshot else None
+        if persisted_id:
+            try:
+                row = activity_service.get_activity(int(persisted_id))
+            except Exception:
+                row = None
+            if row:
+                dp_id = row.get("project_id")
     return {
         "project_id": int(dp_id) if dp_id is not None else 0,
         "project_name": project_name,

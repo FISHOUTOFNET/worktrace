@@ -7,7 +7,7 @@
 
     function showOverview(overview) {
         if (!overview) return;
-        // increment the displayed durations without a bridge round-trip.
+        App.registerLiveClock(overview);
         App.lastOverviewSnapshot = overview;
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-total").textContent = overview.total_duration || "00:00:00";
@@ -21,7 +21,6 @@
         } else {
             currentEl.textContent = "当前活动：无";
         }
-        // roll back against a stale prior ticker projection.
         App._monotonicRenderState["overview-total"] = {
             lastSeconds: parseInt(overview.today_total_seconds, 10) || 0
         };
@@ -35,7 +34,8 @@
     App.showOverview = showOverview;
 
     function showRecent(recentResult) {
-        // increment the live-projected item's duration without a bridge
+        // Register the unified live clock (shares the same sample as the Overview bundle).
+        App.registerLiveClock(recentResult);
         App.lastRecentSnapshot = recentResult;
         var listEl = document.getElementById("recent-list");
         if (!recentResult || !recentResult.activities || recentResult.activities.length === 0) {
@@ -45,10 +45,8 @@
         var html = "";
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
-            // the bridge's explicit contract drives the in-progress
             var inProgress = item.is_in_progress === true || (!item.end_time && item.is_in_progress !== false);
             var timeRange = App.formatTimeRange(item.start_time, item.end_time, inProgress);
-            // Prefer ``duration_seconds`` (raw int from the backend) over
             var durSec = parseInt(item.duration_seconds, 10);
             var durText = (!isNaN(durSec) && durSec >= 0)
                 ? App.formatDuration(durSec)
@@ -57,7 +55,10 @@
             if (inProgress) cls += " in-progress";
             if (item.is_live_projected === true) cls += " live-projected";
             if (item.is_virtual === true) cls += " virtual-live";
+            // Unified live-span DOM attribute: ticker walks [data-display-span-id].
+            var spanId = item.display_span_id || "";
             html += '<div class="' + cls + '" data-recent-index="' + i + '"'
+                + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
                 + ' data-duration-seconds="' + (isNaN(durSec) ? 0 : durSec) + '"'
                 + '>'
                 + '<div>'
@@ -67,7 +68,7 @@
                 + '</div>'
                 + '<div class="recent-item-duration">' + App.escapeHtml(durText) + '</div>'
                 + '</div>';
-            // ticker-projected value without a false "rollback" guard.
+            // Seed monotonic state by live-span id so fresh snapshot replaces prior projection.
             var recentKey = App.liveContinuityKey(item, "recent");
             App.resetMonotonicRenderState(recentKey);
             App._monotonicRenderState[recentKey] = { lastSeconds: isNaN(durSec) ? 0 : durSec };

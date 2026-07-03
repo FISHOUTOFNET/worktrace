@@ -12,14 +12,21 @@
     App.heartbeatTimer = null;
 
     // Ticker invariant: ONLY updates DOM text; never calls a bridge method, never writes the DB,
-    // never starts / stops the collector. Snapshots are seeded by the render flows and read here.
+    // never starts / stops the collector. The live clock is seeded by the render flows and by the
+    // lightweight ``get_refresh_state`` heartbeat into the unified registry below.
     App.lastOverviewSnapshot = null;
-    // Recent-activities snapshot so the ticker can increment the live-
-    // projected recent item's duration without a bridge round-trip.
+    // Structural caches only — used to re-render lists on page switch. They MUST NOT participate
+    // in live-seconds computation anymore; the unified ``App.liveClockBySpanId`` registry is the
+    // single source of truth for every live duration (current / recent / timeline / detail).
     App.lastRecentSnapshot = null;
-    // Session-details snapshot so the ticker can increment the live-
-    // projected detail row's duration without a bridge round-trip.
     App.lastSessionDetailsData = null;
+    App.lastTimelineData = null;
+
+    // Unified live-clock registry. Keyed by ``display_span_id``. Populated from any payload that
+    // carries ``live_clock`` (Overview / Recent / Timeline / Details / Refresh State). The single
+    // live-seconds formula: ``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``.
+    App.liveClockBySpanId = {};
+    App.liveDisplayModel = null;
 
     // ``lastRefreshState`` caches the last ``get_refresh_state`` payload for revision comparison;
     // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard overlapping checks / refreshes.
@@ -44,7 +51,7 @@
     App.timelineLoading = false;
     App.selectedSessionId = null;
     // Stable live key for the selected session. Selection continuity: stable_live_key_hash stays the same
-    // when session_id changes from "virtual-live:<hash>" to the real DB id (virtual → persisted_open transition).
+    // when session_id changes across the virtual / persisted_open / absorbed_pending transitions.
     App.selectedSessionLiveKey = null;
 
     // races a manual refresh.
@@ -153,9 +160,6 @@
         "edit-status-info", "edit-status-success", "edit-status-error",
         "edit-status-loading", "edit-status-empty"
     ];
-
-    // Last successfully rendered Timeline payload.
-    App.lastTimelineData = null;
 
 
     function callBridge(method) {
@@ -339,8 +343,6 @@
 
     // Display-only start time (HH:MM) extracted from a backend
     // "YYYY-MM-DD HH:MM:SS" timestamp.
-    // session list and read-only detail rows where the end time is no
-    // longer shown.
     function formatStartTimeOnly(start_time) {
         return (start_time || "").slice(11, 16);
     }
@@ -439,72 +441,115 @@
     }
     App.formatProjectLabel = formatProjectLabel;
 
-    // ``applyLocalTicker`` re-renders fetched durations with a wall-clock delta each second without a bridge
-    // round-trip. Ticker invariant: ONLY updates DOM text; never calls a bridge, never writes the DB, never
-    // starts / stops the collector. No-op when the current activity is paused / idle / excluded / error.
-    // Live delta uses the stable start-time anchor (``live_started_at_epoch_ms``) so the same activity does
-    // not jump across refreshes: ``display = carry + floor((now - live_started_at) / 1000)``, ``delta = display - elapsed_at_response``.
+    // ===== Unified Live Clock =====
+    //
+    // The SINGLE source of truth for every live duration in the UI. There are no longer separate
+    // ``recentDelta`` / ``tlDelta`` / ``detailDelta`` computations — current activity, recent items,
+    // timeline sessions and detail rows all read from the same registered live clock.
+    //
+    // Formula:  display = carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
+    //
+    // The clock is registered from any payload that carries ``live_clock`` (Overview, Recent,
+    // Timeline, Details, or the lightweight Refresh State). The 1s heartbeat ``applyLocalTicker``
+    // walks every DOM node that carries ``data-display-span-id`` and renders it with the unified
+    // clock, so all four display regions stay in lockstep.
+
     function tickerNowEpochMs() {
         return Date.now();
     }
 
-    // Returns the wall-clock increment to add to KPI totals and per-item durations, using the stable
-    // start-time anchor so the delta does not drift between refreshes. Returns 0 when the payload has no
-    // live clock fields or the activity is not live-eligible. Reads the SINGLE page-level live projection
-    // (``live_projection`` preferred; falls back to ``live_display`` / ``current_activity``).
+    // The unified live-seconds formula. Returns the ``duration_seconds_at_sample`` fallback when
+    // the clock has no valid ``live_started_at_epoch_ms`` (e.g. paused / idle / historical).
+    function liveSeconds(clock) {
+        if (!clock) return 0;
+        var startedAt = parseInt(clock.live_started_at_epoch_ms, 10);
+        var carry = parseInt(clock.carry_seconds, 10) || 0;
+        var atSample = parseInt(clock.duration_seconds_at_sample, 10);
+        if (isNaN(atSample)) atSample = parseInt(clock.duration_seconds, 10) || 0;
+        if (!startedAt || isNaN(startedAt)) return atSample;
+        return carry + Math.floor((tickerNowEpochMs() - startedAt) / 1000);
+    }
+    App.liveSeconds = liveSeconds;
+
+    function projectLiveSeconds(clock) {
+        // Alias kept for callers that semantically "project" a live span.
+        return liveSeconds(clock);
+    }
+    App.projectLiveSeconds = projectLiveSeconds;
+
+    // Register a live clock from ANY payload (Overview / Recent / Timeline / Details / Refresh State).
+    // The payload may carry ``live_clock`` directly or nested inside ``activity_display_model``.
+    function registerLiveClock(payload) {
+        if (!payload) return;
+        var clock = payload.live_clock;
+        if (!clock && payload.activity_display_model) {
+            clock = payload.activity_display_model.live_clock;
+        }
+        if (!clock) return;
+        var spanId = String(clock.display_span_id || "");
+        if (!spanId) return;
+        App.liveClockBySpanId[spanId] = clock;
+        if (payload.activity_display_model) {
+            App.liveDisplayModel = payload.activity_display_model;
+        } else if (!App.liveDisplayModel) {
+            App.liveDisplayModel = payload;
+        }
+    }
+    App.registerLiveClock = registerLiveClock;
+
+    // Return the single active live clock, or ``null``. When multiple spans are registered (rare),
+    // the most recently registered one wins. Used by KPI totals and the current-activity area.
+    function getActiveLiveClock() {
+        var keys = Object.keys(App.liveClockBySpanId);
+        if (keys.length === 0) return null;
+        return App.liveClockBySpanId[keys[keys.length - 1]];
+    }
+    App.getActiveLiveClock = getActiveLiveClock;
+
+    function clearLiveClockRegistry() {
+        App.liveClockBySpanId = {};
+        App.liveDisplayModel = null;
+    }
+    App.clearLiveClockRegistry = clearLiveClockRegistry;
+
+    // Compatibility wrapper: returns the wall-clock delta since the backend sample for KPI totals.
+    // Reads ONLY from the unified registry — never from a page-level snapshot's live_projection.
     function tickerDeltaSeconds(payload) {
-        if (!payload) return 0;
-        var ld = payload.live_projection || payload.live_display || payload.current_activity;
-        if (!ld) return 0;
-        var startedAt = parseInt(ld.live_started_at_epoch_ms, 10);
-        if (!startedAt || isNaN(startedAt)) {
-            return 0;
-        }
-        var carry = parseInt(ld.carry_seconds, 10) || 0;
-        // ``live_projection`` carries ``duration_seconds``; ``live_display``
-        // / ``current_activity`` carry ``elapsed_seconds``. Accept either
-        // field from the backend payload.
-        var elapsedAtResponse = parseInt(ld.duration_seconds, 10);
-        if (isNaN(elapsedAtResponse)) {
-            elapsedAtResponse = parseInt(ld.elapsed_seconds, 10) || 0;
-        }
-        var displaySeconds = carry + Math.floor((tickerNowEpochMs() - startedAt) / 1000);
-        var delta = displaySeconds - elapsedAtResponse;
+        // ``payload`` is accepted for backwards compatibility but ignored; the registry is global.
+        var clock = getActiveLiveClock();
+        if (!clock) return 0;
+        var atSample = parseInt(clock.duration_seconds_at_sample, 10);
+        if (isNaN(atSample)) atSample = 0;
+        var display = liveSeconds(clock);
+        var delta = display - atSample;
         return delta > 0 ? delta : 0;
     }
     App.tickerDeltaSeconds = tickerDeltaSeconds;
 
-    // Live-display eligibility: only virtual (unpersisted normal) and persisted_open (real open normal)
-    // increment project duration; paused / idle / excluded / error / none never do.
+    // Compatibility wrapper: returns ``true`` when the unified live clock should tick project totals.
+    // Mirrors ``live_clock.is_project_duration_live`` so paused / idle / excluded / error /
+    // virtual_pending never inflate KPI totals.
     function tickerLiveEligible(payload) {
-        if (!payload) return false;
-        var lp = payload.live_projection;
-        if (lp) {
-            return lp.live_state === "virtual" || lp.live_state === "persisted_open";
-        }
-        var ld = payload.live_display;
-        if (ld) {
-            return ld.live_state === "virtual" || ld.live_state === "persisted_open";
-        }
-        var current = payload.current_activity;
-        if (!current || !current.active) return false;
-        if (current.is_paused) return false;
-        if (current.status !== "normal") return false;
-        return true;
+        var clock = getActiveLiveClock();
+        if (!clock) return false;
+        return clock.is_project_duration_live === true;
     }
     App.tickerLiveEligible = tickerLiveEligible;
 
-    function tickerCurrentActivityRunning(snapshot) {
-        return tickerLiveEligible(snapshot);
+    function tickerCurrentActivityRunning() {
+        return tickerLiveEligible();
     }
 
-    // SINGLE SOURCE OF TRUTH for live-row continuity keys: the ticker, render seed, and any live duration
-    // DOM update MUST call this. Uses ``stable_live_key_hash`` so the key survives the virtual → persisted_open
-    // transition (session_id / activity_id change across the transition; stable_live_key_hash does not).
+    // SINGLE SOURCE OF TRUTH for live-row continuity keys. Uses ``stable_live_key_hash`` so the key
+    // survives the virtual / persisted_open / absorbed_pending transitions (session_id / activity_id
+    // change across the transition; stable_live_key_hash does not).
     function liveContinuityKey(item, prefix) {
         if (!item) return prefix;
         if (item.stable_live_key_hash) {
             return prefix + ":live:" + item.stable_live_key_hash;
+        }
+        if (item.display_span_id) {
+            return prefix + ":span:" + item.display_span_id;
         }
         if (item.session_id) {
             return prefix + ":" + item.session_id;
@@ -516,16 +561,27 @@
     }
     App.liveContinuityKey = liveContinuityKey;
 
+    // ``applyLocalTicker`` re-renders fetched durations with a wall-clock delta each second without a
+    // bridge round-trip. Ticker invariant: ONLY updates DOM text; never calls a bridge, never writes
+    // the DB, never starts / stops the collector.
+    //
+    // Unified path: walks every DOM node carrying ``data-display-span-id`` and renders it with the
+    // single registered live clock. KPI totals and the current-activity area use the same clock.
     function applyLocalTicker() {
-        // Overview page: total / classified / uncategorized must share the same delta; the delta is added
-        // to EITHER classified OR uncategorized (never both) per the current activity's classification state.
+        var clock = getActiveLiveClock();
+        var liveDelta = 0;
+        var projectDurationLive = false;
+        if (clock) {
+            projectDurationLive = clock.is_project_duration_live === true;
+            if (projectDurationLive) {
+                liveDelta = tickerDeltaSeconds();
+            }
+        }
+
+        // --- Overview KPIs + current activity ---
         var ov = App.lastOverviewSnapshot;
         if (ov && App.currentPage === "overview") {
-            var delta = 0;
             var currentIsUncategorized = true;
-            if (tickerLiveEligible(ov)) {
-                delta = tickerDeltaSeconds(ov);
-            }
             var current = ov.current_activity || {};
             if (current.is_classified === true) {
                 currentIsUncategorized = false;
@@ -537,13 +593,13 @@
             var totalEl = document.getElementById("kpi-total");
             if (totalEl) {
                 var totalSec = parseInt(ov.today_total_seconds, 10) || 0;
-                App.renderDurationMonotonic(totalEl, totalSec + delta, "overview-total", false);
+                App.renderDurationMonotonic(totalEl, totalSec + liveDelta, "overview-total", false);
             }
             var classifiedEl = document.getElementById("kpi-classified");
             if (classifiedEl) {
                 var classifiedSec = parseInt(ov.classified_seconds, 10) || 0;
                 if (currentIsUncategorized === false) {
-                    classifiedSec += delta;
+                    classifiedSec += liveDelta;
                 }
                 App.renderDurationMonotonic(classifiedEl, classifiedSec, "overview-classified", false);
             }
@@ -551,169 +607,79 @@
             if (uncategorizedEl) {
                 var uncategorizedSec = parseInt(ov.uncategorized_seconds, 10) || 0;
                 if (currentIsUncategorized === true) {
-                    uncategorizedSec += delta;
+                    uncategorizedSec += liveDelta;
                 }
                 App.renderDurationMonotonic(uncategorizedEl, uncategorizedSec, "overview-uncategorized", false);
             }
             var currentEl = document.getElementById("current-activity");
             if (currentEl) {
-                if (current.active) {
-                    // Compute display seconds from the stable start-time anchor so the current activity
-                    // display does not drift between refreshes.
-                    var ld = ov.live_projection || ov.live_display || current;
-                    var startedAt = parseInt(ld.live_started_at_epoch_ms, 10);
-                    var carry = parseInt(ld.carry_seconds, 10) || 0;
-                    var elapsedSec = parseInt(current.elapsed_seconds, 10) || 0;
-                    var displaySec;
-                    if (startedAt && !isNaN(startedAt)) {
-                        displaySec = carry + Math.floor((Date.now() - startedAt) / 1000);
-                    } else {
-                        displaySec = elapsedSec + delta;
-                    }
+                if (current.active && clock) {
+                    var displaySec = liveSeconds(clock);
                     var display = current.display || "";
-                    var parts = display.split("｜");
+                    var parts = display.split("\uff5c");
                     if (parts.length >= 3) {
                         parts[2] = App.formatDuration(displaySec);
-                        currentEl.textContent = "当前活动：" + parts.join("｜");
+                        currentEl.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + parts.join("\uff5c");
                     }
-                } else {
-                    currentEl.textContent = "当前活动：无";
+                } else if (!current.active) {
+                    currentEl.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a\u65e0";
                 }
             }
         }
-        // Recent list: baseline comes from the cached payload's ``duration_seconds`` (not DOM text). The
-        // continuity key uses stable_live_key_hash so the duration does not reset on virtual → persisted transition.
-        var recent = App.lastRecentSnapshot;
-        if (recent && App.currentPage === "overview" && recent.activities) {
-            var recentDelta = tickerLiveEligible(recent) ? tickerDeltaSeconds(recent) : 0;
-            for (var ri = 0; ri < recent.activities.length; ri++) {
-                var rItem = recent.activities[ri];
-                if (rItem.is_virtual_live || rItem.is_in_progress) {
-                    var rEl = document.querySelector(
-                        '.recent-item[data-recent-index="' + ri + '"] .recent-item-duration'
-                    );
-                    if (rEl) {
-                        var rBaseSec = parseInt(rItem.duration_seconds, 10) || 0;
-                        var rContinuity = liveContinuityKey(rItem, "recent");
-                        App.renderDurationMonotonic(
-                            rEl, rBaseSec + recentDelta, rContinuity, false
-                        );
-                    }
-                }
-            }
-        }
-        // Timeline page: date total + current activity display + in-progress
-        // / live-projected session duration + projected detail. Only when
-        // viewing today.
+
+        // --- Timeline current-activity area + total ---
         var tl = App.lastTimelineData;
         if (tl && App.currentPage === "timeline") {
-            var todayStr = App.localTodayStr();
-            var isToday = !tl.date || tl.date === todayStr || tl.date === "--";
-            var tlDelta = 0;
-            if (isToday && tickerLiveEligible(tl)) {
-                tlDelta = tickerDeltaSeconds(tl);
-            }
-            var tlTotalEl = document.getElementById("timeline-total");
-            if (tlTotalEl) {
-                var tlTotalSec = parseInt(tl.today_total_seconds, 10) || 0;
-                App.renderDurationMonotonic(tlTotalEl, tlTotalSec + tlDelta, "timeline-total", false);
-            }
             var tlCurrentEl = document.getElementById("timeline-current");
             if (tlCurrentEl) {
                 var tlCurrent = tl.current_activity || {};
-                if (tlCurrent.active) {
-                    var tlLd = tl.live_display || tlCurrent;
-                    var tlStartedAt = parseInt(tlLd.live_started_at_epoch_ms, 10);
-                    var tlCarry = parseInt(tlLd.carry_seconds, 10) || 0;
-                    var tlElapsedSec = parseInt(tlCurrent.elapsed_seconds, 10) || 0;
-                    var tlDisplaySec;
-                    if (tlStartedAt && !isNaN(tlStartedAt)) {
-                        tlDisplaySec = tlCarry + Math.floor((Date.now() - tlStartedAt) / 1000);
-                    } else {
-                        tlDisplaySec = tlElapsedSec + tlDelta;
-                    }
+                if (tlCurrent.active && clock) {
+                    var tlDisplaySec = liveSeconds(clock);
                     var tlDisplay = tlCurrent.display || "";
-                    var tlParts = tlDisplay.split("｜");
+                    var tlParts = tlDisplay.split("\uff5c");
                     if (tlParts.length >= 3) {
                         tlParts[2] = App.formatDuration(tlDisplaySec);
-                        tlCurrentEl.textContent = "当前活动：" + tlParts.join("｜");
+                        tlCurrentEl.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + tlParts.join("\uff5c");
                     }
-                } else {
-                    tlCurrentEl.textContent = "当前活动：无";
+                } else if (!tlCurrent.active) {
+                    tlCurrentEl.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a\u65e0";
                 }
             }
-            // Update in-progress / live-projected session durations. Locate DOM via ``data-session-id``
-            // (not array index) so a re-rendered list cannot mismatch. Look up by stable_live_key_hash
-            // FIRST so the ticker survives the virtual → persisted_open transition; fall back to session_id.
-            if (isToday && tlDelta >= 0 && tl.sessions) {
-                for (var si = 0; si < tl.sessions.length; si++) {
-                    var s = tl.sessions[si];
-                    if (s.is_in_progress || s.is_live_projected || s.is_virtual_live) {
-                        var sid = s.session_id;
-                        var sStableKey = s.stable_live_key_hash || "";
-                        var itemEl = null;
-                        if (sStableKey) {
-                            itemEl = document.querySelector(
-                                '#timeline-sessions-list .timeline-item[data-stable-live-key-hash="' + sStableKey + '"]'
-                            );
-                        }
-                        if (!itemEl) {
-                            itemEl = document.querySelector(
-                                '#timeline-sessions-list .timeline-item[data-session-id="' + sid + '"]'
-                            );
-                        }
-                        if (itemEl) {
-                            var durEl = itemEl.querySelector(".timeline-item-duration");
-                            if (durEl) {
-                                var sSec = parseInt(s.duration_seconds, 10) || 0;
-                                var sContinuity = liveContinuityKey(s, "session");
-                                App.renderDurationMonotonic(durEl, sSec + tlDelta, sContinuity, false);
-                            }
-                        }
-                    }
+            var todayStr = App.localTodayStr();
+            var isToday = !tl.date || tl.date === todayStr || tl.date === "--";
+            var tlTotalEl = document.getElementById("timeline-total");
+            if (tlTotalEl && isToday) {
+                var tlTotalSec = parseInt(tl.today_total_seconds, 10) || 0;
+                App.renderDurationMonotonic(tlTotalEl, tlTotalSec + liveDelta, "timeline-total", false);
+            }
+        }
+
+        // --- Unified live-span DOM walk ---
+        // Every live row (recent / session / detail) carries ``data-display-span-id``. The ticker
+        // looks up the registered clock by span id and renders ``liveSeconds(clock)`` so all rows
+        // share one clock. Rows without the attribute keep their seeded text.
+        var liveNodes = document.querySelectorAll("[data-display-span-id]");
+        for (var i = 0; i < liveNodes.length; i++) {
+            var node = liveNodes[i];
+            var spanId = node.getAttribute("data-display-span-id");
+            if (!spanId) continue;
+            var nodeClock = App.liveClockBySpanId[spanId] || clock;
+            if (!nodeClock) continue;
+            if (nodeClock.is_live !== true) continue;
+            var nextSec = liveSeconds(nodeClock);
+            var durEl = node.querySelector(
+                ".recent-item-duration, .timeline-item-duration, .detail-item-duration"
+            );
+            if (!durEl) {
+                if (node.classList.contains("recent-item-duration")
+                    || node.classList.contains("timeline-item-duration")
+                    || node.classList.contains("detail-item-duration")) {
+                    durEl = node;
                 }
             }
-            // Detail-row projection must NOT use the Timeline main payload delta: the detail payload carries
-            // its own ``live_display`` so its ticker computes from the same unified live clock, preventing drift.
-            if (isToday && (App.selectedSessionId || App.selectedSessionLiveKey)
-                && App.lastSessionDetailsData && !App._timelineEditingActive()) {
-                var detailsList = document.getElementById("timeline-details-list");
-                if (detailsList) {
-                    var detailDelta = 0;
-                    if (tickerLiveEligible(App.lastSessionDetailsData)) {
-                        detailDelta = tickerDeltaSeconds(App.lastSessionDetailsData);
-                    }
-                    var detailActs = App.lastSessionDetailsData.activities || [];
-                    for (var dai = 0; dai < detailActs.length; dai++) {
-                        var dAct = detailActs[dai];
-                        if (dAct.is_virtual_live || dAct.is_in_progress) {
-                            // Look up DOM by stable_live_key_hash FIRST so the ticker survives the
-                            // virtual → persisted_open transition; fall back to activity_id for closed rows.
-                            var dStableKey = dAct.stable_live_key_hash || "";
-                            var dEl = null;
-                            if (dStableKey) {
-                                dEl = detailsList.querySelector(
-                                    '.detail-item[data-stable-live-key-hash="' + dStableKey + '"] .detail-item-duration'
-                                );
-                            }
-                            if (!dEl) {
-                                var dAid = dAct.activity_id || 0;
-                                dEl = detailsList.querySelector(
-                                    '.detail-item[data-activity-id="' + dAid + '"] .detail-item-duration'
-                                );
-                            }
-                            if (dEl) {
-                                var dBaseSec = parseInt(dAct.duration_seconds, 10) || 0;
-                                var dContinuity = liveContinuityKey(dAct, "detail");
-                                App.renderDurationMonotonic(
-                                    dEl, dBaseSec + detailDelta, dContinuity, false
-                                );
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
+            if (!durEl) continue;
+            var continuity = "span:" + spanId;
+            App.renderDurationMonotonic(durEl, nextSec, continuity, false);
         }
     }
     App.applyLocalTicker = applyLocalTicker;
