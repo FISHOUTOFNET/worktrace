@@ -502,11 +502,10 @@ def test_rule_impact_service_py_selects_impact_tests(runner):
 
 
 def test_rule_automation_service_py_selects_automatic_rules_tests(runner):
-    # the new rule_automation_service.py (thin facade delegating to
-    # project_inference_service.process_new_activity) triggers the automatic
-    # rules test file plus the bridge and boundary tests. It must not trigger
-    # keyword/folder CRUD/lifecycle/impact/static tests since the facade is
-    # scoped to the automatic application path only.
+    # rule_automation_service.py (thin facade delegating to
+    # project_inference_service.process_new_activity) triggers automatic
+    # rules + bridge + boundary tests only; CRUD/lifecycle/impact/static
+    # tests must NOT trigger since the facade is scoped to automatic path.
     sel = runner.select_targets(["worktrace/services/rule_automation_service.py"])
     for expected in [
         "tests/test_project_rules_automatic_rules.py",

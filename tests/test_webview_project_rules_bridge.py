@@ -881,11 +881,10 @@ def test_project_rules_bridge_import_boundary():
 
 
 def test_create_project_keyword_rule_success_payload(monkeypatch):
-    # Regression lock: the success payload is the narrow created-rule
-    # summary only (``kind`` / ``id`` / ``project_id`` / ``keyword`` /
-    # ``enabled``). It must NOT echo the full refreshed Project Rules list
-    # back to JS — the frontend re-fetches via ``get_project_rules`` after
-    # success.
+    # Regression lock: the success payload is the narrow created-rule summary
+    # only (``kind`` / ``id`` / ``project_id`` / ``keyword`` / ``enabled``). It
+    # must NOT echo the full refreshed Project Rules list to JS — the frontend
+    # re-fetches via ``get_project_rules`` after success.
     monkeypatch.setattr(
         bridge_rules_module.rule_api,
         "create_project_keyword_rule",
@@ -1166,9 +1165,8 @@ def test_create_project_keyword_rule_payload_json_serializable(monkeypatch):
 def test_create_project_keyword_rule_never_calls_other_project_rules_write_apis(monkeypatch):
     # Regression lock: the create-keyword path must only ever call
     # ``rule_api.create_project_keyword_rule``. It must not invoke any other
-    # Project Rules write APIs (project toggle / create / edit / delete,
-    # folder create / edit / delete, rule edit / delete, conflict preview,
-    # backfill).
+    # Project Rules write API (project/folder/rule CRUD, toggle, conflict
+    # preview, backfill).
     monkeypatch.setattr(
         bridge_rules_module.rule_api,
         "create_project_keyword_rule",
@@ -1320,11 +1318,10 @@ def test_create_project_keyword_rule_bridge_passes_trimmed_keyword_to_api(monkey
 
 
 def test_create_project_keyword_rule_bridge_html_script_keyword_safe(monkeypatch):
-    # Regression lock: HTML / script-like content in the keyword
-    # must pass through the bridge as ordinary plain text without leaking an
-    # exception. The bridge success payload carries the plain-text keyword;
-    # frontend rendering is responsible for escaping (locked by the
-    # static-contract escape-helper test).
+    # Regression lock: HTML / script-like content in the keyword must pass
+    # through the bridge as plain text without leaking an exception. The success
+    # payload carries the plain-text keyword; frontend escaping is locked by the
+    # static-contract escape-helper test.
     html_keyword = "<script>alert('xss')</script>"
 
     monkeypatch.setattr(
@@ -1598,8 +1595,7 @@ def test_delete_project_keyword_rule_payload_json_serializable(monkeypatch):
 def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(monkeypatch):
     # Regression lock: the delete-keyword path must only ever call
     # ``rule_api.delete_project_keyword_rule``. It must not invoke any other
-    # Project Rules write APIs (project toggle / create / edit / delete,
-    # folder create / edit / delete, rule create / edit / toggle, conflict
+    # Project Rules write API (project/folder/rule CRUD, toggle, conflict
     # preview, backfill).
     monkeypatch.setattr(
         bridge_rules_module.rule_api,
@@ -1745,12 +1741,10 @@ def test_delete_project_keyword_rule_does_not_regress_create_project_keyword_rul
 
 
 def test_delete_project_keyword_rule_success_payload_strips_extra_api_keys(monkeypatch):
-    # Regression lock: the bridge success payload must surface
-    # only the narrow ``kind`` / ``id`` / ``deleted`` keys. Even if the API
-    # returned extra keys (project_id, keyword, enabled, internal fields,
-    # sensitive tokens), the bridge must not forward them to JS. The
-    # frontend re-fetches the full Project Rules list via
-    # ``get_project_rules`` after success.
+    # Regression lock: the bridge success payload must surface only the
+    # narrow ``kind`` / ``id`` / ``deleted`` keys. Even if the API returns
+    # extra keys (project_id, keyword, enabled, sensitive tokens), the bridge
+    # must not forward them to JS; the frontend re-fetches via get_project_rules.
     monkeypatch.setattr(
         bridge_rules_module.rule_api,
         "delete_project_keyword_rule",
@@ -1806,12 +1800,10 @@ def test_delete_project_keyword_rule_success_payload_strips_extra_api_keys(monke
 
 
 def test_delete_project_keyword_rule_folder_rule_id_maps_to_stable_not_found(monkeypatch):
-    # Regression lock: a folder rule id reaches the bridge as a
-    # normal positive int (the bridge does not know which table it belongs
-    # to). The API returns ``not_found`` for folder rule ids, and the
-    # bridge must map that to the stable ``关键词规则不存在`` message
-    # without revealing that the id was a folder rule or surfacing any
-    # folder-table detail.
+    # Regression lock: a folder rule id reaches the bridge as a normal positive
+    # int (the bridge doesn't know its table). The API returns ``not_found`` for
+    # folder rule ids; the bridge must map that to ``关键词规则不存在`` without
+    # revealing the id was a folder rule or surfacing any folder-table detail.
     captured: dict[str, object] = {}
 
     def fake_delete(rule_id):
@@ -1864,11 +1856,10 @@ def test_delete_project_keyword_rule_bridge_input_validation_payloads_json_seria
 
 
 def test_create_project_folder_rule_success_payload(monkeypatch):
-    # Regression lock: the success payload is the narrow created-rule
-    # summary only (``kind`` / ``id`` / ``project_id`` / ``folder_path`` /
-    # ``recursive`` / ``enabled``). It must NOT echo the full refreshed
-    # Project Rules list back to JS — the frontend re-fetches via
-    # ``get_project_rules`` after success.
+    # Regression lock: the success payload is the narrow created-rule summary
+    # only (``kind`` / ``id`` / ``project_id`` / ``folder_path`` / ``recursive``
+    # / ``enabled``). It must NOT echo the full refreshed Project Rules list to
+    # JS — the frontend re-fetches via ``get_project_rules`` after success.
     monkeypatch.setattr(
         bridge_rules_module.rule_api,
         "create_project_folder_rule",
@@ -4128,11 +4119,10 @@ def test_get_project_rules_payload_includes_display_safe_lifecycle_flags(monkeyp
 
 
 def test_get_project_rules_read_payload_excludes_sensitive_internal_fields(monkeypatch):
-    # Regression lock: the Project Rules read payload must never
-    # expose raw ``created_by`` / ``created_at`` / ``updated_at`` / raw row
-    # / traceback / SQL. Only display-safe boolean flags (``is_system`` /
-    # ``editable`` / ``can_toggle`` / ``can_archive`` / ``is_excluded``)
-    # carry the frontend decision logic.
+    # Regression lock: the Project Rules read payload must never expose raw
+    # ``created_by`` / ``created_at`` / ``updated_at`` / raw row / traceback / SQL.
+    # Only display-safe boolean flags (``is_system`` / ``editable`` / ``can_toggle``
+    # / ``can_archive`` / ``is_excluded``) carry the frontend decision logic.
     monkeypatch.setattr(
         bridge_rules_module.project_api,
         "list_project_bindings",
@@ -5364,11 +5354,10 @@ def test_bridge_rules_5i_batch_message_maps_are_stable_chinese():
 
 
 def test_create_excluded_keyword_rule_success_returns_narrow_payload(monkeypatch):
-    # Regression lock: the success payload is the narrow created-rule
-    # summary only (``kind`` / ``id`` / ``project_id`` / ``keyword`` /
-    # ``enabled``). Extra API keys must be stripped. The keyword is trimmed
-    # before being forwarded. The payload must be JSON-serializable and must
-    # not surface a full project list.
+    # Regression lock: the success payload is the narrow created-rule summary
+    # only (``kind`` / ``id`` / ``project_id`` / ``keyword`` / ``enabled``). Extra
+    # API keys must be stripped; the keyword is trimmed before forwarding. The
+    # payload must be JSON-serializable and not surface a full project list.
     captured = {}
 
     def _fake(keyword):
@@ -5575,11 +5564,10 @@ def test_create_excluded_folder_rule_rejects_invalid_input_does_not_call_api(
 
 
 def test_excluded_rule_bridge_methods_signature_has_no_project_id():
-    # Regression lock: both excluded-rule bridge methods must NOT
-    # accept a ``project_id`` parameter — the API pins it to EXCLUDED_PROJECT
-    # internally so the frontend cannot inject an arbitrary project_id. The
-    # folder method must also collapse an unexpected API exception to the
-    # generic create-failure message.
+    # Regression lock: both excluded-rule bridge methods must NOT accept a
+    # ``project_id`` parameter — the API pins it to EXCLUDED_PROJECT internally so
+    # the frontend cannot inject one. The folder method must also collapse an
+    # unexpected API exception to the generic create-failure message.
     import inspect
 
     kw_sig = inspect.signature(WebViewBridge.create_excluded_keyword_rule)

@@ -42,12 +42,9 @@ $pyinstallerArgs = @(
     $installerScript
 )
 
-# PyInstaller writes INFO / WARNING logs to stderr. Under
-# `$ErrorActionPreference = "Stop"`, PowerShell wraps native-command stderr as
-# NativeCommandError, which falsely terminates the script even when PyInstaller
-# exits 0. Locally relax the preference around the native call so stderr INFO
-# logs stay visible without becoming terminating errors. $LASTEXITCODE is still
-# checked afterwards so real PyInstaller failures still throw.
+# PyInstaller writes INFO/WARNING to stderr; under ErrorActionPreference "Stop"
+# PowerShell wraps native stderr as NativeCommandError and falsely terminates.
+# Relax the preference around the native call; $LASTEXITCODE is still checked.
 $oldErrorActionPreference = $ErrorActionPreference
 $pyinstallerExitCode = 0
 try {

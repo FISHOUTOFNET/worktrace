@@ -144,9 +144,7 @@ def get_settings_privacy_status() -> dict[str, Any]:
         except Exception:
             # Defensive: never let the backup facade leak tracebacks to the UI.
             secure_import_in_progress = False
-        # Display-safe first-run notice state. The raw DB setting key name
-        # (``first_run_notice_accepted``) is NOT exposed; only the boolean
-        # and view/accept availability flags are surfaced.
+        # Display-safe notice: raw DB key name never exposed; only boolean + availability flags surfaced.
         try:
             notice_accepted = bool(first_run_notice_accepted())
         except Exception:
@@ -175,8 +173,7 @@ def get_settings_privacy_status() -> dict[str, Any]:
         }
         return {"ok": True, "status": status}
     except Exception:
-        # Collapse any unexpected error to a generic UI-facing message.
-        # Never expose raw exception text / traceback / SQL / paths.
+        # Collapse unexpected errors; never expose traceback/SQL/paths.
         return {"ok": False, "error": "加载设置状态失败"}
 
 
@@ -188,33 +185,26 @@ def export_encrypted_backup_for_webview(
     confirm_passphrase: str,
 ) -> dict[str, Any]:
     """Export an encrypted ``.wtbackup`` file from the WebView UI."""
-    # Strict type checks: output_path must be a non-empty string (bool /
-    # None / int / list / dict / object rejected). A whitespace-only path
-    # is also rejected.
     if not isinstance(output_path, str) or isinstance(output_path, bool):
         return {"ok": False, "error": "请选择有效的备份保存位置"}
     if not output_path or not output_path.strip():
         return {"ok": False, "error": "请选择有效的备份保存位置"}
-    # passphrase must be a non-empty string; whitespace-only rejected.
     if not isinstance(passphrase, str) or isinstance(passphrase, bool):
         return {"ok": False, "error": "请输入备份口令"}
     if not passphrase or not passphrase.strip():
         return {"ok": False, "error": "请输入备份口令"}
-    # confirm_passphrase must be a string; mismatch uses exact comparison
-    # (no trim) so the user is not surprised by silently dropped spaces.
+    # confirm_passphrase mismatch uses exact comparison (no trim) so spaces are not silently dropped.
     if not isinstance(confirm_passphrase, str) or isinstance(confirm_passphrase, bool):
         return {"ok": False, "error": "两次输入的备份口令不一致"}
     if confirm_passphrase != passphrase:
         return {"ok": False, "error": "两次输入的备份口令不一致"}
-    # Normalize the suffix: append .wtbackup if missing (case-insensitive).
     normalized_path = output_path
     if not normalized_path.lower().endswith(".wtbackup"):
         normalized_path = normalized_path + ".wtbackup"
     try:
         backup_api.export_encrypted_backup(normalized_path, passphrase)
     except Exception:
-        # Collapse any service-layer exception to a generic message.
-        # Never expose raw exception text / traceback / SQL / path.
+        # Collapse service exceptions; never expose traceback/SQL/path.
         return {"ok": False, "error": "导出加密备份失败"}
     # Return only the basename so the full path never reaches the UI.
     filename = os.path.basename(normalized_path)
@@ -227,9 +217,6 @@ def preview_encrypted_backup_manifest_for_webview(
     input_path: str,
 ) -> dict[str, Any]:
     """Preview the non-sensitive manifest of a ``.wtbackup`` file."""
-    # Strict type checks: input_path must be a non-empty string that ends
-    # with .wtbackup (case-insensitive). bool / None / int / list / dict /
-    # object rejected.
     if not isinstance(input_path, str) or isinstance(input_path, bool):
         return {"ok": False, "error": "请选择有效的加密备份文件"}
     if not input_path or not input_path.strip():
@@ -239,13 +226,9 @@ def preview_encrypted_backup_manifest_for_webview(
     try:
         info = backup_api.parse_encrypted_backup_manifest(input_path)
     except Exception:
-        # Collapse BackupCorruptedError / BackupVersionNotSupportedError /
-        # RuntimeError / any service-layer exception to a generic message.
-        # Never expose raw exception text / traceback / SQL / path.
+        # Collapse backup/service exceptions; never expose traceback/SQL/path.
         return {"ok": False, "error": "读取备份清单失败"}
-    # Build the display-safe manifest dict. Only the six non-sensitive
-    # fields are surfaced; salt / ciphertext / payload / DB content are
-    # never included.
+    # Display-safe manifest: only six non-sensitive fields; salt/ciphertext/payload/DB never included.
     filename = os.path.basename(input_path)
     manifest: dict[str, Any] = {
         "version": int(info.version),
@@ -266,23 +249,18 @@ def import_encrypted_backup_for_webview(
     confirm_text: str,
 ) -> dict[str, Any]:
     """Import an encrypted ``.wtbackup`` file from the WebView UI."""
-    # Strict type checks: input_path must be a non-empty string that ends
-    # with .wtbackup (case-insensitive). bool / None / int / list / dict /
-    # object / wrong suffix rejected. The suffix is NOT auto-appended.
+    # Suffix is NOT auto-appended on import; wrong suffix is rejected.
     if not isinstance(input_path, str) or isinstance(input_path, bool):
         return {"ok": False, "error": "请选择有效的加密备份文件"}
     if not input_path or not input_path.strip():
         return {"ok": False, "error": "请选择有效的加密备份文件"}
     if not input_path.lower().endswith(".wtbackup"):
         return {"ok": False, "error": "请选择有效的加密备份文件"}
-    # passphrase must be a non-empty string; whitespace-only rejected.
-    # passphrase is NOT trimmed / normalized / written to any global state.
+    # passphrase is not trimmed/normalized/written to any global state.
     if not isinstance(passphrase, str) or isinstance(passphrase, bool):
         return {"ok": False, "error": "请输入备份口令"}
     if not passphrase or not passphrase.strip():
         return {"ok": False, "error": "请输入备份口令"}
-    # confirm_text must be a real string whose stripped value is exactly
-    # the literal confirmation phrase.
     if not isinstance(confirm_text, str) or isinstance(confirm_text, bool):
         return {"ok": False, "error": "请输入确认文字：导入并替换"}
     if confirm_text.strip() != "导入并替换":
@@ -298,11 +276,9 @@ def import_encrypted_backup_for_webview(
     except BackupVersionNotSupportedError:
         return {"ok": False, "error": "备份文件版本不受支持"}
     except (SecureBackupError, RuntimeError, Exception):
-        # Collapse any other service-layer exception to a generic message.
-        # Never expose raw exception text / traceback / SQL / path /
-        # passphrase / salt / ciphertext / payload.
+        # Collapse remaining exceptions; never expose traceback/SQL/path/passphrase/salt/ciphertext/payload.
         return {"ok": False, "error": "导入加密备份失败"}
-    # Aggregate the imported_tables dict into display-safe counts only.
+    # Aggregate imported_tables into display-safe counts only.
     imported_tables = result.imported_tables or {}
     imported_table_count = int(len(imported_tables))
     imported_row_count = int(sum(imported_tables.values()))
@@ -319,8 +295,6 @@ def import_encrypted_backup_for_webview(
 
 def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
     """Clear all local data from the WebView UI."""
-    # Strict type checks: confirm_text must be a real string whose
-    # stripped value is exactly the literal confirmation phrase.
     if not isinstance(confirm_text, str) or isinstance(confirm_text, bool):
         return {"ok": False, "error": "请输入确认文字：清空本地数据"}
     if confirm_text.strip() != "清空本地数据":
@@ -328,13 +302,9 @@ def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
     try:
         export_service.clear_all_local_data(confirm=True)
     except Exception:
-        # Collapse any exception (including ValueError from the guard
-        # when a destructive operation is already in progress) to the
-        # stable Chinese message. Never expose raw exception text /
-        # traceback / SQL / path / clipboard / window title / note.
+        # Collapse exceptions (incl. in-progress guard); never expose traceback/SQL/path/clipboard/window title/note.
         return {"ok": False, "error": "清空本地数据失败"}
-    # Try to refresh the status so the frontend can re-render; on failure
-    # still report the successful clear so it is not masked by a read error.
+    # Refresh status so frontend re-renders; still report success if read fails so it is not masked.
     try:
         status_result = get_settings_privacy_status()
         if status_result.get("ok"):
@@ -365,29 +335,22 @@ def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
     facade does not call backup export / import / manifest,
     ``clear_all_local_data``, or any schema mutation.
     """
-    # Strict bool check: ``enabled is True`` / ``enabled is False`` only.
-    # ``isinstance(enabled, bool)`` would also accept ``True``/``False``
-    # but ``is`` is the clearest expression of "real bool only".
     if enabled is not True and enabled is not False:
         return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
     try:
         set_clipboard_capture_enabled(enabled)
         status_result = get_settings_privacy_status()
         if not status_result.get("ok"):
-            # The status read failed after a successful write. Surface a
-            # generic failure so the frontend can re-load the status.
+            # Status read failed after a successful write; surface generic failure so frontend re-loads.
             return {"ok": False, "error": "设置剪贴板记录失败"}
         return {"ok": True, "status": status_result["status"]}
     except Exception:
-        # Collapse any unexpected error to a generic UI-facing message.
-        # Never expose raw exception text / traceback / SQL / paths.
+        # Collapse unexpected errors; never expose traceback/SQL/paths.
         return {"ok": False, "error": "设置剪贴板记录失败"}
 
 
 
 
-# Highlights shown in the WebView notice view.
-# WebView notice view stays consistent with the prior UI semantics.
 _FIRST_RUN_NOTICE_HIGHLIGHTS: list[str] = [
     "本地保存",
     "不截屏录屏",
@@ -403,9 +366,7 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
     try:
         accepted = bool(first_run_notice_accepted())
     except Exception:
-        # Strict fail-closed: do NOT return a fallback notice body. The
-        # frontend must show a blocking error and must not allow accept.
-        # Never expose raw exception text / traceback / SQL / paths.
+        # Fail-closed: never return fallback body or expose traceback/SQL/paths; frontend must block accept.
         return {
             "ok": False,
             "error": "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请重启应用或重新安装。",
@@ -423,11 +384,8 @@ def accept_first_run_notice_for_webview() -> dict[str, Any]:
     """Accept the first-run privacy notice from the WebView UI."""
     try:
         accept_first_run_notice()
-        # Belt-and-suspenders cache invalidation: ``set_setting`` already
-        # refreshes the cache entry, but explicitly clearing it as well
-        # guarantees a subsequent read re-reads from the DB and cannot
-        # observe a stale TTL window. This is safe because
-        # ``clear_settings_cache`` is a no-op when the key is absent.
+        # Belt-and-suspenders: set_setting already refreshes the cache, but
+        # explicit clear guarantees no stale TTL window (no-op when key absent).
         clear_settings_cache("first_run_notice_accepted")
         return {
             "ok": True,
@@ -435,8 +393,7 @@ def accept_first_run_notice_for_webview() -> dict[str, Any]:
             "message": "已确认隐私说明",
         }
     except Exception:
-        # Collapse any unexpected error to a generic UI-facing message.
-        # Never expose raw exception text / traceback / SQL / paths.
+        # Collapse unexpected errors; never expose traceback/SQL/paths.
         return {"ok": False, "error": "确认隐私说明失败"}
 
 
@@ -449,17 +406,12 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
         collector_status = get_collector_status()
         user_paused = is_user_paused()
         paused = bool(user_paused) or collector_status == "paused"
-        # Default report date (today). When the frontend passes a
-        # Timeline date (historical or today), the structural signature
-        # is scoped to that date so structural changes on the viewed
-        # date trigger a heavy refresh.
+        # Scope the structural signature to the viewed Timeline date (today by default)
+        # so structural changes there trigger a heavy refresh.
         from . import timeline_api as _timeline_api
         today = _timeline_api.get_default_report_date()
         scoped_report_date = report_date or today
-        # Unified refresh-revision computation. Delegates to
-        # ``live_display_service.compute_refresh_revision`` so the
-        # revision covers ALL structural changes (snapshot identity,
-        # carry state, latest visible activity, collector status, etc.).
+        # Unified refresh revision covers all structural changes (snapshot, carry state, latest activity, collector status).
         refresh_revision, debug_inputs = live_display_api.compute_refresh_revision(
             snapshot, collector_status, user_paused, today, scoped_report_date
         )
@@ -469,16 +421,13 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
         persisted_activity_id = int(debug_inputs.get("persisted_id") or 0)
         inferred_project_name = str(debug_inputs.get("inferred_project") or "")
         latest_activity_id = int(debug_inputs.get("latest_id") or 0)
-        # Unified live clock: build the current-activity summary from the
-        # SAME snapshot sample so the frontend ticker can use
-        # ``live_started_at_epoch_ms`` + ``carry_seconds`` without a
-        # separate bridge call. The live clock fields come from the same
-        # snapshot as the refresh_revision, guaranteeing a single-sample
-        # contract.
+        # Unified live clock: build the current-activity summary from the SAME snapshot
+        # sample so the frontend ticker uses live_started_at_epoch_ms + carry_seconds
+        # without a second bridge call. Live clock fields share the snapshot with
+        # refresh_revision (single-sample contract).
         live_summary = live_display_api.build_current_activity_summary(
             snapshot, report_date=scoped_report_date, today=today
         )
-        # Map collector_status + user_paused to a display label.
         if paused or collector_status == "paused":
             status_display = "已暂停"
         elif collector_status == "running":

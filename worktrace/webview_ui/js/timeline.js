@@ -1,7 +1,5 @@
-// WorkTrace WebView frontend — timeline module.
-// Timeline page: session list, detail list, edit panel, per-activity
-// inline editors (time / split / merge / hide / delete), session-level
-// correction sections, date navigation.
+// WorkTrace WebView frontend — timeline module: session list, detail list, edit panel, inline editors,
+// session-level correction sections, date navigation.
 
 (function () {
     "use strict";
@@ -28,10 +26,8 @@
                 listEl.innerHTML = '<div class="timeline-empty">正在加载当前活动…</div>';
             } else {
                 listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
-                // Invalidate any pending detail request so a stale
-                // ``get_timeline_session_details`` response does not backfill
-                // the cleared detail panel. Also clear the detail cache so the
-                // ticker does not project against a stale payload.
+                // Invalidate any pending detail request and clear the detail cache so a stale response does not
+                // backfill the cleared panel and the ticker does not project against a stale payload.
                 ++App.detailsRequestToken;
                 App.lastSessionDetailsData = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
@@ -51,14 +47,11 @@
         var sessionContinuityKeys = [];
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
-            // Live projection convergence: virtual live sessions are
-            // rendered, clickable, selectable, and display-only. The backend
-            // marks them ``edit_disabled=True`` so the edit panel stays
-            // disabled.
+            // Live projection convergence: virtual live sessions are display-only; backend marks
+            // ``edit_disabled=True`` so the edit panel stays disabled.
             var startTimeOnly = App.formatStartTimeOnly(s.start_time);
             var projectLabel = App.formatProjectLabel(s.project_name, s.project_description);
-            // ``duration_seconds`` is already the display value (adjusted
-            // when a duration override exists, raw otherwise).
+            // ``duration_seconds`` is already the display value (adjusted when a duration override exists).
             var sDurSec = parseInt(s.duration_seconds, 10);
             var sDurText = (!isNaN(sDurSec) && sDurSec >= 0)
                 ? App.formatDuration(sDurSec)
@@ -69,11 +62,8 @@
             if (s.is_live_projected === true) cls += " live-projected";
             if (s.is_virtual_live === true) cls += " virtual-live";
             if (s.session_id === App.selectedSessionId) cls += " selected";
-            // Stable live key data attribute so the frontend ticker /
-            // selection continuity can locate the session DOM across the
-            // virtual → persisted_open transition (when session_id changes
-            // from "virtual-live:<hash>" to the real DB session id, the
-            // stable_live_key_hash stays the same).
+            // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
+            // the virtual → persisted_open transition (stable_live_key_hash stays the same when session_id changes).
             var stableKeyHash = s.stable_live_key_hash || "";
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
                 + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
@@ -89,27 +79,20 @@
                 + '<div class="timeline-item-count">' + App.escapeHtml(String(s.event_count || 0) + " 条") + '</div>'
                 + '</div>'
                 + '</div>';
-            // The continuity key MUST use App.liveContinuityKey() so the
-            // ticker (which also uses liveContinuityKey) can locate the
-            // seeded state. Using "session-" + session_id would break the
-            // virtual → persisted_open transition because the ticker key
-            // is based on stable_live_key_hash, not session_id.
+            // Continuity key MUST use App.liveContinuityKey() so the ticker can locate the seeded state; a
+            // "session-" + session_id key would break the virtual → persisted_open transition.
             sessionContinuityKeys.push({ key: App.liveContinuityKey(s, "session"), sec: isNaN(sDurSec) ? 0 : sDurSec });
         }
         listEl.innerHTML = html;
-        // Reset + seed the monotonic render state for each session so the
-        // fresh backend snapshot duration replaces any prior ticker
-        // projection and the ticker's first delta does not appear to roll back.
+        // Reset + seed the monotonic render state so the fresh backend snapshot replaces prior ticker projection.
         for (var ci = 0; ci < sessionContinuityKeys.length; ci++) {
             var ck = sessionContinuityKeys[ci];
             App._monotonicRenderState[ck.key] = { lastSeconds: ck.sec };
         }
-        // Also reset the timeline-total continuity so the fresh backend total
-        // duration replaces any prior ticker projection.
+        // Also reset the timeline-total continuity so the fresh backend total replaces prior ticker projection.
         var tlTotalSec = parseInt(data.today_total_seconds, 10) || 0;
         App._monotonicRenderState["timeline-total"] = { lastSeconds: tlTotalSec };
 
-        // Bind click handlers to session items
         var items = listEl.querySelectorAll(".timeline-item");
         for (var j = 0; j < items.length; j++) {
             (function (itemEl) {
@@ -122,9 +105,7 @@
 
         if (App.selectedSessionId !== null || App.selectedSessionLiveKey) {
             var found = null;
-            // First try to match by stable_live_key_hash (handles
-            // virtual → persisted_open transition where session_id
-            // changes but stable_live_key_hash stays the same).
+            // First try to match by stable_live_key_hash (handles virtual → persisted_open transition).
             if (App.selectedSessionLiveKey) {
                 for (var sk = 0; sk < sessions.length; sk++) {
                     if (sessions[sk].stable_live_key_hash
@@ -145,8 +126,7 @@
                 }
             }
             if (found) {
-                // Update the selection anchors so a subsequent refresh
-                // (after the transition) can still find the session.
+                // Update the selection anchors so a subsequent refresh can still find the session.
                 App.selectedSessionId = found.session_id;
                 App.selectedSessionLiveKey = found.stable_live_key_hash || null;
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
@@ -154,15 +134,12 @@
                 if (!skipDetailReload) {
                     loadSessionDetails(found.activity_ids, data.date);
                 }
-                // Only re-populate the edit panel if the user is not mid-edit
-                // AND the session is not edit-disabled (virtual live session).
-                // Auto-refresh must not overwrite unsaved edits.
+                // Only re-populate the edit panel if the user is not mid-edit AND the session is not edit-disabled.
                 if (!found.edit_disabled
                     && (!App.editingSession || App.editingSession.session_id !== found.session_id || !isEditDirty())) {
                     populateEditPanel(found);
                 } else if (found.edit_disabled) {
-                    // Virtual / persisted_open live session: clear the edit
-                    // panel since it cannot be edited.
+                    // Virtual / persisted_open live session: clear the edit panel since it cannot be edited.
                     clearEditPanel();
                 }
                 if (App.correctionShellOpen
@@ -177,11 +154,8 @@
                     );
                 }
             } else {
-                // Selected session disappeared (e.g. session ended and was
-                // re-grouped). Clear selection gracefully without throwing.
-                // Invalidate any pending detail request and clear the detail
-                // cache so a stale response does not backfill the cleared
-                // detail panel.
+                // Selected session disappeared (e.g. re-grouped). Invalidate the pending detail request and clear
+                // the detail cache so a stale response does not backfill the cleared panel.
                 ++App.detailsRequestToken;
                 App.lastSessionDetailsData = null;
                 App.selectedSessionId = null;
@@ -196,18 +170,13 @@
 
     function selectTimelineSession(sessionId, sessions) {
         App.selectedSessionId = sessionId;
-        // Switching sessions closes the correction shell so the shell
-        // context does not get confused across sessions. The shell is a
-        // per-session workspace.
+        // Switching sessions closes the correction shell (per-session workspace).
         if (App.correctionShellOpen && App.correctionShellSessionId !== sessionId) {
             App.resetCorrectionShellState();
         }
-        // Update selected class without full re-render. Match by session_id
-        // AND stable_live_key_hash so the virtual → persisted_open transition
-        // (where session_id changes but stable_live_key_hash stays the same)
-        // keeps the visual selection.
+        // Update selected class without full re-render. Match by session_id AND stable_live_key_hash so the
+        // virtual → persisted_open transition keeps the visual selection.
         var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
-        // Find the newly-selected session so we can capture its stable key.
         var newSelected = null;
         for (var j0 = 0; j0 < sessions.length; j0++) {
             if (sessions[j0].session_id === sessionId) {
@@ -225,20 +194,14 @@
                 items[i].classList.add("selected");
             }
         }
-        // Find the session to get activity_ids
         var found = newSelected;
         if (found) {
             loadSessionDetails(found.activity_ids, App.timelineDate);
-            // Virtual live sessions are display-only. A manual click on a
-            // virtual session must NOT open the edit panel — it has no
-            // persisted activity_ids and cannot be edited. Clear the edit
-            // panel instead so any prior session's edit panel is dismissed.
+            // Virtual live sessions are display-only; a manual click must NOT open the edit panel. Clear it instead.
             if (found.edit_disabled === true || found.is_virtual === true) {
                 clearEditPanel();
             } else {
-                // Populate the edit panel with the selected session's fields.
-                // A manual click always repopulates, even if a prior auto-refresh
-                // had skipped repopulation due to unsaved edits.
+                // A manual click always repopulates the edit panel, even if a prior auto-refresh skipped it.
                 populateEditPanel(found);
             }
         }
@@ -248,9 +211,7 @@
     function loadSessionDetails(activityIds, date) {
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
-        // Only show the "loading" placeholder when the panel is empty. If
-        // we already have details on screen, keep them visible while the
-        // new data loads so a refresh does not flash an empty panel.
+        // Only show "loading" when the panel is empty; keep existing details visible during refresh.
         if (!detailsList.innerHTML.trim()) {
             detailsHeader.textContent = "加载详情…";
             detailsList.innerHTML = "";
@@ -281,11 +242,8 @@
         if (App.activityTimeSaving || App.activitySplitSaving) {
             return;
         }
-        // Cache the session-details payload so the 1-second heartbeat
-        // ticker can increment the live-projected detail row's duration
-        // without a bridge round-trip. The ticker only updates DOM text; it
-        // never re-renders the whole list so inline edit state is preserved
-        // across heartbeat refreshes.
+        // Cache the session-details payload so the 1s heartbeat ticker can increment the live-projected detail
+        // row's duration without a bridge round-trip. The ticker only updates DOM text, never re-renders the list.
         App.lastSessionDetailsData = data;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
@@ -297,15 +255,10 @@
         }
         detailsHeader.textContent = "活动详情（" + activities.length + " 条）";
         var html = "";
-        // Collect detail continuity keys for seeding.
         var detailContinuityKeys = [];
         for (var i = 0; i < activities.length; i++) {
             var a = activities[i];
-            // Simplified read-only detail row: show display name, start
-            // time only, raw activity duration, and project name. No edit
-            // / split / merge / hide / delete buttons and no inline editors
-            // — advanced correction is reached via the "高级纠错" button
-            // in the edit panel, which opens the correction shell.
+            // Simplified read-only detail row; advanced correction is via the "高级纠错" button → correction shell.
             var startTimeOnly = App.formatStartTimeOnly(a.start_time);
             var displayName = a.resource_name || a.app_name || "未知";
             var aDurSec = parseInt(a.duration_seconds, 10);
@@ -316,12 +269,8 @@
             if (a.is_in_progress) cls += " in-progress";
             if (a.is_virtual === true) cls += " virtual-live";
             var aid = a.activity_id || 0;
-            // Stable live key data attribute so the detail ticker can
-            // locate the row across the virtual → persisted_open
-            // transition (when activity_id changes from 0 to the real DB
-            // id, the stable_live_key_hash stays the same). The ticker
-            // looks up the DOM by stable key first, falling back to
-            // activity_id for closed rows.
+            // Stable live key data attribute so the detail ticker locates the row across the virtual → persisted_open
+            // transition (stable_live_key_hash stays the same when activity_id changes; ticker falls back to activity_id).
             var detailStableKey = a.stable_live_key_hash || "";
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
                 + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
@@ -345,11 +294,6 @@
             var detailKey = App.liveContinuityKey(detailItem, "detail");
             App._monotonicRenderState[detailKey] = { lastSeconds: dk.sec };
         }
-        // Simplified detail rows are read-only: no per-activity edit / split
-        // / merge / hide / delete buttons and no inline editors are rendered,
-        // so there is nothing to bind here. Advanced correction is reached
-        // via the "高级纠错" button in the edit panel, which opens the
-        // correction shell (where the per-activity actions still live).
     }
     App.renderSessionDetails = renderSessionDetails;
 
@@ -379,9 +323,6 @@
         if (cancelBtn) cancelBtn.disabled = false;
         editor.hidden = false;
         setActivityTimeStatus(row, "", false);
-        // Wire up save/cancel for this editor instance. Re-binding is safe
-        // because we replace the listener by cloning is unnecessary — we
-        // simply attach and rely on the editor being hidden after close.
         if (saveBtn) {
             saveBtn.onclick = function () { saveActivityTime(row); };
         }
@@ -405,8 +346,7 @@
         if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.onclick = null; }
         editor.hidden = true;
         setActivityTimeStatus(row, "", false);
-        // Only clear editingActivityId if it matches the row being closed,
-        // so closing one editor does not wipe state for a different one.
+        // Only clear editingActivityId if it matches the row being closed.
         var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
         if (App.editingActivityId === rowAid) {
             App.editingActivityId = null;
@@ -496,17 +436,14 @@
                 );
                 return;
             }
-            // Update the button's baseline so a subsequent auto-refresh
-            // does not revert the editor inputs to the pre-save values.
+            // Update the button's baseline so a subsequent auto-refresh does not revert the editor inputs.
             var btn = row.querySelector(".detail-edit-time-btn");
             if (btn) {
                 btn.setAttribute("data-start", startVal);
                 btn.setAttribute("data-end", endVal);
             }
             setActivityTimeStatus(row, "时间已更新", false);
-            // Keep the editor open but re-enable inputs so the user can see
-            // the saved values. The next auto-refresh will re-render with
-            // the new server data.
+            // Keep the editor open so the user can see the saved values; the next auto-refresh re-renders.
             setActivityTimeSaving(row, false);
             if (startInput) startInput.value = App.backendToDatetimeLocal(startVal);
             if (endInput) endInput.value = App.backendToDatetimeLocal(endVal);
@@ -521,11 +458,9 @@
 
     function openActivitySplitEditor(activityId, startVal, endVal, btn) {
         if (!btn) return;
-        // Close any other open inline editor first so only one is visible
-        // at a time. This keeps the editing context unambiguous.
+        // Close any other open inline editor first so only one is visible at a time.
         closeAllActivitySplitEditors(activityId);
-        // Also close any open time editor so the split editor is the only
-        // inline editor visible.
+        // Also close any open time editor.
         closeAllActivityTimeEditors(activityId);
         App.editingSplitActivityId = activityId;
         var row = btn.closest(".detail-item");
@@ -533,10 +468,8 @@
         var editor = row.querySelector(".detail-split-editor");
         if (!editor) return;
         var splitInput = editor.querySelector(".detail-split-time");
-        // Default the split point to the midpoint between start and end so
-        // the user has a reasonable starting value. Use the fixed-format
-        // string conversion helpers, NOT Date parsing, to avoid timezone
-        // shifts.
+        // Default the split point to the midpoint; use fixed-format string conversion (NOT Date parsing) to
+        // avoid timezone shifts.
         if (splitInput) {
             var midVal = App.midpointTime(startVal, endVal);
             splitInput.value = App.backendToDatetimeLocal(midVal);
@@ -569,9 +502,7 @@
         if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.onclick = null; }
         editor.hidden = true;
         setActivitySplitStatus(row, "", false);
-        // Only clear editingSplitActivityId if it matches the row being
-        // closed, so closing one editor does not wipe state for a different
-        // one.
+        // Only clear editingSplitActivityId if it matches the row being closed.
         var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
         if (App.editingSplitActivityId === rowAid) {
             App.editingSplitActivityId = null;
@@ -635,9 +566,8 @@
         if (!editor) return;
         var splitInput = editor.querySelector(".detail-split-time");
         if (!splitInput) return;
-        // The button's data-start/data-end attributes hold the activity's
-        // current server-returned start/end; use them for the range check so
-        // a stale editor on a re-rendered row cannot submit a bad split.
+        // The button's data-start/data-end hold the server-returned start/end; use them for the range check
+        // so a stale editor on a re-rendered row cannot submit a bad split.
         var btn = row.querySelector(".detail-split-btn");
         var actStart = btn ? (btn.getAttribute("data-start") || "") : "";
         var actEnd = btn ? (btn.getAttribute("data-end") || "") : "";
@@ -646,9 +576,7 @@
             setActivitySplitStatus(row, "拆分时间无效", true);
             return;
         }
-        // Frontend range check: split must be strictly between start and end.
-        // The backend re-validates this, but the frontend check gives the
-        // user immediate feedback without a round-trip.
+        // Frontend range check for immediate feedback; the backend re-validates.
         if (!actStart || !actEnd || splitVal <= actStart || splitVal >= actEnd) {
             setActivitySplitStatus(row, "拆分时间必须在活动时间范围内", true);
             return;
@@ -666,10 +594,7 @@
                 );
                 return;
             }
-            // Split succeeded. Close the editor and refresh the Timeline so
-            // the two new activities appear. Reset the saving state before
-            // refreshing so the inputs are re-enabled regardless of whether
-            // the refresh succeeds.
+            // Split succeeded; close the editor and refresh so the two new activities appear.
             setActivitySplitSaving(row, false);
             setActivitySplitStatus(row, "已拆分", false);
             // The split changes the activity's end_time and creates a new
@@ -729,17 +654,12 @@
             setMergeStatus(btn, "活动 ID 无效", true);
             return;
         }
-        // Guard against unsaved edits, consistent with hide / delete. Merge
-        // triggers a refresh that would wipe unsaved project/note/time/split
-        // inputs, so require the user to save or cancel first.
-        // cancel first.
+        // Guard against unsaved edits: merge triggers a refresh that would wipe unsaved inputs.
         if (isEditDirty()) {
             setMergeStatus(btn, "请先保存或取消当前编辑", true);
             return;
         }
-        // Verify the activity id still matches the row so a stale button
-        // (e.g. after rapid session switching) does not operate on a
-        // different session's activity. Consistent with hide / delete.
+        // Verify the activity id still matches the row so a stale button does not operate on a different session.
         var row = btn.closest(".detail-item");
         if (!row) return;
         var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
@@ -757,11 +677,7 @@
                 );
                 return;
             }
-            // Merge succeeded. Reset saving state before refreshing so the
-            // button is re-enabled regardless of whether the refresh
-            // succeeds. The merge changes the activity's end_time and
-            // soft-deletes the next activity, so the detail list must be
-            // refreshed.
+            // Merge succeeded; refresh so the detail list reflects the soft-deleted next activity.
             setMergeSaving(btn, false);
             setMergeStatus(btn, "已合并", false);
             refreshTimelineAfterEdit();
@@ -799,8 +715,7 @@
             btn.disabled = saving;
             btn.textContent = saving ? "隐藏中…" : "隐藏";
         }
-        // Also disable the delete button on the same row during a hide so
-        // the user cannot start a conflicting operation.
+        // Also disable the delete button on the same row during a hide.
         var row = btn ? btn.closest(".detail-item") : null;
         if (row) {
             var delBtn = row.querySelector(".detail-delete-btn");
@@ -830,16 +745,12 @@
             setVisibilityStatus(btn, "活动 ID 无效", true);
             return;
         }
-        // Guard against unsaved edits: hide is an immediate action that
-        // triggers a refresh, which would wipe unsaved project/note/time/
-        // split inputs. Require the user to save or cancel first.
+        // Guard against unsaved edits: hide triggers a refresh that would wipe unsaved inputs.
         if (isEditDirty()) {
             setVisibilityStatus(btn, "请先保存或取消当前编辑", true);
             return;
         }
-        // Verify the activity id still exists in the current details list
-        // so a stale button (e.g. after rapid session switching) does not
-        // operate on a different session's activity.
+        // Verify the activity id still exists in the current details list so a stale button does not misfire.
         var row = btn.closest(".detail-item");
         if (!row) return;
         var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
@@ -882,9 +793,7 @@
         var rowAid = parseInt(row.getAttribute("data-activity-id"), 10);
         if (rowAid !== activityId) return;
 
-        // Lightweight confirmation so the user does not accidentally
-        // soft-delete. The message makes clear this is not a permanent
-        // delete. Uses native window.confirm — no third-party library.
+        // Lightweight confirmation (native window.confirm) so the user does not accidentally soft-delete.
         var confirmed = window.confirm("确定从 Timeline 删除这条记录吗？不会物理删除数据。");
         if (!confirmed) return;
 
@@ -1074,9 +983,7 @@
 
 
     function loadProjects() {
-        // Load the selectable projects list once and cache it. Subsequent
-        // calls reuse the cache so we do not hit the bridge every time the
-        // user selects a session.
+        // Load and cache the selectable projects list so we do not hit the bridge on every session select.
         if (App.projectsCache || App.projectsLoading) {
             return Promise.resolve(App.projectsCache);
         }
@@ -1179,27 +1086,22 @@
             durStatusEl.textContent = session.has_duration_override ? "已修正" : "";
         }
 
-        // Note textarea: load existing note (the editing target only).
         var noteEl = document.getElementById("edit-note-text");
         if (noteEl) {
             noteEl.value = session.session_note || "";
             noteEl.disabled = false;
         }
 
-        // Enable save/cancel buttons first, then let updateNoteCount apply
-        // the over-limit disable so the length check has the final say.
+        // Enable save/cancel first, then updateNoteCount applies the over-limit disable.
         var saveBtn = document.getElementById("edit-save-btn");
         var cancelBtn = document.getElementById("edit-cancel-btn");
         if (saveBtn) saveBtn.disabled = false;
         if (cancelBtn) cancelBtn.disabled = false;
         if (noteEl) updateNoteCount();
 
-        // The session-level time / split / visibility sections are hidden in
-        // the simplified edit panel (their HTML is retained with ``hidden``
-        // so the correction shell can still reach them). Skip populating
-        // them here; their state is reset by clearEditPanel when needed.
+        // Session-level time / split / visibility sections are hidden in the simplified edit panel (HTML retained
+        // for the correction shell); their state is reset by clearEditPanel.
 
-        // Clear any prior status message
         showEditStatus("", false);
     }
     App.populateEditPanel = populateEditPanel;
@@ -1208,28 +1110,19 @@
         App.editingSession = null;
         App.editSaving = false;
         App.timeSaving = false;
-        // Reset per-activity inline editor state. The detail list DOM is
-        // typically rebuilt by renderSessionDetails, but the tracking
-        // variables must be cleared so a stale editingActivityId does not
-        // leak into the next session.
+        // Reset per-activity inline editor state so a stale editingActivityId does not leak into the next session.
         App.editingActivityId = null;
         App.activityTimeSaving = false;
-        // Reset per-activity inline split editor state too.
         App.editingSplitActivityId = null;
         App.activitySplitSaving = false;
         App.sessionSplitSaving = false;
-        // Reset per-activity merge state too.
         App.mergeSaving = false;
         App.mergingActivityId = null;
-        // Reset per-activity hide / delete state too.
         App.hideSaving = false;
         App.hidingActivityId = null;
         App.deleteSaving = false;
         App.deletingActivityId = null;
-        // Reset batch project selection state so a stale batch selection
-        // from the previous session does not leak into the next session.
-        // The reset also clears the project select / status so the panel
-        // returns to a clean baseline.
+        // Reset batch project selection state so a stale selection does not leak into the next session.
         App.resetBatchProjectState();
         // Reset batch note state too so a stale note textarea / saving flag
         // does not leak into the next session.
@@ -1289,9 +1182,7 @@
             var originalProjectId = String(App.editingSession.project_id || 0);
             if (currentProjectId !== originalProjectId) return true;
         }
-        // Duration override input. If the user has changed the minutes away
-        // from the baseline (adjusted / raw seconds → minutes), the panel is
-        // dirty so auto-refresh does not revert the input.
+        // Duration override input: if minutes differ from the baseline, the panel is dirty.
         var durInput = document.getElementById("edit-duration-input");
         if (durInput && !durInput.disabled) {
             var durBaselineSrc = (App.editingSession.adjusted_duration_seconds != null)
@@ -1301,9 +1192,6 @@
             var durBaselineStr = isNaN(durBaselineMin) ? "" : String(durBaselineMin);
             if ((durInput.value || "") !== durBaselineStr) return true;
         }
-        // The session-level time / split inputs and per-activity inline
-        // editors are no longer rendered in the simplified view (their
-        // sections are hidden), so their dirty checks are removed.
         return false;
     }
     App.isEditDirty = isEditDirty;
@@ -1314,16 +1202,12 @@
         if (!noteEl || !countEl) return;
         var len = (noteEl.value || "").length;
         countEl.textContent = len + " / " + App.NOTE_MAX_LENGTH;
-        // Visual warning when over the limit.
         if (len > App.NOTE_MAX_LENGTH) {
             countEl.classList.add("edit-note-count-over");
         } else {
             countEl.classList.remove("edit-note-count-over");
         }
-        // Disable the save button when the note is over the limit so the
-        // user gets immediate feedback instead of an error on click. Only
-        // toggle when not actively saving (setEditSaving controls the
-        // button during save and re-enables it on completion).
+        // Disable save when the note is over the limit; only toggle when not actively saving.
         var saveBtn = document.getElementById("edit-save-btn");
         if (saveBtn && !App.editSaving && App.editingSession) {
             saveBtn.disabled = len > App.NOTE_MAX_LENGTH;
@@ -1361,10 +1245,7 @@
         if (select) select.disabled = saving;
         if (noteEl) noteEl.disabled = saving;
         if (durInput) durInput.disabled = saving;
-        // When stopping a save, re-apply the note-length limit so the
-        // button stays disabled if the user typed past the limit during
-        // the save (the textarea is disabled during save, but this is a
-        // defensive guard).
+        // When stopping a save, re-apply the note-length limit as a defensive guard.
         if (!saving && App.editingSession) {
             updateNoteCount();
         }
@@ -1404,8 +1285,7 @@
         var projectChanged = projectIdStr !== originalProjectId;
         var noteChanged = note !== originalNote;
 
-        // Duration override: empty input clears the override (null); a
-        // non-empty value is parsed as minutes and converted to seconds.
+        // Duration override: empty input clears the override (null); non-empty is minutes → seconds.
         var durInput = document.getElementById("edit-duration-input");
         var durRawValue = durInput ? (durInput.value || "").trim() : "";
         var adjustedDurationSeconds = null;
@@ -1417,8 +1297,7 @@
             }
             adjustedDurationSeconds = durMinutes * 60;
         }
-        // Duration is considered changed when the input differs from the
-        // baseline (adjusted / raw seconds → minutes), matching isEditDirty.
+        // Duration is considered changed when the input differs from the baseline, matching isEditDirty.
         var durBaselineSrc = (App.editingSession.adjusted_duration_seconds != null)
             ? App.editingSession.adjusted_duration_seconds
             : App.editingSession.raw_duration_seconds;
@@ -1452,8 +1331,7 @@
             }));
         }
         if (noteOrDurationChanged) {
-            // The note and the duration override are saved together so the
-            // declared / display duration and the note stay consistent.
+            // The note and the duration override are saved together so they stay consistent.
             promises.push(App.callBridge(
                 "update_timeline_note_and_duration",
                 activityIds, note, adjustedDurationSeconds, reportDate
@@ -1470,10 +1348,8 @@
             for (var i = 0; i < results.length; i++) {
                 if (results[i].status === "rejected") {
                     hasError = true;
-                    // Never read .message from a rejected promise — it
-                    // could be a raw pywebview exception. Use the stable
-                    // "保存失败" fallback so internal details never leak
-                    // into the UI.
+                    // Never read .message from a rejected promise — could be a raw pywebview exception.
+                    // Use the stable "保存失败" fallback so internal details never leak into the UI.
                     errorMsg = "保存失败";
                     break;
                 }
@@ -1484,10 +1360,7 @@
                 showEditStatus(errorMsg, true);
                 return;
             }
-            // Success: update the editingSession baseline to the saved
-            // values so isEditDirty() returns false. This clears the dirty
-            // state, lets the subsequent refresh repopulate the edit panel
-            // with the new server-returned baseline, and ensures Cancel
+            // Update the editingSession baseline to the saved values so isEditDirty() returns false and Cancel
             // after save does not revert to the pre-save values.
             if (App.editingSession) {
                 if (projectChanged) {
@@ -1497,23 +1370,17 @@
                     App.editingSession.session_note = note;
                     App.editingSession.adjusted_duration_seconds = adjustedDurationSeconds;
                     App.editingSession.has_duration_override = (adjustedDurationSeconds != null);
-                    // display_duration_seconds follows the override when set,
-                    // otherwise it falls back to the raw duration.
                     App.editingSession.display_duration_seconds = (adjustedDurationSeconds != null)
                         ? adjustedDurationSeconds
                         : (App.editingSession.raw_duration_seconds != null
                             ? App.editingSession.raw_duration_seconds
                             : App.editingSession.duration_seconds);
-                    // Keep duration_seconds (used by the session list render)
-                    // aligned with the display value so a stale snapshot is
-                    // not rendered before the refresh arrives.
+                    // Keep duration_seconds aligned with the display value so a stale snapshot is not rendered before refresh.
                     App.editingSession.duration_seconds = App.editingSession.display_duration_seconds;
                 }
             }
             showEditStatus("保存成功", false);
-            // Reset the saving state before refreshing so the button is
-            // re-enabled regardless of whether the refresh succeeds. The
-            // save itself succeeded; a refresh failure is a separate concern.
+            // Reset saving state before refreshing; a refresh failure is a separate concern.
             setEditSaving(false);
             refreshTimelineAfterEdit();
         });
@@ -1540,8 +1407,7 @@
             return;
         }
         if (inProgress) {
-            // Single-activity but still open: splitting is not safe because
-            // the displayed end_time may be a projected value.
+            // Single-activity but still open: splitting is not safe (displayed end_time may be projected).
             singleEl.hidden = true;
             multiEl.hidden = false;
             multiEl.textContent = "进行中记录无法拆分。";
@@ -1624,7 +1490,7 @@
             showSplitStatus("拆分时间无效", true);
             return;
         }
-        // Frontend range check: split must be strictly between start and end.
+        // Frontend range check: split must be strictly between start and end (backend re-validates).
         var startVal = App.editingSession.start_time || "";
         var endVal = App.editingSession.end_time || "";
         if (!startVal || !endVal || splitVal <= startVal || splitVal >= endVal) {
@@ -1640,11 +1506,7 @@
                 showSplitStatus(result && result.error ? result.error : "拆分失败", true);
                 return;
             }
-            // Split succeeded. Reset the saving state before refreshing so
-            // the button is re-enabled regardless of whether the refresh
-            // succeeds. The split changes the session structure, so the
-            // selected session may regroup or disappear; the refresh path
-            // handles that gracefully by clearing the selection.
+            // Split succeeded; the refresh path handles session regrouping gracefully.
             setSessionSplitSaving(false);
             showSplitStatus("已拆分", false);
             refreshTimelineAfterEdit();
@@ -1682,7 +1544,6 @@
             clearEditPanel();
             return;
         }
-        // Revert to original values from the session object.
         populateEditPanel(App.editingSession);
     }
     App.cancelEdit = cancelEdit;
@@ -1708,15 +1569,13 @@
             return;
         }
         if (inProgress) {
-            // Single-activity but still open: the displayed end_time may be a
-            // projected value, so editing is not safe. Show the hint instead.
+            // Single-activity but still open: displayed end_time may be projected, so editing is not safe.
             singleEl.hidden = true;
             multiEl.hidden = false;
             multiEl.textContent = "进行中记录无法修改时间。";
             showTimeStatus("", false);
             return;
         }
-        // Single closed activity: show the inputs.
         singleEl.hidden = false;
         multiEl.hidden = true;
         if (startEl) startEl.value = App.backendToDatetimeLocal(session.start_time);

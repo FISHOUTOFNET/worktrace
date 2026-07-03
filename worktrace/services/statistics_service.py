@@ -69,11 +69,9 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True, inc
         live_duration = int(live["duration_seconds"])
         total += live_duration
         effective += live_duration
-    # Use include_live=True for project_stats so BOTH the virtual projection
-    # (add duration to display_project group) AND the persisted_open overlay
-    # (relabel matching session's project to display_project) are applied.
-    # This keeps the uncategorized / classified split consistent with the
-    # display_project contract during the 30-second pending window.
+    # Use include_live=True so the virtual projection and persisted_open
+    # overlay keep the uncategorized/classified split consistent with the
+    # display_project contract during the 30s pending window.
     project_stats = get_project_stats(start_date, end_date, ensure_context=False, include_live=include_live)
     uncategorized = sum(
         int(row["total_duration"])
@@ -118,10 +116,8 @@ def get_project_stats(start_date: str, end_date: str, ensure_context: bool = Tru
         description = str(session.get("project_description") or "").strip()
         # Persisted_open overlay: when the session contains the
         # persisted_activity_id, relabel its project to the snapshot's
-        # display_project (duration unchanged — see ``get_summary``).
-        # open row's time to the inherited display project during the
-        # 30-second pending window, NOT the DB row's candidate assignment.
-        # The duration is NOT changed (no double-count).
+        # display_project during the 30s pending window (not the DB
+        # candidate); duration unchanged to avoid double-counting.
         if persisted_overlay and persisted_overlay["persisted_activity_id"] in {
             int(aid) for aid in (session.get("activity_ids") or []) if aid
         }:
@@ -174,8 +170,6 @@ def _live_projection(start_date: str, end_date: str) -> dict | None:
     live_state = classify_live_state(snapshot)
     if live_state not in {"virtual", "persisted_open"}:
         return None
-    # Use the public live projection contract so virtual and persisted_open
-    # share the SAME display_project source.
     projection = build_live_projection(snapshot, report_date=report_date, today=report_date)
     if not projection:
         return None
@@ -226,9 +220,6 @@ def _read_current_activity_snapshot() -> dict | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
-
-# tracebacks are never surfaced.
 
 
 def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
@@ -335,9 +326,6 @@ def validate_statistics_date_range(date_from: str, date_to: str) -> None:
         raise ValueError("range_too_large")
 
 
-# Private alias for internal callers.
-# that referenced the pre-refactor private name keep working; the canonical
-# implementation is the public ``validate_statistics_date_range`` above.
 _validate_summary_date_range = validate_statistics_date_range
 
 

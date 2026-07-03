@@ -39,6 +39,8 @@ class FileScan:
     empty_lines: int = 0
     inline_comments: int = 0
     max_contiguous_ordinary_comment_block: int = 0
+    applied_ratio_threshold: float = 0.0
+    threshold_source: str = "default"
     violations: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -425,6 +427,8 @@ def _violation(
     line: int | None = None,
     start_line: int | None = None,
     end_line: int | None = None,
+    applied_threshold: float | None = None,
+    threshold_source: str | None = None,
 ) -> dict[str, Any]:
     item: dict[str, Any] = {
         "path": path,
@@ -439,7 +443,70 @@ def _violation(
         item["start_line"] = start_line
     if end_line is not None:
         item["end_line"] = end_line
+    if applied_threshold is not None:
+        item["applied_threshold"] = round(applied_threshold, 6)
+    if threshold_source is not None:
+        item["threshold_source"] = threshold_source
     return item
+
+
+def resolve_file_ratio_override(
+    rel_path: str, policy: dict[str, Any]
+) -> tuple[float | None, str]:
+    """Resolve the per-file ordinary comment ratio override for a path.
+
+    Exact file path match takes priority over directory prefix match. Returns
+    (override_ratio, source) where source is "override:<path>" or "default" when
+    no override applies. Directory prefix matches require the override path to
+    end with "/" so the match boundary is auditable.
+    """
+    overrides = policy.get("path_threshold_overrides", []) or []
+    for entry in overrides:
+        if entry.get("path") == rel_path:
+            return entry.get("file_ordinary_comment_ratio_max"), f"override:{entry['path']}"
+    for entry in overrides:
+        op = entry.get("path", "")
+        if op.endswith("/") and rel_path.startswith(op):
+            return entry.get("file_ordinary_comment_ratio_max"), f"override:{entry['path']}"
+    return None, "default"
+
+
+def validate_overrides(policy: dict[str, Any]) -> list[str]:
+    """Return a list of human-readable override configuration errors."""
+    errors: list[str] = []
+    overrides = policy.get("path_threshold_overrides", []) or []
+    max_ratio = policy.get("override_max_ratio", 0.18)
+    allowed_categories = set(
+        policy.get("override_allowed_categories", []) or []
+    )
+    seen: set[str] = set()
+    for entry in overrides:
+        path = entry.get("path")
+        if not path:
+            errors.append("override entry missing 'path'")
+            continue
+        if path in seen:
+            errors.append(f"duplicate override path: {path}")
+        seen.add(path)
+        if any(ch in path for ch in ("*", "?", "[")):
+            errors.append(f"override path must not use glob wildcards: {path}")
+        ratio = entry.get("file_ordinary_comment_ratio_max")
+        if ratio is None:
+            errors.append(f"override {path} missing 'file_ordinary_comment_ratio_max'")
+        elif ratio > max_ratio + 1e-9:
+            errors.append(
+                f"override {path} ratio {ratio} exceeds override_max_ratio {max_ratio}"
+            )
+        if not entry.get("reason"):
+            errors.append(f"override {path} missing 'reason'")
+        category = entry.get("category")
+        if not category:
+            errors.append(f"override {path} missing 'category'")
+        elif allowed_categories and category not in allowed_categories:
+            errors.append(
+                f"override {path} category '{category}' not in override_allowed_categories"
+            )
+    return errors
 
 
 def _scan_file(path: Path, repo_root: Path, policy: dict[str, Any]) -> FileScan:
@@ -472,6 +539,13 @@ def _scan_file(path: Path, repo_root: Path, policy: dict[str, Any]) -> FileScan:
     longest_block, block_start, block_end = _longest_contiguous_block(
         comment_lines, inline_lines
     )
+    thresholds = policy["thresholds"]
+    override_ratio, threshold_source = resolve_file_ratio_override(rel_path, policy)
+    effective_ratio_threshold = (
+        override_ratio
+        if override_ratio is not None
+        else thresholds["file_ordinary_comment_ratio_max"]
+    )
     scan = FileScan(
         path=rel_path,
         code_lines=len(code_lines),
@@ -480,13 +554,14 @@ def _scan_file(path: Path, repo_root: Path, policy: dict[str, Any]) -> FileScan:
         empty_lines=len(empty_lines),
         inline_comments=len(inline_lines),
         max_contiguous_ordinary_comment_block=longest_block,
+        applied_ratio_threshold=effective_ratio_threshold,
+        threshold_source=threshold_source,
     )
 
-    thresholds = policy["thresholds"]
     stale_patterns = _compile_patterns(policy["stale_markers"]["fail_patterns"])
     todo_patterns = _compile_patterns(policy["stale_markers"]["todo_patterns"])
 
-    if scan.ordinary_comment_ratio > thresholds["file_ordinary_comment_ratio_max"]:
+    if scan.ordinary_comment_ratio > effective_ratio_threshold:
         scan.violations.append(
             _violation(
                 rel_path,
@@ -495,6 +570,8 @@ def _scan_file(path: Path, repo_root: Path, policy: dict[str, Any]) -> FileScan:
                 f"{scan.ordinary_comment_ratio:.4f}",
                 "Delete or condense ordinary comments that do not express current constraints.",
                 line=1,
+                applied_threshold=effective_ratio_threshold,
+                threshold_source=threshold_source,
             )
         )
     if (
@@ -599,6 +676,7 @@ def _sort_violations(violations: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def scan_repository(repo_root: Path, policy: dict[str, Any] | None = None) -> dict[str, Any]:
     root = Path(repo_root).resolve()
     active_policy = policy if policy is not None else load_policy(root)
+    override_errors = validate_overrides(active_policy)
     file_scans = [_scan_file(path, root, active_policy) for path in iter_scan_files(root, active_policy)]
     totals = {
         "files": len(file_scans),
@@ -613,6 +691,17 @@ def scan_repository(repo_root: Path, policy: dict[str, Any] | None = None) -> di
         totals["ordinary_comment_lines"] / denominator if denominator else 0.0
     )
     violations: list[dict[str, Any]] = []
+    for error in override_errors:
+        violations.append(
+            _violation(
+                "comment_policy.json",
+                "override_config",
+                "Invalid per-path threshold override configuration.",
+                error,
+                "Fix the override entry so it is auditable and within override_max_ratio.",
+                line=1,
+            )
+        )
     for item in file_scans:
         violations.extend(item.violations)
     repo_limit = active_policy["thresholds"]["repo_ordinary_comment_ratio_max"]
@@ -625,6 +714,8 @@ def scan_repository(repo_root: Path, policy: dict[str, Any] | None = None) -> di
                 f"{totals['ordinary_comment_ratio']:.4f}",
                 "Delete or condense redundant ordinary comments across scanned code.",
                 line=1,
+                applied_threshold=repo_limit,
+                threshold_source="default",
             )
         )
     violations = _sort_violations(violations)
@@ -638,6 +729,8 @@ def scan_repository(repo_root: Path, policy: dict[str, Any] | None = None) -> di
             "inline_comments": item.inline_comments,
             "ordinary_comment_ratio": round(item.ordinary_comment_ratio, 6),
             "max_contiguous_ordinary_comment_block": item.max_contiguous_ordinary_comment_block,
+            "applied_ratio_threshold": round(item.applied_ratio_threshold, 6),
+            "threshold_source": item.threshold_source,
             "violations": _sort_violations(item.violations),
         }
         for item in file_scans

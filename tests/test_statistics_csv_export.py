@@ -443,11 +443,9 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
     """Cells starting with ``=`` / ``+`` / ``-`` / ``@`` / tab get a
     single-quote prefix so spreadsheet apps treat them as text."""
     # Seed an activity whose resource ``display_name`` starts with each
-    # dangerous prefix. The ``activity_resource.display_name`` column
-    # surfaces in the safe display chain as ``resource_display_name``
-    # (the first key tried by ``format_safe_display_name``). We set it
-    # directly via SQL so the test isolates the CSV escape behavior from
-    # the resource detection layer.
+    # dangerous prefix. We set it directly via SQL (the column surfaces in
+    # the safe display chain as ``resource_display_name``) to isolate the
+    # CSV escape behavior from the resource detection layer.
     prefixes = ["=", "+", "-", "@"]
     starts = ["09:00:00", "09:30:00", "10:00:00", "10:30:00"]
     ends = ["09:30:00", "10:00:00", "10:30:00", "11:00:00"]
@@ -937,11 +935,10 @@ def test_bridge_export_error_messages_are_stable_chinese():
         )
 
 
-# Precision tests for the pywebview save-dialog return-shape variants and
-# the dialog-constant / dialog-exception collapse paths. The bridge must
-# handle every documented ``create_file_dialog`` return shape (None, empty
-# sequence, single string, sequence of paths) and map every dialog failure
-# to the stable ``导出失败`` message without leaking raw exceptions.
+# Precision tests for pywebview save-dialog return-shape variants and the
+# dialog-constant / dialog-exception collapse paths. The bridge must handle
+# every ``create_file_dialog`` return shape and map every dialog failure to
+# the stable ``导出失败`` message without leaking raw exceptions.
 
 
 class _FakeDialogWindow:

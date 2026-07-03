@@ -116,7 +116,6 @@ def test_webview_main_returns_nonzero_when_pywebview_missing(monkeypatch, capsys
     monkeypatch.setattr("worktrace.config.resolve_paths", lambda: type("P", (), {"log_path": "nul"})())
     monkeypatch.setattr("worktrace.config.ensure_directories", lambda _paths: None)
     monkeypatch.setattr(webview_main, "setup_logging", lambda _log_path: None)
-    # Simulate pywebview not being installed.
     monkeypatch.setitem(sys.modules, "webview", None)
 
     result = webview_main.main()
@@ -223,7 +222,6 @@ def test_overview_bridge_methods_return_json_serializable_no_traceback(temp_db):
         method = getattr(bridge, method_name)
         result = method()
         assert isinstance(result, dict), f"{method_name} must return a dict"
-        # Must be JSON-serializable.
         json.dumps(result)
         assert "ok" in result
         # On error, the bridge must return a generic error, not a traceback.
@@ -367,5 +365,4 @@ def test_webview_main_gate_raise_does_not_block_webview(monkeypatch, tmp_path):
 
     result = webview_main.main()
     assert result == 0
-    # The WebView must still start.
     assert mocks["start_calls"]["count"] == 1

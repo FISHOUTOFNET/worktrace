@@ -488,12 +488,10 @@ def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_
     new_kind = resource.resource_kind
     new_subtype = resource.resource_subtype
 
-    # If detection still produced a name-only identity (no path_hint), but we
-    # now have a real local file path, upgrade to a path-based identity so
-    # that the stored resource reflects the newly-available path. We keep the
-    # existing resource kind/subtype when the detector didn't surface a file
-    # (e.g. generic app) so that we don't accidentally downgrade an already
-    # classified resource.
+    # If detection yields only a name-only identity but a real local file
+    # path is now available, upgrade to a path-based identity. Keep the
+    # existing kind/subtype when the detector surfaced no file so we don't
+    # downgrade an already-classified resource.
     from ..path_utils import looks_like_local_file_path
 
     if looks_like_local_file_path(file_path_hint) and not new_path_hint:
@@ -878,11 +876,10 @@ def update_activity_time(activity_id: int, start_time: str, end_time: str) -> No
             (start_time, end_time, duration, now_str(), activity_id),
         )
         if cur.rowcount == 0:
-            # Defensive guard: the row was deleted or reopened between the
-            # API-layer validation and this write (a race condition), or the
-            # caller bypassed validation. Raise so the API can map this to a
-            # controlled ``TimelineTimeEditError`` instead of silently
-            # succeeding with 0 rows written.
+            # Defensive guard: the row was deleted/reopened between API-layer
+            # validation and this write (race condition), or validation was
+            # bypassed. Raise so the API maps this to TimelineTimeEditError
+            # instead of silently writing 0 rows.
             raise ValueError("activity_time_update_affected_zero_rows")
 
 
@@ -961,11 +958,9 @@ def split_activity(activity_id: int, split_time: str) -> dict:
         )
         new_activity_id = int(new_cur.lastrowid)
         if new_activity_id <= 0:
-            # Defensive guard: the INSERT did not return a valid row id.
-            # This should never happen under normal sqlite3 operation, but
-            # if it does we must not proceed with assignment/resource copies
-            # that would reference a non-existent activity id. Raise so the
-            # transaction rolls back and the original activity is restored.
+            # Defensive guard: INSERT returned no valid row id. Raise so the
+            # transaction rolls back and the original activity is restored,
+            # avoiding assignment/resource copies referencing a non-existent id.
             raise ValueError("activity_split_insert_returned_no_id")
 
         # 3) Copy the project assignment row so the new activity keeps the
@@ -1050,11 +1045,10 @@ def split_activity(activity_id: int, split_time: str) -> dict:
         return {"original_activity_id": activity_id, "new_activity_id": new_activity_id}
 
 
-# Maximum gap (in seconds) tolerated between two activities being merged.
-# Real collector data may have a 1-2 second gap between adjacent activities
-# due to close/create timing; allowing a small tolerance makes merge usable
-# without opening the door to merging activities that are far apart in time.
-# A gap larger than this is rejected as ``not_adjacent`` by the API layer.
+# Maximum gap (in seconds) tolerated between two merged activities. Real
+# collector data has 1-2s gaps from close/create timing; a small tolerance
+# makes merge usable without merging far-apart activities. Larger gaps are
+# rejected as ``not_adjacent`` by the API layer.
 MERGE_GAP_TOLERANCE_SECONDS = 2
 
 

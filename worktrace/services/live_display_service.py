@@ -245,11 +245,9 @@ def _display_project_description(snapshot: dict[str, Any] | None) -> str:
     dp = _snapshot_display_project_dict(snapshot)
     if dp:
         return str(dp.get("description") or "")
-    # No structured display_project block — resolve the display name and
-    # look up the concrete project's description by name. This mirrors
-    # ``_display_project_name`` which falls back to ``inferred_project_name``,
-    # ensuring the description is consistent with the name across the
-    # full display chain.
+    # No structured display_project block — resolve the display name and look
+    # up the concrete project's description by name, mirroring
+    # _display_project_name so description stays consistent with the name.
     dp_name = _display_project_name(snapshot)
     if dp_name and dp_name != UNCATEGORIZED_PROJECT:
         from . import project_service
@@ -576,12 +574,10 @@ def build_current_activity_summary(
     if is_virtual_live:
         carry_seconds = short_activity_carry_seconds(snapshot, report_date)
     display_seconds = elapsed_seconds + carry_seconds
-    # Project ownership fields. The snapshot carries a
-    # structured ``display_project`` / ``candidate_project`` /
-    # ``project_transition`` block written by the ownership state
-    # machine. These are surfaced verbatim (display-safe) so the
-    # frontend can render a "确认中" indicator during the 30-second
-    # pending window without re-reading the raw snapshot.
+    # Project ownership fields. The snapshot carries a structured
+    # display_project / candidate_project / project_transition block from
+    # the ownership state machine, surfaced verbatim (display-safe) so the
+    # frontend can render the 30s pending indicator without the raw snapshot.
     display_project_dict = _snapshot_display_project_dict(snapshot) or {
         "id": None,
         "name": project_name,
@@ -604,12 +600,10 @@ def build_current_activity_summary(
             "to_project_id": None,
         }
     project_transition_pending = bool(project_transition_dict.get("pending"))
-    # Unified live clock: the frontend computes
-    # ``display_seconds = carry_seconds + floor((Date.now() -
-    # live_started_at_epoch_ms) / 1000)`` so the same current activity
-    # does not jump fast/slow across refreshes. The start_time is the
-    # stable anchor; carry_seconds captures pending short-activity
-    # accumulation. Both come from the SAME snapshot sample.
+    # Unified live clock: the frontend computes display_seconds =
+    # carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
+    # so the current activity doesn't jump across refreshes. start_time is
+    # the stable anchor; both fields come from the SAME snapshot sample.
     live_started_at_epoch_ms = _start_time_epoch_ms(snapshot)
     from ..formatters import format_duration
 
@@ -925,12 +919,10 @@ def build_persisted_open_overlay(
     persisted_id = snapshot_persisted_id(snapshot) or 0
     if persisted_id <= 0:
         return None
-    # Unified live clock: the persisted open row's live seconds
-    # are anchored on the row's start_time so the frontend can compute
-    # ``display_seconds = carry_seconds + floor((Date.now() -
-    # live_started_at_epoch_ms) / 1000)``. For persisted_open rows
-    # carry_seconds is 0 (the carry is already folded into the row's
-    # stored duration via ``increment_activity_duration``).
+    # Unified live clock: persisted_open live seconds are anchored on the
+    # row's start_time so the frontend computes display_seconds =
+    # carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000).
+    # For persisted_open rows carry_seconds is 0 (already in stored duration).
     live_started_at_epoch_ms = _start_time_epoch_ms(snapshot)
     # Display-facing project fields from the snapshot's display_project
     # block (override the DB row's assignment during the 30-second pending
@@ -999,11 +991,9 @@ def compute_refresh_revision(
     try:
         rows = activity_service.get_activities_by_date(report_date)
         row_count = len(rows)
-        # Hash each row's structural fields together. Using a per-row
-        # signature (rather than concatenating raw values) keeps the
-        # overall string length bounded and avoids field-order
-        # ambiguity. We include the structural fields most likely to
-        # change on a user-initiated edit.
+        # Hash each row's structural fields. Using a per-row signature keeps
+        # the overall string length bounded and avoids field-order ambiguity,
+        # including the fields most likely to change on a user edit.
         row_signatures: list[str] = []
         for row in rows:
             row_id = int(row.get("id") or 0)

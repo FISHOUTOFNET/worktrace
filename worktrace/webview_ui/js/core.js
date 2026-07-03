@@ -1,27 +1,18 @@
-// WorkTrace WebView frontend — core module.
-// Namespace + shared state + bridge helper + generic helpers + date/time/format utils.
-// Only communicates with Python through pywebview API bridge.
-// Does not persist sensitive data in browser storage APIs.
-// Does not access any external network resources.
+// WorkTrace WebView frontend core module. Only communicates with Python through the pywebview API bridge.
+// Does not persist sensitive data in browser storage APIs. Does not access any external network resources.
 
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // Single 1-second heartbeat: applies the local ticker (re-renders
-    // already-fetched durations with a wall-clock delta) and then runs a
-    // lightweight ``get_refresh_state`` revision check. Heavy interfaces
-    // (get_overview / get_recent_activities / get_timeline) are only called
-    // when the structural revision changes.
+    // 1s heartbeat: local ticker re-renders fetched durations with a wall-clock delta, then a lightweight
+    // ``get_refresh_state`` revision check. Heavy interfaces run only on structural revision change.
     App.HEARTBEAT_INTERVAL_MS = 1000;
     App.NOTE_MAX_LENGTH = 2000;
     App.heartbeatTimer = null;
 
-    // The local ticker ONLY updates DOM text; it never calls a bridge
-    // method, never writes the DB, and never starts / stops the collector.
-    // The snapshots are set by showOverview / showRecent / showTimeline /
-    // renderSessionDetails and read by the ticker to compute the live
-    // increment.
+    // Ticker invariant: ONLY updates DOM text; never calls a bridge method, never writes the DB,
+    // never starts / stops the collector. Snapshots are seeded by the render flows and read here.
     App.lastOverviewSnapshot = null;
     // Recent-activities snapshot so the ticker can increment the live-
     // projected recent item's duration without a bridge round-trip.
@@ -30,30 +21,21 @@
     // projected detail row's duration without a bridge round-trip.
     App.lastSessionDetailsData = null;
 
-    // ``lastRefreshState`` caches the last ``get_refresh_state`` payload so
-    // the heartbeat can compare ``refresh_revision`` between ticks.
-    // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard
-    // overlapping revision checks and heavy page-data refreshes.
-    // ``lastFullRefreshAtEpochMs`` records the last heavy-refresh completion.
+    // ``lastRefreshState`` caches the last ``get_refresh_state`` payload for revision comparison;
+    // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard overlapping checks / refreshes.
     App.lastRefreshState = null;
     App.refreshCheckInFlight = false;
     App.activePageRefreshInFlight = false;
-    // Pending page refresh: when ``refreshCurrentPageData`` is called while
-    // a refresh is already in-flight, the request is recorded here. After
-    // the in-flight refresh completes, a new refresh is triggered if this
-    // flag is true so a page-switch immediate refresh is never silently
-    // skipped by the global in-flight guard.
+    // Pending page refresh: records a request made while a refresh is in-flight; after completion a new
+    // refresh is triggered if true so a page-switch refresh is never silently skipped by the in-flight guard.
     App.pendingPageRefresh = false;
     App.lastFullRefreshAtEpochMs = 0;
     App.RECONCILE_INTERVAL_MS = 180000;
     App.lastReconcileAtEpochMs = 0;
     App.reconcileInFlight = false;
 
-    // Maps a continuity key (e.g. ``"recent:live:<stable_hash>"``,
-    // ``"session:live:<stable_hash>"``, ``"detail:live:<stable_hash>"``,
-    // ``"overview-total"``) to the last rendered seconds. Used by
-    // ``renderDurationMonotonic`` to avoid visual rollback when the new
-    // projected seconds are 1-2s less than the DOM value.
+    // Maps a continuity key to the last rendered seconds; used by ``renderDurationMonotonic`` to avoid
+    // 1-2s visual rollback when the new projected seconds are less than the DOM value.
     App._monotonicRenderState = {};
 
     App.currentPage = "overview";
@@ -61,11 +43,8 @@
     App.timelineLoaded = false;
     App.timelineLoading = false;
     App.selectedSessionId = null;
-    // Stable live key (stable_live_key_hash) for the currently selected
-    // session. Selection continuity: when session_id changes from
-    // "virtual-live:<hash>" to the real DB session id, stable_live_key_hash
-    // stays the same so the selection survives the virtual → persisted_open
-    // transition.
+    // Stable live key for the selected session. Selection continuity: stable_live_key_hash stays the same
+    // when session_id changes from "virtual-live:<hash>" to the real DB id (virtual → persisted_open transition).
     App.selectedSessionLiveKey = null;
 
     // races a manual refresh.
@@ -404,21 +383,10 @@
     }
     App.formatDuration = formatDuration;
 
-    // Shared by Overview KPI, current activity, recent, Timeline total,
-    // Timeline session, and Timeline details so every live target uses the
-    // same monotonic-render contract.
-    //
-    // ``readDurationSecondsFromText`` reads the ``data-duration-seconds``
-    // attribute (preferred) or parses the ``HH:MM:SS`` text as a fallback.
-    //
-    // ``renderDurationMonotonic`` writes the formatted duration to ``el``
-    // while avoiding a 1-2 second visual rollback when the same live target
-    // (same ``continuityKey``) is still running. When ``allowDecrease`` is
-    // false and the new seconds are 1-2 less than the last rendered value,
-    // the DOM is kept unchanged. A larger decrease (real state change) or
-    // ``allowDecrease === true`` always overwrites. The backend refresh
-    // path must reset the monotonic state (or pass ``allowDecrease = true``)
-    // so the real snapshot duration can replace the projected value.
+    // Shared monotonic-render contract for every live target. ``renderDurationMonotonic`` avoids 1-2s visual
+    // rollback when the same live target is still running: with ``allowDecrease === false`` and a 1-2s decrease,
+    // the DOM is kept unchanged; larger decreases (real state change) or ``allowDecrease === true`` overwrite.
+    // Backend refresh paths must reset the monotonic state so the real snapshot replaces the projected value.
     function readDurationSecondsFromText(el) {
         if (!el) return 0;
         var attr = el.getAttribute("data-duration-seconds");
@@ -460,11 +428,8 @@
     }
     App.resetMonotonicRenderState = resetMonotonicRenderState;
 
-    // Unified project label contract:
-    //   project_label = name if description empty else f"{name}（{description}）"
-    // Uses full-width Chinese parentheses with no surrounding space so the
-    // label stays compact and consistent across all rendered rows.
-    // session / Timeline detail / virtual / pending / persisted-open rows.
+    // Unified project label contract: ``name`` if description empty, else ``name（description）``
+    // using full-width Chinese parens with no surrounding space, consistent across all rendered rows.
     function formatProjectLabel(name, description) {
         var n = String(name || "").trim();
         if (!n) n = "未归类";
@@ -474,40 +439,19 @@
     }
     App.formatProjectLabel = formatProjectLabel;
 
-    // ``applyLocalTicker`` re-renders already-fetched durations with a
-    // wall-clock delta so the UI updates every second without a bridge
-    // round-trip. The ticker ONLY updates DOM text; it never calls a
-    // bridge method, never writes the DB, and never starts / stops the
-    // collector. It is a no-op when the current activity is paused / idle /
-    // excluded / error or when no snapshot has been fetched yet.
-    // been fetched yet. The heartbeat's second phase (revision check) runs
-    // in init.js and calls heavy interfaces only when the structural
-    // revision changes.
-    //
-    // The ticker computes the live delta from the activity's start_time
-    // (``live_started_at_epoch_ms``) instead of the backend response time,
-    // so the same current activity does not jump fast/slow across
-    // refreshes because the start_time anchor is stable. The formula is:
-    // across refreshes. The formula is:
-    //   display_seconds = carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
-    // and the KPI delta is:
-    //   delta = display_seconds - elapsed_seconds_at_response
+    // ``applyLocalTicker`` re-renders fetched durations with a wall-clock delta each second without a bridge
+    // round-trip. Ticker invariant: ONLY updates DOM text; never calls a bridge, never writes the DB, never
+    // starts / stops the collector. No-op when the current activity is paused / idle / excluded / error.
+    // Live delta uses the stable start-time anchor (``live_started_at_epoch_ms``) so the same activity does
+    // not jump across refreshes: ``display = carry + floor((now - live_started_at) / 1000)``, ``delta = display - elapsed_at_response``.
     function tickerNowEpochMs() {
         return Date.now();
     }
 
-    // Returns the wall-clock increment to add to KPI totals and per-item
-    // durations. Uses the stable start-time anchor so the delta does not
-    // drift between refreshes. Returns 0 when the payload has no live
-    // clock fields or the current activity is not live-eligible.
-    // when the current activity is not live-eligible.
-    //
-    // The ticker reads from the SINGLE page-level live projection. When
-    // the payload carries a ``live_projection`` field (Overview bundle /
-    // Timeline / Detail), that field is the single source of truth.
-    // Payloads without ``live_projection`` fall back to ``live_display``
-    // / ``current_activity`` so the Timeline main payload keeps working.
-    // main payload (which still carries ``live_display``) keeps working.
+    // Returns the wall-clock increment to add to KPI totals and per-item durations, using the stable
+    // start-time anchor so the delta does not drift between refreshes. Returns 0 when the payload has no
+    // live clock fields or the activity is not live-eligible. Reads the SINGLE page-level live projection
+    // (``live_projection`` preferred; falls back to ``live_display`` / ``current_activity``).
     function tickerDeltaSeconds(payload) {
         if (!payload) return 0;
         var ld = payload.live_projection || payload.live_display || payload.current_activity;
@@ -530,12 +474,8 @@
     }
     App.tickerDeltaSeconds = tickerDeltaSeconds;
 
-    // Live-display eligibility: only virtual (unpersisted normal) and
-    // persisted_open (real open normal row) increment normal project
-    // duration. paused / idle / excluded / error / none never do.
-    // Prefer ``live_projection.live_state`` (single source of truth) when
-    // present; fall back to ``live_display`` / ``current_activity`` for
-    // payloads without live_projection.
+    // Live-display eligibility: only virtual (unpersisted normal) and persisted_open (real open normal)
+    // increment project duration; paused / idle / excluded / error / none never do.
     function tickerLiveEligible(payload) {
         if (!payload) return false;
         var lp = payload.live_projection;
@@ -558,19 +498,9 @@
         return tickerLiveEligible(snapshot);
     }
 
-    // Stable continuity key for a live item. Uses ``stable_live_key_hash``
-    // when available so the continuity survives the virtual → persisted_open
-    // transition. Falls back to the session / activity id for non-live
-    // items.
-    //
-    // SINGLE SOURCE OF TRUTH: this is the ONLY place that should construct
-    // a live-row continuity key. The ticker, the render seed, and any live
-    // duration DOM update MUST all call App.liveContinuityKey(item,
-    // prefix) so the key stays stable across the virtual → persisted_open
-    // transition.
-    // array index, the session id, or the activity id directly would break
-    // the virtual → persisted_open transition because those values change
-    // across the transition while stable_live_key_hash stays the same.
+    // SINGLE SOURCE OF TRUTH for live-row continuity keys: the ticker, render seed, and any live duration
+    // DOM update MUST call this. Uses ``stable_live_key_hash`` so the key survives the virtual → persisted_open
+    // transition (session_id / activity_id change across the transition; stable_live_key_hash does not).
     function liveContinuityKey(item, prefix) {
         if (!item) return prefix;
         if (item.stable_live_key_hash) {
@@ -587,11 +517,8 @@
     App.liveContinuityKey = liveContinuityKey;
 
     function applyLocalTicker() {
-        // Overview page: KPI total + classified + uncategorized + current
-        // activity display. total / classified / uncategorized must use
-        // the same delta. The delta is added to EITHER classified OR
-        // uncategorized (never both) depending on the current activity's
-        // classification state.
+        // Overview page: total / classified / uncategorized must share the same delta; the delta is added
+        // to EITHER classified OR uncategorized (never both) per the current activity's classification state.
         var ov = App.lastOverviewSnapshot;
         if (ov && App.currentPage === "overview") {
             var delta = 0;
@@ -631,12 +558,8 @@
             var currentEl = document.getElementById("current-activity");
             if (currentEl) {
                 if (current.active) {
-                    // Compute the display seconds from the stable start-time
-                    // anchor so the current activity display does not drift
-                    // between refreshes. Prefer ``live_projection`` (single
-                    // source of truth) when the Overview bundle is in use.
-                    // prefer ``live_projection`` (single source of truth)
-                    // when the Overview bundle is in use.
+                    // Compute display seconds from the stable start-time anchor so the current activity
+                    // display does not drift between refreshes.
                     var ld = ov.live_projection || ov.live_display || current;
                     var startedAt = parseInt(ld.live_started_at_epoch_ms, 10);
                     var carry = parseInt(ld.carry_seconds, 10) || 0;
@@ -658,12 +581,8 @@
                 }
             }
         }
-        // Recent list: update live (virtual or persisted-open) recent items.
-        // The baseline comes from the cached payload's ``duration_seconds``,
-        // NOT from DOM text. Both virtual live items and real is_in_progress
-        // items are handled by flag. The continuity key uses
-        // stable_live_key_hash so the duration display does not reset when
-        // virtual → persisted.
+        // Recent list: baseline comes from the cached payload's ``duration_seconds`` (not DOM text). The
+        // continuity key uses stable_live_key_hash so the duration does not reset on virtual → persisted transition.
         var recent = App.lastRecentSnapshot;
         if (recent && App.currentPage === "overview" && recent.activities) {
             var recentDelta = tickerLiveEligible(recent) ? tickerDeltaSeconds(recent) : 0;
@@ -723,19 +642,9 @@
                     tlCurrentEl.textContent = "当前活动：无";
                 }
             }
-            // Update in-progress / live-projected session durations.
-            // Locate each session's DOM via ``data-session-id`` instead of
-            // array index so a re-rendered list cannot mismatch sessions.
-            // The continuity key uses stable_live_key_hash for live
-            // sessions so the duration does not reset on transition. Look
-            // up the DOM by stable_live_key_hash FIRST so the ticker
-            // survives the virtual → persisted_open transition; fall back to
-            // session_id for closed sessions that don't carry a stable key.
-            // virtual → persisted_open transition (when session_id
-            // changes from "virtual-live:<hash>" to the real DB session
-            // id, the stable_live_key_hash stays the same). Fall back to
-            // session_id for closed sessions that don't carry a stable
-            // key (verification item 三.5).
+            // Update in-progress / live-projected session durations. Locate DOM via ``data-session-id``
+            // (not array index) so a re-rendered list cannot mismatch. Look up by stable_live_key_hash
+            // FIRST so the ticker survives the virtual → persisted_open transition; fall back to session_id.
             if (isToday && tlDelta >= 0 && tl.sessions) {
                 for (var si = 0; si < tl.sessions.length; si++) {
                     var s = tl.sessions[si];
@@ -764,12 +673,8 @@
                     }
                 }
             }
-            // Detail-row projection. The detail ticker must NOT use the
-            // Timeline main payload delta: the detail payload carries its
-            // own ``live_display`` field so the detail ticker computes its
-            // delta from the same unified live clock, independent of when
-            // the Timeline main payload arrived. This prevents drift
-            // between the detail duration and its own timing anchor.
+            // Detail-row projection must NOT use the Timeline main payload delta: the detail payload carries
+            // its own ``live_display`` so its ticker computes from the same unified live clock, preventing drift.
             if (isToday && (App.selectedSessionId || App.selectedSessionLiveKey)
                 && App.lastSessionDetailsData && !App._timelineEditingActive()) {
                 var detailsList = document.getElementById("timeline-details-list");
@@ -782,14 +687,8 @@
                     for (var dai = 0; dai < detailActs.length; dai++) {
                         var dAct = detailActs[dai];
                         if (dAct.is_virtual_live || dAct.is_in_progress) {
-                            // Look up the DOM by stable_live_key_hash FIRST
-                            // so the ticker survives the virtual →
-                            // persisted_open transition; fall back to
-                            // activity_id for closed rows.
-                            // to the real DB id, the stable_live_key_hash
-                            // stays the same). Fall back to activity_id
-                            // for closed rows that don't carry a stable
-                            // key (verification item 三.5).
+                            // Look up DOM by stable_live_key_hash FIRST so the ticker survives the
+                            // virtual → persisted_open transition; fall back to activity_id for closed rows.
                             var dStableKey = dAct.stable_live_key_hash || "";
                             var dEl = null;
                             if (dStableKey) {
@@ -819,12 +718,9 @@
     }
     App.applyLocalTicker = applyLocalTicker;
 
-    // Timeline editing guard. The ticker, revision-change refresh,
-    // low-frequency reconciliation, and page-switch refresh all respect
-    // this guard so user input is never overwritten. It checks saving
-    // flags + correctionShellOpen, OPEN BUT NOT YET SAVED editors
-    // (editingActivityId / editingSplitActivityId), and dirty session
-    // edits (editingSession + isEditDirty).
+    // Timeline editing guard: the ticker, revision-change refresh, low-frequency reconciliation, and
+    // page-switch refresh all respect this so user input is never overwritten. Checks saving flags +
+    // correctionShellOpen, open-but-unsaved editors, and dirty session edits (editingSession + isEditDirty).
     function timelineEditingActive() {
         if (
             App.editSaving ||

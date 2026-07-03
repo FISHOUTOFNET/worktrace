@@ -194,11 +194,10 @@ def test_create_project_rejects_duplicate_name_after_trim(temp_db):
 
 
 def test_create_project_does_not_match_system_special_names(temp_db):
-    # ``未归类`` and ``排除规则`` are reserved system project names. The
-    # service layer's UNIQUE(name) constraint would reject them, but the
-    # API facade should reject them too (as duplicate_project) rather than
-    # letting the system row be created. This is a regression lock so a
-    # user cannot create a "shadow" system project via this facade.
+    # ``未归类`` and ``排除规则`` are reserved system project names. The service
+    # layer's UNIQUE(name) constraint would reject them, but the API facade must
+    # reject them too (as duplicate_project) so a user cannot create a "shadow"
+    # system project via this facade.
     project_service.get_or_create_uncategorized_project()
     project_service.get_or_create_excluded_project()
 
@@ -854,10 +853,8 @@ def test_lifecycle_does_not_invoke_backfill(temp_db, monkeypatch):
 def test_delete_project_not_exposed_on_api_facade(temp_db):
     # Regression lock: hard delete must NOT be reachable via the
     # ``*_for_rules`` lifecycle facades. The bridge must not call
-    # ``project_api.delete_project`` either; that lock is enforced in the
-    # bridge / static contract tests. Here we only assert that the
-    # lifecycle facades return operation_failed-style payloads and never
-    # delete the project row.
+    # ``project_api.delete_project`` either (enforced in bridge/static
+    # contract tests); here we assert facades never delete the project row.
     project_id = project_service.create_project("Client", "")
 
     project_api.archive_project_for_rules(project_id)
@@ -907,11 +904,10 @@ def test_get_project_rules_payload_includes_display_safe_flags(temp_db):
     bindings = project_service.list_project_bindings()
 
     by_name = {p["name"]: p for p in bindings}
-    # The facade returns raw service rows; the display-safe flags are added
-    # by the bridge. Here we just verify the service still returns the raw
-    # fields the bridge needs to compute them. Note that
-    # ``list_project_bindings`` only surfaces the special ``排除规则``
-    # project (not ``未归类``) because ``未归类`` is never rule-editable.
+    # The facade returns raw service rows; the display-safe flags are added by
+    # the bridge. Here we verify the service still returns the raw fields the
+    # bridge needs. ``list_project_bindings`` only surfaces ``排除规则`` (not
+    # ``未归类``) because ``未归类`` is never rule-editable.
     assert by_name["Client"]["created_by"] == "user"
     assert by_name[EXCLUDED_PROJECT]["created_by"] == "system"
     assert by_name[EXCLUDED_PROJECT]["name"] == EXCLUDED_PROJECT
@@ -921,12 +917,10 @@ def test_get_project_rules_payload_includes_display_safe_flags(temp_db):
 
 
 def test_list_rule_target_projects_excludes_excluded_project(temp_db):
-    # foundational lock: the special ``排除规则`` project is created
-    # with ``enabled = 0``, so ``list_rule_target_projects()`` must NOT
-    # include it. This is why the normal ``create_project_keyword_rule`` /
-    # ``create_project_folder_rule`` facades reject it as
-    # ``project_not_found`` and the dedicated excluded-rule facades are the
-    # only legitimate way to create exclusion rules.
+    # Foundational lock: the special ``排除规则`` project is created with
+    # ``enabled = 0``, so ``list_rule_target_projects()`` must NOT include it.
+    # This is why the normal keyword/folder facades reject it as
+    # ``project_not_found`` and only the dedicated excluded-rule facades apply.
     excluded_id = project_service.get_or_create_excluded_project()
     client_id = project_service.create_project("Client", "")
 
@@ -940,12 +934,10 @@ def test_list_rule_target_projects_excludes_excluded_project(temp_db):
 
 
 def test_excluded_project_cannot_be_made_rule_target_via_lifecycle(temp_db):
-    # consolidated lock: the excluded project cannot be enabled or
-    # archived via the lifecycle API, so it can never become a rule target.
-    # After the rejected attempts it stays ``enabled = 0`` /
-    # ``is_archived = 0`` and remains absent from
-    # ``list_rule_target_projects()``. This is the lifecycle-side guarantee
-    # that backs the dedicated excluded-rule creation facade.
+    # Consolidated lock: the excluded project cannot be enabled or archived via
+    # the lifecycle API, so it can never become a rule target. After rejected
+    # attempts it stays ``enabled = 0`` / ``is_archived = 0`` and stays absent
+    # from ``list_rule_target_projects()`` — backing the excluded-rule facade.
     project_id = project_service.get_or_create_excluded_project()
 
     enable_result = project_api.set_project_enabled_for_rules(project_id, True)

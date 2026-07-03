@@ -121,11 +121,8 @@ class IdeDetector:
     def _extract_workspace(self, title: str, process_lower: str) -> str | None:
         if not title:
             return None
-        # VS Code: "file.py - MyProject - Visual Studio Code"
-        # PyCharm: "file.py – MyProject – PyCharm"
-        # PyCharm (no file): "MyProject – PyCharm"
-        # IntelliJ: "file.java – MyProject – IntelliJ IDEA"
-        # Remove IDE name suffix first
+        # IDE titles use "file - project - IDE" or "project - IDE" form;
+        # the workspace is the last segment after stripping the IDE suffix.
         cleaned = re.sub(
             r"\s*[-–—]\s*(Visual Studio Code|VS Code|PyCharm|IntelliJ IDEA|WebStorm|PhpStorm|Rider|Visual Studio|Sublime Text|Notepad\+\+|Cursor).*$",
             "",

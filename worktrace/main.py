@@ -14,9 +14,8 @@ def setup_logging(log_path) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    # WebView is the sole shipping UI. There is no Tkinter fallback: a missing
-    # WebView2 Runtime or pywebview dependency is a blocking error that exits
-    # with a non-zero status and a clear message.
+    # WebView is the sole shipping UI (no Tkinter fallback); a missing WebView2
+    # Runtime or pywebview dependency is a blocking error that exits non-zero.
     from .webview_main import main as webview_main
 
     return webview_main()

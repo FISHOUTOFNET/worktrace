@@ -606,11 +606,8 @@
     App.showFirstRunNoticeBlockingError = showFirstRunNoticeBlockingError;
 
     function hideFirstRunNotice() {
-        // Hide only the overlay; this function never calls the bridge.
-        // Gate dismissal is allowed only after accept succeeds elsewhere.
-        // firstRunNoticeRequired remains owned by the accept/load flow.
-        // The read-only Settings view uses the same close path safely.
-        // Keep this function side-effect narrow for the privacy gate.
+        // Hides only the overlay; never calls the bridge. Gate dismissal is allowed only after accept succeeds
+        // elsewhere; firstRunNoticeRequired remains owned by the accept/load flow.
         var overlay = document.getElementById("first-run-notice-overlay");
         if (overlay) overlay.hidden = true;
         App.firstRunNoticeViewingFromSettings = false;

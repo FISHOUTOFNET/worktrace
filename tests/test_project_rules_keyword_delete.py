@@ -92,7 +92,6 @@ def test_delete_keyword_rule_under_normal_project_decreases_count_by_one(temp_db
     rule_service.create_rule("SpecC", project)
     before = _counts()
 
-    # Delete one of the three keyword rules.
     with get_connection() as conn:
         target_id = conn.execute(
             "SELECT id FROM project_rule WHERE pattern = ?",
@@ -104,7 +103,6 @@ def test_delete_keyword_rule_under_normal_project_decreases_count_by_one(temp_db
     assert result["ok"] is True
     after = _counts()
     assert after["keyword"] == before["keyword"] - 1
-    # The other two keyword rules survive.
     with get_connection() as conn:
         remaining = conn.execute(
             "SELECT pattern FROM project_rule WHERE project_id = ? ORDER BY pattern",
@@ -114,12 +112,9 @@ def test_delete_keyword_rule_under_normal_project_decreases_count_by_one(temp_db
 
 
 def test_delete_keyword_rule_under_excluded_project(temp_db):
-    # The special ``排除规则`` project is created with ``enabled = 0`` but
-    # keyword rules attached to it are still legitimate keyword rules in
-    # the ``project_rule`` table. The delete facade only checks
-    # that the id is a real keyword rule — it does not gate on project
-    # eligibility (unlike create). This mirrors the spec: "删除
-    # existing keyword rule" must work regardless of project state.
+    # The ``排除规则`` project (enabled=0) still holds legitimate keyword
+    # rules; the delete facade only checks the id is a real keyword rule
+    # and does not gate on project eligibility (unlike create).
     excluded_id = project_service.get_or_create_excluded_project()
     rule_id = rule_service.create_rule("Secret", excluded_id)
 
@@ -177,10 +172,8 @@ def test_unknown_keyword_rule_returns_stable_not_found(temp_db):
 
 
 def test_folder_rule_id_returns_not_found_and_does_not_delete_folder_rule(temp_db):
-    # Regression lock: a folder rule id must never be deleted
-    # through the keyword delete path. The facade uses ``_rule_exists(
-    # "keyword", rule_id)`` which only returns True for ids in
-    # ``project_rule`` (keyword table), so a folder rule id resolves to
+    # Regression lock: a folder rule id must never be deleted via the
+    # keyword path; ``_rule_exists("keyword", ...)`` resolves it to
     # ``not_found`` instead of deleting the folder rule.
     project = project_service.create_project("Client")
     folder_rule_id = folder_rule_service.create_or_update_folder_rule(
@@ -190,7 +183,6 @@ def test_folder_rule_id_returns_not_found_and_does_not_delete_folder_rule(temp_d
     result = rule_api.delete_project_keyword_rule(folder_rule_id)
 
     assert result == {"ok": False, "error": "not_found"}
-    # The folder rule row must still exist.
     folder_rules = folder_rule_service.list_folder_rules()
     assert any(int(r.get("id") or 0) == folder_rule_id for r in folder_rules)
 
@@ -207,7 +199,6 @@ def test_keyword_rule_id_does_not_delete_folder_rule(temp_db):
     result = rule_api.delete_project_keyword_rule(keyword_rule_id)
 
     assert result["ok"] is True
-    # The folder rule row must still exist.
     folder_rules = folder_rule_service.list_folder_rules()
     assert any(int(r.get("id") or 0) == folder_rule_id for r in folder_rules)
 
@@ -488,15 +479,11 @@ def test_delete_keyword_rule_failure_payloads_are_json_serializable(temp_db):
         rule_api.delete_project_keyword_rule({}),
         rule_api.delete_project_keyword_rule(9999),
     ]
-    # A folder rule id also returns a failure payload. Use a folder rule id
-    # that is guaranteed not to collide with any keyword rule id by creating
-    # the folder rule first (before any keyword rule exists in the DB), so
-    # the folder rule id cannot match a keyword rule id in the
-    # ``project_rule`` table.
+    # Create the folder rule first so its id cannot collide with a keyword
+    # rule id in ``project_rule``.
     folder_rule_id = folder_rule_service.create_or_update_folder_rule(
         r"D:\Client", project
     )
-    # Verify no keyword rule with this id exists before asserting failure.
     assert _keyword_rule_exists(folder_rule_id) is False
     failures.append(rule_api.delete_project_keyword_rule(folder_rule_id))
 
@@ -564,11 +551,9 @@ def test_delete_then_recreate_same_keyword_works(temp_db):
 
 
 def test_delete_keyword_rule_second_delete_is_not_treated_as_success(temp_db):
-    # Regression lock: a no-op delete must never be reported as
-    # success. After a successful first delete, the row is gone, so a second
-    # delete on the same id must resolve to ``not_found`` (not ``ok: True``).
-    # This locks the existence pre-check + hard DELETE contract so a future
-    # change cannot turn a stale-id delete into a silent success.
+    # Regression lock: a second delete on the same id must resolve to
+    # ``not_found``, not ``ok: True`` — locks the existence pre-check +
+    # hard DELETE contract against silent stale-id success.
     project = project_service.create_project("Client")
     rule_id = rule_service.create_rule("Spec", project)
 
@@ -585,11 +570,8 @@ def test_delete_keyword_rule_does_not_call_keyword_create_or_toggle_service_path
     temp_db, monkeypatch
 ):
     # Regression lock: the keyword delete path must only call
-    # ``rule_service.delete_rule``. It must not invoke the keyword create
-    # service path (``create_rule``) or the keyword toggle service path
-    # (``set_rule_enabled``), which would mutate the rule set instead of
-    # deleting one row. The existing locks cover folder delete / conflict
-    # preview / backfill; this closes the keyword-side create/toggle gap.
+    # ``rule_service.delete_rule`` — not ``create_rule`` or
+    # ``set_rule_enabled``, which would mutate instead of delete.
     project = project_service.create_project("Client")
     rule_id = rule_service.create_rule("Spec", project)
 
@@ -609,11 +591,9 @@ def test_delete_keyword_rule_does_not_call_keyword_create_or_toggle_service_path
 
 
 def test_delete_keyword_rule_folder_rule_id_returns_stable_not_found_code(temp_db):
-    # Regression lock: a folder rule id must collapse to the
-    # stable ``not_found`` code through the keyword delete path, and the
-    # returned code must be exactly ``not_found`` (not a folder-specific
-    # code that would leak which table the id belonged to). The folder rule
-    # row must survive untouched.
+    # Regression lock: a folder rule id must collapse to exactly
+    # ``not_found`` (not a folder-specific code leaking the table) and
+    # the folder rule row must survive untouched.
     project = project_service.create_project("Client")
     folder_rule_id = folder_rule_service.create_or_update_folder_rule(
         r"D:\Client", project
@@ -622,6 +602,5 @@ def test_delete_keyword_rule_folder_rule_id_returns_stable_not_found_code(temp_d
     result = rule_api.delete_project_keyword_rule(folder_rule_id)
 
     assert result == {"ok": False, "error": "not_found"}
-    # The folder rule row must still exist.
     folder_rules = folder_rule_service.list_folder_rules()
     assert any(int(r.get("id") or 0) == folder_rule_id for r in folder_rules)

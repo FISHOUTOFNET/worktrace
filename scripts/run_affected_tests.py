@@ -49,12 +49,9 @@ CONFTEST_BROAD_SUITE: list[str] = [
 RULES: list[dict] = [
     {
         "id": "A. WebView frontend resources",
-        # Triggers cover the entire ``webview_ui/`` tree (HTML / CSS /
-        # every ``js/*.js`` file) so a newly added JS module or a renamed
-        # module never escapes the WebView contract test set. The JS
-        # file list is parsed from ``index.html`` at test time by
-        # ``tests/webview/static_helpers.py``; the runner keeps a
-        # directory-level trigger instead of a hardcoded file list.
+        # Directory-level trigger so a new/renamed JS module never escapes the
+        # WebView contract test set. The JS file list is parsed from index.html
+        # at test time by tests/webview/static_helpers.py.
         "triggers": [
             "worktrace/webview_ui/index.html",
             "worktrace/webview_ui/styles.css",

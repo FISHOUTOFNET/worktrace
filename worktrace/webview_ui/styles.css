@@ -744,11 +744,8 @@ body {
     font-weight: 500;
 }
 
-/* Correction-section labels (项目与备注 / 时间修正 / 拆分 / 可见性).
-   Slightly more prominent than field-level .edit-label so the user can
-   scan the edit panel by section. Each section below the first also
-   carries a dashed top border (see .edit-time-section /
-   .edit-split-section / .edit-visibility-section). */
+/* Correction-section labels: more prominent than field-level .edit-label so the user can scan by section.
+   Sections below the first carry a dashed top border (see .edit-time-section / .edit-split-section / etc). */
 .edit-section-label {
     font-size: 12px;
     font-weight: 600;
@@ -1131,11 +1128,8 @@ body {
     font-size: 11px;
 }
 
-/* Per-activity "隐藏" / "删除" buttons. Mirror the merge button
-   styling so the action row looks consistent. Hide is a neutral light
-   button; delete carries a red accent so the user can tell the destructive
-   action apart at a glance, while still being a soft delete (no DB row is
-   physically removed). */
+/* Per-activity "隐藏" / "删除" buttons. Delete carries a red accent for the destructive action; both are
+   soft deletes (no DB row is physically removed). */
 .detail-hide-btn {
     padding: 2px 8px;
     font-size: 11px;
@@ -1180,11 +1174,8 @@ body {
     font-size: 11px;
 }
 
-/* Session-level "隐藏此 session" / "删除此 session" section.
-   Visually separated from the split section above so the user can tell the
-   destructive visibility actions apart from editing flows. The delete
-   button carries a red accent consistent with the per-activity delete
-   button. */
+/* Session-level "隐藏此 session" / "删除此 session" section, visually separated from the split section.
+   Delete button carries a red accent consistent with the per-activity delete button. */
 .edit-visibility-section {
     margin-top: 16px;
     padding-top: 12px;
@@ -2253,11 +2244,8 @@ body {
 }
 
 /* --- First-run privacy notice overlay --------------------- */
-/* The overlay is a fixed-position full-screen modal that blocks all
-   underlying app interaction while the first-run privacy notice gate
-   is active. It is also reused for the read-only "查看隐私说明" view
-   opened from the Settings / Privacy page. Local CSS only; no external
-   fonts, no remote resources, no frameworks. */
+/* Fixed full-screen modal blocking interaction while the privacy gate is active; also reused for the
+   read-only "查看隐私说明" view from Settings / Privacy. Local CSS only; no external resources. */
 
 .first-run-notice-overlay {
     position: fixed;
@@ -2385,10 +2373,8 @@ body {
 }
 
 /* --- Settings / Privacy notice row ------------------------ */
-/* Inline row on the Settings / Privacy privacy card: shows the
-   display-safe accept status and a read-only "查看隐私说明" button.
-   The button opens the overlay in view mode; it does NOT re-accept or
-   re-trigger collector start. */
+/* Inline row on the privacy card: shows the display-safe accept status and a read-only "查看隐私说明"
+   button that opens the overlay in view mode; does NOT re-accept or re-trigger collector start. */
 
 .settings-privacy-notice-row {
     display: flex;
@@ -2425,22 +2411,15 @@ body {
     pointer-events: none;
 }
 
-/* Batch note overwrite section inside the correction shell.
-   This is the second batch write capability: only note overwrite on
-   multiple closed, non-hidden, non-deleted activities. The section
-   mirrors the batch project section and reuses the same selection. The
-   textarea reuses the existing .edit-note styling so it reads as part of
-   the shell. */
+/* Batch note overwrite section: second batch write capability, only on multiple closed, non-hidden,
+   non-deleted activities. Mirrors the batch project section and reuses .edit-note styling. */
 .correction-shell-batch-note-text {
     min-height: 60px;
     resize: vertical;
 }
 
-/* Single activity restore section inside the correction shell.
-   This is the restore foundation: only single hidden / soft-deleted
-   activities can be restored. The section mirrors the batch sections so it
-   reads as part of the shell, but does NOT provide batch restore,
-   permanent delete, or undo stack. */
+/* Single activity restore section: only single hidden / soft-deleted activities can be restored.
+   Does NOT provide batch restore, permanent delete, or undo stack. */
 .correction-shell-restore-section {
     margin-top: 16px;
     padding: 12px;

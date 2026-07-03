@@ -39,12 +39,9 @@ def recover_unclosed_records() -> None:
             recovered_boundary_at = _recover_cross_midnight_row(row, end_dt)
             logging.info("recovered cross-midnight unclosed record id=%s", row["id"])
             continue
-        # Non-cross-midnight recovery: route through the lifecycle facade so
+        # Non-cross-midnight recovery routes through the lifecycle facade so
         # the close-finalize helper converges project inference / automatic
         # rules on the recovered row.
-        # that bypassed project inference entirely, leaving recovered rows in
-        # the "uncategorized" assignment even when a concrete inferred project
-        # was available.
         recover_close_activity(
             int(row["id"]),
             end_time,
@@ -66,11 +63,8 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
     first_midnight_text = first_midnight.strftime(TIME_FORMAT)
     original_project_id = row["project_id"] if project_service.is_concrete_project_id(row["project_id"]) else None
     original_id = int(row["id"])
-    # Close the first half of the original row at first_midnight via the
-    # lifecycle facade so the close-finalize helper converges project
-    # inference / automatic rules on it.
-    # this was a direct SQL UPDATE that bypassed project inference entirely,
-    # leaving the first-half row in the "uncategorized" assignment.
+    # Close the first half at first_midnight via the lifecycle facade so the
+    # close-finalize helper converges project inference / automatic rules.
     recover_first_half_close(
         original_id,
         first_midnight_text,
@@ -81,11 +75,10 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
     while current_start < end_dt:
         next_midnight = datetime.combine(current_start.date() + timedelta(days=1), datetime_time.min)
         current_end = min(end_dt, next_midnight)
-        # Create + close each recovered cross-midnight segment via the
-        # lifecycle facade so the open-row state machine has a single
-        # owner (no second hand-rolled create/finalize/close sequence).
-        # The midnight_anchor assignment is applied inside the facade when
-        # status is NORMAL and a concrete project_id is available.
+        # Create + close each cross-midnight segment via the lifecycle facade
+        # so the open-row state machine stays the single owner. The
+        # midnight_anchor assignment is applied inside the facade when status
+        # is NORMAL and a concrete project_id is available.
         payload = {
             "app_name": row["app_name"],
             "process_name": row["process_name"],

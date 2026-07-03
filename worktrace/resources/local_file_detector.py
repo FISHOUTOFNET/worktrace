@@ -36,11 +36,8 @@ _EXT_TO_SUBTYPE: dict[str, str] = {
     ".csv": "csv_file",
 }
 
-# Office document extensions are claimed by OfficeWpsDetector (for office apps)
-# and FallbackFileDetector (for any app) with dedicated subtypes
-# (word_document, spreadsheet, presentation). LocalFileDetector defers these
-# even on full paths so they keep their specific subtypes instead of degrading
-# to "unknown".
+# Office document extensions are owned by OfficeWpsDetector / FallbackFileDetector
+# with dedicated subtypes; LocalFileDetector defers them to preserve those subtypes.
 _OFFICE_DOCUMENT_EXTENSIONS = frozenset({
     ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
 })

@@ -354,12 +354,9 @@ def _short_gap_bridge_target(
 ) -> int | None:
     """Return the target project_id for short-gap bridging, or None."""
     row = rows[index]
-    # Use the "concrete effective" anchor lookups so that other
-    # uncategorized file-context anchors sitting between the same two
-    # same-project anchors are skipped (rather than terminating the
-    # search). This lets every middle anchor in a run of multiple short
-    # uncategorized anchors bridge to the surrounding project, instead of
-    # only the first one.
+    # Use "concrete effective" anchor lookups so every middle anchor in a
+    # run of multiple short uncategorized anchors bridges to the surrounding
+    # project, instead of terminating the search at the first one.
     prev_anchor = _find_previous_concrete_effective_anchor(rows, index, uncategorized_id)
     next_anchor = _find_next_concrete_effective_anchor(rows, index, uncategorized_id)
     if not prev_anchor or not next_anchor:

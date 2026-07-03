@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "scan": {
     "include_paths": [
       "worktrace",
@@ -32,13 +32,23 @@
     ]
   },
   "thresholds": {
-    "repo_ordinary_comment_ratio_max": 0.1,
-    "file_ordinary_comment_ratio_max": 0.2,
-    "max_contiguous_ordinary_comment_block": 6,
-    "max_inline_comments_per_file": 12,
+    "repo_ordinary_comment_ratio_max": 0.08,
+    "file_ordinary_comment_ratio_max": 0.12,
+    "max_contiguous_ordinary_comment_block": 4,
+    "max_inline_comments_per_file": 6,
     "max_docstring_lines_default": 18,
     "max_module_docstring_lines": 28
   },
+  "path_threshold_overrides": [],
+  "override_allowed_categories": [
+    "privacy/security boundary",
+    "data-loss prevention constraint",
+    "transaction or rollback safety",
+    "concurrency, timing, race-condition, or lifecycle explanation",
+    "external API, OS, packaging, or pywebview caveat",
+    "non-obvious regression test intent"
+  ],
+  "override_max_ratio": 0.18,
   "stale_markers": {
     "fail_patterns": [
       "\\bPhase\\s+[0-9A-Za-z.]+\\b",

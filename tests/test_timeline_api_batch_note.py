@@ -825,11 +825,9 @@ def test_batch_no_new_db_schema(temp_db):
     assert before == after
 
 
-#
-# These tests explicitly verify the hardening invariants that distinguish
-# batch note overwrite from the single ``update_activity_note`` path and
-# guard against regressions in the rollback / error-mapping / leak-prevention
-# behavior.
+# These tests verify the hardening invariants that distinguish batch note
+# overwrite from the single ``update_activity_note`` path: rollback,
+# error-mapping, and leak-prevention behavior must not regress.
 
 
 def test_batch_source_not_changed_to_manual(temp_db):

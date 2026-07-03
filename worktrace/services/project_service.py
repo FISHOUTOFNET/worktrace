@@ -262,11 +262,9 @@ def archive_project(project_id: int) -> None:
             "UPDATE project SET is_archived = 1, updated_at = ? WHERE id = ?",
             (now_str(), project_id),
         )
-    # Archiving a project removes it from the rule target list and from
-    # the selectable / active project lists, so the folder rule cache,
-    # keyword rule cache, and privacy exclude cache must be invalidated
-    # to avoid stale rule target / inference / exclude state. Mirrors the
-    # cache invalidation in ``set_project_enabled``.
+    # Archiving removes the project from rule target / selectable / active
+    # lists, so the folder rule, keyword rule, and privacy exclude caches
+    # must be invalidated to avoid stale state. Mirrors set_project_enabled.
     from .folder_rule_service import invalidate_folder_rule_cache
     from .privacy_service import clear_exclude_rules_cache
     from .project_inference_service import invalidate_keyword_rule_cache

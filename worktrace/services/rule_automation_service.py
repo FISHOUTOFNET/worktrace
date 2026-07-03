@@ -6,22 +6,17 @@ from typing import Any
 
 from . import project_inference_service
 
-# Folder / keyword inference confidences — identical to the values used by
-# ``project_inference_service._infer_project_resource_first`` and the
-# single-rule backfill. Exposed as module constants so tests can lock
-# them without reaching into the inference module's privates.
+# Folder / keyword inference confidences, exposed as module constants so
+# tests can lock them without reaching into the inference module's privates.
 FOLDER_RULE_CONFIDENCE = 85
 KEYWORD_RULE_CONFIDENCE = 80
 
-# Stable source strings written to ``activity_project_assignment.source``.
 FOLDER_RULE_SOURCE = "folder_rule"
 KEYWORD_RULE_SOURCE = "keyword_rule"
 
 # Deterministic priority: folder rules before keyword rules. Within each
-# kind, ``project_inference_service._enabled_keyword_rules`` orders by
-# ``created_at, id`` and ``folder_rule_service.find_matching_folder_rule``
-# returns the first match in its own stable order. The first matching rule
-# wins and later matching rules are ignored.
+# kind, ordering is stable (created_at, id for keyword; first match for
+# folder); the first matching rule wins and later matches are ignored.
 AUTOMATIC_RULE_PRIORITY = (FOLDER_RULE_SOURCE, KEYWORD_RULE_SOURCE)
 
 

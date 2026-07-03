@@ -51,11 +51,10 @@ def test_corrupted_ciphertext_fails() -> None:
     envelope = encrypt_aead(b"secret", b"aad", key)
     payload = _decode_envelope_payload(envelope)
 
-    # Corrupt a real decoded ciphertext byte, not a base64url character.
-    # Flipping a single base64url char only perturbs 6 bits and may land on
-    # padding bits or leave the underlying AES-GCM tag/ciphertext unchanged,
-    # making this test flaky. XORing the first decoded byte guarantees the
-    # ciphertext bytes change, so AES-GCM must reject the tag.
+    # Corrupt a real decoded ciphertext byte, not a base64url character:
+    # flipping a base64url char only perturbs 6 bits and may land on padding
+    # bits, making the test flaky. XORing the first decoded byte guarantees
+    # the ciphertext bytes change so AES-GCM must reject the tag.
     ct_bytes = bytearray(_decode_b64url(payload["ct"]))
     assert ct_bytes, "AES-GCM ciphertext+tag must not be empty"
     ct_bytes[0] ^= 0x01

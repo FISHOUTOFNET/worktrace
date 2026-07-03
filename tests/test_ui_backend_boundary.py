@@ -65,8 +65,6 @@ FORBIDDEN_LABELS = [
 ]
 
 
-# Tkinter UI package removal
-
 _LEGACY_UI_DIR = Path(__file__).resolve().parents[1] / "worktrace" / "ui"
 
 
@@ -93,8 +91,6 @@ def test_removed_ui_app_import_raises_module_not_found() -> None:
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("worktrace.ui.app")
 
-
-# WebView UI boundary tests
 
 WEBVIEW_UI_DIR = Path(__file__).resolve().parents[1] / "worktrace" / "webview_ui"
 
@@ -129,12 +125,8 @@ def webview_ui_files() -> list[Path]:
     return _collect_webview_ui_files()
 
 
-# page module mapping: ``bridge.py`` is now a thin composition class
-# that inherits from six mixins (``BridgeDialogMixin``, ``OverviewBridgeMixin``,
-# ``SettingsBridgeMixin``, ``StatisticsBridgeMixin``, ``TimelineBridgeMixin``,
-# ``ProjectRulesBridgeMixin``). Method bodies live in the mixin files below.
-# Static source-level tests scan all bridge files so method bodies are found
-# regardless of which mixin holds them.
+# Bridge.py is a thin composition class inheriting from six mixins; method
+# bodies live in the mixin files. Static tests scan all bridge files.
 BRIDGE_FILES = [
     "bridge.py",
     "bridge_common.py",
@@ -259,20 +251,12 @@ def test_webview_ui_uses_api_layer(webview_ui_files: list[Path]) -> None:
         )
 
 
-# Frontend resource external-link / CDN / Google Fonts / localStorage /
-# traceback scans live in ``tests/webview/test_frontend_global_boundaries.py``,
-# parametrized over every ``index.html``-referenced ``js/*.js`` file plus
-# ``index.html`` / ``styles.css`` via ``tests/webview/static_helpers.py``.
-# The legacy ``static/``-directory skip test was removed so a non-existent
-# ``static/`` directory can no longer mask the real resource set.
+# Frontend resource external-link / CDN / localStorage / traceback scans live in tests/webview/test_frontend_global_boundaries.py.
 
 
-# Hardening lock: lock the four Project Rules batch / automatic-rules
-# bridge methods on the composed ``WebViewBridge`` class. The methods are
-# defined on ``ProjectRulesBridgeMixin`` (in ``bridge_rules.py``) and inherited
-# by ``WebViewBridge``. Without this lock, a future refactor that drops the
-# mixin from ``WebViewBridge``'s bases would silently remove the 5I surface
-# from the only shipping bridge class without any test failing.
+# Hardening lock: the four Project Rules batch methods live on
+# ProjectRulesBridgeMixin and are inherited by WebViewBridge. Without this
+# lock, dropping the mixin would silently remove the 5I surface.
 
 
 def test_webview_bridge_exposes_automatic_rules_batch_and_automatic_methods() -> None:
@@ -297,9 +281,6 @@ def test_webview_bridge_exposes_automatic_rules_batch_and_automatic_methods() ->
             f"WebViewBridge must expose project-rules bridge method {name!r} "
             "(inherited from ProjectRulesBridgeMixin)"
         )
-
-
-# Settings / Privacy clipboard capture toggle bridge method.
 
 
 def test_webview_bridge_exposes_settings_clipboard_toggle_method() -> None:
@@ -378,9 +359,6 @@ def test_webview_bridge_clipboard_toggle_error_payload_has_no_sensitive_tokens()
             "set_clipboard_capture_enabled must not reference forbidden token: "
             + forbidden
         )
-
-
-# Settings / Privacy encrypted backup export + manifest preview
 
 
 def test_webview_bridge_exposes_backup_export_method() -> None:
@@ -490,11 +468,9 @@ def test_webview_bridge_manifest_preview_error_payload_has_no_sensitive_tokens()
     because the manifest preview method never accepts or references a
     passphrase.
     """
-    # method body lives in bridge_settings.py (SettingsBridgeMixin).
-    # The helper slices at the next ``def`` so the body covers only this
-    # method (a fixed window would bleed into ``import_encrypted_backup``
-    # whose signature references ``passphrase``, falsely failing the
-    # forbidden-token check below).
+    # Slice at the next ``def`` so the body covers only this method; a fixed
+    # window would bleed into ``import_encrypted_backup`` whose ``passphrase``
+    # signature would falsely fail the forbidden-token check.
     body = _read_bridge_method_body("preview_encrypted_backup_manifest")
     # Stable Chinese error messages that must appear in the payload.
     assert "已取消读取备份清单" in body
@@ -560,9 +536,6 @@ def test_webview_bridge_backup_methods_do_not_call_import_or_clear() -> None:
         assert forbidden not in manifest_body, (
             "preview_encrypted_backup_manifest must not call: " + forbidden
         )
-
-
-# Settings / Privacy encrypted backup import + clear-all-local-data
 
 
 def test_webview_bridge_exposes_destructive_data_import_method() -> None:
@@ -1057,11 +1030,9 @@ def test_webview_main_uses_unified_privacy_gate_entry() -> None:
         )
 
 
-# ``app_api`` must still export ``start_background_workers`` and
-# ``start_collector`` as runtime-internal helpers (used by
-# ``start_collection_after_privacy_gate``), but the WebView bridge and
-# ``webview_main`` MUST NOT call them directly: they route through the
-# unified privacy-gated entry instead.
+# ``app_api`` exports ``start_background_workers`` / ``start_collector`` as
+# runtime-internal helpers, but the WebView bridge and ``webview_main`` MUST
+# NOT call them directly — they route through the unified privacy-gated entry.
 
 
 def test_app_api_exports_start_background_workers_internal_helper() -> None:

@@ -16,12 +16,10 @@ logger = logging.getLogger(__name__)
 
 _UNKNOWN_APP_LABEL = "未知应用"
 
-# Ordered CSV columns. Each entry is ``(dict_key, csv_header)``.
-# The dict rows returned by ``build_statistics_csv_rows`` use the English
-# keys; the writer emits the Chinese headers so Excel opens the file with
-# readable column names. The columns are display-safe by construction:
-# raw ``window_title`` / ``file_path_hint`` / ``full_path`` / clipboard /
-# note / traceback / SQL are never present in any column.
+# Ordered CSV columns as (dict_key, csv_header). The writer emits Chinese
+# headers for Excel readability. Columns are display-safe: raw window_title
+# / file_path_hint / full_path / clipboard / note / traceback / SQL are
+# never present in any column.
 _CSV_COLUMNS = [
     ("date", "日期"),
     ("start_time", "开始时间"),
@@ -241,10 +239,8 @@ def _destructive_reset_guard() -> Iterator[None]:
         raise
     else:
         # On success leave the app paused so the user can verify the cleared
-        # state before resuming recording. ``reset_database`` re-seeds
-        # default settings (including user_paused/collector_status), so we
-        # explicitly re-assert the paused state here, matching the
-        # secure-import success semantics.
+        # state before resuming. reset_database re-seeds defaults, so we
+        # re-assert the paused state here, matching secure-import semantics.
         set_setting("user_paused", "true")
         set_setting("collector_status", "paused")
         set_setting("current_activity_snapshot", "")

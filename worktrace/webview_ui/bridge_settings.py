@@ -63,27 +63,21 @@ class SettingsBridgeMixin:
         try:
             result = settings_api.accept_first_run_notice_for_webview()
             if not result.get("ok"):
-                # API reported failure (or a stable Chinese error). Do
-                # not start the collector; forward the error payload.
+                # API reported failure; do not start the collector, forward the error payload.
                 return result
-            # Unified privacy-gate startup: the gate is enforced by
-            # ``app_api.start_collection_after_privacy_gate`` so the
-            # bridge does not duplicate the start ordering / gate read.
+            # Unified privacy-gate startup: enforced by app_api.start_collection_after_privacy_gate
+            # so the bridge does not duplicate the start ordering / gate read.
             try:
                 app_api.start_collection_after_privacy_gate()
             except Exception:
-                # The accept itself succeeded (setting is persisted). A
-                # start failure is logged but does NOT mask the
-                # successful accept: the user can press the sidebar
-                # toggle to retry start now that the gate is open.
+                # The accept succeeded (setting persisted). A start failure is logged but does NOT
+                # mask the accept; the user can retry start via the sidebar toggle now that the gate is open.
                 logger.exception(
                     "webview bridge accept_first_run_notice: "
                     "start_collection_after_privacy_gate raised after "
                     "successful accept"
                 )
-            # Build the success payload. Try to refresh the status so
-            # the frontend sidebar / overview can re-render; on failure
-            # still return success without ``status``.
+            # Refresh status so the frontend sidebar / overview can re-render; on failure still return success without status.
             payload: dict[str, Any] = {
                 "ok": True,
                 "accepted": True,
@@ -147,15 +141,12 @@ class SettingsBridgeMixin:
         native file dialogs, or any schema mutation.
         """
         try:
-            # Bridge-level strict bool guard mirrors the API facade so a
-            # non-bool never reaches the backend. ``is`` (not
-            # ``isinstance``) is the clearest "real bool only" check.
+            # Bridge-level strict bool guard mirrors the API facade so a non-bool never reaches the backend.
             if enabled is not True and enabled is not False:
                 return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
             result = settings_api.set_clipboard_capture_enabled_for_webview(enabled)
             if result.get("ok"):
                 return {"ok": True, "status": result["status"]}
-            # API returned a stable Chinese error; pass it through unchanged.
             return {"ok": False, "error": result.get("error") or "设置剪贴板记录失败"}
         except Exception:
             logger.exception("webview bridge set_clipboard_capture_enabled failed")
@@ -167,8 +158,7 @@ class SettingsBridgeMixin:
         try:
             output_path = self._choose_backup_save_path()
             if output_path is None:
-                # User cancelled the native save dialog. This is a clean
-                # cancel result, not a Python exception or "操作失败".
+                # User cancelled the native save dialog (clean cancel, not an exception).
                 return {"ok": False, "error": "已取消导出"}
             result = settings_api.export_encrypted_backup_for_webview(
                 output_path, passphrase, confirm_passphrase
@@ -179,7 +169,6 @@ class SettingsBridgeMixin:
                     "filename": str(result.get("filename") or ""),
                     "message": str(result.get("message") or "加密备份已导出"),
                 }
-            # API returned a stable Chinese error; pass it through unchanged.
             return {"ok": False, "error": result.get("error") or "导出加密备份失败"}
         except Exception:
             logger.exception("webview bridge export_encrypted_backup failed")
@@ -191,8 +180,7 @@ class SettingsBridgeMixin:
         try:
             input_path = self._choose_backup_open_path()
             if input_path is None:
-                # User cancelled the native open dialog. This is a clean
-                # cancel result, not a Python exception or "操作失败".
+                # User cancelled the native open dialog (clean cancel, not an exception).
                 return {"ok": False, "error": "已取消读取备份清单"}
             result = settings_api.preview_encrypted_backup_manifest_for_webview(
                 input_path
@@ -203,7 +191,6 @@ class SettingsBridgeMixin:
                     "filename": str(result.get("filename") or ""),
                     "manifest": result.get("manifest") or {},
                 }
-            # API returned a stable Chinese error; pass it through unchanged.
             return {"ok": False, "error": result.get("error") or "读取备份清单失败"}
         except Exception:
             logger.exception("webview bridge preview_encrypted_backup_manifest failed")
@@ -215,8 +202,7 @@ class SettingsBridgeMixin:
         try:
             input_path = self._choose_backup_open_path()
             if input_path is None:
-                # User cancelled the native open dialog. This is a clean
-                # cancel result, not a Python exception or "操作失败".
+                # User cancelled the native open dialog (clean cancel, not an exception).
                 return {"ok": False, "error": "已取消导入"}
             result = settings_api.import_encrypted_backup_for_webview(
                 input_path, passphrase, confirm_text
@@ -229,7 +215,6 @@ class SettingsBridgeMixin:
                     "imported_row_count": int(result.get("imported_row_count") or 0),
                     "folder_index_reset": bool(result.get("folder_index_reset")),
                 }
-            # API returned a stable Chinese error; pass it through unchanged.
             return {"ok": False, "error": result.get("error") or "导入加密备份失败"}
         except Exception:
             logger.exception("webview bridge import_encrypted_backup failed")
@@ -248,7 +233,6 @@ class SettingsBridgeMixin:
                 if "status" in result:
                     payload["status"] = result["status"]
                 return payload
-            # API returned a stable Chinese error; pass it through unchanged.
             return {"ok": False, "error": result.get("error") or "清空本地数据失败"}
         except Exception:
             logger.exception("webview bridge clear_all_local_data failed")

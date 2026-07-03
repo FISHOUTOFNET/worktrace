@@ -29,22 +29,15 @@ from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 logger = logging.getLogger(__name__)
 
 
-# Chinese error-message maps.
-# Each map translates a stable API error code into a user-facing Chinese
-# message. Unknown codes collapse to the operation-specific generic failure
-# so internal details are never surfaced.
+# Chinese error-message maps: each translates a stable API error code into a user-facing
+# message; unknown codes collapse to the operation-specific generic failure so internal details are never surfaced.
 
-# Maps Project Rules write API stable codes to user-facing messages.
-# Unknown codes collapse to the generic update failure.
 _PROJECT_RULE_WRITE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "规则不存在",
     "operation_failed": "更新规则状态失败",
 }
 
-# Maps Project Rules keyword-create API stable codes to user-facing
-# messages. Unknown codes collapse to the generic create failure so internal
-# details are never surfaced.
 _PROJECT_RULE_CREATE_MESSAGES = {
     "invalid_input": "操作无效",
     "project_not_found": "项目不存在",
@@ -52,22 +45,16 @@ _PROJECT_RULE_CREATE_MESSAGES = {
     "operation_failed": "新增关键词规则失败",
 }
 
-# Maps Project Rules keyword-delete API stable codes to user-facing
-# messages. Unknown codes collapse to the generic delete failure so internal
-# details are never surfaced. ``not_found`` covers both "id does not exist"
-# and "id is a folder rule" — both are reported as ``关键词规则不存在`` so the
-# user never learns which table the id belonged to.
+# Maps keyword-delete codes. not_found covers both "id missing" and "id is a folder rule" —
+# both report 关键词规则不存在 so the user never learns which table the id belonged to.
 _PROJECT_RULE_DELETE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "关键词规则不存在",
     "operation_failed": "删除关键词规则失败",
 }
 
-# Maps Project Rules keyword-update API stable codes to user-facing
-# messages. Unknown codes collapse to the generic update failure so internal
-# details are never surfaced. ``not_found`` covers both "id does not exist"
-# and "id is a folder rule" — both are reported as ``关键词规则不存在`` so the
-# user never learns which table the id belonged to.
+# Maps keyword-update codes. not_found covers both "id missing" and "id is a folder rule" —
+# both report 关键词规则不存在 so the user never learns which table the id belonged to.
 _PROJECT_RULE_UPDATE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "关键词规则不存在",
@@ -75,42 +62,30 @@ _PROJECT_RULE_UPDATE_MESSAGES = {
     "operation_failed": "保存关键词规则失败",
 }
 
-# Maps Project Rules folder-create API stable codes to user-facing
-# messages. Unknown codes collapse to the generic create failure so internal
-# details are never surfaced.
 _PROJECT_RULE_FOLDER_CREATE_MESSAGES = {
     "invalid_input": "操作无效",
     "project_not_found": "项目不存在或不可用",
     "operation_failed": "新增文件夹规则失败",
 }
 
-# Maps Project Rules folder-update API stable codes to user-facing
-# messages. Unknown codes collapse to the generic update failure so internal
-# details are never surfaced. ``not_found`` covers both "id does not exist"
-# and "id is a keyword rule" — both are reported as ``文件夹规则不存在`` so the
-# user never learns which table the id belonged to.
+# Maps folder-update codes. not_found covers both "id missing" and "id is a keyword rule" —
+# both report 文件夹规则不存在 so the user never learns which table the id belonged to.
 _PROJECT_RULE_FOLDER_UPDATE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "文件夹规则不存在",
     "operation_failed": "保存文件夹规则失败",
 }
 
-# Maps Project Rules folder-delete API stable codes to user-facing
-# messages. Unknown codes collapse to the generic delete failure so internal
-# details are never surfaced. ``not_found`` covers both "id does not exist"
-# and "id is a keyword rule" — both are reported as ``文件夹规则不存在`` so the
-# user never learns which table the id belonged to.
+# Maps folder-delete codes. not_found covers both "id missing" and "id is a keyword rule" —
+# both report 文件夹规则不存在 so the user never learns which table the id belonged to.
 _PROJECT_RULE_FOLDER_DELETE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "文件夹规则不存在",
     "operation_failed": "删除文件夹规则失败",
 }
 
-# Maps Project lifecycle API stable codes to user-facing messages for
-# project create / edit / enable-disable / archive. Unknown codes
-# collapse to the matching operation-specific generic failure so internal
-# details are never surfaced. Each operation has its own fallback message
-# so a create failure never echoes an update-focused message, etc.
+# Maps Project lifecycle codes (create/edit/toggle/archive). Each operation has its own
+# fallback message so a create failure never echoes an update-focused message.
 _PROJECT_LIFECYCLE_CREATE_MESSAGES = {
     "invalid_input": "操作无效",
     "duplicate_project": "项目名称已存在",
@@ -139,20 +114,14 @@ _PROJECT_LIFECYCLE_ARCHIVE_MESSAGES = {
     "operation_failed": "归档项目失败",
 }
 
-# Maps rule impact preview API stable codes to user-facing messages.
-# Unknown codes collapse to the generic preview failure so internal details
-# are never surfaced. ``not_found`` covers both "id does not exist" and "id
-# belongs to the other rule table" — both reported as ``规则不存在`` so the
-# user never learns which table the id belonged to.
+# Maps impact-preview codes. not_found covers both "id missing" and "id belongs to the other
+# rule table" — both report 规则不存在 so the user never learns which table the id belonged to.
 _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "规则不存在",
     "operation_failed": "预览规则影响失败",
 }
 
-# Maps safe single-rule backfill API stable codes to user-facing
-# messages. Unknown codes collapse to the generic backfill failure so
-# internal details are never surfaced.
 _PROJECT_RULE_BACKFILL_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "规则不存在",
@@ -169,11 +138,8 @@ _PROJECT_RULE_BATCH_PREVIEW_MESSAGES = {
     "operation_failed": "批量预览失败",
 }
 
-# Maps selected-rule batch apply API stable codes to user-facing
-# messages. Unknown codes collapse to the generic batch-apply failure so
-# internal details are never surfaced. ``rule_disabled`` and
-# ``project_not_available`` use "存在...规则" wording because the batch is
-# all-or-nothing: a single disabled rule or unavailable target project
+# Maps batch-apply codes. rule_disabled and project_not_available use "存在...规则" wording
+# because the batch is all-or-nothing: a single disabled rule or unavailable target project
 # blocks the whole batch.
 _PROJECT_RULE_BATCH_APPLY_MESSAGES = {
     "invalid_input": "操作无效",
@@ -185,11 +151,8 @@ _PROJECT_RULE_BATCH_APPLY_MESSAGES = {
     "operation_failed": "批量应用失败",
 }
 
-# Maps selected-rule batch enable / disable API stable codes to
-# user-facing messages. Unknown codes collapse to the generic batch
-# operation failure so internal details are never surfaced. Toggle does not
-# touch activities, so ``rule_disabled`` / ``project_not_available`` /
-# ``too_many_matches`` cannot occur on this path.
+# Maps batch enable/disable codes. Toggle does not touch activities, so rule_disabled /
+# project_not_available / too_many_matches cannot occur on this path.
 _PROJECT_RULE_BATCH_TOGGLE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "规则不存在",
@@ -197,20 +160,14 @@ _PROJECT_RULE_BATCH_TOGGLE_MESSAGES = {
     "operation_failed": "批量操作失败",
 }
 
-# Maps excluded-rule keyword-create API stable codes to user-facing
-# messages. Unknown codes collapse to the generic create failure so internal
-# details are never surfaced. The excluded project is a system/special
-# project, so ``project_not_found`` cannot occur (the facade resolves it
-# internally).
+# Maps excluded keyword-create codes. The excluded project is system/special, so
+# project_not_found cannot occur (the facade resolves it internally).
 _EXCLUDED_KEYWORD_RULE_CREATE_MESSAGES = {
     "invalid_input": "操作无效",
     "duplicate_rule": "关键词规则已存在",
     "operation_failed": "新增排除关键词规则失败",
 }
 
-# Maps excluded-rule folder-create API stable codes to user-facing
-# messages. Unknown codes collapse to the generic create failure so internal
-# details are never surfaced.
 _EXCLUDED_FOLDER_RULE_CREATE_MESSAGES = {
     "invalid_input": "操作无效",
     "operation_failed": "新增排除文件夹规则失败",
@@ -232,12 +189,8 @@ def _project_rules_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     project_name = _project_rules_text(project.get("name"), "未知项目")
     project_enabled = _project_rules_bool(project.get("enabled"), default=True)
     is_excluded = project_name == "排除规则"
-    # Display-safe project lifecycle flags. ``is_system`` is True for
-    # system/special projects (``created_by == "system"`` or reserved
-    # special project names). The raw ``created_by`` value is NOT surfaced
-    # via these flags or anywhere in the payload; only the boolean is
-    # exposed for frontend decision logic. User projects are editable /
-    # can_toggle / can_archive; system projects are not.
+    # Display-safe lifecycle flags. is_system is True for system/special projects (created_by
+    # == "system" or reserved names). The raw created_by value is never surfaced; only the boolean.
     is_system = (
         _project_rules_text(project.get("created_by"), "") == "system"
         or project_name in {UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT}

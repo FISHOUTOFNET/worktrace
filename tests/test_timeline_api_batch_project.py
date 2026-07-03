@@ -173,11 +173,9 @@ def test_batch_duplicate_ids_deduped(temp_db):
 def test_batch_exceeds_upper_limit(temp_db):
     """More than MAX_BATCH_PROJECT_EDIT_ACTIVITIES ids must fail."""
     ids = _seed_two_closed_activities()
-    # Pad with duplicates of the second id to exceed the limit without
-    # creating 100+ real activities. After dedup this would be 2 ids, so
-    # we need to test the pre-dedup count check in the service. The API
-    # layer dedupes first, so we need 101 unique ids. Instead, test the
-    # service layer directly with a list that exceeds the limit.
+    # Padding with duplicates won't work: the API dedupes first, so after
+    # dedup we'd have only 2 ids. To exceed the pre-dedup limit we pass 101
+    # unique ids (range(1, 102)) directly to the API layer.
     with pytest.raises(TimelineBatchProjectError) as exc:
         timeline_api.batch_update_timeline_activities_project(
             list(range(1, 102)), 1

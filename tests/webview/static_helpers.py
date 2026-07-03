@@ -63,11 +63,8 @@ NO_STORAGE_FILES = (
     + ["js/" + name for name in ALL_JS_FILES]
 )
 
-# Bridge mixin files. ``bridge.py`` is a thin composition class that
-# inherits from the mixins below; the method bodies live in those mixin
-# files. The combined-source and per-method helpers let static source-level
-# tests scan every bridge file without hard-coding which mixin holds each
-# method.
+# Bridge mixin files: ``bridge.py`` is a thin composition class; method
+# bodies live in the mixins so combined-source helpers scan every file.
 BRIDGE_FILES = [
     "bridge.py",
     "bridge_common.py",

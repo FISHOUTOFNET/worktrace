@@ -60,9 +60,6 @@ def _setup_two_projects(temp_db):
     return project_a, project_b
 
 
-# Resource identity immediate + project ownership delayed (<30s)
-
-
 def test_resource_switch_under_30s_shows_new_resource_but_inherited_display_project(temp_db):
     """Section 一.1 / 一.2: <30s after a resource switch the snapshot's
     resource fields reflect the NEW resource, but ``display_project`` is
@@ -256,9 +253,6 @@ def test_uncategorized_candidate_confirmed_after_30_seconds(temp_db):
     assert snap["project_transition"]["pending"] is False
 
 
-# History persistence independent (clipboard force-persist)
-
-
 def test_clipboard_force_persist_under_30s_persists_db_row_but_display_still_pending(temp_db):
     """Section 一.3 / 四.5: clipboard force-persist can create a real
     open DB row BEFORE the 30-second ownership threshold, but the live
@@ -309,9 +303,6 @@ def test_clipboard_force_persist_under_30s_persists_db_row_but_display_still_pen
     snap = _snapshot()
     assert snap["display_project"]["name"] == "ProjectB"
     assert snap["project_transition"]["pending"] is False
-
-
-# Session boundaries clear ownership state
 
 
 def test_stop_clears_ownership_state_so_next_session_does_not_inherit(temp_db):
@@ -479,9 +470,6 @@ def test_time_jump_clears_ownership_state(temp_db):
     assert snap["display_project"]["is_uncategorized"] is True
 
 
-# First activity: no prior confirmed project -> display == candidate
-
-
 def test_first_activity_no_pending_when_candidate_is_uncategorized(temp_db):
     """the first activity of a session has no prior
     confirmed project, so display == candidate immediately (no pending
@@ -516,9 +504,6 @@ def test_first_activity_no_pending_when_candidate_is_concrete_project(temp_db):
     assert snap["display_project"]["id"] == project_a
     assert snap["candidate_project"]["name"] == "ProjectA"
     assert snap["project_transition"]["pending"] is False
-
-
-# inferred_project_name mirrors display_project.name
 
 
 def test_inferred_project_name_mirrors_display_project(temp_db):

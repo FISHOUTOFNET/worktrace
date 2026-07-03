@@ -151,11 +151,10 @@ def _folder_rule_row_by_path(folder_path: str) -> dict | None:
 
 
 def test_create_folder_rule_create_or_update_semantics(temp_db):
-    # The underlying service uses INSERT ... ON CONFLICT(normalized_folder_key)
-    # DO UPDATE, so creating a folder rule with the same normalized key as an
-    # existing one updates the existing row in place (folder_path / project_id
-    # / recursive / enabled are overwritten, enabled is reset to 1). The API
-    # wraps this as a stable "create/update single folder rule" contract.
+    # The service uses INSERT ... ON CONFLICT(normalized_folder_key) DO UPDATE,
+    # so creating a folder rule with the same normalized key updates the existing
+    # row in place (folder_path / project_id / recursive / enabled overwritten,
+    # enabled reset to 1). The API wraps this as a stable create/update contract.
     project_a = project_service.create_project("ClientA")
     project_b = project_service.create_project("ClientB")
     first = rule_api.create_project_folder_rule(project_a, r"D:\Work", True)
@@ -712,11 +711,10 @@ def test_existing_delete_project_keyword_rule_still_works(temp_db):
 
 
 def test_update_folder_rule_to_existing_normalized_key_returns_operation_failed(temp_db):
-    # Regression lock: updating a folder rule's path so that its
-    # normalized key collides with another existing folder rule must collapse
-    # to ``operation_failed`` (the service raises ``IntegrityError`` on the
-    # UNIQUE constraint). The update path must NOT merge or delete the other
-    # rule, and the other rule must remain untouched.
+    # Regression lock: updating a folder rule's path so its normalized key
+    # collides with another rule must collapse to ``operation_failed`` (the
+    # service raises ``IntegrityError`` on the UNIQUE constraint). The update
+    # path must NOT merge or delete the other rule; it must remain untouched.
     project = project_service.create_project("Client")
     other = rule_api.create_project_folder_rule(project, r"D:\Other", True)
     other_id = other["rule"]["id"]
@@ -737,11 +735,10 @@ def test_update_folder_rule_to_existing_normalized_key_returns_operation_failed(
 
 
 def test_update_folder_rule_preserves_rule_id_when_normalized_key_changes(temp_db):
-    # Regression lock: the update-by-id path must preserve the
-    # row id even when the new folder_path produces a different
-    # normalized_folder_key. This is what distinguishes update from
-    # create-or-update (which would reuse the existing row for the same
-    # normalized key).
+    # Regression lock: the update-by-id path must preserve the row id even
+    # when the new folder_path produces a different normalized_folder_key.
+    # This distinguishes update from create-or-update (which reuses the
+    # existing row for the same normalized key).
     project = project_service.create_project("Client")
     created = rule_api.create_project_folder_rule(project, r"D:\Old", True)
     rule_id = created["rule"]["id"]
@@ -777,12 +774,10 @@ def test_update_folder_rule_preserves_enabled_state_when_disabled(temp_db):
 
 
 def test_create_folder_rule_recursive_update_on_same_normalized_key(temp_db):
-    # Regression lock: creating a folder rule with the same
-    # normalized key as an existing one but a different ``recursive`` value
-    # must update the existing row's ``recursive`` field in place (this is
-    # the create-or-update semantics). The existing test covers project_id
-    # and recursive change together; this lock isolates the recursive-only
-    # change on the same project.
+    # Regression lock: creating a folder rule with the same normalized key
+    # but a different ``recursive`` value must update the existing row's
+    # ``recursive`` field in place (create-or-update semantics), isolating
+    # the recursive-only change on the same project.
     project = project_service.create_project("Client")
     first = rule_api.create_project_folder_rule(project, r"D:\Work", True)
     first_id = first["rule"]["id"]
@@ -851,11 +846,10 @@ def test_update_folder_rule_payload_excludes_sensitive_fields(temp_db):
 
 
 def test_delete_folder_rule_payload_excludes_sensitive_fields(temp_db):
-    # Regression lock: the delete success payload must not expose
-    # internal DB columns or sensitive metadata. Note: ``deleted`` is the
-    # legitimate success flag and is allowed; the forbidden ``delete`` SQL
-    # keyword is checked via the key-set assertion (no ``delete`` key) rather
-    # than via substring (which would also match ``deleted``).
+    # Regression lock: the delete success payload must not expose internal DB
+    # columns or sensitive metadata. ``deleted`` is the legitimate success flag;
+    # the forbidden ``delete`` SQL keyword is checked via key-set (no ``delete``
+    # key), not substring (which would also match ``deleted``).
     project = project_service.create_project("Client")
     created = rule_api.create_project_folder_rule(project, r"D:\Work", True)
     rule_id = created["rule"]["id"]
@@ -951,11 +945,10 @@ def test_update_folder_rule_invokes_cache_invalidation_hooks(temp_db, monkeypatc
 
 
 def test_delete_folder_rule_invokes_cache_invalidation_and_index_delete_hooks(temp_db, monkeypatch):
-    # Regression lock: the delete path must call
-    # ``invalidate_folder_rule_cache``, ``clear_exclude_rules_cache``, and
-    # ``delete_index_for_rule`` (NOT ``request_rebuild_for_rule``) so the
-    # folder rule cache, the privacy exclude cache, and the folder index
-    # all reflect the deleted rule.
+    # Regression lock: the delete path must call ``invalidate_folder_rule_cache``,
+    # ``clear_exclude_rules_cache``, and ``delete_index_for_rule`` (NOT
+    # ``request_rebuild_for_rule``) so the folder rule cache, exclude cache, and
+    # folder index all reflect the deleted rule.
     project = project_service.create_project("Client")
     created = rule_api.create_project_folder_rule(project, r"D:\Work", True)
     rule_id = created["rule"]["id"]

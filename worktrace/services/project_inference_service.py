@@ -156,11 +156,10 @@ def process_new_activity(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
-# Sources that indicate the open row is still effectively uncategorized and
-# therefore eligible for re-inference. Concrete automatic sources
-# (``folder_rule`` / ``keyword_rule`` / ``midnight_anchor``) and manual
-# sources are excluded so the open-row sync does not flap an already-concrete
-# assignment mid-activity.
+# Sources marking the open row as still uncategorized (eligible for
+# re-inference). Concrete automatic sources (folder_rule / keyword_rule /
+# midnight_anchor) and manual sources are excluded so open-row sync doesn't
+# flap an already-concrete assignment mid-activity.
 _OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
 
 

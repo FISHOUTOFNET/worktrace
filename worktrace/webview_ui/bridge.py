@@ -34,10 +34,9 @@ class WebViewBridge(
     """
 
     def __init__(self) -> None:
-        # The pywebview window is injected by ``webview_main.py`` after
-        # ``create_window`` so the bridge can open a native save dialog for
-        # the CSV export. Stays ``None`` until ``set_window`` is called, so
-        # importing / unit-testing the bridge never starts the GUI.
+        # The pywebview window is injected by webview_main.py after create_window so the bridge
+        # can open a native CSV save dialog. Stays None until set_window is called, so importing
+        # or unit-testing the bridge never starts the GUI.
         self._window: Any = None
 
     def set_window(self, window: Any) -> None:

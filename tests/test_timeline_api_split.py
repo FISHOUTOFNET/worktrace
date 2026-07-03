@@ -656,12 +656,10 @@ def test_service_split_activity_atomic_rollback_on_zero_row_update(temp_db):
     ):
         with pytest.raises(ValueError):
             activity_service.split_activity(aid, "2026-06-25 09:15:00")
-    # No new activity should have been inserted (the transaction rolled back
-    # when the UPDATE reported 0 rows affected). The real UPDATE may have
-    # modified the original activity's end_time, but the transaction's
-    # ``__exit__`` rolls back on the exception, so the original activity is
-    # restored too. The key invariant is that no NEW activity row was
-    # created.
+    # No new activity should have been inserted: the transaction rolled back
+    # when the UPDATE reported 0 rows affected. The original activity's
+    # end_time may have been modified, but ``__exit__`` rolls back on the
+    # exception, so it's restored too. Key invariant: no NEW row is created.
     assert _count_activities() == before_count
 
 

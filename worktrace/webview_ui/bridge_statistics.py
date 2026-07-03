@@ -32,10 +32,8 @@ from .bridge_common import _DATE_SHAPE_RE, _statistics_summary_payload
 logger = logging.getLogger(__name__)
 
 
-# Maps ``StatisticsSummaryError.code`` to stable Chinese user-facing messages
-# for the read-only statistics / export summary. Unknown codes collapse to
-# the load-focused "加载统计失败" so internal details are never surfaced and
-# a statistics load failure never echoes a write-focused message.
+# Maps StatisticsSummaryError.code to Chinese messages. Unknown codes collapse to "加载统计失败"
+# so internal details are never surfaced and a load failure never echoes a write-focused message.
 _STATISTICS_ERROR_MESSAGES = {
     "invalid_date": "请选择有效日期",
     "invalid_range": "请选择有效日期范围",
@@ -43,11 +41,9 @@ _STATISTICS_ERROR_MESSAGES = {
     "operation_failed": "加载统计失败",
 }
 
-# Maps ``StatisticsExportError.code`` to stable Chinese user-facing messages
-# for the CSV export write action. Unknown codes collapse to "导出失败" so
-# internal details are never surfaced. ``permission_denied`` /
-# ``file_busy`` / ``write_failed`` share one message so a low-level OS
-# failure never distinguishes which kind of write error occurred.
+# Maps StatisticsExportError.code to Chinese messages for the CSV export. Unknown codes collapse
+# to "导出失败". permission_denied / file_busy / write_failed share one message so a low-level
+# OS failure never distinguishes which kind of write error occurred.
 _STATISTICS_EXPORT_ERROR_MESSAGES = {
     "invalid_date": "请选择有效日期",
     "invalid_range": "请选择有效日期范围",
@@ -87,10 +83,7 @@ class StatisticsBridgeMixin:
         note, and internal exception details are never surfaced.
         """
         try:
-            # ``isinstance(..., str)`` rejects ``None``, ``bool``, ``int``,
-            # and any other non-string type. ``bool`` is explicitly not a
-            # string and is rejected here so ``True``/``False`` never reach
-            # the API/service validation.
+            # isinstance(..., str) rejects None/bool/int/etc. so True/False never reach the API/service validation.
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "summary": None}
             if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):
@@ -111,16 +104,14 @@ class StatisticsBridgeMixin:
     def export_statistics_csv(self, date_from, date_to) -> dict[str, Any]:
         """Export a display-safe CSV for the statistics date range."""
         try:
-            # ``isinstance(..., str)`` rejects ``None``, ``bool``, ``int``,
-            # and any other non-string type (``bool`` is not a string).
+            # isinstance(..., str) rejects None/bool/int/etc. so True/False never reach the API.
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
             if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
             output_path = self._choose_csv_save_path()
             if output_path is None:
-                # User cancelled the native save dialog. This is a clean
-                # cancel result, not a Python exception or "操作失败".
+                # User cancelled the native save dialog (clean cancel, not an exception).
                 return {"ok": False, "cancelled": True, "error": "已取消导出"}
             result = export_api.export_statistics_csv(
                 date_from, date_to, output_path

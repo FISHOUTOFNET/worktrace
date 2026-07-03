@@ -374,7 +374,7 @@ def test_api_write_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
 )
 def test_api_write_rejects_non_bool(temp_db, bad_value) -> None:
     set_setting("clipboard_capture_enabled", "true")
-    result = set_clipboard_capture_enabled_for_webview(bad_value)  # type: ignore[arg-type]
+    result = set_clipboard_capture_enabled_for_webview(bad_value)
     assert result == {"ok": False, "error": "请选择有效的剪贴板记录状态"}
 
 
@@ -397,11 +397,11 @@ def test_api_write_rejects_non_bool(temp_db, bad_value) -> None:
 )
 def test_api_write_non_bool_does_not_change_setting(temp_db, bad_value) -> None:
     set_setting("clipboard_capture_enabled", "true")
-    set_clipboard_capture_enabled_for_webview(bad_value)  # type: ignore[arg-type]
+    set_clipboard_capture_enabled_for_webview(bad_value)
     assert settings_api.is_clipboard_capture_enabled() is True
 
     set_setting("clipboard_capture_enabled", "false")
-    set_clipboard_capture_enabled_for_webview(bad_value)  # type: ignore[arg-type]
+    set_clipboard_capture_enabled_for_webview(bad_value)
     assert settings_api.is_clipboard_capture_enabled() is False
 
 
@@ -692,7 +692,7 @@ def test_api_export_success_preserves_existing_wtbackup_suffix(temp_db) -> None:
 )
 def test_api_export_rejects_invalid_output_path(temp_db, bad_path) -> None:
     result = export_encrypted_backup_for_webview(
-        bad_path,  # type: ignore[arg-type]
+        bad_path,
         SENSITIVE_PASSPHRASE,
         SENSITIVE_PASSPHRASE,
     )
@@ -706,7 +706,7 @@ def test_api_export_rejects_invalid_output_path(temp_db, bad_path) -> None:
 def test_api_export_rejects_invalid_passphrase(temp_db, bad_passphrase) -> None:
     result = export_encrypted_backup_for_webview(
         "C:\\backups\\worktrace-backup.wtbackup",
-        bad_passphrase,  # type: ignore[arg-type]
+        bad_passphrase,
         bad_passphrase if isinstance(bad_passphrase, str) else SENSITIVE_PASSPHRASE,
     )
     assert result == {"ok": False, "error": "请输入备份口令"}
@@ -828,7 +828,7 @@ def test_api_manifest_success_returns_display_safe_payload(temp_db) -> None:
 )
 def test_api_manifest_rejects_invalid_path(temp_db, bad_path) -> None:
     result = preview_encrypted_backup_manifest_for_webview(
-        bad_path  # type: ignore[arg-type]
+        bad_path
     )
     assert result == {"ok": False, "error": "请选择有效的加密备份文件"}
 
@@ -1235,7 +1235,7 @@ def test_api_import_success_returns_narrow_payload(temp_db) -> None:
 )
 def test_api_import_rejects_invalid_input_path(temp_db, bad_path) -> None:
     result = import_encrypted_backup_for_webview(
-        bad_path,  # type: ignore[arg-type]
+        bad_path,
         SENSITIVE_PASSPHRASE,
         "导入并替换",
     )
@@ -1249,7 +1249,7 @@ def test_api_import_rejects_invalid_input_path(temp_db, bad_path) -> None:
 def test_api_import_rejects_invalid_passphrase(temp_db, bad_passphrase) -> None:
     result = import_encrypted_backup_for_webview(
         "C:\\backups\\worktrace-backup.wtbackup",
-        bad_passphrase,  # type: ignore[arg-type]
+        bad_passphrase,
         "导入并替换",
     )
     assert result == {"ok": False, "error": "请输入备份口令"}
@@ -1264,7 +1264,7 @@ def test_api_import_rejects_invalid_confirm_text(temp_db, bad_confirm) -> None:
     result = import_encrypted_backup_for_webview(
         "C:\\backups\\worktrace-backup.wtbackup",
         SENSITIVE_PASSPHRASE,
-        bad_confirm,  # type: ignore[arg-type]
+        bad_confirm,
     )
     assert result == {"ok": False, "error": "请输入确认文字：导入并替换"}
 
@@ -1663,11 +1663,9 @@ def test_api_clear_success_returns_narrow_payload(temp_db) -> None:
     serialized = json.dumps(result, ensure_ascii=False)
     parsed = json.loads(serialized)
     assert parsed["ok"] is True
-    # The payload must never carry raw exception / path / clipboard
-    # content / note. Note: ``clipboard_capture_enabled`` is a legitimate
-    # status boolean field name, not clipboard content; we forbid the
-    # ``clipboard_content`` token instead of the bare ``clipboard``
-    # substring to avoid a false positive on the field name.
+    # The payload must never carry raw exception / path / clipboard content /
+    # note. Forbid the ``clipboard_content`` token (not bare ``clipboard``) to
+    # avoid a false positive on the ``clipboard_capture_enabled`` field name.
     for forbidden in (
         "Traceback",
         "RuntimeError",
@@ -1688,7 +1686,7 @@ def test_api_clear_success_returns_narrow_payload(temp_db) -> None:
      "清空", "本地数据", "确认清空"],
 )
 def test_api_clear_rejects_invalid_confirmation(temp_db, bad_confirm) -> None:
-    result = clear_all_local_data_for_webview(bad_confirm)  # type: ignore[arg-type]
+    result = clear_all_local_data_for_webview(bad_confirm)
     assert result == {"ok": False, "error": "请输入确认文字：清空本地数据"}
 
 
@@ -1725,11 +1723,9 @@ def test_api_clear_does_not_call_backup_actions_or_set_setting(temp_db) -> None:
 
 
 def test_api_clear_round_trip_smoke(temp_db) -> None:
-    # No-mock round-trip: seed business data, run clear-all through the
-    # WebView facade, then assert the system-default project / settings
-    # are re-seeded, business data is dropped, secure_import_in_progress
-    # ends at False, user_paused is True, collector_status is paused, and
-    # the payload does not leak internal info.
+    # No-mock round-trip: clear-all through the WebView facade must re-seed
+    # system defaults, drop business data, leave the app paused, and not leak
+    # internal info.
     from worktrace.services import activity_service
     from worktrace.services.settings_service import (
         get_bool_setting,
@@ -1946,12 +1942,9 @@ def test_api_first_run_notice_payload_does_not_leak_sensitive_tokens(temp_db) ->
 
 
 def test_api_first_run_notice_fail_closed_on_accepted_read_exception(temp_db) -> None:
-    # Strict fail-closed: when reading the accepted state raises, the
-    # facade must NOT return a fallback notice body. It must return
-    # ``{"ok": False, "error": "<stable Chinese>"}`` with NO title,
-    # NO highlights, NO notice_text, and NO warning. The frontend must
-    # show a blocking error overlay and must NOT allow the user to
-    # accept. The collector and folder index worker are not started.
+    # Strict fail-closed: when reading accepted state raises, return only
+    # ``{"ok": False, "error": ...}`` with no notice body so the frontend
+    # blocks accepting and the collector does not start.
     with patch.object(
         settings_api,
         "first_run_notice_accepted",

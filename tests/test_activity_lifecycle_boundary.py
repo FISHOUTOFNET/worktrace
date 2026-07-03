@@ -120,9 +120,6 @@ def test_app_runtime_routes_close_all_through_lifecycle_facade() -> None:
     )
 
 
-# recovery_service must not close open rows via direct SQL
-
-
 def test_recovery_service_does_not_direct_sql_close_open_row() -> None:
     """``recovery_service.py`` non-cross-midnight recovery must NOT close
     open rows via direct SQL ``UPDATE activity_log SET end_time``. It must
@@ -146,7 +143,6 @@ def test_recovery_service_does_not_direct_sql_close_open_row() -> None:
         "'UPDATE activity_log SET end_time'; use "
         "activity_lifecycle_service.recover_close_activity instead"
     )
-    # The recovery service must import the lifecycle recovery helpers.
     assert "recover_close_activity" in source, (
         "recovery_service.py must import recover_close_activity from "
         "activity_lifecycle_service for the non-cross-midnight path"
@@ -183,13 +179,10 @@ def test_activity_service_close_methods_do_not_call_finalize() -> None:
     enforced by ``test_activity_service_does_not_import_activity_lifecycle_service``.
     This test checks for actual finalize / inference *calls*."""
     source = _read(SERVICES_DIR / "activity_service.py")
-    # Locate the close_activity function body and verify it does not
-    # call the finalize helper or project inference.
     for func_name in ("close_activity",):
         pos = source.find("def " + func_name + "(")
         if pos == -1:
             continue  # function may have been removed entirely — that's fine
-        # Slice to the next top-level def.
         next_def = source.find("\ndef ", pos + 1)
         body = source[pos:next_def if next_def != -1 else pos + 3000]
         for forbidden in (
@@ -211,8 +204,6 @@ def test_activity_service_create_activity_does_not_close_old_rows() -> None:
     assert pos != -1, "activity_service must define create_activity"
     next_def = source.find("\ndef ", pos + 1)
     body = source[pos:next_def if next_def != -1 else pos + 3000]
-    # Must not call close_all_open_rows / close_activity_row inside
-    # create_activity (closing old rows is the lifecycle facade's job).
     for forbidden in (
         "close_all_open_rows",
         "close_activity_row",

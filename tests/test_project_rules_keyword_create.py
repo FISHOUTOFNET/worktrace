@@ -77,18 +77,13 @@ def test_create_keyword_rule_for_normal_project(temp_db):
 
 
 def test_create_keyword_rule_for_excluded_project_rejected_as_project_not_found(temp_db):
-    # Regression lock: the special local ``排除规则`` project is
-    # created with ``enabled = 0`` and is therefore NOT a rule target per
-    # ``project_api.list_rule_target_projects()``. The API must reject it as
-    # ``project_not_found`` rather than bypassing the service eligibility
-    # rule. This mirrors the spec: "如现有 service 不允许，则不要绕过
-    # service."
+    # Regression lock: 排除规则 project (enabled=0) must be rejected as
+    # project_not_found, not bypassing service eligibility (spec: 不要绕过 service).
     excluded_id = project_service.get_or_create_excluded_project()
 
     result = rule_api.create_project_keyword_rule(excluded_id, "Secret")
 
     assert result == {"ok": False, "error": "project_not_found"}
-    # No keyword rule row was created for the excluded project.
     with get_connection() as conn:
         count = conn.execute(
             "SELECT COUNT(*) AS c FROM project_rule WHERE project_id = ?",
@@ -202,12 +197,9 @@ def test_create_keyword_rule_trims_keyword_before_create(temp_db):
 
 
 def test_create_keyword_rule_html_script_keyword_saved_as_plain_text(temp_db):
-    # Regression lock: HTML / script-like content in the keyword
-    # must not cause the API or bridge to leak an exception. The API saves
-    # the keyword as ordinary plain text; frontend rendering is responsible
-    # for escaping (locked by the static-contract escape-helper test). The
-    # success payload must be JSON-serializable and must not execute or
-    # transform the content.
+    # Regression lock: HTML/script keyword must not leak an exception; the
+    # API saves it as plain text and frontend rendering escapes it. The
+    # success payload must be JSON-serializable.
     project = project_service.create_project("Client")
     html_keyword = "<script>alert('xss')</script>"
 
@@ -237,7 +229,6 @@ def test_create_keyword_rule_html_script_keyword_duplicate_detection(temp_db):
 
 
 def test_unknown_project_returns_stable_project_not_found(temp_db):
-    # An id that does not exist in the project table at all.
     result = rule_api.create_project_keyword_rule(9999, "Spec")
     assert result == {"ok": False, "error": "project_not_found"}
 

@@ -262,11 +262,10 @@ def test_index_html_timeline_edit_panel_has_no_delete_batch():
     assert 'id="edit-visibility-hide-btn"' in source
     assert 'id="edit-visibility-delete-btn"' in source
     assert 'id="edit-visibility-status"' in source
-    # provides a batch project reassignment section in the
-    # correction shell. "batch" is allowed only in the project context;
-    # batch hide / delete / time / split / merge controls must still be
-    # absent from the entire HTML. Restore / permanent delete / auto-rule
-    # must also still be absent.
+    # Provides a batch project reassignment section in the correction shell.
+    # "batch" is allowed only in the project context; batch hide / delete / time
+    # / split / merge controls must stay absent, as must Restore / permanent
+    # delete / auto-rule.
     lowered = source.lower()
     for forbidden_batch in (
         "batch-hide", "batch-delete", "batch-time",
@@ -1790,12 +1789,10 @@ def test_frontend_js_hide_delete_clears_saving_state_on_failure():
         assert start != -1, f"{func_name} must exist"
         next_func = source.find("\n    function ", start + 1)
         body = source[start:next_func] if next_func != -1 else source[start:]
-        # Both the error branch (result.ok === false) and the catch branch
-        # must reset the saving state. We check that the reset helper is
-        # called on both the error and catch paths by counting occurrences.
-        # The reset helper is setHideSaving / setDeleteSaving /
-        # setSessionHideSaving / setSessionDeleteSaving depending on the
-        # function.
+        # Both the error branch (result.ok === false) and the catch branch must
+        # reset the saving state. We verify by counting occurrences of the reset
+        # helper (setHideSaving / setDeleteSaving / setSessionHideSaving /
+        # setSessionDeleteSaving, depending on the function).
         reset_call = (
             "setHideSaving"
             if "Hide" in func_name and "Session" not in func_name

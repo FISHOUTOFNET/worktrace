@@ -218,10 +218,8 @@ def test_settings_js_only_calls_allowed_bridge_methods() -> None:
     assert 'App.callBridge("accept_first_run_notice")' in source
     # Every other write-side bridge method is still forbidden. Note:
     # ``parse_encrypted_backup_manifest`` is the API facade name, not the
-    # bridge method name; the bridge method is ``preview_encrypted_backup_manifest``
-    # and must not be confused with the parse facade. We check for
-    # ``App.callBridge("<forbidden>"`` so forbidden names that appear in
-    # comments / docstrings are not falsely flagged.
+    # bridge method (the bridge method is ``preview_encrypted_backup_manifest``);
+    # we check ``App.callBridge("<forbidden>"`` so names in comments aren't flagged.
     for forbidden in (
         "parse_encrypted_backup_manifest",
         "set_setting_value",
@@ -775,10 +773,9 @@ def test_settings_js_import_does_not_persist_passphrase() -> None:
     pos = source.find("function importEncryptedBackup")
     assert pos != -1
     # Slice to the next top-level function so the body covers the whole
-    # importEncryptedBackup implementation (the clearing code lives near
-    # the end of the function, beyond a fixed 3000-char window). Use
-    # ``\n    function `` to skip nested callback ``function (result)``
-    # expressions inside the body.
+    # importEncryptedBackup implementation (the clearing code lives near the end,
+    # beyond a fixed 3000-char window). ``\n    function `` skips nested
+    # callback ``function (result)`` expressions inside the body.
     next_def = source.find("\n    function ", pos + 1)
     body = source[pos:next_def if next_def != -1 else pos + 6000]
     # The passphrase must be read into a local variable, not App state.
