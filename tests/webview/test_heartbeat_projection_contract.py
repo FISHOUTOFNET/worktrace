@@ -287,22 +287,35 @@ def test_page_switch_immediately_refreshes_current_page():
 
 
 
-def test_overview_js_stores_last_recent_snapshot():
+def test_overview_js_stores_last_recent_data_as_structural_cache():
     """``showRecent`` must save the recent payload to
-    ``App.lastRecentSnapshot`` so the ticker can increment the
-    live-projected recent item without a bridge round-trip."""
+    ``App.lastRecentData`` as a STRUCTURAL CACHE only — used for
+    re-render on page switch / edit-guard checks. It MUST NOT be read by
+    ``applyLocalTicker`` as a live-seconds source; the unified
+    ``App.liveClockBySpanId`` registry is the single source of truth for
+    live durations. The legacy ``lastRecentSnapshot`` name has been
+    retired to remove the old ticker-source semantics."""
     source = read_js("overview.js")
-    assert "App.lastRecentSnapshot" in source, (
-        "overview.js must save App.lastRecentSnapshot in showRecent"
+    assert "App.lastRecentData" in source, (
+        "overview.js must save App.lastRecentData in showRecent (structural cache)"
+    )
+    assert "App.lastRecentSnapshot" not in source, (
+        "overview.js must not reference the retired App.lastRecentSnapshot name; "
+        "use App.lastRecentData (structural cache only, not a live-seconds source)"
     )
 
 
 def test_recent_item_renders_data_index_and_progress_flags():
     """each recent item must render a stable ``data-recent-index``
     attribute and use ``is_in_progress || is_live_projected`` to mark
-    in-progress / live-projected rows with CSS classes. The
-    unified live-display model also adds ``is_virtual`` / ``virtual-live``
-    so virtual live items are visually distinct from real in-progress rows."""
+    in-progress / live-projected rows with CSS classes. Live rows must
+    carry the unified ``data-display-span-id`` attribute so the ticker
+    can render them from the single registered live clock.
+
+    The ``virtual-live`` CSS class may be retained as a compatibility /
+    historical style but is NO LONGER required as the marker for a
+    ``<30s`` virtual recent item — ``<30s`` virtual_pending rows are not
+    injected into Recent at all under the new Activity Display Model."""
     source = read_js("overview.js")
     assert 'data-recent-index' in source, (
         "overview.js must render data-recent-index on each recent item"
@@ -313,17 +326,17 @@ def test_recent_item_renders_data_index_and_progress_flags():
     assert "is_live_projected" in source, (
         "overview.js must check is_live_projected on recent items"
     )
-    assert "is_virtual" in source, (
-        "overview.js must check is_virtual on recent items (unified model)"
-    )
     assert "in-progress" in source, (
         "overview.js must add the in-progress CSS class to live recent rows"
     )
     assert "live-projected" in source, (
         "overview.js must add the live-projected CSS class to projected rows"
     )
-    assert "virtual-live" in source, (
-        "overview.js must add the virtual-live CSS class to virtual items"
+    # Live recent rows must carry the unified display-span-id so the ticker
+    # renders them from the registered live clock.
+    assert "data-display-span-id" in source, (
+        "overview.js must render data-display-span-id on live recent rows so "
+        "the ticker can render them via the unified live clock"
     )
 
 
@@ -340,13 +353,23 @@ def test_recent_item_prefers_duration_seconds_over_string():
     )
 
 
-def test_timeline_js_stores_last_session_details_data():
-    """``renderSessionDetails`` must save the details payload
-    to ``App.lastSessionDetailsData`` so the ticker can increment the
-    live-projected detail row without a bridge round-trip."""
+def test_timeline_js_stores_last_session_details_view_model_as_structural_cache():
+    """``renderSessionDetails`` must save the details payload to
+    ``App.lastSessionDetailsViewModel`` as a STRUCTURAL CACHE only — used
+    for re-render on page switch / edit-guard checks. It MUST NOT be read
+    by ``applyLocalTicker`` as a live-seconds source; the unified
+    ``App.liveClockBySpanId`` registry is the single source of truth for
+    live durations. The legacy ``lastSessionDetailsData`` name has been
+    retired to remove the old ticker-source semantics."""
     source = read_js("timeline.js")
-    assert "App.lastSessionDetailsData" in source, (
-        "timeline.js must save App.lastSessionDetailsData in renderSessionDetails"
+    assert "App.lastSessionDetailsViewModel" in source, (
+        "timeline.js must save App.lastSessionDetailsViewModel in "
+        "renderSessionDetails (structural cache)"
+    )
+    assert "App.lastSessionDetailsData" not in source, (
+        "timeline.js must not reference the retired App.lastSessionDetailsData "
+        "name; use App.lastSessionDetailsViewModel (structural cache only, not a "
+        "live-seconds source)"
     )
 
 
@@ -636,6 +659,47 @@ def test_ticker_locates_live_rows_via_display_span_id():
     )
 
 
+def test_ticker_does_not_read_structural_caches_as_live_seconds_source():
+    """Spec 三.4: ``applyLocalTicker`` MUST NOT read the structural
+    caches (``lastRecentData`` / ``lastSessionDetailsViewModel``) NOR the
+    retired legacy names (``lastRecentSnapshot`` /
+    ``lastSessionDetailsData``) NOR the old per-region delta
+    accumulators (``recentDelta`` / ``tlDelta`` / ``detailDelta``) as a
+    live-row seconds computation source. The unified
+    ``App.liveClockBySpanId`` registry + ``liveSeconds(clock)`` is the
+    single source of truth for every live ROW duration.
+
+    ``lastTimelineData`` / ``lastOverviewSnapshot`` may be read by the
+    ticker for KPI TOTALS and current-activity display (which are NOT
+    live-row seconds); the live-row seconds come exclusively from the
+    ``[data-display-span-id]`` DOM walk + ``liveSeconds(clock)`` (covered
+    by ``test_ticker_locates_live_rows_via_display_span_id``). The
+    recent / details structural caches, the retired names, and the old
+    delta accumulators must NEVER appear in the ticker body at all.
+    """
+    source = read_js("core.js")
+    body = func_body(source, "applyLocalTicker")
+    forbidden = [
+        # Retired legacy structural-cache names (old ticker-source semantics).
+        "lastRecentSnapshot",
+        "lastSessionDetailsData",
+        # Current recent / details structural caches — the ticker must NOT
+        # read these at all (live rows come from the DOM walk).
+        "lastRecentData",
+        "lastSessionDetailsViewModel",
+        # Old per-region delta accumulators (multi-ticker legacy).
+        "recentDelta",
+        "tlDelta",
+        "detailDelta",
+    ]
+    for token in forbidden:
+        assert token not in body, (
+            "applyLocalTicker must not reference '" + token + "'; the unified "
+            "liveClockBySpanId registry + liveSeconds(clock) is the single "
+            "live-row seconds source"
+        )
+
+
 def test_page_switch_refresh_uses_pending_token_mechanism():
     """issue 14: page-switch immediate refresh must NOT be
     silently skipped by the global in-flight guard. When a refresh is
@@ -780,20 +844,20 @@ def test_recent_has_request_token():
 
 def test_render_session_details_cache_after_guard():
     """``renderSessionDetails`` must set
-    ``App.lastSessionDetailsData`` AFTER the dirty-editor / saving guard,
-    not before. When the DOM render is skipped, the cache must also be
-    skipped so they stay atomic."""
+    ``App.lastSessionDetailsViewModel`` AFTER the dirty-editor / saving
+    guard, not before. When the DOM render is skipped, the cache must
+    also be skipped so they stay atomic."""
     source = read_js("timeline.js")
     body = func_body(source, "renderSessionDetails")
     # The guard (isEditDirty / activityTimeSaving) must appear BEFORE the
     # cache assignment in the function body.
     guard_pos = body.find("isEditDirty")
-    cache_pos = body.find("App.lastSessionDetailsData = data")
+    cache_pos = body.find("App.lastSessionDetailsViewModel = data")
     assert guard_pos != -1, (
         "renderSessionDetails must check isEditDirty before caching"
     )
     assert cache_pos != -1, (
-        "renderSessionDetails must set App.lastSessionDetailsData"
+        "renderSessionDetails must set App.lastSessionDetailsViewModel"
     )
     assert guard_pos < cache_pos, (
         "renderSessionDetails must set the cache AFTER the dirty-editor guard "
@@ -827,8 +891,8 @@ def test_date_switch_invalidates_pending_detail_request():
         assert "detailsRequestToken" in body, (
             fn_name + " must increment detailsRequestToken on date switch"
         )
-        assert "lastSessionDetailsData" in body, (
-            fn_name + " must clear lastSessionDetailsData on date switch"
+        assert "lastSessionDetailsViewModel" in body, (
+            fn_name + " must clear lastSessionDetailsViewModel on date switch"
         )
 
 

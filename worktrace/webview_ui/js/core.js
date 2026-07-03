@@ -15,11 +15,12 @@
     // never starts / stops the collector. The live clock is seeded by the render flows and by the
     // lightweight ``get_refresh_state`` heartbeat into the unified registry below.
     App.lastOverviewSnapshot = null;
-    // Structural caches only — used to re-render lists on page switch. They MUST NOT participate
-    // in live-seconds computation anymore; the unified ``App.liveClockBySpanId`` registry is the
-    // single source of truth for every live duration (current / recent / timeline / detail).
-    App.lastRecentSnapshot = null;
-    App.lastSessionDetailsData = null;
+    // Structural caches only — used to re-render lists on page switch / edit-guard checks. They
+    // MUST NOT participate in live-seconds computation; the unified ``App.liveClockBySpanId``
+    // registry is the single source of truth for every live duration (current / recent / timeline
+    // / detail). ``applyLocalTicker`` never reads these caches as a live-seconds source.
+    App.lastRecentData = null;
+    App.lastSessionDetailsViewModel = null;
     App.lastTimelineData = null;
 
     // Unified live-clock registry. Keyed by ``display_span_id``. Populated from any payload that
@@ -443,9 +444,9 @@
 
     // ===== Unified Live Clock =====
     //
-    // The SINGLE source of truth for every live duration in the UI. There are no longer separate
-    // ``recentDelta`` / ``tlDelta`` / ``detailDelta`` computations — current activity, recent items,
-    // timeline sessions and detail rows all read from the same registered live clock.
+    // The SINGLE source of truth for every live duration in the UI. Current activity, recent items,
+    // timeline sessions and detail rows all read from the same registered live clock — there are no
+    // per-region delta computations or cached-snapshot baselines for live rows.
     //
     // Formula:  display = carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
     //

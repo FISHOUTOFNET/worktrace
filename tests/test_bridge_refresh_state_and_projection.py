@@ -1,7 +1,7 @@
-"""Backend tests: unified live display model.
+"""Backend tests: unified Activity Display Model boundary contract.
 
-These tests cover the unified live-display contract introduced by the
-live display rewrite (``worktrace.services.live_display_service``):
+These tests cover the bridge-layer contract enforced by the new
+display-model owner (``activity_display_model_service``):
 
 - ``bridge.get_refresh_state()`` is attached to ``WebViewBridge`` and
   returns a display-safe lightweight payload (no raw window title / file
@@ -10,21 +10,22 @@ live display rewrite (``worktrace.services.live_display_service``):
   ``elapsed_seconds`` / ``extra_seconds`` advance, but DOES change on
   status / persisted / inferred_project_name / latest activity / carry
   state / collector status / user_paused changes.
-- ``get_recent_activities()`` returns the unified live-display payload
-  (``live_display``) and each item carries
-  ``duration_seconds``, ``is_in_progress``, ``is_virtual``,
-  ``is_virtual_live``, ``live_display_key``, ``activity_id``,
-  ``source``, ``edit_disabled``. A virtual live item is prepended when
-  the current snapshot is a normal unpersisted activity.
-- ``get_timeline()`` prepends a virtual live session for today's
-  unpersisted normal snapshot and never projects historical dates.
-- ``get_timeline_session_details()`` returns a virtual detail row when
-  ``activity_ids`` is empty and the snapshot is eligible; real DB rows
-  carry the unified flags.
-- Projection is purely a UI overlay: paused / idle / excluded / error
-  snapshots never produce virtual items / sessions / detail rows,
-  persisted snapshots never double-count, and the DB / collector are
-  untouched.
+- ``get_recent_activities()`` does NOT inject a virtual recent item for a
+  ``<30s`` ``virtual_pending`` snapshot — the activities list comes purely
+  from DB rows. The unified ``live_clock`` (with ``display_span_id``) IS
+  present so the current-activity area can render the live activity.
+- ``get_timeline()`` does NOT inject a virtual live session for a
+  ``virtual_pending`` snapshot — sessions come purely from DB rows. The
+  unified ``live_clock`` is present; historical dates are never projected.
+- ``get_timeline_session_details()`` does NOT inject a virtual detail row
+  for a ``virtual_pending`` snapshot — with ``activity_ids=[]`` the
+  activities list is empty. The unified ``live_clock`` / ``display_span_id``
+  are present on the root payload so the frontend can render the
+  current-activity area.
+- Projection is purely a display-only UI overlay: paused / idle / excluded
+  / error snapshots never produce live rows; ``absorbed_pending`` /
+  ``persisted_open`` only overlay real DB rows; the DB / collector are
+  never touched by the display model.
 """
 
 from __future__ import annotations
@@ -492,7 +493,7 @@ def test_get_refresh_state_is_json_serializable_with_snapshot(bridge):
 
 
 
-def test_get_recent_activities_prepends_virtual_item_for_normal_snapshot(bridge):
+def test_get_recent_activities_does_not_inject_virtual_item_for_virtual_pending(bridge):
     """NEW unified Activity Display Model: a normal unpersisted snapshot
     (``virtual_pending``) is ONLY visible in the "current activity" area.
     ``get_recent_activities`` does NOT inject a virtual recent item —
@@ -537,7 +538,7 @@ def test_get_recent_activities_prepends_virtual_item_for_normal_snapshot(bridge)
     )
 
 
-def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
+def test_get_timeline_does_not_inject_virtual_session_for_virtual_pending(bridge):
     """NEW unified Activity Display Model: a normal unpersisted snapshot
     (``virtual_pending``) does NOT inject a virtual live session into the
     Timeline. ``result["sessions"]`` comes purely from DB rows.
@@ -577,7 +578,7 @@ def test_get_timeline_prepends_virtual_session_for_normal_snapshot(bridge):
     )
 
 
-def test_get_timeline_session_details_returns_virtual_detail_row(bridge):
+def test_get_timeline_session_details_does_not_inject_virtual_detail_row(bridge):
     """NEW unified Activity Display Model: a normal unpersisted snapshot
     (``virtual_pending``) does NOT inject a virtual detail row into
     ``get_timeline_session_details``. With ``activity_ids=[]`` and no

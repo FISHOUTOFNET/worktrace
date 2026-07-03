@@ -1,28 +1,31 @@
-"""Unified live-display model (single source of truth).
+"""Low-level display-safe helpers and legacy-compatible helper provider.
 
-This service is the ONLY place that decides:
+This module is NOT the page live-display model owner. The page live
+display model owner is
+:mod:`worktrace.services.activity_display_model_service`, which is the
+sole place that decides live-eligibility, the refined ``live_state``
+(``virtual_pending`` / ``absorbed_pending`` / ``persisted_open``), the
+display span identity, and visibility of live rows in recent / timeline /
+details.
 
-- whether the current snapshot is eligible for live display;
-- whether the live display is a *virtual* (unpersisted) item, a *persisted
-  open* item, or a *non-normal* status item (idle / paused / excluded / error);
-- the display project, display resource, fetched snapshot duration,
-  start-time anchor, carry seconds, virtual session, virtual detail row,
-  live row identity, and refresh-revision inputs.
+This module retains only low-level pure helpers used by
+``activity_display_model_service`` and the bridge: display-safe field
+extraction, stable live identity (``_stable_live_key`` /
+``_stable_live_key_hash``), live-clock anchor, current-activity summary
+(``build_current_activity_summary``), refresh-revision computation
+(``compute_refresh_revision``), short-activity carry integration, and
+legacy-compatible row-contract helpers (``build_live_row_contract`` /
+``apply_live_row_contract``) kept as private/internal helpers for tests
+and legacy callers. Page ViewModels must use
+``activity_display_model_service.apply_live_span_to_row`` instead.
 
 Display projection is purely a UI overlay. It NEVER writes the DB, NEVER
 changes the 30-second collector persistence threshold, and NEVER persists
-a <30s activity early.
-
-Boundary rules:
-
-- This service lives in ``worktrace.services`` so it may import other
-  services (``activity_service``, ``live_time_service``, ``project_service``,
-  ``settings_service``, ``timeline_service``) and stdlib only. It MUST NOT
-  be imported by ``worktrace.webview_ui.*`` directly — the bridge layer
-  reaches it through ``worktrace.api.live_display_api``.
-- The service returns display-safe JSON-serializable payloads only. Raw
-  ``window_title``, ``file_path_hint``, ``note``, ``clipboard`` and any
-  traceback / SQL are NEVER surfaced.
+a <30s activity early. This service returns display-safe
+JSON-serializable payloads only — raw ``window_title``,
+``file_path_hint``, ``note``, ``clipboard`` and any traceback / SQL are
+NEVER surfaced. The bridge layer reaches it through
+``worktrace.api.live_display_api``.
 """
 
 from __future__ import annotations
@@ -743,27 +746,27 @@ def _snapshot_display_project_fields(snapshot: dict[str, Any] | None) -> dict[st
     }
 
 
-def build_virtual_session(
+def _build_virtual_session(
     snapshot: dict[str, Any] | None,
     report_date: str,
     today: str,
 ) -> dict[str, Any] | None:
-    """Build a display-only virtual session for an unpersisted normal
-    snapshot.
+    """LEGACY private helper: build a display-only virtual session for an
+    unpersisted normal snapshot.
 
-    Returns ``None`` when the snapshot is not eligible for virtual live
-    display (not normal, persisted, no elapsed seconds, or historical
-    date).
+    Retained ONLY for the legacy ``build_live_row_contract`` path and
+    contract tests. Page ViewModels must use
+    ``activity_display_model_service.apply_live_span_to_row`` instead.
+    A ``<30s`` pending snapshot is no longer injected as a virtual row
+    in Recent / Timeline / Details.
 
-    The virtual session is display-only: ``activity_id`` is ``0``,
-    ``is_virtual`` is ``True``, ``source`` is ``"snapshot"``, and every
-    edit / split / merge / hide / delete / restore button must be
-    disabled. The DB is NEVER written.
-
-    ``session_id`` is ``"virtual-live:<stable_live_key_hash>"`` so the
-    frontend continuity key survives the virtual → persisted_open
-    transition (the persisted row uses its real DB id, but the stable
-    hash keeps the ticker continuity anchor stable).
+    Returns ``None`` when the snapshot is not eligible (not normal,
+    persisted, no elapsed seconds, or historical date). The virtual
+    session is display-only: ``activity_id=0``, ``is_virtual=True``,
+    ``source="snapshot"``, all edit buttons disabled. The DB is NEVER
+    written. ``session_id`` is ``"virtual-live:<stable_live_key_hash>"``
+    so the frontend continuity key survives the virtual → persisted_open
+    transition.
     """
     if not is_live_eligible_for_normal(snapshot, report_date, today):
         return None
@@ -819,13 +822,19 @@ def build_virtual_session(
     }
 
 
-def build_virtual_detail_row(
+def _build_virtual_detail_row(
     snapshot: dict[str, Any] | None,
     report_date: str,
     today: str,
 ) -> dict[str, Any] | None:
-    """Build a display-only virtual detail row for an unpersisted normal
-    snapshot.
+    """LEGACY private helper: build a display-only virtual detail row for
+    an unpersisted normal snapshot.
+
+    This helper is retained ONLY for the legacy ``build_live_row_contract``
+    row-contract path and contract tests. Page ViewModels must NOT call it
+    — they use ``activity_display_model_service.apply_live_span_to_row``
+    instead. A ``<30s`` pending snapshot is no longer injected as a
+    virtual row in Recent / Timeline / Details.
 
     Returns ``None`` when the snapshot is not eligible for virtual live
     display. The row is display-only: ``activity_id`` is ``0``,
@@ -1191,18 +1200,19 @@ def build_live_row_contract(
     report_date: str,
     today: str,
 ) -> dict[str, Any]:
-    """Build the unified live-row contract for any live row.
+    """LEGACY live-row contract builder.
+
+    Page ViewModels must use
+    ``activity_display_model_service.apply_live_span_to_row`` instead.
+    Retained only for contract tests and legacy callers.
 
     ``row_kind`` is one of ``"virtual_session"``, ``"virtual_detail"``,
     ``"persisted_open"``, or ``"current"``. Returns a dict with all
-    :data:`LIVE_ROW_CONTRACT_FIELDS` fields populated from the snapshot
-    and/or the DB row.
-
-    For virtual rows, the contract is derived from the snapshot via the
-    existing ``build_virtual_session`` / ``build_virtual_detail_row``
-    helpers. For persisted_open rows, the contract is derived from
-    :func:`build_persisted_open_overlay`. For current activity, it is
-    derived from :func:`build_current_activity_summary`.
+    :data:`LIVE_ROW_CONTRACT_FIELDS` populated from the snapshot and/or
+    the DB row. Virtual rows use the private ``_build_virtual_session`` /
+    ``_build_virtual_detail_row`` helpers; persisted_open uses
+    :func:`build_persisted_open_overlay`; current uses
+    :func:`build_current_activity_summary`.
 
     Returns an empty dict when the row is not live-eligible (closed
     historical rows, non-normal statuses on past dates, etc.).
@@ -1239,12 +1249,12 @@ def build_live_row_contract(
             "start_time": str(overlay.get("start_time") or ""),
         }
     if row_kind == "virtual_session":
-        virtual = build_virtual_session(snapshot, report_date, today)
+        virtual = _build_virtual_session(snapshot, report_date, today)
         if not virtual:
             return {}
         return _contract_from_virtual(virtual)
     if row_kind == "virtual_detail":
-        virtual = build_virtual_detail_row(snapshot, report_date, today)
+        virtual = _build_virtual_detail_row(snapshot, report_date, today)
         if not virtual:
             return {}
         return _contract_from_virtual(virtual)
@@ -1402,14 +1412,10 @@ def build_live_projection(
 __all__ = [
     "LIVE_ROW_CONTRACT_FIELDS",
     "apply_live_row_contract",
-    "apply_persisted_open_overlay_to_row",
     "assert_live_row_contract",
     "build_current_activity_summary",
     "build_live_projection",
     "build_live_row_contract",
-    "build_persisted_open_overlay",
-    "build_virtual_detail_row",
-    "build_virtual_session",
     "short_activity_carry_seconds",
     "classify_live_state",
     "compute_refresh_revision",

@@ -34,7 +34,7 @@
                 // Invalidate any pending detail request and clear the detail cache so a stale response does not
                 // backfill the cleared panel and the ticker does not project against a stale payload.
                 ++App.detailsRequestToken;
-                App.lastSessionDetailsData = null;
+                App.lastSessionDetailsViewModel = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
                 document.getElementById("timeline-details-list").innerHTML = "";
                 App.selectedSessionId = null;
@@ -68,7 +68,7 @@
             if (s.is_virtual_live === true) cls += " virtual-live";
             if (s.session_id === App.selectedSessionId) cls += " selected";
             // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
-            // the virtual → persisted_open transition (stable_live_key_hash stays the same when session_id changes).
+            // the virtual_pending / absorbed_pending / persisted_open transition (stable_live_key_hash stays the same when session_id changes).
             var stableKeyHash = s.stable_live_key_hash || "";
             // Unified live-span DOM attribute: when present, the ticker renders this row from the
             // single registered live clock (same clock as Overview / Recent / Details).
@@ -89,7 +89,7 @@
                 + '</div>'
                 + '</div>';
             // Continuity key MUST use App.liveContinuityKey() so the ticker can locate the seeded state; a
-            // "session-" + session_id key would break the virtual → persisted_open transition.
+            // "session-" + session_id key would break the virtual_pending / absorbed_pending / persisted_open transition.
             sessionContinuityKeys.push({ key: App.liveContinuityKey(s, "session"), sec: isNaN(sDurSec) ? 0 : sDurSec });
         }
         listEl.innerHTML = html;
@@ -114,7 +114,7 @@
 
         if (App.selectedSessionId !== null || App.selectedSessionLiveKey) {
             var found = null;
-            // First try to match by stable_live_key_hash (handles virtual → persisted_open transition).
+            // First try to match by stable_live_key_hash (handles virtual_pending / absorbed_pending / persisted_open transition).
             if (App.selectedSessionLiveKey) {
                 for (var sk = 0; sk < sessions.length; sk++) {
                     if (sessions[sk].stable_live_key_hash
@@ -166,7 +166,7 @@
                 // Selected session disappeared (e.g. re-grouped). Invalidate the pending detail request and clear
                 // the detail cache so a stale response does not backfill the cleared panel.
                 ++App.detailsRequestToken;
-                App.lastSessionDetailsData = null;
+                App.lastSessionDetailsViewModel = null;
                 App.selectedSessionId = null;
                 App.selectedSessionLiveKey = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
@@ -184,7 +184,7 @@
             App.resetCorrectionShellState();
         }
         // Update selected class without full re-render. Match by session_id AND stable_live_key_hash so the
-        // virtual → persisted_open transition keeps the visual selection.
+        // virtual_pending / absorbed_pending / persisted_open transition keeps the visual selection.
         var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
         var newSelected = null;
         for (var j0 = 0; j0 < sessions.length; j0++) {
@@ -255,9 +255,10 @@
         // live detail row from the same single clock registered by Overview / Recent / Timeline. The
         // structural cache below is only for re-render on page switch, never a live-seconds source.
         App.registerLiveClock(data);
-        // Cache the session-details payload so the 1s heartbeat ticker can increment the live-projected detail
-        // row's duration without a bridge round-trip. The ticker only updates DOM text, never re-renders the list.
-        App.lastSessionDetailsData = data;
+        // Structural cache only — used for re-render on page switch / edit-guard checks. The live
+        // seconds come from the registered live clock (data-display-span-id + App.liveSeconds);
+        // this cache MUST NOT be read as a live-seconds source by the ticker.
+        App.lastSessionDetailsViewModel = data;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         var activities = data.activities || [];
@@ -282,7 +283,7 @@
             if (a.is_in_progress) cls += " in-progress";
             if (a.is_virtual === true) cls += " virtual-live";
             var aid = a.activity_id || 0;
-            // Stable live key data attribute so the detail ticker locates the row across the virtual → persisted_open
+            // Stable live key data attribute so the detail ticker locates the row across the virtual_pending / absorbed_pending / persisted_open
             // transition (stable_live_key_hash stays the same when activity_id changes; ticker falls back to activity_id).
             var detailStableKey = a.stable_live_key_hash || "";
             // Unified live-span DOM attribute: when present, the ticker renders this row from the
@@ -1766,7 +1767,7 @@
         // date switch so a stale response from the previous date does not
         // backfill the new date's detail panel.
         ++App.detailsRequestToken;
-        App.lastSessionDetailsData = null;
+        App.lastSessionDetailsViewModel = null;
         // Close the correction shell on date switch so the shell context
         // does not carry over to a different day.
         App.resetCorrectionShellState();
@@ -1783,7 +1784,7 @@
         // Invalidate pending detail requests and clear the detail cache on
         // date switch.
         ++App.detailsRequestToken;
-        App.lastSessionDetailsData = null;
+        App.lastSessionDetailsViewModel = null;
         // Close the correction shell on date switch.
         App.resetCorrectionShellState();
         loadTimeline(App.timelineDate);
@@ -1797,7 +1798,7 @@
         // Invalidate pending detail requests and clear the detail cache on
         // date switch.
         ++App.detailsRequestToken;
-        App.lastSessionDetailsData = null;
+        App.lastSessionDetailsViewModel = null;
         // Close the correction shell on date switch.
         App.resetCorrectionShellState();
         loadTimeline(null);

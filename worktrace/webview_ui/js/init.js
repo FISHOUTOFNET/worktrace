@@ -255,7 +255,7 @@
                 App.timelineDate = e.target.value || null;
                 App.selectedSessionId = null;
                 App.detailsRequestToken++;
-                App.lastSessionDetailsData = null;
+                App.lastSessionDetailsViewModel = null;
                 App.resetCorrectionShellState();
                 App.loadTimeline(App.timelineDate);
             });

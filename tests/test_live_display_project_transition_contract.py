@@ -1,4 +1,28 @@
-"""Live display project-transition contract tests."""
+"""Activity Display Model contract tests for live-state classification,
+display-span projection, and pending project-transition behavior.
+
+These tests verify the NEW display model owner
+(``worktrace.services.activity_display_model_service``) — NOT the legacy
+virtual session / detail row builders. The legacy
+``build_virtual_session`` / ``build_virtual_detail_row`` helpers are no
+longer part of the public contract (they have been privatized to
+``_build_virtual_session`` / ``_build_virtual_detail_row`` and removed
+from ``live_display_api`` re-exports).
+
+Covered cases (spec 一.4 a–f):
+
+a. pending unpersisted snapshot with NO absorb anchor → ``virtual_pending``,
+   ``is_visible_in_recent/timeline/details`` all ``False``.
+b. pending unpersisted snapshot WITH a previous confirmed normal anchor →
+   ``absorbed_pending``, span projects onto the anchor DB row, but the DB
+   is NEVER written.
+c. persisted_open → ``persisted_open``, the real DB row is overlaid.
+d. pending project transition: ``display_project`` is the inherited
+   project; ``candidate_project`` is exposed separately.
+e. No raw ``window_title`` / ``file_path_hint`` / clipboard / note / SQL /
+   traceback leaks from any display-model payload.
+f. The legacy virtual session / detail builders are no longer a contract.
+"""
 
 from __future__ import annotations
 
@@ -8,17 +32,16 @@ from datetime import datetime, timedelta
 import pytest
 
 from worktrace.constants import STATUS_NORMAL, TIME_FORMAT, UNCATEGORIZED_PROJECT
-from worktrace.services import settings_service
-from worktrace.services.live_display_service import (
-    build_current_activity_summary,
-    build_live_projection,
-    build_virtual_detail_row,
-    build_virtual_session,
+from worktrace.services import activity_service, settings_service, timeline_service
+from worktrace.services.activity_display_model_service import (
+    apply_live_span_to_row,
+    build_activity_display_model,
+    classify_display_live_state,
+    get_live_span,
 )
-from worktrace.services import timeline_service
 
 
-# Snapshot helpers
+# Snapshot / DB helpers
 
 
 def _set_snapshot(snapshot: dict | None) -> None:
@@ -90,7 +113,7 @@ def _snapshot(
 
     ``window_title`` / ``file_path_hint`` are populated with sentinel
     secret values so display-safety assertions can verify they do NOT
-    leak into the projection.
+    leak into the display model.
     """
     if start_time is None:
         start = datetime.now() - timedelta(seconds=elapsed_seconds)
@@ -138,6 +161,7 @@ def _pending_snapshot(
     *,
     is_persisted: bool = False,
     persisted_activity_id: int = 0,
+    elapsed_seconds: int = 12,
 ) -> dict:
     """A snapshot in the 30-second pending window: display project is
     ProjectA (inherited), candidate is ProjectB (new resource)."""
@@ -156,13 +180,13 @@ def _pending_snapshot(
     transition = _transition_dict(
         pending=True,
         started_at="2026-06-18 09:00:36",
-        elapsed_seconds=12,
+        elapsed_seconds=elapsed_seconds,
         threshold_seconds=30,
         from_project_id=12,
         to_project_id=18,
     )
     return _snapshot(
-        elapsed_seconds=12,
+        elapsed_seconds=elapsed_seconds,
         is_persisted=is_persisted,
         persisted_activity_id=persisted_activity_id,
         display_project=display,
@@ -173,226 +197,370 @@ def _pending_snapshot(
     )
 
 
-# 1. live_state / project_transition_pending orthogonality
-
-
-def test_empty_snapshot_returns_none_live_state_and_not_pending():
-    """An empty snapshot yields ``live_state == "none"`` and
-    ``project_transition_pending == False``. The two fields are
-    independently observable."""
-    projection = build_live_projection(None)
-    assert projection["live_state"] == "none"
-    assert projection["project_transition_pending"] is False
-    assert projection["display_project"] is None
-    assert projection["candidate_project"] is None
-
-
-def test_pending_virtual_live_state_is_virtual_and_pending_true():
-    """Pending virtual: ``live_state == "virtual"`` AND
-    ``project_transition_pending == True``. The two axes coexist."""
-    snap = _pending_snapshot(is_persisted=False)
-    projection = build_live_projection(snap)
-    assert projection["live_state"] == "virtual"
-    assert projection["is_virtual_live"] is True
-    assert projection["is_in_progress"] is False
-    assert projection["project_transition_pending"] is True
-
-
-def test_pending_persisted_open_live_state_is_persisted_open_and_pending_true():
-    """Clipboard force-persist orthogonality: the DB row exists
-    (``live_state == "persisted_open"``) but the display project is
-    still pending (``project_transition_pending == True``). The two
-    concerns are intentionally independent."""
-    snap = _pending_snapshot(is_persisted=True, persisted_activity_id=42)
-    projection = build_live_projection(snap)
-    assert projection["live_state"] == "persisted_open"
-    assert projection["is_virtual_live"] is False
-    assert projection["is_in_progress"] is True
-    assert projection["persisted_activity_id"] == 42
-    # Pending is STILL True even though the row is persisted.
-    assert projection["project_transition_pending"] is True
-
-
-def test_confirmed_virtual_live_state_is_virtual_and_pending_false():
-    """Confirmed (post-30s) virtual: ``live_state == "virtual"`` AND
-    ``project_transition_pending == False``."""
-    display = _project_dict(name="ProjectB", project_id=18, description="Project B", source="confirmed")
-    snap = _snapshot(
-        elapsed_seconds=45,
-        display_project=display,
-        candidate_project=display,
-        project_transition=_transition_dict(pending=False),
-        project_transition_pending=False,
-        inferred_project_name="ProjectB",
-    )
-    projection = build_live_projection(snap)
-    assert projection["live_state"] == "virtual"
-    assert projection["project_transition_pending"] is False
-
-
-# 2. Pending virtual / persisted_open surface the INHERITED display project
-
-
-def test_pending_virtual_display_project_is_inherited_not_candidate():
-    """During pending, ``display_project`` is the inherited ProjectA,
-    NOT the candidate ProjectB. The candidate is exposed separately."""
-    snap = _pending_snapshot(is_persisted=False)
-    projection = build_live_projection(snap)
-    assert projection["display_project"]["name"] == "ProjectA"
-    assert projection["display_project"]["id"] == 12
-    assert projection["display_project"]["description"] == "Project A description"
-    assert projection["candidate_project"]["name"] == "ProjectB"
-    assert projection["candidate_project"]["id"] == 18
-    # The convenience label fields follow display_project, not candidate.
-    assert projection["project_name"] == "ProjectA"
-    assert projection["project_description"] == "Project A description"
-
-
-def test_pending_persisted_open_display_project_is_inherited_not_candidate():
-    """Clipboard force-persist: even though the DB row exists, the
-    display project is still the inherited ProjectA until the 30-second
-    pending window elapses. The candidate ProjectB is exposed
-    separately for the "确认中" indicator."""
-    snap = _pending_snapshot(is_persisted=True, persisted_activity_id=99)
-    projection = build_live_projection(snap)
-    assert projection["display_project"]["name"] == "ProjectA"
-    assert projection["candidate_project"]["name"] == "ProjectB"
-    assert projection["project_transition_pending"] is True
-    assert projection["persisted_activity_id"] == 99
-
-
-def test_current_activity_summary_pending_surfaces_inherited_display():
-    """``build_current_activity_summary`` (used by Overview header /
-    heartbeat) also surfaces the inherited display project during
-    pending, NOT the candidate."""
-    snap = _pending_snapshot(is_persisted=False)
-    summary = build_current_activity_summary(snap)
-    assert summary["display_project"]["name"] == "ProjectA"
-    assert summary["candidate_project"]["name"] == "ProjectB"
-    assert summary["project_transition_pending"] is True
-    assert summary["project_name"] == "ProjectA"
-    assert summary["project_description"] == "Project A description"
-
-
-# 3. Virtual session / detail description no longer hardcoded empty
-
-
 def _today_report_date() -> str:
     return timeline_service.get_default_report_date()
 
 
-def test_virtual_session_project_description_comes_from_display_project():
-    """virtual session's ``project_description`` must come
-    from ``display_project.description`` — NOT be hardcoded to ``""``."""
-    snap = _pending_snapshot(is_persisted=False)
+def _create_closed_anchor_activity(
+    *,
+    elapsed_seconds: int = 300,
+    project_name: str = "ProjectA",
+) -> tuple[int, str]:
+    """Create a real closed (confirmed) normal activity row to serve as
+    an absorption anchor. Returns ``(activity_id, start_time)``.
+
+    The row is closed (``end_time`` set), auto-sourced, normal, not
+    deleted / hidden — i.e. a valid absorb anchor per
+    ``_is_absorbable_anchor``.
+
+    The start_time is pinned to ``today 00:01:00`` (not ``datetime.now()
+    - 360s``) so the anchor is always on ``today``'s report date — this
+    avoids a flaky date-boundary failure when the test runs within 6
+    minutes of midnight (where ``now - 360s`` falls on yesterday and
+    ``get_activities_by_date(today)`` would miss the anchor).
+    """
     today = _today_report_date()
-    session = build_virtual_session(snap, report_date=today, today=today)
-    assert session is not None, "virtual session must be built for a pending virtual snapshot"
-    assert session["project_name"] == "ProjectA"
-    assert session["project_description"] == "Project A description"
+    anchor_start_dt = datetime.strptime(today + " 00:01:00", TIME_FORMAT)
+    start_time = anchor_start_dt.strftime(TIME_FORMAT)
+    end_time = (anchor_start_dt + timedelta(seconds=elapsed_seconds)).strftime(TIME_FORMAT)
+    aid = activity_service.create_activity(
+        "Code",
+        "code.exe",
+        "main.py - VS Code",
+        file_path_hint=None,
+        start_time=start_time,
+    )
+    activity_service.close_activity(aid, end_time)
+    activity_service.set_activity_duration(aid, elapsed_seconds)
+    # Assign the project so the anchor row carries ProjectA when the
+    # project already exists. The anchor is valid either way; this just
+    # makes the row more realistic.
+    try:
+        from worktrace.services import project_service
+
+        row = project_service.get_project_by_name(project_name)
+        if row:
+            activity_service.update_activity_project(aid, int(row.get("id") or 0))
+    except Exception:
+        pass
+    return aid, start_time
 
 
-def test_virtual_detail_row_project_description_comes_from_display_project():
-    """virtual detail row's ``project_description`` must
-    come from ``display_project.description`` — NOT be hardcoded to
-    ``""``."""
-    snap = _pending_snapshot(is_persisted=False)
+def _pending_start_time_today() -> str:
+    """Return a start_time on ``today`` that is guaranteed to be AFTER the
+    anchor's ``00:01:00`` start. Used by the absorbed_pending tests so the
+    pending snapshot's start_time is always on ``today`` and always after
+    the anchor (satisfying ``_is_absorbable_anchor``'s
+    ``anchor_start <= pending_start`` check)."""
     today = _today_report_date()
-    detail = build_virtual_detail_row(snap, report_date=today, today=today)
-    assert detail is not None, "virtual detail must be built for a pending virtual snapshot"
-    assert detail["project_name"] == "ProjectA"
-    assert detail["project_description"] == "Project A description"
+    return datetime.strptime(today + " 00:07:00", TIME_FORMAT).strftime(TIME_FORMAT)
 
 
-def test_virtual_session_description_empty_when_display_project_has_no_description():
-    """When the display project genuinely has no description (e.g.
-    uncategorized or suggested-project candidate), the virtual session
-    description is empty — but it is derived from the contract, not
-    hardcoded."""
-    display = _project_dict(
-        name=UNCATEGORIZED_PROJECT,
-        project_id=None,
-        description="",
-        source="uncategorized",
-        is_uncategorized=True,
-    )
-    snap = _snapshot(
-        elapsed_seconds=20,
-        display_project=display,
-        candidate_project=display,
-        project_transition=_transition_dict(pending=False),
-        project_transition_pending=False,
-        inferred_project_name=UNCATEGORIZED_PROJECT,
-    )
+# Fixtures
+
+
+@pytest.fixture(autouse=True)
+def _isolate_snapshot(temp_db):
+    """Ensure each test starts with a clean snapshot setting."""
+    settings_service.clear_settings_cache()
+    _set_snapshot(None)
+    yield
+    _set_snapshot(None)
+    settings_service.clear_settings_cache()
+
+
+# Case a: virtual_pending (no anchor)
+
+
+def test_virtual_pending_no_anchor_live_state_and_visibility():
+    """Case (a): a pending unpersisted snapshot with NO previous
+    confirmed normal anchor resolves to ``virtual_pending``. The span is
+    NOT visible in recent / timeline / details — only in the
+    current-activity area.
+    """
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    _set_snapshot(snap)
     today = _today_report_date()
-    session = build_virtual_session(snap, report_date=today, today=today)
-    assert session is not None
-    assert session["project_description"] == ""
 
-
-# 4. Candidate project NEVER preempts display project
-
-
-def test_candidate_does_not_preempt_display_in_projection():
-    """Even when the candidate is a concrete project and the display is
-    uncategorized, ``candidate_project`` MUST NOT overwrite
-    ``display_project`` in the projection. They are separate fields."""
-    display = _project_dict(
-        name=UNCATEGORIZED_PROJECT,
-        project_id=None,
-        description="",
-        source="uncategorized",
-        is_uncategorized=True,
+    state = classify_display_live_state(snap, today, today)
+    assert state == "virtual_pending", (
+        "pending unpersisted snapshot with no anchor must classify as virtual_pending"
     )
-    candidate = _project_dict(
-        name="ProjectB",
-        project_id=18,
-        description="Project B",
-        source="folder_rule",
+
+    model = build_activity_display_model(report_date=today, today=today)
+    assert model["ok"] is True
+    assert model["live_clock"]["live_state"] == "virtual_pending"
+
+    span = get_live_span(model)
+    # virtual_pending produces NO display span (only current-activity area).
+    assert span is None, (
+        "virtual_pending must NOT produce a display span (no recent / timeline / "
+        "details projection)"
     )
-    snap = _snapshot(
-        elapsed_seconds=10,
-        display_project=display,
-        candidate_project=candidate,
-        project_transition=_transition_dict(
-            pending=True,
-            from_project_id=None,
-            to_project_id=18,
-        ),
-        project_transition_pending=True,
-        inferred_project_name=UNCATEGORIZED_PROJECT,
+    # The current-activity area still surfaces the live clock so the user
+    # sees what they are currently doing.
+    current = model["current_activity"]
+    assert current["live_state"] == "virtual_pending"
+    assert current["is_virtual_live"] is True
+    assert current["is_in_progress"] is False
+
+
+def test_virtual_pending_no_anchor_no_db_write():
+    """Case (a) supplement: virtual_pending MUST NOT write the DB. No
+    activity row is created or updated for a <30s unpersisted pending
+    resource. The snapshot setting alone drives the display model."""
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    _set_snapshot(snap)
+    today = _today_report_date()
+
+    before_count = len(activity_service.get_activities_by_date(today))
+    build_activity_display_model(report_date=today, today=today)
+    after_count = len(activity_service.get_activities_by_date(today))
+    assert after_count == before_count, (
+        "virtual_pending must not create or write any DB activity row"
     )
-    projection = build_live_projection(snap)
-    assert projection["display_project"]["name"] == UNCATEGORIZED_PROJECT
+
+
+# Case b: absorbed_pending (with anchor)
+
+
+def test_absorbed_pending_with_anchor_live_state_and_span():
+    """Case (b): a pending unpersisted snapshot WITH a previous confirmed
+    normal anchor resolves to ``absorbed_pending``. A display span is
+    produced and projects onto the anchor DB row (display-only)."""
+    anchor_id, _ = _create_closed_anchor_activity(
+        elapsed_seconds=300, project_name="ProjectA"
+    )
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    snap["start_time"] = _pending_start_time_today()
+    _set_snapshot(snap)
+    today = _today_report_date()
+
+    state = classify_display_live_state(snap, today, today)
+    assert state == "absorbed_pending", (
+        "pending unpersisted snapshot with a confirmed normal anchor must classify "
+        "as absorbed_pending"
+    )
+
+    model = build_activity_display_model(report_date=today, today=today)
+    span = get_live_span(model)
+    assert span is not None, (
+        "absorbed_pending must produce a display span that projects onto the anchor"
+    )
+    assert span["live_state"] == "absorbed_pending"
+    assert span["anchor_activity_id"] == anchor_id, (
+        "absorbed_pending span must anchor onto the previous confirmed normal activity"
+    )
+    assert span["is_visible_in_recent"] is True
+    assert span["is_visible_in_timeline"] is True
+    assert span["is_visible_in_details"] is True
+    assert span["is_absorbed_pending"] is True
+    # Absorbed_pending is NOT virtual_live and NOT in_progress in the
+    # legacy sense — it is a display-only projection.
+    assert span["is_virtual"] is False
+    assert span["is_persisted"] is False
+
+
+def test_absorbed_pending_apply_live_span_to_row_projects_onto_anchor():
+    """Case (b): ``apply_live_span_to_row`` overlays the absorbed_pending
+    live clock onto the anchor DB row. The anchor row's raw duration is
+    preserved (``raw_duration_seconds``) and the projected duration is
+    raw + pending_elapsed_at_sample."""
+    anchor_id, _ = _create_closed_anchor_activity(
+        elapsed_seconds=300, project_name="ProjectA"
+    )
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    snap["start_time"] = _pending_start_time_today()
+    _set_snapshot(snap)
+    today = _today_report_date()
+
+    model = build_activity_display_model(report_date=today, today=today)
+    span = get_live_span(model)
+
+    anchor_row = activity_service.get_activity(anchor_id)
+    raw_duration = int(anchor_row.get("duration_seconds") or 0)
+
+    overlaid = apply_live_span_to_row(dict(anchor_row), span)
+    assert overlaid["live_state"] == "absorbed_pending"
+    assert overlaid["is_live_projected"] is True
+    assert overlaid["is_absorbed_pending"] is True
+    assert overlaid["edit_disabled"] is True
+    # The raw duration is preserved.
+    assert overlaid["raw_duration_seconds"] == raw_duration
+    # The projected duration is raw + pending_at_sample (>= raw).
+    assert int(overlaid["duration_seconds"]) >= raw_duration
+
+
+def test_absorbed_pending_does_not_write_db():
+    """Case (b) invariant: absorbed_pending projection is display-only.
+    Building the model and applying the span MUST NOT call any DB write
+    path (``increment_activity_duration`` / ``set_activity_duration`` /
+    ``persist_open_activity_if_ready``)."""
+    anchor_id, _ = _create_closed_anchor_activity(
+        elapsed_seconds=300, project_name="ProjectA"
+    )
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    snap["start_time"] = _pending_start_time_today()
+    _set_snapshot(snap)
+    today = _today_report_date()
+
+    write_paths = [
+        "worktrace.services.activity_display_model_service.activity_service.increment_activity_duration",
+        "worktrace.services.activity_display_model_service.activity_service.set_activity_duration",
+    ]
+    try:
+        persist_path = (
+            "worktrace.services.activity_display_model_service.activity_service"
+            ".persist_open_activity_if_ready"
+        )
+        write_paths.append(persist_path)
+    except AttributeError:
+        pass
+
+    with pytest.MonkeyPatch().context() as mp:
+        called = {"count": 0}
+
+        def _fail(*args, **kwargs):
+            called["count"] += 1
+            raise AssertionError(
+                "absorbed_pending must not invoke a DB write path; "
+                "got call with args=%r kwargs=%r" % (args, kwargs)
+            )
+
+        for path in write_paths:
+            try:
+                mp.setattr(path, _fail)
+            except (AttributeError, TypeError):
+                pass
+        model = build_activity_display_model(report_date=today, today=today)
+        span = get_live_span(model)
+        anchor_row = activity_service.get_activity(anchor_id)
+        apply_live_span_to_row(dict(anchor_row), span)
+        assert called["count"] == 0, (
+            "absorbed_pending must not call any DB write path"
+        )
+
+    # The anchor row's stored DB duration is unchanged after projection.
+    post_db_row = activity_service.get_activity(anchor_id)
+    assert int(post_db_row["duration_seconds"]) == int(
+        anchor_row["duration_seconds"]
+    ), "absorbed_pending projection must not mutate the anchor DB row's duration"
+
+
+# Case c: persisted_open
+
+
+def test_persisted_open_live_state_and_overlay():
+    """Case (c): a persisted_open snapshot (real open DB row) classifies
+    as ``persisted_open``. The span overlays the real DB row's project
+    fields and live clock."""
+    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
+    snap = _pending_snapshot(
+        is_persisted=True, persisted_activity_id=aid, elapsed_seconds=60
+    )
+    # Override start_time to match the real DB row.
+    snap["start_time"] = start_time
+    _set_snapshot(snap)
+    today = _today_report_date()
+
+    state = classify_display_live_state(snap, today, today)
+    assert state == "persisted_open"
+
+    model = build_activity_display_model(report_date=today, today=today)
+    span = get_live_span(model)
+    assert span is not None
+    assert span["live_state"] == "persisted_open"
+    assert span["anchor_activity_id"] == aid
+    assert span["is_visible_in_recent"] is True
+    assert span["is_visible_in_timeline"] is True
+    assert span["is_visible_in_details"] is True
+    assert span["is_virtual"] is False
+    assert span["is_persisted"] is True
+
+    # apply_live_span_to_row overlays the real DB row.
+    db_row = activity_service.get_activity(aid)
+    overlaid = apply_live_span_to_row(dict(db_row), span)
+    assert overlaid["live_state"] == "persisted_open"
+    assert overlaid["is_live_projected"] is True
+    assert overlaid["is_in_progress"] is True
+    # Project fields come from the snapshot's display_project block.
+    assert overlaid["project_name"] == "ProjectA"
+    assert overlaid["display_project"]["name"] == "ProjectA"
+    assert overlaid["candidate_project"]["name"] == "ProjectB"
+    assert overlaid["project_transition_pending"] is True
+
+
+def _create_real_open_activity(
+    *,
+    app_name: str = "Code",
+    process_name: str = "code.exe",
+    window_title: str = "main.py - VS Code",
+    file_path_hint: str | None = None,
+    elapsed_seconds: int = 60,
+) -> tuple[int, str]:
+    """Create a real open (``end_time IS NULL``) activity row and return
+    ``(activity_id, start_time)``."""
+    start = datetime.now() - timedelta(seconds=elapsed_seconds)
+    start_time = start.strftime(TIME_FORMAT)
+    aid = activity_service.create_activity(
+        app_name,
+        process_name,
+        window_title,
+        file_path_hint=file_path_hint,
+        start_time=start_time,
+    )
+    return aid, start_time
+
+
+# Case d: pending project transition display vs candidate
+
+
+def test_pending_transition_display_project_is_inherited_not_candidate():
+    """Case (d): during a pending project transition the display model
+    surfaces the INHERITED display project (ProjectA), NOT the candidate
+    (ProjectB). The candidate is exposed as a separate field."""
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    _set_snapshot(snap)
+    today = _today_report_date()
+
+    model = build_activity_display_model(report_date=today, today=today)
+    current = model["current_activity"]
+    assert current["display_project"]["name"] == "ProjectA"
+    assert current["candidate_project"]["name"] == "ProjectB"
+    assert current["project_transition_pending"] is True
+    # Convenience label fields follow display_project, not candidate.
+    assert current["project_name"] == "ProjectA"
+
+    # The live_projection alias also carries the same separation.
+    projection = model["live_projection"]
+    assert projection["display_project"]["name"] == "ProjectA"
     assert projection["candidate_project"]["name"] == "ProjectB"
-    assert projection["project_name"] == UNCATEGORIZED_PROJECT
-    assert projection["project_transition_pending"] is True
+    assert projection["project_transition"]["pending"] is True
+    assert projection["project_transition"]["from_project_id"] == 12
+    assert projection["project_transition"]["to_project_id"] == 18
 
 
-def test_candidate_does_not_preempt_display_in_virtual_session():
-    """The virtual session's ``project_name`` follows ``display_project``,
-    not ``candidate_project``."""
-    snap = _pending_snapshot(is_persisted=False)
+def test_pending_persisted_open_display_project_is_inherited_not_candidate():
+    """Case (d) supplement: even when the DB row exists (persisted_open),
+    during the pending window the display project is still the inherited
+    ProjectA. The candidate ProjectB is exposed separately."""
+    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
+    snap = _pending_snapshot(
+        is_persisted=True, persisted_activity_id=aid, elapsed_seconds=60
+    )
+    snap["start_time"] = start_time
+    _set_snapshot(snap)
     today = _today_report_date()
-    session = build_virtual_session(snap, report_date=today, today=today)
-    assert session is not None
-    assert session["project_name"] == "ProjectA"
-    # Candidate ProjectB is NOT the session's project.
-    assert session["project_name"] != "ProjectB"
+
+    model = build_activity_display_model(report_date=today, today=today)
+    current = model["current_activity"]
+    assert current["display_project"]["name"] == "ProjectA"
+    assert current["candidate_project"]["name"] == "ProjectB"
+    assert current["project_transition_pending"] is True
+    assert current["persisted_activity_id"] == aid
 
 
-def test_candidate_does_not_preempt_display_in_virtual_detail():
-    """The virtual detail row's ``project_name`` follows
-    ``display_project``, not ``candidate_project``."""
-    snap = _pending_snapshot(is_persisted=False)
-    today = _today_report_date()
-    detail = build_virtual_detail_row(snap, report_date=today, today=today)
-    assert detail is not None
-    assert detail["project_name"] == "ProjectA"
-    assert detail["project_name"] != "ProjectB"
-
-
-# 5. Display-safe: no raw sensitive fields leak
+# Case e: no sensitive field leaks
 
 
 SENSITIVE_KEYS = {
@@ -418,8 +586,6 @@ def _assert_no_sensitive_keys(payload: dict, label: str) -> None:
 
 
 def _assert_no_sensitive_values(payload: dict, label: str) -> None:
-    """Recursively check that no sensitive sentinel values appear
-    anywhere in the payload."""
     for value in payload.values():
         if isinstance(value, str):
             for marker in SENSITIVE_VALUE_MARKERS:
@@ -436,141 +602,140 @@ def _assert_no_sensitive_values(payload: dict, label: str) -> None:
                     _assert_no_sensitive_values(item, label)
 
 
-def test_live_projection_does_not_leak_sensitive_fields():
-    """Section 二.4 / 三: ``build_live_projection`` MUST NOT leak raw
-    ``window_title`` / ``file_path_hint`` / clipboard / note / SQL /
-    traceback. Only display-safe fields are surfaced."""
-    snap = _pending_snapshot(is_persisted=False)
-    projection = build_live_projection(snap)
-    _assert_no_sensitive_keys(projection, "live_projection")
-    _assert_no_sensitive_values(projection, "live_projection")
-
-
-def test_current_activity_summary_does_not_leak_sensitive_fields():
-    snap = _pending_snapshot(is_persisted=False)
-    summary = build_current_activity_summary(snap)
-    _assert_no_sensitive_keys(summary, "current_activity_summary")
-    _assert_no_sensitive_values(summary, "current_activity_summary")
-
-
-def test_virtual_session_does_not_leak_sensitive_fields():
-    snap = _pending_snapshot(is_persisted=False)
+def test_display_model_does_not_leak_sensitive_fields_virtual_pending():
+    """Case (e): the display model for a virtual_pending snapshot must
+    not leak raw window_title / file_path_hint / clipboard / note / SQL /
+    traceback."""
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    _set_snapshot(snap)
     today = _today_report_date()
-    session = build_virtual_session(snap, report_date=today, today=today)
-    assert session is not None
-    _assert_no_sensitive_keys(session, "virtual_session")
-    _assert_no_sensitive_values(session, "virtual_session")
+    model = build_activity_display_model(report_date=today, today=today)
+    _assert_no_sensitive_keys(model, "activity_display_model")
+    _assert_no_sensitive_values(model, "activity_display_model")
+    serialized = json.dumps(model)
+    for marker in SENSITIVE_VALUE_MARKERS:
+        assert marker not in serialized, (
+            f"activity_display_model serialized payload leaked marker: {marker}"
+        )
 
 
-def test_virtual_detail_does_not_leak_sensitive_fields():
-    snap = _pending_snapshot(is_persisted=False)
+def test_display_model_does_not_leak_sensitive_fields_absorbed_pending():
+    """Case (e) supplement: absorbed_pending projection also must not
+    leak sensitive fields."""
+    _create_closed_anchor_activity(elapsed_seconds=300, project_name="ProjectA")
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    snap["start_time"] = _pending_start_time_today()
+    _set_snapshot(snap)
     today = _today_report_date()
-    detail = build_virtual_detail_row(snap, report_date=today, today=today)
-    assert detail is not None
-    _assert_no_sensitive_keys(detail, "virtual_detail")
-    _assert_no_sensitive_values(detail, "virtual_detail")
+    model = build_activity_display_model(report_date=today, today=today)
+    _assert_no_sensitive_keys(model, "activity_display_model")
+    _assert_no_sensitive_values(model, "activity_display_model")
 
 
-# 6. live_projection carries all required contract fields
-
-
-REQUIRED_PROJECTION_FIELDS = {
-    "resource_name",
-    "app_name",
-    "display_project",
-    "candidate_project",
-    "project_transition",
-    "project_transition_pending",
-    "duration_seconds",
-    "live_started_at_epoch_ms",
-    "carry_seconds",
-    "stable_live_key",
-    "stable_live_key_hash",
-    "live_state",
-    "is_virtual_live",
-    "is_in_progress",
-    "persisted_activity_id",
-    "activity_id",
-    "source",
-    "edit_disabled",
-    "disable_reason",
-    "project_name",
-    "project_description",
-    "is_uncategorized",
-    "is_classified",
-    "status",
-    "start_time",
-}
-
-
-def test_live_projection_carries_all_required_contract_fields():
-    """``live_projection`` must carry every field listed in
-    the contract so consumers do not need to fall back to removed
-    fields."""
-    snap = _pending_snapshot(is_persisted=False)
-    projection = build_live_projection(snap)
-    missing = REQUIRED_PROJECTION_FIELDS - set(projection.keys())
-    assert not missing, f"live_projection missing required fields: {missing}"
-
-
-def test_live_projection_resource_name_reflects_new_resource():
-    """the projection's ``resource_name`` reflects the NEW
-    resource immediately (resource identity is immediate), even while
-    the project ownership is still pending."""
-    snap = _pending_snapshot(is_persisted=False)
-    projection = build_live_projection(snap)
-    # The pending snapshot uses resource_display_name="main.py" by default.
-    assert projection["resource_name"] == "main.py"
-    assert projection["app_name"] == "Code"
-
-
-def test_live_projection_project_transition_block_is_surfacable():
-    """The full ``project_transition`` block (pending / started_at /
-    elapsed_seconds / threshold_seconds / from_project_id /
-    to_project_id) is surfaced so the frontend can render a "确认中"
-    indicator with a real progress bar."""
-    snap = _pending_snapshot(is_persisted=False)
-    projection = build_live_projection(snap)
-    transition = projection["project_transition"]
-    assert transition["pending"] is True
-    assert transition["started_at"] == "2026-06-18 09:00:36"
-    assert transition["threshold_seconds"] == 30
-    assert transition["from_project_id"] == 12
-    assert transition["to_project_id"] == 18
-
-
-# 7. Idle / paused / excluded / error do NOT carry a normal display project
-
-
-@pytest.mark.parametrize(
-    "status",
-    ["idle", "paused", "excluded", "error"],
-)
-def test_system_status_snapshots_have_no_pending_display_project(status):
-    """idle / paused / excluded / error do not participate
-    in normal project pending. Their ``display_project`` is uncategorized
-    and ``project_transition_pending`` is False (no normal project
-    inheritance)."""
-    snap = _snapshot(
-        elapsed_seconds=10,
-        status=status,
-        display_project=_project_dict(
-            name=UNCATEGORIZED_PROJECT,
-            source="uncategorized",
-            is_uncategorized=True,
-        ),
-        candidate_project=_project_dict(
-            name=UNCATEGORIZED_PROJECT,
-            source="uncategorized",
-            is_uncategorized=True,
-        ),
-        project_transition=_transition_dict(pending=False),
-        project_transition_pending=False,
-        inferred_project_name=UNCATEGORIZED_PROJECT,
+def test_display_model_does_not_leak_sensitive_fields_persisted_open():
+    """Case (e) supplement: persisted_open projection also must not leak
+    sensitive fields."""
+    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
+    snap = _pending_snapshot(
+        is_persisted=True, persisted_activity_id=aid, elapsed_seconds=60
     )
-    projection = build_live_projection(snap)
-    assert projection["live_state"] == status
-    assert projection["project_transition_pending"] is False
-    # System status must NOT contribute to normal project live duration.
-    assert projection["is_in_progress"] is False
-    assert projection["is_virtual_live"] is False
+    snap["start_time"] = start_time
+    _set_snapshot(snap)
+    today = _today_report_date()
+    model = build_activity_display_model(report_date=today, today=today)
+    _assert_no_sensitive_keys(model, "activity_display_model")
+    _assert_no_sensitive_values(model, "activity_display_model")
+
+
+# Case f: legacy virtual session/detail builders are no longer a contract
+
+
+def test_legacy_virtual_builders_not_in_live_display_api_exports():
+    """Case (f): ``build_virtual_session`` / ``build_virtual_detail_row``
+    must NOT be re-exported by ``worktrace.api.live_display_api``. They
+    are no longer part of the bridge-facing public contract."""
+    from worktrace.api import live_display_api
+
+    api_all = set(getattr(live_display_api, "__all__", []))
+    assert "build_virtual_session" not in api_all, (
+        "live_display_api must not re-export build_virtual_session"
+    )
+    assert "build_virtual_detail_row" not in api_all, (
+        "live_display_api must not re-export build_virtual_detail_row"
+    )
+    assert not hasattr(live_display_api, "build_virtual_session"), (
+        "live_display_api must not expose build_virtual_session as an attribute"
+    )
+    assert not hasattr(live_display_api, "build_virtual_detail_row"), (
+        "live_display_api must not expose build_virtual_detail_row as an attribute"
+    )
+
+
+def test_legacy_virtual_builders_not_in_live_display_service_all():
+    """Case (f): the public ``__all__`` of
+    ``worktrace.services.live_display_service`` must NOT include the
+    legacy virtual session / detail builders (they are now private
+    ``_build_virtual_session`` / ``_build_virtual_detail_row``)."""
+    from worktrace.services import live_display_service
+
+    service_all = set(getattr(live_display_service, "__all__", []))
+    assert "build_virtual_session" not in service_all
+    assert "build_virtual_detail_row" not in service_all
+    # The private renamed helpers exist (kept for the legacy
+    # build_live_row_contract internal path) but are NOT public.
+    assert hasattr(live_display_service, "_build_virtual_session")
+    assert hasattr(live_display_service, "_build_virtual_detail_row")
+
+
+# Supplementary: model shape / live_clock contract
+
+
+def test_display_model_carries_unified_live_clock_and_span_id():
+    """The display model always carries a ``live_clock`` block with a
+    non-empty ``display_span_id`` when the snapshot is live-eligible, so
+    the frontend can register the unified clock from any payload."""
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    _set_snapshot(snap)
+    today = _today_report_date()
+    model = build_activity_display_model(report_date=today, today=today)
+    assert "live_clock" in model
+    clock = model["live_clock"]
+    assert clock["display_span_id"], (
+        "live_clock.display_span_id must be non-empty for a live snapshot"
+    )
+    assert clock["stable_live_key_hash"]
+    assert clock["live_state"] in (
+        "virtual_pending",
+        "absorbed_pending",
+        "persisted_open",
+    )
+    assert "live_started_at_epoch_ms" in clock
+    assert "carry_seconds" in clock
+    assert "duration_seconds_at_sample" in clock
+
+
+def test_empty_snapshot_returns_none_live_state():
+    """An empty snapshot yields ``live_state == "none"`` and no display
+    span. The model still carries an empty live_clock block."""
+    _set_snapshot(None)
+    today = _today_report_date()
+    model = build_activity_display_model(report_date=today, today=today)
+    assert model["ok"] is True
+    assert model["live_clock"]["live_state"] == "none"
+    assert get_live_span(model) is None
+    assert model["current_activity"]["active"] is False
+
+
+def test_historical_date_suppresses_live_projection():
+    """A historical date (report_date != today) suppresses live
+    projection. A virtual snapshot on a past date collapses to
+    ``live_state == "none"`` and produces no display span."""
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    _set_snapshot(snap)
+    today = _today_report_date()
+    # Build a date string that is definitely not today.
+    historical = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    model = build_activity_display_model(report_date=historical, today=today)
+    assert model["is_today"] is False
+    assert model["live_clock"]["live_state"] == "none"
+    assert get_live_span(model) is None

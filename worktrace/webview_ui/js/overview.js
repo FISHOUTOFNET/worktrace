@@ -36,7 +36,8 @@
     function showRecent(recentResult) {
         // Register the unified live clock (shares the same sample as the Overview bundle).
         App.registerLiveClock(recentResult);
-        App.lastRecentSnapshot = recentResult;
+        // Structural cache only — used for re-render on page switch, never a live-seconds source.
+        App.lastRecentData = recentResult;
         var listEl = document.getElementById("recent-list");
         if (!recentResult || !recentResult.activities || recentResult.activities.length === 0) {
             listEl.innerHTML = '<div class="recent-empty">暂无活动</div>';
