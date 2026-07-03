@@ -233,7 +233,7 @@ def test_low_frequency_reconciliation_exists():
 
     Overview refresh uses the unified ``refreshOverview`` call which
     pulls Overview KPIs + current activity + recent activities +
-    live_projection from a single backend ViewModel sample."""
+    live_clock from a single backend ViewModel sample."""
     source = read_js("init.js")
     assert "function fullReconcileCollectionViews" in source, (
         "init.js must define fullReconcileCollectionViews for low-frequency "
@@ -593,29 +593,36 @@ def test_statistics_page_has_closed_only_hint_css():
 
 
 
-def test_ticker_live_eligible_checks_live_state():
-    """``tickerLiveEligible`` now reads from the unified live-clock
-    registry via ``getActiveLiveClock()`` and returns
-    ``clock.is_project_duration_live === true``. The old ``live_state``
-    enum check (``"virtual"`` / ``"persisted_open"``) has been replaced
-    by the unified ``is_project_duration_live`` flag on the registered
-    clock — a single boolean distinguishes live-eligible states from
-    non-eligible ones (idle / paused / excluded / error /
-    virtual_pending)."""
+def test_live_delta_seconds_replaces_removed_ticker_helpers():
+    """``liveDeltaSeconds(clock)`` is the unified per-tick delta shared
+    by every DOM row. It computes
+    ``max(0, liveSeconds(clock) - duration_seconds_at_sample)`` so a
+    stale clock or wall-clock drift never makes the UI count backwards.
+    The old ``tickerLiveEligible`` / ``tickerDeltaSeconds`` helpers have
+    been removed; ``applyLocalTicker`` calls ``liveDeltaSeconds(clock)``
+    directly and only when ``clock.is_project_duration_live === true``."""
     source = read_js("core.js")
-    assert "function tickerLiveEligible" in source, (
-        "core.js must define function tickerLiveEligible for unified eligibility"
+    assert "function liveDeltaSeconds" in source, (
+        "core.js must define function liveDeltaSeconds (replaces the removed "
+        "tickerDeltaSeconds / tickerLiveEligible helpers)"
     )
-    assert "App.tickerLiveEligible" in source, (
-        "core.js must expose App.tickerLiveEligible"
+    assert "App.liveDeltaSeconds" in source, (
+        "core.js must expose App.liveDeltaSeconds"
     )
-    body = func_body(source, "tickerLiveEligible")
-    assert "getActiveLiveClock" in body, (
-        "tickerLiveEligible must read from the unified registry via "
-        "getActiveLiveClock()"
+    body = func_body(source, "liveDeltaSeconds")
+    assert "liveSeconds" in body, (
+        "liveDeltaSeconds must delegate to liveSeconds(clock) for the live span"
     )
-    assert "is_project_duration_live" in body, (
-        "tickerLiveEligible must return clock.is_project_duration_live === true"
+    assert "duration_seconds_at_sample" in body, (
+        "liveDeltaSeconds must subtract duration_seconds_at_sample (the backend "
+        "sample baseline) from liveSeconds(clock)"
+    )
+    # The removed helpers must NOT be re-introduced.
+    assert "function tickerLiveEligible" not in source, (
+        "core.js must not re-introduce the removed tickerLiveEligible helper"
+    )
+    assert "function tickerDeltaSeconds" not in source, (
+        "core.js must not re-introduce the removed tickerDeltaSeconds helper"
     )
 
 
@@ -756,14 +763,16 @@ def test_render_session_details_skips_rerender_when_editing():
 
 
 
-def test_ticker_uses_unified_live_clock_scheme_a():
+def test_ticker_renders_per_row_base_plus_live_delta():
     """the unified live clock formula
     (``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
-    lives in ``liveSeconds(clock)``. ``tickerDeltaSeconds`` is now a
-    compatibility wrapper that reads the active clock from the registry
-    via ``getActiveLiveClock()`` and delegates to ``liveSeconds(clock)``
-    rather than reading ``live_started_at_epoch_ms`` /
-    ``carry_seconds`` directly from the payload."""
+    lives in ``liveSeconds(clock)``. ``liveDeltaSeconds(clock)`` is the
+    shared per-tick delta (``max(0, liveSeconds(clock) - duration_seconds_at_sample)``).
+    Each live DOM node carries its OWN ``data-live-base-seconds`` (the
+    row's sample display duration); the ticker renders
+    ``nodeBaseSeconds + liveDelta`` so every row advances in lockstep
+    without reading page-level caches. The removed ``tickerDeltaSeconds``
+    helper is no longer referenced."""
     source = read_js("core.js")
     live_seconds_body = func_body(source, "liveSeconds")
     assert "live_started_at_epoch_ms" in live_seconds_body, (
@@ -772,12 +781,18 @@ def test_ticker_uses_unified_live_clock_scheme_a():
     assert "carry_seconds" in live_seconds_body, (
         "liveSeconds must read carry_seconds from the clock"
     )
-    body = func_body(source, "tickerDeltaSeconds")
-    assert "getActiveLiveClock" in body, (
-        "tickerDeltaSeconds must read the active clock via getActiveLiveClock()"
+    # applyLocalTicker must read each row's base seconds from the DOM.
+    ticker_body = func_body(source, "applyLocalTicker")
+    assert "data-live-base-seconds" in ticker_body, (
+        "applyLocalTicker must read each row's base seconds from the "
+        "data-live-base-seconds DOM attribute (per-row base, not page-level cache)"
     )
-    assert "liveSeconds" in body, (
-        "tickerDeltaSeconds must delegate to liveSeconds(clock)"
+    assert "liveDeltaSeconds" in ticker_body, (
+        "applyLocalTicker must compute the shared delta via liveDeltaSeconds(clock)"
+    )
+    # The removed helper must NOT be re-introduced.
+    assert "function tickerDeltaSeconds" not in source, (
+        "core.js must not re-introduce the removed tickerDeltaSeconds helper"
     )
 
 
@@ -830,7 +845,7 @@ def test_recent_has_request_token():
     """The Overview refresh must use a request token so stale
     responses cannot overwrite newer recent-activity renders. The
     ``recentRequestToken`` is now driven by the unified ``refreshOverview``
-    entry (which fuses Overview KPIs + recent activities + live_projection
+    entry (which fuses Overview KPIs + recent activities + live_clock
     from one backend ViewModel sample)."""
     source = read_js("init.js")
     assert "App.recentRequestToken" in source, (
@@ -1080,4 +1095,171 @@ def test_live_continuity_key_is_single_source_of_truth():
     body = func_body(src, "liveContinuityKey")
     assert "stable_live_key_hash" in body, (
         "liveContinuityKey must use stable_live_key_hash for continuity"
+    )
+
+
+# Frontend contract tests for the unified live duration math (spec §IV):
+# per-row base + unified delta, registry clear, monotonic key consistency,
+# no legacy ``live_projection`` / ``live_display`` propagation.
+
+
+def test_register_live_clock_clears_registry_on_no_clock():
+    """``registerLiveClock`` must clear the registry AND the active
+    span id when the payload has NO live clock, NO display_span_id, or
+    the clock's ``is_live`` is not true. This prevents a stale clock
+    from continuing to tick after the activity ends / collector pauses
+    / user switches pages.
+
+    Spec §IV.1.3: registry must be cleared when payload is null, clock
+    is null, spanId is empty, or ``is_live`` is not true.
+    """
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "registerLiveClock")
+    # Must explicitly clear on null payload.
+    assert "clearLiveClockRegistry" in body, (
+        "registerLiveClock must call clearLiveClockRegistry on null/empty "
+        "payload so the registry does not retain a stale clock"
+    )
+    # The clearLiveClockRegistry helper must reset all three: registry,
+    # display model, and active span id.
+    clear_body = func_body(src, "clearLiveClockRegistry")
+    assert "liveClockBySpanId" in clear_body, (
+        "clearLiveClockRegistry must reset App.liveClockBySpanId"
+    )
+    assert "activeDisplaySpanId" in clear_body, (
+        "clearLiveClockRegistry must reset App.activeDisplaySpanId so a stale "
+        "clock cannot win after the activity ends"
+    )
+    # registerLiveClock must check is_live before registering.
+    assert "is_live" in body, (
+        "registerLiveClock must check clock.is_live before registering"
+    )
+
+
+def test_get_active_live_clock_uses_explicit_span_id():
+    """``getActiveLiveClock`` must read from the explicit
+    ``App.activeDisplaySpanId`` instead of relying on object insertion
+    order. Spec §IV.1.3: ``getActiveLiveClock()`` should not depend on
+    insertion order as "last registered wins"."""
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "getActiveLiveClock")
+    assert "activeDisplaySpanId" in body, (
+        "getActiveLiveClock must read from App.activeDisplaySpanId (explicit "
+        "active span) rather than relying on object insertion order"
+    )
+    # Must NOT iterate the registry to pick the last key.
+    assert "Object.keys" not in body, (
+        "getActiveLiveClock must not iterate registry keys to pick the last "
+        "inserted clock"
+    )
+
+
+def test_ticker_reads_dom_continuity_key_for_monotonic_guard():
+    """The ticker must read the continuity key from the DOM's
+    ``data-live-continuity-key`` attribute so the render seed and the
+    ticker share the SAME monotonic guard key. Spec §IV.4: render seed
+    and ticker must use the same continuity key; mismatched keys (e.g.
+    ``recent:live:<hash>`` for render vs ``span:<spanId>`` for ticker)
+    break the monotonic guard."""
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "applyLocalTicker")
+    assert "data-live-continuity-key" in body, (
+        "applyLocalTicker must read data-live-continuity-key from each live "
+        "DOM node so the ticker uses the SAME key the renderer seeded"
+    )
+
+
+def test_apply_local_ticker_renders_node_base_plus_delta_for_dom_rows():
+    """Spec §IV.1.1: the unified live-span DOM walk must render
+    ``nodeBaseSeconds + liveDelta`` for each row, NOT
+    ``liveSeconds(clock)`` directly. ``liveSeconds(clock)`` may only be
+    used for the current-activity area (whose base IS the live span
+    duration). This is the regression guard against the old contract
+    that overwrote every ``[data-display-span-id]`` row with
+    ``liveSeconds(clock)``."""
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "applyLocalTicker")
+    # Must read the per-node base from the DOM.
+    assert "data-live-base-seconds" in body, (
+        "applyLocalTicker must read data-live-base-seconds from each live "
+        "DOM node (per-row base, not the live clock's duration)"
+    )
+    # Must compute the unified delta via liveDeltaSeconds.
+    assert "liveDeltaSeconds" in body, (
+        "applyLocalTicker must compute the shared delta via liveDeltaSeconds"
+    )
+    # Must render nodeBaseSec + liveDelta (the nextSec expression).
+    assert "nodeBaseSec + liveDelta" in body, (
+        "applyLocalTicker must render nodeBaseSec + liveDelta for each DOM "
+        "row, NOT liveSeconds(clock) directly"
+    )
+
+
+def test_frontend_js_does_not_read_live_projection_or_live_display():
+    """Spec §IV.2 / §VI: the frontend JS bundle must NOT read or
+    propagate ``live_projection`` or ``live_display`` as compatibility
+    aliases. These legacy fields have been removed from the backend;
+    the frontend must use ``current_activity`` / ``live_clock`` /
+    ``activity_display_model`` / ``display_span_id`` / ``sample_id``
+    only."""
+    all_js = read_all_js()
+    # Strip comments so documentation mentions don't false-positive.
+    all_js_stripped = _strip_js_comments(all_js)
+    assert "live_projection" not in all_js_stripped, (
+        "frontend JS must not read or propagate live_projection; the legacy "
+        "alias has been removed from the backend"
+    )
+    # ``live_display`` is allowed ONLY in the historical CSS class name
+    # ``live-display`` and the registry helper ``clearLiveClockRegistry``
+    # is fine. But as a payload KEY (``.live_display`` / ``["live_display"]``)
+    # it must not appear. Check for the dotted/bracketed access pattern.
+    assert ".live_display" not in all_js_stripped, (
+        "frontend JS must not access payload.live_display; the legacy alias "
+        "has been removed from the backend"
+    )
+    assert '["live_display"]' not in all_js_stripped, (
+        "frontend JS must not access payload['live_display']; the legacy "
+        "alias has been removed from the backend"
+    )
+
+
+def test_init_refresh_overview_does_not_propagate_live_projection_or_live_display():
+    """Spec §IV.2.1: ``refreshOverview`` must NOT propagate
+    ``bundle.live_projection`` or ``bundle.live_display`` into the
+    ``showOverview`` / ``showRecent`` payloads. Only ``current_activity``
+    / ``live_clock`` / ``activity_display_model`` / ``display_span_id``
+    / ``sample_id`` may be propagated."""
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "refreshOverview")
+    assert "live_projection" not in body, (
+        "refreshOverview must not propagate bundle.live_projection"
+    )
+    assert "live_display" not in body, (
+        "refreshOverview must not propagate bundle.live_display"
+    )
+    # Must propagate the new fields.
+    assert "current_activity" in body, (
+        "refreshOverview must propagate current_activity"
+    )
+    assert "live_clock" in body, (
+        "refreshOverview must propagate live_clock"
+    )
+
+
+def test_apply_local_ticker_clears_when_no_active_clock():
+    """When there is no active live clock (paused / no activity /
+    page-switch with empty payload), ``applyLocalTicker`` must NOT
+    render any live delta. The ticker must early-return or compute
+    ``liveDelta == 0`` so the displayed durations freeze at their
+    sample values instead of continuing to tick."""
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "applyLocalTicker")
+    # Must call getActiveLiveClock to obtain the clock.
+    assert "getActiveLiveClock" in body, (
+        "applyLocalTicker must obtain the clock via getActiveLiveClock"
+    )
+    # Must guard against null clock.
+    assert "if (clock)" in body or "if (!clock)" in body, (
+        "applyLocalTicker must guard against a null clock so no delta is "
+        "applied when the registry is cleared"
     )

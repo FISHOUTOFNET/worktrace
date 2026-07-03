@@ -3,7 +3,7 @@
 Covers sections 九.4 / 九.5 / 九.6:
 
 - **Overview ViewModel** — ``get_overview()`` returns overview KPI
-  + current activity + recent activities + live_projection from ONE
+  + current activity + recent activities + ``live_clock`` from ONE
   snapshot sample. The current activity and the recent live row share
   the same ``sample_id`` / ``stable_live_key_hash`` and the same
   first-frame seconds (no 1-2s drift). During a pending project
@@ -13,13 +13,11 @@ Covers sections 九.4 / 九.5 / 九.6:
   description; detail row uses current resource + display project +
   description. During pending the candidate does NOT preempt the
   Timeline session project. The detail payload carries its OWN
-  ``live_projection`` (not reusing the Timeline main payload's
-  projection).
-- **Statistics / Export** — Overview KPI with ``include_live=True``
-  uses ``live_projection.display_project``; during pending (<30s) the
-  KPI attributes time to the display project. The export preview
-  (``get_statistics_export_summary``) does NOT project the current
-  live activity — it only includes finalized/closed rows.
+  ``live_clock`` (not reusing the Timeline main payload's clock).
+- **Statistics / Export** — Statistics is DB-only (no ``include_live``
+  parameter). The export preview (``get_statistics_export_summary``)
+  does NOT project the current live activity — it only includes
+  finalized/closed rows.
 """
 
 from __future__ import annotations
@@ -188,13 +186,13 @@ def _pending_snapshot() -> dict:
 
 
 def test_overview_view_model_returns_all_required_payloads(bridge):
-    """``get_overview()`` returns ``live_projection``,
+    """``get_overview()`` returns ``live_clock``,
     ``overview`` KPI, ``current_activity``, ``activities`` (recent),
     and ``sample_id`` — all from one backend call."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     bundle = bridge.get_overview()
     assert bundle["ok"] is True
-    assert "live_projection" in bundle
+    assert "live_clock" in bundle
     assert "overview" in bundle
     assert "current_activity" in bundle
     assert "activities" in bundle
@@ -209,8 +207,8 @@ def test_overview_view_model_current_and_recent_share_same_sample_id(bridge):
     bundle = bridge.get_overview()
     sample_id = bundle["sample_id"]
     assert sample_id, "bundle must carry a non-empty sample_id"
-    live_projection = bundle["live_projection"]
-    assert live_projection["stable_live_key_hash"] == sample_id
+    live_clock = bundle["live_clock"]
+    assert live_clock["stable_live_key_hash"] == sample_id
     # The recent live row (first item, virtual) must share the same hash.
     activities = bundle["activities"]
     if activities:
@@ -226,10 +224,10 @@ def test_overview_view_model_current_and_recent_first_frame_seconds_consistent(b
     _set_snapshot(_snapshot(elapsed_seconds=120))
     bundle = bridge.get_overview()
     current_seconds = int(bundle["current_activity"].get("elapsed_seconds") or 0)
-    live_projection_seconds = int(bundle["live_projection"].get("duration_seconds") or 0)
-    # current_activity.elapsed_seconds and live_projection.duration_seconds
+    live_clock_seconds = int(bundle["live_clock"].get("duration_seconds_at_sample") or 0)
+    # current_activity.elapsed_seconds and live_clock.duration_seconds_at_sample
     # both derive from the same snapshot's elapsed_seconds.
-    assert current_seconds == live_projection_seconds
+    assert current_seconds == live_clock_seconds
     # If there's a virtual live row in recent, its duration_seconds must
     # also match (same sample).
     activities = bundle["activities"]
@@ -244,10 +242,10 @@ def test_overview_view_model_pending_recent_uses_display_project_not_candidate(b
     The candidate must NOT appear as a separate independent project row."""
     _set_snapshot(_pending_snapshot())
     bundle = bridge.get_overview()
-    live_projection = bundle["live_projection"]
-    assert live_projection["display_project"]["name"] == "ProjectA"
-    assert live_projection["candidate_project"]["name"] == "ProjectB"
-    assert live_projection["project_transition_pending"] is True
+    current_activity = bundle["current_activity"]
+    assert current_activity["display_project"]["name"] == "ProjectA"
+    assert current_activity["candidate_project"]["name"] == "ProjectB"
+    assert current_activity["project_transition_pending"] is True
     # The recent live row (if present) must use the display project.
     activities = bundle["activities"]
     if activities and activities[0].get("is_virtual_live"):
@@ -268,7 +266,7 @@ def test_overview_view_model_is_display_safe(bridge):
     for key in bundle:
         assert key not in sensitive_keys, f"bundle leaked sensitive key: {key}"
     # Check nested payloads.
-    for sub in (bundle["live_projection"], bundle["current_activity"]):
+    for sub in (bundle["live_clock"], bundle["current_activity"]):
         for key in sub:
             assert key not in sensitive_keys, f"bundle sub-payload leaked key: {key}"
 
@@ -276,8 +274,8 @@ def test_overview_view_model_is_display_safe(bridge):
 # 2. Timeline / Detail (section 九.5)
 
 
-def test_timeline_returns_live_projection(bridge):
-    """Timeline payload must carry a ``live_projection`` from the same
+def test_timeline_returns_live_clock(bridge):
+    """Timeline payload must carry a ``live_clock`` from the same
     snapshot sample. Under the unified Activity Display Model the legacy
     ``"virtual"`` state is split into ``"virtual_pending"`` (no absorb
     anchor) / ``"absorbed_pending"`` (absorb anchor exists); a fresh
@@ -285,8 +283,8 @@ def test_timeline_returns_live_projection(bridge):
     ``"virtual_pending"``."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     timeline = bridge.get_timeline()
-    assert "live_projection" in timeline
-    assert timeline["live_projection"]["live_state"] == "virtual_pending"
+    assert "live_clock" in timeline
+    assert timeline["live_clock"]["live_state"] == "virtual_pending"
 
 
 def test_timeline_session_uses_display_project_and_description(bridge):
@@ -315,10 +313,10 @@ def test_timeline_pending_candidate_does_not_preempt_session_project(bridge):
         assert vs["project_name"] != "ProjectB"
 
 
-def test_timeline_detail_carries_own_live_projection(bridge):
+def test_timeline_detail_carries_own_live_clock(bridge):
     """``get_timeline_session_details()`` must return its
-    OWN ``live_projection`` — the detail ticker must NOT reuse the
-    Timeline main payload's projection. Under the unified Activity
+    OWN ``live_clock`` — the detail ticker must NOT reuse the
+    Timeline main payload's clock. Under the unified Activity
     Display Model the legacy ``"virtual"`` state is split into
     ``"virtual_pending"`` / ``"absorbed_pending"``; a fresh unpersisted
     normal snapshot with no prior confirmed activity yields
@@ -327,9 +325,9 @@ def test_timeline_detail_carries_own_live_projection(bridge):
     timeline = bridge.get_timeline()
     # Find the virtual session id (or use empty for virtual detail).
     details = bridge.get_timeline_session_details([], None)
-    assert "live_projection" in details
-    assert details["live_projection"]["live_state"] == "virtual_pending"
-    # The detail's live_projection sample_id must be present.
+    assert "live_clock" in details
+    assert details["live_clock"]["live_state"] == "virtual_pending"
+    # The detail's live_clock sample_id must be present.
     assert "sample_id" in details
 
 
@@ -360,22 +358,6 @@ def test_timeline_detail_pending_uses_display_project_not_candidate(bridge):
 
 
 # 3. Statistics / Export (section 九.6)
-
-
-def test_overview_kpi_include_live_uses_display_project(bridge):
-    """Overview KPI with ``include_live=True`` uses
-    ``live_projection.display_project`` — during pending (<30s) the KPI
-    attributes live time to the display project (ProjectA), NOT the
-    candidate (ProjectB)."""
-    _set_snapshot(_pending_snapshot())
-    from worktrace.services import timeline_service
-    today = timeline_service.get_default_report_date()
-    summary = statistics_service.get_summary(today, today, include_live=True)
-    # The live projection should be present and attribute time to ProjectA.
-    live = summary.get("live_projection") or {}
-    if live:
-        assert live["project"] == "ProjectA"
-        assert live["project"] != "ProjectB"
 
 
 def test_export_preview_does_not_project_current_live_activity(bridge):

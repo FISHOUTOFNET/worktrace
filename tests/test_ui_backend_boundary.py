@@ -1279,19 +1279,37 @@ def test_bridge_module_all_equals_webview_bridge_only() -> None:
 
 
 # Live-clock carry helper export contract. ``short_activity_carry_seconds``
-# is the public helper; ``carry_baseline_seconds`` must stay absent.
+# is the public service helper; ``carry_baseline_seconds`` must stay absent.
+# The bridge entry point is ``view_model_api`` (``live_display_api`` is gone).
 
 
 def test_short_activity_carry_seconds_exists_under_new_name() -> None:
-    """``short_activity_carry_seconds`` must exist in both
-    ``live_display_service`` and ``live_display_api``.
+    """``short_activity_carry_seconds`` must exist in
+    ``live_display_service``. The legacy ``live_display_api`` module must
+    NOT exist anymore; the bridge facade is now ``view_model_api`` which
+    exports ``build_current_activity_summary``, ``compute_refresh_revision``,
+    and the four ViewModel getters (NOT ``short_activity_carry_seconds`` —
+    that is a service-level helper, not a bridge-facing export).
 
     The helper returns the carry-over seconds from
     consecutive sub-30s short activities that should be added to the
     unified live-display duration.
     """
-    from worktrace.api import live_display_api
+    import importlib
+
+    from worktrace.api import view_model_api
     from worktrace.services import live_display_service
+
+    # The legacy ``live_display_api`` module must NOT exist anymore.
+    try:
+        importlib.import_module("worktrace.api.live_display_api")
+    except ModuleNotFoundError:
+        pass
+    else:
+        raise AssertionError(
+            "worktrace.api.live_display_api module must NOT exist anymore; "
+            "all exports moved to worktrace.api.view_model_api"
+        )
 
     # The public helper must exist in the service module.
     assert hasattr(live_display_service, "short_activity_carry_seconds"), (
@@ -1301,33 +1319,43 @@ def test_short_activity_carry_seconds_exists_under_new_name() -> None:
     assert callable(live_display_service.short_activity_carry_seconds), (
         "live_display_service.short_activity_carry_seconds must be callable"
     )
-    # The new name must be re-exported by the API facade.
-    assert hasattr(live_display_api, "short_activity_carry_seconds"), (
-        "live_display_api must re-export short_activity_carry_seconds"
-    )
-    assert callable(live_display_api.short_activity_carry_seconds), (
-        "live_display_api.short_activity_carry_seconds must be callable"
-    )
-    # The old name must NOT exist in either module.
+    # The old name must NOT exist in the service module.
     assert not hasattr(live_display_service, "carry_baseline_seconds"), (
         "live_display_service must not retain the removed name carry_baseline_seconds"
     )
-    assert not hasattr(live_display_api, "carry_baseline_seconds"), (
-        "live_display_api must not retain the removed name carry_baseline_seconds"
-    )
-    # The new name must appear in __all__ for both modules.
+    # The new name must appear in __all__ for the service module.
     assert "short_activity_carry_seconds" in live_display_service.__all__, (
         "live_display_service.__all__ must include short_activity_carry_seconds"
     )
-    assert "short_activity_carry_seconds" in live_display_api.__all__, (
-        "live_display_api.__all__ must include short_activity_carry_seconds"
-    )
-    # The old name must NOT appear in __all__ for either module.
+    # The old name must NOT appear in __all__ for the service module.
     assert "carry_baseline_seconds" not in live_display_service.__all__, (
         "live_display_service.__all__ must not include carry_baseline_seconds"
     )
-    assert "carry_baseline_seconds" not in live_display_api.__all__, (
-        "live_display_api.__all__ must not include carry_baseline_seconds"
+
+    # The new bridge entry point ``view_model_api`` must export the
+    # canonical ViewModel entry points and pure helpers.
+    for symbol in (
+        "build_current_activity_summary",
+        "compute_refresh_revision",
+        "get_overview_view_model",
+        "get_refresh_state_view_model",
+        "get_session_details_view_model",
+        "get_timeline_view_model",
+    ):
+        assert symbol in view_model_api.__all__, (
+            "view_model_api.__all__ must include " + symbol
+        )
+        assert hasattr(view_model_api, symbol), (
+            "view_model_api must expose " + symbol
+        )
+    # ``short_activity_carry_seconds`` is NOT a bridge-facing export — it
+    # lives in the service module only.
+    assert "short_activity_carry_seconds" not in view_model_api.__all__, (
+        "view_model_api.__all__ must not include short_activity_carry_seconds "
+        "(service-level helper, not bridge-facing)"
+    )
+    assert not hasattr(view_model_api, "carry_baseline_seconds"), (
+        "view_model_api must not retain the removed name carry_baseline_seconds"
     )
 
 
@@ -1335,9 +1363,9 @@ def test_short_activity_carry_seconds_returns_zero_for_none_snapshot() -> None:
     """``short_activity_carry_seconds`` must return ``0`` for a ``None``
     snapshot, confirming the renamed function preserves the original
     fail-safe behavior."""
-    from worktrace.api import live_display_api
+    from worktrace.services import live_display_service
 
-    result = live_display_api.short_activity_carry_seconds(None, None)
+    result = live_display_service.short_activity_carry_seconds(None, None)
     assert result == 0, (
         f"short_activity_carry_seconds(None, None) must return 0, got {result}"
     )

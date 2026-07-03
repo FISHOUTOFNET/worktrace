@@ -28,6 +28,11 @@
     // live-seconds formula: ``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``.
     App.liveClockBySpanId = {};
     App.liveDisplayModel = null;
+    // Explicit active span id — the single live span currently eligible to tick
+    // project totals / current-activity area. ``getActiveLiveClock`` reads this
+    // instead of relying on object insertion order so a stale clock cannot win
+    // by being the last-inserted key.
+    App.activeDisplaySpanId = "";
 
     // ``lastRefreshState`` caches the last ``get_refresh_state`` payload for revision comparison;
     // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard overlapping checks / refreshes.
@@ -444,16 +449,25 @@
 
     // ===== Unified Live Clock =====
     //
-    // The SINGLE source of truth for every live duration in the UI. Current activity, recent items,
-    // timeline sessions and detail rows all read from the same registered live clock — there are no
-    // per-region delta computations or cached-snapshot baselines for live rows.
+    // The SINGLE source of truth for the live delta. The current-activity area,
+    // KPI totals, recent items, timeline sessions, and detail rows all share
+    // ONE live delta derived from the single registered live clock. Each DOM
+    // row carries its OWN sample base (``data-live-base-seconds``); the ticker
+    // renders ``nodeBaseSeconds + liveDelta`` so a session row whose sample
+    // duration is larger than the live activity's own duration is NOT
+    // overwritten by the live span value.
     //
-    // Formula:  display = carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
+    // Live-span formula (the live clock's own current seconds):
+    //     liveSeconds(clock) = carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
     //
-    // The clock is registered from any payload that carries ``live_clock`` (Overview, Recent,
-    // Timeline, Details, or the lightweight Refresh State). The 1s heartbeat ``applyLocalTicker``
-    // walks every DOM node that carries ``data-display-span-id`` and renders it with the unified
-    // clock, so all four display regions stay in lockstep.
+    // Unified live delta (shared by every DOM row):
+    //     liveDelta = max(0, liveSeconds(clock) - clock.duration_seconds_at_sample)
+    //
+    // Per-row render:
+    //     rowSeconds = rowBaseSecondsAtSample + liveDelta
+    //
+    // The clock is registered from any payload that carries ``live_clock``
+    // (Overview, Recent, Timeline, Details, or the lightweight Refresh State).
 
     function tickerNowEpochMs() {
         return Date.now();
@@ -472,52 +486,10 @@
     }
     App.liveSeconds = liveSeconds;
 
-    function projectLiveSeconds(clock) {
-        // Alias kept for callers that semantically "project" a live span.
-        return liveSeconds(clock);
-    }
-    App.projectLiveSeconds = projectLiveSeconds;
-
-    // Register a live clock from ANY payload (Overview / Recent / Timeline / Details / Refresh State).
-    // The payload may carry ``live_clock`` directly or nested inside ``activity_display_model``.
-    function registerLiveClock(payload) {
-        if (!payload) return;
-        var clock = payload.live_clock;
-        if (!clock && payload.activity_display_model) {
-            clock = payload.activity_display_model.live_clock;
-        }
-        if (!clock) return;
-        var spanId = String(clock.display_span_id || "");
-        if (!spanId) return;
-        App.liveClockBySpanId[spanId] = clock;
-        if (payload.activity_display_model) {
-            App.liveDisplayModel = payload.activity_display_model;
-        } else if (!App.liveDisplayModel) {
-            App.liveDisplayModel = payload;
-        }
-    }
-    App.registerLiveClock = registerLiveClock;
-
-    // Return the single active live clock, or ``null``. When multiple spans are registered (rare),
-    // the most recently registered one wins. Used by KPI totals and the current-activity area.
-    function getActiveLiveClock() {
-        var keys = Object.keys(App.liveClockBySpanId);
-        if (keys.length === 0) return null;
-        return App.liveClockBySpanId[keys[keys.length - 1]];
-    }
-    App.getActiveLiveClock = getActiveLiveClock;
-
-    function clearLiveClockRegistry() {
-        App.liveClockBySpanId = {};
-        App.liveDisplayModel = null;
-    }
-    App.clearLiveClockRegistry = clearLiveClockRegistry;
-
-    // Compatibility wrapper: returns the wall-clock delta since the backend sample for KPI totals.
-    // Reads ONLY from the unified registry — never from a page-level snapshot's live_projection.
-    function tickerDeltaSeconds(payload) {
-        // ``payload`` is accepted for backwards compatibility but ignored; the registry is global.
-        var clock = getActiveLiveClock();
+    // Unified live delta: how many seconds have elapsed since the backend
+    // sample. Shared by every DOM row. Clamped to 0 so a stale clock or a
+    // wall-clock drift never makes the UI count backwards.
+    function liveDeltaSeconds(clock) {
         if (!clock) return 0;
         var atSample = parseInt(clock.duration_seconds_at_sample, 10);
         if (isNaN(atSample)) atSample = 0;
@@ -525,25 +497,76 @@
         var delta = display - atSample;
         return delta > 0 ? delta : 0;
     }
-    App.tickerDeltaSeconds = tickerDeltaSeconds;
+    App.liveDeltaSeconds = liveDeltaSeconds;
 
-    // Compatibility wrapper: returns ``true`` when the unified live clock should tick project totals.
-    // Mirrors ``live_clock.is_project_duration_live`` so paused / idle / excluded / error /
-    // virtual_pending never inflate KPI totals.
-    function tickerLiveEligible(payload) {
-        var clock = getActiveLiveClock();
-        if (!clock) return false;
-        return clock.is_project_duration_live === true;
+    // Register a live clock from ANY payload (Overview / Recent / Timeline / Details / Refresh State).
+    // The payload may carry ``live_clock`` directly or nested inside ``activity_display_model``.
+    //
+    // Contract: when the payload has NO live clock, NO display_span_id, or the
+    // clock's ``is_live`` is not true, the registry AND the active span id MUST
+    // be cleared. This prevents a stale clock from continuing to tick after the
+    // activity ends, the collector pauses, or the user switches pages.
+    function registerLiveClock(payload) {
+        if (!payload) {
+            clearLiveClockRegistry();
+            return;
+        }
+        var clock = payload.live_clock;
+        if (!clock && payload.activity_display_model) {
+            clock = payload.activity_display_model.live_clock;
+        }
+        if (!clock) {
+            clearLiveClockRegistry();
+            return;
+        }
+        var spanId = String(clock.display_span_id || "");
+        var isLive = clock.is_live === true;
+        if (!spanId || !isLive) {
+            clearLiveClockRegistry();
+            return;
+        }
+        // Sample identity changed → wipe any prior monotonic state so the
+        // new activity is not poisoned by the previous activity's
+        // rollback-guard.
+        if (App.activeDisplaySpanId && App.activeDisplaySpanId !== spanId) {
+            App._monotonicRenderState = {};
+        }
+        App.liveClockBySpanId = {};
+        App.liveClockBySpanId[spanId] = clock;
+        App.activeDisplaySpanId = spanId;
+        if (payload.activity_display_model) {
+            App.liveDisplayModel = payload.activity_display_model;
+        } else {
+            App.liveDisplayModel = payload;
+        }
     }
-    App.tickerLiveEligible = tickerLiveEligible;
+    App.registerLiveClock = registerLiveClock;
 
-    function tickerCurrentActivityRunning() {
-        return tickerLiveEligible();
+    // Return the single active live clock, or ``null``. Reads the explicit
+    // ``activeDisplaySpanId`` so a stale clock cannot win by being the
+    // last-inserted registry key.
+    function getActiveLiveClock() {
+        if (!App.activeDisplaySpanId) return null;
+        return App.liveClockBySpanId[App.activeDisplaySpanId] || null;
     }
+    App.getActiveLiveClock = getActiveLiveClock;
+
+    function clearLiveClockRegistry() {
+        App.liveClockBySpanId = {};
+        App.liveDisplayModel = null;
+        App.activeDisplaySpanId = "";
+    }
+    App.clearLiveClockRegistry = clearLiveClockRegistry;
 
     // SINGLE SOURCE OF TRUTH for live-row continuity keys. Uses ``stable_live_key_hash`` so the key
     // survives the virtual / persisted_open / absorbed_pending transitions (session_id / activity_id
     // change across the transition; stable_live_key_hash does not).
+    //
+    // The same key MUST be used for both render seeding and ticker updates —
+    // a mismatch (e.g. render seeds ``recent:live:<hash>`` while the ticker
+    // reads ``span:<spanId>``) breaks the monotonic guard. The ticker reads
+    // the seeded key directly from the DOM's ``data-live-continuity-key``
+    // attribute so render and ticker stay in lockstep.
     function liveContinuityKey(item, prefix) {
         if (!item) return prefix;
         if (item.stable_live_key_hash) {
@@ -566,8 +589,12 @@
     // bridge round-trip. Ticker invariant: ONLY updates DOM text; never calls a bridge, never writes
     // the DB, never starts / stops the collector.
     //
-    // Unified path: walks every DOM node carrying ``data-display-span-id`` and renders it with the
-    // single registered live clock. KPI totals and the current-activity area use the same clock.
+    // Per-row contract: each live DOM node carries its OWN
+    // ``data-live-base-seconds`` (the row's sample display duration from the
+    // backend). The ticker renders ``nodeBaseSeconds + liveDelta``. The live
+    // clock's own ``liveSeconds(clock)`` is only used for the current-activity
+    // area (whose base IS the live span duration). KPI totals carry their own
+    // base in the snapshot payload.
     function applyLocalTicker() {
         var clock = getActiveLiveClock();
         var liveDelta = 0;
@@ -575,7 +602,7 @@
         if (clock) {
             projectDurationLive = clock.is_project_duration_live === true;
             if (projectDurationLive) {
-                liveDelta = tickerDeltaSeconds();
+                liveDelta = liveDeltaSeconds(clock);
             }
         }
 
@@ -615,6 +642,12 @@
             var currentEl = document.getElementById("current-activity");
             if (currentEl) {
                 if (current.active && clock) {
+                    // The current-activity area's base IS the live span
+                    // duration (``duration_seconds_at_sample``), so the live
+                    // span's own ``liveSeconds(clock)`` is the correct render
+                    // value here. NOT ``current.elapsed_seconds + liveDelta``
+                    // because ``elapsed_seconds`` already equals
+                    // ``duration_seconds_at_sample``.
                     var displaySec = liveSeconds(clock);
                     var display = current.display || "";
                     var parts = display.split("\uff5c");
@@ -635,6 +668,7 @@
             if (tlCurrentEl) {
                 var tlCurrent = tl.current_activity || {};
                 if (tlCurrent.active && clock) {
+                    // Same as Overview current-activity: base == live span duration.
                     var tlDisplaySec = liveSeconds(clock);
                     var tlDisplay = tlCurrent.display || "";
                     var tlParts = tlDisplay.split("\uff5c");
@@ -656,9 +690,17 @@
         }
 
         // --- Unified live-span DOM walk ---
-        // Every live row (recent / session / detail) carries ``data-display-span-id``. The ticker
-        // looks up the registered clock by span id and renders ``liveSeconds(clock)`` so all rows
-        // share one clock. Rows without the attribute keep their seeded text.
+        // Every live row (recent / session / detail) carries:
+        //   - ``data-display-span-id``: matches the active live clock's span id
+        //   - ``data-live-base-seconds``: the row's OWN sample display duration
+        //   - ``data-live-continuity-key``: the same key the renderer seeded
+        // The ticker renders ``nodeBaseSeconds + liveDelta`` so a session row
+        // whose sample duration is larger than the live activity's own
+        // duration is NOT overwritten by the live span value. Rows without
+        // ``data-live-base-seconds`` keep their seeded text.
+        if (!clock || clock.is_live !== true) {
+            return;
+        }
         var liveNodes = document.querySelectorAll("[data-display-span-id]");
         for (var i = 0; i < liveNodes.length; i++) {
             var node = liveNodes[i];
@@ -667,7 +709,11 @@
             var nodeClock = App.liveClockBySpanId[spanId] || clock;
             if (!nodeClock) continue;
             if (nodeClock.is_live !== true) continue;
-            var nextSec = liveSeconds(nodeClock);
+            var baseAttr = node.getAttribute("data-live-base-seconds");
+            if (baseAttr === null || baseAttr === "") continue;
+            var nodeBaseSec = parseInt(baseAttr, 10);
+            if (isNaN(nodeBaseSec)) continue;
+            var nextSec = nodeBaseSec + liveDelta;
             var durEl = node.querySelector(
                 ".recent-item-duration, .timeline-item-duration, .detail-item-duration"
             );
@@ -679,7 +725,13 @@
                 }
             }
             if (!durEl) continue;
-            var continuity = "span:" + spanId;
+            // Prefer the DOM-seeded continuity key so render and ticker share
+            // the same monotonic guard. Fall back to ``span:<spanId>`` only
+            // when the renderer did not seed one (defensive).
+            var continuity = node.getAttribute("data-live-continuity-key");
+            if (!continuity) {
+                continuity = "span:" + spanId;
+            }
             App.renderDurationMonotonic(durEl, nextSec, continuity, false);
         }
     }

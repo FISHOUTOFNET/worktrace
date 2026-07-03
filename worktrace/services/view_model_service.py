@@ -93,57 +93,51 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     absorbed_pending). A ``<30s`` pending resource with no anchor does NOT
     inject a virtual recent item — it only appears in the current-activity
     area.
+
+    KPI totals (``today_total_seconds`` / ``classified_seconds`` /
+    ``uncategorized_seconds``) are computed from the SAME overlaid sessions
+    list so the KPI, the recent items, and the live clock all share one
+    sample. ``virtual_pending`` contributes nothing to the KPI (no DB row
+    to overlay). ``persisted_open`` / ``absorbed_pending`` contribute via
+    the overlay applied to their matching DB rows — counted exactly once.
     """
     scoped_today = today or timeline_service.get_default_report_date()
     model = build_activity_display_model(report_date=scoped_today, today=scoped_today)
     live_clock = model.get("live_clock") or {}
-    live_projection = model.get("live_projection") or {}
-    live_display = model.get("current_activity") or {}
+    current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
-    summary = statistics_service.get_summary(scoped_today, scoped_today, include_live=True)
     project_count = len(project_service.list_active_projects())
     sessions = timeline_service.get_project_sessions_by_date(
         scoped_today, include_hidden=False, ensure_context=True
     )
 
-    items: list[dict[str, Any]] = []
-    for session in sessions[:_RECENT_LIMIT]:
-        base_seconds = int(session.get("duration_seconds") or 0)
-        is_in_progress = bool(session.get("is_in_progress"))
-        row = {
-            "project_name": str(session.get("project_name") or "未归类"),
-            "project_description": str(session.get("project_description") or ""),
-            "start_time": str(session.get("start_time") or ""),
-            "end_time": str(session.get("end_time") or ""),
-            "duration": format_duration(base_seconds),
-            "duration_seconds": base_seconds,
-            "is_in_progress": is_in_progress,
-            "is_live_projected": is_in_progress,
-            "is_virtual": False,
-            "is_virtual_live": False,
-            "live_display_key": "",
-            "live_state": "",
-            "stable_live_key": "",
-            "stable_live_key_hash": "",
-            "live_started_at_epoch_ms": 0,
-            "carry_seconds": 0,
-            "display_span_id": "",
-            "activity_id": int(session.get("first_activity_id") or 0) or 0,
-            "source": "db",
-            "edit_disabled": False,
-            "disable_reason": "",
-            "status": str(session.get("status_summary") or session.get("status") or ""),
-        }
-        items.append(row)
-    # Apply the unified live-span overlay to matching rows only.
-    _apply_live_span_to_rows(items, model)
+    # Build row dicts for ALL sessions (used for KPI computation).
+    all_rows: list[dict[str, Any]] = []
+    for session in sessions:
+        all_rows.append(_session_to_overview_row(session))
+    # Apply the unified live-span overlay to ALL session rows so the KPI
+    # totals reflect the same sample as the recent items.
+    _apply_live_span_to_rows(all_rows, model)
 
-    total_seconds = int(summary.get("total_duration") or 0)
-    classified_seconds = int(summary.get("classified_duration") or 0)
-    uncategorized_seconds = int(summary.get("uncategorized_duration") or 0)
-    sample_id = str(model.get("sample_id") or live_projection.get("stable_live_key_hash") or "")
-    elapsed = int(live_display.get("elapsed_seconds") or 0)
+    # KPI totals computed from the overlaid rows.
+    today_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in all_rows)
+    classified_seconds = sum(
+        int(r.get("duration_seconds") or 0)
+        for r in all_rows
+        if not r.get("is_uncategorized")
+    )
+    uncategorized_seconds = sum(
+        int(r.get("duration_seconds") or 0)
+        for r in all_rows
+        if r.get("is_uncategorized")
+    )
+
+    # Recent items are the first N overlaid rows.
+    items = all_rows[:_RECENT_LIMIT]
+
+    sample_id = str(model.get("sample_id") or "")
+    elapsed = int(current_activity.get("elapsed_seconds") or 0)
 
     return {
         "ok": True,
@@ -152,23 +146,59 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         "display_span_id": display_span_id,
         "live_clock": live_clock,
         "activity_display_model": model,
-        "live_projection": live_projection,
-        "live_display": live_display,
         "overview": {
-            "total_duration": format_duration(total_seconds),
+            "total_duration": format_duration(today_total_seconds),
             "classified_duration": format_duration(classified_seconds),
             "uncategorized_duration": format_duration(uncategorized_seconds),
             "project_count": project_count,
-            "today_total_seconds": total_seconds,
+            "today_total_seconds": today_total_seconds,
             "classified_seconds": classified_seconds,
             "uncategorized_seconds": uncategorized_seconds,
         },
-        "current_activity": live_display,
+        "current_activity": current_activity,
         "activities": items,
-        "today_total_seconds": total_seconds,
+        "today_total_seconds": today_total_seconds,
         "classified_seconds": classified_seconds,
         "uncategorized_seconds": uncategorized_seconds,
         "current_activity_elapsed_seconds": elapsed,
+        # KPI live-base fields for the frontend ticker: the ticker renders
+        # ``live_base_seconds + live_delta`` so the KPI ticks from the same
+        # sample as the recent items.
+        "kpi_live_base": {
+            "today_total_seconds": today_total_seconds,
+            "classified_seconds": classified_seconds,
+            "uncategorized_seconds": uncategorized_seconds,
+        },
+    }
+
+
+def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
+    """Project a timeline session dict into an Overview recent-item row."""
+    base_seconds = int(session.get("duration_seconds") or 0)
+    is_in_progress = bool(session.get("is_in_progress"))
+    return {
+        "project_name": str(session.get("project_name") or "未归类"),
+        "project_description": str(session.get("project_description") or ""),
+        "start_time": str(session.get("start_time") or ""),
+        "end_time": str(session.get("end_time") or ""),
+        "duration": format_duration(base_seconds),
+        "duration_seconds": base_seconds,
+        "is_in_progress": is_in_progress,
+        "is_live_projected": is_in_progress,
+        "is_virtual": False,
+        "is_virtual_live": False,
+        "live_display_key": "",
+        "live_state": "",
+        "stable_live_key": "",
+        "stable_live_key_hash": "",
+        "live_started_at_epoch_ms": 0,
+        "carry_seconds": 0,
+        "display_span_id": "",
+        "activity_id": int(session.get("first_activity_id") or 0) or 0,
+        "source": "db",
+        "edit_disabled": False,
+        "disable_reason": "",
+        "status": str(session.get("status_summary") or session.get("status") or ""),
     }
 
 
@@ -180,16 +210,19 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
 
     Timeline sessions come ONLY from the DB. The unified live span is
     applied as an overlay onto the matching DB session (persisted_open /
-    absorbed_pending). A ``<30s`` pending resource with no anchor does NOT
-    inject a virtual session — it only appears in the current-activity
-    area. The virtual seconds are NOT added to the timeline total anymore.
+    absorbed_pending) BEFORE computing the display total so the total
+    matches the sum of the session rows. A ``<30s`` pending resource with
+    no anchor does NOT inject a virtual session.
+
+    ``raw_total_seconds`` is the sum of raw DB durations (unaffected by
+    the display-only live overlay or adjusted overrides). ``total_seconds``
+    / ``today_total_seconds`` use the display durations after overlay.
     """
     scoped_report_date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     model = build_activity_display_model(report_date=scoped_report_date, today=today)
     live_clock = model.get("live_clock") or {}
-    live_projection = model.get("live_projection") or {}
-    live_display = model.get("current_activity") or {}
+    current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
     sessions_raw = timeline_service.get_project_sessions_by_date(
@@ -197,7 +230,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     )
 
     sessions: list[dict[str, Any]] = []
-    display_total_seconds = 0
     raw_total_seconds = 0
 
     for session in sessions_raw:
@@ -209,7 +241,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             adjusted = int(adjusted)
         has_override = adjusted is not None
         display_seconds = adjusted if has_override else raw_seconds
-        display_total_seconds += display_seconds
         raw_total_seconds += raw_seconds
         row = {
             "session_id": str(session.get("session_id") or ""),
@@ -251,17 +282,21 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "project_transition_pending": False,
         }
         sessions.append(row)
-    # Apply the unified live-span overlay to matching sessions only.
+    # Apply the unified live-span overlay to matching sessions BEFORE
+    # computing the display total so the total matches the sum of rows.
     _apply_live_span_to_rows(sessions, model)
     # In-progress sessions that received no live overlay still need
-    # edit_disabled (legacy behaviour).
+    # edit_disabled.
     for row in sessions:
         if row.get("is_in_progress") and not row.get("edit_disabled"):
             row["edit_disabled"] = True
             row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
 
-    elapsed = int(live_display.get("elapsed_seconds") or 0)
-    sample_id = str(model.get("sample_id") or live_projection.get("stable_live_key_hash") or "")
+    # display_total_seconds is the sum of display durations AFTER overlay.
+    display_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in sessions)
+
+    elapsed = int(current_activity.get("elapsed_seconds") or 0)
+    sample_id = str(model.get("sample_id") or "")
 
     return {
         "ok": True,
@@ -270,9 +305,7 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         "total_seconds": display_total_seconds,
         "raw_total_duration": format_duration(raw_total_seconds),
         "raw_total_seconds": raw_total_seconds,
-        "current_activity": live_display,
-        "live_display": live_display,
-        "live_projection": live_projection,
+        "current_activity": current_activity,
         "live_clock": live_clock,
         "display_span_id": display_span_id,
         "activity_display_model": model,
@@ -303,10 +336,9 @@ def get_session_details_view_model(
     today = timeline_service.get_default_report_date()
     model = build_activity_display_model(report_date=date, today=today)
     live_clock = model.get("live_clock") or {}
-    live_projection = model.get("live_projection") or {}
-    live_display = model.get("current_activity") or {}
+    current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
-    sample_id = str(model.get("sample_id") or live_projection.get("stable_live_key_hash") or "")
+    sample_id = str(model.get("sample_id") or "")
 
     if not ids:
         # No virtual detail row is injected for an empty selection. The
@@ -314,8 +346,7 @@ def get_session_details_view_model(
         return {
             "ok": True,
             "activities": [],
-            "live_display": live_display,
-            "live_projection": live_projection,
+            "current_activity": current_activity,
             "live_clock": live_clock,
             "display_span_id": display_span_id,
             "activity_display_model": model,
@@ -371,8 +402,7 @@ def get_session_details_view_model(
     return {
         "ok": True,
         "activities": activities,
-        "live_display": live_display,
-        "live_projection": live_projection,
+        "current_activity": current_activity,
         "live_clock": live_clock,
         "display_span_id": display_span_id,
         "activity_display_model": model,
@@ -400,7 +430,7 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
 
     model = build_activity_display_model(report_date=scoped_report_date, today=today)
     live_clock = model.get("live_clock") or {}
-    live_display = model.get("current_activity") or {}
+    current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
     refresh_revision, debug_inputs = compute_refresh_revision(
@@ -448,8 +478,7 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
         "live_state": str(live_clock.get("live_state") or ""),
         "is_live": bool(live_clock.get("is_live")),
         "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
-        "current_activity": live_display,
-        "live_display": live_display,
+        "current_activity": current_activity,
         "sample_id": str(model.get("sample_id") or ""),
     }
 

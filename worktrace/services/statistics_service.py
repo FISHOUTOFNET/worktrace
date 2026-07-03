@@ -1,17 +1,10 @@
 from __future__ import annotations
 
-import json
 from datetime import date, timedelta
 
 from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, UNCATEGORIZED_PROJECT
 from .context_service import recompute_context_assignments_for_date
 from . import timeline_service
-from .live_display_service import (
-    build_live_projection,
-    classify_live_state,
-    is_live_eligible_for_normal,
-)
-from .settings_service import get_setting
 
 # Maximum inclusive calendar-day span accepted by the read-only
 # statistics/export summary. A 31-day span (e.g. 2026-06-01..2026-07-01) is
@@ -34,7 +27,17 @@ _UNKNOWN_APP_LABEL = "未知应用"
 _UNKNOWN_STATUS_LABEL = "未知状态"
 
 
-def get_summary(start_date: str, end_date: str, ensure_context: bool = True, include_live: bool = False) -> dict:
+def get_summary(start_date: str, end_date: str, ensure_context: bool = True) -> dict:
+    """Return a DB-only statistics summary for the inclusive date range.
+
+    This function is DB-ONLY. It does NOT project the current live
+    snapshot. The Overview / KPI live overlay is owned by
+    :mod:`worktrace.services.activity_display_model_service` and applied
+    by :mod:`worktrace.services.view_model_service` on top of the DB-only
+    base returned here. Keeping statistics DB-only is the contract that
+    guarantees the KPI base, the recent items, and the live clock all
+    share one sample.
+    """
     if ensure_context:
         _ensure_context_range(start_date, end_date)
     rows = timeline_service.get_report_activity_rows(
@@ -64,15 +67,7 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True, inc
         for row in rows
         if row.get("status") == STATUS_EXCLUDED
     )
-    live = _live_projection(start_date, end_date) if include_live else None
-    if live is not None and live.get("live_state") == "virtual":
-        live_duration = int(live["duration_seconds"])
-        total += live_duration
-        effective += live_duration
-    # Use include_live=True so the virtual projection and persisted_open
-    # overlay keep the uncategorized/classified split consistent with the
-    # display_project contract during the 30s pending window.
-    project_stats = get_project_stats(start_date, end_date, ensure_context=False, include_live=include_live)
+    project_stats = get_project_stats(start_date, end_date, ensure_context=False)
     uncategorized = sum(
         int(row["total_duration"])
         for row in project_stats
@@ -94,15 +89,16 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True, inc
     }
 
 
-def get_project_stats(start_date: str, end_date: str, ensure_context: bool = True, include_live: bool = False) -> list[dict]:
+def get_project_stats(start_date: str, end_date: str, ensure_context: bool = True) -> list[dict]:
+    """Return DB-only per-project statistics for the inclusive date range.
+
+    This function is DB-ONLY. It does NOT project the current live
+    snapshot nor apply the persisted_open display-project overlay. Both
+    of those live semantics are owned by
+    :mod:`worktrace.services.activity_display_model_service`.
+    """
     if ensure_context:
         _ensure_context_range(start_date, end_date)
-    # Build the live projection once so we can apply BOTH:
-    # - virtual: add the live duration to the display_project group
-    # - persisted_open: relabel the matching session's project to
-    #   display_project (no duration change — the DB row already carries it)
-    live = _live_projection(start_date, end_date) if include_live else None
-    persisted_overlay = _persisted_open_overlay(live)
     groups: dict[str, dict] = {}
     for session in timeline_service.get_project_sessions_by_range(
         start_date,
@@ -114,29 +110,10 @@ def get_project_stats(start_date: str, end_date: str, ensure_context: bool = Tru
             continue
         project = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
         description = str(session.get("project_description") or "").strip()
-        # Persisted_open overlay: when the session contains the
-        # persisted_activity_id, relabel its project to the snapshot's
-        # display_project during the 30s pending window (not the DB
-        # candidate); duration unchanged to avoid double-counting.
-        if persisted_overlay and persisted_overlay["persisted_activity_id"] in {
-            int(aid) for aid in (session.get("activity_ids") or []) if aid
-        }:
-            project = str(persisted_overlay.get("project") or UNCATEGORIZED_PROJECT)
-            description = str(persisted_overlay.get("project_description") or "").strip()
         group = groups.setdefault(project, {"project": project, "total_duration": 0, "record_count": 0})
         if description and not group.get("project_description"):
             group["project_description"] = description
         group["total_duration"] += int(session.get("duration_seconds") or 0)
-        group["record_count"] += 1
-    # Virtual live projection: add the live duration to the
-    # display_project group. The virtual snapshot has no DB row, so no
-    # double-count risk here (see ``get_summary``).
-    if live is not None and live.get("live_state") == "virtual" and live.get("status") == STATUS_NORMAL:
-        project = str(live["project"] or UNCATEGORIZED_PROJECT)
-        group = groups.setdefault(project, {"project": project, "total_duration": 0, "record_count": 0})
-        if live.get("project_description") and not group.get("project_description"):
-            group["project_description"] = live["project_description"]
-        group["total_duration"] += int(live["duration_seconds"] or 0)
         group["record_count"] += 1
     return sorted(groups.values(), key=lambda row: (-int(row["total_duration"]), str(row["project"]).casefold()))
 
@@ -155,71 +132,6 @@ def _ensure_context_range(start_date: str, end_date: str) -> None:
     while current <= final:
         recompute_context_assignments_for_date(current.isoformat())
         current += timedelta(days=1)
-
-
-def _live_projection(start_date: str, end_date: str) -> dict | None:
-    """Project the current live snapshot for KPI attribution."""
-    snapshot = _read_current_activity_snapshot()
-    if not snapshot:
-        return None
-    report_date = timeline_service.get_default_report_date()
-    if not is_live_eligible_for_normal(snapshot, report_date, report_date):
-        return None
-    if not (start_date <= report_date <= end_date):
-        return None
-    live_state = classify_live_state(snapshot)
-    if live_state not in {"virtual", "persisted_open"}:
-        return None
-    projection = build_live_projection(snapshot, report_date=report_date, today=report_date)
-    if not projection:
-        return None
-    duration = int(projection.get("duration_seconds") or 0)
-    if duration <= 0:
-        return None
-    return {
-        "live_state": live_state,
-        "status": STATUS_NORMAL,
-        "duration_seconds": duration,
-        "project": str(projection.get("project_name") or UNCATEGORIZED_PROJECT),
-        "project_description": str(projection.get("project_description") or ""),
-        "is_uncategorized": bool(projection.get("is_uncategorized")),
-        "persisted_activity_id": int(projection.get("persisted_activity_id") or 0),
-    }
-
-
-def _persisted_open_overlay(live: dict | None) -> dict | None:
-    """Return the persisted_open project overlay info from a live projection.
-
-    Returns ``None`` when ``live`` is ``None`` or the live state is not
-    ``persisted_open``. Otherwise returns a dict with
-    ``persisted_activity_id``, ``project``, ``project_description`` so the
-    caller can relabel the matching session's project attribution to the
-    snapshot's ``display_project`` without changing the duration.
-    double-count).
-    """
-    if not live:
-        return None
-    if live.get("live_state") != "persisted_open":
-        return None
-    persisted_id = int(live.get("persisted_activity_id") or 0)
-    if persisted_id <= 0:
-        return None
-    return {
-        "persisted_activity_id": persisted_id,
-        "project": str(live.get("project") or UNCATEGORIZED_PROJECT),
-        "project_description": str(live.get("project_description") or ""),
-    }
-
-
-def _read_current_activity_snapshot() -> dict | None:
-    raw = get_setting("current_activity_snapshot", "") or ""
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None
 
 
 def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
@@ -307,8 +219,8 @@ def validate_statistics_date_range(date_from: str, date_to: str) -> None:
     Raises ``ValueError`` with a stable code token (``invalid_date`` /
     ``invalid_range`` / ``range_too_large``) so the API layer can map to
     user-facing messages without echoing internal details. ``bool`` is
-    rejected explicitly because it is not a date string even though it is
-    a subclass of ``int``.
+    rejected explicitly because it is not a date string even though it
+    is a subclass of ``int``.
     """
     # ``bool`` is a subclass of ``int`` but not of ``str``; the ``str``
     # isinstance check below rejects it so ``True`` / ``False`` never reach

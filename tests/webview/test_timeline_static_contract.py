@@ -3455,9 +3455,9 @@ def test_core_js_ticker_uses_stable_live_key_first():
     )
 
 
-def test_timeline_js_does_not_clear_detail_when_live_projection_exists():
+def test_timeline_js_does_not_clear_detail_when_live_clock_exists():
     """Section 三.1 / 六.3: when ``sessions`` is empty but a live
-    projection exists, ``showTimeline`` must NOT clear the detail cache
+    clock exists, ``showTimeline`` must NOT clear the detail cache
     / selected session. Instead it must show a loading placeholder
     ("正在加载当前活动…") so the live session can be rendered once the
     next refresh arrives."""
@@ -3465,6 +3465,6 @@ def test_timeline_js_does_not_clear_detail_when_live_projection_exists():
     # The loading placeholder must be present.
     assert "正在加载当前活动" in source, (
         "timeline.js must show '正在加载当前活动…' when sessions are "
-        "empty but a live projection exists, instead of clearing the "
+        "empty but a live clock exists, instead of clearing the "
         "detail cache / selected session"
     )

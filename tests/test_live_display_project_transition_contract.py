@@ -4,10 +4,9 @@ display-span projection, and pending project-transition behavior.
 These tests verify the NEW display model owner
 (``worktrace.services.activity_display_model_service``) — NOT the legacy
 virtual session / detail row builders. The legacy
-``build_virtual_session`` / ``build_virtual_detail_row`` helpers are no
-longer part of the public contract (they have been privatized to
-``_build_virtual_session`` / ``_build_virtual_detail_row`` and removed
-from ``live_display_api`` re-exports).
+``build_virtual_session`` / ``build_virtual_detail_row`` helpers have been
+removed entirely from the codebase and are no longer part of the public
+contract (the bridge-facing facade is now ``worktrace.api.view_model_api``).
 
 Covered cases (spec 一.4 a–f):
 
@@ -530,14 +529,11 @@ def test_pending_transition_display_project_is_inherited_not_candidate():
     assert current["project_transition_pending"] is True
     # Convenience label fields follow display_project, not candidate.
     assert current["project_name"] == "ProjectA"
-
-    # The live_projection alias also carries the same separation.
-    projection = model["live_projection"]
-    assert projection["display_project"]["name"] == "ProjectA"
-    assert projection["candidate_project"]["name"] == "ProjectB"
-    assert projection["project_transition"]["pending"] is True
-    assert projection["project_transition"]["from_project_id"] == 12
-    assert projection["project_transition"]["to_project_id"] == 18
+    # The project_transition block carries from_project_id (inherited)
+    # and to_project_id (candidate).
+    assert current["project_transition"]["pending"] is True
+    assert current["project_transition"]["from_project_id"] == 12
+    assert current["project_transition"]["to_project_id"] == 18
 
 
 def test_pending_persisted_open_display_project_is_inherited_not_candidate():
@@ -652,39 +648,48 @@ def test_display_model_does_not_leak_sensitive_fields_persisted_open():
 
 def test_legacy_virtual_builders_not_in_live_display_api_exports():
     """Case (f): ``build_virtual_session`` / ``build_virtual_detail_row``
-    must NOT be re-exported by ``worktrace.api.live_display_api``. They
-    are no longer part of the bridge-facing public contract."""
-    from worktrace.api import live_display_api
+    / ``build_persisted_open_overlay`` / ``apply_persisted_open_overlay_to_row``
+    / ``build_live_row_contract`` must NOT be re-exported by
+    ``worktrace.api.view_model_api``. They are no longer part of the
+    bridge-facing public contract."""
+    from worktrace.api import view_model_api
 
-    api_all = set(getattr(live_display_api, "__all__", []))
-    assert "build_virtual_session" not in api_all, (
-        "live_display_api must not re-export build_virtual_session"
-    )
-    assert "build_virtual_detail_row" not in api_all, (
-        "live_display_api must not re-export build_virtual_detail_row"
-    )
-    assert not hasattr(live_display_api, "build_virtual_session"), (
-        "live_display_api must not expose build_virtual_session as an attribute"
-    )
-    assert not hasattr(live_display_api, "build_virtual_detail_row"), (
-        "live_display_api must not expose build_virtual_detail_row as an attribute"
-    )
+    api_all = set(getattr(view_model_api, "__all__", []))
+    for symbol in (
+        "build_virtual_session",
+        "build_virtual_detail_row",
+        "build_persisted_open_overlay",
+        "apply_persisted_open_overlay_to_row",
+        "build_live_row_contract",
+    ):
+        assert symbol not in api_all, (
+            "view_model_api must not re-export " + symbol
+        )
+        assert not hasattr(view_model_api, symbol), (
+            "view_model_api must not expose " + symbol + " as an attribute"
+        )
 
 
 def test_legacy_virtual_builders_not_in_live_display_service_all():
     """Case (f): the public ``__all__`` of
     ``worktrace.services.live_display_service`` must NOT include the
-    legacy virtual session / detail builders (they are now private
-    ``_build_virtual_session`` / ``_build_virtual_detail_row``)."""
+    legacy virtual session / detail builders. They have been removed
+    entirely from the codebase (no private aliases either)."""
     from worktrace.services import live_display_service
 
     service_all = set(getattr(live_display_service, "__all__", []))
-    assert "build_virtual_session" not in service_all
-    assert "build_virtual_detail_row" not in service_all
-    # The private renamed helpers exist (kept for the legacy
-    # build_live_row_contract internal path) but are NOT public.
-    assert hasattr(live_display_service, "_build_virtual_session")
-    assert hasattr(live_display_service, "_build_virtual_detail_row")
+    for symbol in (
+        "build_virtual_session",
+        "build_virtual_detail_row",
+        "build_persisted_open_overlay",
+        "apply_persisted_open_overlay_to_row",
+        "build_live_row_contract",
+        "_build_virtual_session",
+        "_build_virtual_detail_row",
+    ):
+        assert symbol not in service_all, (
+            "live_display_service.__all__ must not export " + symbol
+        )
 
 
 # Supplementary: model shape / live_clock contract

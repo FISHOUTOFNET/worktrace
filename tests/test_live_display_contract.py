@@ -403,9 +403,8 @@ def test_persisted_open_timeline_recent_detail_and_overview_classification_consi
     The persisted open row's live seconds come from
     ``timeline_service._live_duration_for_row`` (which reads the
     snapshot), so the session duration already includes the live time.
-    ``statistics_service._live_projection`` returns None for
-    persisted_open snapshots (avoiding double count), so the only live
-    contribution to the KPI is via the real DB session.
+    Statistics is DB-only, so the only live contribution to the KPI is
+    via the real DB session.
     """
     pid = project_service.create_project("MyProject")
     folder_rule_service.create_or_update_folder_rule("D:\\MyProject", pid)
@@ -803,11 +802,6 @@ def test_persisted_open_recent_item_carries_stable_live_fields(bridge):
     (``stable_live_key_hash``, ``live_started_at_epoch_ms``,
     ``carry_seconds``, ``live_state``) as virtual rows so the frontend
     continuity key survives the virtual → persisted_open transition."""
-    from worktrace.services.live_display_service import (
-        LIVE_ROW_CONTRACT_FIELDS,
-        assert_live_row_contract,
-    )
-
     aid, start_time = _create_real_open_activity(
         app_name="AppA",
         process_name="AppA.exe",
@@ -839,16 +833,25 @@ def test_persisted_open_recent_item_carries_stable_live_fields(bridge):
     assert persisted_item["live_state"] == "persisted_open"
     assert int(persisted_item["live_started_at_epoch_ms"]) > 0
 
-    # All contract fields must be present.
-    assert_live_row_contract(persisted_item)
+    # All live span fields added by apply_live_span_to_row must be present.
+    for field in (
+        "display_span_id",
+        "stable_live_key_hash",
+        "live_state",
+        "live_started_at_epoch_ms",
+        "carry_seconds",
+        "live_base_seconds",
+        "live_delta_eligible",
+    ):
+        assert field in persisted_item, (
+            "persisted_open recent item missing live span field: " + field
+        )
 
 
 def test_persisted_open_timeline_session_carries_stable_live_fields(bridge):
     """persisted_open DB sessions in
     ``get_timeline`` must carry the same stable live fields as virtual
     sessions."""
-    from worktrace.services.live_display_service import assert_live_row_contract
-
     aid, start_time = _create_real_open_activity(
         app_name="AppA",
         process_name="AppA.exe",
@@ -877,15 +880,26 @@ def test_persisted_open_timeline_session_carries_stable_live_fields(bridge):
         "persisted_open timeline session must carry stable_live_key_hash"
     )
     assert persisted_session["live_state"] == "persisted_open"
-    assert_live_row_contract(persisted_session)
+
+    # All live span fields added by apply_live_span_to_row must be present.
+    for field in (
+        "display_span_id",
+        "stable_live_key_hash",
+        "live_state",
+        "live_started_at_epoch_ms",
+        "carry_seconds",
+        "live_base_seconds",
+        "live_delta_eligible",
+    ):
+        assert field in persisted_session, (
+            "persisted_open timeline session missing live span field: " + field
+        )
 
 
 def test_persisted_open_detail_row_carries_stable_live_fields(bridge):
     """persisted_open DB detail rows in
     ``get_timeline_session_details`` must carry the same stable live
     fields as virtual detail rows."""
-    from worktrace.services.live_display_service import assert_live_row_contract
-
     aid, start_time = _create_real_open_activity(
         app_name="AppA",
         process_name="AppA.exe",
@@ -914,7 +928,20 @@ def test_persisted_open_detail_row_carries_stable_live_fields(bridge):
         "persisted_open detail row must carry stable_live_key_hash"
     )
     assert persisted_detail["live_state"] == "persisted_open"
-    assert_live_row_contract(persisted_detail)
+
+    # All live span fields added by apply_live_span_to_row must be present.
+    for field in (
+        "display_span_id",
+        "stable_live_key_hash",
+        "live_state",
+        "live_started_at_epoch_ms",
+        "carry_seconds",
+        "live_base_seconds",
+        "live_delta_eligible",
+    ):
+        assert field in persisted_detail, (
+            "persisted_open detail row missing live span field: " + field
+        )
 
 
 def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
@@ -973,228 +1000,397 @@ def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
     assert timeline["live_clock"]["stable_live_key_hash"] == persisted_hash
 
 
+# Math-invariant tests for the unified live duration contract (30s drift /
+# page-switch jump / total freeze-then-jump root-cause fix).
 
 
-def _pending_persisted_open_snapshot(
-    *,
-    aid: int,
-    start_time: str,
-    display_name: str = "ProjectA",
-    candidate_name: str = "ProjectB",
-    display_is_uncategorized: bool = False,
-) -> dict:
-    """Build a pending persisted_open snapshot with display_project /
-    candidate_project blocks.
+def test_persisted_open_extra_seconds_carry_invariant(bridge):
+    """``persisted_open`` must preserve ``extra_seconds`` via
+    ``carry_seconds`` so the frontend formula
+    ``carry_seconds + floor((now - live_started_at_epoch_ms) / 1000)``
+    equals ``elapsed + extra == duration_seconds_at_sample`` at sample
+    time, and ``duration_seconds_at_sample + 5`` five seconds later.
 
-    ``display_project`` is the inherited last-confirmed project;
-    ``candidate_project`` is the new resource's inferred project. During
-    the 30-second pending window the live UI must show
-    ``display_project``, NOT ``candidate_project``.
+    This is the root-cause fix for the ~30s drift: previously the carry
+    was hard-coded to 0 while ``duration_seconds_at_sample`` included
+    ``extra_seconds``, so the frontend ``liveSeconds(clock)`` lost the
+    extra seconds.
     """
-    display = {
-        "id": 12 if not display_is_uncategorized else None,
-        "name": display_name,
-        "description": display_name + " description",
-        "source": "inherited" if not display_is_uncategorized else "uncategorized",
-        "is_uncategorized": display_is_uncategorized,
-        "is_suggested_project": False,
-    }
-    candidate = {
-        "id": 18,
-        "name": candidate_name,
-        "description": candidate_name + " description",
-        "source": "folder_rule",
-        "is_uncategorized": False,
-        "is_suggested_project": False,
-    }
-    snap = _normal_snapshot(
-        elapsed_seconds=60,
+    from worktrace.services.activity_display_model_service import build_activity_display_model
+    from worktrace.services.live_time_service import (
+        snapshot_elapsed_seconds,
+        snapshot_extra_seconds,
+    )
+
+    aid, start_time = _create_real_open_activity(elapsed_seconds=210)
+    snapshot = _normal_snapshot(
+        elapsed_seconds=210,
+        extra_seconds=30,
         is_persisted=True,
         persisted_activity_id=aid,
-        inferred_project_name=display_name,
         start_time=start_time,
     )
-    snap["display_project"] = display
-    snap["candidate_project"] = candidate
-    snap["project_transition"] = {
-        "pending": True,
-        "started_at": "",
-        "elapsed_seconds": 12,
-        "threshold_seconds": 30,
-        "from_project_id": 12 if not display_is_uncategorized else None,
-        "to_project_id": 18,
-    }
-    snap["project_transition_pending"] = True
-    return snap
+    _set_snapshot(snapshot)
 
+    model = build_activity_display_model()
+    live_clock = model["live_clock"]
 
-def test_apply_persisted_open_overlay_to_row_overlays_all_project_fields(bridge):
-    """Section 一.3 / 六.1: ``apply_persisted_open_overlay_to_row`` must
-    overlay BOTH the unified live clock fields AND the display-facing
-    project fields. Matching a persisted open row must override
-    ``project_id`` / ``project_name`` / ``project_description`` /
-    ``display_project`` / ``candidate_project`` / ``project_transition`` /
-    ``project_transition_pending`` / ``is_uncategorized`` /
-    ``is_classified`` — not just the live clock fields.
-    """
-    from worktrace.services.live_display_service import (
-        apply_persisted_open_overlay_to_row,
-        build_persisted_open_overlay,
+    assert live_clock["live_state"] == "persisted_open"
+    assert live_clock["carry_seconds"] == snapshot_extra_seconds(snapshot), (
+        "persisted_open carry_seconds must equal snapshot extra_seconds "
+        "or the frontend liveSeconds formula loses the extra seconds"
+    )
+    assert live_clock["duration_seconds_at_sample"] == (
+        snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
+    ), (
+        "persisted_open duration_seconds_at_sample must equal "
+        "snapshot_elapsed + snapshot_extra"
+    )
+    assert live_clock["duration_seconds_at_sample"] == 240
+
+    # JS formula: live_span_seconds(T) = carry + floor((T - live_started_at)/1000).
+    import time
+
+    live_started_ms = int(live_clock["live_started_at_epoch_ms"])
+    carry = int(live_clock["carry_seconds"])
+    now_ms = int(time.time() * 1000)
+    floor_term_now = (now_ms - live_started_ms) // 1000
+    live_seconds_now = carry + floor_term_now
+    assert 238 <= live_seconds_now <= 245, (
+        f"live_span_seconds at sample time expected ~240, got {live_seconds_now}"
+    )
+    floor_term_plus_5 = ((now_ms + 5000) - live_started_ms) // 1000
+    live_seconds_plus_5 = carry + floor_term_plus_5
+    assert live_seconds_plus_5 - live_seconds_now == 5, (
+        "live_span_seconds must advance by exactly 5 over 5 seconds"
     )
 
-    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
-    snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
-    _set_snapshot(snapshot)
-    today = timeline_service.get_default_report_date()
+    delta_now = max(0, live_seconds_now - int(live_clock["duration_seconds_at_sample"]))
+    assert 0 <= delta_now <= 5, (
+        f"live delta at sample time expected ~0, got {delta_now}"
+    )
 
-    overlay = build_persisted_open_overlay(snapshot, today, today)
-    assert overlay is not None, "overlay must be built for a persisted_open snapshot"
 
-    # Build a session row that matches the persisted_activity_id. The row
-    # starts with DB candidate project fields that MUST be overlaid.
+def test_persisted_open_viewmodel_same_sample_consistency(bridge):
+    """Under one ``persisted_open`` snapshot with ``extra_seconds=30``,
+    Overview / Recent / Timeline / Detail must all share the same
+    ``duration_seconds_at_sample == 240`` and the same
+    ``stable_live_key_hash`` / ``display_span_id``.
+
+    This nails down the "same sample" consistency that previously broke
+    when Overview KPI used the old live projection while the other views
+    used the Activity Display Model.
+    """
+    aid, start_time = _create_real_open_activity(elapsed_seconds=210)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=210,
+            extra_seconds=30,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+
+    overview = bridge.get_overview()
+    recent = bridge.get_recent_activities()
+    timeline = bridge.get_timeline()
+    details = bridge.get_timeline_session_details([aid], None)
+
+    expected_span_id = overview["live_clock"]["display_span_id"]
+    expected_hash = overview["live_clock"]["stable_live_key_hash"]
+    expected_durations = overview["live_clock"]["duration_seconds_at_sample"]
+    assert expected_durations == 240
+
+    # All four views share the same live_clock identity.
+    for view_name, view in (
+        ("overview", overview),
+        ("recent", recent),
+        ("timeline", timeline),
+        ("details", details),
+    ):
+        assert view["live_clock"]["display_span_id"] == expected_span_id, (
+            f"{view_name} live_clock.display_span_id mismatch"
+        )
+        assert view["live_clock"]["stable_live_key_hash"] == expected_hash, (
+            f"{view_name} live_clock.stable_live_key_hash mismatch"
+        )
+        assert (
+            view["live_clock"]["duration_seconds_at_sample"] == expected_durations
+        ), f"{view_name} live_clock.duration_seconds_at_sample mismatch"
+
+    # Detail row sample duration must be 240 (the open activity's own
+    # duration at sample).
+    detail_row = next(
+        (a for a in details["activities"] if int(a.get("activity_id") or 0) == aid),
+        None,
+    )
+    assert detail_row is not None
+    assert detail_row["duration_seconds_at_sample"] == 240
+    assert detail_row["live_base_seconds"] == 240
+    assert detail_row["display_span_id"] == expected_span_id
+
+    # Recent matching row must also carry the same span id and a live base.
+    recent_row = next(
+        (r for r in recent["activities"] if int(r.get("activity_id") or 0) == aid),
+        None,
+    )
+    assert recent_row is not None
+    assert recent_row["display_span_id"] == expected_span_id
+    assert recent_row["live_base_seconds"] == 240
+
+    # Timeline matching session row must also carry the same span id.
+    timeline_session = next(
+        (
+            s
+            for s in timeline["sessions"]
+            if int(s.get("first_activity_id") or 0) == aid
+        ),
+        None,
+    )
+    assert timeline_session is not None
+    assert timeline_session["display_span_id"] == expected_span_id
+
+    # Timeline today_total_seconds must equal sum of session row durations
+    # (post-overlay). With only this one open row, total == 240.
+    sessions_total = sum(int(s.get("duration_seconds") or 0) for s in timeline["sessions"])
+    assert timeline["today_total_seconds"] == sessions_total, (
+        "timeline today_total_seconds must equal sum of post-overlay session "
+        "durations"
+    )
+
+
+def test_session_base_differs_from_live_activity_duration(bridge):
+    """A session row that contains BOTH a closed activity (100s) AND a
+    ``persisted_open`` activity (240s) must have ``live_base_seconds``
+    equal to the SESSION's full sample duration (340s), NOT the live
+    activity's own duration (240s).
+
+    The detail row for the persisted_open activity must have
+    ``live_base_seconds == 240``. Both rows share the same live delta,
+    so after +5s the session row reads 345s and the detail row reads
+    245s. The session row must NEVER be overwritten to 245s.
+
+    This is the regression guard against the old "every
+    ``[data-display-span-id]`` node renders ``liveSeconds(clock)``"
+    contract that overwrote session durations with the live activity's
+    own duration.
+    """
+    from worktrace.services.activity_display_model_service import (
+        apply_live_span_to_row,
+        build_activity_display_model,
+        get_live_span,
+    )
+
+    # 1. Create a closed activity of 100s in the same project.
+    closed_start = datetime.now() - timedelta(seconds=400)
+    closed_end = closed_start + timedelta(seconds=100)
+    closed_aid = activity_service.create_activity(
+        "AppA",
+        "AppA.exe",
+        "Window",
+        start_time=closed_start.strftime(TIME_FORMAT),
+    )
+    activity_service.close_activity(closed_aid, closed_end.strftime(TIME_FORMAT), 100)
+
+    # 2. Create a persisted_open activity of 240s in the same project.
+    open_aid, open_start = _create_real_open_activity(elapsed_seconds=240)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=210,
+            extra_seconds=30,
+            is_persisted=True,
+            persisted_activity_id=open_aid,
+            start_time=open_start,
+        )
+    )
+
+    model = build_activity_display_model()
+    span = get_live_span(model)
+    assert span is not None, "persisted_open display span must exist"
+
+    # Session row aggregates both activities: 100 (closed) + 240 (live) = 340.
     session_row = {
-        "activity_id": aid,
-        "first_activity_id": aid,
-        "activity_ids": [aid],
-        "project_id": 999,
-        "project_name": "DB_Candidate_Project",
-        "project_description": "DB candidate desc",
-        "is_uncategorized": False,
-        "is_classified": True,
-        "live_state": "",
-        "stable_live_key": "",
-        "stable_live_key_hash": "",
-        "live_display_key": "",
-        "live_started_at_epoch_ms": 0,
-        "carry_seconds": 0,
-        "is_virtual_live": False,
-        "is_in_progress": False,
-        "is_live_projected": False,
-        "edit_disabled": False,
-        "disable_reason": "",
-        "source": "db",
-        "display_project": None,
-        "candidate_project": None,
-        "project_transition": None,
-        "project_transition_pending": False,
-        "status": "",
-        "start_time": "",
+        "session_id": "sess-1",
+        "first_activity_id": open_aid,
+        "activity_ids": [closed_aid, open_aid],
+        "duration_seconds": 340,
+        "raw_duration_seconds": 340,
     }
-    apply_persisted_open_overlay_to_row(session_row, overlay)
+    detail_row = {
+        "activity_id": open_aid,
+        "duration_seconds": 240,
+        "raw_duration_seconds": 0,
+    }
 
-    # Unified live clock fields must be overlaid.
-    assert session_row["live_state"] == "persisted_open"
-    assert session_row["stable_live_key_hash"]
-    assert session_row["live_started_at_epoch_ms"] > 0
-    # Display-facing project fields must be overlaid from display_project.
-    assert session_row["project_name"] == "ProjectA"
-    assert session_row["project_description"] == "ProjectA description"
-    assert session_row["display_project"]["name"] == "ProjectA"
-    assert session_row["candidate_project"]["name"] == "ProjectB"
-    assert session_row["project_transition_pending"] is True
-    assert session_row["is_uncategorized"] is False
-    assert session_row["is_classified"] is True
-    # Edit controls must be disabled for in-progress rows.
-    assert session_row["edit_disabled"] is True
-    assert session_row["disable_reason"]
+    apply_live_span_to_row(session_row, span)
+    apply_live_span_to_row(detail_row, span)
+
+    assert detail_row["live_base_seconds"] == 240, (
+        "detail row live_base_seconds must equal the open activity's "
+        "sample duration (240)"
+    )
+    assert session_row["live_base_seconds"] == 340, (
+        "session row live_base_seconds must equal the session's full sample "
+        "duration (340 = 100 closed + 240 live), NOT the live activity's "
+        "own duration (240). This is the regression guard against the old "
+        "contract that overwrote session durations with liveSeconds(clock)."
+    )
+
+    assert session_row["display_span_id"] == detail_row["display_span_id"]
+    assert session_row["stable_live_key_hash"] == detail_row["stable_live_key_hash"]
+    assert session_row["duration_seconds_at_sample"] == 240
+
+    # Ticker: delta = max(0, live_span_now - 240). At sample time delta=0;
+    # at +5s delta=5. Session renders 340→345, detail renders 240→245.
+    delta_at_sample = 0
+    assert session_row["live_base_seconds"] + delta_at_sample == 340
+    assert detail_row["live_base_seconds"] + delta_at_sample == 240
+
+    delta_plus_5 = 5
+    assert session_row["live_base_seconds"] + delta_plus_5 == 345, (
+        "session row after +5s must be 345, NOT 245 — the session must not "
+        "be overwritten to the live activity's own duration"
+    )
+    assert detail_row["live_base_seconds"] + delta_plus_5 == 245
 
 
-def test_apply_persisted_open_overlay_to_row_candidate_does_not_override_project_name(bridge):
-    """Section 一.5 / 六.1: ``candidate_project`` must NEVER override
-    ``project_name`` / ``project_description`` / ``project_id``. Even
-    when the candidate is a concrete project and the display is
-    uncategorized, the overlay keeps ``project_name`` aligned with
-    ``display_project.name``.
+def test_virtual_pending_no_rows_in_lists_and_no_kpi_tick(bridge):
+    """A ``virtual_pending`` snapshot (normal, unpersisted, <30s, no
+    absorb anchor) must:
+
+    * render the pending resource in the current-activity area;
+    * NOT inject any row into Recent / Timeline / Details;
+    * NOT inflate Overview KPI ``today_total_seconds`` /
+      ``classified_seconds`` / ``uncategorized_seconds`` (no DB row to
+      project onto);
+    * surface a live_clock with ``is_live == True`` but
+      ``is_project_duration_live == False``.
     """
-    from worktrace.services.live_display_service import (
-        apply_persisted_open_overlay_to_row,
-        build_persisted_open_overlay,
+    # No prior activity exists, so the pending snapshot has no anchor.
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=10,
+            extra_seconds=0,
+            is_persisted=False,
+        )
     )
 
-    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
-    snapshot = _pending_persisted_open_snapshot(
-        aid=aid,
-        start_time=start_time,
-        display_name=UNCATEGORIZED_PROJECT,
-        candidate_name="ProjectB",
-        display_is_uncategorized=True,
+    overview = bridge.get_overview()
+    recent = bridge.get_recent_activities()
+    timeline = bridge.get_timeline()
+
+    # current_activity area IS active.
+    assert overview["current_activity"]["active"] is True
+    assert overview["current_activity"]["is_virtual_live"] is True
+    assert overview["live_clock"]["live_state"] == "virtual_pending"
+    assert overview["live_clock"]["is_live"] is True
+    # KPI totals must NOT tick for virtual_pending.
+    assert overview["live_clock"]["is_project_duration_live"] is False, (
+        "virtual_pending must NOT tick project/KPI totals"
     )
-    _set_snapshot(snapshot)
-    today = timeline_service.get_default_report_date()
 
-    overlay = build_persisted_open_overlay(snapshot, today, today)
-    session_row = {
-        "activity_id": aid,
-        "first_activity_id": aid,
-        "activity_ids": [aid],
-        "project_id": 999,
-        "project_name": "DB_Candidate",
-        "project_description": "",
-        "is_uncategorized": False,
-        "is_classified": True,
-        "live_state": "",
-        "stable_live_key": "",
-        "stable_live_key_hash": "",
-        "live_display_key": "",
-        "live_started_at_epoch_ms": 0,
-        "carry_seconds": 0,
-        "is_virtual_live": False,
-        "is_in_progress": False,
-        "is_live_projected": False,
-        "edit_disabled": False,
-        "disable_reason": "",
-        "source": "db",
-        "display_project": None,
-        "candidate_project": None,
-        "project_transition": None,
-        "project_transition_pending": False,
-        "status": "",
-        "start_time": "",
-    }
-    apply_persisted_open_overlay_to_row(session_row, overlay)
+    # Recent / Timeline must have NO live row injected.
+    assert recent["activities"] == [], (
+        "virtual_pending must NOT inject a row into Recent"
+    )
+    assert timeline["sessions"] == [], (
+        "virtual_pending must NOT inject a row into Timeline"
+    )
 
-    # project_name follows display_project (uncategorized), NOT candidate.
-    assert session_row["project_name"] == UNCATEGORIZED_PROJECT
-    assert session_row["is_uncategorized"] is True
-    assert session_row["is_classified"] is False
-    # candidate_project is exposed as a separate field only.
-    assert session_row["candidate_project"]["name"] == "ProjectB"
-    # project_id follows display_project.id (None -> 0), NOT candidate.id.
-    assert session_row["project_id"] == 0
+    # KPI totals must be 0 (no DB rows, no live projection onto a DB row).
+    assert int(overview["today_total_seconds"]) == 0
+    assert int(overview["classified_seconds"]) == 0
+    assert int(overview["uncategorized_seconds"]) == 0
 
 
-def test_apply_persisted_open_overlay_to_row_does_not_overlay_non_matching_row(bridge):
-    """``apply_persisted_open_overlay_to_row`` must NOT
-    overlay a row whose ``activity_id`` / ``first_activity_id`` /
-    ``activity_ids`` do NOT contain the persisted_activity_id. Closed
-    historical rows must remain untouched.
+def test_absorbed_pending_overlays_anchor_row_only(bridge):
+    """An ``absorbed_pending`` snapshot (normal, unpersisted, <30s, WITH
+    absorb anchor) must:
+
+    * overlay ONLY the anchor DB row's live clock fields (no virtual row
+      injection);
+    * set the anchor row's ``live_base_seconds`` = ``anchor_raw +
+      pending_at_sample`` so the frontend ticker lands on the right value;
+    * NOT write the DB (anchor row's stored duration is unchanged in DB);
+    * keep the anchor row's project / resource identity (the pending
+      snapshot's inferred project is NOT overlaid).
     """
-    from worktrace.services.live_display_service import (
-        apply_persisted_open_overlay_to_row,
-        build_persisted_open_overlay,
+    # 1. Create a closed anchor activity of 60s.
+    anchor_start = datetime.now() - timedelta(seconds=120)
+    anchor_end = anchor_start + timedelta(seconds=60)
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start.strftime(TIME_FORMAT),
+    )
+    activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 60)
+
+    # 2. Set a <30s pending snapshot. The carry state must point at the
+    #    anchor for absorption to kick in.
+    from worktrace.services import settings_service as ss
+
+    pending_start = datetime.now() - timedelta(seconds=10)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=10,
+            extra_seconds=0,
+            is_persisted=False,
+            start_time=pending_start.strftime(TIME_FORMAT),
+            inferred_project_name="PendingProject",
+        )
+    )
+    # short_activity_carry links the pending snapshot to the anchor.
+    ss.set_setting(
+        "short_activity_carry",
+        json.dumps({"activity_id": anchor_aid, "completed_seconds": 60}),
+    )
+    ss.clear_settings_cache()
+
+    overview = bridge.get_overview()
+    recent = bridge.get_recent_activities()
+    timeline = bridge.get_timeline()
+
+    assert overview["live_clock"]["live_state"] == "absorbed_pending"
+    assert overview["live_clock"]["is_live"] is True
+    assert overview["live_clock"]["is_project_duration_live"] is True
+
+    # No virtual row injection: only the anchor DB row appears.
+    assert len(recent["activities"]) == 1, (
+        "absorbed_pending must NOT inject a virtual row; only the anchor DB "
+        "row appears"
+    )
+    recent_row = recent["activities"][0]
+    assert int(recent_row["activity_id"]) == anchor_aid
+    assert recent_row["live_state"] == "absorbed_pending"
+    assert recent_row["source"] == "absorbed_pending"
+
+    # Anchor row keeps its OWN project identity, not the pending snapshot's.
+    assert recent_row["project_name"] == "未归类", (
+        "absorbed_pending must keep the anchor row's project identity"
     )
 
-    aid, start_time = _create_real_open_activity(elapsed_seconds=60)
-    snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
-    _set_snapshot(snapshot)
-    today = timeline_service.get_default_report_date()
+    # live_base = anchor_raw(60) + pending_at_sample(10) = 70.
+    assert recent_row["live_base_seconds"] == 70, (
+        f"absorbed_pending live_base_seconds must equal anchor_raw (60) + "
+        f"pending_at_sample (10) = 70, got {recent_row['live_base_seconds']}"
+    )
 
-    overlay = build_persisted_open_overlay(snapshot, today, today)
-    # A closed historical row with a different activity_id.
-    closed_row = {
-        "activity_id": 8888,
-        "first_activity_id": 8888,
-        "activity_ids": [8888],
-        "project_id": 555,
-        "project_name": "ClosedProject",
-        "project_description": "closed desc",
-        "live_state": "",
-        "stable_live_key_hash": "",
-        "edit_disabled": False,
-        "source": "db",
-    }
-    apply_persisted_open_overlay_to_row(closed_row, overlay)
-    # The closed row is NOT overlaid.
-    assert closed_row["project_name"] == "ClosedProject"
-    assert closed_row["live_state"] == ""
-    assert closed_row["edit_disabled"] is False
+    # DB must NOT be written: the anchor row's stored duration is still 60.
+    anchor_db = activity_service.get_activity(anchor_aid)
+    assert int(anchor_db["duration_seconds"]) == 60, (
+        "absorbed_pending display projection must NOT write the DB"
+    )
+
+    # Timeline session for the anchor also overlays (no virtual session).
+    anchor_session = next(
+        (
+            s
+            for s in timeline["sessions"]
+            if int(s.get("first_activity_id") or 0) == anchor_aid
+        ),
+        None,
+    )
+    assert anchor_session is not None
+    assert anchor_session["live_state"] == "absorbed_pending"

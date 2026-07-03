@@ -11,7 +11,7 @@ import os
 
 from typing import Any
 
-from . import backup_api, live_display_api
+from . import backup_api, view_model_api
 from ..constants import PRIVACY_NOTICE_TEXT
 from ..services import export_service
 from ..services.secure_backup_service import (
@@ -412,7 +412,7 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
         today = _timeline_api.get_default_report_date()
         scoped_report_date = report_date or today
         # Unified refresh revision covers all structural changes (snapshot, carry state, latest activity, collector status).
-        refresh_revision, debug_inputs = live_display_api.compute_refresh_revision(
+        refresh_revision, debug_inputs = view_model_api.compute_refresh_revision(
             snapshot, collector_status, user_paused, today, scoped_report_date
         )
         current_activity_key = str(debug_inputs.get("current_activity_key") or "")
@@ -425,7 +425,7 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
         # sample so the frontend ticker uses live_started_at_epoch_ms + carry_seconds
         # without a second bridge call. Live clock fields share the snapshot with
         # refresh_revision (single-sample contract).
-        live_summary = live_display_api.build_current_activity_summary(
+        live_summary = view_model_api.build_current_activity_summary(
             snapshot, report_date=scoped_report_date, today=today
         )
         if paused or collector_status == "paused":

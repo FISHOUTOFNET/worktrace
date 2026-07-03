@@ -5,14 +5,14 @@ These tests enforce the architectural invariants from the cleanup spec
 builder / multi-cache-ticker semantics. The display-model owner is
 ``worktrace.services.activity_display_model_service``; the legacy
 ``build_virtual_session`` / ``build_virtual_detail_row`` helpers have been
-privatized and removed from the bridge-facing public API.
+removed entirely from the codebase and the bridge-facing public API.
 
 Covered invariants:
 
 1. ``view_model_service.py`` does NOT import/call the legacy
    ``build_virtual_session`` / ``build_virtual_detail_row`` /
    ``build_persisted_open_overlay`` / ``apply_persisted_open_overlay_to_row``.
-2. ``live_display_api.py`` does NOT re-export the legacy virtual builders.
+2. ``view_model_api.py`` does NOT re-export the legacy virtual builders.
 3. No test under ``tests/`` imports ``build_virtual_session`` /
    ``build_virtual_detail_row`` as a POSITIVE contract.
 4. (Covered in ``test_heartbeat_projection_contract.py``:
@@ -66,18 +66,31 @@ def test_view_model_service_does_not_reference_legacy_virtual_builders():
         )
 
 
-# --- Invariant 2: live_display_api does not re-export legacy builders ---
+# --- Invariant 2: view_model_api does not re-export legacy builders ---
 
 
-def test_live_display_api_does_not_re_export_legacy_virtual_builders():
-    """Invariant 三.2: ``worktrace.api.live_display_api`` must NOT re-export
+def test_view_model_api_does_not_re_export_legacy_virtual_builders():
+    """Invariant 三.2: ``worktrace.api.view_model_api`` must NOT re-export
     ``build_virtual_session`` / ``build_virtual_detail_row``. The bridge
     facade is no longer the unified live-display model entry; it only
-    exposes low-level pure helpers (stable key, refresh revision, display
-    model pass-through)."""
-    from worktrace.api import live_display_api
+    exposes low-level pure helpers (current activity summary, refresh
+    revision, ViewModel getters)."""
+    import importlib
 
-    api_all = set(getattr(live_display_api, "__all__", []))
+    # The legacy ``live_display_api`` module must NOT exist anymore.
+    try:
+        importlib.import_module("worktrace.api.live_display_api")
+    except ModuleNotFoundError:
+        pass
+    else:
+        raise AssertionError(
+            "worktrace.api.live_display_api module must NOT exist anymore; "
+            "all exports moved to worktrace.api.view_model_api"
+        )
+
+    from worktrace.api import view_model_api
+
+    api_all = set(getattr(view_model_api, "__all__", []))
     for symbol in (
         "build_virtual_session",
         "build_virtual_detail_row",
@@ -85,10 +98,23 @@ def test_live_display_api_does_not_re_export_legacy_virtual_builders():
         "apply_persisted_open_overlay_to_row",
     ):
         assert symbol not in api_all, (
-            "live_display_api.__all__ must not re-export " + symbol
+            "view_model_api.__all__ must not re-export " + symbol
         )
-        assert not hasattr(live_display_api, symbol), (
-            "live_display_api must not expose " + symbol + " as an attribute"
+        assert not hasattr(view_model_api, symbol), (
+            "view_model_api must not expose " + symbol + " as an attribute"
+        )
+
+    # The new view_model_api must export the canonical ViewModel entry points.
+    for symbol in (
+        "build_current_activity_summary",
+        "compute_refresh_revision",
+        "get_overview_view_model",
+        "get_refresh_state_view_model",
+        "get_session_details_view_model",
+        "get_timeline_view_model",
+    ):
+        assert symbol in api_all or hasattr(view_model_api, symbol), (
+            "view_model_api must export " + symbol
         )
 
 
@@ -168,8 +194,8 @@ def test_timeline_js_renders_live_rows_with_display_span_id():
 def test_live_display_service_all_does_not_export_legacy_virtual_builders():
     """Reinforcement of 三.1 / 三.2: the public ``__all__`` of
     ``worktrace.services.live_display_service`` must NOT include the
-    legacy virtual session / detail builders. They have been renamed to
-    private ``_build_virtual_session`` / ``_build_virtual_detail_row``."""
+    legacy virtual session / detail builders. They have been removed
+    entirely from the codebase."""
     from worktrace.services import live_display_service
 
     service_all = set(getattr(live_display_service, "__all__", []))

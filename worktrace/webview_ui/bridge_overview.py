@@ -99,8 +99,11 @@ class OverviewBridgeMixin:
         """Return today's Overview page ViewModel.
 
         The complete Overview ViewModel (KPIs, current activity, recent
-        activities, live_projection, sample_id, live clock fields) is
-        built by ``view_model_service`` from a single snapshot sample.
+        activities, live_clock, sample_id, Activity Display Model fields)
+        is built by ``view_model_service`` from a single snapshot sample.
+        The legacy ``live_projection`` / ``live_display`` aliases are no
+        longer surfaced; the Activity Display Model is the sole live
+        semantics owner.
         """
         try:
             return view_model_api.get_overview_view_model()
@@ -111,24 +114,25 @@ class OverviewBridgeMixin:
     def get_recent_activities(self) -> dict[str, Any]:
         """Return up to 20 recent project sessions for today.
 
-        Selects the recent-activities sub-payload and the live-display
-        summary from the unified Overview ViewModel so the recent list
-        and the Overview share the same snapshot sample. The unified
-        live clock fields (``live_clock``, ``display_span_id``,
-        ``activity_display_model``, ``live_projection``) are surfaced so
-        the Recent ViewModel carries the same contract fields as Overview
-        / Timeline / Details under the unified Activity Display Model.
+        Selects the recent-activities sub-payload and the unified live
+        clock fields from the Overview ViewModel so the recent list and
+        the Overview share the same snapshot sample. The unified live
+        clock fields (``live_clock``, ``display_span_id``,
+        ``activity_display_model``, ``sample_id``) are surfaced so the
+        Recent ViewModel carries the same contract fields as Overview /
+        Timeline / Details under the unified Activity Display Model. The
+        legacy ``live_projection`` / ``live_display`` aliases are no
+        longer surfaced.
         """
         try:
             vm = view_model_api.get_overview_view_model()
             return {
                 "ok": True,
                 "activities": vm.get("activities", []),
-                "live_display": vm.get("live_display", {}),
                 "live_clock": vm.get("live_clock", {}),
                 "display_span_id": vm.get("display_span_id", ""),
                 "activity_display_model": vm.get("activity_display_model", {}),
-                "live_projection": vm.get("live_projection", {}),
+                "sample_id": vm.get("sample_id", ""),
             }
         except Exception:
             logger.exception("webview bridge get_recent_activities failed")

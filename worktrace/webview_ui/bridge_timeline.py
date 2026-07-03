@@ -143,10 +143,12 @@ class TimelineBridgeMixin:
     def get_timeline(self, date: str | None = None) -> dict[str, Any]:
         """Return the Timeline page ViewModel for a single date.
 
-        The complete Timeline ViewModel (sessions, live_projection,
-        live clock fields, persisted_open overlay, project transition,
+        The complete Timeline ViewModel (sessions, live_clock, Activity
+        Display Model fields, persisted_open overlay, project transition,
         duration override, raw/display totals) is built by
-        ``view_model_service`` from a single snapshot sample.
+        ``view_model_service`` from a single snapshot sample. The legacy
+        ``live_projection`` alias is no longer surfaced; the Activity
+        Display Model is the sole live semantics owner.
         """
         try:
             return view_model_api.get_timeline_view_model(date)
@@ -161,11 +163,13 @@ class TimelineBridgeMixin:
     ) -> dict[str, Any]:
         """Return the Timeline Details ViewModel for a session.
 
-        The complete Details ViewModel (virtual detail row,
-        persisted_open overlay, display-safe resource/project fields,
+        The complete Details ViewModel (real DB detail rows with live
+        span overlay, display-safe resource/project fields,
         edit_disabled / disable_reason, live clock fields, single-sample
-        live_display / live_projection contract) is built by
-        ``view_model_service``.
+        Activity Display Model contract) is built by
+        ``view_model_service``. The legacy virtual detail row injection
+        and ``live_projection`` / ``live_display`` aliases are no longer
+        surfaced.
         """
         try:
             ids = [int(aid) for aid in (activity_ids or [])]

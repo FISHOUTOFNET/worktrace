@@ -298,11 +298,11 @@ def test_refresh_revision_changes_on_user_paused(bridge):
 
 def test_get_recent_activities_returns_required_fields(bridge):
     """each recent item must carry the unified live-display
-    fields; the payload must carry ``live_display``."""
+    fields; the payload must carry ``live_clock``."""
     _set_snapshot(None)  # no current activity -> no virtual item
     result = bridge.get_recent_activities()
     assert result["ok"] is True
-    assert "live_display" in result
+    assert "live_clock" in result
     # Removed live clock fields must stay absent from the recent
     # activities payload; assert they are absent so a future regression
     # is caught.
@@ -326,10 +326,10 @@ def test_get_recent_activities_returns_required_fields(bridge):
 
 def test_get_recent_activities_no_projection_without_snapshot(bridge):
     """when no current snapshot exists, no virtual item is
-    prepended and ``live_display.is_virtual_live`` is False."""
+    prepended and ``live_clock.live_state`` is ``none``."""
     _set_snapshot(None)
     result = bridge.get_recent_activities()
-    assert result["live_display"]["is_virtual_live"] is False
+    assert result["live_clock"]["live_state"] == "none"
     for item in result["activities"]:
         assert item["is_virtual_live"] is False
         assert item["is_virtual"] is False
@@ -341,7 +341,7 @@ def test_get_recent_activities_no_projection_for_paused_snapshot(bridge):
     for status in ("idle", "paused", "excluded", "error"):
         _set_snapshot(_normal_snapshot(status=status))
         result = bridge.get_recent_activities()
-        assert result["live_display"]["is_virtual_live"] is False, (
+        assert result["live_clock"]["live_state"] != "virtual_pending", (
             "paused/idle/excluded/error snapshot must not produce a "
             "virtual recent item (status=" + status + ")"
         )
@@ -358,7 +358,7 @@ def test_get_recent_activities_no_projection_for_persisted_snapshot(bridge):
         _normal_snapshot(is_persisted=True, persisted_activity_id=123)
     )
     result = bridge.get_recent_activities()
-    assert result["live_display"]["is_virtual_live"] is False
+    assert result["live_clock"]["live_state"] != "virtual_pending"
     for item in result["activities"]:
         assert item["is_virtual_live"] is False
         assert item["is_virtual"] is False

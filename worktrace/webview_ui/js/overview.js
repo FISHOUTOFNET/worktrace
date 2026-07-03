@@ -56,10 +56,17 @@
             if (inProgress) cls += " in-progress";
             if (item.is_live_projected === true) cls += " live-projected";
             if (item.is_virtual === true) cls += " virtual-live";
-            // Unified live-span DOM attribute: ticker walks [data-display-span-id].
+            // Unified live-span DOM attributes: ticker walks [data-display-span-id]
+            // and reads each row's OWN sample base from [data-live-base-seconds]
+            // so a session/recent row whose sample duration is larger than the
+            // live activity's own duration is NOT overwritten by the live span.
             var spanId = item.display_span_id || "";
+            var liveBaseSec = (spanId && !isNaN(durSec)) ? durSec : 0;
+            var continuityKey = spanId ? App.liveContinuityKey(item, "recent") : "";
             html += '<div class="' + cls + '" data-recent-index="' + i + '"'
                 + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
+                + (spanId ? ' data-live-base-seconds="' + liveBaseSec + '"' : '')
+                + (continuityKey ? ' data-live-continuity-key="' + App.escapeHtml(continuityKey) + '"' : '')
                 + ' data-duration-seconds="' + (isNaN(durSec) ? 0 : durSec) + '"'
                 + '>'
                 + '<div>'
@@ -69,10 +76,13 @@
                 + '</div>'
                 + '<div class="recent-item-duration">' + App.escapeHtml(durText) + '</div>'
                 + '</div>';
-            // Seed monotonic state by live-span id so fresh snapshot replaces prior projection.
-            var recentKey = App.liveContinuityKey(item, "recent");
-            App.resetMonotonicRenderState(recentKey);
-            App._monotonicRenderState[recentKey] = { lastSeconds: isNaN(durSec) ? 0 : durSec };
+            // Seed monotonic state by the SAME continuity key the ticker will
+            // read from data-live-continuity-key so render and ticker share
+            // one monotonic guard.
+            if (continuityKey) {
+                App.resetMonotonicRenderState(continuityKey);
+                App._monotonicRenderState[continuityKey] = { lastSeconds: isNaN(durSec) ? 0 : durSec };
+            }
         }
         listEl.innerHTML = html;
     }

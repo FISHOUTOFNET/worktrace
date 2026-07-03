@@ -130,60 +130,6 @@ def test_project_stats_count_project_records_split_by_boundary(temp_db):
     ]
 
 
-def test_live_unpersisted_activity_is_projected_only_when_requested(temp_db):
-    today = date.today().isoformat()
-    project_service.create_project("Client", "billable")
-    settings_service.set_setting(
-        "current_activity_snapshot",
-        json.dumps(
-            {
-                "activity_display_name": "Spec.docx",
-                "inferred_project_name": "Client",
-                "status": "normal",
-                "start_time": "",
-                "elapsed_seconds": 65,
-                "is_persisted": False,
-                "persisted_activity_id": None,
-            },
-            ensure_ascii=False,
-        ),
-    )
-
-    assert statistics_service.get_summary(today, today)["total_duration"] == 0
-
-    summary = statistics_service.get_summary(today, today, include_live=True)
-    stats = statistics_service.get_project_stats(today, today, include_live=True)
-
-    assert summary["total_duration"] == 65
-    assert summary["effective_duration"] == 65
-    assert summary["classified_duration"] == 65
-    assert stats == [{"project": "Client", "total_duration": 65, "record_count": 1, "project_description": "billable"}]
-
-
-def test_live_persisted_snapshot_is_not_double_counted(temp_db):
-    today = date.today().isoformat()
-    settings_service.set_setting(
-        "current_activity_snapshot",
-        json.dumps(
-            {
-                "activity_display_name": "Spec.docx",
-                "inferred_project_name": "Client",
-                "status": "normal",
-                "start_time": "",
-                "elapsed_seconds": 65,
-                "is_persisted": True,
-                "persisted_activity_id": 99,
-            },
-            ensure_ascii=False,
-        ),
-    )
-
-    assert statistics_service.get_summary(today, today, include_live=True)["total_duration"] == 0
-    assert statistics_service.get_project_stats(today, today, include_live=True) == []
-
-
-
-
 def _pending_persisted_open_snapshot(
     *,
     aid: int,
@@ -233,129 +179,6 @@ def _pending_persisted_open_snapshot(
     }
 
 
-def test_get_project_stats_persisted_open_group_uses_display_project(temp_db):
-    """Section 四.1 / 六.4: during the 30-second pending window,
-    ``get_project_stats(include_live=True)`` must group the persisted_open
-    session under the inherited ``display_project``, NOT the DB row's
-    candidate assignment. ``candidate_project`` must NOT influence KPI
-    attribution.
-    """
-    from datetime import datetime, timedelta
-    from worktrace.constants import TIME_FORMAT
-    from worktrace.services import activity_service, project_service
-
-    today = date.today().isoformat()
-    project_a_id = project_service.create_project("ProjectA")
-    project_b_id = project_service.create_project("ProjectB")
-    start = datetime.now() - timedelta(seconds=60)
-    start_time = start.strftime(TIME_FORMAT)
-    aid = activity_service.create_activity(
-        "AppA", "AppA.exe", "Window", start_time=start_time
-    )
-    # Assign the DB row to ProjectB (the candidate). The KPI must
-    # override this with ProjectA (the inherited display project).
-    activity_service.update_activity_project(aid, project_b_id)
-    activity_service.set_activity_duration(aid, 60)
-    assert activity_service.get_activity(aid)["project_name"] == "ProjectB"
-
-    snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
-    settings_service.set_setting(
-        "current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False)
-    )
-    settings_service.clear_settings_cache()
-
-    stats = statistics_service.get_project_stats(today, today, include_live=True)
-    # The persisted_open session must be grouped under ProjectA, NOT ProjectB.
-    project_names = {row["project"]: row for row in stats}
-    assert "ProjectA" in project_names, (
-        "persisted_open session must be grouped under display_project (ProjectA)"
-    )
-    assert project_names["ProjectA"]["total_duration"] >= 60
-    # ProjectB (the DB candidate) must NOT appear because the overlay
-    # relabels the session to ProjectA.
-    assert "ProjectB" not in project_names, (
-        "candidate_project must NOT appear as a separate KPI group"
-    )
-
-
-def test_get_summary_persisted_open_does_not_double_count_total(temp_db):
-    """Section 四.1 / 六.4: ``get_summary(include_live=True)`` must NOT
-    double-count a persisted_open session's duration in
-    ``total_duration`` / ``effective_duration``. The DB row already
-    carries the duration; the live overlay only relabels the project.
-    """
-    from datetime import datetime, timedelta
-    from worktrace.constants import TIME_FORMAT
-    from worktrace.services import activity_service, project_service
-
-    today = date.today().isoformat()
-    project_b_id = project_service.create_project("ProjectB")
-    start = datetime.now() - timedelta(seconds=60)
-    start_time = start.strftime(TIME_FORMAT)
-    aid = activity_service.create_activity(
-        "AppA", "AppA.exe", "Window", start_time=start_time
-    )
-    activity_service.update_activity_project(aid, project_b_id)
-    activity_service.set_activity_duration(aid, 60)
-
-    snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
-    settings_service.set_setting(
-        "current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False)
-    )
-    settings_service.clear_settings_cache()
-
-    summary_with_live = statistics_service.get_summary(today, today, include_live=True)
-    summary_without_live = statistics_service.get_summary(today, today, include_live=False)
-    # Both must report the same total / effective duration — the DB row
-    # already carries the duration. include_live must NOT add an extra
-    # live duration for persisted_open (that would double-count).
-    assert summary_with_live["total_duration"] == summary_without_live["total_duration"], (
-        "include_live=True must NOT double-count persisted_open duration"
-    )
-    assert summary_with_live["effective_duration"] == summary_without_live["effective_duration"], (
-        "include_live=True must NOT double-count persisted_open effective duration"
-    )
-    # The total is the open DB row's duration (~60s, may be 61s due to
-    # wall-clock drift between start_time and the live recompute), NOT
-    # 120s (which would indicate double-counting). Use a tolerant
-    # range: at least 60, strictly less than 120.
-    assert 60 <= summary_with_live["total_duration"] < 120, (
-        f"persisted_open total_duration should be ~60s (open DB row only), "
-        f"got {summary_with_live['total_duration']}s"
-    )
-
-
-def test_get_summary_virtual_live_adds_duration_to_total(temp_db):
-    """Section 四.1 / 六.4: ``get_summary(include_live=True)`` must add
-    the virtual live session's duration to ``total_duration`` /
-    ``effective_duration`` / ``classified_duration``. The virtual session
-    has no DB row, so its duration is added to the KPI.
-    """
-    today = date.today().isoformat()
-    project_service.create_project("Client", "billable")
-    settings_service.set_setting(
-        "current_activity_snapshot",
-        json.dumps(
-            {
-                "activity_display_name": "Spec.docx",
-                "inferred_project_name": "Client",
-                "status": "normal",
-                "start_time": "",
-                "elapsed_seconds": 65,
-                "is_persisted": False,
-                "persisted_activity_id": None,
-            },
-            ensure_ascii=False,
-        ),
-    )
-
-    summary = statistics_service.get_summary(today, today, include_live=True)
-    assert summary["total_duration"] == 65
-    assert summary["effective_duration"] == 65
-    assert summary["classified_duration"] == 65
-    assert summary["uncategorized_duration"] == 0
-
-
 def test_statistics_export_excludes_in_progress_live_rows(temp_db):
     """Section 四.4 / 六.4: Statistics / Export pages remain closed-only.
 
@@ -365,11 +188,9 @@ def test_statistics_export_excludes_in_progress_live_rows(temp_db):
     This must hold even when a persisted_open snapshot is active: the
     open DB row must NOT contribute to the closed-only KPIs.
 
-    Note: ``get_summary(include_live=False)`` is a DIFFERENT function
-    used by the Overview KPI; it intentionally counts open DB rows
-    (the ``include_live`` flag only controls the virtual projection
-    add-on). The closed-only contract is owned by
-    ``get_statistics_export_summary``.
+    Note: ``get_summary`` is a DIFFERENT function used by the Overview
+    KPI; it intentionally counts open DB rows. The closed-only contract
+    is owned by ``get_statistics_export_summary``.
     """
     from datetime import datetime, timedelta
     from worktrace.constants import TIME_FORMAT

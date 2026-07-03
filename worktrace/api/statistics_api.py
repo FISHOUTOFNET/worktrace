@@ -37,13 +37,11 @@ def get_summary(
     start_date: str,
     end_date: str,
     ensure_context: bool = True,
-    include_live: bool = False,
 ) -> dict[str, Any]:
     return statistics_service.get_summary(
         start_date,
         end_date,
         ensure_context=ensure_context,
-        include_live=include_live,
     )
 
 
@@ -51,13 +49,11 @@ def get_project_stats(
     start_date: str,
     end_date: str,
     ensure_context: bool = True,
-    include_live: bool = False,
 ) -> list[dict[str, Any]]:
     return statistics_service.get_project_stats(
         start_date,
         end_date,
         ensure_context=ensure_context,
-        include_live=include_live,
     )
 
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..api import live_display_api
+from ..api import view_model_api
 from ..formatters import format_duration, format_safe_display_name
 
 # The generic bridge-level error payload. Every mixin method that catches
@@ -131,7 +131,7 @@ def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     """Build a non-sensitive current-activity summary from the snapshot.
 
     Thin delegate to the unified live-display model
-    (``live_display_api.build_current_activity_summary``). Only display-name,
+    (``view_model_api.build_current_activity_summary``). Only display-name,
     project, elapsed, and state are returned. Window titles, paths, and
     notes are never included.
 
@@ -144,7 +144,7 @@ def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     ``is_classified`` so Overview / Recent / Timeline can apply a single
     live-projection decision without re-reading the raw snapshot.
     """
-    return live_display_api.build_current_activity_summary(snapshot)
+    return view_model_api.build_current_activity_summary(snapshot)
 
 
 def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:

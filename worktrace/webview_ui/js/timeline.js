@@ -21,13 +21,16 @@
         var listEl = document.getElementById("timeline-sessions-list");
         var sessions = data.sessions || [];
         App.currentSessions = sessions;
-        var liveProjection = data.live_projection || null;
-        var hasLiveProjection = !!(
-            liveProjection
-            && (liveProjection.is_virtual_live || liveProjection.is_in_progress)
+        // Live span is present when the Activity Display Model provides a
+        // non-empty ``display_span_id`` and a live clock with ``is_live``.
+        var liveClock = data.live_clock || null;
+        var hasLiveSpan = !!(
+            liveClock
+            && liveClock.is_live
+            && (data.display_span_id || (liveClock.display_span_id))
         );
         if (sessions.length === 0) {
-            if (hasLiveProjection) {
+            if (hasLiveSpan) {
                 listEl.innerHTML = '<div class="timeline-empty">正在加载当前活动…</div>';
             } else {
                 listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
@@ -70,12 +73,17 @@
             // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
             // the virtual_pending / absorbed_pending / persisted_open transition (stable_live_key_hash stays the same when session_id changes).
             var stableKeyHash = s.stable_live_key_hash || "";
-            // Unified live-span DOM attribute: when present, the ticker renders this row from the
-            // single registered live clock (same clock as Overview / Recent / Details).
+            // Unified live-span DOM attributes: ``data-display-span-id`` makes the
+            // ticker render this row from the registered live clock; ``data-live-base-seconds``
+            // carries the row's OWN sample base. Ticker renders ``base + liveDelta``.
             var sessSpanId = s.display_span_id || "";
+            var sessLiveBaseSec = (sessSpanId && !isNaN(sDurSec)) ? sDurSec : 0;
+            var sessContinuityKey = sessSpanId ? App.liveContinuityKey(s, "session") : "";
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
                 + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
                 + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
+                + (sessSpanId ? ' data-live-base-seconds="' + sessLiveBaseSec + '"' : '')
+                + (sessContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(sessContinuityKey) + '"' : '')
                 + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startTimeOnly) + '｜' + App.escapeHtml(sDurText) + '"'
                 + '>'
                 + '<div class="timeline-item-main">'
@@ -90,7 +98,7 @@
                 + '</div>';
             // Continuity key MUST use App.liveContinuityKey() so the ticker can locate the seeded state; a
             // "session-" + session_id key would break the virtual_pending / absorbed_pending / persisted_open transition.
-            sessionContinuityKeys.push({ key: App.liveContinuityKey(s, "session"), sec: isNaN(sDurSec) ? 0 : sDurSec });
+            sessionContinuityKeys.push({ key: sessContinuityKey || App.liveContinuityKey(s, "session"), sec: isNaN(sDurSec) ? 0 : sDurSec });
         }
         listEl.innerHTML = html;
         // Reset + seed the monotonic render state so the fresh backend snapshot replaces prior ticker projection.
@@ -286,12 +294,17 @@
             // Stable live key data attribute so the detail ticker locates the row across the virtual_pending / absorbed_pending / persisted_open
             // transition (stable_live_key_hash stays the same when activity_id changes; ticker falls back to activity_id).
             var detailStableKey = a.stable_live_key_hash || "";
-            // Unified live-span DOM attribute: when present, the ticker renders this row from the
-            // single registered live clock (same clock as Overview / Recent / Timeline sessions).
+            // Unified live-span DOM attributes: ``data-display-span-id`` makes the ticker
+            // render this row from the registered live clock; ``data-live-base-seconds``
+            // carries the row's OWN sample base. Ticker renders ``base + liveDelta``.
             var detailSpanId = a.display_span_id || "";
+            var detailLiveBaseSec = (detailSpanId && !isNaN(aDurSec)) ? aDurSec : 0;
+            var detailContinuityKey = detailSpanId ? App.liveContinuityKey(a, "detail") : "";
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
                 + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
                 + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
+                + (detailSpanId ? ' data-live-base-seconds="' + detailLiveBaseSec + '"' : '')
+                + (detailContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(detailContinuityKey) + '"' : '')
                 + ' data-detail-index="' + i + '"'
                 + '>'
                 + '<div class="detail-item-time">' + App.escapeHtml(startTimeOnly) + '</div>'
@@ -301,15 +314,16 @@
                 + '</div>';
             // Collect this row's continuity key so the monotonic state can
             // be seeded after the innerHTML swap.
-            detailContinuityKeys.push({ index: i, sec: isNaN(aDurSec) ? 0 : aDurSec });
+            detailContinuityKeys.push({ index: i, sec: isNaN(aDurSec) ? 0 : aDurSec, key: detailContinuityKey });
         }
         detailsList.innerHTML = html;
         // Detail rows use App.liveContinuityKey() so virtual-to-persisted keys stay stable.
+        // The key is the SAME string written to ``data-live-continuity-key``
+        // so the render seed and the ticker share one monotonic guard.
         for (var di = 0; di < detailContinuityKeys.length; di++) {
             var dk = detailContinuityKeys[di];
-            var activitiesRef = data.activities || [];
-            var detailItem = activitiesRef[dk.index] || {};
-            var detailKey = App.liveContinuityKey(detailItem, "detail");
+            var detailKey = dk.key || "";
+            if (!detailKey) continue;
             App._monotonicRenderState[detailKey] = { lastSeconds: dk.sec };
         }
     }

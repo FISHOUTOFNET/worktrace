@@ -32,10 +32,9 @@
     }
     App.refreshStatusFromRefreshState = refreshStatusFromRefreshState;
 
-    // ``refreshOverview`` pulls the unified Overview ViewModel (KPIs +
-    // current activity + recent activities + live_projection + sample_id)
-    // from a single backend snapshot sample. The recent list and the
-    // Overview KPIs share the same sample so there is no 1-2s drift.
+    // refreshOverview pulls the unified Overview ViewModel (KPIs + current
+    // activity + recent + live_clock + sample_id) from one backend sample.
+    // Legacy ``live_projection`` / ``live_display`` are not read or propagated.
     function refreshOverview() {
         var token = ++App.overviewRequestToken;
         App.recentRequestToken = token;  // single token for the bundle
@@ -54,8 +53,6 @@
             // Augment the overview sub-payload with the bundle-level
             overview.date = bundle.date || overview.date;
             overview.current_activity = bundle.current_activity || overview.current_activity;
-            overview.live_projection = bundle.live_projection || overview.live_projection;
-            overview.live_display = bundle.live_display || bundle.live_projection || overview.live_display;
             overview.live_clock = bundle.live_clock || overview.live_clock;
             overview.activity_display_model = bundle.activity_display_model || overview.activity_display_model;
             overview.display_span_id = bundle.display_span_id || overview.display_span_id;
@@ -75,8 +72,6 @@
             App.showOverview(overview);
             App.showRecent({
                 activities: bundle.activities || [],
-                live_projection: bundle.live_projection || null,
-                live_display: bundle.live_display || bundle.current_activity || null,
                 live_clock: bundle.live_clock || null,
                 activity_display_model: bundle.activity_display_model || null,
                 display_span_id: bundle.display_span_id || "",

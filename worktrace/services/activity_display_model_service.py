@@ -51,7 +51,6 @@ from .live_display_service import (
     _stable_live_key,
     _stable_live_key_hash,
     build_current_activity_summary,
-    build_live_projection,
     classify_live_state,
     is_live_eligible_for_normal,
     short_activity_carry_seconds,
@@ -232,16 +231,20 @@ def _build_live_clock(
 ) -> dict[str, Any]:
     """Build the single authoritative live-clock block.
 
-    The frontend computes display seconds as::
+    Frontend formula: ``carry_seconds + floor((now - live_started_at_epoch_ms)/1000)``.
+    Unified delta: ``max(0, live_span_seconds - duration_seconds_at_sample)``.
 
-        carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
+    Invariants at sample time ``T0``:
+    - ``duration_seconds_at_sample == snapshot_elapsed + snapshot_extra``
+    - ``live_span_seconds(T0) == duration_seconds_at_sample``
+    - ``live_span_seconds(T0 + 5s) == duration_seconds_at_sample + 5``
 
-    For ``absorbed_pending`` the carry is the anchor's stored duration
-    plus any accumulated short-activity completed seconds, and the anchor
-    epoch is the pending snapshot's start_time (so the floor term yields
-    the pending elapsed). For ``persisted_open`` the carry is 0 (already
-    folded into the stored duration). For ``virtual_pending`` the carry
-    is the short-activity carry only.
+    Carry per state:
+    - ``absorbed_pending``: carry = anchor stored + short-activity completed.
+    - ``persisted_open``: carry = ``snapshot_extra_seconds`` so
+      ``carry + floor((T0 - start_time)/1000) == extra + elapsed``. Must
+      preserve sub-30s pending folded into ``extra_seconds`` or UI loses ~30s.
+    - ``virtual_pending``: carry = short-activity carry only.
     """
     stable_key = _stable_live_key(snapshot)
     stable_hash = _stable_live_key_hash(snapshot)
@@ -260,7 +263,11 @@ def _build_live_clock(
         carry_seconds = short_activity_carry_seconds(snapshot, report_date)
         duration_at_sample = _snapshot_total_seconds(snapshot) + carry_seconds
     elif display_live_state == "persisted_open":
-        carry_seconds = 0
+        # carry_seconds MUST equal snapshot_extra_seconds so the frontend
+        # formula ``carry + floor((now - start_time)/1000)`` equals
+        # ``extra + elapsed == duration_seconds_at_sample`` at sample time.
+        # Setting carry=0 here drops extra_seconds and causes a ~30s drift.
+        carry_seconds = snapshot_extra_seconds(snapshot)
         duration_at_sample = _snapshot_total_seconds(snapshot)
 
     is_live = display_live_state in (
@@ -505,15 +512,20 @@ def apply_live_span_to_row(
 ) -> dict[str, Any]:
     """Merge the unified live-span overlay into a DB row payload.
 
-    The row matches the span when its ``activity_id`` / ``id`` /
-    ``first_activity_id`` / ``activity_ids`` contains the span's
-    ``anchor_activity_id``. For ``persisted_open`` the project fields are
-    also overlaid (project-ownership pending window). For
-    ``absorbed_pending`` ONLY the live clock fields are overlaid — the
-    anchor row's project / resource identity is preserved.
+    Row matches when its ``activity_id`` / ``id`` / ``first_activity_id`` /
+    ``activity_ids`` contains ``span.anchor_activity_id``. For
+    ``persisted_open`` project fields are also overlaid; for
+    ``absorbed_pending`` ONLY live clock fields are overlaid.
 
-    Mutates and returns ``row``. When ``span`` is ``None`` or the row does
-    not match, the row is returned unchanged.
+    Per-row base fields seeded on every matching row:
+    - ``live_base_seconds`` — row's OWN display duration at sample time.
+      Frontend renders ``live_base_seconds + live_delta`` so a session row
+      (340s) and a detail row (240s) sharing the same span keep own bases.
+    - ``duration_seconds_at_sample`` — live span's sample duration. Frontend
+      computes ``live_delta = max(0, live_span_seconds - duration_seconds_at_sample)``.
+    - ``live_delta_eligible`` — always ``True`` for matched live rows.
+
+    Mutates and returns ``row``; unchanged when ``span`` is ``None`` or no match.
     """
     if not span:
         return row
@@ -550,6 +562,7 @@ def apply_live_span_to_row(
         projected = row_raw + pending_at_sample
         row["duration_seconds"] = int(projected)
         row["duration"] = format_duration(projected)
+        row["live_base_seconds"] = int(projected)
     elif state == "persisted_open":
         # For a detail row (the persisted activity itself) the live value
         # IS the snapshot total. For a session / recent row the DB
@@ -558,12 +571,16 @@ def apply_live_span_to_row(
         if row_id == anchor_id:
             row["duration_seconds"] = duration_at_sample
             row["duration"] = format_duration(duration_at_sample)
+            row["live_base_seconds"] = int(duration_at_sample)
         else:
             row["duration_seconds"] = row_raw
             row["duration"] = format_duration(row_raw)
+            row["live_base_seconds"] = int(row_raw)
     else:
         row["duration_seconds"] = duration_at_sample
         row["duration"] = format_duration(duration_at_sample)
+        row["live_base_seconds"] = int(duration_at_sample)
+    row["live_delta_eligible"] = True
     row["is_live_projected"] = True
     row["is_in_progress"] = True
     row["is_virtual_live"] = False
@@ -573,8 +590,7 @@ def apply_live_span_to_row(
 
     if state == "persisted_open":
         # Persisted_open overlays project-ownership fields from the
-        # snapshot's display_project block (mirrors the legacy
-        # apply_persisted_open_overlay_to_row behaviour).
+        # snapshot's display_project block.
         row["project_id"] = int(span.get("project_id") or 0)
         row["project_name"] = str(span.get("project_name") or "未归类")
         row["project_description"] = str(span.get("project_description") or "")
@@ -648,16 +664,6 @@ def build_activity_display_model(
         snapshot, display_live_state, anchor, summary, live_clock
     )
 
-    # Backwards-compatible live_projection / live_display aliases derived
-    # from the same model so existing frontend code keeps working while
-    # the new live_clock / activity_display_model fields are adopted.
-    live_projection = build_live_projection(snapshot, report_date=report_date, today=today)
-    live_projection["display_span_id"] = live_clock.get("display_span_id") or ""
-    live_projection["live_state"] = display_live_state
-    live_projection["live_started_at_epoch_ms"] = int(live_clock.get("live_started_at_epoch_ms") or 0)
-    live_projection["carry_seconds"] = int(live_clock.get("carry_seconds") or 0)
-    live_projection["duration_seconds"] = int(live_clock.get("duration_seconds_at_sample") or 0)
-
     sample_id = str(live_clock.get("stable_live_key_hash") or "")
 
     return {
@@ -668,8 +674,6 @@ def build_activity_display_model(
         "live_clock": live_clock,
         "current_activity": current_activity,
         "display_spans": display_spans,
-        "live_projection": live_projection,
-        "live_display": current_activity,
     }
 
 
