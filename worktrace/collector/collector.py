@@ -9,7 +9,7 @@ from ..db import now_str
 from ..platforms.base import PlatformAdapter
 from ..services import clipboard_service, privacy_service, recovery_service
 from ..services.secure_backup_service import is_secure_import_in_progress
-from ..services.settings_service import get_bool_setting, get_int_setting, set_setting
+from ..services.settings_service import get_bool_setting, get_int_setting, get_setting, set_setting
 from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
 
@@ -21,6 +21,7 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
     prune_counter = 0
     logging.info("collector start")
     set_setting("collector_status", "running")
+    _normalize_poll_interval_setting()
     recovery_service.recover_unclosed_records()
     clipboard_service.prune_old_events()
 
@@ -54,10 +55,6 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 last_loop_time = now
                 continue
 
-            # Secure backup import guard: when an encrypted backup import is
-            # in progress, skip all active-window polling and recording so the
-            # collector cannot write to the DB mid-replacement. The guard is
-            # set by ``secure_backup_service._secure_import_guard``.
             if is_secure_import_in_progress():
                 set_setting("collector_status", "paused")
                 machine.pause(at_time=now)
@@ -99,11 +96,17 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
     logging.info("collector stop")
 
 
+def _normalize_poll_interval_setting() -> None:
+    raw = get_setting("poll_interval_seconds", "1") or "1"
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        value = 0
+    if value <= 0 or value == 5:
+        set_setting("poll_interval_seconds", "1")
+
+
 def _sleep_poll(stop_event: threading.Event) -> None:
-    # Default poll interval is 1 second (immediacy of current activity
-    # change perception takes priority over minor polling overhead). The
-    # setting is seeded in ``db.seed_defaults``; the fallback here matches
-    # the seeded default.
     interval = max(1, get_int_setting("poll_interval_seconds", 1))
     stop_event.wait(interval)
 

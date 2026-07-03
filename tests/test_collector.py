@@ -1,7 +1,11 @@
 import threading
 import time
 
-from worktrace.collector.collector import _midnight_crossed_between, run_collector
+from worktrace.collector.collector import (
+    _midnight_crossed_between,
+    _normalize_poll_interval_setting,
+    run_collector,
+)
 from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.fake_adapter import FakeAdapter
 from worktrace.services import activity_service, settings_service
@@ -25,6 +29,30 @@ def test_collector_loop_with_fake_adapter(temp_db):
     assert rows == []
     assert settings_service.get_setting("collector_status") == "stopped"
     assert settings_service.get_setting("current_activity_snapshot", "") == ""
+
+
+def test_legacy_five_second_poll_interval_is_normalized(temp_db):
+    settings_service.set_setting("poll_interval_seconds", "5")
+
+    _normalize_poll_interval_setting()
+
+    assert settings_service.get_setting("poll_interval_seconds") == "1"
+
+
+def test_invalid_poll_interval_is_normalized(temp_db):
+    settings_service.set_setting("poll_interval_seconds", "bad")
+
+    _normalize_poll_interval_setting()
+
+    assert settings_service.get_setting("poll_interval_seconds") == "1"
+
+
+def test_custom_non_legacy_poll_interval_is_preserved(temp_db):
+    settings_service.set_setting("poll_interval_seconds", "2")
+
+    _normalize_poll_interval_setting()
+
+    assert settings_service.get_setting("poll_interval_seconds") == "2"
 
 
 def test_collector_pause_does_not_poll_active_window(temp_db):
@@ -55,14 +83,7 @@ def test_collector_pause_does_not_poll_active_window(temp_db):
     assert settings_service.get_setting("current_activity_snapshot", "") == ""
 
 
-#
-# When ``secure_import_in_progress=true`` the collector loop must skip
-# active-window polling and must not write any real activity rows.
-
-
 def test_collector_skips_active_window_when_import_guard_active(temp_db):
-    """The collector must not poll the active window while the import guard is set."""
-
     class RaisingAdapter:
         calls = 0
 
@@ -87,14 +108,10 @@ def test_collector_skips_active_window_when_import_guard_active(temp_db):
     thread.join(timeout=3)
 
     assert adapter.calls == 0
-    # Note: collector_status will be "stopped" after the thread exits because
-    # run_collector sets it on shutdown. The key assertion is that the active
-    # window was never polled while the guard was active.
     assert activity_service.get_activities_by_date(time.strftime("%Y-%m-%d")) == []
 
 
 def test_no_new_activity_during_import_guard(temp_db):
-    """No activity_log rows should be created while the import guard is active."""
     settings_service.set_setting("first_run_notice_accepted", "true")
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("secure_import_in_progress", "true")
@@ -117,7 +134,6 @@ def test_no_new_activity_during_import_guard(temp_db):
 
 
 def test_no_real_title_path_stored_during_import_guard(temp_db):
-    """No real window title or file path should be persisted while the guard is active."""
     from worktrace.db import get_connection
 
     settings_service.set_setting("first_run_notice_accepted", "true")

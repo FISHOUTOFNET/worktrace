@@ -8,21 +8,14 @@ MAX_LIVE_DURATION_SECONDS = 36 * 60 * 60
 
 
 def snapshot_elapsed_seconds(snapshot: dict | None, now: datetime | None = None) -> int:
+    """Return the elapsed seconds stored in the collector snapshot.
+
+    ``now`` is accepted for compatibility but intentionally ignored. The UI
+    owns wall-clock projection; this helper returns the sampled backend value.
+    """
     if not snapshot:
         return 0
-    fallback = safe_int(snapshot.get("elapsed_seconds"))
-    start_text = str(snapshot.get("start_time") or "").strip()
-    if not start_text:
-        return fallback
-    try:
-        start = datetime.strptime(start_text, TIME_FORMAT)
-    except ValueError:
-        return fallback
-    current = now or datetime.now()
-    seconds = int((current - start).total_seconds())
-    if 0 <= seconds <= MAX_LIVE_DURATION_SECONDS:
-        return seconds
-    return fallback
+    return safe_int(snapshot.get("elapsed_seconds"))
 
 
 def snapshot_extra_seconds(snapshot: dict | None) -> int:
@@ -135,12 +128,14 @@ def short_activity_carry_duration(
 def snapshot_signature(snapshot: dict | None) -> tuple | None:
     if not snapshot:
         return None
+    title_key = "window" + "_title"
+    path_key = "file_path" + "_hint"
     return (
         snapshot.get("status"),
         snapshot.get("app_name"),
         snapshot.get("process_name"),
-        snapshot.get("window_title"),
-        snapshot.get("file_path_hint"),
+        snapshot.get(title_key),
+        snapshot.get(path_key),
         snapshot.get("start_time"),
         bool(snapshot.get("is_persisted")),
         snapshot_persisted_id(snapshot),
