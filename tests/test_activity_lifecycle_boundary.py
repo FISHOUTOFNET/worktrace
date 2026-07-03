@@ -184,7 +184,7 @@ def test_activity_service_close_methods_do_not_call_finalize() -> None:
         if pos == -1:
             continue  # function may have been removed entirely — that's fine
         next_def = source.find("\ndef ", pos + 1)
-        body = source[pos:next_def if next_def != -1 else pos + 3000]
+        body = source[pos:next_def if next_def != -1 else len(source)]
         for forbidden in (
             "finalize_closed_activity_ids",
             "process_new_activity",
@@ -203,7 +203,7 @@ def test_activity_service_create_activity_does_not_close_old_rows() -> None:
     pos = source.find("def create_activity(")
     assert pos != -1, "activity_service must define create_activity"
     next_def = source.find("\ndef ", pos + 1)
-    body = source[pos:next_def if next_def != -1 else pos + 3000]
+    body = source[pos:next_def if next_def != -1 else len(source)]
     for forbidden in (
         "close_all_open_rows",
         "close_activity_row",

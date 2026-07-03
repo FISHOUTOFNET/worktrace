@@ -22,6 +22,7 @@ from static_helpers import (
     REPO_ROOT, WEBVIEW_UI_DIR, HISTORY_PATH,
     RELEASE_VALIDATION_PATH, README_PATH,
     read_resource, read_all_js, func_body,
+    html_element_by_id,
     read_bridge_sources_combined,
     FRONTEND_RESOURCE_FILES, NO_STORAGE_FILES,
 )
@@ -200,12 +201,9 @@ def test_index_html_visibility_hint_mentions_hide_and_soft_delete():
     soft-delete semantics so the user understands neither physically
     deletes data."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    # Find the visibility section
-    start = source.find('id="edit-visibility-section"')
-    assert start != -1, "edit-visibility-section must exist"
-    # Find the end of the section (next </div> at the section level is hard
-    # to find reliably, so just search forward for the hint text).
-    section = source[start:start + 1200]
+    # Bound to the real <div id="edit-visibility-section">...</div> element
+    # so the assertion never scans adjacent DOM.
+    section = html_element_by_id(source, "edit-visibility-section")
     assert "隐藏" in section, (
         "visibility hint must mention 隐藏"
     )
@@ -229,9 +227,29 @@ def test_styles_css_has_action_group_styles():
         "styles.css must style .detail-action-danger-group"
     )
     # The danger group must have a red-tinted left border so destructive
-    # actions read as visually separated.
-    danger_start = source.find(".detail-action-danger-group")
-    danger_block = source[danger_start:danger_start + 400]
+    # actions read as visually separated. The selector appears in more
+    # than one rule, so collect every rule body via brace counting instead
+    # of a fixed character window that could bleed into adjacent rules.
+    danger_block = ""
+    search_pos = 0
+    while True:
+        rule_start = source.find(".detail-action-danger-group", search_pos)
+        if rule_start == -1:
+            break
+        brace_start = source.find("{", rule_start)
+        assert brace_start != -1, ".detail-action-danger-group rule must open with {"
+        depth = 0
+        rule_end = brace_start
+        for i in range(brace_start, len(source)):
+            if source[i] == "{":
+                depth += 1
+            elif source[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    rule_end = i + 1
+                    break
+        danger_block += source[rule_start:rule_end]
+        search_pos = rule_end
     assert "#fca5a5" in danger_block or "border-left" in danger_block, (
         "danger group must have a visually separating border"
     )
@@ -2581,8 +2599,16 @@ def test_index_html_restore_hint_no_batch_undo_permanent():
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     hint_start = source.find("correction-shell-restore-hint")
     assert hint_start != -1, "index.html must contain the restore hint"
-    # Extract a window around the hint to check its text.
-    hint_window = source[hint_start:hint_start + 500]
+    # Bound the hint to its enclosing <div>...</div> element so the
+    # assertion scans the real hint text instead of a fixed character
+    # window that could bleed into adjacent DOM.
+    tag_start = source.rfind("<", 0, hint_start)
+    assert tag_start != -1, "restore hint must be inside an HTML element"
+    open_tag_end = source.find(">", hint_start)
+    assert open_tag_end != -1, "restore hint opening tag must close"
+    hint_close = source.find("</div>", open_tag_end)
+    assert hint_close != -1, "restore hint must have a closing </div>"
+    hint_window = source[tag_start:hint_close]
     assert "恢复" in hint_window, (
         "restore hint must mention that restores are performed one at a time"
     )
@@ -3886,7 +3912,8 @@ def test_frontend_js_save_batch_note_cross_save_uses_unified_message():
     # The unified message must appear in the cross-save guard section.
     cross_pos = body.find("App.batchProjectSaving || App.restoreSaving")
     assert cross_pos != -1, "cross-save guard must exist"
-    guard_section = body[cross_pos:cross_pos + 200]
+    ret_pos = body.find("return", cross_pos)
+    guard_section = body[cross_pos:ret_pos] if ret_pos != -1 else body[cross_pos:]
     assert "请等待当前操作完成" in guard_section, (
         "saveBatchNote cross-save guard must use the unified message"
     )
@@ -4304,7 +4331,9 @@ def test_styles_css_correction_shell_hidden_display_none():
         "styles.css must have .correction-shell[hidden] rule"
     )
     pos = source.find(".correction-shell[hidden]")
-    rule = source[pos:pos + 80]
+    rule_end = source.find("}", pos)
+    assert rule_end != -1, ".correction-shell[hidden] rule must close with }"
+    rule = source[pos:rule_end + 1]
     assert "display: none" in rule, (
         ".correction-shell[hidden] must set display: none"
     )

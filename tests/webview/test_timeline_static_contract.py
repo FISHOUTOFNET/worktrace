@@ -22,6 +22,7 @@ from static_helpers import (
     REPO_ROOT, WEBVIEW_UI_DIR, HISTORY_PATH,
     RELEASE_VALIDATION_PATH, README_PATH,
     read_resource, read_all_js, func_body,
+    html_section_by_id,
     read_bridge_sources_combined,
     FRONTEND_RESOURCE_FILES, NO_STORAGE_FILES,
 )
@@ -2374,7 +2375,11 @@ def test_styles_css_correction_shell_hidden_still_display_none():
         "styles.css must have .correction-shell[hidden] rule"
     )
     pos = source.find(".correction-shell[hidden]")
-    rule = source[pos:pos + 80]
+    rule_end = source.find("}", pos)
+    assert rule_end != -1, (
+        ".correction-shell[hidden] rule must close with }"
+    )
+    rule = source[pos:rule_end + 1]
     assert "display: none" in rule, (
         ".correction-shell[hidden] must set display: none"
     )
@@ -2474,9 +2479,7 @@ def test_index_html_no_new_top_level_pages():
 
     # Settings / Privacy migrated as a read-only WebView status
     # page; the obsolete placeholder copy must not appear in its section.
-    settings_pos = source.find('id="page-settings"')
-    assert settings_pos != -1
-    settings_section = source[settings_pos:settings_pos + 400]
+    settings_section = html_section_by_id(source, "page-settings")
     assert "WebView 迁移中" not in settings_section
 
 
@@ -2579,10 +2582,13 @@ def test_frontend_js_save_edit_catch_uses_stable_fallback():
     """the saveEdit Promise.allSettled rejection handler must
     use the stable '保存失败' fallback instead of reading .reason.message."""
     source = read_all_js()
+    # Bound the scan to the real saveEdit function body so adjacent
+    # functions / modules cannot leak into the block we assert on.
+    body = func_body(source, "saveEdit")
     # Find the Promise.allSettled block inside saveEdit.
-    allsettled_pos = source.find("Promise.allSettled(promises).then")
+    allsettled_pos = body.find("Promise.allSettled(promises).then")
     assert allsettled_pos != -1, "saveEdit must use Promise.allSettled"
-    block = source[allsettled_pos:allsettled_pos + 800]
+    block = body[allsettled_pos:]
     assert "保存失败" in block, (
         "saveEdit rejection handler must use '保存失败' stable fallback"
     )
@@ -2841,7 +2847,11 @@ def test_styles_css_correction_shell_hidden_display_none():
         "styles.css must have .correction-shell[hidden] rule"
     )
     pos = source.find(".correction-shell[hidden]")
-    rule = source[pos:pos + 80]
+    rule_end = source.find("}", pos)
+    assert rule_end != -1, (
+        ".correction-shell[hidden] rule must close with }"
+    )
+    rule = source[pos:rule_end + 1]
     assert "display: none" in rule, (
         ".correction-shell[hidden] must set display: none"
     )

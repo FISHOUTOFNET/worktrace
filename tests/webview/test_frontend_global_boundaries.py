@@ -588,12 +588,7 @@ def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
     source = read_js("init.js")
     # Match ``function init()`` exactly so we do not collide with
     # ``function initNav`` or ``function initButtons``.
-    pos = source.find("function init()")
-    assert pos != -1, "init.js must define function init()"
-    # Slice to the next sibling function so we capture the whole init()
-    # body.
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 2500]
+    body = func_body(source, "init()")
     load_pos = body.find("App.loadFirstRunNotice()")
     refresh_pos = body.find("refreshCurrentPageData()")
     heartbeat_pos = body.find("startHeartbeat()")

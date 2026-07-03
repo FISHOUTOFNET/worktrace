@@ -23,6 +23,8 @@ from static_helpers import (
     REPO_ROOT, WEBVIEW_UI_DIR, HISTORY_PATH,
     RELEASE_VALIDATION_PATH, README_PATH,
     read_resource, read_all_js, read_js, func_body,
+    html_section_by_id, html_element_by_id, js_catch_block,
+    python_method_body,
     read_bridge_sources_combined, read_bridge_method_body,
     FRONTEND_RESOURCE_FILES, NO_STORAGE_FILES,
 )
@@ -42,9 +44,7 @@ def test_index_html_statistics_page_section_exists():
     """the page-statistics section must exist and not be a
     placeholder."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-statistics"')
-    assert pos != -1
-    section = source[pos:pos + 2000]
+    section = html_section_by_id(source, "page-statistics")
     # The page must NOT show the placeholder.
     assert "WebView 迁移中" not in section
 
@@ -54,8 +54,7 @@ def test_index_html_statistics_header_subtitle_describes_csv_export():
     """the page header subtitle must announce CSV export is
     open (not obsolete read-only-only copy)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-statistics"')
-    section = source[pos:pos + 600]
+    section = html_section_by_id(source, "page-statistics")
     assert "统计 / 导出" in section
     assert "查看统计并导出当前范围内的活动记录为 CSV 文件" in section
     # the obsolete read-only-only copy must be gone.
@@ -133,9 +132,7 @@ def test_index_html_statistics_export_action_enabled():
     """the export action button must be enabled and labeled
     "导出 CSV" (no longer the disabled placeholder)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="stats-export-action-btn"')
-    assert pos != -1
-    section = source[pos:pos + 400]
+    section = html_element_by_id(source, "stats-export-action-btn")
     # The button must be a real action button with the CSV label.
     assert "导出 CSV" in section
     # The button itself must NOT carry a disabled attribute; the old
@@ -152,7 +149,9 @@ def test_index_html_statistics_export_hint_csv_enabled():
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     pos = source.find("stats-export-hint")
     assert pos != -1
-    section = source[pos:pos + 600]
+    end = source.find("</div>", pos)
+    assert end != -1
+    section = source[pos:end]
     # The hint must clearly state CSV is the supported format.
     assert "导出当前范围内已结束、非隐藏的活动记录为 CSV" in section
     assert "导出范围最多 31 天" in section
@@ -256,9 +255,7 @@ def test_frontend_js_statistics_lazy_load_in_switch_page():
     navigation to the page."""
     source = read_all_js()
     # Find the switchPage function body and verify the statistics branch.
-    pos = source.find("function switchPage")
-    assert pos != -1
-    body = source[pos:pos + 1500]
+    body = func_body(source, "switchPage")
     assert "statistics" in body
     assert "loadStatisticsExportSummary" in body
     assert "initStatisticsDefaults" in body
@@ -269,9 +266,7 @@ def test_frontend_js_statistics_event_binding_in_init_buttons():
     """initButtons must bind the statistics load + quick range
     buttons."""
     source = read_all_js()
-    pos = source.find("function initButtons")
-    assert pos != -1
-    body = source[pos:pos + 9000]
+    body = func_body(source, "initButtons")
     assert "statistics-load-btn" in body
     assert "statistics-today-btn" in body
     assert "statistics-7d-btn" in body
@@ -284,9 +279,7 @@ def test_frontend_js_statistics_event_binding_in_init_buttons():
 def test_frontend_js_statistics_uses_escape_html():
     """renderStatsTable must use escapeHtml for dynamic values."""
     source = read_all_js()
-    pos = source.find("function renderStatsTable")
-    assert pos != -1
-    body = source[pos:pos + 1200]
+    body = func_body(source, "renderStatsTable")
     assert "escapeHtml" in body
     assert "safeText" in body
 
@@ -378,7 +371,9 @@ def test_styles_css_statistics_export_action_enabled_style():
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     pos = source.find(".stats-export-action-btn")
     assert pos != -1
-    body = source[pos:pos + 400]
+    end = source.find("}", pos)
+    assert end != -1
+    body = source[pos:end]
     # An enabled action button uses pointer cursor and a primary blue.
     assert "cursor: pointer" in body or "cursor:pointer" in body
     # The disabled not-allowed style must not appear on the default
@@ -671,9 +666,7 @@ def test_frontend_js_statistics_loading_double_click_guard():
     """loadStatisticsExportSummary must refuse concurrent loads
     by checking ``statisticsLoading`` before doing any work."""
     source = read_all_js()
-    pos = source.find("function loadStatisticsExportSummary")
-    assert pos != -1
-    body = source[pos:pos + 600]
+    body = func_body(source, "loadStatisticsExportSummary")
     assert "if (App.statisticsLoading) return" in body, (
         "loadStatisticsExportSummary must guard against concurrent loads"
     )
@@ -688,8 +681,7 @@ def test_frontend_js_statistics_client_side_range_validator():
     assert "function validateStatisticsDateRange" in source, (
         "frontend JS must define validateStatisticsDateRange"
     )
-    pos = source.find("function validateStatisticsDateRange")
-    body = source[pos:pos + 1200]
+    body = func_body(source, "validateStatisticsDateRange")
     # Must return the same Chinese messages the bridge uses.
     assert "请选择有效日期" in body
     assert "请选择有效日期范围" in body
@@ -706,8 +698,7 @@ def test_frontend_js_statistics_load_uses_validator():
     """loadStatisticsExportSummary must call
     validateStatisticsDateRange before calling the bridge."""
     source = read_all_js()
-    pos = source.find("function loadStatisticsExportSummary")
-    body = source[pos:pos + 2000]
+    body = func_body(source, "loadStatisticsExportSummary")
     assert "validateStatisticsDateRange" in body
     assert "if (rangeMsg)" in body
 
@@ -752,9 +743,7 @@ def test_frontend_js_statistics_no_direct_file_write_in_module():
 def test_index_html_statistics_export_hint_csv_enabled_contract_2():
     """The export preview area must announce that CSV is supported."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="statistics-export-preview"')
-    assert pos != -1
-    section = source[pos:pos + 2000]
+    section = html_element_by_id(source, "statistics-export-preview")
     # CSV is now supported; the hint announces it.
     assert "导出当前范围内已结束、非隐藏的活动记录为 CSV" in section
     # Obsolete read-only-only copy must be absent.
@@ -1008,17 +997,13 @@ def test_frontend_js_statistics_export_saving_guard_present():
         "statisticsExportSaving must start as a separate false boolean"
     )
     # The export function must check the guard on entry.
-    pos = source.find("function exportStatisticsCsv")
-    assert pos != -1, "frontend JS must define exportStatisticsCsv function"
-    body = source[pos:pos + 1500]
+    body = func_body(source, "exportStatisticsCsv")
     assert "if (App.statisticsExportSaving)" in body, (
         "exportStatisticsCsv must guard against duplicate clicks"
     )
     # The statistics load path must also block while a write is in flight.
     # ``setStatisticsLoading`` must consider ``statisticsExportSaving``.
-    set_load_pos = source.find("function setStatisticsLoading")
-    assert set_load_pos != -1
-    set_load_body = source[set_load_pos:set_load_pos + 800]
+    set_load_body = func_body(source, "setStatisticsLoading")
     assert "statisticsExportSaving" in set_load_body, (
         "setStatisticsLoading must disable export btn while a write is in flight"
     )
@@ -1030,9 +1015,7 @@ def test_frontend_js_statistics_export_uses_validate_statistics_date_range():
     validateStatisticsDateRange before calling the bridge, so the user
     gets an immediate clear message without a bridge round-trip."""
     source = read_all_js()
-    pos = source.find("function exportStatisticsCsv")
-    assert pos != -1
-    body = source[pos:pos + 1500]
+    body = func_body(source, "exportStatisticsCsv")
     assert "validateStatisticsDateRange" in body, (
         "exportStatisticsCsv must call validateStatisticsDateRange"
     )
@@ -1043,14 +1026,10 @@ def test_frontend_js_statistics_export_catch_never_surfaces_raw_exception():
     """the exportStatisticsCsv promise catch must collapse to
     a stable Chinese message and never read raw exception text."""
     source = read_all_js()
-    pos = source.find("function exportStatisticsCsv")
-    assert pos != -1
-    # The catch block is somewhere after the export function. Find the
-    # next ``.catch`` after the export function start.
-    catch_pos = source.find(".catch", pos)
-    assert catch_pos != -1
-    # The catch block extends to the next ``;`` after the closing ``}``.
-    catch_body = source[catch_pos:catch_pos + 400]
+    body = func_body(source, "exportStatisticsCsv")
+    # Extract the .catch(function () { ... }) block from the export function.
+    catch_body = js_catch_block(body)
+    assert catch_body, "exportStatisticsCsv must have a catch block"
     assert "导出失败" in catch_body, (
         "export catch must collapse to the stable 导出失败 message"
     )
@@ -1072,9 +1051,7 @@ def test_frontend_js_statistics_export_cancel_is_clean_result():
     """a cancelled export must be handled as a clean info
     result (``已取消导出``), not as a Python exception or ``导出失败``."""
     source = read_all_js()
-    pos = source.find("function exportStatisticsCsv")
-    assert pos != -1
-    body = source[pos:pos + 2000]
+    body = func_body(source, "exportStatisticsCsv")
     assert "result.cancelled" in body or "cancelled" in body, (
         "exportStatisticsCsv must handle a cancelled result explicitly"
     )
@@ -1088,9 +1065,7 @@ def test_frontend_js_statistics_export_success_shows_filename_count_duration():
     """a successful export must surface the basename, activity
     count, and total duration — never the full local path."""
     source = read_all_js()
-    pos = source.find("function exportStatisticsCsv")
-    assert pos != -1
-    body = source[pos:pos + 2000]
+    body = func_body(source, "exportStatisticsCsv")
     # The success branch must reference filename / activity_count / duration.
     assert "filename" in body, (
         "success payload must surface filename (basename only)"
@@ -1176,8 +1151,7 @@ def test_bridge_set_window_method_present():
     # only forbid the actual call form (``webview.start()`` /
     # ``webview.create_window(``), not docstring text that merely mentions
     # these APIs.
-    pos = source.find("def set_window")
-    body = source[pos:pos + 800]
+    body = python_method_body(source, "set_window")
     assert "webview.start()" not in body, (
         "set_window must not call webview.start()"
     )
@@ -1255,10 +1229,8 @@ def test_frontend_js_statistics_export_no_local_storage_session_storage():
     """the export action must not use localStorage or
     sessionStorage (regression lock for the new write path)."""
     source = read_all_js()
-    pos = source.find("function exportStatisticsCsv")
-    assert pos != -1
-    # Scan a generous body so the catch / status helpers are included.
-    body = source[pos:pos + 2500]
+    # Scan the full function body so the catch / status helpers are included.
+    body = func_body(source, "exportStatisticsCsv")
     for forbidden in ("localStorage", "sessionStorage"):
         assert forbidden not in body, (
             "exportStatisticsCsv must not use " + forbidden
@@ -1270,10 +1242,7 @@ def test_index_html_statistics_export_no_external_links():
     """the statistics export section must not reference any
     external link / CDN / Google Fonts (regression lock)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-statistics"')
-    assert pos != -1
-    end = source.find("</section>", pos)
-    section = source[pos:end] if end != -1 else source[pos:pos + 4000]
+    section = html_section_by_id(source, "page-statistics")
     assert not re.search(r"https?://", section), (
         "statistics section must not reference external links"
     )
@@ -1321,9 +1290,7 @@ def test_frontend_js_statistics_load_and_export_use_independent_state():
         "statisticsExportSaving must be a declared state variable"
     )
     # The export function must check its OWN guard, not the load guard.
-    export_pos = source.find("function exportStatisticsCsv")
-    assert export_pos != -1
-    export_body = source[export_pos:export_pos + 400]
+    export_body = func_body(source, "exportStatisticsCsv")
     assert "if (App.statisticsExportSaving)" in export_body, (
         "exportStatisticsCsv must guard against duplicate clicks via "
         "statisticsExportSaving, not statisticsLoading"
@@ -1334,9 +1301,7 @@ def test_frontend_js_statistics_load_and_export_use_independent_state():
         "is in flight"
     )
     # The load function must guard on statisticsLoading (its own guard).
-    load_pos = source.find("function loadStatisticsExportSummary")
-    assert load_pos != -1
-    load_body = source[load_pos:load_pos + 400]
+    load_body = func_body(source, "loadStatisticsExportSummary")
     assert "if (App.statisticsLoading)" in load_body, (
         "loadStatisticsExportSummary must guard via statisticsLoading"
     )
@@ -1347,9 +1312,7 @@ def test_frontend_js_statistics_export_disables_both_buttons():
     export button and the statistics load button while a write is in
     flight, so the user cannot trigger a concurrent load."""
     source = read_js("statistics.js")
-    pos = source.find("function setStatisticsExportSaving")
-    assert pos != -1
-    body = source[pos:pos + 800]
+    body = func_body(source, "setStatisticsExportSaving")
     assert "stats-export-action-btn" in body, (
         "setStatisticsExportSaving must toggle the export button"
     )
@@ -1367,9 +1330,7 @@ def test_frontend_js_statistics_load_disables_export_button():
     """``setStatisticsLoading`` must disable the export button
     while statistics are loading, so a write cannot be triggered mid-load."""
     source = read_js("statistics.js")
-    pos = source.find("function setStatisticsLoading")
-    assert pos != -1
-    body = source[pos:pos + 800]
+    body = func_body(source, "setStatisticsLoading")
     assert "stats-export-action-btn" in body, (
         "setStatisticsLoading must disable the export button while loading"
     )

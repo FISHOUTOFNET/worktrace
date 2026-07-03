@@ -30,6 +30,9 @@ if _HERE not in sys.path:
 from static_helpers import (
     REPO_ROOT, WEBVIEW_UI_DIR, JS_DIR, ALL_JS_FILES,
     read_resource, read_all_js, read_js,
+    func_body, html_section_by_id,
+    html_element_by_id, html_opening_tag_by_id,
+    js_catch_block,
 )
 
 
@@ -46,9 +49,7 @@ def test_index_html_settings_page_section_is_complete() -> None:
     """the page-settings section must not contain the old
     unavailable-feature placeholder copy."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-settings"')
-    assert pos != -1, "page-settings section must exist"
-    section = source[pos:pos + 1200]
+    section = html_section_by_id(source, "page-settings")
     assert "WebView 迁移中" not in section
     # The page must announce its purpose in user language.
     assert "设置与隐私" in section
@@ -59,10 +60,7 @@ def test_index_html_settings_page_no_refresh_status_text() -> None:
     """The Settings page must not contain a resident '刷新状态' button
     or label. Status is auto-refreshed on page entry and after operations."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-settings"')
-    assert pos != -1
-    end = source.find("</section>", pos)
-    section = source[pos:end]
+    section = html_section_by_id(source, "page-settings")
     assert "刷新状态" not in section, (
         "Settings page must not contain '刷新状态'; the refresh button "
         "has been removed"
@@ -73,10 +71,7 @@ def test_index_html_settings_page_no_unavailable_write_text() -> None:
     """The Settings page must not contain unavailable write restriction
     copy like '其他写操作暂不开放'."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-settings"')
-    assert pos != -1
-    end = source.find("</section>", pos)
-    section = source[pos:end]
+    section = html_section_by_id(source, "page-settings")
     assert "其他写操作暂不开放" not in section, (
         "Settings page must not contain '其他写操作暂不开放'"
     )
@@ -302,10 +297,7 @@ def test_index_html_no_settings_write_buttons() -> None:
     a checkbox (``settings-clipboard-toggle``), not a button; a
     ``settings-clipboard-toggle-btn`` id is still forbidden."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-settings"')
-    assert pos != -1
-    end = source.find("</section>", pos)
-    section = source[pos:end]
+    section = html_section_by_id(source, "page-settings")
     for forbidden in (
         "settings-save-btn",
         "settings-export-btn",
@@ -345,9 +337,7 @@ def test_settings_js_lazy_load_in_switch_page() -> None:
     """switchPage must lazy-load the settings status when
     navigating to the page for the first time."""
     source = read_js("init.js")
-    pos = source.find("function switchPage")
-    assert pos != -1
-    body = source[pos:pos + 3500]
+    body = func_body(source, "switchPage")
     assert '"settings"' in body or "'settings'" in body
     assert "loadSettingsPrivacyStatus" in body
 
@@ -422,9 +412,7 @@ def test_settings_js_toggle_change_handler_bound_in_init() -> None:
     change event to ``App.handleCaptureToggleChange`` so the toggle
     write path is wired without a separate submit button."""
     source = read_js("init.js")
-    pos = source.find("function initButtons")
-    assert pos != -1
-    body = source[pos:pos + 8000]
+    body = func_body(source, "initButtons")
     assert "settings-clipboard-toggle" in body
     assert "handleCaptureToggleChange" in body
     assert '"change"' in body or "'change'" in body
@@ -440,12 +428,9 @@ def test_settings_js_disables_controls_during_load_and_write() -> None:
     all four flags block every Settings control."""
     source = read_js("settings.js")
     # The shared disable helper must exist.
-    pos = source.find("function setSettingsControlsDisabled")
-    assert pos != -1
+    assert "function setSettingsControlsDisabled" in source
     # anySettingsOperationInProgress must exist and reference all four flags.
-    any_pos = source.find("function anySettingsOperationInProgress")
-    assert any_pos != -1
-    any_body = source[any_pos:any_pos + 600]
+    any_body = func_body(source, "anySettingsOperationInProgress")
     for flag in (
         "settingsLoading",
         "settingsWriteInProgress",
@@ -456,14 +441,10 @@ def test_settings_js_disables_controls_during_load_and_write() -> None:
             "anySettingsOperationInProgress must reference flag: " + flag
         )
     # setSettingsLoading must delegate to anySettingsOperationInProgress.
-    loading_pos = source.find("function setSettingsLoading")
-    assert loading_pos != -1
-    loading_body = source[loading_pos:loading_pos + 600]
+    loading_body = func_body(source, "setSettingsLoading")
     assert "anySettingsOperationInProgress" in loading_body
     # renderCaptureToggle must also disable on the combined flag + not-yet-loaded.
-    render_pos = source.find("function renderCaptureToggle")
-    assert render_pos != -1
-    render_body = source[render_pos:render_pos + 800]
+    render_body = func_body(source, "renderCaptureToggle")
     assert "anySettingsOperationInProgress" in render_body
     assert "settingsLoaded" in render_body
 
@@ -474,9 +455,7 @@ def test_settings_js_toggle_write_failure_recovers_state() -> None:
     Both the data-failure branch (``!data``) and the catch block must
     contain the restore logic."""
     source = read_js("settings.js")
-    pos = source.find("function setCaptureEnabled")
-    assert pos != -1
-    body = source[pos:pos + 2500]
+    body = func_body(source, "setCaptureEnabled")
     # The catch block must restore the toggle and show a stable error.
     assert "WRITE_ERROR_MESSAGE" in body
     assert "toggle.checked = !enabled" in body
@@ -496,9 +475,7 @@ def test_settings_js_render_status_syncs_toggle() -> None:
     latest status snapshot after both a successful read and a successful
     write."""
     source = read_js("settings.js")
-    pos = source.find("function renderSettingsStatus")
-    assert pos != -1
-    body = source[pos:pos + 1200]
+    body = func_body(source, "renderSettingsStatus")
     assert "renderCaptureToggle" in body
 
 
@@ -570,9 +547,7 @@ def test_settings_js_backup_render_uses_text_content() -> None:
     """renderBackupManifest must render manifest fields via
     ``textContent`` only; ``innerHTML`` is already forbidden module-wide."""
     source = read_js("settings.js")
-    pos = source.find("function renderBackupManifest")
-    assert pos != -1
-    body = source[pos:pos + 1500]
+    body = func_body(source, "renderBackupManifest")
     assert "textContent" in body
     assert "innerHTML" not in body
     assert "createElement" in body
@@ -584,9 +559,7 @@ def test_settings_js_backup_does_not_persist_passphrase() -> None:
     variables and clears the inputs after the call; it must NOT assign
     the passphrase to any ``App.`` property."""
     source = read_js("settings.js")
-    pos = source.find("function exportEncryptedBackup")
-    assert pos != -1
-    body = source[pos:pos + 2500]
+    body = func_body(source, "exportEncryptedBackup")
     # The passphrase must be read into a local variable, not App state.
     assert "var passphrase" in body
     assert "var confirmPassphrase" in body
@@ -615,9 +588,7 @@ def test_init_js_binds_backup_buttons() -> None:
     ``settings-backup-manifest-btn`` click event to
     ``App.previewEncryptedBackupManifest``."""
     source = read_js("init.js")
-    pos = source.find("function initButtons")
-    assert pos != -1
-    body = source[pos:pos + 10000]
+    body = func_body(source, "initButtons")
     assert "settings-backup-export-btn" in body
     assert "exportEncryptedBackup" in body
     assert "settings-backup-manifest-btn" in body
@@ -654,10 +625,7 @@ def test_index_html_no_forbidden_settings_buttons() -> None:
     (without the ``-backup-`` segment) remain forbidden so no
     ambiguous shortcut ids are introduced."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-settings"')
-    assert pos != -1
-    end = source.find("</section>", pos)
-    section = source[pos:end]
+    section = html_section_by_id(source, "page-settings")
     for forbidden in (
         "settings-import-btn",
         "settings-clear-btn",
@@ -748,9 +716,7 @@ def test_settings_js_any_settings_operation_in_progress_includes_6d_flags() -> N
     in-flight import / clear blocks every Settings control together with
     the read / toggle / export / manifest operations."""
     source = read_js("settings.js")
-    pos = source.find("function anySettingsOperationInProgress")
-    assert pos != -1
-    body = source[pos:pos + 800]
+    body = func_body(source, "anySettingsOperationInProgress")
     for flag in (
         "settingsLoading",
         "settingsWriteInProgress",
@@ -770,14 +736,7 @@ def test_settings_js_import_does_not_persist_passphrase() -> None:
     variables and clears the inputs after the call; it must NOT assign
     the passphrase to any ``App.`` property."""
     source = read_js("settings.js")
-    pos = source.find("function importEncryptedBackup")
-    assert pos != -1
-    # Slice to the next top-level function so the body covers the whole
-    # importEncryptedBackup implementation (the clearing code lives near the end,
-    # beyond a fixed 3000-char window). ``\n    function `` skips nested
-    # callback ``function (result)`` expressions inside the body.
-    next_def = source.find("\n    function ", pos + 1)
-    body = source[pos:next_def if next_def != -1 else pos + 6000]
+    body = func_body(source, "importEncryptedBackup")
     # The passphrase must be read into a local variable, not App state.
     assert "var passphrase" in body
     # The function must clear the passphrase input after the call.
@@ -807,9 +766,7 @@ def test_settings_js_import_clear_uses_text_content() -> None:
     assert "innerHTML" not in source
     # The new status helpers must use textContent.
     for name in ("setSettingsImportStatus", "setSettingsClearStatus"):
-        pos = source.find("function " + name)
-        assert pos != -1
-        body = source[pos:pos + 600]
+        body = func_body(source, name)
         assert "textContent" in body
 
 
@@ -819,9 +776,7 @@ def test_settings_js_reset_frontend_after_local_data_replacement() -> None:
     per-activity selection state so stale ids cannot be operated on after
     the local DB is replaced by an import or a clear-all."""
     source = read_js("settings.js")
-    pos = source.find("function resetFrontendAfterLocalDataReplacement")
-    assert pos != -1
-    body = source[pos:pos + 2500]
+    body = func_body(source, "resetFrontendAfterLocalDataReplacement")
     for token in (
         "App.timelineLoaded = false",
         "App.statisticsLoaded = false",
@@ -853,9 +808,7 @@ def test_settings_js_import_clear_refresh_status_and_overview() -> None:
     does not keep showing pre-import / pre-clear data."""
     source = read_js("settings.js")
     for name in ("importEncryptedBackup", "clearAllLocalData"):
-        pos = source.find("function " + name)
-        assert pos != -1
-        body = source[pos:pos + 3500]
+        body = func_body(source, name)
         assert "App.loadSettingsPrivacyStatus()" in body, (
             name + " success path must call App.loadSettingsPrivacyStatus()"
         )
@@ -870,9 +823,7 @@ def test_init_js_binds_import_and_clear_buttons() -> None:
     ``settings-clear-local-data-btn`` click event to
     ``App.clearAllLocalData``."""
     source = read_js("init.js")
-    pos = source.find("function initButtons")
-    assert pos != -1
-    body = source[pos:pos + 12000]
+    body = func_body(source, "initButtons")
     assert "settings-backup-import-btn" in body
     assert "importEncryptedBackup" in body
     assert "settings-clear-local-data-btn" in body
@@ -920,10 +871,9 @@ def test_index_html_defines_first_run_notice_overlay_dom_ids() -> None:
         assert 'id="' + dom_id + '"' in source, (
             "index.html must define first-run notice DOM id: " + dom_id
         )
-    # The overlay must be hidden by default.
-    overlay_pos = source.find('id="first-run-notice-overlay"')
-    assert overlay_pos != -1
-    overlay_tag = source[overlay_pos - 200:overlay_pos + 200]
+    # The overlay must be hidden by default. Bound the check to the real
+    # opening tag so it does not scan adjacent DOM.
+    overlay_tag = html_opening_tag_by_id(source, "first-run-notice-overlay")
     assert "hidden" in overlay_tag, (
         "first-run-notice-overlay must be hidden by default"
     )
@@ -935,10 +885,7 @@ def test_index_html_settings_page_has_read_only_view_notice_button() -> None:
     without writing any setting or re-accepting. The button must NOT
     be a save / set-path / file-dialog write button."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    pos = source.find('id="page-settings"')
-    assert pos != -1
-    end = source.find("</section>", pos)
-    section = source[pos:end]
+    section = html_section_by_id(source, "page-settings")
     assert 'id="settings-privacy-notice-btn"' in section, (
         "page-settings must include settings-privacy-notice-btn"
     )
@@ -946,11 +893,9 @@ def test_index_html_settings_page_has_read_only_view_notice_button() -> None:
         "page-settings must include settings-privacy-notice-status"
     )
     # The button label should mention "查看隐私说明" so the user knows
-    # it opens a read-only view.
-    btn_pos = section.find('id="settings-privacy-notice-btn"')
-    assert btn_pos != -1
-    btn_tag = section[btn_pos:btn_pos + 300]
-    assert "查看隐私说明" in btn_tag, (
+    # it opens a read-only view. Bound to the real button element.
+    btn_element = html_element_by_id(source, "settings-privacy-notice-btn")
+    assert "查看隐私说明" in btn_element, (
         "settings-privacy-notice-btn must be labeled 查看隐私说明"
     )
 
@@ -962,14 +907,8 @@ def test_index_html_first_run_gate_has_no_skip_or_later_or_cancel() -> None:
     is allowed; the close button is allowed only for the read-only view
     mode (it is hidden in gate mode by ``renderFirstRunNotice``)."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    overlay_pos = source.find('id="first-run-notice-overlay"')
-    assert overlay_pos != -1
-    # The overlay ends at the matching </div> for the overlay container;
-    # slice a generous window that covers the entire dialog markup.
-    overlay_end = source.find("</div>", source.find(
-        "</div>", source.find('id="first-run-notice-close-btn"')
-    ) + 1)
-    overlay = source[overlay_pos:overlay_end + 1]
+    # Bound to the real overlay element so the check never scans adjacent DOM.
+    overlay = html_element_by_id(source, "first-run-notice-overlay")
     for forbidden in (
         "first-run-notice-skip-btn",
         "first-run-notice-later-btn",
@@ -989,9 +928,7 @@ def test_index_html_first_run_close_button_is_hidden_by_default() -> None:
     ``hidden`` attribute. This ensures the gate mode never offers a
     close affordance even before JS runs."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    close_pos = source.find('id="first-run-notice-close-btn"')
-    assert close_pos != -1
-    close_tag = source[close_pos - 100:close_pos + 200]
+    close_tag = html_opening_tag_by_id(source, "first-run-notice-close-btn")
     assert "hidden" in close_tag, (
         "first-run-notice-close-btn must be hidden by default; it is "
         "only revealed in read-only view mode by renderFirstRunNotice"
@@ -1043,9 +980,7 @@ def test_settings_js_first_run_notice_uses_text_content_not_inner_html() -> None
     notice text via ``textContent`` and ``createElement`` only.
     ``innerHTML`` is already forbidden module-wide; this test focuses on the render function."""
     source = read_js("settings.js")
-    pos = source.find("function renderFirstRunNotice")
-    assert pos != -1
-    body = source[pos:pos + 2000]
+    body = func_body(source, "renderFirstRunNotice")
     assert "textContent" in body
     assert "createElement" in body
     assert "innerHTML" not in body
@@ -1115,9 +1050,7 @@ def test_settings_js_load_first_run_notice_shows_gate_when_unaccepted() -> None:
     ``result.accepted === false``. This locks the blocking-gate behavior
     in source so the user cannot be silently bypassed."""
     source = read_js("settings.js")
-    pos = source.find("function loadFirstRunNotice")
-    assert pos != -1
-    body = source[pos:pos + 2500]
+    body = func_body(source, "loadFirstRunNotice")
     assert "result.accepted === false" in body
     assert 'App.firstRunNoticeRequired = true' in body
     assert 'showFirstRunNotice' in body
@@ -1130,9 +1063,7 @@ def test_settings_js_accept_first_run_notice_clears_required_and_hides_gate() ->
     success. It must also call ``App.refreshAll`` so the sidebar
     reflects the now-running collector."""
     source = read_js("settings.js")
-    pos = source.find("function acceptFirstRunNotice")
-    assert pos != -1
-    body = source[pos:pos + 2500]
+    body = func_body(source, "acceptFirstRunNotice")
     assert "App.firstRunNoticeRequired = false" in body
     assert "hideFirstRunNotice" in body
     assert "App.refreshAll" in body
@@ -1143,13 +1074,7 @@ def test_settings_js_open_privacy_notice_uses_view_mode_only() -> None:
     ``showFirstRunNotice`` with mode ``"view"`` (read-only). It must
     never call ``acceptFirstRunNotice`` or write any setting."""
     source = read_js("settings.js")
-    pos = source.find("function openPrivacyNoticeFromSettings")
-    assert pos != -1
-    # Slice to the next sibling function so the body covers the whole
-    # openPrivacyNoticeFromSettings implementation, including the strict
-    # fail-closed error branch which precedes the showFirstRunNotice call.
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 3000]
+    body = func_body(source, "openPrivacyNoticeFromSettings")
     assert "showFirstRunNotice" in body
     assert '"view"' in body or "'view'" in body
     # The view-mode function must not call accept or any write bridge.
@@ -1165,9 +1090,7 @@ def test_settings_js_hide_first_run_notice_does_not_write_setting_or_start_colle
     NOT call ``set_setting_value``, must NOT call
     ``accept_first_run_notice``, and must NOT start the collector."""
     source = read_js("settings.js")
-    pos = source.find("function hideFirstRunNotice")
-    assert pos != -1
-    body = source[pos:pos + 800]
+    body = func_body(source, "hideFirstRunNotice")
     # The only operations allowed in hideFirstRunNotice are setting
     # ``overlay.hidden`` and ``App.firstRunNoticeViewingFromSettings``.
     # No bridge calls of any kind.
@@ -1182,9 +1105,7 @@ def test_settings_js_render_first_run_notice_hides_close_in_gate_mode() -> None:
     is to accept. The accept button is shown in gate mode and hidden in
     view mode."""
     source = read_js("settings.js")
-    pos = source.find("function renderFirstRunNotice")
-    assert pos != -1
-    body = source[pos:pos + 2500]
+    body = func_body(source, "renderFirstRunNotice")
     # In "view" mode: accept hidden, close shown.
     assert 'acceptBtn' in body and 'closeBtn' in body
     assert '"view"' in body or "'view'" in body
@@ -1203,9 +1124,8 @@ def test_settings_js_close_button_handler_guards_on_viewing_from_settings() -> N
     close button from ever dismissing the gate even if a future code
     path re-enables it."""
     source = read_js("init.js")
-    pos = source.find("first-run-notice-close-btn")
-    assert pos != -1
-    body = source[pos:pos + 1000]
+    body = func_body(source, "initButtons")
+    assert "first-run-notice-close-btn" in body
     assert "firstRunNoticeViewingFromSettings" in body
     assert "hideFirstRunNotice" in body
 
@@ -1218,9 +1138,7 @@ def test_init_js_binds_first_run_notice_buttons() -> None:
     ``settings-privacy-notice-btn`` click event to
     ``App.openPrivacyNoticeFromSettings``."""
     source = read_js("init.js")
-    pos = source.find("function initButtons")
-    assert pos != -1
-    body = source[pos:pos + 14000]
+    body = func_body(source, "initButtons")
     assert "first-run-notice-accept-btn" in body
     assert "acceptFirstRunNotice" in body
     assert "first-run-notice-close-btn" in body
@@ -1244,12 +1162,7 @@ def test_init_js_calls_load_first_run_notice_in_init() -> None:
     source = read_js("init.js")
     # Match ``function init()`` exactly so we do not collide with
     # ``function initNav`` or ``function initButtons``.
-    pos = source.find("function init()")
-    assert pos != -1, "init.js must define function init()"
-    # Slice to the next sibling function so we capture the whole init()
-    # body.
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 2500]
+    body = func_body(source, "init()")
     assert "App.loadFirstRunNotice()" in body
     load_pos = body.find("App.loadFirstRunNotice()")
     # ``refreshCurrentPageData()`` and
@@ -1328,12 +1241,7 @@ def test_settings_js_backup_controls_not_dependent_on_settingsLoaded() -> None:
     editable even when the first ``get_settings_privacy_status`` read
     failed so the user can still perform backup operations."""
     source = read_js("settings.js")
-    pos = source.find("function setSettingsBackupControlsDisabled")
-    assert pos != -1
-    # Slice to the next sibling function so the body covers the whole
-    # function implementation.
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 1500]
+    body = func_body(source, "setSettingsBackupControlsDisabled")
     # Strip // line comments to avoid false positives from comments that
     # explain WHY settingsLoaded is not used.
     cleaned_lines = []
@@ -1360,11 +1268,7 @@ def test_settings_js_danger_controls_not_dependent_on_settingsLoaded() -> None:
     even when the first status read failed; the backend re-validates the
     confirmation literal, so allowing input before status loads is safe."""
     source = read_js("settings.js")
-    pos = source.find("function setSettingsDangerControlsDisabled")
-    assert pos != -1
-    # Slice to the next sibling function.
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 1200]
+    body = func_body(source, "setSettingsDangerControlsDisabled")
     # Strip // line comments to avoid false positives from comments that
     # explain WHY settingsLoaded is not used.
     cleaned_lines = []
@@ -1391,11 +1295,7 @@ def test_settings_js_clipboard_toggle_still_uses_settingsLoaded() -> None:
     first successful status load. This is the ONLY Settings control that
     still depends on settingsLoaded after the fix."""
     source = read_js("settings.js")
-    pos = source.find("function setSettingsControlsDisabled")
-    assert pos != -1
-    # Slice to the next sibling function.
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 1000]
+    body = func_body(source, "setSettingsControlsDisabled")
     # The clipboard toggle line must reference settingsLoaded.
     assert "!App.settingsLoaded" in body, (
         "setSettingsControlsDisabled must reference App.settingsLoaded "
@@ -1442,12 +1342,7 @@ def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
     source = read_js("init.js")
     # Match ``function init()`` exactly so we do not collide with
     # ``function initNav`` or ``function initButtons``.
-    pos = source.find("function init()")
-    assert pos != -1, "init.js must define function init()"
-    # Slice to the next sibling function so we capture the whole init()
-    # body.
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 2500]
+    body = func_body(source, "init()")
     # loadFirstRunNotice must be called.
     assert "App.loadFirstRunNotice()" in body, (
         "init() must call App.loadFirstRunNotice()"
@@ -1564,10 +1459,7 @@ def test_init_js_bootstrap_handles_bridge_already_ready() -> None:
     # The onDomReady handler must branch on isBridgeReady(): call
     # bootstrap() directly when ready, otherwise attach the
     # pywebviewready listener.
-    pos = source.find("function onDomReady")
-    assert pos != -1, "init.js must define function onDomReady"
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 800]
+    body = func_body(source, "onDomReady")
     assert "isBridgeReady()" in body, (
         "onDomReady must call isBridgeReady() to detect an already-injected "
         "bridge"
@@ -1613,10 +1505,7 @@ def test_init_js_does_not_start_refresh_on_notice_load_failure() -> None:
     (fail-closed). The refresh contract is ``refreshCurrentPageData()`` plus
     ``startHeartbeat()``, guarded by the notice state."""
     source = read_js("init.js")
-    pos = source.find("function init()")
-    assert pos != -1, "init.js must define function init()"
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 2500]
+    body = func_body(source, "init()")
     # The .then callback must receive a notice-confirmed boolean and guard
     # the refresh calls on it so a failed notice load does not start refresh.
     assert "noticeConfirmed" in body, (
@@ -1630,9 +1519,8 @@ def test_init_js_does_not_start_refresh_on_notice_load_failure() -> None:
     # The old catch branch that unconditionally started refresh must not
     # exist. A .catch on the loadFirstRunNotice chain that contains
     # refreshCurrentPageData / startHeartbeat is forbidden.
-    catch_pos = body.find(".catch(function")
-    if catch_pos != -1:
-        catch_body = body[catch_pos:catch_pos + 600]
+    catch_body = js_catch_block(body)
+    if catch_body:
         for call in ("refreshCurrentPageData()", "startHeartbeat()"):
             assert call not in catch_body, (
                 "init() catch branch must not call " + call + " on notice "
@@ -1652,17 +1540,10 @@ def test_settings_js_load_first_run_notice_catch_does_not_lock_state() -> None:
     for strict fail-closed since the backend is broken and retrying will
     not help."""
     source = read_js("settings.js")
-    pos = source.find("function loadFirstRunNotice")
-    assert pos != -1
-    # Slice to the next sibling function so we cover the whole
-    # loadFirstRunNotice implementation including the catch block.
-    end = source.find("\n    function ", pos + 1)
-    body = source[pos:end if end != -1 else pos + 3000]
-    # Locate the catch block within loadFirstRunNotice.
-    catch_pos = body.find(".catch(function")
-    assert catch_pos != -1, "loadFirstRunNotice must have a catch block"
-    # Slice the catch block body (generous window).
-    catch_body = body[catch_pos:catch_pos + 800]
+    body = func_body(source, "loadFirstRunNotice")
+    # Locate the catch block within loadFirstRunNotice using brace counting.
+    catch_body = js_catch_block(body)
+    assert catch_body, "loadFirstRunNotice must have a catch block"
     assert "firstRunNoticeLoaded = true" not in catch_body, (
         "loadFirstRunNotice catch must not set firstRunNoticeLoaded = true; "
         "bridge rejection may be transient and must allow retry"

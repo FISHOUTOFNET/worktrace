@@ -151,6 +151,149 @@ def func_body(source: str, name: str) -> str:
     return source[start:end] if end != -1 else source[start:]
 
 
+def html_section_by_id(source: str, section_id: str) -> str:
+    """Return the ``<section id="<section_id>">`` block from HTML source.
+
+    Bounds the slice to the real ``</section>`` close so the section-level
+    contract tests never scan adjacent sections. Raises ``AssertionError``
+    when the section id or its closing ``</section>`` tag is missing so a
+    malformed/renamed section fails loudly instead of silently scanning
+    adjacent DOM.
+
+    Used in place of fixed ``source[pos:pos + N]`` windows so a section
+    test cannot bleed into the next section even when comments shrink or
+    grow.
+    """
+    marker = 'id="' + section_id + '"'
+    pos = source.find(marker)
+    assert pos != -1, "html must define section id: " + section_id
+    end = source.find("</section>", pos)
+    assert end != -1, "html section must close after id: " + section_id
+    return source[pos:end]
+
+
+def html_element_by_id(source: str, element_id: str) -> str:
+    """Return the full HTML element (opening tag + content + closing tag)
+    for the element with ``id="<element_id>"``.
+
+    Locates the opening tag by searching backwards from the id marker for
+    the preceding ``<``, extracts the tag name, then walks forward counting
+    nested open/close tags of the same name to find the matching closing
+    tag. This avoids fixed character windows that could bleed into adjacent
+    DOM when comments shrink or grow.
+
+    Raises ``AssertionError`` when the id, the opening tag, or the matching
+    closing tag cannot be found.
+    """
+    marker = 'id="' + element_id + '"'
+    pos = source.find(marker)
+    assert pos != -1, "html must define element id: " + element_id
+    tag_start = source.rfind("<", 0, pos)
+    assert tag_start != -1, "element must have a well-formed opening tag: " + element_id
+    tag_match = re.match(r"<(\w+)", source[tag_start:])
+    assert tag_match, "element must have a valid tag name: " + element_id
+    tag_name = tag_match.group(1)
+    open_tag_end = source.find(">", pos)
+    assert open_tag_end != -1, "element opening tag must close: " + element_id
+    # Self-closing tag (e.g. <input id="..." />)
+    if source[open_tag_end - 1] == "/":
+        return source[tag_start:open_tag_end + 1]
+    close_tag = "</" + tag_name + ">"
+    search_pos = open_tag_end + 1
+    depth = 1
+    while depth > 0:
+        next_open = source.find("<" + tag_name, search_pos)
+        next_close = source.find(close_tag, search_pos)
+        if next_close == -1:
+            raise AssertionError(
+                "element " + repr(element_id)
+                + " (<" + tag_name + ">) has no matching closing tag"
+            )
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            search_pos = next_open + len("<" + tag_name)
+        else:
+            depth -= 1
+            search_pos = next_close + len(close_tag)
+    return source[tag_start:search_pos]
+
+
+def html_opening_tag_by_id(source: str, element_id: str) -> str:
+    """Return just the opening HTML tag for the element with
+    ``id="<element_id>"``.
+
+    Bounds the slice from the preceding ``<`` to the closing ``>`` of the
+    opening tag so attribute checks (e.g. ``hidden``) never scan adjacent
+    DOM.
+    """
+    marker = 'id="' + element_id + '"'
+    pos = source.find(marker)
+    assert pos != -1, "html must define element id: " + element_id
+    tag_start = source.rfind("<", 0, pos)
+    assert tag_start != -1, "element must have a well-formed opening tag: " + element_id
+    tag_end = source.find(">", pos)
+    assert tag_end != -1, "element opening tag must close: " + element_id
+    return source[tag_start:tag_end + 1]
+
+
+def js_catch_block(func_source: str) -> str:
+    """Return the ``.catch(function () { ... })`` block from a JS function
+    body.
+
+    Finds the first ``.catch(function`` in *func_source* and returns the text
+    up to the matching ``});`` close. Uses brace counting so nested
+    callbacks inside the catch do not produce a false-short slice.
+
+    Returns an empty string when no ``.catch(function`` is found, so callers
+    can ``if catch_body:`` to guard assertions.
+    """
+    catch_pos = func_source.find(".catch(function")
+    if catch_pos == -1:
+        return ""
+    brace_start = func_source.find("{", catch_pos)
+    assert brace_start != -1, "catch callback must open with {"
+    depth = 1
+    pos = brace_start + 1
+    while depth > 0:
+        next_open = func_source.find("{", pos)
+        next_close = func_source.find("}", pos)
+        if next_close == -1:
+            raise AssertionError("catch block has no matching closing brace")
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            pos = next_open + 1
+        else:
+            depth -= 1
+            pos = next_close + 1
+    # Include the trailing ``);`` that closes the .catch() call.
+    paren_close = func_source.find(")", pos)
+    if paren_close != -1:
+        end = paren_close + 1
+    else:
+        end = pos
+    return func_source[catch_pos:end]
+
+
+def python_method_body(source: str, method_name: str) -> str:
+    """Return the body of ``def <method_name>`` from Python source.
+
+    Locates ``def <method_name>`` and returns the text up to the next
+    ``\\n    def `` at the same indentation (or the next ``\\nclass `` /
+    EOF). This avoids fixed character windows when a test needs to check
+    a single Python method body.
+    """
+    marker = "def " + method_name
+    start = source.find(marker)
+    assert start != -1, "python source must define method: " + method_name
+    # Find the end: next ``\n    def `` or ``\nclass `` or ``\ndef ``.
+    next_def = source.find("\n    def ", start + 1)
+    next_class = source.find("\nclass ", start + 1)
+    next_top_def = source.find("\ndef ", start + 1)
+    candidates = [e for e in (next_def, next_class, next_top_def) if e != -1]
+    end = min(candidates) if candidates else -1
+    return source[start:end] if end != -1 else source[start:]
+
+
 def read_bridge_sources_combined() -> str:
     """Return the concatenated UTF-8 source of all bridge mixin files.
 
