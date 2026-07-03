@@ -71,6 +71,7 @@ jobs:
           }
 
       - name: Upload release smoke artifacts
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: worktrace-windows-smoke
@@ -78,3 +79,4 @@ jobs:
             dist/WorkTrace.exe
             dist/WorkTrace-Setup.exe
           if-no-files-found: error
+          retention-days: 7
