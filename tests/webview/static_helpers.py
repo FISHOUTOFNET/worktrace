@@ -110,12 +110,11 @@ def read_rules_module_js() -> str:
     Project Rules logic spans six IIFE modules loaded in order:
       rules.js                (core load / refresh / wiring)
       rules_render.js         (render helpers)
-      rules_create_panel.js   (unified create/edit panel)
-      rules_rule_actions.js  (rule toggle)
-      rules_keyword_actions.js (keyword create / edit / delete)
-      rules_folder_actions.js (folder create / edit / delete)
-      rules_project_actions.js (project lifecycle: create / edit /
-                                toggle / archive)
+      rules_create_panel.js   (unified create/edit panel + advanced
+                                excluded-rules panel)
+      rules_rule_actions.js   (created-rule backfill helper)
+      rules_keyword_actions.js (keyword rule delete)
+      rules_folder_actions.js (folder rule delete)
     Tests that need to check substring contracts or ``func_body`` across
     the full Project Rules surface should use this helper instead of
     ``read_js("rules.js")``.
@@ -127,7 +126,6 @@ def read_rules_module_js() -> str:
         "rules_rule_actions.js",
         "rules_keyword_actions.js",
         "rules_folder_actions.js",
-        "rules_project_actions.js",
     ]
     parts: list[str] = []
     for name in names:

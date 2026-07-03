@@ -30,24 +30,6 @@
     }
     App.loadProjectRules = loadProjectRules;
 
-    function _collectExistingRuleKeys(projects) {
-        // rule currently present in the loaded data. Used to prune stale
-        var keys = {};
-        if (!projects || !projects.length) return keys;
-        for (var i = 0; i < projects.length; i++) {
-            var rules = (projects[i] && projects[i].rules) || [];
-            for (var j = 0; j < rules.length; j++) {
-                var rule = rules[j] || {};
-                var kind = rule.kind;
-                var id = parseInt(rule.id, 10);
-                if ((kind === "folder" || kind === "keyword") && id > 0) {
-                    keys[kind + ":" + id] = true;
-                }
-            }
-        }
-        return keys;
-    }
-
     function _sortProjectsForRulesHome(projects) {
         var list = (projects || []).slice();
         var mode = App.rulesSortMode || "last_used";
@@ -72,20 +54,6 @@
     }
     App.sortProjectsForRulesHome = _sortProjectsForRulesHome;
 
-    function _pruneBatchSelection(projects) {
-        // batch write handlers clear selection explicitly on success and
-        if (!App.rulesBatchSelectedKeys) return;
-        var existing = _collectExistingRuleKeys(projects);
-        var pruned = {};
-        var keys = Object.keys(App.rulesBatchSelectedKeys);
-        for (var i = 0; i < keys.length; i++) {
-            if (existing[keys[i]]) {
-                pruned[keys[i]] = true;
-            }
-        }
-        App.rulesBatchSelectedKeys = pruned;
-    }
-
     function showProjectRules(data) {
         App.rulesLoaded = true;
         App.lastProjectRulesData = data || { projects: [] };
@@ -99,8 +67,6 @@
         }
         if (!list || !empty) return;
         var projects = _sortProjectsForRulesHome((data && data.projects) || []);
-        // Prune stale batch selection keys before rendering so the per-row
-        _pruneBatchSelection(projects);
         if (!projects.length) {
             list.innerHTML = "";
             empty.hidden = false;
@@ -112,7 +78,6 @@
         }).join("");
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
-        App.bindProjectLifecycleEvents();
     }
     App.showProjectRules = showProjectRules;
 
@@ -132,7 +97,6 @@
         }).join("");
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
-        App.bindProjectLifecycleEvents();
     }
     App.rerenderProjectRulesList = rerenderProjectRulesList;
 

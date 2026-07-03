@@ -1,8 +1,6 @@
 """Project Rules bridge mixin, payload helpers, and Chinese error-message maps.
 
-The boundary rules from ``bridge.py`` carry over verbatim:
-surface has its own module. The boundary rules from ``bridge.py`` carry
-over verbatim:
+Boundary rules inherited from ``bridge.py``:
 
 - This module may import ``worktrace.api``, ``worktrace.constants``,
   ``worktrace.formatters``, and stdlib only. It must NOT import
@@ -14,12 +12,10 @@ over verbatim:
 - Methods do not log window titles, file paths, notes, or copied text.
 
 ``WebViewBridge`` in ``bridge.py`` inherits ``ProjectRulesBridgeMixin`` so
-the 12 Project Rules bridge method names stay on ``WebViewBridge``. The
+the Project Rules bridge method names stay on ``WebViewBridge``. The
 module-level payload helpers (``_project_rules_project_payload`` etc.) and
 the Chinese error-message maps (``_PROJECT_RULE_WRITE_MESSAGES`` etc.)
 live here and are imported from this module directly.
-are imported from this module directly; ``bridge.py`` no longer re-exports
-them.
 """
 
 from __future__ import annotations
@@ -290,8 +286,9 @@ def _project_lifecycle_summary(project: dict[str, Any]) -> dict[str, Any]:
     """Build the narrow project summary payload for lifecycle writes.
 
     Only exposes display-safe fields (``id`` / ``name`` / ``description`` /
-    ``enabled`` / ``archived``). Never surfaces ``created_by`` /
-    ``created_at`` / ``updated_at`` / raw row / traceback / SQL.
+    ``language`` / ``enabled`` / ``archived``). Never surfaces
+    ``created_by`` / ``created_at`` / ``updated_at`` / raw row / traceback /
+    SQL.
     """
     project = _project_rules_mapping(project)
     return {
@@ -400,14 +397,14 @@ def _project_rules_list(value: Any) -> list[Any]:
     return []
 
 
-# ProjectRulesBridgeMixin: the 12 Project Rules bridge methods.
+# ProjectRulesBridgeMixin: Project Rules bridge methods.
 
 
 class ProjectRulesBridgeMixin:
     """Project Rules bridge methods.
 
-    Mixed into ``WebViewBridge`` in ``bridge.py`` so the 12 method names
-    (``get_project_rules`` / ``set_project_rule_enabled`` /
+    Mixed into ``WebViewBridge`` in ``bridge.py`` so the Project Rules
+    method names (``get_project_rules`` / ``set_project_rule_enabled`` /
     ... / ``archive_project_for_rules``) stay on ``WebViewBridge``. The
     mixin must NOT add ``__init__``; it relies on the host class having a
     ``logger`` and the module-level ``logger`` defined above for exception
@@ -913,11 +910,11 @@ class ProjectRulesBridgeMixin:
         window titles, clipboard, or notes in the payload.
 
         Returns ``{"ok": True, "project": {"id": int, "name": str,
-        "description": str, "enabled": bool, "archived": bool}}`` on
-        success (the narrow created-project summary only — the frontend
-        re-fetches the full Project Rules list via ``get_project_rules``
-        after success) or ``{"ok": False, "error": "<chinese message>"}``
-        on failure.
+        "description": str, "language": str, "enabled": bool,
+        "archived": bool}}`` on success (the narrow created-project summary
+        only — the frontend re-fetches the full Project Rules list via
+        ``get_project_rules`` after success) or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure.
         """
         try:
             # ``type(...) is not str`` rejects ``bool`` / ``int`` / ``float``
@@ -974,17 +971,16 @@ class ProjectRulesBridgeMixin:
         window titles, clipboard, or notes in the payload.
 
         Returns ``{"ok": True, "project": {"id": int, "name": str,
-        "description": str, "enabled": bool, "archived": bool}}`` on
-        success (the narrow updated-project summary only — the frontend
-        re-fetches the full Project Rules list via ``get_project_rules``
-        after success) or ``{"ok": False, "error": "<chinese message>"}``
-        on failure.
+        "description": str, "language": str, "enabled": bool,
+        "archived": bool}}`` on success (the narrow updated-project summary
+        only — the frontend re-fetches the full Project Rules list via
+        ``get_project_rules`` after success) or
+        ``{"ok": False, "error": "<chinese message>"}`` on failure.
         """
         try:
             # ``type(...) is not int`` rejects ``bool`` (``type(True) is
             # bool``), ``float``, ``str``, ``None``, and container types in
             # one check, matching the shared rule-id validation pattern.
-            # pattern.
             if type(project_id) is not int or project_id <= 0:
                 return {"ok": False, "error": "操作无效"}
             if type(name) is not str or not name.strip():

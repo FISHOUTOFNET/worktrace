@@ -414,10 +414,6 @@
         // Clear cached payloads so the next page visit re-fetches.
         App.lastTimelineData = null;
         App.lastProjectRulesData = null;
-        App.rulesImpactPreviewKey = null;
-        App.rulesImpactPreviewData = null;
-        App.rulesBatchSelectedKeys = {};
-        App.rulesBatchPanelData = null;
         // caller chains App.loadSettingsPrivacyStatus() after this so the
     }
     App.resetFrontendAfterLocalDataReplacement = resetFrontendAfterLocalDataReplacement;

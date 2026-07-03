@@ -144,59 +144,23 @@
     App.rulesLoading = false;
     App.rulesRequestToken = 0;
     App.rulesSortMode = "last_used";
-    App.rulesSavingRuleKey = null;
 
-    // Keyword creation writes are isolated from rule toggle writes.
-    // Only one keyword create may be in flight at a time.
-    App.rulesCreatingKeyword = false;
-
-    // Keyword deletion writes carry the "<kind>:<id>" key of the row being
-    // deleted so only that row's button enters deleting state.
+    // Keyword rule delete in-flight: carries the "keyword:<id>" key of the
+    // row being deleted so only that row's button enters deleting state.
     App.rulesDeletingRuleKey = null;
 
-    // Keyword edit writes carry the "keyword:<id>" key of the row being
-    // edited or saved.
-    App.rulesEditingKeywordKey = null;
-    App.rulesUpdatingKeywordKey = null;
-
-    // Folder rule CRUD state. Only one folder write may be in flight per
-    // kind at a time.
-    App.rulesCreatingFolder = false;
-    App.rulesEditingFolderKey = null;
+    // Folder rule delete in-flight: carries the "folder:<id>" key of the
+    // row being deleted so only that row's button enters deleting state.
     App.rulesDeletingFolderKey = null;
-    // Cache of the last-loaded Project Rules data so the inline folder
-    // edit form can re-render the list immediately without a round-trip
+
+    // Cache of the last-loaded Project Rules data so the unified panel and
+    // the advanced excluded-rules panel can re-render without a round-trip
     // through loadProjectRules (which would lose input focus).
     App.lastProjectRulesData = null;
 
-    // Project lifecycle writes are isolated from rule CRUD button and input
-    // disabled state. Only one project lifecycle write may be in flight per
-    // kind at a time.
-    App.rulesCreatingProject = false;
-    App.rulesEditingProjectId = null;
-    App.rulesUpdatingProjectId = null;
-    App.rulesTogglingProjectId = null;
-    App.rulesArchivingProjectId = null;
-
-    // Rule impact preview + safe single-rule backfill state.
-    // ``rulesPreviewingImpactKey``: preview key currently loading.
-    // ``rulesBackfillingRuleKey``: backfill key currently being applied.
-    // ``rulesImpactPreviewKey``: rendered preview key (null = no preview).
-    // ``rulesImpactPreviewData``: cached preview payload for re-render.
-    App.rulesPreviewingImpactKey = null;
+    // Created-rule backfill in-flight: carries the "<kind>:<id>" key while
+    // the optional "apply to history" step runs after a rule is created.
     App.rulesBackfillingRuleKey = null;
-    App.rulesImpactPreviewKey = null;
-    App.rulesImpactPreviewData = null;
-
-    // Selected-rule batch operations state.
-    // ``rulesBatchSelectedKeys``: selected rule keys kept in JS memory only.
-    // ``rulesBatchInFlight``: true while preview / apply / enable / disable
-    // batch work is running; while true, batch and per-rule write controls
-    // are disabled.
-    // ``rulesBatchPanelData``: cached batch panel payload for re-render.
-    App.rulesBatchSelectedKeys = {};
-    App.rulesBatchInFlight = false;
-    App.rulesBatchPanelData = null;
 
     App.STATUS_TYPE_CLASS = {
         info: "edit-status-info",

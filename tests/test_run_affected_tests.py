@@ -417,23 +417,6 @@ def test_bridge_rules_py_selects_project_rules_bridge_tests_only(runner):
     assert sel.smoke_commands == []
 
 
-# C6. rules_project_actions.js -> Project Rules static contract + smoke
-
-
-def test_rules_project_actions_js_selects_static_contract_and_smoke(runner):
-    sel = runner.select_targets(["worktrace/webview_ui/js/rules_project_actions.js"])
-    # rules_project_actions.js triggers section A (frontend resources, broad)
-    # AND section C6 (Project Rules static contract). Both contribute the
-    # static contract target; dedup ensures it appears once.
-    assert "tests/webview/test_project_rules_static_contract.py" in sel.pytest_targets
-    assert "tests/webview/" in sel.pytest_targets
-    assert "tests/test_webview_bridge.py" in sel.pytest_targets
-    assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets
-    assert any(
-        "import worktrace.webview_main" in " ".join(s) for s in sel.smoke_commands
-    )
-
-
 # C6 (the modular split). New split modules -> Project Rules static contract + smoke
 
 

@@ -257,15 +257,6 @@
         });
     }
 
-    function backfillCreatedRule(ruleType, ruleId) {
-        return App.callBridge("backfill_project_rule", ruleType, ruleId).then(function (result) {
-            return !(result && result.ok === false);
-        }).catch(function () {
-            return false;
-        });
-    }
-    App.backfillCreatedRule = backfillCreatedRule;
-
     function renderRulesAdvancedPanel() {
         var details = document.getElementById("rules-advanced");
         var content = document.getElementById("rules-advanced-content");

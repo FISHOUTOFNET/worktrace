@@ -1,4 +1,7 @@
-// WorkTrace WebView frontend - retained single-rule history apply helper.
+// WorkTrace WebView frontend - created-rule backfill helper.
+// Sole owner of App.backfillCreatedRule: applies one newly created
+// folder / keyword rule to eligible history via the bridge. The unified
+// create panel calls this helper when "应用到历史记录" is checked.
 
 (function () {
     "use strict";

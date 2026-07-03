@@ -89,7 +89,7 @@ def test_project_rules_script_order_includes_create_panel_before_actions():
     assert ALL_JS_FILES.index("rules.js") < ALL_JS_FILES.index("rules_render.js")
     assert ALL_JS_FILES.index("rules_create_panel.js") == ALL_JS_FILES.index("rules_render.js") + 1
     assert ALL_JS_FILES.index("rules_rule_actions.js") == ALL_JS_FILES.index("rules_create_panel.js") + 1
-    assert ALL_JS_FILES.index("rules_project_actions.js") < ALL_JS_FILES.index("init.js")
+    assert ALL_JS_FILES.index("rules_folder_actions.js") < ALL_JS_FILES.index("init.js")
 
 
 def test_project_rules_static_helper_reads_create_panel_module():
