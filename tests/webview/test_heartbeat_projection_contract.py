@@ -312,10 +312,9 @@ def test_recent_item_renders_data_index_and_progress_flags():
     carry the unified ``data-display-span-id`` attribute so the ticker
     can render them from the single registered live clock.
 
-    The ``virtual-live`` CSS class may be retained as a compatibility /
-    historical style but is NO LONGER required as the marker for a
-    ``<30s`` virtual recent item — ``<30s`` virtual_pending rows are not
-    injected into Recent at all under the new Activity Display Model."""
+    The ``virtual-live`` CSS class is only styling; live ticking is keyed
+    by ``data-display-span-id`` for DB-overlay rows and display-only
+    ``virtual_pending`` rows alike."""
     source = read_js("overview.js")
     assert 'data-recent-index' in source, (
         "overview.js must render data-recent-index on each recent item"

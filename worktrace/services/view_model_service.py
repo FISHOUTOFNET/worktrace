@@ -196,15 +196,15 @@ def _materialize_display_only_detail_row(
 def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     """Build the Overview page ViewModel from a single display model.
 
-    Recent activities come ONLY from DB sessions; the unified live span is
-    applied as an overlay onto the matching DB row (persisted_open /
-    absorbed_pending). A ``<30s`` pending resource with no anchor does NOT
-    inject a virtual recent item — it only appears in the current-activity
-    area.
+    Recent rows come from DB sessions plus any display-only
+    ``virtual_pending`` row materialized from the Activity Display Model.
+    Anchored spans overlay matching DB rows; an unanchored
+    ``virtual_pending`` span materializes a display-only recent row.
 
     KPI totals (``today_total_seconds`` / ``classified_seconds`` /
-    ``uncategorized_seconds``) are computed from the SAME overlaid sessions
-    list so the KPI, recent items, and live clock all share one sample.
+    ``uncategorized_seconds``) are computed from the same overlay +
+    materialized rows so the KPI, recent items, and live clock share one
+    sample.
 
     Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
     ONCE here and passed to :func:`build_activity_display_model`; the builder
@@ -350,11 +350,10 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
 def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     """Build the Timeline page ViewModel from a single display model.
 
-    Timeline sessions come ONLY from the DB. The unified live span is
-    applied as an overlay onto the matching DB session (persisted_open /
-    absorbed_pending) BEFORE computing the display total so the total
-    matches the sum of the session rows. A ``<30s`` pending resource with
-    no anchor does NOT inject a virtual session.
+    Timeline sessions come from DB rows plus any display-only
+    ``virtual_pending`` session materialized from the Activity Display
+    Model. Anchored spans overlay matching DB sessions before computing
+    the display total so the total matches the sum of the session rows.
 
     ``raw_total_seconds`` is the sum of raw DB durations (unaffected by
     the display-only live overlay or adjusted overrides). ``total_seconds``
@@ -480,11 +479,10 @@ def get_session_details_view_model(
 ) -> dict[str, Any]:
     """Build the Timeline Details ViewModel from a single display model.
 
-    When ``activity_ids`` is empty, NO virtual detail row is injected
-    anymore — the frontend renders the current-activity area only. When
-    activity ids are present, the DB activity rows are listed and the
-    unified live span is applied as an overlay onto the matching row
-    (persisted_open / absorbed_pending).
+    When details are visible for ``virtual_pending``, an unanchored span
+    materializes a display-only detail row. Otherwise, DB activity ids are
+    listed and any matching Activity Display Model span overlays the DB
+    row. Display-only detail rows are not editable, exported, or stored.
 
     Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
     ONCE here and the resulting ``snapshot`` is passed to

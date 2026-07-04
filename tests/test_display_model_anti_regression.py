@@ -1,18 +1,18 @@
-"""Static anti-regression contracts for the unified Activity Display Model.
+"""Static contracts for the unified Activity Display Model.
 
-These tests enforce the architectural invariants from the cleanup spec
-(section 三) so future code cannot re-introduce the legacy virtual-row
-builder / multi-cache-ticker semantics. The display-model owner is
-``worktrace.services.activity_display_model_service``; the legacy
-``build_virtual_session`` / ``build_virtual_detail_row`` helpers have been
-removed entirely from the codebase and the bridge-facing public API.
+These tests keep live display semantics owned by
+``worktrace.services.activity_display_model_service``. Page ViewModels
+consume Activity Display Model spans: anchored spans overlay DB rows, and
+unanchored ``virtual_pending`` spans may materialize display-only rows.
+Bridge and frontend code must not own live semantics or derive live
+seconds from structural caches.
 
 Covered invariants:
 
-1. ``view_model_service.py`` does NOT import/call the legacy
+1. ``view_model_service.py`` does NOT import/call removed
    ``build_virtual_session`` / ``build_virtual_detail_row`` /
    ``build_persisted_open_overlay`` / ``apply_persisted_open_overlay_to_row``.
-2. ``view_model_api.py`` does NOT re-export the legacy virtual builders.
+2. ``view_model_api.py`` does NOT re-export removed virtual builders.
 3. No test under ``tests/`` imports ``build_virtual_session`` /
    ``build_virtual_detail_row`` as a POSITIVE contract.
 4. (Covered in ``test_heartbeat_projection_contract.py``:
@@ -38,7 +38,7 @@ WEBVIEW_UI_DIR = REPO_ROOT / "worktrace" / "webview_ui"
 JS_DIR = WEBVIEW_UI_DIR / "js"
 
 
-# --- Invariant 1: view_model_service does not import / call legacy builders ---
+# --- Invariant 1: view_model_service consumes display spans only ---
 
 
 _LEGACY_VIRTUAL_SYMBOLS = (
@@ -50,34 +50,29 @@ _LEGACY_VIRTUAL_SYMBOLS = (
 
 
 def test_view_model_service_does_not_reference_legacy_virtual_builders():
-    """Invariant 三.1: ``view_model_service.py`` must NOT import or call
-    the legacy virtual session / detail row / persisted-open overlay
-    builders. They have been privatized out of the page ViewModel path;
-    the new display model owner
-    (``activity_display_model_service``) is the single source of truth."""
+    """``view_model_service.py`` must consume Activity Display Model
+    spans instead of removed virtual-row builders."""
     vms_path = REPO_ROOT / "worktrace" / "services" / "view_model_service.py"
     source = vms_path.read_text(encoding="utf-8")
     for symbol in _LEGACY_VIRTUAL_SYMBOLS:
         assert symbol not in source, (
-            "view_model_service.py must not reference the legacy helper "
+            "view_model_service.py must not reference removed helper "
             + symbol
             + " — the page ViewModel path consumes Activity Display "
               "Model spans only"
         )
 
 
-# --- Invariant 2: view_model_api does not re-export legacy builders ---
+# --- Invariant 2: view_model_api exposes ViewModel entry points only ---
 
 
 def test_view_model_api_does_not_re_export_legacy_virtual_builders():
-    """Invariant 三.2: ``worktrace.api.view_model_api`` must NOT re-export
+    """``worktrace.api.view_model_api`` must NOT re-export
     ``build_virtual_session`` / ``build_virtual_detail_row``. The bridge
-    facade is no longer the unified live-display model entry; it only
-    exposes low-level pure helpers (current activity summary, refresh
-    revision, ViewModel getters)."""
+    facade exposes low-level pure helpers and ViewModel getters."""
     import importlib
 
-    # The legacy ``live_display_api`` module must NOT exist anymore.
+    # Bridge-facing live display entry points live in view_model_api.
     try:
         importlib.import_module("worktrace.api.live_display_api")
     except ModuleNotFoundError:
@@ -121,7 +116,7 @@ def test_view_model_api_does_not_re_export_legacy_virtual_builders():
 # --- Invariant 3: tests do not import virtual builders as positive contract ---
 
 
-# Pattern matches an actual import statement for the legacy builders.
+# Pattern matches an actual import statement for removed builders.
 # Docstring / assertion references (in strings or comments) do NOT match
 # because they are not preceded by ``import`` / ``from ... import``.
 _VIRTUAL_BUILDER_IMPORT_RE = re.compile(
@@ -135,11 +130,10 @@ _VIRTUAL_BUILDER_IMPORT_RE = re.compile(
 
 
 def test_tests_directory_does_not_import_virtual_builders_as_positive_contract():
-    """Invariant 三.3: no test under ``tests/`` may import
+    """No test under ``tests/`` may import
     ``build_virtual_session`` / ``build_virtual_detail_row`` as a POSITIVE
-    contract. The legacy builders are no longer part of the public API;
-    the only allowed references are forbid-assertions / docstrings /
-    comments inside the rewritten contract tests."""
+    contract. Tests should assert Activity Display Model / ViewModel
+    materialization rather than scattered builder APIs."""
     offenders = []
     for py_file in TESTS_DIR.rglob("test_*.py"):
         source = py_file.read_text(encoding="utf-8")
@@ -156,7 +150,7 @@ def test_tests_directory_does_not_import_virtual_builders_as_positive_contract()
 
 
 def test_overview_js_renders_live_rows_with_display_span_id():
-    """Invariant 三.5: ``overview.js`` must emit ``data-display-span-id``
+    """``overview.js`` must emit ``data-display-span-id``
     on every live recent row so the unified ticker walks the registered
     live clock (``App.liveClockBySpanId`` + ``App.liveSeconds()``) instead
     of reading a structural cache as a live-seconds source."""
@@ -168,7 +162,7 @@ def test_overview_js_renders_live_rows_with_display_span_id():
 
 
 def test_timeline_js_renders_live_rows_with_display_span_id():
-    """Invariant 三.5: ``timeline.js`` must emit ``data-display-span-id``
+    """``timeline.js`` must emit ``data-display-span-id``
     on every live timeline session row AND every live detail row so the
     unified ticker walks the registered live clock for both surfaces."""
     source = (JS_DIR / "timeline.js").read_text(encoding="utf-8")
@@ -188,14 +182,13 @@ def test_timeline_js_renders_live_rows_with_display_span_id():
     )
 
 
-# --- Invariant reinforcement: live_display_service __all__ no longer exports them ---
+# --- Invariant reinforcement: live_display_service __all__ does not export builders ---
 
 
 def test_live_display_service_all_does_not_export_legacy_virtual_builders():
-    """Reinforcement of 三.1 / 三.2: the public ``__all__`` of
+    """The public ``__all__`` of
     ``worktrace.services.live_display_service`` must NOT include the
-    legacy virtual session / detail builders. They have been removed
-    entirely from the codebase."""
+    removed virtual session / detail builders."""
     from worktrace.services import live_display_service
 
     service_all = set(getattr(live_display_service, "__all__", []))
@@ -210,7 +203,7 @@ def test_live_display_service_all_does_not_export_legacy_virtual_builders():
         )
 
 
-# --- Section 七: DB-only / report-only service boundary static tests ---
+# --- DB-only / report-only service boundary static tests ---
 
 
 # Live-projection helpers that MUST NEVER appear in any DB-only service.

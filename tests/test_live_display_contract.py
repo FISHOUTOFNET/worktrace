@@ -108,8 +108,8 @@ def test_stable_live_key_consistent_across_overview_recent_timeline_detail(bridg
     ``live_started_at_epoch_ms``) across Overview / Recent / Timeline /
     Details. The real persisted DB row in each list is overlaid with the
     same ``display_span_id`` and ``stable_live_key_hash`` via
-    ``apply_live_span_to_row`` (no virtual session / virtual detail row
-    is injected anymore)."""
+    ``apply_live_span_to_row`` rather than materializing display-only
+    rows."""
     aid, start_time = _create_real_open_activity(elapsed_seconds=120)
     _set_snapshot(
         _normal_snapshot(
@@ -1458,7 +1458,7 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
         "absorbed_pending display projection must NOT write the DB"
     )
 
-    # Timeline session for the anchor also overlays (no virtual session).
+    # Timeline session for the anchor also uses the overlay path.
     anchor_session = next(
         (
             s
