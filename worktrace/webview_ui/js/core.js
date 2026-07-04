@@ -35,6 +35,7 @@
     App.liveClockByPage = App.activeSpanClockByPage;
     App.activeDisplaySpanIdByPage = {};
     App.currentActivityClockByPage = {};
+    App.currentActivityContinuityKeyByPage = {};
     App.liveClockContractViolation = null;
     App.liveClockContractRefreshRequested = false;
 
@@ -530,6 +531,21 @@
     function activeElapsedNow(clock, nowMs) {
         var c = normalizeLiveClock(clock);
         if (!c) return 0;
+        var activeSample = null;
+        if (clock && clock.current_elapsed_at_sample !== undefined
+            && clock.current_elapsed_at_sample !== null) {
+            activeSample = nonNegativeInt(clock.current_elapsed_at_sample, 0);
+        } else if (clock && clock.active_elapsed_at_sample !== undefined
+            && clock.active_elapsed_at_sample !== null) {
+            activeSample = nonNegativeInt(clock.active_elapsed_at_sample, 0);
+        }
+        if (activeSample !== null) {
+            if (!c.live_started_at_epoch_ms) return activeSample;
+            var now = nonNegativeInt(nowMs, tickerNowEpochMs());
+            var elapsed = Math.floor((now - c.live_started_at_epoch_ms) / 1000);
+            if (elapsed < 0) elapsed = 0;
+            return elapsed > activeSample ? elapsed : activeSample;
+        }
         return projectClockSeconds(c, nowMs);
     }
     App.activeElapsedNow = activeElapsedNow;
@@ -537,9 +553,17 @@
     function activeElapsedAtSample(clock) {
         var c = normalizeLiveClock(clock);
         if (!c) return 0;
+        if (clock && clock.current_elapsed_at_sample !== undefined
+            && clock.current_elapsed_at_sample !== null) {
+            return nonNegativeInt(clock.current_elapsed_at_sample, 0);
+        }
         if (clock && clock.active_elapsed_seconds_at_sample !== undefined
             && clock.active_elapsed_seconds_at_sample !== null) {
             return nonNegativeInt(clock.active_elapsed_seconds_at_sample, 0);
+        }
+        if (clock && clock.active_elapsed_at_sample !== undefined
+            && clock.active_elapsed_at_sample !== null) {
+            return nonNegativeInt(clock.active_elapsed_at_sample, 0);
         }
         return c.duration_seconds_at_sample;
     }
@@ -613,7 +637,11 @@
 
     function isCurrentDurationClock(clock) {
         var c = normalizeLiveClock(clock);
-        return !!(c && c.display_span_id && (c.current_duration_live === true || c.is_live === true));
+        return !!(c && (
+            c.current_duration_live === true
+            || clock.current_elapsed_at_sample !== undefined
+            || clock.active_elapsed_at_sample !== undefined
+        ));
     }
 
     function mirrorActiveSpanClockForCompatibility(pageScope, clock) {
@@ -713,15 +741,20 @@
         var incomingClock = normalizeLiveClock(findClockInPayload(payload, true));
         if (!isCurrentDurationClock(incomingClock)) {
             delete App.currentActivityClockByPage[pageScope];
+            delete App.currentActivityContinuityKeyByPage[pageScope];
             return;
         }
         var prev = App.currentActivityClockByPage[pageScope] || null;
-        if (pageScope === App.currentPage && prev && !sameLiveContinuity(prev, incomingClock)) {
-            App.resetMonotonicRenderState();
+        var prevKey = App.currentActivityContinuityKeyByPage[pageScope] || currentActivityContinuityKey(null, prev, pageScope);
+        var incomingKey = currentActivityContinuityKey(null, incomingClock, pageScope);
+        var sameCurrentContinuity = !!(prev && prevKey && incomingKey && prevKey === incomingKey);
+        if (pageScope === App.currentPage && prev && !sameCurrentContinuity && prevKey) {
+            App.resetMonotonicRenderState(prevKey);
         }
-        App.currentActivityClockByPage[pageScope] = rebaseIncomingClockWithoutRollback(
-            prev, incomingClock, tickerNowEpochMs()
-        );
+        App.currentActivityClockByPage[pageScope] = sameCurrentContinuity
+            ? rebaseIncomingClockWithoutRollback(prev, incomingClock, tickerNowEpochMs())
+            : incomingClock;
+        App.currentActivityContinuityKeyByPage[pageScope] = incomingKey;
         if (payload && payload.activity_display_model) {
             App.liveDisplayModel = payload.activity_display_model;
         }
@@ -770,6 +803,7 @@
         App.liveClockByPage = App.activeSpanClockByPage;
         App.activeElapsedAnchorByPage = {};
         App.currentActivityClockByPage = {};
+        App.currentActivityContinuityKeyByPage = {};
         App.activeDisplaySpanIdByPage = {};
         App.liveDisplayModel = null;
         App.activeDisplaySpanId = "";
@@ -804,13 +838,22 @@
     App.liveContinuityKey = liveContinuityKey;
 
     function currentActivityContinuityKey(current, clock, prefix) {
-        var hash = "";
-        if (clock && clock.stable_live_key_hash) {
-            hash = clock.stable_live_key_hash;
+        var identity = "";
+        if (clock && clock.current_resource_identity_hash) {
+            identity = clock.current_resource_identity_hash;
+        } else if (clock && clock.current_activity_display_span_id) {
+            identity = clock.current_activity_display_span_id;
+        } else if (clock && clock.display_span_id) {
+            identity = clock.display_span_id;
+        } else if (current && current.current_activity_display_span_id) {
+            identity = current.current_activity_display_span_id;
+        } else if (current && current.start_time) {
+            identity = String(current.resource_name || current.app_name || "current")
+                + ":" + String(current.start_time || "");
         } else if (current && current.stable_live_key_hash) {
-            hash = current.stable_live_key_hash;
+            identity = current.stable_live_key_hash;
         }
-        return prefix + ":current:" + (hash || "none");
+        return prefix + ":current:" + (identity || "none");
     }
     App.currentActivityContinuityKey = currentActivityContinuityKey;
 
@@ -827,6 +870,11 @@
             seconds = projectClockSeconds(currentClock, tickerNowEpochMs());
         }
         var continuity = currentActivityContinuityKey(current, currentClock, prefix);
+        var previousContinuity = el.getAttribute("data-current-continuity-key") || "";
+        if (previousContinuity && previousContinuity !== continuity) {
+            App.resetMonotonicRenderState(previousContinuity);
+        }
+        el.setAttribute("data-current-continuity-key", continuity);
         var entry = App._monotonicRenderState[continuity];
         if (entry && typeof entry.lastSeconds === "number" && seconds < entry.lastSeconds) {
             seconds = entry.lastSeconds;

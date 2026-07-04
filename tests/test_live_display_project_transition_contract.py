@@ -397,7 +397,7 @@ def test_absorbed_pending_apply_live_span_to_row_projects_onto_anchor():
     assert int(overlaid["duration_seconds"]) >= raw_duration
 
 
-def test_absorbed_pending_current_and_anchor_row_share_display_seconds():
+def test_current_activity_uses_resource_elapsed_project_rows_use_projection():
     anchor_id, _ = _create_closed_anchor_activity(
         elapsed_seconds=300, project_name="ProjectA"
     )
@@ -412,11 +412,108 @@ def test_absorbed_pending_current_and_anchor_row_share_display_seconds():
     overlaid = apply_live_span_to_row(dict(anchor_row), span)
 
     current = model["current_activity"]
-    assert current["elapsed_seconds"] == 312
+    assert current["elapsed_seconds"] == 12
     assert current["resource_elapsed_seconds"] == 12
-    assert model["current_activity_clock"]["duration_seconds_at_sample"] == 312
+    assert model["current_activity_clock"]["duration_seconds_at_sample"] == 12
+    assert model["current_activity_clock"]["carry_seconds"] == 0
+    assert model["current_activity_clock"]["project_duration_live"] is False
+    assert model["current_activity_clock"]["display_span_id"] != model["live_clock"]["display_span_id"]
     assert model["live_clock"]["duration_seconds_at_sample"] == 312
+    assert model["live_clock"]["display_base_seconds"] == 300
+    assert model["live_clock"]["current_elapsed_at_sample"] == 12
     assert int(overlaid["duration_seconds"]) == 312
+
+
+def test_persisted_open_current_elapsed_and_project_projection_no_double_count():
+    anchor_id, start_time = _create_closed_anchor_activity(
+        elapsed_seconds=300, project_name="ProjectA"
+    )
+    snap = _pending_snapshot(
+        is_persisted=True,
+        persisted_activity_id=anchor_id,
+        elapsed_seconds=12,
+    )
+    snap["start_time"] = start_time
+    snap["extra_seconds"] = 300
+    _set_snapshot(snap)
+    today = _today_report_date()
+
+    model = build_activity_display_model(report_date=today, today=today)
+    span = get_live_span(model)
+    row = activity_service.get_activity(anchor_id)
+    overlaid = apply_live_span_to_row(dict(row), span)
+
+    assert model["live_clock"]["live_state"] == "persisted_open"
+    assert model["current_activity"]["elapsed_seconds"] == 12
+    assert model["current_activity"]["resource_elapsed_seconds"] == 12
+    assert model["current_activity_clock"]["duration_seconds_at_sample"] == 12
+    assert model["current_activity_clock"]["carry_seconds"] == 0
+    assert model["live_clock"]["duration_seconds_at_sample"] == 312
+    assert model["live_clock"]["display_base_seconds"] == 300
+    assert int(overlaid["duration_seconds"]) == 312
+    assert int(overlaid["raw_duration_seconds"]) == 300
+
+
+def test_virtual_pending_to_persisted_open_same_resource_current_clock_continuity():
+    start_time = _pending_start_time_today()
+    virtual = _pending_snapshot(is_persisted=False, elapsed_seconds=29)
+    virtual["start_time"] = start_time
+    _set_snapshot(virtual)
+    today = _today_report_date()
+    virtual_model = build_activity_display_model(report_date=today, today=today)
+
+    persisted = _pending_snapshot(
+        is_persisted=True,
+        persisted_activity_id=42,
+        elapsed_seconds=30,
+    )
+    persisted["start_time"] = start_time
+    _set_snapshot(persisted)
+    persisted_model = build_activity_display_model(report_date=today, today=today)
+
+    assert (
+        persisted_model["current_activity_clock"]["display_span_id"]
+        == virtual_model["current_activity_clock"]["display_span_id"]
+    )
+    assert persisted_model["current_activity"]["elapsed_seconds"] == 30
+    assert persisted_model["current_activity_clock"]["duration_seconds_at_sample"] == 30
+    assert persisted_model["current_activity_clock"]["carry_seconds"] == 0
+    assert persisted_model["live_clock"]["duration_seconds_at_sample"] == 30
+
+
+def test_window_switch_resets_current_activity_elapsed_not_project_projection():
+    today = _today_report_date()
+    old_start = datetime.strptime(today + " 09:00:00", TIME_FORMAT).strftime(TIME_FORMAT)
+    old_snap = _snapshot(
+        elapsed_seconds=300,
+        start_time=old_start,
+        resource_display_name="WindowA",
+        activity_display_name="WindowA",
+    )
+    old_snap["resource_identity_key"] = "app:WindowA"
+    _set_snapshot(old_snap)
+    old_model = build_activity_display_model(report_date=today, today=today)
+
+    new_start = datetime.strptime(today + " 09:05:00", TIME_FORMAT).strftime(TIME_FORMAT)
+    new_snap = _snapshot(
+        elapsed_seconds=1,
+        start_time=new_start,
+        resource_display_name="WindowB",
+        activity_display_name="WindowB",
+    )
+    new_snap["resource_identity_key"] = "app:WindowB"
+    _set_snapshot(new_snap)
+    new_model = build_activity_display_model(report_date=today, today=today)
+
+    assert old_model["current_activity"]["elapsed_seconds"] == 300
+    assert new_model["current_activity"]["elapsed_seconds"] == 1
+    assert new_model["current_activity"]["resource_elapsed_seconds"] == 1
+    assert new_model["current_activity_clock"]["duration_seconds_at_sample"] == 1
+    assert (
+        new_model["current_activity_clock"]["display_span_id"]
+        != old_model["current_activity_clock"]["display_span_id"]
+    )
+    assert new_model["live_clock"]["duration_seconds_at_sample"] == 1
 
 
 def test_absorbed_pending_does_not_write_db():

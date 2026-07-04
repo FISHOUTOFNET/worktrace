@@ -16,9 +16,9 @@ short-activity merge is COLLECTOR-OWNED persistence behavior
 (``_merge_or_pend_short_seconds`` real DB write, ``pending_short_seconds``
 pend, or drop at session boundary) — NOT the display model's responsibility.
 
-Boundary: lives in ``worktrace.services``; imports ``live_display_service``,
-``activity_service``, ``timeline_service``, ``settings_service``,
-``live_time_service`` and stdlib only. MUST NOT be imported by
+Boundary: lives in ``worktrace.services``; imports low-level helpers from
+``live_display_service`` plus ``activity_service``, ``timeline_service``,
+``settings_service``, ``live_time_service`` and stdlib only. MUST NOT be imported by
 ``worktrace.webview_ui.*`` directly. JSON-serializable only; raw
 ``window_title`` / ``file_path_hint`` / ``note`` / ``clipboard`` / SQL /
 tracebacks / paths / passphrases NEVER surfaced.
@@ -27,6 +27,7 @@ tracebacks / paths / passphrases NEVER surfaced.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -39,21 +40,16 @@ from ..constants import (
     STATUS_PAUSED,
     UNCATEGORIZED_PROJECT,
 )
-from . import activity_service, live_display_service, timeline_service
+from . import activity_service, timeline_service
 from .activity_continuity_service import can_absorb_short_pending
 from .live_display_service import (
-    _display_app_name,
-    _display_project_description,
-    _display_project_name,
     _display_resource_name,
     _read_pending_short_seconds,
     _snapshot_display_project_fields,
-    _snapshot_total_seconds,
     _stable_live_key,
     _stable_live_key_hash,
     build_current_activity_summary,
     classify_live_state,
-    is_live_eligible_for_normal,
 )
 from .live_time_service import (
     safe_int,
@@ -61,7 +57,7 @@ from .live_time_service import (
     snapshot_extra_seconds,
     snapshot_persisted_id,
 )
-from .settings_service import get_bool_setting, get_setting
+from .settings_service import get_setting
 
 
 # Sentinel activity id used when no real DB row backs a display span.
@@ -230,17 +226,73 @@ def classify_display_live_state(
 
 def _build_current_activity_clock(
     snapshot: dict[str, Any] | None,
-    live_clock: dict[str, Any],
+    display_live_state: str,
+    summary: dict[str, Any],
 ) -> dict[str, Any]:
-    """Return the user-visible current activity clock.
+    """Return the current resource elapsed source.
 
-    When a live span exists, Current / Recent / Timeline / Details all use
-    the same display clock. Resource-only elapsed is exposed separately on
-    ``current_activity.resource_elapsed_seconds``.
+    This is not a second project clock. It is the single active resource
+    elapsed sample used by the Current Activity area. Project/history rows
+    receive their own display-base projection via ``live_clock``.
     """
     if not snapshot:
         return _build_suppressed_live_clock()
-    return dict(live_clock)
+    elapsed_at_sample = int(snapshot_elapsed_seconds(snapshot))
+    live_started_at = int(summary.get("live_started_at_epoch_ms") or 0)
+    current_live = bool(
+        display_live_state not in ("none", "paused")
+        and live_started_at > 0
+    )
+    identity_hash = _current_resource_identity_hash(snapshot)
+    display_span_id = ("current:" + identity_hash) if identity_hash else ""
+    stable_key = "current|" + _stable_live_key(snapshot)
+    return {
+        "display_span_id": display_span_id,
+        "current_activity_display_span_id": display_span_id,
+        "stable_live_key": stable_key,
+        "stable_live_key_hash": identity_hash,
+        "current_resource_identity_hash": identity_hash,
+        "live_state": display_live_state,
+        "live_started_at_epoch_ms": live_started_at,
+        "carry_seconds": 0,
+        "duration_seconds_at_sample": elapsed_at_sample,
+        "active_elapsed_at_sample": elapsed_at_sample,
+        "current_elapsed_at_sample": elapsed_at_sample,
+        "project_duration_live": False,
+        "current_duration_live": current_live,
+        "is_live": current_live,
+        "is_project_duration_live": False,
+    }
+
+
+def _current_resource_identity_hash(snapshot: dict[str, Any] | None) -> str:
+    """Hash current resource identity + start_time for UI continuity.
+
+    The raw resource identity may contain a path, so only the digest is
+    surfaced. Including start_time lets a window/resource switch reset the
+    current activity display while virtual_pending -> persisted_open for the
+    same resource remains continuous.
+    """
+    if not snapshot:
+        return ""
+    resource_identity = (
+        snapshot.get("resource_identity_key")
+        or snapshot.get("activity_identity_key")
+        or snapshot.get("resource_display_name")
+        or snapshot.get("activity_display_name")
+        or snapshot.get("app_name")
+        or snapshot.get("process_name")
+        or ""
+    )
+    parts = [
+        str(resource_identity or ""),
+        str(snapshot.get("start_time") or ""),
+        str(snapshot.get("status") or ""),
+    ]
+    key = "|".join(parts)
+    if not key.strip("|"):
+        return ""
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
 
 
 def _build_project_live_clock(
@@ -253,13 +305,14 @@ def _build_project_live_clock(
 ) -> dict[str, Any]:
     """Build the project/history projection live-clock block.
 
-    Frontend formula: ``carry_seconds + floor((now - live_started_at_epoch_ms)/1000)``.
-    Unified delta: ``max(0, live_span_seconds - duration_seconds_at_sample)``.
+    Project/history formula: ``display_base_seconds + current_active_elapsed``.
+    The dynamic portion is the current resource elapsed source sampled from
+    the same snapshot, not the project duration reverse-engineered as a
+    current activity duration.
 
     Invariants at sample time ``T0``: ``duration_seconds_at_sample ==
-    snapshot_elapsed + snapshot_extra``; ``live_span_seconds(T0) ==
-    duration_seconds_at_sample``; ``live_span_seconds(T0 + 5s) ==
-    duration_seconds_at_sample + 5``.
+    display_base_seconds + current_elapsed_at_sample``; rows/KPIs add only
+    the heartbeat delta after render.
 
     Carry per state is the display span's seconds before the snapshot
     start: ``absorbed_pending`` → anchor duration + snapshot extra,
@@ -272,18 +325,21 @@ def _build_project_live_clock(
     live_started_at = int(summary.get("live_started_at_epoch_ms") or 0)
     carry_seconds = int(summary.get("carry_seconds") or 0)
     duration_at_sample = int(summary.get("elapsed_seconds") or 0)
+    current_elapsed_at_sample = int(snapshot_elapsed_seconds(snapshot))
+    display_base_seconds = max(0, int(duration_at_sample) - current_elapsed_at_sample)
 
     if display_live_state == "absorbed_pending" and anchor:
         carry_seconds = safe_int(anchor.get("duration_seconds")) + snapshot_extra_seconds(snapshot)
-        duration_at_sample = carry_seconds + snapshot_elapsed_seconds(snapshot)
+        display_base_seconds = carry_seconds
+        duration_at_sample = display_base_seconds + current_elapsed_at_sample
     elif display_live_state == "virtual_pending":
         carry_seconds = _read_pending_short_seconds() + snapshot_extra_seconds(snapshot)
-        duration_at_sample = carry_seconds + snapshot_elapsed_seconds(snapshot)
+        display_base_seconds = carry_seconds
+        duration_at_sample = display_base_seconds + current_elapsed_at_sample
     elif display_live_state == "persisted_open":
-        # carry_seconds MUST equal snapshot_extra_seconds so the frontend
-        # formula matches duration_seconds_at_sample at sample time.
         carry_seconds = snapshot_extra_seconds(snapshot)
-        duration_at_sample = _snapshot_total_seconds(snapshot)
+        display_base_seconds = carry_seconds
+        duration_at_sample = display_base_seconds + current_elapsed_at_sample
 
     is_project_duration_live = display_live_state in (
         "virtual_pending",
@@ -303,7 +359,10 @@ def _build_project_live_clock(
         "live_state": display_live_state,
         "live_started_at_epoch_ms": live_started_at,
         "carry_seconds": int(carry_seconds),
+        "display_base_seconds": int(display_base_seconds),
         "duration_seconds_at_sample": int(duration_at_sample),
+        "active_elapsed_at_sample": int(current_elapsed_at_sample),
+        "current_elapsed_at_sample": int(current_elapsed_at_sample),
         "project_duration_live": bool(is_project_duration_live),
         "current_duration_live": bool(is_current_duration_live),
         "is_live": bool(is_project_duration_live or is_current_duration_live),
@@ -326,8 +385,8 @@ def _build_current_activity_display(
 
     The current-activity area always renders the pending resource / window
     so the user knows what they are currently looking at. Its primary
-    duration is the same display-span duration used by Recent / Timeline /
-    Details; resource-only elapsed is a separate field.
+    duration is the current resource elapsed source. Absorbed/project display
+    projection remains in ``live_clock`` for Recent / Timeline / Details.
     """
     if not snapshot:
         return {
@@ -384,13 +443,12 @@ def _build_current_activity_display(
     )
     display["live_state"] = display_live_state
     display["live_started_at_epoch_ms"] = int(
-        live_clock.get("live_started_at_epoch_ms") or 0
+        current_activity_clock.get("live_started_at_epoch_ms") or 0
     )
-    display["carry_seconds"] = int(live_clock.get("carry_seconds") or 0)
-    display["resource_elapsed_seconds"] = int(snapshot_elapsed_seconds(snapshot))
-    display["elapsed_seconds"] = int(
-        live_clock.get("duration_seconds_at_sample") or 0
-    )
+    display["carry_seconds"] = int(current_activity_clock.get("carry_seconds") or 0)
+    current_elapsed = int(snapshot_elapsed_seconds(snapshot))
+    display["resource_elapsed_seconds"] = current_elapsed
+    display["elapsed_seconds"] = current_elapsed
     display["duration_seconds_at_sample"] = display["elapsed_seconds"]
 
     display["is_virtual_live"] = display_live_state == "virtual_pending"
@@ -490,6 +548,9 @@ def _build_display_structural_signature(
             "display_span_id": str(live_clock.get("display_span_id") or ""),
             "anchor_activity_id": int(anchor.get("id") or 0) if anchor else 0,
         },
+        "current_activity_display_span_id": str(
+            current_activity.get("current_activity_display_span_id") or ""
+        ),
         "report_date": report_date,
         "today": today,
         "is_today": bool(is_today),
@@ -562,9 +623,9 @@ def _build_display_span(
     start_time = str(snapshot.get("start_time") or "") if snapshot else ""
     project_fields = _snapshot_display_project_fields(snapshot)
     duration_at_sample = int(live_clock.get("duration_seconds_at_sample") or 0)
-    # Anchor base seconds (the anchor activity's stored DB duration) feeds
-    # ``apply_live_span_to_row`` so session / recent rows project
-    # ``row_raw + live_delta_at_sample`` without double-counting.
+    # Anchor base seconds is the static row/display base already represented
+    # in DB or an anchor row. ``apply_live_span_to_row`` adds only the current
+    # active elapsed delta, preventing persisted_open double-counting.
     live_anchor_base_seconds = 0
 
     if display_live_state == "persisted_open":
@@ -657,7 +718,10 @@ def _live_clock_fields(live_clock: dict[str, Any]) -> dict[str, Any]:
         "live_state": str(live_clock.get("live_state") or ""),
         "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),
         "carry_seconds": int(live_clock.get("carry_seconds") or 0),
+        "display_base_seconds": int(live_clock.get("display_base_seconds") or 0),
         "duration_seconds_at_sample": int(live_clock.get("duration_seconds_at_sample") or 0),
+        "active_elapsed_at_sample": int(live_clock.get("active_elapsed_at_sample") or 0),
+        "current_elapsed_at_sample": int(live_clock.get("current_elapsed_at_sample") or 0),
         "is_live": bool(live_clock.get("is_live")),
         "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
         "project_duration_live": bool(live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))),
@@ -674,11 +738,12 @@ def apply_live_span_to_row(
     Row matches when its ``activity_id`` / ``id`` / ``first_activity_id`` /
     ``activity_ids`` contains ``span.anchor_activity_id``.
 
-    Unified live-span formula (Section 三): ``live_delta_at_sample =
-    max(0, duration_seconds_at_sample - live_anchor_base_seconds)``;
-    ``projected_row_duration = row_raw + live_delta_at_sample``;
-    ``live_base_seconds = projected_row_duration``. The frontend ticker
-    renders ``live_base_seconds + liveDelta``.
+    Row projection formula: ``row/static display base + current active
+    elapsed delta``. At sample time the backend materializes the row's
+    display duration; the frontend heartbeat adds
+    ``active_elapsed_now - active_elapsed_at_render``. For persisted_open,
+    ``live_anchor_base_seconds`` prevents the already-written DB open
+    duration from being counted twice.
 
     Mutates and returns ``row``; unchanged when ``span`` is ``None`` or no match.
     """
@@ -700,7 +765,6 @@ def apply_live_span_to_row(
     row.update(_live_clock_fields(live_clock))
     state = str(span.get("live_state") or "")
     duration_at_sample = int(live_clock.get("duration_seconds_at_sample") or 0)
-    carry = int(live_clock.get("carry_seconds") or 0)
     # Preserve the row's raw duration before any live projection.
     if "raw_duration_seconds" not in row:
         row["raw_duration_seconds"] = int(row.get("duration_seconds") or 0)
@@ -709,14 +773,19 @@ def apply_live_span_to_row(
 
     if state == "absorbed_pending":
         anchor_base = int(span.get("live_anchor_base_seconds") or 0)
-        live_delta_at_sample = max(0, duration_at_sample - anchor_base)
+        active_elapsed_at_sample = int(
+            live_clock.get("active_elapsed_at_sample")
+            or live_clock.get("current_elapsed_at_sample")
+            or max(0, duration_at_sample - anchor_base)
+        )
+        live_delta_at_sample = max(0, active_elapsed_at_sample)
         projected = row_raw + live_delta_at_sample
         row["duration_seconds"] = int(projected)
         row["duration"] = format_duration(projected)
         row["live_base_seconds"] = int(projected)
     elif state == "persisted_open":
-        # Unified formula (Section 三): subtract anchor's DB duration so
-        # session / recent rows do not double-count the open activity.
+        # Subtract anchor's DB duration so session / recent rows do not
+        # double-count the open activity already written to the DB.
         anchor_base = int(span.get("live_anchor_base_seconds") or 0)
         live_delta_at_sample = max(0, duration_at_sample - anchor_base)
         projected = row_raw + live_delta_at_sample
@@ -819,7 +888,9 @@ def build_activity_display_model(
         live_clock = _build_project_live_clock(
             snapshot, display_live_state, anchor, summary, report_date, today or ""
         )
-    current_activity_clock = _build_current_activity_clock(snapshot, live_clock)
+    current_activity_clock = _build_current_activity_clock(
+        snapshot, display_live_state, summary
+    )
 
     display_spans: list[dict[str, Any]] = []
     if is_today and display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"):

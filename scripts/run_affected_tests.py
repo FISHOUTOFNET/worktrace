@@ -65,6 +65,7 @@ RULES: list[dict] = [
             "tests/test_ui_backend_boundary.py",
             "tests/test_bridge_refresh_state_and_projection.py",
             "tests/test_live_display_contract.py",
+            "tests/test_live_display_project_transition_contract.py",
             "tests/test_run_affected_tests.py",
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
@@ -88,6 +89,7 @@ RULES: list[dict] = [
             "tests/test_overview_bundle_and_export_contract.py",
             "tests/test_bridge_refresh_state_and_projection.py",
             "tests/test_live_display_contract.py",
+            "tests/test_live_display_project_transition_contract.py",
             "tests/test_display_model_anti_regression.py",
             "tests/test_run_affected_tests.py",
             "tests/webview/test_heartbeat_projection_contract.py",
@@ -524,6 +526,7 @@ RULES: list[dict] = [
             "tests/test_overview_bundle_and_export_contract.py",
             "tests/test_bridge_refresh_state_and_projection.py",
             "tests/test_live_display_contract.py",
+            "tests/test_live_display_project_transition_contract.py",
             "tests/test_display_model_anti_regression.py",
             "tests/webview/test_heartbeat_projection_contract.py",
             "tests/webview/test_frontend_global_boundaries.py",
@@ -892,6 +895,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Run the full `python -m pytest` suite (explicit fallback).",
     )
     parser.add_argument(
+        "--files",
+        nargs="+",
+        default=None,
+        help=(
+            "Use the provided repo-relative changed files instead of git diff. "
+            "Useful for CI hooks and one-off targeted validation."
+        ),
+    )
+    parser.add_argument(
         "--base",
         default="HEAD",
         help="Diff base ref (default: HEAD).",
@@ -914,17 +926,20 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         return subprocess.run(command, cwd=str(REPO_ROOT)).returncode
 
-    # Require a git repo. Never silently run the full suite.
-    if not _is_git_repo(REPO_ROOT):
-        sys.stderr.write(
-            "ERROR: not a git repository (or git is not on PATH).\n"
-            "Run `python -m pytest` explicitly, or pass a target test path, "
-            "or use `python scripts/run_affected_tests.py --all` for the "
-            "full suite.\n"
-        )
-        return 2
-
-    changed = _git_changed_files(REPO_ROOT, opts.base, opts.staged)
+    if opts.files:
+        changed = list(opts.files)
+    else:
+        # Require a git repo. Never silently run the full suite.
+        if not _is_git_repo(REPO_ROOT):
+            sys.stderr.write(
+                "ERROR: not a git repository (or git is not on PATH).\n"
+                "Run `python -m pytest` explicitly, or pass --files with "
+                "repo-relative paths, or use "
+                "`python scripts/run_affected_tests.py --all` for the "
+                "full suite.\n"
+            )
+            return 2
+        changed = _git_changed_files(REPO_ROOT, opts.base, opts.staged)
     sel = select_targets(changed)
     targets = existing_targets(sel.pytest_targets, REPO_ROOT)
 

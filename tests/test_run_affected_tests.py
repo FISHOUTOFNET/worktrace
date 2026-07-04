@@ -744,6 +744,21 @@ def test_no_changed_files_adds_import_smoke(runner):
     )
 
 
+def test_cli_files_option_selects_targets_without_git_diff(runner, capsys):
+    rc = runner.main([
+        "--files",
+        "worktrace/services/activity_display_model_service.py",
+        "worktrace/webview_ui/js/core.js",
+        "--print-only",
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "worktrace/services/activity_display_model_service.py" in out
+    assert "worktrace/webview_ui/js/core.js" in out
+    assert "tests/test_live_display_project_transition_contract.py" in out
+    assert "tests/webview/test_heartbeat_projection_contract.py" in out
+
+
 @pytest.mark.parametrize("changed", [
     "worktrace/services/activity_service.py",
     "worktrace/webview_ui/js/core.js",

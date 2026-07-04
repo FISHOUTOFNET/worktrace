@@ -1469,7 +1469,7 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
     assert anchor_session["live_state"] == "absorbed_pending"
 
 
-def test_absorbed_pending_current_clock_uses_display_span_clock(bridge):
+def test_absorbed_pending_current_clock_uses_resource_elapsed(bridge):
     from worktrace.services.activity_display_model_service import (
         apply_live_span_to_row,
         build_activity_display_model,
@@ -1503,12 +1503,15 @@ def test_absorbed_pending_current_clock_uses_display_span_clock(bridge):
     span = get_live_span(model)
     assert span is not None
 
-    assert current["elapsed_seconds"] == 125
+    assert current["elapsed_seconds"] == 5
     assert current["resource_elapsed_seconds"] == 5
-    assert current_clock["duration_seconds_at_sample"] == project_clock["duration_seconds_at_sample"] == 125
-    assert current_clock["carry_seconds"] == project_clock["carry_seconds"] == 120
-    assert current_clock["display_span_id"] == project_clock["display_span_id"]
+    assert current_clock["duration_seconds_at_sample"] == 5
+    assert current_clock["carry_seconds"] == 0
+    assert current_clock["display_span_id"] != project_clock["display_span_id"]
+    assert current_clock["project_duration_live"] is False
     assert project_clock["duration_seconds_at_sample"] == 125
+    assert project_clock["display_base_seconds"] == 120
+    assert project_clock["current_elapsed_at_sample"] == 5
 
     anchor_row = activity_service.get_activity(anchor_aid)
     projected = dict(anchor_row)
@@ -1517,7 +1520,7 @@ def test_absorbed_pending_current_clock_uses_display_span_clock(bridge):
     assert activity_service.get_activity(anchor_aid)["duration_seconds"] == 120
 
 
-def test_persisted_open_current_clock_includes_extra_seconds(bridge):
+def test_persisted_open_current_clock_uses_resource_elapsed_and_project_extra(bridge):
     from worktrace.services.activity_display_model_service import (
         apply_live_span_to_row,
         build_activity_display_model,
@@ -1542,14 +1545,17 @@ def test_persisted_open_current_clock_includes_extra_seconds(bridge):
     span = get_live_span(model)
     assert span is not None
 
-    assert current["elapsed_seconds"] == 45
+    assert current["elapsed_seconds"] == 35
     assert current["resource_elapsed_seconds"] == 35
-    assert current_clock["duration_seconds_at_sample"] == project_clock["duration_seconds_at_sample"] == 45
-    assert current_clock["carry_seconds"] == project_clock["carry_seconds"] == 10
-    assert current_clock["display_span_id"] == project_clock["display_span_id"]
+    assert current_clock["duration_seconds_at_sample"] == 35
+    assert current_clock["carry_seconds"] == 0
+    assert current_clock["display_span_id"] != project_clock["display_span_id"]
+    assert current_clock["project_duration_live"] is False
     assert project_clock["duration_seconds_at_sample"] == 45
+    assert project_clock["display_base_seconds"] == 10
+    assert project_clock["current_elapsed_at_sample"] == 35
 
-    row = {"activity_id": aid, "duration_seconds": 0, "raw_duration_seconds": 0}
+    row = activity_service.get_activity(aid)
     apply_live_span_to_row(row, span)
     assert row["duration_seconds"] == 45
 

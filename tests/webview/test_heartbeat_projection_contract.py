@@ -1545,6 +1545,48 @@ def test_current_activity_clock_registry_is_page_scoped():
     assert "currentActivityClockByPage" in get_body
 
 
+def test_register_current_activity_clock_rebases_only_same_current_continuity():
+    src = _strip_js_comments(read_js("core.js"))
+    reg_body = func_body(src, "registerCurrentActivityClock")
+    assert "sameCurrentContinuity" in reg_body
+    assert "? rebaseIncomingClockWithoutRollback" in reg_body
+    assert ": incomingClock" in reg_body, (
+        "current clock registration must accept rollback/reset when the "
+        "current resource/start_time continuity changes"
+    )
+    assert "currentActivityContinuityKey" in reg_body
+    assert "resetMonotonicRenderState(prevKey)" in reg_body
+
+
+def test_current_duration_clock_does_not_require_project_display_span_id():
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "isCurrentDurationClock")
+    assert "current_duration_live" in body
+    assert "current_elapsed_at_sample" in body
+    assert "active_elapsed_at_sample" in body
+    assert "display_span_id &&" not in body, (
+        "current activity clock must not require the project display span id"
+    )
+
+
+def test_current_activity_continuity_uses_current_resource_identity():
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "currentActivityContinuityKey")
+    assert "current_resource_identity_hash" in body
+    assert "current_activity_display_span_id" in body
+    assert "start_time" in body
+    assert "stable_live_key_hash" in body
+
+
+def test_render_current_activity_no_rollback_is_key_scoped():
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "renderCurrentActivityElement")
+    assert "data-current-continuity-key" in body
+    assert "previousContinuity !== continuity" in body
+    assert "resetMonotonicRenderState(previousContinuity)" in body
+    assert "App._monotonicRenderState[continuity]" in body
+
+
 def test_apply_local_ticker_current_activity_does_not_fallback_to_project_clock():
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "applyLocalTicker")

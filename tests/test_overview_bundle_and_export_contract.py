@@ -222,14 +222,13 @@ def test_overview_view_model_current_and_recent_share_same_sample_id(bridge):
 
 def test_overview_view_model_current_and_recent_first_frame_seconds_consistent(bridge):
     """the current activity and the recent live row must
-    NOT have a 1-2 second drift on the first frame. Both derive from
-    the same snapshot, so their duration_seconds must be equal."""
+    NOT have a 1-2 second drift on the first frame when the display base
+    is zero. Both derive from the same snapshot elapsed source."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     bundle = bridge.get_overview()
     current_seconds = int(bundle["current_activity"].get("elapsed_seconds") or 0)
     live_clock_seconds = int(bundle["live_clock"].get("duration_seconds_at_sample") or 0)
-    # current_activity.elapsed_seconds and live_clock.duration_seconds_at_sample
-    # both derive from the same snapshot's elapsed_seconds.
+    # With no display base, current elapsed and project display seconds match.
     assert current_seconds == live_clock_seconds
     activities = bundle["activities"]
     assert activities and activities[0].get("is_virtual_live")
@@ -258,8 +257,8 @@ def test_overview_view_model_pending_recent_uses_display_project_not_candidate(b
 
 
 def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
-    """Fresh ``virtual_pending`` uses one display sample for KPI and
-    Recent and current activity."""
+    """Fresh ``virtual_pending`` uses one project display sample for KPI /
+    Recent while current activity keeps resource elapsed."""
     _set_snapshot(_snapshot(elapsed_seconds=12, extra_seconds=3))
     bundle = bridge.get_overview()
     assert bundle["ok"] is True
@@ -267,12 +266,15 @@ def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     current = bundle["current_activity"]
     live_clock = bundle["live_clock"]
     assert current["live_state"] == "virtual_pending"
-    assert int(current["elapsed_seconds"]) == 15
+    assert int(current["elapsed_seconds"]) == 12
     assert int(current["resource_elapsed_seconds"]) == 12
-    assert int(bundle["current_activity_clock"]["duration_seconds_at_sample"]) == 15
+    assert int(bundle["current_activity_clock"]["duration_seconds_at_sample"]) == 12
+    assert int(bundle["current_activity_clock"]["carry_seconds"]) == 0
 
     sample = int(live_clock["duration_seconds_at_sample"])
     assert sample == 15
+    assert int(live_clock["display_base_seconds"]) == 3
+    assert int(live_clock["current_elapsed_at_sample"]) == 12
     assert live_clock["is_project_duration_live"] is True
     assert int(bundle["today_total_seconds"]) == sample
     assert int(bundle["classified_seconds"]) == sample
@@ -594,18 +596,20 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
     )
     assert recent_row["stable_live_key_hash"] == sample_hash
 
-    # current_activity elapsed uses the same display sample; resource-only
-    # elapsed remains separate.
+    # current_activity elapsed uses the current resource sample; project
+    # rows/KPIs use the display projection sample.
     current = bundle["current_activity"]
-    assert int(current["elapsed_seconds"]) == sample_duration, (
+    assert int(current["elapsed_seconds"]) == 210, (
         f"current_activity.elapsed_seconds ({current['elapsed_seconds']}) "
-        "must equal the live display sample"
+        "must equal the current resource elapsed sample"
     )
     assert int(current["resource_elapsed_seconds"]) == 210
     assert current["stable_live_key_hash"] == sample_hash
-    assert bundle["current_activity_clock"]["duration_seconds_at_sample"] == sample_duration
-    assert bundle["current_activity_clock"]["carry_seconds"] == 30
-    assert bundle["current_activity_clock"]["display_span_id"] == live_clock["display_span_id"]
+    assert bundle["current_activity_clock"]["duration_seconds_at_sample"] == 210
+    assert bundle["current_activity_clock"]["carry_seconds"] == 0
+    assert bundle["current_activity_clock"]["display_span_id"] != live_clock["display_span_id"]
+    assert int(live_clock["display_base_seconds"]) == 30
+    assert int(live_clock["current_elapsed_at_sample"]) == 210
 
 
 def _create_real_open_activity_helper(

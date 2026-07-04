@@ -338,3 +338,65 @@ def test_frontend_js_ticker_only_reads_registered_live_clock():
     assert "opts.page" in source or "options.page" in source, (
         "core.js registerLiveClock must accept a page/scope parameter"
     )
+
+
+def test_current_activity_clock_is_not_project_live_clock_copy():
+    source = (
+        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+    ).read_text(encoding="utf-8")
+    assert "return dict(live_clock)" not in source, (
+        "_build_current_activity_clock must build the current resource elapsed "
+        "source from the snapshot, not copy the project display live_clock"
+    )
+    match = re.search(
+        r"def\s+_build_current_activity_clock\b(?P<body>.*?)(?=\ndef\s+_build_project_live_clock\b)",
+        source,
+        re.S,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert "snapshot_elapsed_seconds(snapshot)" in body
+    assert '"carry_seconds": 0' in body
+    assert '"project_duration_live": False' in body
+
+
+def test_current_activity_elapsed_does_not_read_project_duration_sample():
+    source = (
+        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r"def\s+_build_current_activity_display\b(?P<body>.*?)(?=\ndef\s+_signature_project_dict\b)",
+        source,
+        re.S,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert "current_elapsed = int(snapshot_elapsed_seconds(snapshot))" in body
+    forbidden = (
+        'live_clock.get("duration_seconds_at_sample")',
+        "live_clock['duration_seconds_at_sample']",
+    )
+    for token in forbidden:
+        assert token not in body, (
+            "current_activity.elapsed_seconds must use snapshot elapsed, "
+            "not the project display live_clock sample"
+        )
+
+
+def test_activity_display_model_remains_single_display_semantics_owner():
+    forbidden_service_names = (
+        "current_timer_service.py",
+        "recent_timer_service.py",
+        "timeline_timer_service.py",
+        "current_live_projection_service.py",
+        "recent_live_projection_service.py",
+    )
+    offenders = [
+        path.name
+        for path in (REPO_ROOT / "worktrace" / "services").glob("*.py")
+        if path.name in forbidden_service_names
+    ]
+    assert not offenders, (
+        "Activity Display Model must remain the display semantics owner; "
+        "unexpected live projection services: " + ", ".join(offenders)
+    )

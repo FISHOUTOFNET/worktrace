@@ -129,15 +129,17 @@ def test_get_refresh_state_returns_dict_with_required_fields(bridge):
     assert "carry_seconds" in clock
 
 
-def test_get_refresh_state_current_activity_clock_uses_display_span_seconds(bridge):
+def test_get_refresh_state_current_activity_clock_uses_resource_elapsed_source(bridge):
     _set_snapshot(_normal_snapshot(elapsed_seconds=35, extra_seconds=10))
     result = bridge.get_refresh_state()
-    assert result["current_activity"]["elapsed_seconds"] == 45
+    assert result["current_activity"]["elapsed_seconds"] == 35
     assert result["current_activity"]["resource_elapsed_seconds"] == 35
-    assert result["current_activity_clock"]["duration_seconds_at_sample"] == 45
-    assert result["current_activity_clock"]["carry_seconds"] == 10
-    assert result["current_activity_clock"]["display_span_id"] == result["live_clock"]["display_span_id"]
-    assert result["current_activity_clock"]["duration_seconds_at_sample"] == result["live_clock"]["duration_seconds_at_sample"]
+    assert result["current_activity_clock"]["duration_seconds_at_sample"] == 35
+    assert result["current_activity_clock"]["carry_seconds"] == 0
+    assert result["current_activity_clock"]["display_span_id"] != result["live_clock"]["display_span_id"]
+    assert result["live_clock"]["duration_seconds_at_sample"] == 45
+    assert result["live_clock"]["display_base_seconds"] == 10
+    assert result["live_clock"]["current_elapsed_at_sample"] == 35
 
 
 def test_get_refresh_state_is_json_serializable(bridge):
