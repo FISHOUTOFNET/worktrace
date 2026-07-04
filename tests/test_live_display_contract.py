@@ -1306,7 +1306,7 @@ def test_virtual_pending_no_rows_in_lists_and_no_kpi_tick(bridge):
 
 def test_absorbed_pending_overlays_anchor_row_only(bridge):
     """An ``absorbed_pending`` snapshot (normal, unpersisted, <30s, WITH
-    absorb anchor) must:
+    absorb anchor in the SAME session) must:
 
     * overlay ONLY the anchor DB row's live clock fields (no virtual row
       injection);
@@ -1315,6 +1315,13 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
     * NOT write the DB (anchor row's stored duration is unchanged in DB);
     * keep the anchor row's project / resource identity (the pending
       snapshot's inferred project is NOT overlaid).
+
+    Absorption no longer relies on the legacy structured
+    ``short_activity_carry`` JSON (it was removed — no production
+    writer). The anchor is resolved purely from today's DB rows that
+    pass the boundary-aware ``_is_absorbable_anchor`` gate: closed,
+    auto, normal, ``end_time <= pending_start_time``, no session
+    boundary in ``[anchor.end_time, pending_start_time]``.
     """
     # 1. Create a closed anchor activity of 60s.
     anchor_start = datetime.now() - timedelta(seconds=120)
@@ -1327,10 +1334,9 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
     )
     activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 60)
 
-    # 2. Set a <30s pending snapshot. The carry state must point at the
-    #    anchor for absorption to kick in.
-    from worktrace.services import settings_service as ss
-
+    # 2. Set a <30s pending snapshot starting AFTER the anchor closed
+    #    (same session — no boundary recorded between anchor.end_time
+    #    and pending_start_time).
     pending_start = datetime.now() - timedelta(seconds=10)
     _set_snapshot(
         _normal_snapshot(
@@ -1341,12 +1347,6 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
             inferred_project_name="PendingProject",
         )
     )
-    # short_activity_carry links the pending snapshot to the anchor.
-    ss.set_setting(
-        "short_activity_carry",
-        json.dumps({"activity_id": anchor_aid, "completed_seconds": 60}),
-    )
-    ss.clear_settings_cache()
 
     overview = bridge.get_overview()
     recent = bridge.get_recent_activities()
@@ -1394,3 +1394,373 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
     )
     assert anchor_session is not None
     assert anchor_session["live_state"] == "absorbed_pending"
+
+
+# Boundary-aware absorption contract: a ``<30s`` pending snapshot MUST
+# NOT absorb into a previous confirmed normal activity when a session
+# boundary was recorded between the anchor's ``end_time`` and the
+# pending snapshot's ``start_time``. Legacy carry path removed.
+
+
+def test_absorbed_pending_does_not_cross_restart_boundary(bridge):
+    """A ``<30s`` pending snapshot starting AFTER a ``restart`` session
+    boundary MUST NOT absorb into a previous confirmed normal activity
+    even if that activity is the latest closed, auto, normal row on
+    ``today``. The display state collapses to ``virtual_pending`` with
+    no live span overlay.
+    """
+    from worktrace.services import session_boundary_service
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+
+    # 1. Create a closed normal auto activity A (60s).
+    anchor_start = datetime.now() - timedelta(seconds=120)
+    anchor_end = anchor_start + timedelta(seconds=60)
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start.strftime(TIME_FORMAT),
+    )
+    activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 60)
+
+    # 2. Record a session boundary (restart) AFTER anchor.end_time.
+    boundary_at = anchor_end + timedelta(seconds=10)
+    session_boundary_service.record_boundary(
+        boundary_at.strftime(TIME_FORMAT), "restart"
+    )
+
+    # 3. Write a <30s unpersisted normal snapshot B starting after the
+    #    boundary.
+    pending_start = boundary_at + timedelta(seconds=5)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=10,
+            extra_seconds=0,
+            is_persisted=False,
+            start_time=pending_start.strftime(TIME_FORMAT),
+            inferred_project_name="PendingProject",
+        )
+    )
+
+    # 4. build_activity_display_model(today) MUST classify as virtual_pending.
+    model = build_activity_display_model()
+    assert model["live_clock"]["live_state"] == "virtual_pending", (
+        "a <30s pending snapshot that starts after a restart boundary MUST "
+        "NOT absorb into the previous confirmed normal activity; expected "
+        "live_state=virtual_pending"
+    )
+    assert model["display_spans"] == [], (
+        "no display span should be created when a session boundary blocks "
+        "absorption (virtual_pending has no DB row to overlay)"
+    )
+
+    # 5. The bridge Overview / Recent / Timeline must NOT overlay A.
+    overview = bridge.get_overview()
+    recent = bridge.get_recent_activities()
+    timeline = bridge.get_timeline()
+    assert overview["live_clock"]["live_state"] == "virtual_pending"
+    assert overview["live_clock"]["is_project_duration_live"] is False
+    # Recent / Timeline carry the anchor DB row (it's still today's history),
+    # but it must NOT be overlaid (no live_state, no live_base_seconds bump).
+    for item in recent["activities"]:
+        assert item.get("live_state") != "absorbed_pending", (
+            "anchor row must NOT be overlaid when a boundary blocks absorption"
+        )
+        # When a boundary blocks absorption, the anchor row is NOT overlaid,
+        # so ``live_base_seconds`` is either absent (None) or — if some other
+        # non-absorbed live_state attached a base — equal to the stored
+        # ``duration_seconds`` (no inflation by pending projection).
+        live_base = item.get("live_base_seconds")
+        if live_base is not None:
+            assert int(live_base) == int(item.get("duration_seconds") or 0), (
+                "anchor row duration must NOT be inflated by pending "
+                "projection when a boundary blocks absorption"
+            )
+    for s in timeline["sessions"]:
+        assert s.get("live_state") != "absorbed_pending"
+
+
+def test_absorbed_pending_does_not_cross_stopped_boundary(bridge):
+    """A ``stopped`` boundary blocks absorption just like ``restart`` —
+    no boundary reason is whitelisted. After a stop, a new ``<30s``
+    pending activity is a fresh session and must NOT leak into the
+    previous project's row.
+    """
+    from worktrace.services import session_boundary_service
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+
+    anchor_start = datetime.now() - timedelta(seconds=120)
+    anchor_end = anchor_start + timedelta(seconds=60)
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start.strftime(TIME_FORMAT),
+    )
+    activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 60)
+
+    boundary_at = anchor_end + timedelta(seconds=5)
+    session_boundary_service.record_boundary(
+        boundary_at.strftime(TIME_FORMAT), "stopped"
+    )
+
+    pending_start = boundary_at + timedelta(seconds=5)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=15,
+            extra_seconds=0,
+            is_persisted=False,
+            start_time=pending_start.strftime(TIME_FORMAT),
+        )
+    )
+
+    model = build_activity_display_model()
+    assert model["live_clock"]["live_state"] == "virtual_pending"
+    assert model["display_spans"] == []
+
+
+def test_absorbed_pending_same_session_allows_absorption(bridge):
+    """When NO session boundary was recorded between the anchor's
+    ``end_time`` and the pending snapshot's ``start_time``, the
+    ``<30s`` pending snapshot MUST absorb into the anchor. The display
+    state is ``absorbed_pending`` and the span's ``anchor_activity_id``
+    equals the anchor DB row's id.
+
+    This test also verifies display-only projection: the anchor row's
+    stored DB duration is unchanged after the display model is built.
+    """
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+
+    anchor_start = datetime.now() - timedelta(seconds=120)
+    anchor_end = anchor_start + timedelta(seconds=60)
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start.strftime(TIME_FORMAT),
+    )
+    activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 60)
+
+    pending_start = anchor_end + timedelta(seconds=5)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=10,
+            extra_seconds=0,
+            is_persisted=False,
+            start_time=pending_start.strftime(TIME_FORMAT),
+        )
+    )
+
+    model = build_activity_display_model()
+    assert model["live_clock"]["live_state"] == "absorbed_pending"
+    assert len(model["display_spans"]) == 1
+    span = model["display_spans"][0]
+    assert int(span["anchor_activity_id"]) == anchor_aid
+
+    # Display-only projection MUST NOT write the DB.
+    anchor_db = activity_service.get_activity(anchor_aid)
+    assert int(anchor_db["duration_seconds"]) == 60
+
+
+def test_absorbed_pending_rejects_anchor_end_after_pending_start(bridge):
+    """A closed anchor whose ``end_time`` is LATER than the pending
+    snapshot's ``start_time`` is an overlap / anomaly and MUST NOT be
+    used as an absorption anchor. Even if it is the latest closed,
+    auto, normal row, the display state collapses to ``virtual_pending``
+    so the UI does not double-count the overlap window.
+    """
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+
+    # 1. Construct a closed anchor whose end_time is AFTER the pending
+    #    snapshot's start_time (overlap). anchor: 09:00:00 → 09:02:00.
+    #    pending start: 09:01:30 (overlaps anchor by 30s).
+    anchor_start = datetime.now() - timedelta(seconds=120)
+    anchor_end = anchor_start + timedelta(seconds=120)  # 2-minute anchor
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start.strftime(TIME_FORMAT),
+    )
+    activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 120)
+
+    # 2. Pending snapshot starts BEFORE anchor.end_time (overlap).
+    pending_start = anchor_start + timedelta(seconds=90)  # 30s before anchor.end_time
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=10,
+            extra_seconds=0,
+            is_persisted=False,
+            start_time=pending_start.strftime(TIME_FORMAT),
+        )
+    )
+
+    model = build_activity_display_model()
+    # The anchor is NOT absorbable (end_time > pending_start_time), so the
+    # display state collapses to virtual_pending.
+    assert model["live_clock"]["live_state"] == "virtual_pending", (
+        "an anchor whose end_time > pending_start_time is an overlap / "
+        "anomaly and MUST NOT be used as an absorption anchor"
+    )
+    assert model["display_spans"] == []
+
+
+def test_absorbed_pending_rejects_pending_without_start_time(bridge):
+    """A pending snapshot with no ``start_time`` MUST NOT be absorbed —
+    the ``_is_absorbable_anchor`` gate rejects empty ``pending_start_time``
+    so a malformed snapshot cannot trigger absorption against a stale
+    anchor.
+    """
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+
+    anchor_start = datetime.now() - timedelta(seconds=120)
+    anchor_end = anchor_start + timedelta(seconds=60)
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start.strftime(TIME_FORMAT),
+    )
+    activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 60)
+
+    # Pending snapshot with no start_time.
+    _set_snapshot(
+        {
+            "app_name": "AppA",
+            "process_name": "AppA.exe",
+            "inferred_project_name": "PendingProject",
+            "start_time": "",
+            "elapsed_seconds": 10,
+            "extra_seconds": 0,
+            "status": STATUS_NORMAL,
+            "is_persisted": False,
+            "persisted_activity_id": 0,
+        }
+    )
+
+    model = build_activity_display_model()
+    assert model["live_clock"]["live_state"] == "virtual_pending"
+    assert model["display_spans"] == []
+
+
+def test_absorbed_pending_current_activity_uses_anchor_project_for_kpi(bridge):
+    """Under ``absorbed_pending``, the current-activity area shows the
+    pending RESOURCE name (what the user is looking at) BUT the project
+    attribution fields (``project_name``, ``project_id``,
+    ``is_classified``, ``is_uncategorized``) MUST come from the ANCHOR
+    DB row so KPI classified / uncategorized increments match the
+    Recent / Timeline overlay row (which also uses the anchor's
+    project). This forbids the same live span being classified as
+    PendingProject in KPI and AnchorProject in Recent / Timeline.
+    """
+    from worktrace.services import project_service
+
+    # 1. Create a classified project "AnchorProject".
+    proj_id = int(project_service.create_project("AnchorProject", description="anchor"))
+
+    # 2. Create a closed anchor activity attributed to AnchorProject.
+    anchor_start = datetime.now() - timedelta(seconds=120)
+    anchor_end = anchor_start + timedelta(seconds=60)
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start.strftime(TIME_FORMAT),
+        project_id=proj_id,
+    )
+    activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 60)
+
+    # 3. Set a <30s pending snapshot whose inferred project is DIFFERENT
+    #    ("PendingProject"). Same session (no boundary).
+    pending_start = anchor_end + timedelta(seconds=5)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=10,
+            extra_seconds=0,
+            is_persisted=False,
+            start_time=pending_start.strftime(TIME_FORMAT),
+            inferred_project_name="PendingProject",
+        )
+    )
+
+    overview = bridge.get_overview()
+    recent = bridge.get_recent_activities()
+
+    # current_activity's project fields MUST come from the anchor.
+    current = overview["current_activity"]
+    assert current["live_state"] == "absorbed_pending"
+    assert current["project_name"] == "AnchorProject", (
+        "current_activity.project_name must come from the anchor DB row, "
+        "NOT the pending snapshot's inferred project, so KPI classification "
+        "matches the Recent / Timeline overlay row"
+    )
+    assert int(current["project_id"]) == proj_id
+    assert current["is_classified"] is True
+    assert current["is_uncategorized"] is False
+
+    # The Recent overlay row also uses the anchor's project — same span,
+    # same project attribution. The overview recent-item row exposes
+    # ``project_name`` (not ``project_id``); the project name match is
+    # the cross-ViewModel consistency check.
+    recent_row = recent["activities"][0]
+    assert int(recent_row["activity_id"]) == anchor_aid
+    assert recent_row["project_name"] == "AnchorProject"
+
+    # The current-activity display text MUST contain the anchor's project
+    # name (so the user sees the same project label as the Recent row),
+    # while the resource name (first part) is the pending snapshot's.
+    assert "AnchorProject" in current["display"]
+    assert "PendingProject" not in current["display"]
+
+
+def test_pending_short_seconds_does_not_cross_session_boundary(bridge):
+    """The ``pending_short_seconds`` accumulator (production-maintained)
+    is the only carry source for ``virtual_pending``. The collector
+    resets it whenever a normal short activity merges into a persisted
+    row, so it never crosses a session boundary in production. This
+    test verifies the display model's ``virtual_pending`` carry is
+    sourced purely from ``pending_short_seconds`` (the legacy
+    ``short_activity_carry`` JSON is gone).
+    """
+    from worktrace.services import settings_service
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+
+    # Set pending_short_seconds to a known value.
+    settings_service.set_setting("pending_short_seconds", "20")
+    settings_service.clear_settings_cache()
+
+    # No anchor exists (no DB rows today), so the snapshot is virtual_pending.
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=10,
+            extra_seconds=0,
+            is_persisted=False,
+        )
+    )
+
+    model = build_activity_display_model()
+    assert model["live_clock"]["live_state"] == "virtual_pending"
+    # carry_seconds MUST equal pending_short_seconds (20).
+    assert int(model["live_clock"]["carry_seconds"]) == 20, (
+        "virtual_pending carry_seconds MUST come from pending_short_seconds "
+        "(the production-maintained accumulator); the legacy structured "
+        "short_activity_carry JSON was removed"
+    )
+    # duration_at_sample = snapshot_total (10) + carry (20) = 30.
+    assert int(model["live_clock"]["duration_seconds_at_sample"]) == 30
+
+    # Cleanup.
+    settings_service.set_setting("pending_short_seconds", "0")
+    settings_service.clear_settings_cache()

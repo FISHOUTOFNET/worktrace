@@ -1,29 +1,29 @@
 """Low-level display-safe helpers for the unified Activity Display Model.
 
-This module is NOT the page live-display model owner. The page live
-display model owner is
-:mod:`worktrace.services.activity_display_model_service`, which is the
-sole place that decides live-eligibility, the refined ``live_state``
-(``virtual_pending`` / ``absorbed_pending`` / ``persisted_open``), the
-display span identity, and visibility of live rows in recent / timeline /
-details.
+This module is NOT the page live-display model owner. The owner is
+:mod:`worktrace.services.activity_display_model_service`, which solely
+decides live-eligibility, ``live_state``
+(``virtual_pending`` / ``absorbed_pending`` / ``persisted_open``),
+display span identity, and visibility of live rows.
 
 This module retains ONLY the low-level pure helpers used by
-``activity_display_model_service`` and the bridge / settings layers via
-``worktrace.api.view_model_api``: display-safe field extraction, stable
-live identity (``_stable_live_key`` / ``_stable_live_key_hash``),
-live-clock anchor, current-activity summary
-(``build_current_activity_summary``), refresh-revision computation
-(``compute_refresh_revision``), short-activity carry integration,
-classification, and the persisted-open live-seconds helper used by
-``timeline_service``.
+``activity_display_model_service`` and the bridge / settings layers:
+display-safe field extraction, stable live identity
+(``_stable_live_key`` / ``_stable_live_key_hash``), live-clock anchor,
+current-activity summary (``build_current_activity_summary``),
+refresh-revision computation (``compute_refresh_revision``), the
+production-maintained ``pending_short_seconds`` accumulator,
+classification, and the persisted-open live-seconds helper.
 
-Display projection is purely a UI overlay. It NEVER writes the DB, NEVER
-changes the 30-second collector persistence threshold, and NEVER persists
-a <30s activity early. This service returns display-safe
-JSON-serializable payloads only — raw ``window_title``,
-``file_path_hint``, ``note``, ``clipboard`` and any traceback / SQL are
-NEVER surfaced.
+The legacy structured ``short_activity_carry`` JSON mechanism was
+REMOVED — no production writer existed. The production collector
+maintains ``pending_short_seconds``, the only carry source consulted.
+
+Display projection is purely a UI overlay. It NEVER writes the DB,
+NEVER changes the 30-second collector persistence threshold, and NEVER
+persists a <30s activity early. Returns display-safe JSON-serializable
+payloads only — raw ``window_title``, ``file_path_hint``, ``note``,
+``clipboard`` and any traceback / SQL are NEVER surfaced.
 """
 
 from __future__ import annotations
@@ -48,7 +48,6 @@ from .live_time_service import (
     snapshot_persisted_id,
     snapshot_seconds_for_date_range,
     snapshot_start_time,
-    sync_short_activity_carry,
 )
 from .settings_service import get_setting
 
@@ -344,14 +343,21 @@ def _live_display_key(snapshot: dict[str, Any] | None) -> str:
 
 
 def _read_pending_short_seconds() -> int:
-    """Read the pending_short_seconds setting (carry-over from sub-30s
-    short activities that have not yet been persisted).
+    """Read the ``pending_short_seconds`` setting (carry-over from
+    sub-30s short activities that have not yet been persisted).
 
-    The collector writes this value whenever a normal short activity ends
-    without crossing the 30-second persistence threshold. The unified
-    live-display carry seconds must include it so the UI does not lose seconds
-    between short activities and then suddenly jump when the next
-    activity persists.
+    The COLLECTOR writes this value whenever a normal short activity ends
+    without crossing the 30-second persistence threshold, and resets it
+    whenever a normal short activity merges into a persisted row. It is
+    therefore the ONLY production-maintained carry source the display
+    model should consult; the legacy structured ``short_activity_carry``
+    JSON had no production writer and was removed.
+
+    The unified live-display carry seconds include this value so the UI
+    does not lose seconds between short activities and then suddenly jump
+    when the next activity persists. Because the collector resets the
+    accumulator on every persistence, this carry never crosses a session
+    boundary.
     """
     raw = get_setting("pending_short_seconds", "") or ""
     if not raw:
@@ -361,106 +367,6 @@ def _read_pending_short_seconds() -> int:
     except (TypeError, ValueError):
         return 0
     return max(0, value)
-
-
-def _read_short_activity_carry() -> dict[str, Any] | None:
-    """Read the serialized short-activity carry state (if any).
-
-    The collector writes a JSON object describing the carry-over context
-    so the unified live-display carry seconds can incorporate consecutive
-    short activities that belong to the same logical session.
-    """
-    import json
-
-    raw = get_setting("short_activity_carry", "") or ""
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def short_activity_carry_seconds(
-    snapshot: dict[str, Any] | None,
-    report_date: str | None,
-) -> int:
-    """Return the carry-over seconds that should be added to the unified
-    live-display carry seconds.
-
-    The carry seconds represent consecutive short activities (<30s each)
-    that have not been persisted individually but should still contribute
-    to the current normal live display so the UI does not first lose
-    seconds and then suddenly jump when the next activity crosses the
-    persistence threshold.
-
-    Returns ``0`` when:
-
-    - the snapshot is None / not normal / not unconfirmed;
-    - there is no carry state;
-    - the carry's anchor activity id is no longer visible in the
-      report date's activity ids.
-    """
-    if not snapshot or _snapshot_status(snapshot) != STATUS_NORMAL:
-        return 0
-    if bool(snapshot.get("is_persisted")) or snapshot_persisted_id(snapshot):
-        return 0
-    carry = _read_short_activity_carry()
-    if not carry:
-        # Fall back to the simple pending_short_seconds accumulator when
-        # no structured carry state exists. This covers the common case
-        # of a single short activity ending below the threshold.
-        return _read_pending_short_seconds()
-    # Use the existing helper to compute the carry duration against the
-    # current report date's activity ids. The helper returns ``None`` when
-    # the carry's anchor activity is no longer visible, in which case we
-    # fall back to the pending accumulator.
-    try:
-        if report_date:
-            activity_ids = [
-                int(a.get("id") or 0)
-                for a in activity_service.get_activities_by_date(report_date)
-                if int(a.get("id") or 0) > 0
-            ]
-            base_duration = 0
-            anchor_id = safe_int(carry.get("activity_id"))
-            if anchor_id and anchor_id in activity_ids:
-                # The anchor activity's stored duration is the confirmed
-                # base; carry.completed_seconds holds subsequent short
-                # activities that have already ended.
-                anchor = activity_service.get_activity(anchor_id)
-                if anchor:
-                    base_duration = safe_int(anchor.get("duration_seconds"))
-            duration = _short_activity_carry_duration_helper(
-                carry, activity_ids, base_duration, report_date, snapshot
-            )
-            if duration is not None:
-                return max(0, duration)
-    except Exception:
-        pass
-    return _read_pending_short_seconds()
-
-
-def _short_activity_carry_duration_helper(
-    carry: dict[str, Any] | None,
-    activity_ids: list[int],
-    base_duration_seconds: int,
-    report_date: str,
-    snapshot: dict[str, Any] | None,
-) -> int | None:
-    """Thin wrapper around ``live_time_service.short_activity_carry_duration``
-    so the import boundary is explicit.
-    """
-    from .live_time_service import short_activity_carry_duration
-
-    return short_activity_carry_duration(
-        carry,
-        activity_ids,
-        base_duration_seconds,
-        report_date,
-        snapshot,
-    )
 
 
 # Unified live-display payload builders
@@ -541,18 +447,16 @@ def build_current_activity_summary(
     is_uncategorized = (
         not project_name or project_name == UNCATEGORIZED_PROJECT
     )
-    # The carry seconds are added to the elapsed seconds so the UI does
-    # not lose seconds between consecutive short activities. Only applies
-    # to virtual (unpersisted) snapshots; persisted_open rows already
-    # have the carry folded into their stored duration.
+    # Carry seconds added to elapsed so the UI does not lose seconds
+    # between consecutive short activities. Only applies to virtual
+    # (unpersisted) snapshots; persisted_open rows already have carry
+    # folded into their stored duration. Source: ``pending_short_seconds``.
     carry_seconds = 0
     if is_virtual_live:
-        carry_seconds = short_activity_carry_seconds(snapshot, report_date)
+        carry_seconds = _read_pending_short_seconds()
     display_seconds = elapsed_seconds + carry_seconds
-    # Project ownership fields. The snapshot carries a structured
-    # display_project / candidate_project / project_transition block from
-    # the ownership state machine, surfaced verbatim (display-safe) so the
-    # frontend can render the 30s pending indicator without the raw snapshot.
+    # Project ownership fields surfaced verbatim (display-safe) from the
+    # snapshot's structured display_project / candidate_project block.
     display_project_dict = _snapshot_display_project_dict(snapshot) or {
         "id": None,
         "name": project_name,
@@ -747,16 +651,10 @@ def compute_refresh_revision(
     inferred_project = ""
     if snapshot:
         inferred_project = str(snapshot.get("inferred_project_name") or "")
-    # Carry / pending state.
+    # Carry / pending state: only the production-maintained
+    # ``pending_short_seconds`` accumulator contributes. Legacy
+    # structured carry removed (no writer; no ``carry_*`` field hashed).
     pending_short_seconds = _read_pending_short_seconds()
-    carry_signature = ""
-    carry = _read_short_activity_carry()
-    if carry:
-        carry_signature = "{0}|{1}|{2}".format(
-            safe_int(carry.get("activity_id")),
-            safe_int(carry.get("base_seconds")),
-            safe_int(carry.get("completed_seconds")),
-        )
     latest_id = 0
     latest_updated_at = ""
     latest_kind = ""
@@ -821,7 +719,6 @@ def compute_refresh_revision(
             "1" if user_paused else "0",
             today,
             str(pending_short_seconds),
-            carry_signature,
             # Structural signature so a duration-only ``updated_at`` bump
             # does not trigger a heavy refresh.
             structural_signature,
@@ -840,7 +737,6 @@ def compute_refresh_revision(
         "user_paused": user_paused,
         "today": today,
         "pending_short_seconds": pending_short_seconds,
-        "carry_signature": carry_signature,
         "structural_signature": structural_signature,
         "row_count": row_count,
         "latest_id": latest_id,
@@ -857,5 +753,4 @@ __all__ = [
     "compute_refresh_revision",
     "is_live_eligible_for_normal",
     "persisted_open_live_seconds",
-    "short_activity_carry_seconds",
 ]

@@ -44,11 +44,10 @@
                 throw new Error(msg);
             });
             if (!bundle) return;
-            // Register the unified live clock from the bundle BEFORE rendering so the 1s ticker can
-            // render KPIs, current activity, and recent items from the single registered clock. The
-            // bundle carries ``live_clock`` / ``activity_display_model`` at the top level; downstream
-            // ``showOverview`` / ``showRecent`` re-register defensively (same clock, no-op overwrite).
-            App.registerLiveClock(bundle);
+            // Register the bundle's unified live clock BEFORE rendering so
+            // the 1s ticker renders KPIs/current/recent from one clock.
+            // ``source: "page_model"`` replaces any refresh_state clock.
+            App.registerLiveClock(bundle, { source: "page_model" });
             var overview = bundle.overview || {};
             // Augment the overview sub-payload with the bundle-level
             overview.date = bundle.date || overview.date;
@@ -382,11 +381,22 @@
             var newRevision = state.refresh_revision;
             var isFirstCheck = prevRevision === null || prevRevision === undefined;
             App.lastRefreshState = state;
-            // Register the unified live clock from the lightweight refresh_state payload so the 1s
-            // ticker keeps rendering every live duration WITHOUT a heavy page-model refresh. This is
-            // the "live model refresh" vs "page view model refresh" split: unchanged revision → only
-            // the live clock updates; the structural page payload is NOT reloaded.
-            App.registerLiveClock(state);
+            // Refresh-state registration: first check registers;
+            // revision-changed skips (heavy refresh registers); unchanged
+            // registers with ``preserveSameSpanSample`` to protect the sample.
+            if (isFirstCheck) {
+                App.registerLiveClock(state, {
+                    source: "refresh_state",
+                    preserveSameSpanSample: false
+                });
+            } else if (prevRevision === newRevision) {
+                App.registerLiveClock(state, {
+                    source: "refresh_state",
+                    preserveSameSpanSample: true
+                });
+            }
+            // When revision changed, we intentionally skip registration here;
+            // the heavy refresh will register the new page-model sample.
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision
             if (isFirstCheck || prevRevision !== newRevision) {
@@ -441,9 +451,13 @@
                 var state = App.handleResult(result, function () { return null; });
                 if (state) {
                     App.lastRefreshState = state;
-                    // Seed the unified live clock from the initial refresh_state so the first heartbeat
-                    // tick can render live durations before the first revision-change page refresh.
-                    App.registerLiveClock(state);
+                    // Bootstrap: seed clock from initial refresh_state so
+                    // the first heartbeat tick can render. ``false`` here
+                    // because no prior page-model sample exists yet.
+                    App.registerLiveClock(state, {
+                        source: "refresh_state",
+                        preserveSameSpanSample: false
+                    });
                 }
                 startHeartbeat();
             }, function () {

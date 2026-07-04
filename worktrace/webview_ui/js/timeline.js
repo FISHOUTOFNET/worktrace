@@ -8,11 +8,10 @@
 
     function showTimeline(data) {
         if (!data) return;
-        // Register the unified live clock carried by the Timeline payload FIRST so the 1s ticker
-        // renders the live session row, the timeline total, and the current-activity area from the
-        // same single clock registered by Overview / Recent / Details. The structural cache
-        // ``lastTimelineData`` below is only for re-render on page switch, never a live-seconds source.
-        App.registerLiveClock(data);
+        // Register the unified live clock carried by Timeline FIRST so
+        // the 1s ticker renders session row, total, and current-activity
+        // from the same clock. ``source: "page_model"`` makes it authoritative.
+        App.registerLiveClock(data, { source: "page_model" });
         App.lastTimelineData = data;
         var dateInput = document.getElementById("timeline-date-input");
         if (dateInput) dateInput.value = data.date || "";
@@ -262,7 +261,8 @@
         // Register the unified live clock carried by the Details payload so the 1s ticker renders the
         // live detail row from the same single clock registered by Overview / Recent / Timeline. The
         // structural cache below is only for re-render on page switch, never a live-seconds source.
-        App.registerLiveClock(data);
+        // ``source: "page_model"`` so the Details page-model sample is the authoritative clock.
+        App.registerLiveClock(data, { source: "page_model" });
         // Structural cache only — used for re-render on page switch / edit-guard checks. The live
         // seconds come from the registered live clock (data-display-span-id + App.liveSeconds);
         // this cache MUST NOT be read as a live-seconds source by the ticker.

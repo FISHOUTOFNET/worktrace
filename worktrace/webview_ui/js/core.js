@@ -499,14 +499,37 @@
     }
     App.liveDeltaSeconds = liveDeltaSeconds;
 
-    // Register a live clock from ANY payload (Overview / Recent / Timeline / Details / Refresh State).
-    // The payload may carry ``live_clock`` directly or nested inside ``activity_display_model``.
+    // Register a live clock from ANY payload (Overview / Recent / Timeline /
+    // Details / Refresh State). The payload may carry ``live_clock`` directly
+    // or nested inside ``activity_display_model``.
     //
-    // Contract: when the payload has NO live clock, NO display_span_id, or the
-    // clock's ``is_live`` is not true, the registry AND the active span id MUST
-    // be cleared. This prevents a stale clock from continuing to tick after the
-    // activity ends, the collector pauses, or the user switches pages.
-    function registerLiveClock(payload) {
+    // The optional second argument is ``{ source: "page_model" | "refresh_state",
+    // preserveSameSpanSample: bool }``. It distinguishes the two registration
+    // paths so the lightweight refresh_state cannot overwrite a page-model
+    // sample clock's ``live_started_at_epoch_ms`` / ``carry_seconds`` /
+    // ``duration_seconds_at_sample`` while the user is still on the same live
+    // span.
+    //
+    // Contract:
+    //
+    // - When the payload has NO live clock, NO display_span_id, or the
+    //   clock's ``is_live`` is not true, the registry AND the active span id
+    //   MUST be cleared. This prevents a stale clock from continuing to tick
+    //   after the activity ends, the collector pauses, or the user switches
+    //   pages.
+    // - When ``source == "refresh_state"`` AND ``preserveSameSpanSample`` is
+    //   true AND the new clock shares the active span id AND the active
+    //   clock's ``stable_live_key_hash`` equals the new clock's, the
+    //   ``live_started_at_epoch_ms`` / ``carry_seconds`` /
+    //   ``duration_seconds_at_sample`` fields of the ACTIVE clock are
+    //   PRESERVED. Only non-sample fields (is_live / is_project_duration_live
+    //   / live_state / stable_live_key) refresh from the new payload. This is
+    //   the same-span preservation rule: refresh_state is structural-only and
+    //   must NOT reset the liveDelta base that the page-model sample seeded.
+    // - In all other cases (span id changed, stable key changed, is_live
+    //   flipped false, live_state structural switch, or source ==
+    //   "page_model"), the new clock fully replaces the active clock.
+    function registerLiveClock(payload, options) {
         if (!payload) {
             clearLiveClockRegistry();
             return;
@@ -525,14 +548,58 @@
             clearLiveClockRegistry();
             return;
         }
-        // Sample identity changed → wipe any prior monotonic state so the
-        // new activity is not poisoned by the previous activity's
-        // rollback-guard.
+        var opts = options || {};
+        var source = String(opts.source || "page_model");
+        var preserveSameSpanSample = !!opts.preserveSameSpanSample;
+        var activeClock = App.activeDisplaySpanId
+            ? (App.liveClockBySpanId[App.activeDisplaySpanId] || null)
+            : null;
+        var sameSpan = activeClock
+            && App.activeDisplaySpanId === spanId
+            && activeClock.is_live === true;
+        var sameStableKey = sameSpan
+            && String(activeClock.stable_live_key_hash || "")
+                === String(clock.stable_live_key_hash || "");
+        var sameLiveState = sameSpan
+            && String(activeClock.live_state || "")
+                === String(clock.live_state || "");
+        var canPreserveSample = source === "refresh_state"
+            && preserveSameSpanSample
+            && sameSpan
+            && sameStableKey
+            && sameLiveState;
+        // Sample identity changed (different span id, different stable key,
+        // different live_state, or a page_model refresh) → wipe any prior
+        // monotonic state so the new activity is not poisoned by the previous
+        // activity's rollback-guard.
         if (App.activeDisplaySpanId && App.activeDisplaySpanId !== spanId) {
             App._monotonicRenderState = {};
+        } else if (!canPreserveSample) {
+            // Same span id but stable key / live_state / source moved → the
+            // page-model sample clock is being replaced; reset monotonic
+            // state so the new sample base takes effect immediately.
+            App._monotonicRenderState = {};
+        }
+        var storedClock = clock;
+        if (canPreserveSample && activeClock) {
+            // Preserve the page-model sample fields; refresh only the
+            // non-sample identity / status fields from the lightweight
+            // refresh_state payload.
+            storedClock = {
+                display_span_id: clock.display_span_id,
+                stable_live_key: clock.stable_live_key,
+                stable_live_key_hash: clock.stable_live_key_hash,
+                live_state: clock.live_state,
+                is_live: clock.is_live,
+                is_project_duration_live: clock.is_project_duration_live,
+                // Sample fields preserved from the active page-model clock.
+                live_started_at_epoch_ms: activeClock.live_started_at_epoch_ms,
+                carry_seconds: activeClock.carry_seconds,
+                duration_seconds_at_sample: activeClock.duration_seconds_at_sample,
+            };
         }
         App.liveClockBySpanId = {};
-        App.liveClockBySpanId[spanId] = clock;
+        App.liveClockBySpanId[spanId] = storedClock;
         App.activeDisplaySpanId = spanId;
         if (payload.activity_display_model) {
             App.liveDisplayModel = payload.activity_display_model;

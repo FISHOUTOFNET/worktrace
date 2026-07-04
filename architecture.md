@@ -1281,12 +1281,13 @@ is_virtual_live is_in_progress is_live_projected
 edit_disabled disable_reason source
 ```
 
-The bridge applies the persisted-open overlay
-(`apply_persisted_open_overlay_to_row`) so DB rows that match the
-current snapshot carry the same `stable_live_key_hash` as the virtual
-row. This lets the frontend ticker use a single continuity key
-(`App.liveContinuityKey`) across the virtual → persisted_open
-transition.
+The bridge applies the unified live-span overlay
+(`view_model_service._apply_live_span_to_rows` /
+`apply_live_span_to_row`) so DB rows that match the current snapshot
+carry the same `stable_live_key_hash` and `display_span_id` as the
+live clock. This lets the frontend ticker use a single span-keyed
+registry (`App.liveClockBySpanId`, keyed by `display_span_id`) across
+the virtual → persisted_open → absorbed_pending transitions.
 
 Statistics / Export remain closed-only; the live overlay must not
 alter closed-only semantics.
@@ -1796,25 +1797,29 @@ reopen `activity_log` rows. It only computes and maintains the
 display/candidate/pending semantics. DB open-row lifecycle remains the
 exclusive responsibility of `activity_lifecycle_service`.
 
-### 33.5 Live Projection Unified
+### 33.5 Activity Display Model Unified
 
-`live_display_service.build_live_projection()` is the single source of
-truth for every live UI consumer (Overview / Recent / Timeline / Detail
-/ live KPI). The projection carries:
+`activity_display_model_service.build_activity_display_model()` is the
+single source of truth for every live UI consumer (Overview / Recent /
+Timeline / Detail / live KPI / current-activity area). The display
+model carries:
 
 - `display_project` / `candidate_project` / `project_transition` /
   `project_transition_pending` (project ownership contract);
-- `live_started_at_epoch_ms` / `carry_seconds` / `duration_seconds`
-  (unified live clock, scheme A);
+- `live_started_at_epoch_ms` / `carry_seconds` /
+  `duration_seconds_at_sample` (unified live clock, scheme A);
 - `stable_live_key` / `stable_live_key_hash` (stable live identity);
-- `live_state` / `is_virtual_live` / `is_in_progress`
-  (persisted/virtual/system state).
+- `display_span_id` (span-keyed registry identity);
+- `live_state` (`none` / `virtual_pending` / `absorbed_pending` /
+  `persisted_open` / `paused` / `idle` / `excluded` / `error`);
+- `is_project_duration_live` (whether KPI / project totals tick).
 
 Overview / Recent / Timeline / Detail must NOT each re-interpret
 `inferred_project_name`, `is_virtual_live`, or `duration_seconds`
-independently. The legacy `inferred_project_name` field mirrors
-`display_project.name` for backward compatibility but is NOT the
-authoritative source.
+independently. The legacy `inferred_project_name` field mirrors the
+display project for backward compatibility but is NOT the authoritative
+source. No page ViewModel may bypass
+`activity_display_model_service` to construct live rows independently.
 
 ### 33.6 Overview ViewModel Single-Sample
 
@@ -1822,7 +1827,10 @@ The Overview page uses a single backend call
 `view_model_service.get_overview_view_model()` (exposed to the WebView
 bridge via `view_model_api.get_overview_view_model()`) which returns:
 
-- `live_projection` (the unified live projection);
+- `live_clock` (the unified live clock block from the Activity Display
+  Model);
+- `activity_display_model` (the full display model for cross-ViewModel
+  consistency);
 - `overview` KPI (with `include_live=True`);
 - `current_activity` summary;
 - `activities` (recent activities list);
@@ -1848,9 +1856,10 @@ documented Phase 4A semantics: the read-only preview is stable and
 deterministic.
 
 Overview KPI (`get_summary(include_live=True)`) DOES project the live
-activity via `_live_projection`, which uses `display_project` (not
-`candidate_project`) during pending. The two paths are intentionally
-distinct: KPI is real-time; export is finalized-only.
+activity via the Activity Display Model's live-span overlay, which uses
+`display_project` (not `candidate_project`) during pending. The two
+paths are intentionally distinct: KPI is real-time; export is
+finalized-only.
 
 ### 33.8 Short Activity Blind Merge Preserved
 
@@ -1861,7 +1870,61 @@ they belong to the same project is irrelevant. The new display-level
 project ownership pending is a SEPARATE concern and does NOT change
 the short-activity merge policy.
 
-The `pending_short_seconds` accumulator and the
-`short_activity_carry_duration` helper continue to work as before. The
-unified live clock adds carry seconds to the virtual snapshot's
-elapsed seconds so consecutive <30s activities do not lose seconds.
+The `pending_short_seconds` accumulator (production-maintained by the
+collector) is the only carry source for `virtual_pending`. The legacy
+structured `short_activity_carry` JSON mechanism was removed — it had
+no production writer. The unified live clock adds carry seconds to the
+virtual snapshot's elapsed seconds so consecutive <30s activities do
+not lose seconds. Absorption across a session boundary
+(`stopped` / `paused` / `restart` / `recovered` / `time_jump` /
+`midnight`) is blocked by `session_boundary_service.has_boundary_between`.
+
+### 33.9 Page-Model Sample Clock Contract
+
+The frontend maintains a single active live-clock sample registered from
+the page-model payload (`get_overview` / `get_timeline` /
+`get_timeline_session_details`). The lightweight `refresh_state`
+heartbeat MUST NOT overwrite the active sample's
+`live_started_at_epoch_ms` / `carry_seconds` /
+`duration_seconds_at_sample` when ALL of the following hold:
+
+- `display_span_id` is unchanged;
+- `stable_live_key_hash` is unchanged;
+- `live_state` is unchanged (no `virtual_pending` ↔ `absorbed_pending` ↔
+  `persisted_open` structural switch).
+
+`registerLiveClock(payload, options)` accepts a `source` mode:
+
+- `{ source: "page_model" }` — registers / replaces the active sample
+  (used by `showOverview` / `showRecent` / `showTimeline` /
+  `renderSessionDetails` / `refreshOverview`);
+- `{ source: "refresh_state", preserveSameSpanSample: true }` — used by
+  `runRevisionCheck` on the revision-UNCHANGED branch; preserves the
+  active sample fields when same-span + same-stable-key + same-live-state.
+
+When `refresh_revision` CHANGES, `runRevisionCheck` does NOT register
+the refresh_state clock — it triggers a heavy page-model refresh that
+will register a fresh sample. This prevents the same live span's
+current-activity area from ticking while Recent / Timeline / Details
+rows freeze or jump.
+
+`applyLocalTicker` remains DOM-text-only: it never calls a bridge
+method, never writes the DB, never re-renders a list. Current activity,
+KPI, recent row, timeline session row, and detail row all advance from
+the SAME active clock.
+
+### 33.10 Absorbed_pending Project Consistency
+
+Under `absorbed_pending`, the current-activity area shows the pending
+RESOURCE name (what the user is looking at) BUT the project attribution
+fields (`project_name` / `project_id` / `is_classified` /
+`is_uncategorized`) come from the ANCHOR DB row — NOT the pending
+snapshot's `inferred_project_name`. This forbids the same live span
+being classified as PendingProject in the KPI while appearing as
+AnchorProject in Recent / Timeline / Details.
+
+When no valid anchor exists (boundary blocks absorption, overlap anchor
+rejected, or no prior confirmed normal activity), the display state
+collapses to `virtual_pending`: `display_spans` is empty, Recent /
+Timeline / Details show no live row, and only the current-activity area
+renders the pending resource.

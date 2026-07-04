@@ -7,7 +7,9 @@
 
     function showOverview(overview) {
         if (!overview) return;
-        App.registerLiveClock(overview);
+        // ``source: "page_model"``: authoritative Overview sample; replaces
+        // any refresh_state clock seeded during bootstrap / heartbeat.
+        App.registerLiveClock(overview, { source: "page_model" });
         App.lastOverviewSnapshot = overview;
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-total").textContent = overview.total_duration || "00:00:00";
@@ -34,9 +36,9 @@
     App.showOverview = showOverview;
 
     function showRecent(recentResult) {
-        // Register the unified live clock (shares the same sample as the Overview bundle).
-        App.registerLiveClock(recentResult);
-        // Structural cache only — used for re-render on page switch, never a live-seconds source.
+        // ``source: "page_model"``: defensive re-registration of the same sample.
+        App.registerLiveClock(recentResult, { source: "page_model" });
+        // Structural cache only — never a live-seconds source.
         App.lastRecentData = recentResult;
         var listEl = document.getElementById("recent-list");
         if (!recentResult || !recentResult.activities || recentResult.activities.length === 0) {
@@ -56,10 +58,8 @@
             if (inProgress) cls += " in-progress";
             if (item.is_live_projected === true) cls += " live-projected";
             if (item.is_virtual === true) cls += " virtual-live";
-            // Unified live-span DOM attributes: ticker walks [data-display-span-id]
-            // and reads each row's OWN sample base from [data-live-base-seconds]
-            // so a session/recent row whose sample duration is larger than the
-            // live activity's own duration is NOT overwritten by the live span.
+            // Unified live-span DOM attributes: ticker reads each row's
+            // OWN sample base from [data-live-base-seconds].
             var spanId = item.display_span_id || "";
             var liveBaseSec = (spanId && !isNaN(durSec)) ? durSec : 0;
             var continuityKey = spanId ? App.liveContinuityKey(item, "recent") : "";
@@ -76,9 +76,7 @@
                 + '</div>'
                 + '<div class="recent-item-duration">' + App.escapeHtml(durText) + '</div>'
                 + '</div>';
-            // Seed monotonic state by the SAME continuity key the ticker will
-            // read from data-live-continuity-key so render and ticker share
-            // one monotonic guard.
+            // Seed monotonic state by the SAME continuity key the ticker reads.
             if (continuityKey) {
                 App.resetMonotonicRenderState(continuityKey);
                 App._monotonicRenderState[continuityKey] = { lastSeconds: isNaN(durSec) ? 0 : durSec };

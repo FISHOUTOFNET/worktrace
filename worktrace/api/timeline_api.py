@@ -13,14 +13,10 @@ from typing import Any
 from ..constants import TIME_FORMAT
 from ..services import activity_service, project_service, timeline_service
 from ..services.live_time_service import (
-    is_unconfirmed_snapshot,
-    short_activity_carry_duration,
     snapshot_elapsed_seconds,
     snapshot_extra_seconds,
     snapshot_persisted_id,
     snapshot_seconds_for_date_range,
-    snapshot_signature,
-    sync_short_activity_carry,
 )
 
 
@@ -1201,38 +1197,6 @@ def get_snapshot_seconds_for_date_range(
     return snapshot_seconds_for_date_range(snapshot, start_date, end_date)
 
 
-def get_snapshot_signature(snapshot: dict[str, Any] | None) -> tuple | None:
-    return snapshot_signature(snapshot)
-
-
-def sync_short_activity_carry_value(
-    carry: dict[str, Any] | None,
-    previous: dict[str, Any] | None,
-    current: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    return sync_short_activity_carry(carry, previous, current)
-
-
-def get_short_activity_carry_duration(
-    carry: dict[str, Any] | None,
-    activity_ids: list[int],
-    duration_seconds: int,
-    report_date: str,
-    snapshot: dict[str, Any] | None,
-) -> int | None:
-    return short_activity_carry_duration(
-        carry,
-        activity_ids,
-        duration_seconds,
-        report_date,
-        snapshot,
-    )
-
-
-def is_snapshot_unconfirmed(snapshot: dict[str, Any] | None) -> bool:
-    return is_unconfirmed_snapshot(snapshot)
-
-
 __all__ = [
     "TIMELINE_ADJUSTED_DURATION_MAX_SECONDS",
     "TIMELINE_NOTE_MAX_LENGTH",
@@ -1250,16 +1214,13 @@ __all__ = [
     "get_project_sessions_by_range",
     "get_session_activity_details",
     "get_session_anchor_folders",
-    "get_short_activity_carry_duration",
     "get_snapshot_elapsed_seconds",
     "get_snapshot_extra_seconds",
     "get_snapshot_persisted_id",
     "get_snapshot_seconds_for_date_range",
-    "get_snapshot_signature",
     "get_timeline_restorable_activities",
     "hide_timeline_activity",
     "hide_timeline_session",
-    "is_snapshot_unconfirmed",
     "list_selectable_projects",
     "merge_timeline_activities",
     "preview_session_project_update",
@@ -1270,7 +1231,6 @@ __all__ = [
     "soft_delete_timeline_session",
     "split_timeline_activity",
     "split_timeline_session",
-    "sync_short_activity_carry_value",
     "update_activity_group_project",
     "update_activity_note",
     "update_session_note",

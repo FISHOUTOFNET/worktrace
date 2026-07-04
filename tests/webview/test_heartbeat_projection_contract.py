@@ -1263,3 +1263,149 @@ def test_apply_local_ticker_clears_when_no_active_clock():
         "applyLocalTicker must guard against a null clock so no delta is "
         "applied when the registry is cleared"
     )
+
+
+# ---------------------------------------------------------------------------
+# Page-model sample clock contract (Section 33.9)
+# ---------------------------------------------------------------------------
+
+
+def test_register_live_clock_accepts_source_option():
+    """``registerLiveClock`` MUST accept a second ``options`` argument
+    with a ``source`` field (``"page_model"`` or ``"refresh_state"``)
+    and a ``preserveSameSpanSample`` boolean. This is the entry point
+    for the page-model vs refresh-state sample-clock contract.
+    """
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "registerLiveClock")
+    # The function signature must accept a second parameter.
+    assert re.search(r"function\s+registerLiveClock\s*\(\s*\w+\s*,\s*\w+", body), (
+        "registerLiveClock must accept a second options parameter"
+    )
+    # Must read opts.source (or options.source).
+    assert re.search(r"\.source\b", body), (
+        "registerLiveClock must read options.source to distinguish "
+        "page_model vs refresh_state registration"
+    )
+    # Must read preserveSameSpanSample.
+    assert "preserveSameSpanSample" in body, (
+        "registerLiveClock must read preserveSameSpanSample to decide "
+        "whether the active sample is preserved on same-span refresh_state"
+    )
+
+
+def test_register_live_clock_preserves_sample_on_same_span_refresh_state():
+    """When ``source == "refresh_state"`` AND
+    ``preserveSameSpanSample == true`` AND the active clock has the SAME
+    ``display_span_id`` + SAME ``stable_live_key_hash`` + SAME
+    ``live_state``, the sample fields
+    (``live_started_at_epoch_ms`` / ``carry_seconds`` /
+    ``duration_seconds_at_sample``) MUST be preserved from the active
+    clock — NOT overwritten by the refresh_state payload.
+    """
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "registerLiveClock")
+    # Must compute a same-span / same-stable-key / same-live-state gate.
+    assert "sameSpan" in body, (
+        "registerLiveClock must compute a sameSpan gate"
+    )
+    assert "sameStableKey" in body, (
+        "registerLiveClock must compute a sameStableKey gate"
+    )
+    assert "sameLiveState" in body, (
+        "registerLiveClock must compute a sameLiveState gate"
+    )
+    # Must compute canPreserveSample combining all gates.
+    assert "canPreserveSample" in body, (
+        "registerLiveClock must compute canPreserveSample combining "
+        "source / preserveSameSpanSample / sameSpan / sameStableKey / "
+        "sameLiveState"
+    )
+    # When preserving, sample fields must come from the active clock.
+    assert "activeClock" in body, (
+        "registerLiveClock must reference the active clock to preserve "
+        "sample fields"
+    )
+    # The preserved sample fields must be explicitly assigned.
+    for field in (
+        "live_started_at_epoch_ms",
+        "carry_seconds",
+        "duration_seconds_at_sample",
+    ):
+        assert field in body, (
+            "registerLiveClock must preserve " + field + " from the "
+            "active clock when canPreserveSample is true"
+        )
+
+
+def test_run_revision_check_preserves_sample_on_unchanged_revision():
+    """On the revision-UNCHANGED branch, ``runRevisionCheck`` MUST call
+    ``registerLiveClock`` with
+    ``{ source: 'refresh_state', preserveSameSpanSample: true }`` so the
+    active page-model sample is NOT overwritten by the refresh_state
+    payload. It must NOT call ``registerLiveClock(state)`` without the
+    options.
+    """
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "runRevisionCheck")
+    # Must reference preserveSameSpanSample: true on the unchanged branch.
+    assert "preserveSameSpanSample" in body, (
+        "runRevisionCheck must use preserveSameSpanSample to protect the "
+        "active sample on the revision-unchanged branch"
+    )
+    # Must reference source: "refresh_state".
+    assert '"refresh_state"' in body or "'refresh_state'" in body, (
+        "runRevisionCheck must register refresh_state with source "
+        "'refresh_state'"
+    )
+    # Must NOT have a bare registerLiveClock(state) call without options.
+    # A bare call would overwrite the sample on every tick.
+    bare_call = re.search(r"registerLiveClock\s*\(\s*state\s*\)", body)
+    assert bare_call is None, (
+        "runRevisionCheck must not call registerLiveClock(state) without "
+        "options; the sample clock would be overwritten every second"
+    )
+
+
+def test_page_model_render_uses_page_model_source():
+    """The page-model render flows (``showOverview`` / ``showRecent`` /
+    ``showTimeline`` / ``renderSessionDetails`` / ``refreshOverview``)
+    MUST register with ``{ source: 'page_model' }`` so they replace the
+    active sample. ``refresh_state`` must NOT use ``page_model`` source.
+    """
+    for fname in ("overview.js", "timeline.js"):
+        src = _strip_js_comments(read_js(fname))
+        # Every registerLiveClock call in these files must use page_model.
+        calls = re.findall(r"registerLiveClock\s*\([^)]*\)", src)
+        assert calls, (
+            fname + " must call registerLiveClock at least once"
+        )
+        for call in calls:
+            assert '"page_model"' in call or "'page_model'" in call, (
+                fname + " registerLiveClock call must use source 'page_model'; "
+                "found: " + call
+            )
+
+
+def test_run_revision_check_skips_registration_on_revision_change():
+    """When ``refresh_revision`` CHANGES, ``runRevisionCheck`` must NOT
+    register the refresh_state clock — it triggers a heavy page-model
+    refresh that will register a fresh sample. Registering the
+    refresh_state sample on a revision-change would seed the clock with
+    a transient state that the heavy refresh immediately replaces,
+    causing a visual flash.
+    """
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "runRevisionCheck")
+    # Must have a revision-change branch that triggers heavy refresh.
+    assert "revision" in body.lower(), (
+        "runRevisionCheck must compare refresh_revision"
+    )
+    # The revision-change branch must NOT register the refresh_state
+    # clock; registration is gated behind ``preserveSameSpanSample``
+    # (true only on the unchanged branch).
+    assert "preserveSameSpanSample" in body, (
+        "runRevisionCheck must gate refresh_state registration behind "
+        "preserveSameSpanSample so the revision-change branch does not "
+        "register a transient sample"
+    )
