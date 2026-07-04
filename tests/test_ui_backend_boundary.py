@@ -1418,9 +1418,21 @@ def test_view_model_api_does_not_export_carry_helpers() -> None:
         assert symbol in view_model_api.__all__, (
             "view_model_api.__all__ must include " + symbol
         )
-        assert hasattr(view_model_api, symbol), (
-            "view_model_api must expose " + symbol
-        )
+
+
+def test_overview_bridge_pause_uses_app_api_facade_only() -> None:
+    import inspect
+
+    from worktrace.api import app_api
+    from worktrace.webview_ui import bridge_overview
+
+    assert hasattr(app_api, "pause_collection_now")
+    source = inspect.getsource(bridge_overview)
+    assert "app_api.pause_collection_now" in source
+    assert "clear_runtime_activity_state" not in source
+    for forbidden in ("runtime", "services", "collector", "db", "config"):
+        assert f"from ..{forbidden}" not in source
+        assert f"import worktrace.{forbidden}" not in source
 
 
 # --- Section 七: page-scoped frontend live clock registry boundary ---

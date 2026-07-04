@@ -83,20 +83,46 @@ def _apply_live_span_to_rows(rows: list[dict[str, Any]], model: dict[str, Any]) 
         apply_live_span_to_row(row, span)
 
 
-def _get_virtual_pending_span(model: dict[str, Any]) -> dict[str, Any] | None:
+def _get_visible_live_span(model: dict[str, Any], surface: str) -> dict[str, Any] | None:
     span = get_live_span(model)
     if not span:
         return None
-    if str(span.get("live_state") or "") != "virtual_pending":
+    live_clock = span.get("live_clock") or model.get("live_clock") or {}
+    if not (
+        live_clock.get("project_duration_live") is True
+        or live_clock.get("is_project_duration_live") is True
+    ):
         return None
-    if int(span.get("anchor_activity_id") or 0) != 0:
+    if not str(live_clock.get("display_span_id") or span.get("display_span_id") or ""):
+        return None
+    if not span.get("is_visible_in_" + surface):
         return None
     return span
 
 
-def _display_only_common_fields(span: dict[str, Any]) -> dict[str, Any]:
+def _rows_have_live_span(rows: list[dict[str, Any]], span: dict[str, Any]) -> bool:
+    span_id = str(span.get("display_span_id") or "")
+    if not span_id:
+        return False
+    return any(str(row.get("display_span_id") or "") == span_id for row in rows)
+
+
+def _live_contract_reason(span: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+    if int(span.get("anchor_activity_id") or 0) <= 0:
+        return ""
+    if not rows:
+        return "db_row_missing"
+    return "live_overlay_mismatch"
+
+
+def _display_only_common_fields(
+    span: dict[str, Any],
+    *,
+    live_contract_reason: str = "",
+) -> dict[str, Any]:
     live_clock = span.get("live_clock") or {}
     duration_seconds = int(span.get("duration_seconds") or 0)
+    is_contract_fallback = bool(live_contract_reason)
     return {
         "activity_id": int(span.get("activity_id") or 0),
         "start_time": str(span.get("start_time") or ""),
@@ -108,15 +134,17 @@ def _display_only_common_fields(span: dict[str, Any]) -> dict[str, Any]:
         "live_delta_eligible": True,
         "is_in_progress": True,
         "is_live_projected": True,
-        "is_virtual": True,
-        "is_virtual_live": True,
+        "is_virtual": not is_contract_fallback,
+        "is_virtual_live": not is_contract_fallback,
         "is_display_only": True,
         "display_only": True,
         "editable": False,
         "exportable": False,
-        "source": "snapshot",
+        "source": "live_contract_fallback" if is_contract_fallback else "snapshot",
         "edit_disabled": True,
         "disable_reason": str(span.get("disable_reason") or ""),
+        "live_contract_fallback": is_contract_fallback,
+        "live_contract_reason": live_contract_reason,
         "display_span_id": str(span.get("display_span_id") or ""),
         "stable_live_key": str(live_clock.get("stable_live_key") or ""),
         "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
@@ -140,8 +168,15 @@ def _display_only_common_fields(span: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _materialize_display_only_recent_row(span: dict[str, Any]) -> dict[str, Any]:
-    row = _display_only_common_fields(span)
+def _materialize_display_only_recent_row(
+    span: dict[str, Any],
+    *,
+    live_contract_reason: str = "",
+) -> dict[str, Any]:
+    row = _display_only_common_fields(
+        span,
+        live_contract_reason=live_contract_reason,
+    )
     row.update(
         {
             "project_name": str(span.get("project_name") or "未归类"),
@@ -154,8 +189,15 @@ def _materialize_display_only_recent_row(span: dict[str, Any]) -> dict[str, Any]
     return row
 
 
-def _materialize_display_only_timeline_session(span: dict[str, Any]) -> dict[str, Any]:
-    row = _display_only_common_fields(span)
+def _materialize_display_only_timeline_session(
+    span: dict[str, Any],
+    *,
+    live_contract_reason: str = "",
+) -> dict[str, Any]:
+    row = _display_only_common_fields(
+        span,
+        live_contract_reason=live_contract_reason,
+    )
     stable_hash = str(row.get("stable_live_key_hash") or "")
     row.update(
         {
@@ -176,8 +218,13 @@ def _materialize_display_only_timeline_session(span: dict[str, Any]) -> dict[str
 def _materialize_display_only_detail_row(
     span: dict[str, Any],
     current_activity: dict[str, Any],
+    *,
+    live_contract_reason: str = "",
 ) -> dict[str, Any]:
-    row = _display_only_common_fields(span)
+    row = _display_only_common_fields(
+        span,
+        live_contract_reason=live_contract_reason,
+    )
     row.update(
         {
             "app_name": str(current_activity.get("app_name") or ""),
@@ -234,9 +281,15 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     # Apply the unified live-span overlay to ALL session rows so the KPI
     # totals reflect the same sample as the recent items.
     _apply_live_span_to_rows(all_rows, model)
-    virtual_span = _get_virtual_pending_span(model)
-    if virtual_span and virtual_span.get("is_visible_in_recent"):
-        all_rows.insert(0, _materialize_display_only_recent_row(virtual_span))
+    recent_live_span = _get_visible_live_span(model, "recent")
+    if recent_live_span and not _rows_have_live_span(all_rows, recent_live_span):
+        all_rows.insert(
+            0,
+            _materialize_display_only_recent_row(
+                recent_live_span,
+                live_contract_reason=_live_contract_reason(recent_live_span, all_rows),
+            ),
+        )
 
     # KPI totals computed from the overlaid rows. Classification uses the
     # explicit ``is_classified`` / ``is_uncategorized`` flags propagated by
@@ -437,9 +490,15 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     # Apply the unified live-span overlay to matching sessions BEFORE
     # computing the display total so the total matches the sum of rows.
     _apply_live_span_to_rows(sessions, model)
-    virtual_span = _get_virtual_pending_span(model)
-    if virtual_span and virtual_span.get("is_visible_in_timeline"):
-        sessions.insert(0, _materialize_display_only_timeline_session(virtual_span))
+    timeline_live_span = _get_visible_live_span(model, "timeline")
+    if timeline_live_span and not _rows_have_live_span(sessions, timeline_live_span):
+        sessions.insert(
+            0,
+            _materialize_display_only_timeline_session(
+                timeline_live_span,
+                live_contract_reason=_live_contract_reason(timeline_live_span, sessions),
+            ),
+        )
     # In-progress sessions that received no live overlay still need
     # edit_disabled.
     for row in sessions:
@@ -504,14 +563,21 @@ def get_session_details_view_model(
     display_span_id = str(live_clock.get("display_span_id") or "")
     sample_id = str(model.get("sample_id") or "")
 
-    virtual_span = _get_virtual_pending_span(model)
-    if virtual_span and virtual_span.get("is_visible_in_details"):
-        virtual_id = int(virtual_span.get("activity_id") or 0)
-        if not ids or virtual_id in ids:
+    details_live_span = _get_visible_live_span(model, "details")
+    if details_live_span:
+        live_activity_id = int(details_live_span.get("activity_id") or 0)
+        live_anchor_id = int(details_live_span.get("anchor_activity_id") or 0)
+        request_matches_live = (
+            not ids
+            or (live_anchor_id <= 0 and 0 in ids)
+            or (live_activity_id > 0 and live_activity_id in ids)
+            or (live_anchor_id > 0 and live_anchor_id in ids)
+        )
+        if request_matches_live and live_anchor_id <= 0:
             return {
                 "ok": True,
                 "activities": [
-                    _materialize_display_only_detail_row(virtual_span, current_activity)
+                    _materialize_display_only_detail_row(details_live_span, current_activity)
                 ],
                 "current_activity": current_activity,
                 "live_clock": live_clock,
@@ -574,6 +640,19 @@ def get_session_details_view_model(
         activities.append(detail_row)
     # Apply the unified live-span overlay to matching detail rows only.
     _apply_live_span_to_rows(activities, model)
+    if (
+        details_live_span
+        and request_matches_live
+        and not _rows_have_live_span(activities, details_live_span)
+    ):
+        activities.insert(
+            0,
+            _materialize_display_only_detail_row(
+                details_live_span,
+                current_activity,
+                live_contract_reason=_live_contract_reason(details_live_span, activities),
+            ),
+        )
     for detail_row in activities:
         if detail_row.get("is_in_progress") and not detail_row.get("edit_disabled"):
             detail_row["edit_disabled"] = True

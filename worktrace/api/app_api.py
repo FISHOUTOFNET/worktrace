@@ -66,6 +66,28 @@ def start_collection_after_privacy_gate() -> dict[str, Any]:
     return {"ok": True}
 
 
+def pause_collection_now() -> dict[str, Any]:
+    """Pause collection through the runtime/collector lifecycle owner.
+
+    The UI must not clear ``current_activity_snapshot`` itself. When no
+    collector can acknowledge the command, fail safe by marking the user
+    paused so the next collector loop closes the activity; snapshot cleanup
+    remains recorder-owned.
+    """
+    try:
+        if _runtime is not None:
+            return dict(_runtime.pause_collection_now())
+        settings_api.set_user_paused(True)
+        return {"ok": False, "pause_pending": True}
+    except Exception:
+        logging.exception("app_api.pause_collection_now failed")
+        try:
+            settings_api.set_user_paused(True)
+        except Exception:
+            logging.exception("app_api.pause_collection_now fallback failed")
+        return {"ok": False, "pause_pending": True}
+
+
 def start_collector() -> None:
     """Start the collector thread if it has not been started yet.
 
@@ -112,6 +134,7 @@ def owns_collector() -> bool:
 __all__ = [
     "get_runtime",
     "owns_collector",
+    "pause_collection_now",
     "request_shutdown",
     "set_runtime",
     "start_background_workers",

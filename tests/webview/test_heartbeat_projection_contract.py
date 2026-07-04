@@ -1305,21 +1305,57 @@ def test_init_refresh_overview_does_not_propagate_live_projection_or_live_displa
     )
 
 
-def test_apply_local_ticker_skips_rows_without_node_clock():
+def test_apply_local_ticker_records_missing_node_clock_contract_violation():
     """When a row's span id is not registered, ``applyLocalTicker`` must
-    skip that row instead of falling back to the active page clock."""
+    record diagnostics instead of silently hiding the contract break."""
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "applyLocalTicker")
-    # Must call getActiveLiveClock to obtain the clock.
     assert "getActiveLiveClock" in body, (
         "applyLocalTicker must obtain the clock via getActiveLiveClock"
     )
     assert "App.liveClockBySpanId[spanId] || clock" not in body, (
         "applyLocalTicker must not fall back from a missing row clock to the active page clock"
     )
-    assert "if (!nodeClock) continue" in body, (
-        "applyLocalTicker must skip rows whose own clock is missing"
+    assert "if (!nodeClock) continue" not in body, (
+        "applyLocalTicker must not silently continue when a row clock is missing"
     )
+    assert "recordLiveClockContractViolation" in body, (
+        "applyLocalTicker must record diagnostics for a missing row clock"
+    )
+    assert "missing_node_clock" in body, (
+        "missing node clock diagnostics must use a display-safe reason"
+    )
+
+
+def test_live_clock_contract_violation_refresh_is_consumed_outside_ticker():
+    core = _strip_js_comments(read_js("core.js"))
+    ticker_body = func_body(core, "applyLocalTicker")
+    assert "callBridge" not in ticker_body, (
+        "applyLocalTicker must stay bridge-free even when reporting diagnostics"
+    )
+    init = _strip_js_comments(read_js("init.js"))
+    revision_body = func_body(init, "runRevisionCheck")
+    assert "liveClockContractRefreshRequested" in revision_body, (
+        "runRevisionCheck must consume live clock diagnostics"
+    )
+    assert "refreshCurrentPageData" in revision_body, (
+        "runRevisionCheck must trigger a controlled page refresh for diagnostics"
+    )
+
+
+def test_renderers_diagnose_live_rows_missing_span_id():
+    overview_body = func_body(_strip_js_comments(read_js("overview.js")), "showRecent")
+    timeline_src = _strip_js_comments(read_js("timeline.js"))
+    timeline_body = func_body(timeline_src, "showTimeline")
+    details_body = func_body(timeline_src, "renderSessionDetails")
+
+    assert "recent_live_row_missing_span_id" in overview_body
+    assert "session_live_row_missing_span_id" in timeline_body
+    assert "detail_live_row_missing_span_id" in details_body
+    for body in (overview_body, timeline_body, details_body):
+        assert "recordLiveClockContractViolation" in body, (
+            "live row renderers must diagnose missing display_span_id"
+        )
 
 
 # ---------------------------------------------------------------------------

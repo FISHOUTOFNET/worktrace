@@ -2357,3 +2357,86 @@ def test_today_persisted_open_still_overlays_matching_db_row(bridge):
     assert overlaid, "persisted_open session must appear on today's timeline"
     assert overlaid[0].get("live_state") == "persisted_open"
     assert overlaid[0].get("display_span_id")
+
+
+def test_overview_materializes_display_only_fallback_when_live_overlay_missing(bridge):
+    start_time = (datetime.now() - timedelta(seconds=75)).strftime(TIME_FORMAT)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=75,
+            is_persisted=True,
+            persisted_activity_id=987654,
+            start_time=start_time,
+        )
+    )
+
+    overview = bridge.get_overview()
+    expected_span_id = overview["live_clock"]["display_span_id"]
+    live_rows = [
+        row for row in overview["activities"]
+        if row.get("display_span_id") == expected_span_id
+    ]
+
+    assert live_rows, "Overview must materialize a fallback live row"
+    row = live_rows[0]
+    assert row["display_only"] is True
+    assert row["exportable"] is False
+    assert row["editable"] is False
+    assert row["live_contract_fallback"] is True
+    assert row["live_contract_reason"] in ("db_row_missing", "live_overlay_mismatch")
+    assert row["live_base_seconds"] == row["duration_seconds"]
+
+
+def test_timeline_and_details_materialize_live_fallback_when_overlay_missing(bridge):
+    start_time = (datetime.now() - timedelta(seconds=80)).strftime(TIME_FORMAT)
+    missing_id = 765432
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=80,
+            is_persisted=True,
+            persisted_activity_id=missing_id,
+            start_time=start_time,
+        )
+    )
+
+    timeline = bridge.get_timeline()
+    details = bridge.get_timeline_session_details([missing_id], None)
+    expected_span_id = timeline["live_clock"]["display_span_id"]
+
+    session = next(
+        row for row in timeline["sessions"]
+        if row.get("display_span_id") == expected_span_id
+    )
+    detail = next(
+        row for row in details["activities"]
+        if row.get("display_span_id") == expected_span_id
+    )
+    for row in (session, detail):
+        assert row["display_only"] is True
+        assert row["exportable"] is False
+        assert row["editable"] is False
+        assert row["live_contract_fallback"] is True
+        assert row["live_base_seconds"] == row["duration_seconds"]
+
+
+def test_today_live_payloads_do_not_return_live_rows_without_span_fields(bridge):
+    aid, start_time = _create_real_open_activity(elapsed_seconds=90)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=90,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+    payloads = [
+        bridge.get_recent_activities()["activities"],
+        bridge.get_timeline()["sessions"],
+        bridge.get_timeline_session_details([aid], None)["activities"],
+    ]
+
+    for rows in payloads:
+        for row in rows:
+            if row.get("is_in_progress") or row.get("is_live_projected"):
+                assert row.get("display_span_id"), row
+                assert "live_base_seconds" in row, row

@@ -426,6 +426,11 @@
             // the refresh_state payload (no get_status call). When revision
             if (isFirstCheck || prevRevision !== newRevision) {
                 triggeredHeavyRefresh = true;
+                App.liveClockContractRefreshRequested = false;
+                refreshCurrentPageData();
+            } else if (App.liveClockContractRefreshRequested && !App.activePageRefreshInFlight) {
+                triggeredHeavyRefresh = true;
+                App.liveClockContractRefreshRequested = false;
                 refreshCurrentPageData();
             } else {
                 refreshStatusFromRefreshState(state);

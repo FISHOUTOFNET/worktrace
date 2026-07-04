@@ -65,6 +65,11 @@
             var s = sessions[i];
             // Live projection convergence: virtual live sessions are display-only; backend marks
             // ``edit_disabled=True`` so the edit panel stays disabled.
+            if ((s.is_in_progress === true || s.is_live_projected === true)
+                && !s.display_span_id
+                && typeof App.recordLiveClockContractViolation === "function") {
+                App.recordLiveClockContractViolation("", "timeline", "session_live_row_missing_span_id");
+            }
             var startTimeOnly = App.formatStartTimeOnly(s.start_time);
             var projectLabel = App.formatProjectLabel(s.project_name, s.project_description);
             var sDurSec = parseInt(s.duration_seconds, 10);
@@ -305,6 +310,11 @@
         for (var i = 0; i < activities.length; i++) {
             var a = activities[i];
             // Simplified read-only detail row; advanced correction is via the "高级纠错" button → correction shell.
+            if ((a.is_in_progress === true || a.is_live_projected === true)
+                && !a.display_span_id
+                && typeof App.recordLiveClockContractViolation === "function") {
+                App.recordLiveClockContractViolation("", "timeline", "detail_live_row_missing_span_id");
+            }
             var startTimeOnly = App.formatStartTimeOnly(a.start_time);
             var displayName = a.resource_name || a.app_name || "未知";
             var aDurSec = parseInt(a.duration_seconds, 10);

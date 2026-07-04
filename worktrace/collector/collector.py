@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime, time as datetime_time
+from typing import Any
 
 from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
@@ -14,7 +15,54 @@ from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
 
 
-def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None:
+class CollectorControl:
+    """Small command channel owned by the runtime and consumed by collector."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._wake_event = threading.Event()
+        self._pause_requested = False
+        self._pause_done = threading.Event()
+        self._pause_result: dict[str, Any] = {"ok": False, "pause_pending": False}
+
+    def request_pause(self, timeout_seconds: float = 5.0) -> dict[str, Any]:
+        with self._lock:
+            self._pause_requested = True
+            self._pause_done.clear()
+            self._pause_result = {"ok": False, "pause_pending": True}
+            self._wake_event.set()
+        if not self._pause_done.wait(timeout_seconds):
+            return {"ok": False, "pause_pending": True}
+        with self._lock:
+            return dict(self._pause_result)
+
+    def take_pause_request(self) -> bool:
+        with self._lock:
+            if not self._pause_requested:
+                return False
+            self._pause_requested = False
+            self._wake_event.clear()
+            return True
+
+    def complete_pause(self, result: dict[str, Any]) -> None:
+        with self._lock:
+            self._pause_result = dict(result)
+            self._pause_done.set()
+
+    def wait(self, stop_event: threading.Event, timeout_seconds: float) -> None:
+        deadline = datetime.now().timestamp() + max(0.0, timeout_seconds)
+        while not stop_event.is_set():
+            if self._wake_event.wait(timeout=0.1):
+                return
+            if datetime.now().timestamp() >= deadline:
+                return
+
+
+def run_collector(
+    adapter: PlatformAdapter,
+    stop_event: threading.Event,
+    control: CollectorControl | None = None,
+) -> None:
     machine = CollectorStateMachine()
     last_loop_time: str | None = None
     heartbeat_counter = 0
@@ -41,24 +89,28 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 update_heartbeat("running")
                 heartbeat_counter = 0
 
+            if control is not None and control.take_pause_request():
+                _pause_machine_then_expose(machine, now, set_user_paused=True)
+                control.complete_pause({"ok": True, "pause_pending": False})
+                _sleep_poll(stop_event, control)
+                last_loop_time = now
+                continue
+
             if not get_bool_setting("first_run_notice_accepted", False):
-                set_setting("collector_status", "paused")
-                machine.pause(at_time=now)
-                _sleep_poll(stop_event)
+                _pause_machine_then_expose(machine, now)
+                _sleep_poll(stop_event, control)
                 last_loop_time = now
                 continue
 
             if get_bool_setting("user_paused", False):
-                set_setting("collector_status", "paused")
-                machine.pause(at_time=now)
-                _sleep_poll(stop_event)
+                _pause_machine_then_expose(machine, now)
+                _sleep_poll(stop_event, control)
                 last_loop_time = now
                 continue
 
             if is_secure_import_in_progress():
-                set_setting("collector_status", "paused")
-                machine.pause(at_time=now)
-                _sleep_poll(stop_event)
+                _pause_machine_then_expose(machine, now)
+                _sleep_poll(stop_event, control)
                 last_loop_time = now
                 continue
 
@@ -81,7 +133,7 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 clipboard_service.prune_old_events()
                 prune_counter = 0
             last_loop_time = observation_time
-            _sleep_poll(stop_event)
+            _sleep_poll(stop_event, control)
         except Exception:
             logging.exception("collector unexpected exception")
             set_setting("collector_status", "error")
@@ -89,7 +141,7 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 machine.transition_to("error", at_time=now_str())
             except Exception:
                 logging.exception("failed to persist collector error state")
-            _sleep_poll(stop_event)
+            _sleep_poll(stop_event, control)
 
     machine.transition_to("stopped", at_time=now_str())
     set_setting("collector_status", "stopped")
@@ -107,8 +159,24 @@ def _normalize_poll_interval_setting() -> None:
         set_setting("poll_interval_seconds", "1")
 
 
-def _sleep_poll(stop_event: threading.Event) -> None:
+def _pause_machine_then_expose(
+    machine: CollectorStateMachine,
+    at_time: str,
+    *,
+    set_user_paused: bool = False,
+) -> None:
+    machine.pause(at_time=at_time)
+    if set_user_paused:
+        set_setting("user_paused", "true")
+    set_setting("collector_status", "paused")
+    update_heartbeat("paused")
+
+
+def _sleep_poll(stop_event: threading.Event, control: CollectorControl | None = None) -> None:
     interval = max(1, get_int_setting("poll_interval_seconds", 1))
+    if control is not None:
+        control.wait(stop_event, interval)
+        return
     stop_event.wait(interval)
 
 

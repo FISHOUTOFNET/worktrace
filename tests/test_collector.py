@@ -3,6 +3,7 @@ import time
 import inspect
 
 from worktrace.collector.collector import (
+    CollectorControl,
     _midnight_crossed_between,
     _normalize_poll_interval_setting,
     run_collector,
@@ -93,6 +94,80 @@ def test_collector_pause_does_not_poll_active_window(temp_db):
     assert adapter.calls == 0
     assert activity_service.get_activities_by_date(time.strftime("%Y-%m-%d")) == []
     assert settings_service.get_setting("current_activity_snapshot", "") == ""
+
+
+def test_collector_control_pause_finalizes_before_exposing_paused(monkeypatch):
+    from worktrace.collector import collector as collector_mod
+
+    calls: list[str] = []
+
+    class FakeMachine:
+        def pause(self, at_time=None):
+            calls.append("machine.pause")
+
+        def transition_to(self, state, at_time=None):
+            calls.append("machine.transition_to:" + state)
+
+    class RaisingAdapter:
+        def get_active_window(self):
+            raise AssertionError("active window should not be polled")
+
+        def get_idle_seconds(self):
+            raise AssertionError("idle state should not be polled")
+
+    def fake_set_setting(key, value):
+        if key in ("user_paused", "collector_status"):
+            calls.append(f"set:{key}:{value}")
+
+    monkeypatch.setattr(collector_mod, "CollectorStateMachine", lambda: FakeMachine())
+    monkeypatch.setattr(collector_mod, "set_setting", fake_set_setting)
+    monkeypatch.setattr(collector_mod, "get_setting", lambda key, default=None: default or "1")
+    monkeypatch.setattr(collector_mod, "get_int_setting", lambda key, default=1: 1)
+    monkeypatch.setattr(
+        collector_mod,
+        "get_bool_setting",
+        lambda key, default=False: True if key == "first_run_notice_accepted" else False,
+    )
+    monkeypatch.setattr(collector_mod.recovery_service, "recover_unclosed_records", lambda: None)
+    monkeypatch.setattr(collector_mod.clipboard_service, "prune_old_events", lambda: None)
+    monkeypatch.setattr(collector_mod, "update_heartbeat", lambda status: calls.append("heartbeat:" + status))
+    monkeypatch.setattr(collector_mod, "now_str", lambda: "2026-07-05 10:00:00")
+
+    stop_event = threading.Event()
+    control = CollectorControl()
+    thread = threading.Thread(
+        target=run_collector,
+        args=(RaisingAdapter(), stop_event, control),
+        daemon=True,
+    )
+    thread.start()
+    result = control.request_pause(timeout_seconds=2)
+    stop_event.set()
+    thread.join(timeout=2)
+
+    assert result == {"ok": True, "pause_pending": False}
+    pause_index = calls.index("machine.pause")
+    user_index = calls.index("set:user_paused:true")
+    status_index = calls.index("set:collector_status:paused")
+    assert pause_index < user_index < status_index
+
+
+def test_collector_paused_branches_pause_before_status(monkeypatch):
+    from worktrace.collector import collector as collector_mod
+
+    calls: list[str] = []
+
+    class FakeMachine:
+        def pause(self, at_time=None):
+            calls.append("machine.pause")
+
+    monkeypatch.setattr(collector_mod, "update_heartbeat", lambda status: None)
+    monkeypatch.setattr(collector_mod, "set_setting", lambda key, value: calls.append(f"set:{key}:{value}"))
+
+    collector_mod._pause_machine_then_expose(FakeMachine(), "2026-07-05 10:00:00")
+
+    assert calls[0] == "machine.pause"
+    assert calls[1] == "set:collector_status:paused"
 
 
 def test_collector_skips_active_window_when_import_guard_active(temp_db):

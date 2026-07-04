@@ -68,9 +68,8 @@ class OverviewBridgeMixin:
         """Toggle the collector pause state.
 
         If currently paused or not running, clear user_paused and start
-        the collector via the unified privacy-gated entry; otherwise set
-        user_paused, mark collector_status paused, and clear the current
-        activity snapshot.
+        the collector via the unified privacy-gated entry; otherwise ask
+        the app API to pause through the runtime/collector lifecycle.
 
         The first-run privacy gate is enforced solely by
         :func:`app_api.start_collection_after_privacy_gate`. If the notice
@@ -87,9 +86,7 @@ class OverviewBridgeMixin:
                     return result
                 settings_api.set_user_paused(False)
             else:
-                settings_api.set_user_paused(True)
-                settings_api.set_collector_status("paused")
-                settings_api.clear_runtime_activity_state("ui_toggle_pause")
+                app_api.pause_collection_now()
             return self.get_status()
         except Exception:
             logger.exception("webview bridge toggle_pause failed")

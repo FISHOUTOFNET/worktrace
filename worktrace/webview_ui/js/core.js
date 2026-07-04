@@ -40,6 +40,8 @@
     App.liveClockByPage = {};
     App.activeDisplaySpanIdByPage = {};
     App.currentActivityClockByPage = {};
+    App.liveClockContractViolation = null;
+    App.liveClockContractRefreshRequested = false;
 
     // ``lastRefreshState`` caches the last ``get_refresh_state`` payload for revision comparison;
     // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard overlapping checks / refreshes.
@@ -514,6 +516,17 @@
     }
     App.normalizeLiveClock = normalizeLiveClock;
 
+    function recordLiveClockContractViolation(spanId, page, reason) {
+        App.liveClockContractViolation = {
+            spanId: String(spanId || ""),
+            page: String(page || App.currentPage || ""),
+            reason: String(reason || "missing_live_clock"),
+            at: Date.now()
+        };
+        App.liveClockContractRefreshRequested = true;
+    }
+    App.recordLiveClockContractViolation = recordLiveClockContractViolation;
+
     function projectClockSeconds(clock, nowMs) {
         var c = normalizeLiveClock(clock);
         if (!c) return 0;
@@ -910,7 +923,10 @@
             var spanId = node.getAttribute("data-display-span-id");
             if (!spanId) continue;
             var nodeClock = App.liveClockBySpanId[spanId];
-            if (!nodeClock) continue;
+            if (!nodeClock) {
+                recordLiveClockContractViolation(spanId, tickerPage, "missing_node_clock");
+                continue;
+            }
             if (!(nodeClock.project_duration_live === true || nodeClock.is_project_duration_live === true)) continue;
             var baseAttr = node.getAttribute("data-live-base-seconds");
             if (baseAttr === null || baseAttr === "") continue;

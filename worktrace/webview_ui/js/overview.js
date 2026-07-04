@@ -78,6 +78,11 @@
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
             var inProgress = item.is_in_progress === true || (!item.end_time && item.is_in_progress !== false);
+            if ((item.is_in_progress === true || item.is_live_projected === true)
+                && !item.display_span_id
+                && typeof App.recordLiveClockContractViolation === "function") {
+                App.recordLiveClockContractViolation("", "overview", "recent_live_row_missing_span_id");
+            }
             var timeRange = App.formatTimeRange(item.start_time, item.end_time, inProgress);
             var durSec = parseInt(item.duration_seconds, 10);
             var cls = "recent-item";

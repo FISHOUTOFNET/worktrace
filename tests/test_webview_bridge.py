@@ -580,6 +580,35 @@ def test_toggle_pause_does_not_start_collection_when_gate_closed(
     assert snapshot_calls == []
 
 
+def test_toggle_pause_calls_app_api_pause_entry_when_running(bridge, monkeypatch):
+    """Pausing must go through ``app_api.pause_collection_now`` so the
+    collector/recorder own finalization and snapshot cleanup."""
+    monkeypatch.setattr(
+        "worktrace.webview_ui.bridge_overview.settings_api.get_collector_status",
+        lambda: "running",
+    )
+    monkeypatch.setattr(
+        "worktrace.webview_ui.bridge_overview.settings_api.is_user_paused", lambda: False
+    )
+    pause_calls: list[bool] = []
+    monkeypatch.setattr(
+        "worktrace.webview_ui.bridge_overview.app_api.pause_collection_now",
+        lambda: pause_calls.append(True) or {"ok": True, "pause_pending": False},
+    )
+    clear_calls: list[str] = []
+    monkeypatch.setattr(
+        "worktrace.webview_ui.bridge_overview.settings_api.clear_runtime_activity_state",
+        lambda reason: clear_calls.append(reason),
+        raising=False,
+    )
+
+    result = bridge.toggle_pause()
+
+    assert result["ok"] is True
+    assert pause_calls == [True]
+    assert clear_calls == []
+
+
 # P0: accept_first_run_notice + unified privacy-gated startup
 
 

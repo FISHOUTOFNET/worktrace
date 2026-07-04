@@ -17,7 +17,7 @@ import threading
 from typing import TYPE_CHECKING
 
 from .. import db
-from ..collector.collector import run_collector
+from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import activity_lifecycle_service, folder_index_service, recovery_service
 from ..services.settings_service import set_setting
@@ -67,6 +67,7 @@ class AppRuntime:
         self.paths = paths
         self.stop_event = threading.Event()
         self.owns_collector = False
+        self.collector_control = CollectorControl()
         self._collector_thread: threading.Thread | None = None
         self._index_thread: threading.Thread | None = None
         self._initialized = False
@@ -126,11 +127,22 @@ class AppRuntime:
             return
         self._collector_thread = threading.Thread(
             target=run_collector,
-            args=(_choose_adapter(), self.stop_event),
+            args=(_choose_adapter(), self.stop_event, self.collector_control),
             name="WorkTraceCollector",
             daemon=True,
         )
         self._collector_thread.start()
+
+    def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
+        """Ask the collector to finalize the current activity before pausing."""
+        if (
+            not self.owns_collector
+            or self._collector_thread is None
+            or not self._collector_thread.is_alive()
+        ):
+            set_setting("user_paused", "true")
+            return {"ok": False, "pause_pending": True}
+        return self.collector_control.request_pause(timeout_seconds=timeout_seconds)
 
     def request_shutdown(self) -> None:
         """Signal the collector and index threads to stop."""
