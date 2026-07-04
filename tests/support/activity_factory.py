@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL
+from worktrace.resources.types import DetectedResource
+from worktrace.services import activity_service
+
+
+def create_open_activity(
+    *,
+    app_name: str = "Word",
+    process_name: str = "winword.exe",
+    window_title: str = "A.docx",
+    start_time: str = "2026-06-25 09:00:00",
+    status: str = STATUS_NORMAL,
+    source: str = SOURCE_AUTO,
+    project_id: int | None = None,
+    file_path_hint: str | None = None,
+    note: str | None = None,
+    resource: DetectedResource | None = None,
+) -> int:
+    return activity_service.create_activity(
+        app_name,
+        process_name,
+        window_title,
+        start_time=start_time,
+        status=status,
+        source=source,
+        project_id=project_id,
+        file_path_hint=file_path_hint,
+        note=note,
+        resource=resource,
+    )
+
+
+def create_closed_activity(
+    *,
+    day: str = "2026-06-25",
+    start: str = "09:00:00",
+    end: str = "09:30:00",
+    app_name: str = "Word",
+    process_name: str = "winword.exe",
+    window_title: str = "A.docx",
+    project_id: int | None = None,
+    file_path_hint: str | None = None,
+    note: str | None = None,
+) -> int:
+    activity_id = create_open_activity(
+        app_name=app_name,
+        process_name=process_name,
+        window_title=window_title,
+        start_time=f"{day} {start}",
+        project_id=project_id,
+        file_path_hint=file_path_hint,
+        note=note,
+    )
+    activity_service.finalize_created_activity(activity_id)
+    activity_service.close_activity(activity_id, f"{day} {end}")
+    return activity_id
+
+
+def create_finalized_activity(**kwargs) -> int:
+    activity_id = create_open_activity(**kwargs)
+    activity_service.finalize_created_activity(activity_id)
+    return activity_id
+
+
+def create_soft_deleted_activity(**kwargs) -> int:
+    activity_id = create_closed_activity(**kwargs)
+    activity_service.soft_delete_activity(activity_id)
+    return activity_id
+
+
+def create_cross_day_activity(
+    *,
+    start_time: str = "2026-06-25 23:00:00",
+    end_time: str = "2026-06-26 01:00:00",
+    app_name: str = "Word",
+    process_name: str = "winword.exe",
+    window_title: str = "A.docx",
+    project_id: int | None = None,
+) -> int:
+    activity_id = create_open_activity(
+        app_name=app_name,
+        process_name=process_name,
+        window_title=window_title,
+        start_time=start_time,
+        project_id=project_id,
+    )
+    activity_service.finalize_created_activity(activity_id)
+    activity_service.close_activity(activity_id, end_time)
+    return activity_id

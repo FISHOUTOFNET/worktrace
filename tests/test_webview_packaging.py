@@ -27,6 +27,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = [pytest.mark.packaging, pytest.mark.contract, pytest.mark.serial]
+
 from tests.webview.static_helpers import ALL_JS_FILES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

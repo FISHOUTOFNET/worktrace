@@ -3,6 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.integration, pytest.mark.collector_runtime, pytest.mark.serial]
+
 
 def test_main_import_keeps_optional_heavy_dependencies_lazy():
     code = """

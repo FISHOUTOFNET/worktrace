@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db, pytest.mark.security_privacy]
+
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_APP_NAME, EXCLUDED_PROCESS_NAME, EXCLUDED_WINDOW_TITLE
 from worktrace.db import get_connection

@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
+
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import folder_rule_service, privacy_service, project_service, rule_service

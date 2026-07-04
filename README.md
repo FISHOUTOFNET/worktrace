@@ -143,10 +143,10 @@ Tests run without requiring a real Windows foreground window and use
 
 ### Local Test Strategy
 
-The suite has grown past 2000 cases, so running the full `pytest` on every
-small change is wasteful. Default to the affected-test runner for day-to-day
-iteration; reserve the full suite for cross-cutting changes, pre-push, and
-release validation.
+WorkTrace has a large and growing test suite, so running the full `pytest` on
+every small change is wasteful. Default to the affected-test runner for
+day-to-day iteration; reserve the full suite for cross-cutting changes,
+pre-push, and release validation.
 
 ```powershell
 # Day-to-day: run only the tests affected by the current workspace changes
@@ -168,14 +168,22 @@ python scripts/run_affected_tests.py --base HEAD
 
 # Pass extra pytest arguments after --
 python scripts/run_affected_tests.py -- --maxfail=1 -q
+
+# Audit test structure, marker coverage, and governance warnings
+python scripts/test_inventory.py
+python scripts/test_inventory.py --check
 ```
 
 The runner maps changed source / docs / packaging paths to a conservative,
-finite set of pytest targets. When nothing changed it runs a light smoke set
-(startup imports, WebView bridge boundary, WebView static-contract suite) plus
-the `import worktrace.webview_main` import smoke — it never silently runs the
-full suite. PyInstaller and the per-user installer are **not** part of the
-affected runner; they remain manual release-validation steps.
+finite set of pytest targets and now prints marker-shard diagnostics for some
+well-known domains (`webview_static`, `live_display`, `collector_runtime`,
+`security_privacy`, `packaging`). The default command still runs concrete
+targets so unmarked tests are not skipped. When nothing changed it runs a
+light smoke set (startup imports, WebView bridge boundary, WebView
+static-contract suite) plus the `import worktrace.webview_main` import smoke —
+it never silently runs the full suite. PyInstaller and the per-user installer
+are **not** part of the affected runner; they remain manual release-validation
+steps.
 
 ### Targeted and Full Test Commands
 
@@ -187,10 +195,23 @@ pytest --lf
 pytest tests/test_timeline_service.py
 pytest tests/test_timeline_service.py::TestClassName::test_case
 
+# Marker shards for focused local feedback
+pytest -m "webview_static and contract"
+pytest -m "live_display and contract"
+pytest -m "collector_runtime and integration"
+pytest -m "security_privacy"
+pytest -m "packaging"
+
 # Full suite — use for core cross-cutting changes, pre-push, or release
 # validation. Also runs in GitHub Actions CI.
 pytest
 ```
+
+This phase does **not** enable parallel testing. The `parallel_safe` and
+`serial` markers are planning labels for future work only; default `pytest`
+and the affected runner remain non-parallel. Shared helpers live under
+`tests/support/`: use small domain factories for repeated setup, but keep each
+test's scenario readable and avoid large fixtures that hide behavior.
 
 ## Local Paths
 

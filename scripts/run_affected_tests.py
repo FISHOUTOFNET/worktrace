@@ -69,6 +69,7 @@ RULES: list[dict] = [
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
+        "markers": ["webview_static and contract"],
     },
     {
         "id": "A2. ViewModel service / API facade",
@@ -95,6 +96,7 @@ RULES: list[dict] = [
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
+        "markers": ["live_display and contract"],
     },
     {
         "id": "B. WebView bridge",
@@ -128,6 +130,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["integration and contract"],
     },
     {
         "id": "C1. Project Rules shared API contract helpers",
@@ -150,6 +153,7 @@ RULES: list[dict] = [
         "warnings": [
             "Shared Project Rules contract helper changed; running broad Project Rules suite.",
         ],
+        "markers": ["contract and integration"],
     },
     {
         "id": "C2. Keyword rule API / service",
@@ -170,6 +174,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "C3. Folder rule API / service",
@@ -187,6 +192,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "C4. Project lifecycle API / service",
@@ -207,6 +213,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "C5. Project Rules bridge",
@@ -220,6 +227,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "C6. Project Rules frontend / static",
@@ -233,6 +241,7 @@ RULES: list[dict] = [
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
+        "markers": ["webview_static and contract"],
     },
     {
         "id": "C7. Rule impact service",
@@ -246,6 +255,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "C8. Automatic rules service",
@@ -259,6 +269,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "C9. Batch operations service",
@@ -272,6 +283,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "D. Timeline API / service / bridge",
@@ -300,6 +312,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "E. Statistics / export",
@@ -324,6 +337,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "F. Database / schema / migrations",
@@ -349,6 +363,7 @@ RULES: list[dict] = [
         "warnings": [
             "DB/schema changed; consider running full pytest before push.",
         ],
+        "markers": ["db"],
     },
     {
         "id": "G. Security / crypto / backup",
@@ -367,6 +382,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["security_privacy"],
     },
     {
         "id": "H. Collector / platform / resource model",
@@ -388,6 +404,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["collector_runtime and integration"],
     },
     {
         "id": "I. Docs only",
@@ -402,6 +419,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract"],
     },
     {
         "id": "J. Packaging / release files",
@@ -422,6 +440,7 @@ RULES: list[dict] = [
             "PyInstaller / installer builds remain manual release-validation "
             "steps and are not run by the affected runner.",
         ],
+        "markers": ["packaging"],
     },
     {
         "id": "K1. Settings / Privacy WebView",
@@ -451,6 +470,7 @@ RULES: list[dict] = [
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
+        "markers": ["security_privacy", "webview_static and contract"],
     },
     {
         "id": "K2. WebView main / startup gate",
@@ -470,6 +490,7 @@ RULES: list[dict] = [
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
+        "markers": ["collector_runtime and integration"],
     },
     {
         "id": "L1. Context assignment service",
@@ -484,6 +505,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["contract and integration"],
     },
     {
         "id": "M. Live display service / API",
@@ -516,6 +538,7 @@ RULES: list[dict] = [
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
+        "markers": ["live_display and contract"],
     },
     {
         "id": "N. Activity lifecycle boundary",
@@ -544,6 +567,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["collector_runtime and integration"],
     },
     {
         "id": "O. Comment hygiene gate",
@@ -558,6 +582,7 @@ RULES: list[dict] = [
         ],
         "smoke": [],
         "warnings": [],
+        "markers": ["unit"],
     },
 ]
 
@@ -570,6 +595,9 @@ class Selection:
         changed_files: normalized repo-relative changed paths.
         pytest_targets: ordered, de-duplicated pytest target list (files or
             directories). Stable: first occurrence wins on dedup.
+        marker_exprs: marker shard expressions associated with the matched
+            rules. Diagnostic/selection hints only; the default command still
+            runs concrete targets so unmarked tests are not skipped.
         smoke_commands: extra non-pytest commands to run, each an argv list.
         warnings: human-readable notes about the selection (e.g. DB change,
             unknown source, packaging reminder).
@@ -577,6 +605,7 @@ class Selection:
 
     changed_files: list[str] = field(default_factory=list)
     pytest_targets: list[str] = field(default_factory=list)
+    marker_exprs: list[str] = field(default_factory=list)
     smoke_commands: list[list[str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -623,9 +652,11 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
 
     targets: list[str] = []
     smoke: list[list[str]] = []
+    markers: list[str] = []
     warnings: list[str] = []
     seen_t: set[str] = set()
     seen_s: set[tuple[str, ...]] = set()
+    seen_m: set[str] = set()
 
     def add_target(t: str) -> None:
         if t not in seen_t:
@@ -637,6 +668,11 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
         if key not in seen_s:
             seen_s.add(key)
             smoke.append(list(argv))
+
+    def add_marker(expr: str) -> None:
+        if expr not in seen_m:
+            seen_m.add(expr)
+            markers.append(expr)
 
     def add_warning(w: str) -> None:
         if w not in warnings:
@@ -677,6 +713,8 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
                     add_smoke(s)
                 for w in rule["warnings"]:
                     add_warning(w)
+                for m in rule.get("markers", []):
+                    add_marker(m)
         # K. Unknown worktrace/ source change: smoke + boundary + warn.
         if not matched and c.startswith("worktrace/"):
             add_target("tests/test_startup_imports.py")
@@ -701,6 +739,7 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
     return Selection(
         changed_files=files,
         pytest_targets=targets,
+        marker_exprs=markers,
         smoke_commands=smoke,
         warnings=warnings,
     )
@@ -801,6 +840,13 @@ def _print_selection(sel: Selection, final_command: str | None) -> None:
     if sel.pytest_targets:
         for t in sel.pytest_targets:
             print(f"  - {t}")
+    else:
+        print("  (none)")
+    print()
+    print("Marker shards:")
+    if sel.marker_exprs:
+        for expr in sel.marker_exprs:
+            print(f"  - {expr}")
     else:
         print("  (none)")
     print()

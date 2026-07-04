@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
+
 from worktrace.api import backup_api
 from worktrace.db import get_connection, now_str
 from worktrace.services import secure_backup_service

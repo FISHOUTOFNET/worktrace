@@ -5,6 +5,10 @@ import json
 import sys
 import types
 
+import pytest
+
+pytestmark = [pytest.mark.security_privacy, pytest.mark.integration]
+
 from worktrace.security.key_manager import (
     DATA_KEY_BYTES,
     DPAPI_WRAP_TYPE,

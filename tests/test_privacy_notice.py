@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = [pytest.mark.unit, pytest.mark.security_privacy, pytest.mark.parallel_safe]
+
 from worktrace.constants import PRIVACY_NOTICE_TEXT
 from worktrace.platforms.base import ActiveWindow
 

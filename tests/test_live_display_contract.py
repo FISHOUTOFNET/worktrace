@@ -28,6 +28,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
+pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pytest.mark.live_display]
+
 from worktrace.constants import (
     STATUS_ERROR,
     STATUS_EXCLUDED,
@@ -51,6 +53,8 @@ from worktrace.services.project_inference_service import (
 )
 from worktrace.services import timeline_service
 from worktrace.webview_ui.bridge import WebViewBridge
+from tests.support.activity_factory import create_open_activity
+from tests.support.snapshot_factory import normal_snapshot
 
 
 
@@ -82,21 +86,15 @@ def _normal_snapshot(
     extra_seconds: int = 0,
     start_time: str | None = None,
 ) -> dict:
-    now = datetime.now()
-    if start_time is None:
-        start = now - timedelta(seconds=elapsed_seconds)
-        start_time = start.strftime(TIME_FORMAT)
-    return {
-        "app_name": "AppA",
-        "process_name": "AppA.exe",
-        "inferred_project_name": inferred_project_name,
-        "start_time": start_time,
-        "elapsed_seconds": elapsed_seconds,
-        "extra_seconds": extra_seconds,
-        "status": status,
-        "is_persisted": is_persisted,
-        "persisted_activity_id": persisted_activity_id,
-    }
+    return normal_snapshot(
+        elapsed_seconds=elapsed_seconds,
+        status=status,
+        is_persisted=is_persisted,
+        persisted_activity_id=persisted_activity_id,
+        inferred_project_name=inferred_project_name,
+        extra_seconds=extra_seconds,
+        start_time=start_time,
+    )
 
 
 
@@ -367,10 +365,10 @@ def _create_real_open_activity(
     """
     start = datetime.now() - timedelta(seconds=elapsed_seconds)
     start_time = start.strftime(TIME_FORMAT)
-    aid = activity_service.create_activity(
-        app_name,
-        process_name,
-        window_title,
+    aid = create_open_activity(
+        app_name=app_name,
+        process_name=process_name,
+        window_title=window_title,
         file_path_hint=file_path_hint,
         start_time=start_time,
     )

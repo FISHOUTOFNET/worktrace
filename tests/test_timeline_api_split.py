@@ -26,25 +26,26 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db]
+
 from worktrace.api import timeline_api
 from worktrace.api.timeline_api import TimelineSplitError
 from worktrace.db import get_connection
 from worktrace.services import activity_service
+from tests.support.activity_factory import create_closed_activity, create_cross_day_activity
+from tests.support.db_helpers import assignment_row, resource_row, table_count
 
 
 
 
 def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
     """Seed a single closed activity and return its id."""
-    aid = activity_service.create_activity(
-        "Word",
-        "winword.exe",
-        "A1.docx",
-        start_time=f"{day} {start}",
+    return create_closed_activity(
+        day=day,
+        start=start,
+        end=end,
+        window_title="A1.docx",
     )
-    activity_service.finalize_created_activity(aid)
-    activity_service.close_activity(aid, f"{day} {end}")
-    return aid
 
 
 def _seed_session():
@@ -62,29 +63,15 @@ def _seed_session():
 
 
 def _count_activities() -> int:
-    with get_connection() as conn:
-        row = conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()
-    return int(row["c"])
+    return table_count("activity_log")
 
 
 def _get_assignment(activity_id: int) -> dict | None:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT project_id, confidence, source, is_manual "
-            "FROM activity_project_assignment WHERE activity_id = ?",
-            (activity_id,),
-        ).fetchone()
-    return dict(row) if row else None
+    return assignment_row(activity_id)
 
 
 def _get_resource(activity_id: int) -> dict | None:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT resource_kind, display_name, identity_key, path_hint "
-            "FROM activity_resource WHERE activity_id = ?",
-            (activity_id,),
-        ).fetchone()
-    return dict(row) if row else None
+    return resource_row(activity_id)
 
 
 
@@ -369,12 +356,11 @@ def test_split_activity_cross_day_split_report_date_slices(temp_db):
     """A cross-day activity split must produce reasonable report_date
     slices when read back through timeline_service."""
     # Seed a cross-day activity: 2026-06-25 23:00 -> 2026-06-26 01:00 (2h)
-    aid = activity_service.create_activity(
-        "Word", "winword.exe", "A.docx",
+    aid = create_cross_day_activity(
         start_time="2026-06-25 23:00:00",
+        end_time="2026-06-26 01:00:00",
+        window_title="A.docx",
     )
-    activity_service.finalize_created_activity(aid)
-    activity_service.close_activity(aid, "2026-06-26 01:00:00")
     # Split at midnight: front = 23:00-24:00 (on 06-25), back = 00:00-01:00
     # (on 06-26). The split_time is strictly inside the activity range.
     result = timeline_api.split_timeline_activity(aid, "2026-06-26 00:00:00")

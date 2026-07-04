@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db]
+
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import STATUS_ERROR
 from worktrace.platforms.base import ActiveWindow

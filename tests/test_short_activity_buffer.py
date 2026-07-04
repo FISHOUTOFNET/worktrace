@@ -1,5 +1,9 @@
 import json
 
+import pytest
+
+pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db]
+
 from openpyxl import load_workbook
 
 from worktrace.collector.state_machine import CollectorStateMachine

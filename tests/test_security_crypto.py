@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+pytestmark = [pytest.mark.unit, pytest.mark.security_privacy, pytest.mark.parallel_safe]
+
 from worktrace.security.crypto import CryptoError, decrypt_aead, encrypt_aead, is_encrypted_envelope
 
 

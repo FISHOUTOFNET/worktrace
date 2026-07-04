@@ -1,5 +1,9 @@
 from datetime import datetime
 
+import pytest
+
+pytestmark = [pytest.mark.unit, pytest.mark.live_display, pytest.mark.parallel_safe]
+
 from worktrace.services.live_time_service import snapshot_elapsed_seconds, snapshot_total_seconds
 
 

@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+pytestmark = [pytest.mark.unit, pytest.mark.parallel_safe]
+
 from worktrace.platforms.base import ActiveWindow
 from worktrace.resources.detectors import (
     GenericAppDetector,

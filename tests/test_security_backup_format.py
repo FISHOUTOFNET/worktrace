@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+pytestmark = [pytest.mark.unit, pytest.mark.security_privacy, pytest.mark.parallel_safe]
+
 from worktrace.security.backup_format import (
     BackupFormatError,
     BackupManifest,

@@ -2,6 +2,10 @@ import threading
 import time
 import inspect
 
+import pytest
+
+pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db, pytest.mark.serial]
+
 from worktrace.collector.collector import (
     CollectorControl,
     _midnight_crossed_between,

@@ -32,6 +32,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.contract, pytest.mark.webview_static, pytest.mark.live_display]
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
 WEBVIEW_UI_DIR = REPO_ROOT / "worktrace" / "webview_ui"

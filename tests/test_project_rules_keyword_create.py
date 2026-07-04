@@ -15,6 +15,8 @@ import json
 
 import pytest
 
+pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pytest.mark.security_privacy]
+
 from worktrace.api import rule_api
 from worktrace.constants import EXCLUDED_PROJECT
 from worktrace.db import get_connection, now_str
@@ -25,22 +27,20 @@ from worktrace.services import (
     project_service,
     rule_service,
 )
+from tests.support.assertions import assert_api_error_envelope, assert_privacy_redacted
+from tests.support.db_helpers import table_count
+from tests.support.project_factory import create_project
 
 
 def _counts() -> dict[str, int]:
-    with get_connection() as conn:
-        return {
-            "project": conn.execute("SELECT COUNT(*) AS c FROM project").fetchone()["c"],
-            "folder": conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"],
-            "keyword": conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"],
-            "activity": conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"],
-            "assignment": conn.execute(
-                "SELECT COUNT(*) AS c FROM activity_project_assignment"
-            ).fetchone()["c"],
-            "session_note": conn.execute(
-                "SELECT COUNT(*) AS c FROM project_session_note"
-            ).fetchone()["c"],
-        }
+    return {
+        "project": table_count("project"),
+        "folder": table_count("folder_project_rule"),
+        "keyword": table_count("project_rule"),
+        "activity": table_count("activity_log"),
+        "assignment": table_count("activity_project_assignment"),
+        "session_note": table_count("project_session_note"),
+    }
 
 
 def _keyword_rule_row(rule_id: int) -> dict:
@@ -56,7 +56,7 @@ def _keyword_rule_row(rule_id: int) -> dict:
 
 
 def test_create_keyword_rule_for_normal_project(temp_db):
-    project = project_service.create_project("Client")
+    project = create_project("Client")
 
     result = rule_api.create_project_keyword_rule(project, "Spec")
 
@@ -83,7 +83,7 @@ def test_create_keyword_rule_for_excluded_project_rejected_as_project_not_found(
 
     result = rule_api.create_project_keyword_rule(excluded_id, "Secret")
 
-    assert result == {"ok": False, "error": "project_not_found"}
+    assert_api_error_envelope(result, "project_not_found")
     with get_connection() as conn:
         count = conn.execute(
             "SELECT COUNT(*) AS c FROM project_rule WHERE project_id = ?",
@@ -696,17 +696,18 @@ def test_create_excluded_keyword_rule_for_webview_exception_collapses(
 
     result = rule_api.create_excluded_keyword_rule_for_webview("kw")
 
-    assert result == {"ok": False, "error": "operation_failed"}
-    lowered = repr(result).lower()
-    for forbidden in (
-        "traceback",
-        "sqlite",
-        "select ",
-        "window_title",
-        "clipboard",
-        "note",
-        "secret",
-        "c:\\",
-    ):
-        assert forbidden not in lowered, forbidden
+    assert_api_error_envelope(result, "operation_failed")
+    assert_privacy_redacted(
+        result,
+        [
+            "traceback",
+            "sqlite",
+            "select ",
+            "window_title",
+            "clipboard",
+            "note",
+            "secret",
+            "c:\\",
+        ],
+    )
     json.dumps(result, ensure_ascii=False)

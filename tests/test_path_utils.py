@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = [pytest.mark.unit, pytest.mark.parallel_safe]
+
 from worktrace.constants import ANCHOR_FILE_EXTENSIONS
 from worktrace import path_utils
 from worktrace.path_utils import (

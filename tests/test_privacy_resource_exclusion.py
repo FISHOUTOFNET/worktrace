@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
+
 from worktrace.constants import (
     EXCLUDED_APP_NAME,
     EXCLUDED_PROCESS_NAME,

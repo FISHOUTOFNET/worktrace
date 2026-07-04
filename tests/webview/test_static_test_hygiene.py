@@ -13,6 +13,10 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.contract, pytest.mark.webview_static]
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)

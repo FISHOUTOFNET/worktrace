@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.packaging, pytest.mark.contract, pytest.mark.serial]
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "build_windows_installer.ps1"
 

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+pytestmark = [pytest.mark.unit, pytest.mark.parallel_safe]
+
 from worktrace.platforms.base import ActiveWindow
 from worktrace.resources.resource_helpers import (
     build_path_or_name_identity,

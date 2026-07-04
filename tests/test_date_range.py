@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = [pytest.mark.unit, pytest.mark.parallel_safe]
+
 from worktrace import date_range
 
 

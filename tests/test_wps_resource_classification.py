@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = [pytest.mark.integration, pytest.mark.db]
+
 from worktrace.constants import UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection
 from worktrace.services import activity_service, folder_rule_service, project_service, timeline_service

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = [pytest.mark.integration, pytest.mark.db]
+
 from worktrace.platforms.base import ActiveWindow
 from worktrace.resources.detectors import (
     GenericAppDetector,

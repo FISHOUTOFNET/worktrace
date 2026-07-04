@@ -7,7 +7,17 @@ This checklist is the release-candidate validation baseline for WorkTrace v0.1 L
 - Current validation target: WorkTrace v0.1 Lite.
 - This document does not cover v0.2 AI, server features, payments, licensing, database encryption, automatic updates, or frontend migration.
 - The goal is to confirm that Windows users can install, start, collect active-window metadata, classify activity, export, clear local data, and exit without crossing the documented privacy boundary.
-- The local affected-test runner (`scripts/run_affected_tests.py`) is a **development accelerator only**. It selects a finite pytest subset based on changed paths and never invokes PyInstaller or the installer. It does **not** replace this release validation: a release still requires the full `pytest` suite to pass plus the PyInstaller exe and the per-user installer builds validated below.
+- The local affected-test runner (`scripts/run_affected_tests.py`) and marker
+  shard commands are **development accelerators only**. They select focused
+  feedback based on changed paths or registered pytest markers and never invoke
+  PyInstaller or the installer. They do **not** replace this release
+  validation: a release still requires the full `pytest` suite to pass plus the
+  PyInstaller exe and the per-user installer builds validated below.
+- `scripts/test_inventory.py --check` is a governance gate for marker
+  registration and static-test hygiene. It is not a substitute for pytest
+  execution.
+- This phase does not enable parallel pytest execution. `parallel_safe` and
+  `serial` are planning markers only.
 
 ## Validation Environment
 
@@ -33,7 +43,18 @@ pip install -r requirements.txt
 Run tests:
 
 ```powershell
+python scripts/test_inventory.py --check
 pytest
+```
+
+Focused development feedback may use:
+
+```powershell
+python scripts/run_affected_tests.py
+python scripts/test_inventory.py
+pytest -m "webview_static and contract"
+pytest -m "live_display and contract"
+pytest -m "security_privacy"
 ```
 
 Start from source:

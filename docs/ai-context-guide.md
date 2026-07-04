@@ -116,8 +116,9 @@ features or dependencies are introduced by a docs/tests-only phase.
 
 ## 9. Default Test Selection (Phase TG1)
 
-Keep the "narrow read, narrow test" principle. The WorkTrace suite has grown
-past 2000 cases, so do **not** default to the full `pytest` on every change.
+Keep the "narrow read, narrow test" principle. WorkTrace has a large and
+growing test suite, so do **not** default to the full `pytest` on every
+change.
 
 - **Default for ordinary feature / hardening phases**: run
   `python scripts/run_affected_tests.py`. It maps the changed source / docs /
@@ -126,7 +127,19 @@ past 2000 cases, so do **not** default to the full `pytest` on every change.
   change, and — when nothing changed — falls back to a light smoke set
   (startup imports, WebView bridge boundary, WebView static contracts). It
   never silently runs the full suite and introduces no new dependencies
-  (pure standard library).
+  (pure standard library). Marker shard output is diagnostic/focused
+  selection guidance; concrete target selection remains the compatibility
+  path while marker coverage is incremental.
+- **Inventory / governance**: run `python scripts/test_inventory.py` for a
+  local marker and test-structure summary, and
+  `python scripts/test_inventory.py --check` for the lightweight governance
+  gate. The check warns about unmarked tests but does not fail on them in
+  this phase.
+- **Marker-focused local feedback** can use commands such as
+  `pytest -m "webview_static and contract"`,
+  `pytest -m "live_display and contract"`,
+  `pytest -m "collector_runtime and integration"`,
+  `pytest -m "security_privacy"`, or `pytest -m "packaging"`.
 - **Default to the full `pytest` only** when the change is DB / schema /
   core cross-cutting (collector, resource model, path utils), or when
   validating a release / pre-push. The affected runner prints an explicit
@@ -134,6 +147,8 @@ past 2000 cases, so do **not** default to the full `pytest` on every change.
   source changes.
 - **Never** move PyInstaller or the per-user installer build into the
   affected runner; those remain manual release-validation steps.
+- **Do not introduce parallel pytest in TG1**. The `parallel_safe` and
+  `serial` markers are future-planning labels only.
 - For a single known failure, prefer `pytest --lf` or a specific test file
   / case over the full suite.
 

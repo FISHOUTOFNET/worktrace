@@ -27,6 +27,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pytest.mark.live_display]
+
 from worktrace import db
 from worktrace.constants import STATUS_NORMAL, TIME_FORMAT
 from worktrace.services import settings_service

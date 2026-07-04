@@ -23,6 +23,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
+
 from worktrace.api import settings_api
 from worktrace.api.backup_api import BackupManifestInfo
 from worktrace.api.settings_api import (

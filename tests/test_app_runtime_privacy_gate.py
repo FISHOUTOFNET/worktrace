@@ -15,6 +15,15 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+pytestmark = [
+    pytest.mark.collector_runtime,
+    pytest.mark.integration,
+    pytest.mark.security_privacy,
+    pytest.mark.serial,
+]
+
 from worktrace.runtime.app_runtime import AppRuntime
 from worktrace.services import folder_index_service
 

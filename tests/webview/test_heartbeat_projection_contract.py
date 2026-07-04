@@ -31,6 +31,8 @@ import sys
 
 import pytest
 
+pytestmark = [pytest.mark.contract, pytest.mark.webview_static, pytest.mark.live_display]
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)

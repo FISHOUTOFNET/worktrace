@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.unit, pytest.mark.parallel_safe]
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNNER_PATH = REPO_ROOT / "scripts" / "run_affected_tests.py"
 MODULE_NAME = "run_affected_tests"
@@ -1295,3 +1297,58 @@ def test_removed_live_display_api_py_is_not_a_trigger(runner):
         assert "worktrace/api/live_display_api.py" not in rule.get("triggers", []), (
             f"{rule['id']} must not reference removed worktrace/api/live_display_api.py"
         )
+
+
+def test_webview_resource_change_adds_webview_static_marker_shard(runner):
+    sel = runner.select_targets(["worktrace/webview_ui/js/timeline.js"])
+    assert "tests/webview/" in sel.pytest_targets
+    assert "webview_static and contract" in sel.marker_exprs
+
+
+def test_live_display_owner_adds_live_display_marker_shard(runner):
+    sel = runner.select_targets(["worktrace/services/live_display_service.py"])
+    assert "tests/test_live_display_contract.py" in sel.pytest_targets
+    assert "live_display and contract" in sel.marker_exprs
+
+
+def test_collector_change_adds_collector_runtime_marker_shard(runner):
+    sel = runner.select_targets(["worktrace/collector/collector.py"])
+    assert "tests/test_collector.py" in sel.pytest_targets
+    assert "collector_runtime and integration" in sel.marker_exprs
+
+
+def test_security_change_adds_security_privacy_marker_shard(runner):
+    sel = runner.select_targets(["worktrace/security/crypto.py"])
+    assert "tests/test_security_crypto.py" in sel.pytest_targets
+    assert "security_privacy" in sel.marker_exprs
+
+
+def test_packaging_change_adds_packaging_marker_shard(runner):
+    sel = runner.select_targets(["WorkTrace.spec"])
+    assert "tests/test_webview_packaging.py" in sel.pytest_targets
+    assert "packaging" in sel.marker_exprs
+
+
+def test_no_changed_files_stays_light_smoke_not_full_suite(runner):
+    sel = runner.select_targets([])
+    assert sel.pytest_targets == [
+        "tests/test_startup_imports.py",
+        "tests/test_ui_backend_boundary.py",
+        "tests/webview/",
+        "tests/test_comment_hygiene.py",
+    ]
+    assert sel.marker_exprs == []
+    command = runner.build_pytest_command(sel.pytest_targets, [])
+    assert command != ["python", "-m", "pytest"]
+
+
+def test_all_command_is_explicit_full_suite(runner):
+    assert runner.build_pytest_command([], []) == ["python", "-m", "pytest"]
+
+
+def test_unknown_worktrace_source_warns_without_full_suite_or_marker_shard(runner):
+    sel = runner.select_targets(["worktrace/new_module.py"])
+    assert "tests/test_startup_imports.py" in sel.pytest_targets
+    assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets
+    assert sel.marker_exprs == []
+    assert any("Unknown worktrace/ source changed" in w for w in sel.warnings)

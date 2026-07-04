@@ -27,6 +27,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
+pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pytest.mark.live_display]
+
 from worktrace.constants import STATUS_NORMAL, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from worktrace.services import settings_service, statistics_service, timeline_service
 from worktrace.webview_ui.bridge import WebViewBridge
