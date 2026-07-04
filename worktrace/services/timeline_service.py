@@ -653,74 +653,17 @@ def _activity_summary_label(row: dict) -> str:
 
 
 def _display_duration(row: dict) -> int:
-    live_duration = _live_duration_for_row(row)
-    if live_duration is not None:
-        stored = int(row.get("duration_seconds") or 0)
-        return max(stored, live_duration)
+    """Return the DB / report row's own duration.
+
+    Timeline / Statistics / Export are DB-only / report-only layers.
+    Live projection is the sole responsibility of
+    ``activity_display_model_service`` + ``view_model_service``.
+    This function MUST NOT read settings or the live snapshot, and MUST
+    NOT call any live-display helper.
+    """
     if row.get("duration_seconds") is not None:
         return int(row.get("duration_seconds") or 0)
     return 0
-
-
-def _live_duration_for_row(row: dict) -> int | None:
-    """Return the live seconds for a persisted open DB row.
-
-    Routes through the unified live-display model
-    (``live_display_service.persisted_open_live_seconds``) so the
-    persisted-open live duration uses the same snapshot matching and
-    elapsed-seconds computation as the rest of the live-display
-    pipeline. Returns ``None`` when the row is closed or does not match
-    the current snapshot's ``persisted_activity_id``.
-
-    Historical-date suppression (Section 三): when the row's
-    ``report_date`` is not today, the function MUST return ``None`` so
-    the historical Timeline / Details total is NOT polluted by the
-    current open row's live sample seconds. Only today's open row is
-    eligible for the live-duration injection; the page-scoped live clock
-    is fully suppressed by ``activity_display_model_service`` for past
-    dates, and the row-level duration must follow the same rule.
-    """
-    if row.get("end_time") is not None:
-        return None
-    try:
-        row_id = int(row.get("id") or 0)
-    except (TypeError, ValueError):
-        return None
-    if row_id <= 0:
-        return None
-    # Historical-date suppression: a row whose report_date is not today
-    # MUST NOT receive a live-duration injection. Fall back to deriving
-    # report_date from ``start_time`` when absent (defensive).
-    row_report_date = str(row.get("report_date") or "")
-    if not row_report_date:
-        start_dt = _parse_row_time(row.get("start_time"))
-        if start_dt is not None:
-            row_report_date = start_dt.date().isoformat()
-    today_str = get_default_report_date()
-    if row_report_date and row_report_date != today_str:
-        return None
-    snapshot = _read_current_activity_snapshot()
-    if not snapshot:
-        return None
-    from .live_display_service import persisted_open_live_seconds
-
-    live = persisted_open_live_seconds(snapshot, row)
-    return live if live > 0 else None
-
-
-def _read_current_activity_snapshot() -> dict | None:
-    from .settings_service import get_setting
-
-    raw = get_setting("current_activity_snapshot", "") or ""
-    if not raw:
-        return None
-    import json
-
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None
 
 
 def _parse_row_time(value: str | None) -> datetime | None:

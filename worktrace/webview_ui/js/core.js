@@ -33,6 +33,12 @@
     // instead of relying on object insertion order so a stale clock cannot win
     // by being the last-inserted key.
     App.activeDisplaySpanId = "";
+    // Page-scoped live-clock registry (Section 五 fix). Keyed by page scope
+    // (``"overview"`` / ``"timeline"`` / ``"refresh_state"``). A hidden page's
+    // payload MUST NOT overwrite the current page's active live clock;
+    // ``getActiveLiveClock`` reads ``App.liveClockByPage[App.currentPage]``.
+    App.liveClockByPage = {};
+    App.activeDisplaySpanIdByPage = {};
 
     // ``lastRefreshState`` caches the last ``get_refresh_state`` payload for revision comparison;
     // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard overlapping checks / refreshes.
@@ -504,19 +510,28 @@
     // or nested inside ``activity_display_model``.
     //
     // The optional second argument is ``{ source: "page_model" | "refresh_state",
-    // preserveSameSpanSample: bool }``. It distinguishes the two registration
-    // paths so the lightweight refresh_state cannot overwrite a page-model
-    // sample clock's ``live_started_at_epoch_ms`` / ``carry_seconds`` /
-    // ``duration_seconds_at_sample`` while the user is still on the same live
+    // preserveSameSpanSample: bool, page: <scope> }``. It distinguishes the
+    // registration paths so the lightweight refresh_state cannot overwrite a
+    // page-model sample clock's ``live_started_at_epoch_ms`` / ``carry_seconds``
+    // / ``duration_seconds_at_sample`` while the user is still on the same live
     // span.
+    //
+    // Page-scoped registry (Section 五 fix): ``options.page`` MUST be one of
+    // ``"overview"`` / ``"timeline"`` / ``"refresh_state"``. The clock is
+    // stored under ``App.liveClockByPage[page]`` so a hidden page's payload
+    // (e.g. Overview refresh during Timeline view) cannot overwrite the
+    // current page's active live clock. When ``options.page`` is omitted the
+    // clock is registered under the CURRENT page scope (``App.currentPage``)
+    // so historical callers keep working but still respect page isolation.
     //
     // Contract:
     //
     // - When the payload has NO live clock, NO display_span_id, or the
     //   clock's ``is_live`` is not true, the registry AND the active span id
-    //   MUST be cleared. This prevents a stale clock from continuing to tick
-    //   after the activity ends, the collector pauses, or the user switches
-    //   pages.
+    //   for the TARGET page scope MUST be cleared. This prevents a stale
+    //   clock from continuing to tick after the activity ends, the collector
+    //   pauses, or the user switches pages. Clearing a non-current page's
+    //   scope does NOT touch the current page's active clock.
     // - When ``source == "refresh_state"`` AND ``preserveSameSpanSample`` is
     //   true AND the new clock shares the active span id AND the active
     //   clock's ``stable_live_key_hash`` equals the new clock's, the
@@ -528,10 +543,13 @@
     //   must NOT reset the liveDelta base that the page-model sample seeded.
     // - In all other cases (span id changed, stable key changed, is_live
     //   flipped false, live_state structural switch, or source ==
-    //   "page_model"), the new clock fully replaces the active clock.
+    //   "page_model"), the new clock fully replaces the active clock for the
+    //   TARGET page scope.
     function registerLiveClock(payload, options) {
+        var opts = options || {};
+        var pageScope = String(opts.page || App.currentPage || "overview");
         if (!payload) {
-            clearLiveClockRegistry();
+            clearLiveClockRegistry(pageScope);
             return;
         }
         var clock = payload.live_clock;
@@ -539,23 +557,25 @@
             clock = payload.activity_display_model.live_clock;
         }
         if (!clock) {
-            clearLiveClockRegistry();
+            clearLiveClockRegistry(pageScope);
             return;
         }
         var spanId = String(clock.display_span_id || "");
         var isLive = clock.is_live === true;
         if (!spanId || !isLive) {
-            clearLiveClockRegistry();
+            clearLiveClockRegistry(pageScope);
             return;
         }
-        var opts = options || {};
         var source = String(opts.source || "page_model");
         var preserveSameSpanSample = !!opts.preserveSameSpanSample;
-        var activeClock = App.activeDisplaySpanId
-            ? (App.liveClockBySpanId[App.activeDisplaySpanId] || null)
+        // Read the active clock for THIS page scope only so a hidden page's
+        // payload cannot overwrite the current page's clock.
+        var pageActiveSpanId = App.activeDisplaySpanIdByPage[pageScope] || "";
+        var activeClock = pageActiveSpanId
+            ? (App.liveClockBySpanId[pageActiveSpanId] || null)
             : null;
         var sameSpan = activeClock
-            && App.activeDisplaySpanId === spanId
+            && pageActiveSpanId === spanId
             && activeClock.is_live === true;
         var sameStableKey = sameSpan
             && String(activeClock.stable_live_key_hash || "")
@@ -571,14 +591,16 @@
         // Sample identity changed (different span id, different stable key,
         // different live_state, or a page_model refresh) → wipe any prior
         // monotonic state so the new activity is not poisoned by the previous
-        // activity's rollback-guard.
-        if (App.activeDisplaySpanId && App.activeDisplaySpanId !== spanId) {
-            App._monotonicRenderState = {};
-        } else if (!canPreserveSample) {
-            // Same span id but stable key / live_state / source moved → the
-            // page-model sample clock is being replaced; reset monotonic
-            // state so the new sample base takes effect immediately.
-            App._monotonicRenderState = {};
+        // activity's rollback-guard. ONLY for the current page scope so a
+        // hidden page refresh does not reset the current page's monotonic
+        // state.
+        var isCurrentPageScope = (pageScope === App.currentPage);
+        if (isCurrentPageScope) {
+            if (pageActiveSpanId && pageActiveSpanId !== spanId) {
+                App._monotonicRenderState = {};
+            } else if (!canPreserveSample) {
+                App._monotonicRenderState = {};
+            }
         }
         var storedClock = clock;
         if (canPreserveSample && activeClock) {
@@ -598,9 +620,17 @@
                 duration_seconds_at_sample: activeClock.duration_seconds_at_sample,
             };
         }
-        App.liveClockBySpanId = {};
+        // span-id registry is global so DOM rows on any page can look up
+        // their clock; the page scope decides which one is ACTIVE.
         App.liveClockBySpanId[spanId] = storedClock;
-        App.activeDisplaySpanId = spanId;
+        App.liveClockByPage[pageScope] = storedClock;
+        App.activeDisplaySpanIdByPage[pageScope] = spanId;
+        // Maintain ``activeDisplaySpanId`` for the current page only so
+        // legacy readers (and tests) keep working. Hidden-page registrations
+        // MUST NOT overwrite this field.
+        if (isCurrentPageScope) {
+            App.activeDisplaySpanId = spanId;
+        }
         if (payload.activity_display_model) {
             App.liveDisplayModel = payload.activity_display_model;
         } else {
@@ -609,17 +639,47 @@
     }
     App.registerLiveClock = registerLiveClock;
 
-    // Return the single active live clock, or ``null``. Reads the explicit
-    // ``activeDisplaySpanId`` so a stale clock cannot win by being the
-    // last-inserted registry key.
+    // Return the single active live clock for the CURRENT page scope, or
+    // ``null``. Reads ``App.liveClockByPage[App.currentPage]`` so a hidden
+    // page's payload cannot become the active clock. Falls back to the
+    // legacy ``activeDisplaySpanId`` lookup only when the page-scoped entry
+    // is missing (defensive; should not happen in normal flow).
     function getActiveLiveClock() {
+        var page = App.currentPage || "overview";
+        var pageClock = App.liveClockByPage[page];
+        if (pageClock) return pageClock;
+        // Defensive fallback: when no page-scoped clock is registered yet
+        // (e.g. before the first page-model refresh), fall back to the
+        // legacy span-id lookup so the ticker can still render.
         if (!App.activeDisplaySpanId) return null;
         return App.liveClockBySpanId[App.activeDisplaySpanId] || null;
     }
     App.getActiveLiveClock = getActiveLiveClock;
 
-    function clearLiveClockRegistry() {
+    // Clear the live-clock registry. When ``pageScope`` is provided, only
+    // that scope's clock is cleared; the current page's active clock is
+    // untouched when clearing a non-current scope. When ``pageScope`` is
+    // omitted, ALL scopes are cleared (legacy behavior).
+    function clearLiveClockRegistry(pageScope) {
+        if (pageScope) {
+            var spanId = App.activeDisplaySpanIdByPage[pageScope] || "";
+            if (spanId && App.liveClockBySpanId[spanId]) {
+                delete App.liveClockBySpanId[spanId];
+            }
+            delete App.liveClockByPage[pageScope];
+            delete App.activeDisplaySpanIdByPage[pageScope];
+            // Only clear the global active fields when the cleared scope is
+            // the current page; a hidden-page clear MUST NOT touch the
+            // current page's active clock.
+            if (pageScope === App.currentPage) {
+                App.activeDisplaySpanId = "";
+                App.liveDisplayModel = null;
+            }
+            return;
+        }
         App.liveClockBySpanId = {};
+        App.liveClockByPage = {};
+        App.activeDisplaySpanIdByPage = {};
         App.liveDisplayModel = null;
         App.activeDisplaySpanId = "";
     }

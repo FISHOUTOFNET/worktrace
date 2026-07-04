@@ -208,3 +208,136 @@ def test_live_display_service_all_does_not_export_legacy_virtual_builders():
         assert symbol not in service_all, (
             "live_display_service.__all__ must not export " + symbol
         )
+
+
+# --- Section 七: DB-only / report-only service boundary static tests ---
+
+
+# Live-projection helpers that MUST NEVER appear in any DB-only service.
+_LIVE_PROJECTION_FORBIDDEN_SYMBOLS = (
+    "_read_current_activity_snapshot",
+    "persisted_open_live_seconds",
+    "snapshot_elapsed_seconds",
+    "snapshot_extra_seconds",
+)
+
+# The settings key ``current_activity_snapshot`` is forbidden in
+# timeline_service / statistics_service (strict DB-only). export_service
+# may manage the settings key in its ``_destructive_reset_guard``
+# (save / restore / clear during a destructive reset — settings mgmt).
+_STRICT_DB_ONLY_SERVICES = (
+    "worktrace/services/timeline_service.py",
+    "worktrace/services/statistics_service.py",
+)
+
+_DB_ONLY_SERVICES = (
+    "worktrace/services/timeline_service.py",
+    "worktrace/services/statistics_service.py",
+    "worktrace/services/export_service.py",
+)
+
+
+def test_db_only_services_do_not_read_current_activity_snapshot():
+    """Section 七: DB-only services MUST NOT contain live-projection
+    helpers (``_read_current_activity_snapshot``, ``persisted_open_live_seconds``,
+    ``snapshot_elapsed_seconds``, ``snapshot_extra_seconds``).
+
+    timeline_service / statistics_service also MUST NOT reference the
+    ``current_activity_snapshot`` settings key. export_service may manage
+    the key in ``_destructive_reset_guard`` (settings management, not
+    live projection). Live projection is the sole responsibility of
+    ``activity_display_model_service`` + ``view_model_service``.
+    """
+    offenders: list[str] = []
+    for rel_path in _DB_ONLY_SERVICES:
+        source = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
+        for symbol in _LIVE_PROJECTION_FORBIDDEN_SYMBOLS:
+            if symbol in source:
+                offenders.append(f"{rel_path}: {symbol}")
+    for rel_path in _STRICT_DB_ONLY_SERVICES:
+        source = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
+        if "current_activity_snapshot" in source:
+            offenders.append(f"{rel_path}: current_activity_snapshot")
+    assert not offenders, (
+        "DB-only / report-only services MUST NOT reference live-projection "
+        "symbols; offenders: " + "; ".join(offenders)
+    )
+
+
+def test_db_only_services_do_not_import_live_display_service():
+    """Section 七: ``timeline_service.py`` / ``statistics_service.py`` /
+    ``export_service.py`` MUST NOT import from ``live_display_service``
+    or ``activity_display_model_service`` so the DB/report layer cannot
+    accidentally invoke live-projection helpers."""
+    forbidden_imports = (
+        "from .live_display_service import",
+        "from worktrace.services.live_display_service import",
+        "from .activity_display_model_service import",
+        "from worktrace.services.activity_display_model_service import",
+    )
+    offenders: list[str] = []
+    for rel_path in _DB_ONLY_SERVICES:
+        source = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
+        for symbol in forbidden_imports:
+            if symbol in source:
+                offenders.append(f"{rel_path}: {symbol}")
+    assert not offenders, (
+        "DB-only services MUST NOT import live_display_service / "
+        "activity_display_model_service; offenders: " + "; ".join(offenders)
+    )
+
+
+# --- Section 七: frontend / bridge live-seconds derivation boundary ---
+
+
+def test_bridge_does_not_derive_live_seconds_independently():
+    """Section 七: the WebView bridge MUST NOT re-derive live duration.
+    It may only call ``view_model_api`` entry points. The bridge source
+    MUST NOT compute ``elapsed_seconds`` / ``persisted_open_live_seconds``
+    / ``snapshot_elapsed_seconds`` directly."""
+    bridge_dir = REPO_ROOT / "worktrace" / "webview_ui"
+    forbidden_symbols = (
+        "persisted_open_live_seconds",
+        "snapshot_elapsed_seconds",
+        "snapshot_extra_seconds",
+        "_read_current_activity_snapshot",
+    )
+    offenders: list[str] = []
+    for py_file in bridge_dir.glob("bridge*.py"):
+        source = py_file.read_text(encoding="utf-8")
+        for symbol in forbidden_symbols:
+            if symbol in source:
+                offenders.append(f"{py_file.name}: {symbol}")
+    assert not offenders, (
+        "bridge MUST NOT reference live-projection helpers; offenders: "
+        + "; ".join(offenders)
+    )
+
+
+def test_frontend_js_ticker_only_reads_registered_live_clock():
+    """Section 七: the frontend ticker MUST only read from the
+    page-scoped registered live clock (``getActiveLiveClock`` /
+    ``liveClockBySpanId`` / ``liveClockByPage``). It MUST NOT derive
+    live seconds from ``lastOverviewSnapshot`` / ``lastTimelineData`` /
+    ``lastRecentData`` / ``lastSessionDetailsViewModel`` — those are
+    structural caches only, never a live-seconds source.
+
+    This test verifies the ticker function body does not read these
+    caches as a live-seconds source. The caches may be read for OTHER
+    purposes (e.g. KPI base values) but never as the live-seconds
+    source itself.
+    """
+    source = (JS_DIR / "core.js").read_text(encoding="utf-8")
+    # The ticker MUST call getActiveLiveClock (the page-scoped entry).
+    assert "getActiveLiveClock()" in source, (
+        "core.js ticker must call getActiveLiveClock() to read the "
+        "page-scoped live clock"
+    )
+    # The page-scoped registry MUST exist.
+    assert "App.liveClockByPage" in source, (
+        "core.js must define App.liveClockByPage (page-scoped registry)"
+    )
+    # registerLiveClock MUST accept a page parameter.
+    assert "opts.page" in source or "options.page" in source, (
+        "core.js registerLiveClock must accept a page/scope parameter"
+    )

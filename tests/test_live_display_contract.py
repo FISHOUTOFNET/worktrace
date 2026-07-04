@@ -1162,20 +1162,18 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
 
 
 def test_session_base_differs_from_live_activity_duration(bridge):
-    """A session row that contains BOTH a closed activity (100s) AND a
-    ``persisted_open`` activity (240s) must have ``live_base_seconds``
-    equal to the SESSION's full sample duration (340s), NOT the live
-    activity's own duration (240s).
+    """A session row with a closed activity (100s DB) AND a
+    ``persisted_open`` activity (DB duration 0, live sample 240s) must
+    have ``live_base_seconds`` = 340 (session's full sample), NOT 240.
+    The detail row for the open activity must have
+    ``live_base_seconds == 240``. Both share the same live delta, so
+    after +5s: session reads 345, detail reads 245. Session must NEVER
+    be overwritten to 245.
 
-    The detail row for the persisted_open activity must have
-    ``live_base_seconds == 240``. Both rows share the same live delta,
-    so after +5s the session row reads 345s and the detail row reads
-    245s. The session row must NEVER be overwritten to 245s.
-
-    This is the regression guard against the old "every
-    ``[data-display-span-id]`` node renders ``liveSeconds(clock)``"
-    contract that overwrote session durations with the live activity's
-    own duration.
+    Under the DB-only contract (Section 一), session row's
+    ``raw_duration_seconds`` is DB-only (100 + 0 = 100). The unified
+    formula adds ``live_delta_at_sample`` (240) to reach 340. The detail
+    row (DB duration 0) reaches 240.
     """
     from worktrace.services.activity_display_model_service import (
         apply_live_span_to_row,
@@ -1194,7 +1192,7 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     )
     activity_service.close_activity(closed_aid, closed_end.strftime(TIME_FORMAT), 100)
 
-    # 2. Create a persisted_open activity of 240s in the same project.
+    # 2. Create a persisted_open activity (DB duration 0; live sample 240s).
     open_aid, open_start = _create_real_open_activity(elapsed_seconds=240)
     _set_snapshot(
         _normal_snapshot(
@@ -1210,17 +1208,20 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     span = get_live_span(model)
     assert span is not None, "persisted_open display span must exist"
 
-    # Session row aggregates both activities: 100 (closed) + 240 (live) = 340.
+    # Session row aggregates both activities' DB durations: 100 (closed)
+    # + 0 (open, no DB duration) = 100. The unified formula adds
+    # live_delta_at_sample (240) to reach the session's full sample (340).
     session_row = {
         "session_id": "sess-1",
         "first_activity_id": open_aid,
         "activity_ids": [closed_aid, open_aid],
-        "duration_seconds": 340,
-        "raw_duration_seconds": 340,
+        "duration_seconds": 100,
+        "raw_duration_seconds": 100,
     }
+    # Detail row for the open activity: DB duration 0.
     detail_row = {
         "activity_id": open_aid,
-        "duration_seconds": 240,
+        "duration_seconds": 0,
         "raw_duration_seconds": 0,
     }
 
@@ -1233,9 +1234,10 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     )
     assert session_row["live_base_seconds"] == 340, (
         "session row live_base_seconds must equal the session's full sample "
-        "duration (340 = 100 closed + 240 live), NOT the live activity's "
-        "own duration (240). This is the regression guard against the old "
-        "contract that overwrote session durations with liveSeconds(clock)."
+        "duration (340 = 100 closed DB + 240 live delta), NOT the live "
+        "activity's own duration (240). This is the regression guard against "
+        "the old contract that overwrote session durations with "
+        "liveSeconds(clock)."
     )
 
     assert session_row["display_span_id"] == detail_row["display_span_id"]

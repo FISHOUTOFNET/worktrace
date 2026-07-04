@@ -1460,3 +1460,113 @@ def test_run_revision_check_skips_registration_on_revision_change():
         "preserveSameSpanSample so the revision-change branch does not "
         "register a transient sample"
     )
+
+
+# ---------------------------------------------------------------------------
+# Page-scoped live clock registry (Section 五)
+# ---------------------------------------------------------------------------
+
+
+def test_register_live_clock_accepts_page_scope_option():
+    """Section 五: ``registerLiveClock`` MUST accept a ``page`` / ``scope``
+    option so the clock is registered under a page-scoped registry
+    (``App.liveClockByPage``) instead of a single global active span.
+    """
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "registerLiveClock")
+    # Must read opts.page (or options.page).
+    assert re.search(r"opts\.page|options\.page", body), (
+        "registerLiveClock must read options.page to scope the registration"
+    )
+    # Must store under App.liveClockByPage (page-scoped registry).
+    assert "liveClockByPage" in body, (
+        "registerLiveClock must store the clock under App.liveClockByPage "
+        "(page-scoped registry)"
+    )
+
+
+def test_get_active_live_clock_reads_page_scope():
+    """Section 五: ``getActiveLiveClock`` MUST read the current page scope
+    (``App.currentPage``) and return the page-scoped clock from
+    ``App.liveClockByPage``. The single global ``activeDisplaySpanId``
+    MUST NOT be the only active-clock source — it is only a fallback.
+    """
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "getActiveLiveClock")
+    assert "currentPage" in body, (
+        "getActiveLiveClock must read App.currentPage to scope the lookup"
+    )
+    assert "liveClockByPage" in body, (
+        "getActiveLiveClock must read from App.liveClockByPage (page-scoped)"
+    )
+
+
+def test_full_reconcile_does_not_unconditionally_call_refresh_overview():
+    """Section 五: ``fullReconcileCollectionViews`` MUST NOT unconditionally
+    call ``refreshOverview()``. When the current page is NOT Overview
+    (e.g. Timeline historical date), the reconcile must only refresh
+    status + the current page so a hidden Overview refresh does not
+    register an Overview-scope live clock that overwrites the current
+    page's active clock.
+    """
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "fullReconcileCollectionViews")
+    # refreshOverview must be gated on the current page.
+    assert 'currentPage === "overview"' in body, (
+        "fullReconcileCollectionViews must gate refreshOverview on "
+        'App.currentPage === "overview" so a hidden Overview refresh '
+        "does not overwrite the current page's active clock"
+    )
+
+
+def test_overview_js_registers_with_page_scope():
+    """Section 五: ``overview.js`` MUST register live clocks with
+    ``page: "overview"`` so the clock is scoped to the Overview page."""
+    src = _strip_js_comments(read_js("overview.js"))
+    assert 'page: "overview"' in src, (
+        'overview.js must register live clocks with page: "overview"'
+    )
+
+
+def test_timeline_js_registers_with_page_scope():
+    """Section 五: ``timeline.js`` MUST register live clocks with
+    ``page: "timeline"`` so the clock is scoped to the Timeline page."""
+    src = _strip_js_comments(read_js("timeline.js"))
+    assert 'page: "timeline"' in src, (
+        'timeline.js must register live clocks with page: "timeline"'
+    )
+
+
+def test_init_refresh_overview_registers_with_page_scope():
+    """Section 五: ``refreshOverview`` in ``init.js`` MUST register the
+    Overview live clock with ``page: "overview"`` so the clock is
+    scoped to the Overview page."""
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "refreshOverview")
+    assert 'page: "overview"' in body, (
+        "refreshOverview must register with page: \"overview\""
+    )
+
+
+def test_run_revision_check_registers_with_current_page_scope():
+    """Section 五: ``runRevisionCheck`` in ``init.js`` MUST register the
+    refresh_state live clock with the CURRENT page scope
+    (``page: App.currentPage``) so the refresh_state clock does not
+    overwrite a different page's active clock."""
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "runRevisionCheck")
+    assert "App.currentPage" in body, (
+        "runRevisionCheck must register with page: App.currentPage"
+    )
+
+
+def test_clear_live_clock_registry_supports_page_scope():
+    """Section 五: ``clearLiveClockRegistry`` MUST accept an optional
+    page scope argument so a non-current page's clock can be cleared
+    without touching the current page's active clock."""
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "clearLiveClockRegistry")
+    # Must accept a pageScope parameter.
+    assert re.search(r"function\s+clearLiveClockRegistry\s*\(\s*\w+", body), (
+        "clearLiveClockRegistry must accept a page scope parameter"
+    )

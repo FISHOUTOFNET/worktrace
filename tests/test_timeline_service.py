@@ -101,31 +101,85 @@ def test_idle_and_uncategorized_split_at_midnight(temp_db):
     assert [session["project_name"] for session in next_day] == [UNCATEGORIZED_PROJECT, UNCATEGORIZED_PROJECT]
 
 
-def test_open_activity_duration_uses_current_snapshot_projection(temp_db):
-    """An open activity's display duration MUST use the current snapshot
-    projection (``elapsed_seconds + extra_seconds``) when viewing TODAY.
-    Historical-date live suppression (Section 三) is covered separately in
-    ``test_live_display_contract.py``; this test only locks the today-path
-    projection so a regression that drops the snapshot injection is caught.
+def test_timeline_db_only_contract_open_row_ignores_current_snapshot(temp_db):
+    """Timeline / Statistics / Export MUST be DB-only / report-only.
+
+    An open activity's DB duration MUST NOT be mutated by
+    ``current_activity_snapshot`` projection. Live overlay is the sole
+    responsibility of ``activity_display_model_service`` +
+    ``view_model_service``; the DB/report layer must return the stored
+    duration unchanged.
     """
     from datetime import date
+
+    from worktrace.services import statistics_service
 
     today_str = date.today().isoformat()
     project = project_service.create_project("A")
     activity_id = _activity_at("Word", "winword.exe", "A.docx", f"{today_str} 09:00:00", project)
+    # Force DB duration to 10 seconds.
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET duration_seconds = 10 WHERE id = ?",
+            (activity_id,),
+        )
     settings_service.set_setting(
         "current_activity_snapshot",
         (
             '{"status":"normal","app_name":"Word","process_name":"winword.exe",'
             '"window_title":"A.docx","start_time":"' + today_str + ' 09:00:00",'
-            f'"elapsed_seconds":90,"extra_seconds":5,"persisted_activity_id":{activity_id},'
+            f'"elapsed_seconds":999,"extra_seconds":0,"persisted_activity_id":{activity_id},'
             '"is_persisted":true}'
         ),
     )
 
     sessions = timeline_service.get_project_sessions_by_date(today_str)
+    assert sessions[0]["duration_seconds"] == 10
 
-    assert sessions[0]["duration_seconds"] == 95
+    summary = statistics_service.get_summary(today_str, today_str)
+    assert summary["total_duration"] == 10
+    assert 999 not in (
+        summary.get("total_duration", 0),
+        summary.get("classified_duration", 0),
+        summary.get("uncategorized_duration", 0),
+    )
+
+
+def test_timeline_db_only_contract_closed_row_unaffected_by_snapshot(temp_db):
+    """A closed activity row's duration MUST NOT depend on snapshot.
+
+    Regression guard: even when ``current_activity_snapshot`` references
+    a closed activity id, the DB/report layer must use the stored
+    duration only.
+    """
+    from datetime import date
+
+    from worktrace.services import statistics_service
+
+    today_str = date.today().isoformat()
+    project = project_service.create_project("A")
+    activity_id = _activity_at("Word", "winword.exe", "A.docx", f"{today_str} 09:00:00", project)
+    activity_service.close_all_open_rows(f"{today_str} 09:01:00")
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET duration_seconds = 60 WHERE id = ?",
+            (activity_id,),
+        )
+    settings_service.set_setting(
+        "current_activity_snapshot",
+        (
+            '{"status":"normal","app_name":"Word","process_name":"winword.exe",'
+            '"window_title":"A.docx","start_time":"' + today_str + ' 09:00:00",'
+            f'"elapsed_seconds":999,"extra_seconds":0,"persisted_activity_id":{activity_id},'
+            '"is_persisted":true}'
+        ),
+    )
+
+    sessions = timeline_service.get_project_sessions_by_date(today_str)
+    assert sessions[0]["duration_seconds"] == 60
+
+    summary = statistics_service.get_summary(today_str, today_str)
+    assert summary["total_duration"] == 60
 
 
 def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):

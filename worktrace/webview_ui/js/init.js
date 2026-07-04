@@ -46,8 +46,9 @@
             if (!bundle) return;
             // Register the bundle's unified live clock BEFORE rendering so
             // the 1s ticker renders KPIs/current/recent from one clock.
-            // ``source: "page_model"`` replaces any refresh_state clock.
-            App.registerLiveClock(bundle, { source: "page_model" });
+            // ``page: "overview"`` keeps it page-scoped (Section 五 fix)
+            // so a hidden Overview refresh cannot overwrite Timeline's clock.
+            App.registerLiveClock(bundle, { source: "page_model", page: "overview" });
             var overview = bundle.overview || {};
             // Augment the overview sub-payload with the bundle-level
             overview.date = bundle.date || overview.date;
@@ -153,14 +154,17 @@
     App.refreshAll = refreshAll;
     App.refreshCurrentPageData = refreshCurrentPageData;
 
-    // Low-frequency collection reconciliation. Re-pulls collector status +
+    // Low-frequency collection reconciliation: re-pulls collector status +
+    // the CURRENT page's data. Section 五 fix: do NOT call
+    // ``refreshOverview()`` when the user is on a non-Overview page (would
+    // register an Overview-scope clock and overwrite the current page's).
     function fullReconcileCollectionViews(reason) {
         if (App.reconcileInFlight) return Promise.resolve();
         App.reconcileInFlight = true;
         var promises = [refreshStatus()];
-        promises.push(refreshOverview());
-        // shell write is in progress so input focus is never lost. When the
-        if (App.currentPage === "timeline" && App.timelineLoaded
+        if (App.currentPage === "overview") {
+            promises.push(refreshOverview());
+        } else if (App.currentPage === "timeline" && App.timelineLoaded
             && !App._timelineEditingActive()) {
             promises.push(refreshTimeline());
         }
@@ -387,12 +391,14 @@
             if (isFirstCheck) {
                 App.registerLiveClock(state, {
                     source: "refresh_state",
-                    preserveSameSpanSample: false
+                    preserveSameSpanSample: false,
+                    page: App.currentPage || "overview"
                 });
             } else if (prevRevision === newRevision) {
                 App.registerLiveClock(state, {
                     source: "refresh_state",
-                    preserveSameSpanSample: true
+                    preserveSameSpanSample: true,
+                    page: App.currentPage || "overview"
                 });
             }
             // When revision changed, we intentionally skip registration here;
@@ -456,7 +462,8 @@
                     // because no prior page-model sample exists yet.
                     App.registerLiveClock(state, {
                         source: "refresh_state",
-                        preserveSameSpanSample: false
+                        preserveSameSpanSample: false,
+                        page: App.currentPage || "overview"
                     });
                 }
                 startHeartbeat();

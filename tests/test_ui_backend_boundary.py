@@ -1421,3 +1421,70 @@ def test_view_model_api_does_not_export_carry_helpers() -> None:
         assert hasattr(view_model_api, symbol), (
             "view_model_api must expose " + symbol
         )
+
+
+# --- Section 七: page-scoped frontend live clock registry boundary ---
+
+
+_JS_DIR = WEBVIEW_UI_DIR / "js"
+
+
+def test_core_js_implements_page_scoped_live_clock_registry() -> None:
+    """Section 七: ``core.js`` MUST implement a page-scoped live-clock
+    registry. The single global ``App.activeDisplaySpanId`` MUST NOT be
+    the only active-clock source; the page-scoped
+    ``App.liveClockByPage`` / ``App.activeDisplaySpanIdByPage`` MUST be
+    the primary active-clock source so a hidden page's payload cannot
+    overwrite the current page's active clock.
+    """
+    source = (_JS_DIR / "core.js").read_text(encoding="utf-8")
+    # Page-scoped registry MUST exist.
+    assert "App.liveClockByPage" in source, (
+        "core.js must define App.liveClockByPage (page-scoped registry)"
+    )
+    assert "App.activeDisplaySpanIdByPage" in source, (
+        "core.js must define App.activeDisplaySpanIdByPage"
+    )
+    # getActiveLiveClock MUST read App.currentPage to scope the lookup.
+    assert "App.currentPage" in source, (
+        "core.js getActiveLiveClock must read App.currentPage to scope "
+        "the active clock lookup"
+    )
+    # registerLiveClock MUST accept a page/scope parameter.
+    assert "opts.page" in source or "options.page" in source, (
+        "core.js registerLiveClock must accept a page/scope parameter"
+    )
+
+
+def test_core_js_full_reconcile_does_not_unconditionally_refresh_overview() -> None:
+    """Section 七: ``fullReconcileCollectionViews`` in ``init.js`` MUST
+    NOT unconditionally call ``refreshOverview()``. When the current
+    page is NOT Overview (e.g. Timeline historical date), the reconcile
+    MUST only refresh status + the current page so a hidden Overview
+    refresh does not register an Overview-scope live clock that
+    overwrites the current page's active clock.
+    """
+    source = (_JS_DIR / "init.js").read_text(encoding="utf-8")
+    # The reconcile function MUST gate refreshOverview on the current page.
+    assert 'App.currentPage === "overview"' in source, (
+        "init.js fullReconcileCollectionViews must gate refreshOverview on "
+        'App.currentPage === "overview"'
+    )
+
+
+def test_overview_js_registers_with_page_scope() -> None:
+    """Section 七: ``overview.js`` MUST register live clocks with
+    ``page: "overview"`` so the clock is scoped to the Overview page."""
+    source = (_JS_DIR / "overview.js").read_text(encoding="utf-8")
+    assert 'page: "overview"' in source, (
+        "overview.js must register live clocks with page: \"overview\""
+    )
+
+
+def test_timeline_js_registers_with_page_scope() -> None:
+    """Section 七: ``timeline.js`` MUST register live clocks with
+    ``page: "timeline"`` so the clock is scoped to the Timeline page."""
+    source = (_JS_DIR / "timeline.js").read_text(encoding="utf-8")
+    assert 'page: "timeline"' in source, (
+        "timeline.js must register live clocks with page: \"timeline\""
+    )

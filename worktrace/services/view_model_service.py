@@ -88,7 +88,7 @@ def _apply_live_span_to_rows(rows: list[dict[str, Any]], model: dict[str, Any]) 
 def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     """Build the Overview page ViewModel from a single display model.
 
-    Recent activities come ONLY from DB sessions. The unified live span is
+    Recent activities come ONLY from DB sessions; the unified live span is
     applied as an overlay onto the matching DB row (persisted_open /
     absorbed_pending). A ``<30s`` pending resource with no anchor does NOT
     inject a virtual recent item — it only appears in the current-activity
@@ -96,13 +96,17 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
 
     KPI totals (``today_total_seconds`` / ``classified_seconds`` /
     ``uncategorized_seconds``) are computed from the SAME overlaid sessions
-    list so the KPI, the recent items, and the live clock all share one
-    sample. ``virtual_pending`` contributes nothing to the KPI (no DB row
-    to overlay). ``persisted_open`` / ``absorbed_pending`` contribute via
-    the overlay applied to their matching DB rows — counted exactly once.
+    list so the KPI, recent items, and live clock all share one sample.
+
+    Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
+    ONCE here and passed to :func:`build_activity_display_model`; the builder
+    MUST NOT re-read the setting on this path.
     """
     scoped_today = today or timeline_service.get_default_report_date()
-    model = build_activity_display_model(report_date=scoped_today, today=scoped_today)
+    snapshot = _get_current_activity_snapshot()
+    model = build_activity_display_model(
+        report_date=scoped_today, today=scoped_today, snapshot=snapshot
+    )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
@@ -231,10 +235,18 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     ``raw_total_seconds`` is the sum of raw DB durations (unaffected by
     the display-only live overlay or adjusted overrides). ``total_seconds``
     / ``today_total_seconds`` use the display durations after overlay.
+
+    Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
+    ONCE here and the resulting ``snapshot`` is passed to
+    :func:`build_activity_display_model` (via ``snapshot=...``). The
+    builder MUST NOT re-read the setting on this path.
     """
     scoped_report_date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
-    model = build_activity_display_model(report_date=scoped_report_date, today=today)
+    snapshot = _get_current_activity_snapshot()
+    model = build_activity_display_model(
+        report_date=scoped_report_date, today=today, snapshot=snapshot
+    )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
@@ -344,11 +356,19 @@ def get_session_details_view_model(
     activity ids are present, the DB activity rows are listed and the
     unified live span is applied as an overlay onto the matching row
     (persisted_open / absorbed_pending).
+
+    Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
+    ONCE here and the resulting ``snapshot`` is passed to
+    :func:`build_activity_display_model` (via ``snapshot=...``). The
+    builder MUST NOT re-read the setting on this path.
     """
     ids = [int(aid) for aid in (activity_ids or [])]
     date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
-    model = build_activity_display_model(report_date=date, today=today)
+    snapshot = _get_current_activity_snapshot()
+    model = build_activity_display_model(
+        report_date=date, today=today, snapshot=snapshot
+    )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")

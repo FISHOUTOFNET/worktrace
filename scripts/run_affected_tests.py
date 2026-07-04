@@ -330,7 +330,6 @@ RULES: list[dict] = [
         "triggers": [
             "worktrace/db.py",
             "worktrace/schema.sql",
-            "worktrace/db/",
         ],
         "tests": [
             "tests/test_db_migration.py",
@@ -490,12 +489,14 @@ RULES: list[dict] = [
         "id": "M. Live display service / API",
         "triggers": [
             "worktrace/services/live_display_service.py",
-            "worktrace/api/live_display_api.py",
             "worktrace/services/activity_display_model_service.py",
             "worktrace/services/live_time_service.py",
             "worktrace/services/activity_service.py",
             "worktrace/webview_ui/bridge_overview.py",
             "worktrace/webview_ui/bridge_timeline.py",
+            "worktrace/services/timeline_service.py",
+            "worktrace/services/statistics_service.py",
+            "worktrace/services/export_service.py",
         ],
         "tests": [
             "tests/test_overview_bundle_and_export_contract.py",

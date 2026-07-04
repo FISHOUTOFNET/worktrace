@@ -1227,3 +1227,71 @@ def test_live_display_owner_selects_full_live_display_regression_set(runner, cha
         assert expected in sel.pytest_targets, (
             f"{changed} must select live-display regression target: {expected}"
         )
+
+
+_DB_ONLY_BOUNDARY_TARGETS = [
+    "tests/test_timeline_service.py",
+    "tests/test_statistics_service.py",
+    "tests/test_overview_bundle_and_export_contract.py",
+    "tests/test_bridge_refresh_state_and_projection.py",
+    "tests/test_live_display_contract.py",
+    "tests/test_display_model_anti_regression.py",
+    "tests/webview/test_heartbeat_projection_contract.py",
+    "tests/webview/test_frontend_global_boundaries.py",
+    "tests/test_ui_backend_boundary.py",
+    "tests/test_run_affected_tests.py",
+]
+
+
+@pytest.mark.parametrize("changed", [
+    "worktrace/services/timeline_service.py",
+    "worktrace/services/statistics_service.py",
+    "worktrace/services/export_service.py",
+])
+def test_db_only_service_selects_live_display_boundary_regression_set(runner, changed):
+    """Section 六: changing any DB-only / report-only service
+    (``timeline_service.py`` / ``statistics_service.py`` /
+    ``export_service.py``) MUST select the live-display boundary +
+    DB-only contract regression set via the M rule so a regression that
+    re-introduces ``current_activity_snapshot`` reads is caught."""
+    sel = runner.select_targets([changed])
+    for expected in _DB_ONLY_BOUNDARY_TARGETS:
+        assert expected in sel.pytest_targets, (
+            f"{changed} must select DB-only boundary target: {expected}"
+        )
+
+
+def test_no_stale_trigger_files_in_rules(runner):
+    """Section 六: runner rules MUST NOT contain trigger files that do
+    not exist on disk. A stale trigger filename (e.g. a removed API
+    module) MUST fail this test so the mapping stays clean.
+
+    Directory triggers (trailing ``/``) are accepted when the directory
+    exists. File triggers must resolve to an existing file under the
+    repo root. The previously-listed ``worktrace/api/live_display_api.py``
+    was removed and MUST NOT reappear in any rule.
+    """
+    repo_root = runner.REPO_ROOT
+    stale: list[str] = []
+    for rule in runner.RULES:
+        for trigger in rule.get("triggers", []):
+            clean = trigger.replace("\\", "/").rstrip("/")
+            if not clean:
+                continue
+            candidate = repo_root / clean
+            if not candidate.exists():
+                stale.append(f"{rule['id']}: {trigger}")
+    assert not stale, (
+        "Stale trigger files in runner rules (do not exist on disk): "
+        + "; ".join(stale)
+    )
+
+
+def test_removed_live_display_api_py_is_not_a_trigger(runner):
+    """Section 六: ``worktrace/api/live_display_api.py`` was removed (the
+    file does not exist). It MUST NOT appear in any rule's triggers so
+    the runner never silently skips it."""
+    for rule in runner.RULES:
+        assert "worktrace/api/live_display_api.py" not in rule.get("triggers", []), (
+            f"{rule['id']} must not reference removed worktrace/api/live_display_api.py"
+        )

@@ -9,7 +9,8 @@
         if (!overview) return;
         // ``source: "page_model"``: authoritative Overview sample; replaces
         // any refresh_state clock seeded during bootstrap / heartbeat.
-        App.registerLiveClock(overview, { source: "page_model" });
+        // ``page: "overview"`` keeps the clock page-scoped (Section 五 fix).
+        App.registerLiveClock(overview, { source: "page_model", page: "overview" });
         App.lastOverviewSnapshot = overview;
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-total").textContent = overview.total_duration || "00:00:00";
@@ -37,7 +38,8 @@
 
     function showRecent(recentResult) {
         // ``source: "page_model"``: defensive re-registration of the same sample.
-        App.registerLiveClock(recentResult, { source: "page_model" });
+        // ``page: "overview"`` keeps the clock page-scoped (Section 五 fix).
+        App.registerLiveClock(recentResult, { source: "page_model", page: "overview" });
         // Structural cache only — never a live-seconds source.
         App.lastRecentData = recentResult;
         var listEl = document.getElementById("recent-list");
