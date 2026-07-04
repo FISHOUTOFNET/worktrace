@@ -19,6 +19,10 @@ from ..constants import (
 from ..resources.resource_builders import resource_signature
 from ..resources.types import DetectedResource
 from ..services import activity_service, project_service, session_boundary_service
+from ..services.activity_continuity_service import (
+    can_absorb_short_pending,
+    can_merge_finished_short_activity,
+)
 from ..services.activity_lifecycle_service import (
     close_activity as lifecycle_close_activity,
     force_persist_open_activity_for_clipboard,
@@ -106,8 +110,8 @@ class AutoActivityRecorder:
                 end_time,
                 duration_seconds=elapsed + self.current_extra_seconds,
             )
-        elif merge_transient and elapsed > 0 and status in {STATUS_NORMAL, STATUS_IDLE}:
-            self._merge_or_pend_short_seconds(elapsed)
+        elif merge_transient and elapsed > 0 and status == STATUS_NORMAL:
+            self._merge_or_pend_short_seconds(status, self.current_start_time, end_time, elapsed)
 
         self.current_payload = None
         self.current_signature = None
@@ -259,13 +263,22 @@ class AutoActivityRecorder:
         elapsed = _seconds_between(self.current_start_time, at_time)
         activity_service.set_activity_duration(self.persisted_activity_id, elapsed + self.current_extra_seconds)
 
-    def _merge_or_pend_short_seconds(self, seconds: int) -> None:
+    def _merge_or_pend_short_seconds(
+        self,
+        status: str,
+        start_time: str,
+        end_time: str,
+        seconds: int,
+    ) -> None:
         if seconds <= 0:
+            return
+        if not can_merge_finished_short_activity(status, start_time, end_time):
+            self.resume_after_short_activity = None
             return
         target = activity_service.get_latest_closed_auto_normal_activity(
             after_time=session_boundary_service.latest_boundary_time()
         )
-        if target:
+        if target and can_absorb_short_pending(target, start_time):
             activity_service.increment_activity_duration(int(target["id"]), seconds)
             target["duration_seconds"] = int(target.get("duration_seconds") or 0) + seconds
             self.resume_after_short_activity = target

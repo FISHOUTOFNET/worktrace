@@ -372,6 +372,29 @@
     }
     App.initButtons = initButtons;
 
+    function patchCurrentActivityFromRefreshState(state) {
+        if (!state) return;
+        if (App.currentPage === "overview" && App.lastOverviewSnapshot) {
+            App.lastOverviewSnapshot.current_activity = state.current_activity || {};
+            App.lastOverviewSnapshot.current_activity_clock = state.current_activity_clock || null;
+            App.renderCurrentActivityElement(
+                document.getElementById("current-activity"),
+                App.lastOverviewSnapshot.current_activity,
+                App.getActiveCurrentActivityClock(),
+                "overview"
+            );
+        } else if (App.currentPage === "timeline" && App.lastTimelineData) {
+            App.lastTimelineData.current_activity = state.current_activity || {};
+            App.lastTimelineData.current_activity_clock = state.current_activity_clock || null;
+            App.renderCurrentActivityElement(
+                document.getElementById("timeline-current"),
+                App.lastTimelineData.current_activity,
+                App.getActiveCurrentActivityClock(),
+                "timeline"
+            );
+        }
+    }
+
     // The heartbeat never writes the DB, never starts / stops the
     function runRevisionCheck() {
         if (App.refreshCheckInFlight) return;
@@ -411,31 +434,14 @@
                     preserveSameSpanSample: true,
                     page: App.currentPage || "overview"
                 });
+                patchCurrentActivityFromRefreshState(state);
             }
             if (!isFirstCheck && prevRevision !== newRevision) {
                 App.registerCurrentActivityClock(state, {
                     source: "refresh_state",
                     page: App.currentPage || "overview"
                 });
-                if (App.currentPage === "overview" && App.lastOverviewSnapshot) {
-                    App.lastOverviewSnapshot.current_activity = state.current_activity || {};
-                    App.lastOverviewSnapshot.current_activity_clock = state.current_activity_clock || null;
-                    App.renderCurrentActivityElement(
-                        document.getElementById("current-activity"),
-                        App.lastOverviewSnapshot.current_activity,
-                        App.getActiveCurrentActivityClock(),
-                        "overview"
-                    );
-                } else if (App.currentPage === "timeline" && App.lastTimelineData) {
-                    App.lastTimelineData.current_activity = state.current_activity || {};
-                    App.lastTimelineData.current_activity_clock = state.current_activity_clock || null;
-                    App.renderCurrentActivityElement(
-                        document.getElementById("timeline-current"),
-                        App.lastTimelineData.current_activity,
-                        App.getActiveCurrentActivityClock(),
-                        "timeline"
-                    );
-                }
+                patchCurrentActivityFromRefreshState(state);
                 var stateClock = state.live_clock || (
                     state.activity_display_model ? state.activity_display_model.live_clock : null
                 );

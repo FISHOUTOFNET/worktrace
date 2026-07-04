@@ -178,7 +178,7 @@ def test_idle_30_seconds_creates_one_idle_record(temp_db):
     assert rows[0]["end_time"] is None
 
 
-def test_short_idle_merges_into_previous_normal_when_normal_resumes(temp_db):
+def test_short_idle_does_not_merge_into_previous_normal(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
@@ -188,7 +188,8 @@ def test_short_idle_merges_into_previous_normal_when_normal_resumes(temp_db):
     rows = _rows()
     assert len(rows) == 1
     assert rows[0]["window_title"] == "A"
-    assert rows[0]["duration_seconds"] == 329
+    assert rows[0]["duration_seconds"] == 300
+    assert settings_service.get_setting("pending_short_seconds") == "0"
 
 
 # Section 四: short-activity boundary tests. Running ``absorbed_pending``

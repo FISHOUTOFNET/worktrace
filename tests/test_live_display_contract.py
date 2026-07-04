@@ -1553,7 +1553,7 @@ def test_persisted_open_current_clock_ignores_extra_seconds(bridge):
 
 
 @pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR])
-def test_non_normal_current_activity_clock_not_live_and_display_safe(bridge, status):
+def test_system_current_activity_clock_contract_and_display_safe(bridge, status):
     from worktrace.services.activity_display_model_service import build_activity_display_model
 
     _set_snapshot(
@@ -1566,12 +1566,75 @@ def test_non_normal_current_activity_clock_not_live_and_display_safe(bridge, sta
         }
     )
     model = build_activity_display_model()
-    assert model["current_activity_clock"]["is_live"] is False
+    expected_current_live = status != STATUS_PAUSED
+    assert model["current_activity_clock"]["current_duration_live"] is expected_current_live
+    assert model["current_activity_clock"]["is_live"] is expected_current_live
     assert model["live_clock"]["is_project_duration_live"] is False
+    assert model["live_clock"]["project_duration_live"] is False
     assert model["display_spans"] == []
     serialized = json.dumps(model, ensure_ascii=False)
     for forbidden in ("secret.docx", "C:\\secret", "secret clipboard", "secret note"):
         assert forbidden not in serialized
+
+
+def test_idle_blocks_display_absorbed_pending(bridge):
+    from worktrace.constants import SOURCE_AUTO, SOURCE_SYSTEM
+    from worktrace.services.activity_display_model_service import build_activity_display_model
+
+    today = timeline_service.get_default_report_date()
+    project_id = project_service.create_project("IdleBoundaryProject")
+    anchor_id = activity_service.create_activity(
+        "AppA",
+        "app.exe",
+        "A",
+        source=SOURCE_AUTO,
+        start_time=f"{today} 09:00:00",
+        project_id=project_id,
+    )
+    activity_service.close_activity(anchor_id, f"{today} 09:01:00", 60)
+    idle_id = activity_service.create_activity(
+        "空闲",
+        "idle",
+        "用户空闲",
+        status=STATUS_IDLE,
+        source=SOURCE_SYSTEM,
+        start_time=f"{today} 09:01:00",
+    )
+    activity_service.close_activity(idle_id, f"{today} 09:01:10", 10)
+
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=10,
+            start_time=f"{today} 09:01:10",
+            inferred_project_name="ProjectB",
+        )
+    )
+
+    model = build_activity_display_model(report_date=today, today=today)
+
+    assert model["current_activity"]["live_state"] == "virtual_pending"
+    assert model["current_activity"]["is_absorbed_pending"] is False
+    assert model["display_spans"][0]["anchor_activity_id"] == 0
+
+
+def test_new_activity_first_frame_registers_current_clock(bridge):
+    from worktrace.services.activity_display_model_service import build_activity_display_model
+
+    today = timeline_service.get_default_report_date()
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=0,
+            start_time=f"{today} 09:00:00",
+            inferred_project_name="FirstFrame",
+        )
+    )
+
+    model = build_activity_display_model(report_date=today, today=today)
+
+    assert model["current_activity"]["live_state"] == "virtual_pending"
+    assert model["current_activity_clock"]["current_duration_live"] is True
+    assert model["current_activity_clock"]["duration_seconds_at_sample"] == 0
+    assert model["current_activity_clock"]["live_started_at_epoch_ms"] > 0
 
 
 # Boundary-aware absorption contract: a ``<30s`` pending snapshot MUST

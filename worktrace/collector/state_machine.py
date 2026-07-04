@@ -17,6 +17,7 @@ from ..resources.resource_builders import make_system_resource, resource_signatu
 from ..resources.resource_identity import infer_resource_from_active_window
 from ..resources.types import DetectedResource
 from ..services import activity_service, activity_lifecycle_service, clipboard_service, privacy_service, session_boundary_service
+from ..services.activity_continuity_service import is_hard_boundary_status
 from .auto_activity_recorder import AutoActivityRecorder
 
 STATE_TO_STATUS = {
@@ -68,7 +69,15 @@ class CollectorStateMachine:
             self.active_signature = self.recorder.current_signature or signature
             return
 
+        previous_status = ""
+        if self.recorder.current_payload is not None:
+            previous_status = str(self.recorder.current_payload.get("status") or "")
+        if is_hard_boundary_status(status) and previous_status != status:
+            session_boundary_service.record_boundary(transition_time, status)
+
         self.recorder.observe(payload, signature, transition_time)
+        if is_hard_boundary_status(status):
+            self.recorder.clear_short_buffers()
         self.state = state
         self.active_signature = signature
         if status == STATUS_EXCLUDED:

@@ -39,7 +39,8 @@ from ..constants import (
     STATUS_PAUSED,
     UNCATEGORIZED_PROJECT,
 )
-from . import activity_service, live_display_service, session_boundary_service, timeline_service
+from . import activity_service, live_display_service, timeline_service
+from .activity_continuity_service import can_absorb_short_pending
 from .live_display_service import (
     _display_app_name,
     _display_project_description,
@@ -97,6 +98,8 @@ def _build_suppressed_live_clock() -> dict[str, Any]:
         "duration_seconds_at_sample": 0,
         "is_live": False,
         "is_project_duration_live": False,
+        "current_duration_live": False,
+        "project_duration_live": False,
     }
 
 
@@ -186,9 +189,7 @@ def _is_absorbable_anchor(row: dict[str, Any], pending_start_time: str) -> bool:
     if anchor_end > pending_start_time:
         # Overlap / anomaly: anchor ended after pending start.
         return False
-    if session_boundary_service.has_boundary_between(anchor_end, pending_start_time):
-        return False
-    return True
+    return can_absorb_short_pending(row, pending_start_time)
 
 
 # Display live-state classification
@@ -240,11 +241,10 @@ def _build_current_activity_clock(
     stable_key = _stable_live_key(snapshot)
     stable_hash = _stable_live_key_hash(snapshot)
     elapsed = snapshot_elapsed_seconds(snapshot)
-    status = _snapshot_status_safe(snapshot)
-    is_live = bool(
+    current_duration_live = bool(
         snapshot
-        and status == STATUS_NORMAL
-        and elapsed > 0
+        and display_live_state not in ("none", "paused")
+        and _start_time_epoch_ms(snapshot) > 0
     )
     return {
         "display_span_id": ("current:" + stable_hash) if stable_hash else "",
@@ -254,7 +254,9 @@ def _build_current_activity_clock(
         "live_started_at_epoch_ms": _start_time_epoch_ms(snapshot),
         "carry_seconds": 0,
         "duration_seconds_at_sample": int(elapsed),
-        "is_live": bool(is_live),
+        "current_duration_live": bool(current_duration_live),
+        "project_duration_live": False,
+        "is_live": bool(current_duration_live),
         "is_project_duration_live": False,
     }
 
@@ -303,11 +305,6 @@ def _build_project_live_clock(
         carry_seconds = snapshot_extra_seconds(snapshot)
         duration_at_sample = _snapshot_total_seconds(snapshot)
 
-    is_live = display_live_state in (
-        "virtual_pending",
-        "absorbed_pending",
-        "persisted_open",
-    )
     is_project_duration_live = display_live_state in (
         "virtual_pending",
         "absorbed_pending",
@@ -322,7 +319,9 @@ def _build_project_live_clock(
         "live_started_at_epoch_ms": live_started_at,
         "carry_seconds": int(carry_seconds),
         "duration_seconds_at_sample": int(duration_at_sample),
-        "is_live": bool(is_live),
+        "project_duration_live": bool(is_project_duration_live),
+        "current_duration_live": False,
+        "is_live": bool(is_project_duration_live),
         "is_project_duration_live": bool(is_project_duration_live),
     }
 
@@ -636,6 +635,8 @@ def _build_display_span(
         "resource_name": _display_resource_name(snapshot) if snapshot else "",
         "is_current": True,
         "is_live": bool(live_clock.get("is_live")),
+        "project_duration_live": bool(live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))),
+        "current_duration_live": bool(live_clock.get("current_duration_live")),
         "is_virtual": bool(is_virtual),
         "is_persisted": bool(is_persisted),
         "is_absorbed_pending": bool(is_absorbed),
@@ -675,6 +676,8 @@ def _live_clock_fields(live_clock: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds_at_sample": int(live_clock.get("duration_seconds_at_sample") or 0),
         "is_live": bool(live_clock.get("is_live")),
         "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
+        "project_duration_live": bool(live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))),
+        "current_duration_live": bool(live_clock.get("current_duration_live")),
     }
 
 

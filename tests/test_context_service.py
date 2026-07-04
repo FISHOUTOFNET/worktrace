@@ -142,18 +142,22 @@ def test_interrupt_and_carry_window_stop_context(temp_db):
     assert activity_service.get_activity(late)["project_name"] == UNCATEGORIZED_PROJECT
 
 
-def test_excluded_and_error_do_not_stop_context_scan(temp_db):
+def test_excluded_error_and_paused_stop_context_scan(temp_db):
     project = project_service.create_project("A")
     _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project)
     _activity("已排除", "excluded", "已排除窗口", "09:05:00", status="excluded")
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("异常", "error", "采集异常", "09:15:00", status="error")
-    _activity("Word", "winword.exe", "A_file_2.docx", "09:20:00", project)
+    browser_after_error = _activity("Edge", "msedge.exe", "After Error", "09:17:00")
+    _activity("已暂停", "paused", "用户暂停", "09:19:00", status="paused")
+    browser_after_pause = _activity("Edge", "msedge.exe", "After Pause", "09:21:00")
     activity_service.close_all_open_rows("2026-06-18 09:30:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
-    assert activity_service.get_activity(browser)["project_id"] == project
+    assert activity_service.get_activity(browser)["project_name"] == UNCATEGORIZED_PROJECT
+    assert activity_service.get_activity(browser_after_error)["project_name"] == UNCATEGORIZED_PROJECT
+    assert activity_service.get_activity(browser_after_pause)["project_name"] == UNCATEGORIZED_PROJECT
 
 
 def test_recompute_is_idempotent_and_preserves_manual_auxiliary(temp_db):

@@ -19,6 +19,11 @@ from ..db import dict_rows, get_connection
 from ..path_utils import split_file_path
 from ..resources.title_parsing import extract_anchor_file_name
 from . import folder_rule_service, session_boundary_service, session_note_service
+from .activity_continuity_service import (
+    has_hard_boundary_between,
+    is_hard_boundary_status,
+    is_normal_project_status,
+)
 from .activity_service import update_activities_project
 from .anchor_predicates import is_file_context_anchor
 from .context_service import recompute_context_assignments_for_date
@@ -454,6 +459,8 @@ def _find_short_context_merge(
         row = rows[pos]
         if _has_session_boundary_between(rows[pos - 1], row, boundary_times):
             return None
+        if is_hard_boundary_status(str(row.get("status") or "")):
+            return None
         if _is_project_anchor(row) and str(row.get("display_project_key") or "") == anchor_key:
             if (
                 interrupt_indices
@@ -489,7 +496,7 @@ def _is_project_anchor(row: dict) -> bool:
     timeline session concept only treats file-context anchors (and
     midnight anchors) as session boundaries.
     """
-    if row.get("status") != STATUS_NORMAL:
+    if not is_normal_project_status(str(row.get("status") or "")):
         return False
     if row.get("assignment_source") == "midnight_anchor":
         return (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
@@ -499,13 +506,11 @@ def _is_project_anchor(row: dict) -> bool:
 
 
 def _is_same_report_project_normal(row: dict, anchor_key: str) -> bool:
-    return row.get("status") == STATUS_NORMAL and str(row.get("display_project_key") or "") == anchor_key
+    return is_normal_project_status(str(row.get("status") or "")) and str(row.get("display_project_key") or "") == anchor_key
 
 
 def _is_short_merge_interrupt(row: dict, anchor_key: str) -> bool:
-    if row.get("status") == STATUS_IDLE:
-        return True
-    return row.get("status") == STATUS_NORMAL and str(row.get("display_project_key") or "") != anchor_key
+    return is_normal_project_status(str(row.get("status") or "")) and str(row.get("display_project_key") or "") != anchor_key
 
 
 def _seconds_for_rows(rows: list[dict], indexes: list[int]) -> int:
@@ -513,7 +518,7 @@ def _seconds_for_rows(rows: list[dict], indexes: list[int]) -> int:
 
 
 def _can_participate_in_report_session(row: dict) -> bool:
-    return row.get("status") == STATUS_NORMAL or bool(row.get("report_context_merged"))
+    return is_normal_project_status(str(row.get("status") or ""))
 
 
 def _anchor_context_time(row: dict) -> str:
@@ -527,15 +532,11 @@ def _minutes_between(start: str, end: str) -> float:
 
 
 def _has_session_boundary_between(previous: dict, current: dict, boundary_times: list[str] | None = None) -> bool:
-    if _has_unrecorded_gap_between(previous, current):
-        return True
     boundary_start = previous.get("end_time") or previous.get("start_time") or ""
     boundary_end = current.get("start_time") or ""
     if not boundary_start or not boundary_end:
         return False
-    if boundary_times is not None:
-        return _has_boundary_time_between(boundary_times, str(boundary_start), str(boundary_end))
-    return session_boundary_service.has_boundary_between(str(boundary_start), str(boundary_end))
+    return has_hard_boundary_between(str(boundary_start), str(boundary_end))
 
 
 def _boundary_times_for_rows(rows: list[dict]) -> list[str]:

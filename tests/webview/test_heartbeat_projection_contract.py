@@ -651,17 +651,16 @@ def test_ticker_uses_unified_clock_not_cached_snapshot():
 def test_ticker_locates_live_rows_via_display_span_id():
     """the ticker locates every live row via the unified
     ``data-display-span-id`` DOM walk and only renders rows whose clock
-    has ``is_live === true``. The old ``is_virtual_live`` /
+    has a project-duration live flag. The old ``is_virtual_live`` /
     ``is_in_progress`` flag checks are no longer used by the ticker —
-    the ``is_live`` flag on the registered clock is the single
-    eligibility signal."""
+    the project clock flag is the project-row eligibility signal."""
     source = read_js("core.js")
     body = func_body(source, "applyLocalTicker")
     assert "data-display-span-id" in body, (
         "applyLocalTicker must locate live rows via data-display-span-id"
     )
-    assert "is_live" in body, (
-        "applyLocalTicker must check the clock's is_live flag before rendering"
+    assert "project_duration_live" in body and "is_project_duration_live" in body, (
+        "applyLocalTicker must check the project-duration live flag before rendering"
     )
     assert "is_virtual_live" not in body, (
         "applyLocalTicker must not reference the removed is_virtual_live flag"
@@ -1472,8 +1471,8 @@ def test_run_revision_check_registers_current_clock_on_revision_change():
     assert "registerCurrentActivityClock" in body, (
         "runRevisionCheck must register current_activity_clock from refresh_state"
     )
-    assert "renderCurrentActivityElement" in body, (
-        "runRevisionCheck must update current activity immediately"
+    assert "patchCurrentActivityFromRefreshState" in body, (
+        "runRevisionCheck must patch current activity from refresh_state immediately"
     )
     assert "querySelector" in body and "data-display-span-id" in body, (
         "revision-changed project clock registration must be gated by a "
@@ -1481,6 +1480,25 @@ def test_run_revision_check_registers_current_clock_on_revision_change():
     )
     assert "preserveSameSpanSample" in body, (
         "runRevisionCheck must preserve project sample only for eligible same-span paths"
+    )
+
+
+def test_run_revision_check_patches_current_activity_when_revision_unchanged():
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "runRevisionCheck")
+
+    assert "prevRevision === newRevision" in body, (
+        "runRevisionCheck must have an explicit revision-unchanged branch"
+    )
+    unchanged_branch_index = body.find("prevRevision === newRevision")
+    patch_index = body.find("patchCurrentActivityFromRefreshState(state)", unchanged_branch_index)
+    heavy_index = body.find("refreshCurrentPageData()", unchanged_branch_index)
+
+    assert patch_index != -1, (
+        "revision-unchanged branch must patch current activity/cache from refresh_state"
+    )
+    assert heavy_index == -1 or patch_index < heavy_index, (
+        "revision-unchanged current patch must not depend on the heavy refresh path"
     )
 
 

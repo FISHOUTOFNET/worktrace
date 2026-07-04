@@ -74,7 +74,7 @@ def classify_live_state(snapshot: dict[str, Any] | None) -> str:
 
     Returns one of:
 
-    - ``"none"``         — no snapshot / no elapsed seconds.
+    - ``"none"``         — no snapshot / unsupported status.
     - ``"virtual"``      — normal, not persisted, no persisted_activity_id;
                             eligible for virtual live display.
     - ``"persisted_open"`` — normal, persisted with a real open DB row.
@@ -101,9 +101,6 @@ def classify_live_state(snapshot: dict[str, Any] | None) -> str:
         return "error"
     if status != STATUS_NORMAL:
         return "none"
-    elapsed = _snapshot_total_seconds(snapshot)
-    if elapsed <= 0:
-        return "none"
     if bool(snapshot.get("is_persisted")) or snapshot_persisted_id(snapshot):
         return "persisted_open"
     return "virtual"
@@ -123,7 +120,6 @@ def is_live_eligible_for_normal(
     - snapshot exists;
     - snapshot ``status == "normal"`` (excludes idle / paused / excluded /
       error);
-    - elapsed + extra seconds > 0;
     - report_date == today (historical dates are not projected).
 
     Persisted-open rows are ALSO eligible: they need the same continuous
@@ -133,8 +129,6 @@ def is_live_eligible_for_normal(
     if not snapshot:
         return False
     if _snapshot_status(snapshot) != STATUS_NORMAL:
-        return False
-    if _snapshot_total_seconds(snapshot) <= 0:
         return False
     if not report_date or not today:
         return False

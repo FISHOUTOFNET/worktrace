@@ -528,7 +528,7 @@
     // Contract:
     //
     // - When the payload has NO live clock, NO display_span_id, or the
-    //   clock's ``is_live`` is not true, the registry AND the active span id
+    //   clock's project-duration live flag is not true, the registry AND the active span id
     //   for the TARGET page scope MUST be cleared. This prevents a stale
     //   clock from continuing to tick after the activity ends, the collector
     //   pauses, or the user switches pages. Clearing a non-current page's
@@ -538,11 +538,11 @@
     //   clock's ``stable_live_key_hash`` equals the new clock's, the
     //   ``live_started_at_epoch_ms`` / ``carry_seconds`` /
     //   ``duration_seconds_at_sample`` fields of the ACTIVE clock are
-    //   PRESERVED. Only non-sample fields (is_live / is_project_duration_live
+    //   PRESERVED. Only non-sample fields (project_duration_live / live_state
     //   / live_state / stable_live_key) refresh from the new payload. This is
     //   the same-span preservation rule: refresh_state is structural-only and
     //   must NOT reset the liveDelta base that the page-model sample seeded.
-    // - In all other cases (span id changed, stable key changed, is_live
+    // - In all other cases (span id changed, stable key changed, project live
     //   flipped false, live_state structural switch, or source ==
     //   "page_model"), the new clock fully replaces the active clock for the
     //   TARGET page scope.
@@ -562,8 +562,9 @@
             return;
         }
         var spanId = String(clock.display_span_id || "");
-        var isLive = clock.is_live === true;
-        if (!spanId || !isLive) {
+        var projectDurationLive = clock.project_duration_live === true
+            || clock.is_project_duration_live === true;
+        if (!spanId || !projectDurationLive) {
             clearLiveClockRegistry(pageScope);
             return;
         }
@@ -577,7 +578,8 @@
             : null;
         var sameSpan = activeClock
             && pageActiveSpanId === spanId
-            && activeClock.is_live === true;
+            && (activeClock.project_duration_live === true
+                || activeClock.is_project_duration_live === true);
         var sameStableKey = sameSpan
             && String(activeClock.stable_live_key_hash || "")
                 === String(clock.stable_live_key_hash || "");
@@ -615,6 +617,8 @@
                 live_state: clock.live_state,
                 is_live: clock.is_live,
                 is_project_duration_live: clock.is_project_duration_live,
+                project_duration_live: clock.project_duration_live,
+                current_duration_live: clock.current_duration_live,
                 // Sample fields preserved from the active page-model clock.
                 live_started_at_epoch_ms: activeClock.live_started_at_epoch_ms,
                 carry_seconds: activeClock.carry_seconds,
@@ -767,7 +771,7 @@
         }
         var display = current.display || "";
         var seconds = parseInt(current.elapsed_seconds, 10) || 0;
-        if (currentClock && currentClock.is_live === true) {
+        if (currentClock && (currentClock.current_duration_live === true || currentClock.is_live === true)) {
             seconds = liveSeconds(currentClock);
         }
         var parts = display.split("\uff5c");
@@ -799,7 +803,8 @@
         var liveDelta = 0;
         var projectDurationLive = false;
         if (clock) {
-            projectDurationLive = clock.is_project_duration_live === true;
+            projectDurationLive = clock.project_duration_live === true
+                || clock.is_project_duration_live === true;
             if (projectDurationLive) {
                 liveDelta = liveDeltaSeconds(clock);
             }
@@ -878,7 +883,7 @@
         // Page-scoped walk: only nodes inside the CURRENT page container
         // (``#page-<currentPage>``) are visited so a hidden page's stale
         // live DOM is never updated with the current page's delta.
-        if (!clock || clock.is_live !== true) {
+        if (!clock || !(clock.project_duration_live === true || clock.is_project_duration_live === true)) {
             return;
         }
         var tickerPage = App.currentPage || "overview";
@@ -892,7 +897,7 @@
             if (!spanId) continue;
             var nodeClock = App.liveClockBySpanId[spanId] || clock;
             if (!nodeClock) continue;
-            if (nodeClock.is_live !== true) continue;
+            if (!(nodeClock.project_duration_live === true || nodeClock.is_project_duration_live === true)) continue;
             var baseAttr = node.getAttribute("data-live-base-seconds");
             if (baseAttr === null || baseAttr === "") continue;
             var nodeBaseSec = parseInt(baseAttr, 10);

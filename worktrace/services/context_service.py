@@ -6,6 +6,8 @@ from ..constants import (
     CLIPBOARD_TRANSITION_SECONDS,
     DEFAULT_CONTEXT_CARRY_MINUTES,
     REPORT_CONTEXT_SHORT_MERGE_SECONDS,
+    STATUS_ERROR,
+    STATUS_EXCLUDED,
     STATUS_IDLE,
     STATUS_NORMAL,
     STATUS_PAUSED,
@@ -13,6 +15,12 @@ from ..constants import (
 )
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from . import clipboard_service, session_boundary_service
+from .activity_continuity_service import (
+    SYSTEM_STATUSES,
+    can_carry_context_between,
+    has_hard_boundary_between,
+    is_hard_boundary_status,
+)
 from .anchor_predicates import (
     DIRECT_ASSIGNMENT_SOURCES,
     is_direct_assignment_anchor,
@@ -23,7 +31,7 @@ from .project_inference_service import assign_project_for_activity
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
 
-INTERRUPT_STATUSES = {STATUS_IDLE, STATUS_PAUSED}
+INTERRUPT_STATUSES = set(SYSTEM_STATUSES)
 # Sources that already represent derived context and must not chain onward
 # as direct assignment anchors (avoids low-confidence propagation).
 _CONTEXT_DERIVED_SOURCES = {
@@ -276,7 +284,7 @@ def _has_session_boundary_between(previous: dict, current: dict) -> bool:
     boundary_end = current.get("start_time") or ""
     if not boundary_start or not boundary_end:
         return False
-    return session_boundary_service.has_boundary_between(str(boundary_start), str(boundary_end))
+    return has_hard_boundary_between(str(boundary_start), str(boundary_end))
 
 
 def _copied_before_transition(previous: dict, current: dict, copy_times: dict[int, list[str]]) -> bool:
@@ -536,7 +544,11 @@ def _nearest_anchor_is_uncategorized(rows: list[dict], index: int, step: int, un
     pos = index + step
     while 0 <= pos < len(rows):
         row = rows[pos]
-        if row["status"] in INTERRUPT_STATUSES:
+        adjacent = rows[pos - step]
+        previous, current = (row, adjacent) if step < 0 else (adjacent, row)
+        if _has_session_boundary_between(previous, current):
+            return False
+        if is_hard_boundary_status(str(row.get("status") or "")):
             return False
         # Only file-context anchors participate in the uncategorized
         # block-carry protection; direct assignment anchors never carry
@@ -554,7 +566,9 @@ def _nearest_anchor_is_uncategorized(rows: list[dict], index: int, step: int, un
 def _find_previous_effective_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
     for pos in range(index - 1, -1, -1):
         row = rows[pos]
-        if row["status"] in INTERRUPT_STATUSES:
+        if _has_session_boundary_between(row, rows[pos + 1]):
+            return None
+        if is_hard_boundary_status(str(row.get("status") or "")):
             return None
         if _is_effective_context_anchor(row, uncategorized_id):
             project_id = _row_project_id(row)
@@ -570,7 +584,9 @@ def _find_previous_effective_anchor(rows: list[dict], index: int, uncategorized_
 def _find_next_effective_anchor(rows: list[dict], index: int, uncategorized_id: int) -> dict | None:
     for pos in range(index + 1, len(rows)):
         row = rows[pos]
-        if row["status"] in INTERRUPT_STATUSES:
+        if _has_session_boundary_between(rows[pos - 1], row):
+            return None
+        if is_hard_boundary_status(str(row.get("status") or "")):
             return None
         if _is_effective_context_anchor(row, uncategorized_id):
             project_id = _row_project_id(row)
@@ -592,7 +608,9 @@ def _find_previous_concrete_effective_anchor(
     """
     for pos in range(index - 1, -1, -1):
         row = rows[pos]
-        if row["status"] in INTERRUPT_STATUSES:
+        if _has_session_boundary_between(row, rows[pos + 1]):
+            return None
+        if is_hard_boundary_status(str(row.get("status") or "")):
             return None
         if _is_effective_context_anchor(row, uncategorized_id):
             project_id = _row_project_id(row)
@@ -609,7 +627,9 @@ def _find_next_concrete_effective_anchor(
     file-context anchors instead of stopping at them."""
     for pos in range(index + 1, len(rows)):
         row = rows[pos]
-        if row["status"] in INTERRUPT_STATUSES:
+        if _has_session_boundary_between(rows[pos - 1], row):
+            return None
+        if is_hard_boundary_status(str(row.get("status") or "")):
             return None
         if _is_effective_context_anchor(row, uncategorized_id):
             project_id = _row_project_id(row)

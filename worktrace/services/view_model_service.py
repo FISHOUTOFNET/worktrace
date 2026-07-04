@@ -126,6 +126,8 @@ def _display_only_common_fields(span: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds_at_sample": int(live_clock.get("duration_seconds_at_sample") or 0),
         "is_live": bool(live_clock.get("is_live")),
         "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
+        "project_duration_live": bool(live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))),
+        "current_duration_live": bool(live_clock.get("current_duration_live")),
         "project_id": int(span.get("project_id") or 0),
         "project_name": str(span.get("project_name") or "未归类"),
         "project_description": str(span.get("project_description") or ""),
@@ -677,6 +679,8 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
         "live_state": str(live_clock.get("live_state") or ""),
         "is_live": bool(live_clock.get("is_live")),
         "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
+        "project_duration_live": bool(live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))),
+        "current_duration_live": bool(live_clock.get("current_duration_live")),
         "current_activity": current_activity,
         "sample_id": str(model.get("sample_id") or ""),
     }

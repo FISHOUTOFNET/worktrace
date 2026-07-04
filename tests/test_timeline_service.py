@@ -217,7 +217,7 @@ def test_short_other_project_between_same_project_anchors_reports_inside_anchor_
     assert activity_service.get_activity(b_activity)["project_id"] == project_b
 
 
-def test_short_idle_between_same_project_anchors_reports_inside_anchor_session(temp_db):
+def test_short_idle_between_same_project_anchors_breaks_anchor_session(temp_db):
     project_a = project_service.create_project("A")
     _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
     idle_activity = _activity("空闲", "idle", "用户空闲", "09:05:00", status="idle")
@@ -225,13 +225,13 @@ def test_short_idle_between_same_project_anchors_reports_inside_anchor_session(t
     activity_service.close_all_open_rows("2026-06-18 09:12:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
-    details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
-    idle_detail = next(row for row in details if row["id"] == idle_activity)
+    idle_session = next(session for session in sessions if idle_activity in session["activity_ids"])
+    idle_detail = timeline_service.get_session_activity_details(idle_session["activity_ids"])[0]
 
-    assert len(sessions) == 1
-    assert sessions[0]["project_name"] == "A"
-    assert sessions[0]["status"] == "mixed"
-    assert sessions[0]["duration_seconds"] == 720
+    assert len(sessions) == 3
+    assert idle_session["project_name"] == UNCATEGORIZED_PROJECT
+    assert idle_session["status"] == "idle"
+    assert idle_session["duration_seconds"] == 180
     assert idle_detail["status"] == "idle"
     assert idle_detail["project_name"] == UNCATEGORIZED_PROJECT
 
