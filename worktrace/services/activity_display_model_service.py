@@ -205,9 +205,8 @@ def classify_display_live_state(
     the legacy ``"virtual"`` state into:
 
     - ``"virtual_pending"`` — normal, unpersisted, ``<30s``, and no
-      previous confirmed normal activity to absorb into. Only the
-      current-activity area renders it; Recent / Timeline / Details show
-      no live row.
+      previous confirmed normal activity to absorb into. It produces a
+      display-only span for Current / Recent / Timeline / Details.
     - ``"absorbed_pending"`` — normal, unpersisted, ``<30s``, and a
       previous confirmed normal activity exists. The pending elapsed is
       projected (display-only) onto that anchor's DB row.
@@ -310,6 +309,7 @@ def _build_project_live_clock(
         "persisted_open",
     )
     is_project_duration_live = display_live_state in (
+        "virtual_pending",
         "absorbed_pending",
         "persisted_open",
     )
@@ -640,9 +640,13 @@ def _build_display_span(
         "is_persisted": bool(is_persisted),
         "is_absorbed_pending": bool(is_absorbed),
         "is_visible_in_current": True,
-        "is_visible_in_recent": display_live_state in ("absorbed_pending", "persisted_open"),
-        "is_visible_in_timeline": display_live_state in ("absorbed_pending", "persisted_open"),
-        "is_visible_in_details": display_live_state in ("absorbed_pending", "persisted_open"),
+        "is_visible_in_recent": display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"),
+        "is_visible_in_timeline": display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"),
+        "is_visible_in_details": display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"),
+        "is_display_only": display_live_state in ("virtual_pending", "absorbed_pending"),
+        "display_only": display_live_state in ("virtual_pending", "absorbed_pending"),
+        "editable": False,
+        "exportable": False,
         "edit_disabled": True,
         "disable_reason": _LIVE_EDIT_DISABLE_REASON,
         "display_project": project_fields["display_project"] if display_live_state != "absorbed_pending" else None,
@@ -831,7 +835,7 @@ def build_activity_display_model(
     current_activity_clock = _build_current_activity_clock(snapshot, display_live_state)
 
     display_spans: list[dict[str, Any]] = []
-    if is_today and display_live_state in ("absorbed_pending", "persisted_open"):
+    if is_today and display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"):
         display_spans.append(
             _build_display_span(
                 snapshot, display_live_state, anchor, live_clock, summary, report_date, today or ""

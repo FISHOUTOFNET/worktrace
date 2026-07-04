@@ -274,8 +274,8 @@ def _isolate_snapshot(temp_db):
 def test_virtual_pending_no_anchor_live_state_and_visibility():
     """Case (a): a pending unpersisted snapshot with NO previous
     confirmed normal anchor resolves to ``virtual_pending``. The span is
-    NOT visible in recent / timeline / details — only in the
-    current-activity area.
+    display-only and visible in current / recent / timeline / details,
+    but never exportable or editable.
     """
     snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
     _set_snapshot(snap)
@@ -291,13 +291,18 @@ def test_virtual_pending_no_anchor_live_state_and_visibility():
     assert model["live_clock"]["live_state"] == "virtual_pending"
 
     span = get_live_span(model)
-    # virtual_pending produces NO display span (only current-activity area).
-    assert span is None, (
-        "virtual_pending must NOT produce a display span (no recent / timeline / "
-        "details projection)"
-    )
-    # The current-activity area still surfaces the live clock so the user
-    # sees what they are currently doing.
+    assert span is not None
+    assert span["source"] == "snapshot"
+    assert int(span["activity_id"]) == 0
+    assert int(span["anchor_activity_id"]) == 0
+    assert span["is_visible_in_current"] is True
+    assert span["is_visible_in_recent"] is True
+    assert span["is_visible_in_timeline"] is True
+    assert span["is_visible_in_details"] is True
+    assert span["exportable"] is False
+    assert span["editable"] is False
+    assert span["edit_disabled"] is True
+    assert span["is_display_only"] is True
     current = model["current_activity"]
     assert current["live_state"] == "virtual_pending"
     assert current["is_virtual_live"] is True

@@ -9,8 +9,9 @@ persisted_open overlay, project transition) is decided by
 1. Calls :func:`build_activity_display_model` once per request.
 2. Projects page payloads from that model.
 3. Builds ordinary DB list payloads (sessions, activity details).
-4. Applies ``apply_live_span_to_row`` to matching DB rows — NEVER injects a
-   separate virtual recent item / virtual session / virtual detail row.
+4. Applies ``apply_live_span_to_row`` to matching DB rows.
+5. Materializes an unanchored ``virtual_pending`` span as display-only
+   Recent / Timeline / Detail rows.
 
 Boundary:
 
@@ -82,6 +83,113 @@ def _apply_live_span_to_rows(rows: list[dict[str, Any]], model: dict[str, Any]) 
         apply_live_span_to_row(row, span)
 
 
+def _get_virtual_pending_span(model: dict[str, Any]) -> dict[str, Any] | None:
+    span = get_live_span(model)
+    if not span:
+        return None
+    if str(span.get("live_state") or "") != "virtual_pending":
+        return None
+    if int(span.get("anchor_activity_id") or 0) != 0:
+        return None
+    return span
+
+
+def _display_only_common_fields(span: dict[str, Any]) -> dict[str, Any]:
+    live_clock = span.get("live_clock") or {}
+    duration_seconds = int(span.get("duration_seconds") or 0)
+    return {
+        "activity_id": int(span.get("activity_id") or 0),
+        "start_time": str(span.get("start_time") or ""),
+        "end_time": "",
+        "duration": format_duration(duration_seconds),
+        "duration_seconds": duration_seconds,
+        "raw_duration_seconds": 0,
+        "live_base_seconds": duration_seconds,
+        "live_delta_eligible": True,
+        "is_in_progress": True,
+        "is_live_projected": True,
+        "is_virtual": True,
+        "is_virtual_live": True,
+        "is_display_only": True,
+        "display_only": True,
+        "editable": False,
+        "exportable": False,
+        "source": "snapshot",
+        "edit_disabled": True,
+        "disable_reason": str(span.get("disable_reason") or ""),
+        "display_span_id": str(span.get("display_span_id") or ""),
+        "stable_live_key": str(live_clock.get("stable_live_key") or ""),
+        "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
+        "live_state": str(live_clock.get("live_state") or ""),
+        "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),
+        "carry_seconds": int(live_clock.get("carry_seconds") or 0),
+        "duration_seconds_at_sample": int(live_clock.get("duration_seconds_at_sample") or 0),
+        "is_live": bool(live_clock.get("is_live")),
+        "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
+        "project_id": int(span.get("project_id") or 0),
+        "project_name": str(span.get("project_name") or "未归类"),
+        "project_description": str(span.get("project_description") or ""),
+        "display_project": span.get("display_project"),
+        "candidate_project": span.get("candidate_project"),
+        "project_transition": span.get("project_transition"),
+        "project_transition_pending": bool(span.get("project_transition_pending")),
+        "is_uncategorized": bool(span.get("is_uncategorized")),
+        "is_classified": bool(span.get("is_classified")),
+    }
+
+
+def _materialize_display_only_recent_row(span: dict[str, Any]) -> dict[str, Any]:
+    row = _display_only_common_fields(span)
+    row.update(
+        {
+            "project_name": str(span.get("project_name") or "未归类"),
+            "project_description": str(span.get("project_description") or ""),
+            "activity_ids": [int(span.get("activity_id") or 0)],
+            "first_activity_id": int(span.get("activity_id") or 0),
+            "status": "进行中",
+        }
+    )
+    return row
+
+
+def _materialize_display_only_timeline_session(span: dict[str, Any]) -> dict[str, Any]:
+    row = _display_only_common_fields(span)
+    stable_hash = str(row.get("stable_live_key_hash") or "")
+    row.update(
+        {
+            "session_id": "live:" + stable_hash if stable_hash else "live:pending",
+            "activity_ids": [int(span.get("activity_id") or 0)],
+            "first_activity_id": int(span.get("activity_id") or 0),
+            "raw_duration": format_duration(0),
+            "adjusted_duration_seconds": None,
+            "has_duration_override": False,
+            "status": "进行中",
+            "event_count": 1,
+            "session_note": "",
+        }
+    )
+    return row
+
+
+def _materialize_display_only_detail_row(
+    span: dict[str, Any],
+    current_activity: dict[str, Any],
+) -> dict[str, Any]:
+    row = _display_only_common_fields(span)
+    row.update(
+        {
+            "app_name": str(current_activity.get("app_name") or ""),
+            "resource_type": format_resource_type(
+                current_activity.get("resource_kind"),
+                current_activity.get("resource_subtype"),
+            ),
+            "resource_name": str(span.get("resource_name") or "未知"),
+            "status": str(current_activity.get("status") or "normal"),
+        }
+    )
+    return row
+
+
 # Overview ViewModel
 
 
@@ -124,6 +232,9 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     # Apply the unified live-span overlay to ALL session rows so the KPI
     # totals reflect the same sample as the recent items.
     _apply_live_span_to_rows(all_rows, model)
+    virtual_span = _get_virtual_pending_span(model)
+    if virtual_span and virtual_span.get("is_visible_in_recent"):
+        all_rows.insert(0, _materialize_display_only_recent_row(virtual_span))
 
     # KPI totals computed from the overlaid rows. Classification uses the
     # explicit ``is_classified`` / ``is_uncategorized`` flags propagated by
@@ -325,6 +436,9 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     # Apply the unified live-span overlay to matching sessions BEFORE
     # computing the display total so the total matches the sum of rows.
     _apply_live_span_to_rows(sessions, model)
+    virtual_span = _get_virtual_pending_span(model)
+    if virtual_span and virtual_span.get("is_visible_in_timeline"):
+        sessions.insert(0, _materialize_display_only_timeline_session(virtual_span))
     # In-progress sessions that received no live overlay still need
     # edit_disabled.
     for row in sessions:
@@ -390,9 +504,24 @@ def get_session_details_view_model(
     display_span_id = str(live_clock.get("display_span_id") or "")
     sample_id = str(model.get("sample_id") or "")
 
+    virtual_span = _get_virtual_pending_span(model)
+    if virtual_span and virtual_span.get("is_visible_in_details"):
+        virtual_id = int(virtual_span.get("activity_id") or 0)
+        if not ids or virtual_id in ids:
+            return {
+                "ok": True,
+                "activities": [
+                    _materialize_display_only_detail_row(virtual_span, current_activity)
+                ],
+                "current_activity": current_activity,
+                "live_clock": live_clock,
+                "current_activity_clock": current_activity_clock,
+                "display_span_id": display_span_id,
+                "activity_display_model": model,
+                "sample_id": sample_id,
+            }
+
     if not ids:
-        # No virtual detail row is injected for an empty selection. The
-        # frontend uses the current-activity area from the display model.
         return {
             "ok": True,
             "activities": [],

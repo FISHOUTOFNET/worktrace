@@ -19,9 +19,9 @@ Covered invariants:
    ``applyLocalTicker()`` must not read structural caches as live-seconds
    source.)
 5. ``overview.js`` / ``timeline.js`` render live rows with ``data-display-span-id``.
-6. (Covered in ``test_bridge_refresh_state_and_projection.py``:
-   ``get_timeline_session_details([], date)`` under virtual_pending returns
-   ``activities == []`` but root still carries ``live_clock`` / ``display_span_id``.)
+6. Page ViewModels consume Activity Display Model spans: anchored spans
+   overlay DB rows; unanchored ``virtual_pending`` spans may materialize
+   display-only rows.
 7. (Covered in ``test_live_display_project_transition_contract.py``:
    ``build_activity_display_model()`` visibility flags for the 3 states;
    ``absorbed_pending`` projection never writes DB.)
@@ -61,8 +61,8 @@ def test_view_model_service_does_not_reference_legacy_virtual_builders():
         assert symbol not in source, (
             "view_model_service.py must not reference the legacy helper "
             + symbol
-            + " — the page ViewModel path projects only DB rows + "
-              "apply_live_span_to_row overlay"
+            + " — the page ViewModel path consumes Activity Display "
+              "Model spans only"
         )
 
 

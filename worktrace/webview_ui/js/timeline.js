@@ -28,29 +28,17 @@
         var listEl = document.getElementById("timeline-sessions-list");
         var sessions = data.sessions || [];
         App.currentSessions = sessions;
-        // Live span is present when the Activity Display Model provides a
-        // non-empty ``display_span_id`` and a live clock with ``is_live``.
-        var liveClock = data.live_clock || null;
-        var hasLiveSpan = !!(
-            liveClock
-            && liveClock.is_live
-            && (data.display_span_id || (liveClock.display_span_id))
-        );
         if (sessions.length === 0) {
-            if (hasLiveSpan) {
-                listEl.innerHTML = '<div class="timeline-empty">正在加载当前活动…</div>';
-            } else {
-                listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
-                // Invalidate any pending detail request and clear the detail cache so a stale response does not
-                // backfill the cleared panel and the ticker does not project against a stale payload.
-                ++App.detailsRequestToken;
-                App.lastSessionDetailsViewModel = null;
-                document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
-                document.getElementById("timeline-details-list").innerHTML = "";
-                App.selectedSessionId = null;
-                App.selectedSessionLiveKey = null;
-                clearEditPanel();
-            }
+            listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
+            // Invalidate any pending detail request and clear the detail cache so a stale response does not
+            // backfill the cleared panel and the ticker does not project against a stale payload.
+            ++App.detailsRequestToken;
+            App.lastSessionDetailsViewModel = null;
+            document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
+            document.getElementById("timeline-details-list").innerHTML = "";
+            App.selectedSessionId = null;
+            App.selectedSessionLiveKey = null;
+            clearEditPanel();
             return;
         }
 

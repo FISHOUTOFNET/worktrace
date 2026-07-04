@@ -216,6 +216,75 @@ def test_stable_live_key_survives_virtual_to_persisted_transition(bridge):
     assert hash_virtual == hash_persisted
 
 
+def test_virtual_pending_to_persisted_open_display_span_continuity(bridge):
+    """Crossing the persistence threshold keeps the same stable live
+    key and span id, with display duration advancing once."""
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+
+    start = (datetime.now() - timedelta(seconds=29)).strftime(TIME_FORMAT)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=29,
+            is_persisted=False,
+            start_time=start,
+        )
+    )
+    virtual_model = build_activity_display_model()
+    virtual_clock = virtual_model["live_clock"]
+    virtual_span = virtual_model["display_spans"][0]
+    assert virtual_clock["live_state"] == "virtual_pending"
+    assert virtual_span["source"] == "snapshot"
+
+    aid = activity_service.create_activity(
+        "AppA",
+        "AppA.exe",
+        "Window",
+        start_time=start,
+    )
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=30,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start,
+        )
+    )
+    persisted_model = build_activity_display_model()
+    persisted_clock = persisted_model["live_clock"]
+    persisted_span = persisted_model["display_spans"][0]
+
+    assert persisted_clock["live_state"] == "persisted_open"
+    assert persisted_clock["stable_live_key_hash"] == virtual_clock["stable_live_key_hash"]
+    assert persisted_clock["display_span_id"] == virtual_clock["display_span_id"]
+    assert persisted_span["display_span_id"] == virtual_span["display_span_id"]
+    assert int(persisted_span["anchor_activity_id"]) == aid
+    assert int(virtual_span["duration_seconds"]) == 29
+    assert int(persisted_span["duration_seconds"]) == 30
+
+
+def test_virtual_pending_display_span_visibility_flags(bridge):
+    """``virtual_pending`` spans are visible on display surfaces but
+    never exportable or editable."""
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+
+    _set_snapshot(_normal_snapshot(elapsed_seconds=12, is_persisted=False))
+    model = build_activity_display_model()
+    span = model["display_spans"][0]
+    assert span["live_state"] == "virtual_pending"
+    assert span["is_visible_in_current"] is True
+    assert span["is_visible_in_recent"] is True
+    assert span["is_visible_in_timeline"] is True
+    assert span["is_visible_in_details"] is True
+    assert span["exportable"] is False
+    assert span["editable"] is False
+    assert span["edit_disabled"] is True
+    assert span["is_display_only"] is True
+
+
 def test_stable_live_key_changes_on_start_time_change(bridge):
     """when the start_time changes (a genuinely
     different activity), the stable_live_key must also change."""
@@ -758,26 +827,26 @@ def test_time_edit_changes_revision(bridge):
 
 def test_virtual_session_and_detail_are_display_only(bridge):
     """Under the unified Activity Display Model, a normal unpersisted
-    pending snapshot (``virtual_pending``) does NOT inject virtual
-    sessions or virtual detail rows into Timeline / Details. The pending
-    resource is ONLY visible in the current-activity area. Recent /
-    Timeline / Details lists come purely from DB rows."""
+    pending snapshot (``virtual_pending``) materializes display-only
+    Timeline / Details rows without creating DB history."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=10))
     timeline = bridge.get_timeline()
-    # No virtual session is injected for a virtual_pending snapshot.
-    assert timeline["sessions"] == []
+    assert len(timeline["sessions"]) == 1
+    session = timeline["sessions"][0]
+    assert session["source"] == "snapshot"
+    assert session["is_display_only"] is True
+    assert session["edit_disabled"] is True
 
     details = bridge.get_timeline_session_details([], None)
-    # No virtual detail row is injected for an empty selection.
-    assert details["activities"] == []
+    assert len(details["activities"]) == 1
+    detail = details["activities"][0]
+    assert detail["source"] == "snapshot"
+    assert detail["is_display_only"] is True
+    assert detail["edit_disabled"] is True
 
-    # The current-activity area DOES show the pending resource.
     overview = bridge.get_overview()
     assert overview["current_activity"]["active"] is True
-    assert overview["current_activity"]["live_state"] in (
-        "virtual_pending",
-        "absorbed_pending",
-    )
+    assert overview["current_activity"]["live_state"] == "virtual_pending"
 
 
 
@@ -960,20 +1029,16 @@ def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
     bridge-level version of
     ``test_stable_live_key_survives_virtual_to_persisted_transition``.
 
-    Under the new architecture, ``virtual_pending`` is ONLY visible in
-    the current-activity area (no recent / timeline row is injected),
-    while ``persisted_open`` is visible in the current-activity area
-    AND in timeline (real DB row overlaid). The
-    ``stable_live_key_hash`` surfaced via the current-activity area must
-    be the same in both states so the frontend continuity key survives
-    the transition.
+    ``virtual_pending`` is display-only and ``persisted_open`` overlays
+    the real DB row, but both states must surface the same stable identity
+    so the frontend continuity key survives the transition.
     """
     aid, start_time = _create_real_open_activity(
         app_name="AppA",
         process_name="AppA.exe",
         elapsed_seconds=10,
     )
-    # virtual_pending snapshot (unpersisted) — no DB row visible in lists.
+    # virtual_pending snapshot (unpersisted) — display-only rows are visible.
     _set_snapshot(
         _normal_snapshot(
             elapsed_seconds=10,
@@ -984,6 +1049,9 @@ def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
     overview_virtual = bridge.get_overview()
     virtual_hash = overview_virtual["current_activity"]["stable_live_key_hash"]
     assert virtual_hash, "virtual_pending current_activity must carry stable_live_key_hash"
+    virtual_span_id = overview_virtual["live_clock"]["display_span_id"]
+    assert virtual_span_id
+    assert overview_virtual["activities"][0]["stable_live_key_hash"] == virtual_hash
 
     # persisted_open snapshot (same activity identity).
     _set_snapshot(
@@ -1002,6 +1070,7 @@ def test_virtual_to_persisted_open_stable_key_hash_unchived_at_bridge(bridge):
     assert virtual_hash == persisted_hash, (
         "stable_live_key_hash must not change across virtual_pending -> persisted_open"
     )
+    assert overview_persisted["live_clock"]["display_span_id"] == virtual_span_id
 
     # persisted_open IS visible in timeline, so timeline's live_clock
     # must carry the same hash.
@@ -1266,17 +1335,15 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     assert detail_row["live_base_seconds"] + delta_plus_5 == 245
 
 
-def test_virtual_pending_no_rows_in_lists_and_no_kpi_tick(bridge):
+def test_virtual_pending_rows_in_lists_and_kpi_tick(bridge):
     """A ``virtual_pending`` snapshot (normal, unpersisted, <30s, no
     absorb anchor) must:
 
     * render the pending resource in the current-activity area;
-    * NOT inject any row into Recent / Timeline / Details;
-    * NOT inflate Overview KPI ``today_total_seconds`` /
-      ``classified_seconds`` / ``uncategorized_seconds`` (no DB row to
-      project onto);
+    * materialize display-only rows into Recent / Timeline / Details;
+    * include the display duration in Overview KPI totals;
     * surface a live_clock with ``is_live == True`` but
-      ``is_project_duration_live == False``.
+      ``is_project_duration_live == True``.
     """
     # No prior activity exists, so the pending snapshot has no anchor.
     _set_snapshot(
@@ -1296,22 +1363,19 @@ def test_virtual_pending_no_rows_in_lists_and_no_kpi_tick(bridge):
     assert overview["current_activity"]["is_virtual_live"] is True
     assert overview["live_clock"]["live_state"] == "virtual_pending"
     assert overview["live_clock"]["is_live"] is True
-    # KPI totals must NOT tick for virtual_pending.
-    assert overview["live_clock"]["is_project_duration_live"] is False, (
-        "virtual_pending must NOT tick project/KPI totals"
-    )
+    assert overview["live_clock"]["is_project_duration_live"] is True
 
-    # Recent / Timeline must have NO live row injected.
-    assert recent["activities"] == [], (
-        "virtual_pending must NOT inject a row into Recent"
-    )
-    assert timeline["sessions"] == [], (
-        "virtual_pending must NOT inject a row into Timeline"
-    )
+    assert len(recent["activities"]) == 1
+    assert len(timeline["sessions"]) == 1
+    recent_row = recent["activities"][0]
+    timeline_row = timeline["sessions"][0]
+    assert recent_row["source"] == "snapshot"
+    assert timeline_row["source"] == "snapshot"
+    assert recent_row["edit_disabled"] is True
+    assert timeline_row["edit_disabled"] is True
 
-    # KPI totals must be 0 (no DB rows, no live projection onto a DB row).
-    assert int(overview["today_total_seconds"]) == 0
-    assert int(overview["classified_seconds"]) == 0
+    assert int(overview["today_total_seconds"]) == 10
+    assert int(overview["classified_seconds"]) == 10
     assert int(overview["uncategorized_seconds"]) == 0
 
 
@@ -1565,17 +1629,15 @@ def test_absorbed_pending_does_not_cross_restart_boundary(bridge):
         "NOT absorb into the previous confirmed normal activity; expected "
         "live_state=virtual_pending"
     )
-    assert model["display_spans"] == [], (
-        "no display span should be created when a session boundary blocks "
-        "absorption (virtual_pending has no DB row to overlay)"
-    )
+    assert len(model["display_spans"]) == 1
+    assert int(model["display_spans"][0]["anchor_activity_id"]) == 0
 
     # 5. The bridge Overview / Recent / Timeline must NOT overlay A.
     overview = bridge.get_overview()
     recent = bridge.get_recent_activities()
     timeline = bridge.get_timeline()
     assert overview["live_clock"]["live_state"] == "virtual_pending"
-    assert overview["live_clock"]["is_project_duration_live"] is False
+    assert overview["live_clock"]["is_project_duration_live"] is True
     # Recent / Timeline carry the anchor DB row (it's still today's history),
     # but it must NOT be overlaid (no live_state, no live_base_seconds bump).
     for item in recent["activities"]:
@@ -1634,7 +1696,8 @@ def test_absorbed_pending_does_not_cross_stopped_boundary(bridge):
 
     model = build_activity_display_model()
     assert model["live_clock"]["live_state"] == "virtual_pending"
-    assert model["display_spans"] == []
+    assert len(model["display_spans"]) == 1
+    assert int(model["display_spans"][0]["anchor_activity_id"]) == 0
 
 
 def test_absorbed_pending_same_session_allows_absorption(bridge):
@@ -1724,7 +1787,8 @@ def test_absorbed_pending_rejects_anchor_end_after_pending_start(bridge):
         "an anchor whose end_time > pending_start_time is an overlap / "
         "anomaly and MUST NOT be used as an absorption anchor"
     )
-    assert model["display_spans"] == []
+    assert len(model["display_spans"]) == 1
+    assert int(model["display_spans"][0]["anchor_activity_id"]) == 0
 
 
 def test_absorbed_pending_rejects_pending_without_start_time(bridge):
@@ -1764,7 +1828,8 @@ def test_absorbed_pending_rejects_pending_without_start_time(bridge):
 
     model = build_activity_display_model()
     assert model["live_clock"]["live_state"] == "virtual_pending"
-    assert model["display_spans"] == []
+    assert len(model["display_spans"]) == 1
+    assert int(model["display_spans"][0]["anchor_activity_id"]) == 0
 
 
 def test_absorbed_pending_current_activity_uses_anchor_project_for_kpi(bridge):
