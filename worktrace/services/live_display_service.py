@@ -639,6 +639,7 @@ def compute_refresh_revision(
     user_paused: bool,
     today: str,
     report_date: str | None = None,
+    display_model: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Compute the unified refresh-revision signature."""
     if report_date is None:
@@ -651,10 +652,6 @@ def compute_refresh_revision(
     inferred_project = ""
     if snapshot:
         inferred_project = str(snapshot.get("inferred_project_name") or "")
-    # Carry / pending state: only the production-maintained
-    # ``pending_short_seconds`` accumulator contributes. Legacy
-    # structured carry removed (no writer; no ``carry_*`` field hashed).
-    pending_short_seconds = _read_pending_short_seconds()
     latest_id = 0
     latest_updated_at = ""
     latest_kind = ""
@@ -710,15 +707,11 @@ def compute_refresh_revision(
         pass
     revision_input = "|".join(
         [
-            current_activity_key,
-            current_status,
-            "1" if is_persisted else "0",
-            str(persisted_id),
-            inferred_project,
+            str((display_model or {}).get("display_structural_signature") or ""),
             collector_status,
             "1" if user_paused else "0",
             today,
-            str(pending_short_seconds),
+            str(report_date or ""),
             # Structural signature so a duration-only ``updated_at`` bump
             # does not trigger a heavy refresh.
             structural_signature,
@@ -736,7 +729,10 @@ def compute_refresh_revision(
         "collector_status": collector_status,
         "user_paused": user_paused,
         "today": today,
-        "pending_short_seconds": pending_short_seconds,
+        "pending_short_seconds": _read_pending_short_seconds(),
+        "display_structural_signature": str(
+            (display_model or {}).get("display_structural_signature") or ""
+        ),
         "structural_signature": structural_signature,
         "row_count": row_count,
         "latest_id": latest_id,

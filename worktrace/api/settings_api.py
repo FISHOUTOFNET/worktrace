@@ -402,60 +402,7 @@ def accept_first_run_notice_for_webview() -> dict[str, Any]:
 def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
     """Return a lightweight refresh-state payload for the frontend heartbeat."""
     try:
-        snapshot = get_current_activity_snapshot()
-        collector_status = get_collector_status()
-        user_paused = is_user_paused()
-        paused = bool(user_paused) or collector_status == "paused"
-        # Scope the structural signature to the viewed Timeline date (today by default)
-        # so structural changes there trigger a heavy refresh.
-        from . import timeline_api as _timeline_api
-        today = _timeline_api.get_default_report_date()
-        scoped_report_date = report_date or today
-        # Unified refresh revision covers all structural changes (snapshot, carry state, latest activity, collector status).
-        refresh_revision, debug_inputs = view_model_api.compute_refresh_revision(
-            snapshot, collector_status, user_paused, today, scoped_report_date
-        )
-        current_activity_key = str(debug_inputs.get("current_activity_key") or "")
-        current_activity_status = str(debug_inputs.get("current_status") or "")
-        is_persisted = bool(debug_inputs.get("is_persisted"))
-        persisted_activity_id = int(debug_inputs.get("persisted_id") or 0)
-        inferred_project_name = str(debug_inputs.get("inferred_project") or "")
-        latest_activity_id = int(debug_inputs.get("latest_id") or 0)
-        # Unified live clock: build the current-activity summary from the SAME snapshot
-        # sample so the frontend ticker uses live_started_at_epoch_ms + carry_seconds
-        # without a second bridge call. Live clock fields share the snapshot with
-        # refresh_revision (single-sample contract).
-        live_summary = view_model_api.build_current_activity_summary(
-            snapshot, report_date=scoped_report_date, today=today
-        )
-        if paused or collector_status == "paused":
-            status_display = "已暂停"
-        elif collector_status == "running":
-            status_display = "记录中"
-        elif collector_status == "error":
-            status_display = "状态异常"
-        else:
-            status_display = "采集器未运行"
-        return {
-            "ok": True,
-            "collector_status": collector_status,
-            "paused": paused,
-            "status_display": status_display,
-            "current_activity_key": current_activity_key,
-            "current_activity_status": current_activity_status,
-            "is_persisted": is_persisted,
-            "persisted_activity_id": persisted_activity_id,
-            "inferred_project_name": inferred_project_name,
-            "refresh_revision": refresh_revision,
-            "today": today,
-            "report_date": scoped_report_date,
-            "latest_activity_id": latest_activity_id,
-            "live_started_at_epoch_ms": int(live_summary.get("live_started_at_epoch_ms") or 0),
-            "carry_seconds": int(live_summary.get("carry_seconds") or 0),
-            "stable_live_key": str(live_summary.get("stable_live_key") or ""),
-            "stable_live_key_hash": str(live_summary.get("stable_live_key_hash") or ""),
-            "live_state": str(live_summary.get("live_state") or ""),
-        }
+        return view_model_api.get_refresh_state_view_model(report_date)
     except Exception:
         return {"ok": False, "error": "刷新状态加载失败"}
 

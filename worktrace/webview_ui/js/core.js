@@ -23,9 +23,9 @@
     App.lastSessionDetailsViewModel = null;
     App.lastTimelineData = null;
 
-    // Unified live-clock registry. Keyed by ``display_span_id``. Populated from any payload that
-    // carries ``live_clock`` (Overview / Recent / Timeline / Details / Refresh State). The single
-    // live-seconds formula: ``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``.
+    // Project live-clock registry. Keyed by ``display_span_id``. Populated from any payload that
+    // carries project ``live_clock`` (Overview / Recent / Timeline / Details / Refresh State).
+    // Current-activity UI has its own registry below and never reads this as a fallback.
     App.liveClockBySpanId = {};
     App.liveDisplayModel = null;
     // Explicit active span id — the single live span currently eligible to tick
@@ -39,6 +39,7 @@
     // ``getActiveLiveClock`` reads ``App.liveClockByPage[App.currentPage]``.
     App.liveClockByPage = {};
     App.activeDisplaySpanIdByPage = {};
+    App.currentActivityClockByPage = {};
 
     // ``lastRefreshState`` caches the last ``get_refresh_state`` payload for revision comparison;
     // ``refreshCheckInFlight`` / ``activePageRefreshInFlight`` guard overlapping checks / refreshes.
@@ -639,6 +640,43 @@
     }
     App.registerLiveClock = registerLiveClock;
 
+    function registerCurrentActivityClock(payload, options) {
+        var opts = options || {};
+        var pageScope = String(opts.page || App.currentPage || "overview");
+        var clock = null;
+        if (payload) {
+            clock = payload.current_activity_clock || null;
+            if (!clock && payload.activity_display_model) {
+                clock = payload.activity_display_model.current_activity_clock || null;
+            }
+            if (!clock && payload.current_activity) {
+                clock = payload.current_activity.current_activity_clock || null;
+            }
+        }
+        if (!clock) {
+            delete App.currentActivityClockByPage[pageScope];
+            return;
+        }
+        var currentSpanId = String(clock.display_span_id || "");
+        var prev = App.currentActivityClockByPage[pageScope] || null;
+        if (pageScope === App.currentPage
+            && prev
+            && String(prev.display_span_id || "") !== currentSpanId) {
+            App.resetMonotonicRenderState();
+        }
+        App.currentActivityClockByPage[pageScope] = clock;
+        if (payload && payload.activity_display_model) {
+            App.liveDisplayModel = payload.activity_display_model;
+        }
+    }
+    App.registerCurrentActivityClock = registerCurrentActivityClock;
+
+    function getActiveCurrentActivityClock() {
+        var page = App.currentPage || "overview";
+        return App.currentActivityClockByPage[page] || null;
+    }
+    App.getActiveCurrentActivityClock = getActiveCurrentActivityClock;
+
     // Return the single active live clock for the CURRENT page scope, or
     // ``null``. Reads ONLY ``App.liveClockByPage[App.currentPage]`` so a
     // hidden page's payload cannot become the active clock. There is NO
@@ -675,6 +713,7 @@
         }
         App.liveClockBySpanId = {};
         App.liveClockByPage = {};
+        App.currentActivityClockByPage = {};
         App.activeDisplaySpanIdByPage = {};
         App.liveDisplayModel = null;
         App.activeDisplaySpanId = "";
@@ -708,6 +747,42 @@
     }
     App.liveContinuityKey = liveContinuityKey;
 
+    function currentActivityContinuityKey(current, clock, prefix) {
+        var hash = "";
+        if (clock && clock.stable_live_key_hash) {
+            hash = clock.stable_live_key_hash;
+        } else if (current && current.stable_live_key_hash) {
+            hash = current.stable_live_key_hash;
+        }
+        return prefix + ":current:" + (hash || "none");
+    }
+    App.currentActivityContinuityKey = currentActivityContinuityKey;
+
+    function renderCurrentActivityElement(el, current, currentClock, prefix) {
+        if (!el) return;
+        current = current || {};
+        if (!current.active) {
+            el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a\u65e0";
+            return;
+        }
+        var display = current.display || "";
+        var seconds = parseInt(current.elapsed_seconds, 10) || 0;
+        if (currentClock && currentClock.is_live === true) {
+            seconds = liveSeconds(currentClock);
+        }
+        var parts = display.split("\uff5c");
+        if (parts.length >= 3) {
+            parts[2] = App.formatDuration(seconds);
+            el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + parts.join("\uff5c");
+            App._monotonicRenderState[currentActivityContinuityKey(current, currentClock, prefix)] = {
+                lastSeconds: seconds
+            };
+        } else {
+            el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + display;
+        }
+    }
+    App.renderCurrentActivityElement = renderCurrentActivityElement;
+
     // ``applyLocalTicker`` re-renders fetched durations with a wall-clock delta each second without a
     // bridge round-trip. Ticker invariant: ONLY updates DOM text; never calls a bridge, never writes
     // the DB, never starts / stops the collector.
@@ -720,6 +795,7 @@
     // base in the snapshot payload.
     function applyLocalTicker() {
         var clock = getActiveLiveClock();
+        var currentActivityClock = getActiveCurrentActivityClock();
         var liveDelta = 0;
         var projectDurationLive = false;
         if (clock) {
@@ -764,23 +840,9 @@
             }
             var currentEl = document.getElementById("current-activity");
             if (currentEl) {
-                if (current.active && clock) {
-                    // The current-activity area's base IS the live span
-                    // duration (``duration_seconds_at_sample``), so the live
-                    // span's own ``liveSeconds(clock)`` is the correct render
-                    // value here. NOT ``current.elapsed_seconds + liveDelta``
-                    // because ``elapsed_seconds`` already equals
-                    // ``duration_seconds_at_sample``.
-                    var displaySec = liveSeconds(clock);
-                    var display = current.display || "";
-                    var parts = display.split("\uff5c");
-                    if (parts.length >= 3) {
-                        parts[2] = App.formatDuration(displaySec);
-                        currentEl.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + parts.join("\uff5c");
-                    }
-                } else if (!current.active) {
-                    currentEl.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a\u65e0";
-                }
+                App.renderCurrentActivityElement(
+                    currentEl, current, currentActivityClock, "overview"
+                );
             }
         }
 
@@ -790,18 +852,9 @@
             var tlCurrentEl = document.getElementById("timeline-current");
             if (tlCurrentEl) {
                 var tlCurrent = tl.current_activity || {};
-                if (tlCurrent.active && clock) {
-                    // Same as Overview current-activity: base == live span duration.
-                    var tlDisplaySec = liveSeconds(clock);
-                    var tlDisplay = tlCurrent.display || "";
-                    var tlParts = tlDisplay.split("\uff5c");
-                    if (tlParts.length >= 3) {
-                        tlParts[2] = App.formatDuration(tlDisplaySec);
-                        tlCurrentEl.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + tlParts.join("\uff5c");
-                    }
-                } else if (!tlCurrent.active) {
-                    tlCurrentEl.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a\u65e0";
-                }
+                App.renderCurrentActivityElement(
+                    tlCurrentEl, tlCurrent, currentActivityClock, "timeline"
+                );
             }
             var todayStr = App.localTodayStr();
             var isToday = !tl.date || tl.date === todayStr || tl.date === "--";

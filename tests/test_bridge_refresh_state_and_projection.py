@@ -114,6 +114,8 @@ def test_get_refresh_state_returns_dict_with_required_fields(bridge):
         "collector_status",
         "paused",
         "status_display",
+        "current_activity",
+        "current_activity_clock",
         "current_activity_key",
         "current_activity_status",
         "is_persisted",
@@ -129,6 +131,17 @@ def test_get_refresh_state_returns_dict_with_required_fields(bridge):
     assert "snapshot_baseline_epoch_ms" not in result, (
         "get_refresh_state must not return snapshot_baseline_epoch_ms"
     )
+    clock = result["current_activity_clock"]
+    assert "duration_seconds_at_sample" in clock
+    assert "carry_seconds" in clock
+
+
+def test_get_refresh_state_current_activity_clock_is_current_only(bridge):
+    _set_snapshot(_normal_snapshot(elapsed_seconds=35, extra_seconds=10))
+    result = bridge.get_refresh_state()
+    assert result["current_activity"]["elapsed_seconds"] == 35
+    assert result["current_activity_clock"]["duration_seconds_at_sample"] == 35
+    assert result["current_activity_clock"]["carry_seconds"] == 0
 
 
 def test_get_refresh_state_is_json_serializable(bridge):
@@ -225,6 +238,32 @@ def test_refresh_revision_changes_on_status_change(bridge):
     assert r1["refresh_revision"] != r2["refresh_revision"], (
         "refresh_revision must change on current activity status change"
     )
+
+
+def test_refresh_revision_changes_when_project_transition_resolves(bridge):
+    fixed_start = (datetime.now() - timedelta(seconds=60)).strftime(TIME_FORMAT)
+    pending = _normal_snapshot(elapsed_seconds=20, start_time=fixed_start)
+    pending["project_transition"] = {
+        "pending": True,
+        "started_at": fixed_start,
+        "elapsed_seconds": 20,
+        "threshold_seconds": 30,
+        "from_project_id": 1,
+        "to_project_id": 2,
+    }
+    pending["project_transition_pending"] = True
+    _set_snapshot(pending)
+    r1 = bridge.get_refresh_state()
+
+    resolved = dict(pending)
+    resolved["project_transition"] = {
+        **pending["project_transition"],
+        "pending": False,
+    }
+    resolved["project_transition_pending"] = False
+    _set_snapshot(resolved)
+    r2 = bridge.get_refresh_state()
+    assert r1["refresh_revision"] != r2["refresh_revision"]
 
 
 def test_refresh_revision_changes_on_persisted_state(bridge):
@@ -653,10 +692,8 @@ def test_virtual_items_do_not_leak_sensitive_fields(bridge):
     )
 
 
-def test_refresh_revision_changes_on_pending_short_seconds(bridge):
-    """``refresh_revision`` must change when
-    ``pending_short_seconds`` changes (the carry state advances so a
-    short activity that just crossed the threshold triggers a refresh)."""
+def test_refresh_revision_unchanged_on_pending_short_seconds_only(bridge):
+    """``pending_short_seconds`` is projection carry, not structure."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     settings_service.set_setting("pending_short_seconds", "0")
     settings_service.clear_settings_cache()
@@ -664,8 +701,8 @@ def test_refresh_revision_changes_on_pending_short_seconds(bridge):
     settings_service.set_setting("pending_short_seconds", "45")
     settings_service.clear_settings_cache()
     r2 = bridge.get_refresh_state()
-    assert r1["refresh_revision"] != r2["refresh_revision"], (
-        "refresh_revision must change on pending_short_seconds change"
+    assert r1["refresh_revision"] == r2["refresh_revision"], (
+        "refresh_revision must not change on pending_short_seconds only"
     )
 
 

@@ -63,23 +63,24 @@ def run_collector(adapter: PlatformAdapter, stop_event: threading.Event) -> None
                 continue
 
             active_window = adapter.get_active_window()
+            observation_time = now_str()
             clipboard_events = _clipboard_events(adapter) if clipboard_service.is_capture_enabled() else []
             idle_seconds = adapter.get_idle_seconds()
             idle_threshold = max(1, idle_threshold_seconds)
 
             if idle_seconds >= idle_threshold:
-                machine.transition_to("idle", at_time=now)
+                machine.transition_to("idle", at_time=observation_time)
             elif privacy_service.is_excluded(active_window):
-                machine.transition_to("excluded", at_time=now)
+                machine.transition_to("excluded", at_time=observation_time)
             else:
-                machine.transition_to("recording", active_window, at_time=now)
+                machine.transition_to("recording", active_window, at_time=observation_time)
                 for event in clipboard_events:
-                    machine.record_clipboard_event(event, at_time=now)
+                    machine.record_clipboard_event(event, at_time=observation_time)
             prune_counter += 1
             if prune_counter >= 20:
                 clipboard_service.prune_old_events()
                 prune_counter = 0
-            last_loop_time = now
+            last_loop_time = observation_time
             _sleep_poll(stop_event)
         except Exception:
             logging.exception("collector unexpected exception")

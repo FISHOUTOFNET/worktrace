@@ -130,6 +130,7 @@ class OverviewBridgeMixin:
                 "ok": True,
                 "activities": vm.get("activities", []),
                 "live_clock": vm.get("live_clock", {}),
+                "current_activity_clock": vm.get("current_activity_clock", {}),
                 "display_span_id": vm.get("display_span_id", ""),
                 "activity_display_model": vm.get("activity_display_model", {}),
                 "sample_id": vm.get("sample_id", ""),

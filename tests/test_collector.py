@@ -1,5 +1,6 @@
 import threading
 import time
+import inspect
 
 from worktrace.collector.collector import (
     _midnight_crossed_between,
@@ -53,6 +54,17 @@ def test_custom_non_legacy_poll_interval_is_preserved(temp_db):
     _normalize_poll_interval_setting()
 
     assert settings_service.get_setting("poll_interval_seconds") == "2"
+
+
+def test_collector_observation_time_is_after_active_window_fast_path():
+    source = inspect.getsource(run_collector)
+    active_pos = source.find("active_window = adapter.get_active_window()")
+    observation_pos = source.find("observation_time = now_str()", active_pos)
+    transition_pos = source.find('machine.transition_to("recording"', observation_pos)
+    assert active_pos != -1
+    assert observation_pos > active_pos
+    assert transition_pos > observation_pos
+    assert "at_time=observation_time" in source
 
 
 def test_collector_pause_does_not_poll_active_window(temp_db):

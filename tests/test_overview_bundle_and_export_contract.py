@@ -484,14 +484,13 @@ def test_overview_kpi_classified_uncategorized_split_explicit_fields(bridge):
 def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(bridge):
     """Section 一: under a ``persisted_open`` overlay, the Overview KPI
     base, the Recent row's display duration, and the current-activity
-    area's elapsed seconds MUST all derive from the SAME live sample.
-    The frontend ticker only adds the live delta on top; the sample
-    seconds MUST NOT be double-counted.
+    area's elapsed seconds MUST use separate clocks. The project sample
+    includes ``extra_seconds``; the current-activity sample is current-only.
 
     With a persisted_open snapshot (elapsed=210, extra=30 → sample=240),
     the KPI ``classified_seconds`` base, the Recent row's
-    ``live_base_seconds``, and ``current_activity.elapsed_seconds`` must
-    all equal 240 and share the same ``stable_live_key_hash``.
+    ``live_base_seconds`` must equal 240, while
+    ``current_activity.elapsed_seconds`` must equal 210.
     """
     from worktrace.services import activity_service, project_service
 
@@ -561,13 +560,15 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
     )
     assert recent_row["stable_live_key_hash"] == sample_hash
 
-    # current_activity.elapsed_seconds must equal the sample duration.
+    # current_activity.elapsed_seconds must be current-only (no extra_seconds).
     current = bundle["current_activity"]
-    assert int(current["elapsed_seconds"]) == sample_duration, (
+    assert int(current["elapsed_seconds"]) == 210, (
         f"current_activity.elapsed_seconds ({current['elapsed_seconds']}) "
-        f"must equal the sample duration ({sample_duration})"
+        "must equal current snapshot elapsed only"
     )
     assert current["stable_live_key_hash"] == sample_hash
+    assert bundle["current_activity_clock"]["duration_seconds_at_sample"] == 210
+    assert bundle["current_activity_clock"]["carry_seconds"] == 0
 
 
 def _create_real_open_activity_helper(

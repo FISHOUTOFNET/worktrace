@@ -108,6 +108,7 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         report_date=scoped_today, today=scoped_today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
+    current_activity_clock = model.get("current_activity_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
@@ -152,6 +153,7 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         "sample_id": sample_id,
         "display_span_id": display_span_id,
         "live_clock": live_clock,
+        "current_activity_clock": current_activity_clock,
         "activity_display_model": model,
         "overview": {
             "total_duration": format_duration(today_total_seconds),
@@ -259,6 +261,7 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         report_date=scoped_report_date, today=today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
+    current_activity_clock = model.get("current_activity_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
@@ -344,6 +347,7 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         "raw_total_seconds": raw_total_seconds,
         "current_activity": current_activity,
         "live_clock": live_clock,
+        "current_activity_clock": current_activity_clock,
         "display_span_id": display_span_id,
         "activity_display_model": model,
         "sample_id": sample_id,
@@ -381,6 +385,7 @@ def get_session_details_view_model(
         report_date=date, today=today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
+    current_activity_clock = model.get("current_activity_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
     sample_id = str(model.get("sample_id") or "")
@@ -393,6 +398,7 @@ def get_session_details_view_model(
             "activities": [],
             "current_activity": current_activity,
             "live_clock": live_clock,
+            "current_activity_clock": current_activity_clock,
             "display_span_id": display_span_id,
             "activity_display_model": model,
             "sample_id": sample_id,
@@ -449,6 +455,7 @@ def get_session_details_view_model(
         "activities": activities,
         "current_activity": current_activity,
         "live_clock": live_clock,
+        "current_activity_clock": current_activity_clock,
         "display_span_id": display_span_id,
         "activity_display_model": model,
         "sample_id": sample_id,
@@ -488,11 +495,17 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
         report_date=scoped_report_date, today=today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
+    current_activity_clock = model.get("current_activity_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
     refresh_revision, debug_inputs = compute_refresh_revision(
-        snapshot, collector_status, user_paused, today, scoped_report_date
+        snapshot,
+        collector_status,
+        user_paused,
+        today,
+        scoped_report_date,
+        display_model=model,
     )
     current_activity_key = str(debug_inputs.get("current_activity_key") or "")
     current_activity_status = str(debug_inputs.get("current_status") or "")
@@ -526,6 +539,7 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
         "latest_activity_id": latest_activity_id,
         # Unified live clock (single source of truth for the frontend).
         "live_clock": live_clock,
+        "current_activity_clock": current_activity_clock,
         "display_span_id": display_span_id,
         "activity_display_model": model,
         "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),

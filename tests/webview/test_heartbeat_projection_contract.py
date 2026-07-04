@@ -496,8 +496,8 @@ def test_ticker_locates_live_spans_via_data_display_span_id():
     assert 'querySelectorAll' in body, (
         "applyLocalTicker must walk DOM nodes via querySelectorAll"
     )
-    assert 'liveSeconds' in body, (
-        "applyLocalTicker must render each live span via liveSeconds(clock)"
+    assert 'liveDeltaSeconds' in body, (
+        "applyLocalTicker must render live rows via row base + liveDeltaSeconds(clock)"
     )
 
 
@@ -638,11 +638,14 @@ def test_ticker_uses_unified_clock_not_cached_snapshot():
         "applyLocalTicker must not read rItem.duration_seconds from a cached "
         "page-level snapshot; the unified live clock is the single source"
     )
-    assert "liveSeconds" in body, (
-        "applyLocalTicker must render via liveSeconds(clock) (the unified formula)"
+    assert "liveDeltaSeconds" in body, (
+        "applyLocalTicker must render project rows via liveDeltaSeconds(clock)"
     )
     assert "getActiveLiveClock" in body, (
         "applyLocalTicker must read the active clock via getActiveLiveClock()"
+    )
+    assert "getActiveCurrentActivityClock" in body, (
+        "applyLocalTicker must read current activity from its separate clock"
     )
 
 
@@ -1456,13 +1459,10 @@ def test_page_model_render_uses_page_model_source():
             )
 
 
-def test_run_revision_check_skips_registration_on_revision_change():
-    """When ``refresh_revision`` CHANGES, ``runRevisionCheck`` must NOT
-    register the refresh_state clock — it triggers a heavy page-model
-    refresh that will register a fresh sample. Registering the
-    refresh_state sample on a revision-change would seed the clock with
-    a transient state that the heavy refresh immediately replaces,
-    causing a visual flash.
+def test_run_revision_check_registers_current_clock_on_revision_change():
+    """When ``refresh_revision`` changes, current activity updates from
+    refresh_state immediately while project live-clock registration stays
+    guarded by same-span DOM matching.
     """
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
@@ -1470,13 +1470,18 @@ def test_run_revision_check_skips_registration_on_revision_change():
     assert "revision" in body.lower(), (
         "runRevisionCheck must compare refresh_revision"
     )
-    # The revision-change branch must NOT register the refresh_state
-    # clock; registration is gated behind ``preserveSameSpanSample``
-    # (true only on the unchanged branch).
+    assert "registerCurrentActivityClock" in body, (
+        "runRevisionCheck must register current_activity_clock from refresh_state"
+    )
+    assert "renderCurrentActivityElement" in body, (
+        "runRevisionCheck must update current activity immediately"
+    )
+    assert "querySelector" in body and "data-display-span-id" in body, (
+        "revision-changed project clock registration must be gated by a "
+        "matching live DOM row"
+    )
     assert "preserveSameSpanSample" in body, (
-        "runRevisionCheck must gate refresh_state registration behind "
-        "preserveSameSpanSample so the revision-change branch does not "
-        "register a transient sample"
+        "runRevisionCheck must preserve project sample only for eligible same-span paths"
     )
 
 
@@ -1501,6 +1506,53 @@ def test_register_live_clock_accepts_page_scope_option():
         "registerLiveClock must store the clock under App.liveClockByPage "
         "(page-scoped registry)"
     )
+
+
+def test_current_activity_clock_registry_is_page_scoped():
+    src = _strip_js_comments(read_js("core.js"))
+    assert "currentActivityClockByPage" in src
+    reg_body = func_body(src, "registerCurrentActivityClock")
+    get_body = func_body(src, "getActiveCurrentActivityClock")
+    assert "current_activity_clock" in reg_body
+    assert "activity_display_model.current_activity_clock" in reg_body
+    assert "App.currentPage" in get_body
+    assert "currentActivityClockByPage" in get_body
+
+
+def test_apply_local_ticker_current_activity_does_not_fallback_to_project_clock():
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "applyLocalTicker")
+    current_section = body[
+        body.find('document.getElementById("current-activity")'):
+        body.find("var tl = App.lastTimelineData")
+    ]
+    timeline_section = body[
+        body.find('document.getElementById("timeline-current")'):
+        body.find("var tickerPage = App.currentPage")
+    ]
+    assert "currentActivityClock" in current_section
+    assert "currentActivityClock" in timeline_section
+    assert "liveSeconds(clock)" not in current_section
+    assert "liveSeconds(clock)" not in timeline_section
+
+
+def test_renderers_register_project_and_current_clocks():
+    overview = _strip_js_comments(read_js("overview.js"))
+    timeline = _strip_js_comments(read_js("timeline.js"))
+    for src, name in ((overview, "overview.js"), (timeline, "timeline.js")):
+        assert "registerLiveClock" in src, name + " must register project live clock"
+        assert "registerCurrentActivityClock" in src, name + " must register current activity clock"
+
+
+def test_timeline_details_edit_guard_keeps_dom_but_registers_clocks():
+    src = _strip_js_comments(read_js("timeline.js"))
+    body = func_body(src, "renderSessionDetails")
+    reg_pos = body.find("registerCurrentActivityClock")
+    guard_pos = body.find("_timelineEditingActive")
+    render_pos = body.find("detailsList.innerHTML")
+    assert reg_pos != -1 and guard_pos != -1
+    assert reg_pos < guard_pos, "Details must register clocks before edit guard returns"
+    assert guard_pos < render_pos, "Details edit guard must run before DOM redraw"
 
 
 def test_get_active_live_clock_reads_page_scope():

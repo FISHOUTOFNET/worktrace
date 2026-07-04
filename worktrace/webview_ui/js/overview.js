@@ -11,6 +11,7 @@
         // any refresh_state clock seeded during bootstrap / heartbeat.
         // ``page: "overview"`` keeps the clock page-scoped (Section 五 fix).
         App.registerLiveClock(overview, { source: "page_model", page: "overview" });
+        App.registerCurrentActivityClock(overview, { source: "page_model", page: "overview" });
         App.lastOverviewSnapshot = overview;
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-total").textContent = overview.total_duration || "00:00:00";
@@ -24,6 +25,12 @@
         } else {
             currentEl.textContent = "当前活动：无";
         }
+        var currentClock = overview.current_activity_clock || (
+            overview.activity_display_model ? overview.activity_display_model.current_activity_clock : null
+        );
+        App._monotonicRenderState[App.currentActivityContinuityKey(current, currentClock, "overview")] = {
+            lastSeconds: parseInt(current.elapsed_seconds, 10) || 0
+        };
         App._monotonicRenderState["overview-total"] = {
             lastSeconds: parseInt(overview.today_total_seconds, 10) || 0
         };
@@ -40,6 +47,7 @@
         // ``source: "page_model"``: defensive re-registration of the same sample.
         // ``page: "overview"`` keeps the clock page-scoped (Section 五 fix).
         App.registerLiveClock(recentResult, { source: "page_model", page: "overview" });
+        App.registerCurrentActivityClock(recentResult, { source: "page_model", page: "overview" });
         // Structural cache only — never a live-seconds source.
         App.lastRecentData = recentResult;
         var listEl = document.getElementById("recent-list");

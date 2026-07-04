@@ -29,7 +29,7 @@ def snapshot_total_seconds(snapshot: dict | None, now: datetime | None = None) -
 
 
 def snapshot_current_seconds(snapshot: dict | None, now: datetime | None = None) -> int:
-    return snapshot_total_seconds(snapshot, now=now)
+    return snapshot_elapsed_seconds(snapshot, now=now)
 
 
 def snapshot_seconds_for_date_range(

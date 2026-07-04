@@ -138,6 +138,9 @@ _OPEN_FILES_FAILURE_COOLDOWN_SECONDS = 30.0
 
 _com_failure_times: dict[str, float] = {}
 _open_files_failure_times: dict[int, float] = {}
+_active_file_path_cache: dict[tuple[int | None, int | None, str, str], str | None] = {}
+_active_file_path_inflight: set[tuple[int | None, int | None, str, str]] = set()
+_active_file_path_lock = threading.Lock()
 
 
 def _is_com_available(prog_id: str) -> bool:
@@ -284,7 +287,13 @@ def _get_foreground_active_window() -> ActiveWindow:
     except psutil.Error:
         process_name = "unknown"
         app_name = "unknown"
-    file_path_hint = _resolve_active_file_path(process_name, title, pid)
+    file_path_hint = _resolve_title_file_path(title)
+    cache_key = (hwnd, pid, process_name, title)
+    if not file_path_hint:
+        with _active_file_path_lock:
+            file_path_hint = _active_file_path_cache.get(cache_key)
+    if not file_path_hint:
+        _schedule_active_file_path_resolution(cache_key, process_name, title, pid)
     window_class = None
     try:
         window_class = win32gui.GetClassName(hwnd) or None
@@ -299,6 +308,49 @@ def _get_foreground_active_window() -> ActiveWindow:
         hwnd=hwnd,
         window_class=window_class,
     )
+
+
+def _resolve_title_file_path(window_title: str) -> str | None:
+    try:
+        title_path = extract_file_path_from_title(window_title)
+        if title_path and looks_like_local_file_path(title_path):
+            return split_file_path(title_path)[0]
+    except Exception:
+        logging.debug("active file path title parse failed", exc_info=True)
+    return None
+
+
+def _schedule_active_file_path_resolution(
+    cache_key: tuple[int | None, int | None, str, str],
+    process_name: str,
+    title: str,
+    pid: int | None,
+) -> None:
+    with _active_file_path_lock:
+        if cache_key in _active_file_path_inflight:
+            return
+        if cache_key in _active_file_path_cache:
+            return
+        _active_file_path_inflight.add(cache_key)
+
+    def _worker() -> None:
+        resolved = None
+        try:
+            resolved = _resolve_active_file_path(process_name, title, pid)
+        except Exception:
+            logging.debug("background active file path resolution failed", exc_info=True)
+        finally:
+            with _active_file_path_lock:
+                if len(_active_file_path_cache) > 256:
+                    _active_file_path_cache.clear()
+                _active_file_path_cache[cache_key] = resolved
+                _active_file_path_inflight.discard(cache_key)
+
+    threading.Thread(
+        target=_worker,
+        name="WorkTraceActivePathResolver",
+        daemon=True,
+    ).start()
 
 
 def _clipboard_sequence_number() -> int | None:

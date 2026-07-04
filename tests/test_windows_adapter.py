@@ -1,5 +1,7 @@
 import sys
 import threading
+import time
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +13,7 @@ from worktrace.platforms.windows_adapter import (
     _ensure_com_initialized,
     _evaluate_com_path_expression,
     _get_com_file_path_threadsafe,
+    _get_foreground_active_window,
     _is_com_available,
     _is_open_files_available,
     _is_valid_com_path,
@@ -110,6 +113,63 @@ def test_resolve_active_file_path_uses_open_files_for_any_process(monkeypatch):
     )
 
     assert _resolve_active_file_path("Code.exe", "main.py - Visual Studio Code", 123) == "C:\\Repo\\WorkTrace\\main.py"
+
+
+def test_foreground_active_window_does_not_call_full_path_resolver_synchronously():
+    source = inspect.getsource(_get_foreground_active_window)
+    assert "_resolve_active_file_path(" not in source
+    assert "_schedule_active_file_path_resolution" in source
+
+
+def test_foreground_active_window_fast_path_does_not_block_on_slow_resolver(monkeypatch):
+    class FakeWin32Gui:
+        @staticmethod
+        def GetForegroundWindow():
+            return 101
+
+        @staticmethod
+        def GetWindowText(_hwnd):
+            return "main.py - Visual Studio Code"
+
+        @staticmethod
+        def GetClassName(_hwnd):
+            return "Chrome_WidgetWin_1"
+
+    class FakeWin32Process:
+        @staticmethod
+        def GetWindowThreadProcessId(_hwnd):
+            return (1, 4242)
+
+    class FakeProcess:
+        def __init__(self, _pid):
+            pass
+
+        def name(self):
+            return "Code.exe"
+
+    class FakePsutil:
+        Error = Exception
+        Process = FakeProcess
+
+    def slow_resolver(*_args, **_kwargs):
+        time.sleep(1.0)
+        return "C:\\Repo\\WorkTrace\\main.py"
+
+    monkeypatch.setitem(sys.modules, "win32gui", FakeWin32Gui)
+    monkeypatch.setitem(sys.modules, "win32process", FakeWin32Process)
+    monkeypatch.setitem(sys.modules, "psutil", FakePsutil)
+    monkeypatch.setattr(windows_adapter, "_resolve_title_file_path", lambda _title: None)
+    monkeypatch.setattr(windows_adapter, "_resolve_active_file_path", slow_resolver)
+    windows_adapter._active_file_path_cache.clear()
+    windows_adapter._active_file_path_inflight.clear()
+
+    started = time.perf_counter()
+    active = _get_foreground_active_window()
+    elapsed = time.perf_counter() - started
+
+    assert active.window_title == "main.py - Visual Studio Code"
+    assert active.file_path_hint is None
+    assert elapsed < 0.3
 
 
 def test_open_files_timeout_marks_pid_cooldown(monkeypatch):

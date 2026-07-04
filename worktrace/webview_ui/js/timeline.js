@@ -13,10 +13,17 @@
         // from the same clock. ``page: "timeline"`` keeps it page-scoped
         // (Section 五 fix) so a hidden Overview refresh cannot overwrite it.
         App.registerLiveClock(data, { source: "page_model", page: "timeline" });
+        App.registerCurrentActivityClock(data, { source: "page_model", page: "timeline" });
         App.lastTimelineData = data;
         var dateInput = document.getElementById("timeline-date-input");
         if (dateInput) dateInput.value = data.date || "";
         document.getElementById("timeline-total").textContent = data.total_duration || "00:00:00";
+        App.renderCurrentActivityElement(
+            document.getElementById("timeline-current"),
+            data.current_activity || {},
+            data.current_activity_clock || (data.activity_display_model ? data.activity_display_model.current_activity_clock : null),
+            "timeline"
+        );
 
         var listEl = document.getElementById("timeline-sessions-list");
         var sessions = data.sessions || [];
@@ -252,6 +259,24 @@
     App.loadSessionDetails = loadSessionDetails;
 
     function renderSessionDetails(data) {
+        // Register both clocks before any edit guard returns. Details rows use
+        // the project clock; the Timeline top current area uses the current
+        // activity clock and can update while editors are protected.
+        App.registerLiveClock(data, { source: "page_model", page: "timeline" });
+        App.registerCurrentActivityClock(data, { source: "page_model", page: "timeline" });
+        if (App.lastTimelineData) {
+            App.lastTimelineData.current_activity = data.current_activity || App.lastTimelineData.current_activity || {};
+            App.lastTimelineData.current_activity_clock = data.current_activity_clock || App.lastTimelineData.current_activity_clock || null;
+            App.renderCurrentActivityElement(
+                document.getElementById("timeline-current"),
+                App.lastTimelineData.current_activity,
+                App.getActiveCurrentActivityClock(),
+                "timeline"
+            );
+        }
+        if (typeof App._timelineEditingActive === "function" && App._timelineEditingActive()) {
+            return;
+        }
         if ((App.editingActivityId !== null || App.editingSplitActivityId !== null)
             && typeof App.isEditDirty === "function" && App.isEditDirty()) {
             return;
@@ -259,10 +284,6 @@
         if (App.activityTimeSaving || App.activitySplitSaving) {
             return;
         }
-        // Register the unified live clock carried by the Details payload
-        // so the 1s ticker renders the live detail row from the same
-        // clock. ``page: "timeline"`` keeps it page-scoped (Section 五 fix).
-        App.registerLiveClock(data, { source: "page_model", page: "timeline" });
         // Structural cache only — used for re-render on page switch /
         // edit-guard checks. Live seconds come from the registered live
         // clock; this cache MUST NOT be read as a live-seconds source.

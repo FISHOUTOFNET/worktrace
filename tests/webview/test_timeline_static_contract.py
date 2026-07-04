@@ -82,18 +82,10 @@ def test_index_html_timeline_page_has_error_and_empty_and_loading_states():
 
 
 def test_index_html_timeline_page_has_total():
-    """the Timeline page must show the daily total duration.
-
-    The current-activity summary (``timeline-current``) has been removed
-    from the Timeline page — current-activity display is handled by the
-    Overview page only.
-    """
+    """the Timeline page must show daily total and current activity."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="timeline-total"' in source
-    assert 'id="timeline-current"' not in source, (
-        "timeline-current must not appear in index.html; current-activity "
-        "display is handled by the Overview page only"
-    )
+    assert 'id="timeline-current"' in source
 
 
 
@@ -3216,14 +3208,10 @@ def test_index_html_timeline_has_date_input():
     )
 
 
-def test_index_html_timeline_no_current_activity():
-    """The Timeline page must not contain a ``timeline-current`` element —
-    current-activity display is handled by the Overview page only."""
+def test_index_html_timeline_has_current_activity():
+    """The Timeline page must contain a ``timeline-current`` element."""
     source = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
-    assert 'id="timeline-current"' not in source, (
-        "timeline-current must not appear in index.html; current-activity "
-        "display is handled by the Overview page only"
-    )
+    assert 'id="timeline-current"' in source
 
 
 def test_index_html_timeline_has_duration_input():

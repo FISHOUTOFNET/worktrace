@@ -28,7 +28,15 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from worktrace.constants import STATUS_NORMAL, TIME_FORMAT, UNCATEGORIZED_PROJECT
+from worktrace.constants import (
+    STATUS_ERROR,
+    STATUS_EXCLUDED,
+    STATUS_IDLE,
+    STATUS_NORMAL,
+    STATUS_PAUSED,
+    TIME_FORMAT,
+    UNCATEGORIZED_PROJECT,
+)
 from worktrace.services import activity_service, folder_rule_service, project_service, settings_service
 from worktrace.services.live_display_service import (
     _live_display_key,
@@ -1397,6 +1405,109 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
     )
     assert anchor_session is not None
     assert anchor_session["live_state"] == "absorbed_pending"
+
+
+def test_absorbed_pending_current_clock_separate_from_project_clock(bridge):
+    from worktrace.services.activity_display_model_service import (
+        apply_live_span_to_row,
+        build_activity_display_model,
+        get_live_span,
+    )
+
+    anchor_start = datetime.now() - timedelta(seconds=180)
+    anchor_end = anchor_start + timedelta(seconds=120)
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start.strftime(TIME_FORMAT),
+    )
+    activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 120)
+
+    pending_start = anchor_end + timedelta(seconds=5)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=5,
+            extra_seconds=0,
+            is_persisted=False,
+            start_time=pending_start.strftime(TIME_FORMAT),
+        )
+    )
+
+    model = build_activity_display_model()
+    current = model["current_activity"]
+    current_clock = model["current_activity_clock"]
+    project_clock = model["live_clock"]
+    span = get_live_span(model)
+    assert span is not None
+
+    assert current["elapsed_seconds"] == 5
+    assert current_clock["duration_seconds_at_sample"] == 5
+    assert current_clock["carry_seconds"] == 0
+    assert project_clock["duration_seconds_at_sample"] == 125
+
+    anchor_row = activity_service.get_activity(anchor_aid)
+    projected = dict(anchor_row)
+    apply_live_span_to_row(projected, span)
+    assert projected["duration_seconds"] == 125
+    assert activity_service.get_activity(anchor_aid)["duration_seconds"] == 120
+
+
+def test_persisted_open_current_clock_ignores_extra_seconds(bridge):
+    from worktrace.services.activity_display_model_service import (
+        apply_live_span_to_row,
+        build_activity_display_model,
+        get_live_span,
+    )
+
+    aid, start_time = _create_real_open_activity(elapsed_seconds=35)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=35,
+            extra_seconds=10,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+
+    model = build_activity_display_model()
+    current = model["current_activity"]
+    current_clock = model["current_activity_clock"]
+    project_clock = model["live_clock"]
+    span = get_live_span(model)
+    assert span is not None
+
+    assert current["elapsed_seconds"] == 35
+    assert current_clock["duration_seconds_at_sample"] == 35
+    assert current_clock["carry_seconds"] == 0
+    assert project_clock["duration_seconds_at_sample"] == 45
+
+    row = {"activity_id": aid, "duration_seconds": 0, "raw_duration_seconds": 0}
+    apply_live_span_to_row(row, span)
+    assert row["duration_seconds"] == 45
+
+
+@pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR])
+def test_non_normal_current_activity_clock_not_live_and_display_safe(bridge, status):
+    from worktrace.services.activity_display_model_service import build_activity_display_model
+
+    _set_snapshot(
+        {
+            **_normal_snapshot(elapsed_seconds=12, status=status),
+            "window_title": "secret.docx - Word",
+            "file_path_hint": "C:\\secret\\secret.docx",
+            "clipboard": "secret clipboard",
+            "note": "secret note",
+        }
+    )
+    model = build_activity_display_model()
+    assert model["current_activity_clock"]["is_live"] is False
+    assert model["live_clock"]["is_project_duration_live"] is False
+    assert model["display_spans"] == []
+    serialized = json.dumps(model, ensure_ascii=False)
+    for forbidden in ("secret.docx", "C:\\secret", "secret clipboard", "secret note"):
+        assert forbidden not in serialized
 
 
 # Boundary-aware absorption contract: a ``<30s`` pending snapshot MUST

@@ -229,7 +229,38 @@ def classify_display_live_state(
 # Live-clock construction
 
 
-def _build_live_clock(
+def _build_current_activity_clock(
+    snapshot: dict[str, Any] | None,
+    display_live_state: str,
+) -> dict[str, Any]:
+    """Build the current-resource clock used only by current activity UI.
+
+    This clock is intentionally current-only: no anchor duration, no
+    ``extra_seconds``, no ``pending_short_seconds``, and no DB row duration.
+    """
+    stable_key = _stable_live_key(snapshot)
+    stable_hash = _stable_live_key_hash(snapshot)
+    elapsed = snapshot_elapsed_seconds(snapshot)
+    status = _snapshot_status_safe(snapshot)
+    is_live = bool(
+        snapshot
+        and status == STATUS_NORMAL
+        and elapsed > 0
+    )
+    return {
+        "display_span_id": ("current:" + stable_hash) if stable_hash else "",
+        "stable_live_key": stable_key,
+        "stable_live_key_hash": stable_hash,
+        "live_state": display_live_state if snapshot else "none",
+        "live_started_at_epoch_ms": _start_time_epoch_ms(snapshot),
+        "carry_seconds": 0,
+        "duration_seconds_at_sample": int(elapsed),
+        "is_live": bool(is_live),
+        "is_project_duration_live": False,
+    }
+
+
+def _build_project_live_clock(
     snapshot: dict[str, Any] | None,
     display_live_state: str,
     anchor: dict[str, Any] | None,
@@ -237,7 +268,7 @@ def _build_live_clock(
     report_date: str,
     today: str,
 ) -> dict[str, Any]:
-    """Build the single authoritative live-clock block.
+    """Build the project/history projection live-clock block.
 
     Frontend formula: ``carry_seconds + floor((now - live_started_at_epoch_ms)/1000)``.
     Unified delta: ``max(0, live_span_seconds - duration_seconds_at_sample)``.
@@ -305,13 +336,13 @@ def _build_current_activity_display(
     anchor: dict[str, Any] | None,
     summary: dict[str, Any],
     live_clock: dict[str, Any],
+    current_activity_clock: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the current-activity display block.
 
     The current-activity area always renders the pending resource / window
-    so the user knows what they are currently looking at. The duration and
-    live clock come from the unified ``live_clock`` so current / recent /
-    timeline / details share one clock.
+    so the user knows what they are currently looking at. Duration comes
+    from ``current_activity_clock`` only; project rows use ``live_clock``.
     """
     if not snapshot:
         return {
@@ -354,21 +385,41 @@ def _build_current_activity_display(
             "project_transition_pending": False,
             "display_span_id": "",
             "live_clock": live_clock,
+            "current_activity_clock": current_activity_clock,
         }
 
     # Start from the existing summary and override live clock / elapsed fields.
     display = dict(summary)
     display["live_clock"] = live_clock
+    display["current_activity_clock"] = current_activity_clock
     display["display_span_id"] = live_clock.get("display_span_id") or ""
+    display["current_activity_display_span_id"] = (
+        current_activity_clock.get("display_span_id") or ""
+    )
     display["live_state"] = display_live_state
-    display["live_started_at_epoch_ms"] = int(live_clock.get("live_started_at_epoch_ms") or 0)
-    display["carry_seconds"] = int(live_clock.get("carry_seconds") or 0)
-    display["elapsed_seconds"] = int(live_clock.get("duration_seconds_at_sample") or 0)
+    display["live_started_at_epoch_ms"] = int(
+        current_activity_clock.get("live_started_at_epoch_ms") or 0
+    )
+    display["carry_seconds"] = 0
+    display["elapsed_seconds"] = int(
+        current_activity_clock.get("duration_seconds_at_sample") or 0
+    )
+    display["duration_seconds_at_sample"] = display["elapsed_seconds"]
 
     display["is_virtual_live"] = display_live_state == "virtual_pending"
     display["is_in_progress"] = display_live_state == "persisted_open"
     display["is_absorbed_pending"] = display_live_state == "absorbed_pending"
     display["source"] = _source_for_state(display_live_state, snapshot)
+
+    # Current activity display duration always uses current-resource elapsed.
+    from ..formatters import format_duration
+
+    display_seconds = int(display.get("elapsed_seconds") or 0)
+    if display.get("display"):
+        parts = str(display.get("display") or "").split("｜")
+        if len(parts) >= 3:
+            parts[2] = format_duration(display_seconds)
+            display["display"] = "｜".join(parts)
 
     # Absorbed_pending: KPI project attribution MUST come from the anchor DB row.
     if display_live_state == "absorbed_pending" and anchor:
@@ -394,10 +445,8 @@ def _build_current_activity_display(
             "to_project_id": None,
         }
         display["project_transition_pending"] = False
-        from ..formatters import format_duration
         from .live_display_service import _display_resource_name as _resource_name
         resource_name = _resource_name(snapshot)
-        display_seconds = int(display.get("elapsed_seconds") or 0)
         state_label = "暂不入历史"
         status = _snapshot_status_safe(snapshot)
         if status == STATUS_IDLE:
@@ -414,6 +463,52 @@ def _build_current_activity_display(
             f"{format_duration(display_seconds)}｜{state_label}"
         )
     return display
+
+
+def _signature_project_dict(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        "id": value.get("id"),
+        "name": str(value.get("name") or ""),
+        "source": str(value.get("source") or ""),
+    }
+
+
+def _build_display_structural_signature(
+    snapshot: dict[str, Any] | None,
+    display_live_state: str,
+    anchor: dict[str, Any] | None,
+    live_clock: dict[str, Any],
+    current_activity: dict[str, Any],
+    report_date: str,
+    today: str,
+    is_today: bool,
+) -> str:
+    project_transition = current_activity.get("project_transition") or {}
+    signature_payload = {
+        "current_activity_stable_key": str(
+            current_activity.get("stable_live_key") or _stable_live_key(snapshot)
+        ),
+        "display_live_state": display_live_state,
+        "is_persisted": bool(snapshot and snapshot.get("is_persisted")),
+        "persisted_activity_id": int(snapshot_persisted_id(snapshot) or 0) if snapshot else 0,
+        "display_project": _signature_project_dict(current_activity.get("display_project")),
+        "candidate_project": _signature_project_dict(current_activity.get("candidate_project")),
+        "project_transition": {
+            "pending": bool(project_transition.get("pending")),
+            "from_project_id": project_transition.get("from_project_id"),
+            "to_project_id": project_transition.get("to_project_id"),
+        },
+        "project_live_span": {
+            "display_span_id": str(live_clock.get("display_span_id") or ""),
+            "anchor_activity_id": int(anchor.get("id") or 0) if anchor else 0,
+        },
+        "report_date": report_date,
+        "today": today,
+        "is_today": bool(is_today),
+    }
+    return json.dumps(signature_payload, sort_keys=True, ensure_ascii=False)
 
 
 def _snapshot_status_safe(snapshot: dict[str, Any] | None) -> str:
@@ -730,9 +825,10 @@ def build_activity_display_model(
     if not is_today:
         live_clock = _build_suppressed_live_clock()
     else:
-        live_clock = _build_live_clock(
+        live_clock = _build_project_live_clock(
             snapshot, display_live_state, anchor, summary, report_date, today or ""
         )
+    current_activity_clock = _build_current_activity_clock(snapshot, display_live_state)
 
     display_spans: list[dict[str, Any]] = []
     if is_today and display_live_state in ("absorbed_pending", "persisted_open"):
@@ -743,7 +839,17 @@ def build_activity_display_model(
         )
 
     current_activity = _build_current_activity_display(
-        snapshot, display_live_state, anchor, summary, live_clock
+        snapshot, display_live_state, anchor, summary, live_clock, current_activity_clock
+    )
+    display_structural_signature = _build_display_structural_signature(
+        snapshot,
+        display_live_state,
+        anchor,
+        live_clock,
+        current_activity,
+        report_date,
+        today or "",
+        is_today,
     )
 
     sample_id = str(live_clock.get("stable_live_key_hash") or "")
@@ -754,8 +860,10 @@ def build_activity_display_model(
         "is_today": bool(is_today),
         "sample_id": sample_id,
         "live_clock": live_clock,
+        "current_activity_clock": current_activity_clock,
         "current_activity": current_activity,
         "display_spans": display_spans,
+        "display_structural_signature": display_structural_signature,
     }
 
 
