@@ -592,3 +592,202 @@ def _create_real_open_activity_helper(
         start_time=start_time,
     )
     return aid, start_time
+
+
+# Real-session live overlay regression: a closed-then-open session MUST
+# be overlaid via ``activity_ids`` match (not ``activity_id`` equality) so
+# Overview recent / KPI / Timeline aggregate share one live sample.
+
+
+def test_overview_recent_session_with_closed_then_open_activity_gets_live_overlay(
+    bridge,
+):
+    """Regression: a closed-then-open session MUST overlay via
+    ``activity_ids`` match. ``_session_to_overview_row`` previously dropped
+    ``activity_ids`` / ``first_activity_id``, so when the open activity was
+    NOT the session's first activity, ``apply_live_span_to_row`` could not
+    match the persisted_open anchor and the Overview recent row / KPI totals
+    froze at DB-only duration while the current-activity area kept ticking.
+
+    Scenario (real Timeline session order, no synthetic row): project ``P``,
+    closed 60s + persisted_open DB duration 0 (no boundary → one session
+    ``activity_ids == [closed_id, open_id]``), snapshot ``is_persisted=True``
+    / ``persisted_activity_id=open_id`` / ``elapsed_seconds=100``.
+
+    Asserts: recent row ``activity_ids == [closed_id, open_id]`` /
+    ``first_activity_id == closed_id``; ``duration_seconds == 160`` /
+    ``live_base_seconds == 160``; ``today_total_seconds == 160`` /
+    ``classified_seconds == 160`` / ``uncategorized_seconds == 0``;
+    ``current_activity.elapsed_seconds == 100`` (open OWN sample);
+    Timeline same session 160 (Overview ↔ Timeline agree)."""
+    from worktrace.services import activity_service, project_service
+
+    pid = project_service.create_project("P")
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # 1. Closed activity in P (60s).
+    closed_start = datetime.now() - timedelta(seconds=200)
+    closed_end = closed_start + timedelta(seconds=60)
+    closed_id = activity_service.create_activity(
+        "AppP",
+        "AppP.exe",
+        "ClosedWindow",
+        start_time=closed_start.strftime(TIME_FORMAT),
+        project_id=pid,
+    )
+    activity_service.close_activity(
+        closed_id, closed_end.strftime(TIME_FORMAT), 60
+    )
+
+    # 2. Persisted open activity in P (DB duration 0). Start it right
+    #    after the closed activity so they merge into one session
+    #    (no boundary recorded).
+    open_start = datetime.now() - timedelta(seconds=100)
+    open_id = activity_service.create_activity(
+        "AppP",
+        "AppP.exe",
+        "OpenWindow",
+        start_time=open_start.strftime(TIME_FORMAT),
+        project_id=pid,
+    )
+    assert activity_service.get_activity(open_id)["project_name"] == "P"
+
+    # 3. Snapshot: persisted_open pointing at the open activity.
+    _set_snapshot(
+        _snapshot(
+            elapsed_seconds=100,
+            extra_seconds=0,
+            is_persisted=True,
+            persisted_activity_id=open_id,
+            start_time=open_start.strftime(TIME_FORMAT),
+            display_project=_project_dict(
+                name="P",
+                project_id=pid,
+                description="P description",
+                source="folder_rule",
+            ),
+        )
+    )
+
+    bundle = bridge.get_overview()
+    assert bundle["ok"] is True
+
+    # 4. The Overview recent row for the merged session must preserve
+    #    activity_ids and first_activity_id.
+    recent_row = None
+    for row in bundle["activities"]:
+        ids = row.get("activity_ids") or []
+        if closed_id in ids and open_id in ids:
+            recent_row = row
+            break
+    assert recent_row is not None, (
+        "Overview recent row for the merged session (activity_ids covering "
+        "both closed_id and open_id) must exist"
+    )
+    assert list(recent_row["activity_ids"]) == [closed_id, open_id], (
+        "Overview recent row activity_ids must equal [closed_id, open_id] "
+        "so apply_live_span_to_row can match the persisted_open anchor"
+    )
+    assert int(recent_row["first_activity_id"]) == closed_id, (
+        "Overview recent row first_activity_id must equal closed_id (the "
+        "session's first activity), NOT the open id"
+    )
+    # activity_id stays equal to first_activity_id (session identity).
+    assert int(recent_row["activity_id"]) == closed_id
+
+    # 5. The recent row is overlaid with the live span.
+    expected_span_id = bundle["live_clock"]["display_span_id"]
+    assert expected_span_id, "live_clock.display_span_id must be non-empty"
+    assert recent_row["display_span_id"] == expected_span_id, (
+        "Overview recent row display_span_id must equal the payload live "
+        "clock's display_span_id"
+    )
+    assert int(recent_row["duration_seconds"]) == 160, (
+        f"Overview recent row duration_seconds must equal 160 (60 closed DB "
+        f"+ 100 live delta); got {recent_row['duration_seconds']}"
+    )
+    assert int(recent_row["live_base_seconds"]) == 160, (
+        f"Overview recent row live_base_seconds must equal 160; got "
+        f"{recent_row['live_base_seconds']}"
+    )
+
+    # 6. KPI totals reflect the same sample.
+    assert int(bundle["today_total_seconds"]) == 160, (
+        f"today_total_seconds must equal 160; got "
+        f"{bundle['today_total_seconds']}"
+    )
+    assert int(bundle["classified_seconds"]) == 160, (
+        f"classified_seconds must equal 160 (project P is classified); got "
+        f"{bundle['classified_seconds']}"
+    )
+    assert int(bundle["uncategorized_seconds"]) == 0, (
+        f"uncategorized_seconds must equal 0; got "
+        f"{bundle['uncategorized_seconds']}"
+    )
+
+    # 7. current_activity shows the open activity's OWN sample (100s),
+    #    NOT the session aggregate (160s). The two samples must NOT be
+    #    flattened together.
+    current = bundle["current_activity"]
+    assert int(current["elapsed_seconds"]) == 100, (
+        f"current_activity.elapsed_seconds must equal 100 (the open "
+        f"activity's own sample), NOT the session aggregate 160; got "
+        f"{current['elapsed_seconds']}"
+    )
+
+    # 8. Timeline session for the same activity_ids also reports 160s
+    #    so Overview and Timeline agree on the session aggregate.
+    timeline = bridge.get_timeline(today)
+    tl_session = None
+    for s in timeline["sessions"]:
+        ids = s.get("activity_ids") or []
+        if closed_id in ids and open_id in ids:
+            tl_session = s
+            break
+    assert tl_session is not None, (
+        "Timeline session for the merged session must exist"
+    )
+    assert int(tl_session["duration_seconds"]) == 160, (
+        f"Timeline session duration_seconds must equal 160 (same aggregate "
+        f"as Overview); got {tl_session['duration_seconds']}"
+    )
+    assert tl_session["display_span_id"] == expected_span_id
+
+
+def test_session_to_overview_row_preserves_activity_ids_for_live_anchor_matching():
+    """Low-level guard: ``_session_to_overview_row`` MUST propagate
+    ``activity_ids`` and ``first_activity_id`` from the source session so
+    ``apply_live_span_to_row`` can match a persisted_open anchor that is
+    not the session's first activity. ``activity_id`` MUST stay equal to
+    ``first_activity_id`` (session identity); the live overlay matches via
+    ``activity_ids`` membership, not via ``activity_id`` equality.
+    """
+    from worktrace.services.view_model_service import _session_to_overview_row
+
+    closed_id = 1001
+    open_id = 1002
+    session = {
+        "project_name": "P",
+        "project_description": "P description",
+        "project_id": 42,
+        "start_time": "2026-07-04 09:00:00",
+        "end_time": "",
+        "duration_seconds": 60,
+        "is_in_progress": True,
+        "is_uncategorized": False,
+        "activity_ids": [closed_id, open_id],
+        "first_activity_id": closed_id,
+        "status_summary": "mixed",
+    }
+    row = _session_to_overview_row(session)
+    assert list(row["activity_ids"]) == [closed_id, open_id], (
+        "_session_to_overview_row must preserve activity_ids so "
+        "apply_live_span_to_row can match a non-first persisted_open anchor"
+    )
+    assert int(row["first_activity_id"]) == closed_id, (
+        "_session_to_overview_row must preserve first_activity_id"
+    )
+    assert int(row["activity_id"]) == closed_id, (
+        "_session_to_overview_row activity_id MUST stay equal to "
+        "first_activity_id; do NOT change it to the open id"
+    )

@@ -187,10 +187,19 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
     session so the Overview KPI ``classified_seconds`` /
     ``uncategorized_seconds`` split is based on a positive field check
     rather than relying on a missing field's falsy default.
+
+    ``activity_ids`` / ``first_activity_id`` MUST be propagated so
+    ``apply_live_span_to_row`` can match a persisted_open anchor that is
+    NOT the session's first activity (the common case when a closed
+    activity precedes the open one in the same session). ``activity_id``
+    stays equal to ``first_activity_id`` to preserve session identity;
+    the live overlay matches via ``activity_ids`` membership, not via
+    ``activity_id`` equality.
     """
     base_seconds = int(session.get("duration_seconds") or 0)
     is_in_progress = bool(session.get("is_in_progress"))
     is_uncategorized = bool(session.get("is_uncategorized"))
+    first_activity_id = int(session.get("first_activity_id") or 0) or None
     return {
         "project_name": str(session.get("project_name") or "未归类"),
         "project_description": str(session.get("project_description") or ""),
@@ -212,7 +221,9 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
         "live_started_at_epoch_ms": 0,
         "carry_seconds": 0,
         "display_span_id": "",
-        "activity_id": int(session.get("first_activity_id") or 0) or 0,
+        "activity_ids": list(session.get("activity_ids") or []),
+        "first_activity_id": first_activity_id,
+        "activity_id": int(first_activity_id or 0),
         "source": "db",
         "edit_disabled": False,
         "disable_reason": "",

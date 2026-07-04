@@ -1137,15 +1137,33 @@ def test_register_live_clock_clears_registry_on_no_clock():
 
 
 def test_get_active_live_clock_uses_explicit_span_id():
-    """``getActiveLiveClock`` must read from the explicit
-    ``App.activeDisplaySpanId`` instead of relying on object insertion
-    order. Spec §IV.1.3: ``getActiveLiveClock()`` should not depend on
-    insertion order as "last registered wins"."""
+    """``getActiveLiveClock`` must read the active clock from the
+    page-scoped registry (``App.liveClockByPage[App.currentPage]``)
+    instead of relying on object insertion order. Spec §IV.1.3:
+    ``getActiveLiveClock()`` should not depend on insertion order as
+    "last registered wins".
+
+    The legacy global ``activeDisplaySpanId`` lookup is NO LONGER a
+    fallback: page-scoped is the single source of truth so a hidden
+    page's payload cannot become the active clock. The function MUST NOT
+    read ``App.activeDisplaySpanId`` / ``App.liveClockBySpanId[App.activeDisplaySpanId]``.
+    """
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "getActiveLiveClock")
-    assert "activeDisplaySpanId" in body, (
-        "getActiveLiveClock must read from App.activeDisplaySpanId (explicit "
-        "active span) rather than relying on object insertion order"
+    assert "liveClockByPage" in body, (
+        "getActiveLiveClock must read from App.liveClockByPage (page-scoped "
+        "registry) rather than relying on object insertion order"
+    )
+    assert "currentPage" in body, (
+        "getActiveLiveClock must read App.currentPage to scope the lookup"
+    )
+    # Must NOT read the legacy global activeDisplaySpanId field.
+    assert "activeDisplaySpanId" not in body, (
+        "getActiveLiveClock must NOT read App.activeDisplaySpanId; the "
+        "legacy global fallback was removed in favor of page-scoped lookup"
+    )
+    assert "liveClockBySpanId[App.activeDisplaySpanId]" not in body, (
+        "getActiveLiveClock must NOT look up App.liveClockBySpanId[App.activeDisplaySpanId]"
     )
     # Must NOT iterate the registry to pick the last key.
     assert "Object.keys" not in body, (
@@ -1488,8 +1506,9 @@ def test_register_live_clock_accepts_page_scope_option():
 def test_get_active_live_clock_reads_page_scope():
     """Section 五: ``getActiveLiveClock`` MUST read the current page scope
     (``App.currentPage``) and return the page-scoped clock from
-    ``App.liveClockByPage``. The single global ``activeDisplaySpanId``
-    MUST NOT be the only active-clock source — it is only a fallback.
+    ``App.liveClockByPage``. Page-scoped lookup is the SINGLE source of
+    truth — the legacy global ``activeDisplaySpanId`` fallback has been
+    removed so a hidden page's payload cannot become the active clock.
     """
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "getActiveLiveClock")
@@ -1498,6 +1517,10 @@ def test_get_active_live_clock_reads_page_scope():
     )
     assert "liveClockByPage" in body, (
         "getActiveLiveClock must read from App.liveClockByPage (page-scoped)"
+    )
+    assert "activeDisplaySpanId" not in body, (
+        "getActiveLiveClock must NOT fall back to App.activeDisplaySpanId; "
+        "page-scoped lookup is the single source of truth"
     )
 
 
@@ -1569,4 +1592,81 @@ def test_clear_live_clock_registry_supports_page_scope():
     # Must accept a pageScope parameter.
     assert re.search(r"function\s+clearLiveClockRegistry\s*\(\s*\w+", body), (
         "clearLiveClockRegistry must accept a page scope parameter"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Page-scoped live clock + page-scoped ticker DOM walk hardening.
+# ---------------------------------------------------------------------------
+
+
+def test_get_active_live_clock_reads_page_scoped_registry_only():
+    """``getActiveLiveClock`` MUST read ``App.liveClockByPage[App.currentPage]``
+    and MUST NOT read ``App.activeDisplaySpanId`` or
+    ``App.liveClockBySpanId[App.activeDisplaySpanId]``. The legacy global
+    fallback was removed so a hidden page's stale registration cannot
+    become the current page's active clock.
+    """
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "getActiveLiveClock")
+    assert "App.liveClockByPage[page]" in body, (
+        "getActiveLiveClock must read App.liveClockByPage[page] where "
+        "page = App.currentPage"
+    )
+    assert "App.currentPage" in body, (
+        "getActiveLiveClock must read App.currentPage to derive the page scope"
+    )
+    # Forbidden: legacy global fallback paths.
+    assert "App.activeDisplaySpanId" not in body, (
+        "getActiveLiveClock must NOT read App.activeDisplaySpanId; the "
+        "legacy global fallback was removed"
+    )
+    assert "liveClockBySpanId[App.activeDisplaySpanId]" not in body, (
+        "getActiveLiveClock must NOT look up "
+        "App.liveClockBySpanId[App.activeDisplaySpanId]; page-scoped is "
+        "the single source of truth"
+    )
+
+
+def test_apply_local_ticker_does_not_use_global_live_node_query():
+    """``applyLocalTicker`` MUST NOT use
+    ``document.querySelectorAll("[data-display-span-id]")`` as a global
+    live-row query. The ticker must scope the DOM walk to the current
+    page container (``#page-<currentPage>``) so a hidden page's stale
+    live DOM is never updated with the current page's delta.
+    """
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "applyLocalTicker")
+    assert 'document.querySelectorAll("[data-display-span-id]")' not in body, (
+        "applyLocalTicker must NOT use a global "
+        'document.querySelectorAll("[data-display-span-id]") query; scope '
+        "the walk to the current page container"
+    )
+
+
+def test_apply_local_ticker_uses_page_container_for_live_nodes():
+    """``applyLocalTicker`` MUST scope the live-node walk to the current
+    page container: ``document.getElementById("page-" + page)`` followed
+    by ``pageRoot.querySelectorAll("[data-display-span-id]")``. This
+    prevents a hidden page's live DOM from being updated with the
+    current page's live delta.
+    """
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "applyLocalTicker")
+    assert 'getElementById("page-"' in body, (
+        "applyLocalTicker must resolve the current page container via "
+        'document.getElementById("page-" + page)'
+    )
+    assert "pageRoot.querySelectorAll" in body, (
+        "applyLocalTicker must call pageRoot.querySelectorAll(...) on the "
+        "page container so only the current page's live nodes are visited"
+    )
+    assert '[data-display-span-id]' in body, (
+        "applyLocalTicker must still use the [data-display-span-id] selector "
+        "but scoped to pageRoot"
+    )
+    # Must derive the page scope from App.currentPage so a hidden page's
+    # DOM is never walked.
+    assert "App.currentPage" in body, (
+        "applyLocalTicker must derive the page scope from App.currentPage"
     )

@@ -640,19 +640,15 @@
     App.registerLiveClock = registerLiveClock;
 
     // Return the single active live clock for the CURRENT page scope, or
-    // ``null``. Reads ``App.liveClockByPage[App.currentPage]`` so a hidden
-    // page's payload cannot become the active clock. Falls back to the
-    // legacy ``activeDisplaySpanId`` lookup only when the page-scoped entry
-    // is missing (defensive; should not happen in normal flow).
+    // ``null``. Reads ONLY ``App.liveClockByPage[App.currentPage]`` so a
+    // hidden page's payload cannot become the active clock. There is NO
+    // legacy ``activeDisplaySpanId`` fallback: page-scoped is the single
+    // source of truth. When no page-scoped clock is registered yet (e.g.
+    // before the first page-model refresh), the ticker renders no live
+    // delta, which is the correct behavior.
     function getActiveLiveClock() {
         var page = App.currentPage || "overview";
-        var pageClock = App.liveClockByPage[page];
-        if (pageClock) return pageClock;
-        // Defensive fallback: when no page-scoped clock is registered yet
-        // (e.g. before the first page-model refresh), fall back to the
-        // legacy span-id lookup so the ticker can still render.
-        if (!App.activeDisplaySpanId) return null;
-        return App.liveClockBySpanId[App.activeDisplaySpanId] || null;
+        return App.liveClockByPage[page] || null;
     }
     App.getActiveLiveClock = getActiveLiveClock;
 
@@ -816,7 +812,7 @@
             }
         }
 
-        // --- Unified live-span DOM walk ---
+        // --- Unified live-span DOM walk (page-scoped) ---
         // Every live row (recent / session / detail) carries:
         //   - ``data-display-span-id``: matches the active live clock's span id
         //   - ``data-live-base-seconds``: the row's OWN sample display duration
@@ -825,10 +821,18 @@
         // whose sample duration is larger than the live activity's own
         // duration is NOT overwritten by the live span value. Rows without
         // ``data-live-base-seconds`` keep their seeded text.
+        //
+        // Page-scoped walk: only nodes inside the CURRENT page container
+        // (``#page-<currentPage>``) are visited so a hidden page's stale
+        // live DOM is never updated with the current page's delta.
         if (!clock || clock.is_live !== true) {
             return;
         }
-        var liveNodes = document.querySelectorAll("[data-display-span-id]");
+        var tickerPage = App.currentPage || "overview";
+        var pageRoot = document.getElementById("page-" + tickerPage);
+        var liveNodes = pageRoot
+            ? pageRoot.querySelectorAll("[data-display-span-id]")
+            : [];
         for (var i = 0; i < liveNodes.length; i++) {
             var node = liveNodes[i];
             var spanId = node.getAttribute("data-display-span-id");
