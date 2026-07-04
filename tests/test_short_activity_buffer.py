@@ -189,3 +189,148 @@ def test_short_idle_merges_into_previous_normal_when_normal_resumes(temp_db):
     assert len(rows) == 1
     assert rows[0]["window_title"] == "A"
     assert rows[0]["duration_seconds"] == 329
+
+
+# Section 四: short-activity boundary tests. Running ``absorbed_pending``
+# display projection is display-only (verified in
+# ``test_live_display_project_transition_contract.py``). Finished merge
+# MUST NOT cross a session boundary (pause / stopped / restart / midnight).
+
+
+def test_short_activity_after_restart_does_not_merge_into_pre_boundary_activity(temp_db):
+    """Section 四: a ``<30s`` short activity that ends AFTER a restart
+    boundary MUST NOT merge into a pre-boundary confirmed normal activity.
+    The merge target lookup uses
+    ``activity_service.get_latest_closed_auto_normal_activity(after_time=
+    latest_boundary_time())`` so any anchor whose ``end_time`` is before
+    or equal to the latest boundary is excluded. With no post-boundary
+    anchor, the short seconds MUST pend into ``pending_short_seconds``.
+
+    B is finished by switching to a new activity C (NOT by stopping),
+    so ``_merge_or_pend_short_seconds`` is invoked. The ``stopped``
+    transition would otherwise drop B via ``merge_transient=False`` +
+    ``clear_short_buffers``.
+    """
+    from worktrace.services import session_boundary_service
+
+    # Pre-boundary anchor A (persisted, 60s, then closed by stopping at 09:02:00).
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
+    machine.transition_to("stopped", at_time="2026-06-18 09:02:00")
+
+    # Simulate a restart boundary at 09:03:00 (recorded by recovery_service on app restart).
+    session_boundary_service.record_boundary("2026-06-18 09:03:00", "restart")
+
+    # After the restart, start a NEW short activity B (<30s) and finish it
+    # by switching to C — this triggers ``_merge_or_pend_short_seconds``.
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:04:00")
+    machine.transition_to("recording", _normal("C"), at_time="2026-06-18 09:04:20")
+
+    rows = _rows()
+    a_rows = [r for r in rows if r["window_title"] == "A"]
+    assert len(a_rows) == 1, "anchor A must be closed and persisted"
+    # A: 09:00:00 → 09:02:00 = 120s. B's 20s must NOT be added across the
+    # restart boundary (the latest boundary is 09:03:00, A.end_time is 09:02:00).
+    assert int(a_rows[0]["duration_seconds"]) == 120, (
+        "B's <30s seconds must NOT merge into A across the restart boundary"
+    )
+    # B is not persisted and does not appear as a separate row.
+    b_rows = [r for r in rows if r["window_title"] == "B"]
+    assert b_rows == [], "B must NOT be persisted as a separate row"
+    # B's 20s pend into pending_short_seconds (no post-boundary absorbable anchor).
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+
+
+def test_short_activity_after_pause_does_not_merge_into_pre_boundary_activity(temp_db):
+    """Section 四: a ``<30s`` short activity that ends AFTER a pause
+    boundary MUST NOT merge into a pre-boundary confirmed normal activity.
+    ``state_machine.pause()`` records a ``"paused"`` boundary so the merge
+    target lookup excludes any anchor at or before the pause time. B is
+    finished by switching to C (not by stopping) so the merge/pend logic
+    runs and the seconds pend into ``pending_short_seconds``.
+    """
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
+    machine.pause(at_time="2026-06-18 09:02:00")
+
+    # After the pause, start B (<30s) and finish by switching to C.
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:03:00")
+    machine.transition_to("recording", _normal("C"), at_time="2026-06-18 09:03:20")
+
+    rows = _rows()
+    a_rows = [r for r in rows if r["window_title"] == "A"]
+    assert len(a_rows) == 1
+    # A: 09:00:00 → 09:02:00 = 120s. B's 20s must NOT be added across the pause boundary.
+    assert int(a_rows[0]["duration_seconds"]) == 120
+    b_rows = [r for r in rows if r["window_title"] == "B"]
+    assert b_rows == [], "B must NOT be persisted as a separate row"
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+
+
+def test_short_activity_after_midnight_does_not_merge_into_pre_boundary_activity(temp_db):
+    """Section 四: a ``<30s`` short activity that ends AFTER a midnight
+    boundary MUST NOT merge into a pre-midnight confirmed normal activity.
+    A ``"midnight"`` boundary is recorded so the merge target lookup
+    excludes any anchor on the previous day. B is finished by switching
+    to C so the merge/pend logic runs and the seconds pend into
+    ``pending_short_seconds``.
+    """
+    from worktrace.services import session_boundary_service
+
+    # Day 1: anchor A (persisted, 300s, closed by stopping at midnight).
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 23:50:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 23:55:00")
+    machine.transition_to("stopped", at_time="2026-06-19 00:00:00")
+
+    # Record a "midnight" boundary at 2026-06-19 00:00:00.
+    session_boundary_service.record_boundary("2026-06-19 00:00:00", "midnight")
+
+    # Day 2: short activity B (<30s) after midnight, finished by switching to C.
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-19 09:00:00")
+    machine.transition_to("recording", _normal("C"), at_time="2026-06-19 09:00:20")
+
+    # Check A on day 1.
+    rows_day1 = activity_service.get_activities_by_date("2026-06-18")
+    a_rows = [r for r in rows_day1 if r["window_title"] == "A"]
+    assert len(a_rows) == 1, "anchor A must be closed and persisted on day 1"
+    # A: 23:50:00 → 00:00:00 = 600s. B's 20s must NOT be added across midnight.
+    assert int(a_rows[0]["duration_seconds"]) == 600, (
+        "B's <30s seconds must NOT merge into A across the midnight boundary"
+    )
+    # B is not persisted on either day.
+    b_rows_day1 = [r for r in rows_day1 if r["window_title"] == "B"]
+    rows_day2 = activity_service.get_activities_by_date("2026-06-19")
+    b_rows_day2 = [r for r in rows_day2 if r["window_title"] == "B"]
+    assert b_rows_day1 == [] and b_rows_day2 == [], "B must NOT be persisted as a separate row"
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+
+
+def test_short_activity_after_stopped_does_not_merge_into_pre_boundary_activity(temp_db):
+    """Section 四: a ``<30s`` short activity that ends AFTER a stopped
+    boundary MUST NOT merge into a pre-boundary confirmed normal activity.
+    ``state_machine.transition_to("stopped")`` records a ``"stopped"``
+    boundary so the merge target lookup excludes any anchor at or before
+    the stop time. B is finished by switching to C (not by stopping) so
+    the merge/pend logic runs and the seconds pend into
+    ``pending_short_seconds``.
+    """
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
+    machine.transition_to("stopped", at_time="2026-06-18 09:02:00")
+
+    # After the stopped boundary, start B (<30s) and finish by switching to C.
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:03:00")
+    machine.transition_to("recording", _normal("C"), at_time="2026-06-18 09:03:20")
+
+    rows = _rows()
+    a_rows = [r for r in rows if r["window_title"] == "A"]
+    assert len(a_rows) == 1
+    # A: 09:00:00 → 09:02:00 = 120s. B's 20s must NOT be added across the stopped boundary.
+    assert int(a_rows[0]["duration_seconds"]) == 120
+    b_rows = [r for r in rows if r["window_title"] == "B"]
+    assert b_rows == [], "B must NOT be persisted as a separate row"
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20

@@ -106,6 +106,7 @@ def _snapshot(
     app_name: str = "Code",
     process_name: str = "code.exe",
     start_time: str | None = None,
+    extra_seconds: int = 0,
 ) -> dict:
     if start_time is None:
         start = datetime.now() - timedelta(seconds=elapsed_seconds)
@@ -139,7 +140,7 @@ def _snapshot(
         "status": status,
         "start_time": start_time,
         "elapsed_seconds": elapsed_seconds,
-        "extra_seconds": 0,
+        "extra_seconds": extra_seconds,
         "persisted_activity_id": persisted_activity_id,
         "is_persisted": is_persisted,
         "display_project": display_project,
@@ -385,3 +386,209 @@ def test_export_preview_only_includes_closed_rows(bridge):
     # must NOT contribute to the export total.
     assert int(export_summary.get("activity_count") or 0) == 0
     assert int(export_summary.get("total_duration_seconds") or 0) == 0
+
+
+# 4. Overview KPI classified / uncategorized split (section 一)
+
+
+def test_overview_kpi_classified_uncategorized_split_explicit_fields(bridge):
+    """Section 一: ``_session_to_overview_row`` MUST propagate
+    ``project_id`` / ``is_uncategorized`` / ``is_classified`` from the
+    source session so the Overview KPI split is based on a positive
+    field check, not on a missing field's falsy default.
+
+    With one classified session (60s) and one uncategorized session
+    (45s), the KPI must satisfy:
+
+    * ``today_total_seconds == classified_seconds + uncategorized_seconds``
+    * ``classified_seconds`` includes ONLY the classified session
+    * ``uncategorized_seconds`` includes ONLY the uncategorized session
+    * the corresponding recent rows carry the correct
+      ``is_uncategorized`` / ``is_classified`` flags
+    """
+    from worktrace.services import activity_service, project_service
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    # 1. Create a classified project + classified closed activity (60s).
+    pid = project_service.create_project("ClassifiedProject")
+    classified_aid = activity_service.create_activity(
+        "ClassifiedApp",
+        "ClassifiedApp.exe",
+        "ClassifiedWindow",
+        start_time=f"{today} 09:00:00",
+        project_id=pid,
+    )
+    activity_service.close_activity(classified_aid, f"{today} 09:01:00", 60)
+
+    # 2. Uncategorized closed activity (45s). Lock via MANUAL assignment so
+    #    context_service carry logic does NOT auto-classify it into the
+    #    preceding ClassifiedProject session.
+    uncategorized_id = project_service.get_or_create_uncategorized_project()
+    uncategorized_aid = activity_service.create_activity(
+        "UncategorizedApp",
+        "UncategorizedApp.exe",
+        "UncategorizedWindow",
+        start_time=f"{today} 09:02:00",
+    )
+    activity_service.close_activity(uncategorized_aid, f"{today} 09:02:45", 45)
+    activity_service.update_activity_project(
+        uncategorized_aid, uncategorized_id, manual=True
+    )
+
+    # No live snapshot — KPI comes purely from DB rows.
+    _set_snapshot(None)
+    bundle = bridge.get_overview()
+    assert bundle["ok"] is True
+
+    today_total = int(bundle["today_total_seconds"])
+    classified = int(bundle["classified_seconds"])
+    uncategorized = int(bundle["uncategorized_seconds"])
+
+    # KPI identity: total == classified + uncategorized.
+    assert today_total == classified + uncategorized, (
+        f"today_total_seconds ({today_total}) must equal classified "
+        f"({classified}) + uncategorized ({uncategorized})"
+    )
+    # Explicit split: classified == 60, uncategorized == 45.
+    assert classified == 60, (
+        f"classified_seconds must include ONLY the classified session (60s), "
+        f"got {classified}"
+    )
+    assert uncategorized == 45, (
+        f"uncategorized_seconds must include ONLY the uncategorized session "
+        f"(45s), got {uncategorized}"
+    )
+
+    # The recent rows must carry the correct classification flags.
+    activities = bundle["activities"]
+    classified_row = next(
+        (a for a in activities if int(a.get("activity_id") or 0) == classified_aid),
+        None,
+    )
+    uncategorized_row = next(
+        (a for a in activities if int(a.get("activity_id") or 0) == uncategorized_aid),
+        None,
+    )
+    assert classified_row is not None, "classified session not found in activities"
+    assert uncategorized_row is not None, "uncategorized session not found in activities"
+
+    assert classified_row["is_classified"] is True
+    assert classified_row["is_uncategorized"] is False
+    assert int(classified_row["project_id"]) == pid
+
+    assert uncategorized_row["is_uncategorized"] is True
+    assert uncategorized_row["is_classified"] is False
+    assert int(uncategorized_row["project_id"]) == uncategorized_id
+
+
+def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(bridge):
+    """Section 一: under a ``persisted_open`` overlay, the Overview KPI
+    base, the Recent row's display duration, and the current-activity
+    area's elapsed seconds MUST all derive from the SAME live sample.
+    The frontend ticker only adds the live delta on top; the sample
+    seconds MUST NOT be double-counted.
+
+    With a persisted_open snapshot (elapsed=210, extra=30 → sample=240),
+    the KPI ``classified_seconds`` base, the Recent row's
+    ``live_base_seconds``, and ``current_activity.elapsed_seconds`` must
+    all equal 240 and share the same ``stable_live_key_hash``.
+    """
+    from worktrace.services import activity_service, project_service
+
+    pid = project_service.create_project("MyProject")
+    aid, start_time = _create_real_open_activity_helper(
+        app_name="Visual Studio Code",
+        process_name="Code.exe",
+        window_title="main.py - Visual Studio Code",
+        file_path_hint="D:\\MyProject\\main.py",
+        elapsed_seconds=210,
+    )
+    activity_service.update_activity_project(aid, pid)
+    assert activity_service.get_activity(aid)["project_name"] == "MyProject"
+
+    _set_snapshot(
+        _snapshot(
+            elapsed_seconds=210,
+            extra_seconds=30,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+            display_project=_project_dict(
+                name="MyProject",
+                project_id=pid,
+                description="MyProject description",
+                source="folder_rule",
+            ),
+        )
+    )
+
+    bundle = bridge.get_overview()
+    assert bundle["ok"] is True
+
+    live_clock = bundle["live_clock"]
+    sample_duration = int(live_clock["duration_seconds_at_sample"])
+    sample_hash = live_clock["stable_live_key_hash"]
+    assert sample_duration == 240, (
+        f"persisted_open sample duration must be 240 (210 elapsed + 30 extra), "
+        f"got {sample_duration}"
+    )
+
+    # KPI classified_seconds base must equal the sample duration (counted once).
+    classified = int(bundle["classified_seconds"])
+    assert classified == sample_duration, (
+        f"Overview classified_seconds ({classified}) must equal the live "
+        f"sample duration ({sample_duration}) — counted exactly once, not "
+        f"double-counted"
+    )
+    assert int(bundle["uncategorized_seconds"]) == 0
+    assert int(bundle["today_total_seconds"]) == sample_duration
+
+    # kpi_live_base must match the sample so the frontend ticker only
+    # adds the live delta.
+    kpi_base = bundle["kpi_live_base"]
+    assert int(kpi_base["classified_seconds"]) == sample_duration
+    assert int(kpi_base["today_total_seconds"]) == sample_duration
+
+    # The Recent row must carry the same sample duration and hash.
+    recent_row = next(
+        (a for a in bundle["activities"] if int(a.get("activity_id") or 0) == aid),
+        None,
+    )
+    assert recent_row is not None, "persisted_open row not found in activities"
+    assert int(recent_row["live_base_seconds"]) == sample_duration, (
+        f"Recent row live_base_seconds ({recent_row['live_base_seconds']}) "
+        f"must equal the sample duration ({sample_duration})"
+    )
+    assert recent_row["stable_live_key_hash"] == sample_hash
+
+    # current_activity.elapsed_seconds must equal the sample duration.
+    current = bundle["current_activity"]
+    assert int(current["elapsed_seconds"]) == sample_duration, (
+        f"current_activity.elapsed_seconds ({current['elapsed_seconds']}) "
+        f"must equal the sample duration ({sample_duration})"
+    )
+    assert current["stable_live_key_hash"] == sample_hash
+
+
+def _create_real_open_activity_helper(
+    *,
+    app_name: str = "AppA",
+    process_name: str = "AppA.exe",
+    window_title: str = "Window",
+    file_path_hint: str | None = None,
+    elapsed_seconds: int = 120,
+) -> tuple[int, str]:
+    """Create a real open (``end_time IS NULL``) activity row and return
+    ``(activity_id, start_time)``."""
+    from worktrace.services import activity_service
+
+    start = datetime.now() - timedelta(seconds=elapsed_seconds)
+    start_time = start.strftime(TIME_FORMAT)
+    aid = activity_service.create_activity(
+        app_name,
+        process_name,
+        window_title,
+        file_path_hint=file_path_hint,
+        start_time=start_time,
+    )
+    return aid, start_time

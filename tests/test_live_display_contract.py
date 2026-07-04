@@ -31,6 +31,7 @@ import pytest
 from worktrace.constants import STATUS_NORMAL, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from worktrace.services import activity_service, folder_rule_service, project_service, settings_service
 from worktrace.services.live_display_service import (
+    _live_display_key,
     _stable_live_key,
     _stable_live_key_hash,
     build_current_activity_summary,
@@ -1764,3 +1765,350 @@ def test_pending_short_seconds_does_not_cross_session_boundary(bridge):
     # Cleanup.
     settings_service.set_setting("pending_short_seconds", "0")
     settings_service.clear_settings_cache()
+
+
+# =============================================================================
+# Section 二: Refresh State single-sample contract (no double-read race).
+# =============================================================================
+
+
+def test_refresh_state_view_model_reads_snapshot_exactly_once(bridge, monkeypatch):
+    """Section 二: ``get_refresh_state_view_model`` MUST read
+    ``current_activity_snapshot`` EXACTLY ONCE per call and pass the same
+    sample to BOTH :func:`build_activity_display_model` (via the
+    ``snapshot=...`` parameter) AND :func:`compute_refresh_revision`. The
+    display-model service MUST NOT re-read the setting when a snapshot is
+    injected.
+
+    Verification strategy: monkeypatch
+    ``view_model_service._get_current_activity_snapshot`` to return a fixed
+    snapshot A; monkeypatch
+    ``activity_display_model_service._get_current_activity_snapshot`` to
+    raise ``AssertionError``. If the refresh-state path re-reads the
+    setting inside the display model, the AssertionError propagates and
+    the test fails. If it correctly injects the snapshot, the call
+    succeeds and the returned identity fields match snapshot A.
+    """
+    from worktrace.services import view_model_service
+
+    fixed_snapshot = _normal_snapshot(
+        elapsed_seconds=120,
+        is_persisted=True,
+        persisted_activity_id=0,
+        inferred_project_name="SampleA",
+    )
+
+    call_counter = {"count": 0}
+
+    def _vms_read():
+        call_counter["count"] += 1
+        return fixed_snapshot
+
+    def _adm_read_boom():
+        raise AssertionError(
+            "activity_display_model_service._get_current_activity_snapshot MUST "
+            "NOT be called when get_refresh_state_view_model injects the snapshot"
+        )
+
+    monkeypatch.setattr(view_model_service, "_get_current_activity_snapshot", _vms_read)
+    # Patch the display-model service's reader to ensure it is not invoked.
+    monkeypatch.setattr(
+        "worktrace.services.activity_display_model_service._get_current_activity_snapshot",
+        _adm_read_boom,
+    )
+
+    state = view_model_service.get_refresh_state_view_model()
+    assert state["ok"] is True, "refresh-state ViewModel must succeed with single snapshot"
+    # The view_model_service reader must be called exactly once.
+    assert call_counter["count"] == 1, (
+        f"get_refresh_state_view_model MUST read the snapshot EXACTLY ONCE; "
+        f"got {call_counter['count']} reads"
+    )
+    # refresh_revision, current_activity_key, live_clock, and current_activity
+    # must all derive from snapshot A (inferred_project_name="SampleA").
+    assert state["inferred_project_name"] == "SampleA"
+    assert state["is_persisted"] is True
+    # live_clock identity must come from the same snapshot A.
+    expected_hash = _stable_live_key_hash(fixed_snapshot)
+    assert state["stable_live_key_hash"] == expected_hash, (
+        "refresh-state stable_live_key_hash MUST come from the same single "
+        "snapshot sample as refresh_revision"
+    )
+    assert state["sample_id"] == expected_hash
+    assert state["live_clock"]["stable_live_key_hash"] == expected_hash
+
+
+def test_refresh_state_view_model_revision_and_live_clock_share_same_sample(
+    bridge, monkeypatch
+):
+    """Section 二 (stricter race): construct snapshot A / snapshot B and
+    ensure the refresh-state payload NEVER mixes revision from A with live
+    clock identity from B. The single-sample architecture guarantees both
+    fields originate from the same snapshot sample.
+
+    Strategy: monkeypatch the reader so it ALWAYS returns snapshot A
+    (deterministic single sample). Build a snapshot B with a different
+    inferred_project_name and a different start_time. Assert that the
+    returned ``refresh_revision`` / ``current_activity_key`` /
+    ``stable_live_key_hash`` all correspond to A — never B.
+    """
+    from worktrace.services import view_model_service
+
+    snapshot_a = _normal_snapshot(
+        elapsed_seconds=120,
+        is_persisted=False,
+        inferred_project_name="ProjectA",
+        start_time=(datetime.now() - timedelta(seconds=120)).strftime(TIME_FORMAT),
+    )
+    snapshot_b = _normal_snapshot(
+        elapsed_seconds=300,
+        is_persisted=True,
+        persisted_activity_id=42,
+        inferred_project_name="ProjectB",
+        start_time=(datetime.now() - timedelta(seconds=300)).strftime(TIME_FORMAT),
+    )
+
+    # The reader always returns A — simulating a single-sample read at T0.
+    monkeypatch.setattr(
+        view_model_service,
+        "_get_current_activity_snapshot",
+        lambda: snapshot_a,
+    )
+
+    state = view_model_service.get_refresh_state_view_model()
+    assert state["ok"] is True
+    # revision identity fields MUST all match snapshot A.
+    assert state["inferred_project_name"] == "ProjectA"
+    assert state["is_persisted"] is False
+    # live_clock identity MUST match snapshot A.
+    expected_hash_a = _stable_live_key_hash(snapshot_a)
+    expected_hash_b = _stable_live_key_hash(snapshot_b)
+    assert expected_hash_a != expected_hash_b, (
+        "snapshot A and B must have distinct stable_live_key_hash for the "
+        "race test to be meaningful"
+    )
+    assert state["stable_live_key_hash"] == expected_hash_a, (
+        "refresh-state live_clock MUST come from the same single sample "
+        "(A) as refresh_revision — never mixed with B"
+    )
+    assert state["live_clock"]["stable_live_key_hash"] == expected_hash_a
+    # current_activity must also carry snapshot A's identity.
+    assert state["current_activity"]["stable_live_key_hash"] == expected_hash_a
+
+
+# =============================================================================
+# Section 三: Historical date full live-clock suppression.
+# =============================================================================
+
+
+def test_historical_date_persisted_open_suppresses_live_clock(bridge):
+    """Section 三: when ``report_date != today`` and the current snapshot
+    is ``persisted_open``, the page-scoped ``live_clock`` MUST be fully
+    suppressed so the frontend ticker cannot register an active
+    project-duration live clock on a historical Timeline page.
+
+    Assertions:
+
+    * ``display_spans == []``
+    * root ``live_clock.live_state == "none"``
+    * root ``live_clock.is_live is False``
+    * root ``live_clock.is_project_duration_live is False``
+    * root ``display_span_id == ""``
+    * root ``live_clock.live_started_at_epoch_ms == 0``
+    * root ``live_clock.carry_seconds == 0``
+    * Timeline ``total_seconds`` equals the historical DB rows' display
+      total — the open row's live sample seconds MUST NOT pollute the
+      historical total.
+    """
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+    from worktrace.services.view_model_service import get_timeline_view_model
+
+    # 1. Create an open activity on a HISTORICAL date (2 days ago).
+    historical_day = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+    historical_start = f"{historical_day} 09:00:00"
+    aid = activity_service.create_activity(
+        "HistApp",
+        "HistApp.exe",
+        "HistWindow",
+        start_time=historical_start,
+    )
+
+    # 2. Set a persisted_open snapshot pointing at the historical open row.
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=240,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            inferred_project_name="HistProject",
+            start_time=historical_start,
+        )
+    )
+
+    # 3. Build the Timeline ViewModel for the HISTORICAL date.
+    timeline = get_timeline_view_model(historical_day)
+    assert timeline["ok"] is True
+    live_clock = timeline["live_clock"]
+    assert live_clock["live_state"] == "none", (
+        "historical date MUST collapse live_state to 'none' even when the "
+        "snapshot is persisted_open"
+    )
+    assert live_clock["is_live"] is False
+    assert live_clock["is_project_duration_live"] is False
+    assert live_clock["display_span_id"] == ""
+    assert int(live_clock["live_started_at_epoch_ms"]) == 0
+    assert int(live_clock["carry_seconds"]) == 0
+
+    # 4. The display_spans list must be empty.
+    model = build_activity_display_model(
+        report_date=historical_day,
+        today=datetime.now().strftime("%Y-%m-%d"),
+    )
+    assert model["display_spans"] == []
+    assert model["live_clock"]["live_state"] == "none"
+
+    # 5. The historical Timeline total MUST NOT include the persisted_open
+    #    sample's live seconds (240s). The historical DB row is open with
+    #    no duration_seconds stored, so its raw duration is 0; the total
+    #    must be 0 (or whatever raw DB rows exist for that historical date).
+    historical_total = int(timeline["total_seconds"])
+    assert historical_total == 0, (
+        f"historical Timeline total_seconds MUST be 0 (open row has no stored "
+        f"duration, no live overlay applied); got {historical_total}"
+    )
+    # The open row must NOT carry any live_state / display_span_id overlay.
+    for session in timeline["sessions"]:
+        assert not session.get("display_span_id"), (
+            "historical session MUST NOT carry a display_span_id from the "
+            "current persisted_open snapshot"
+        )
+        assert session.get("live_state") != "persisted_open"
+        assert session.get("live_state") != "absorbed_pending"
+
+
+def test_historical_date_absorbed_pending_suppresses_live_clock(bridge):
+    """Section 三: when ``report_date != today`` and the current snapshot
+    would have been ``absorbed_pending`` on today, the historical date
+    MUST suppress the live clock entirely. The current open row's pending
+    seconds MUST NOT pollute the historical Timeline total via the
+    absorbed_pending projection.
+
+    Strategy: create an anchor (closed normal activity) on a historical
+    date, then a fresh absorbed_pending snapshot today (no boundary
+    between anchor and pending). On the historical date view, the
+    absorbed_pending projection MUST NOT be applied: no display span, no
+    live clock, no inflation of the anchor's duration_seconds.
+    """
+    from worktrace.services.activity_display_model_service import (
+        build_activity_display_model,
+    )
+    from worktrace.services.view_model_service import get_timeline_view_model
+
+    # 1. Create a closed anchor activity on a HISTORICAL date (3 days ago).
+    historical_day = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+    anchor_start = f"{historical_day} 09:00:00"
+    anchor_end = f"{historical_day} 09:01:00"
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start,
+    )
+    activity_service.close_activity(anchor_aid, anchor_end, 60)
+    # The anchor's stored DB duration is 60s.
+
+    # 2. Set an absorbed_pending snapshot that — on TODAY — would absorb
+    #    into the historical anchor (no boundary). But we query the
+    #    historical date, so the projection MUST be suppressed.
+    pending_start = (datetime.now() - timedelta(seconds=15)).strftime(TIME_FORMAT)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=15,
+            is_persisted=False,
+            inferred_project_name="PendingProject",
+            start_time=pending_start,
+        )
+    )
+
+    # 3. Build the Timeline ViewModel for the HISTORICAL date.
+    timeline = get_timeline_view_model(historical_day)
+    assert timeline["ok"] is True
+    live_clock = timeline["live_clock"]
+    assert live_clock["live_state"] == "none"
+    assert live_clock["is_live"] is False
+    assert live_clock["is_project_duration_live"] is False
+    assert live_clock["display_span_id"] == ""
+    assert int(live_clock["live_started_at_epoch_ms"]) == 0
+    assert int(live_clock["carry_seconds"]) == 0
+
+    # 4. The display model for the historical date MUST NOT contain a
+    #    display span (even though it would absorb on today).
+    model = build_activity_display_model(
+        report_date=historical_day,
+        today=datetime.now().strftime("%Y-%m-%d"),
+    )
+    assert model["display_spans"] == []
+    assert model["live_clock"]["live_state"] == "none"
+
+    # 5. The historical anchor DB row MUST NOT be inflated by the pending
+    #    projection. Its duration_seconds stays at 60 (no overlay).
+    anchor_session = next(
+        (
+            s for s in timeline["sessions"]
+            if int(s.get("first_activity_id") or 0) == anchor_aid
+        ),
+        None,
+    )
+    assert anchor_session is not None, "anchor DB row must appear on its historical date"
+    assert int(anchor_session["duration_seconds"]) == 60, (
+        f"historical anchor duration MUST be 60s (no pending projection "
+        f"overlay); got {anchor_session['duration_seconds']}"
+    )
+    assert not anchor_session.get("display_span_id")
+    assert anchor_session.get("live_state") != "absorbed_pending"
+    assert anchor_session.get("live_state") != "persisted_open"
+
+    # 6. The historical total equals the anchor DB row's 60s only.
+    historical_total = int(timeline["total_seconds"])
+    assert historical_total == 60, (
+        f"historical Timeline total_seconds MUST equal the anchor DB row's "
+        f"60s only (no pending projection); got {historical_total}"
+    )
+
+
+def test_today_persisted_open_still_overlays_matching_db_row(bridge):
+    """Section 三 (today behavior preserved): on today's Timeline, the
+    ``persisted_open`` overlay MUST still be applied to the matching DB
+    row. This guards against over-suppression: only historical dates are
+    fully suppressed.
+    """
+    aid, start_time = _create_real_open_activity(elapsed_seconds=120)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=120,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            inferred_project_name="TodayProject",
+            start_time=start_time,
+        )
+    )
+
+    today = timeline_service.get_default_report_date()
+    timeline = bridge.get_timeline(today)
+    assert timeline["ok"] is True
+    live_clock = timeline["live_clock"]
+    # Today's behavior: live clock is NOT suppressed.
+    assert live_clock["live_state"] == "persisted_open"
+    assert live_clock["is_live"] is True
+    assert live_clock["is_project_duration_live"] is True
+    assert live_clock["display_span_id"]
+
+    # The matching DB session row MUST be overlaid.
+    overlaid = [
+        s for s in timeline["sessions"]
+        if int(s.get("first_activity_id") or 0) == aid
+    ]
+    assert overlaid, "persisted_open session must appear on today's timeline"
+    assert overlaid[0].get("live_state") == "persisted_open"
+    assert overlaid[0].get("display_span_id")

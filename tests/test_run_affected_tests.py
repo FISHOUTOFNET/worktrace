@@ -1193,3 +1193,37 @@ def test_live_display_service_py_selects_run_affected_and_timeline_static(runner
     assert (
         "tests/webview/test_timeline_static_contract.py" in sel.pytest_targets
     ), "live_display_service.py must select the Timeline static contract"
+
+
+# Section 六: live-display semantic owner triggers (A2 + M strengthened).
+# Changes to ``activity_display_model_service.py`` / ``live_display_service.py``
+# / ``live_time_service.py`` MUST select the full live-display regression set.
+
+
+_LIVE_DISPLAY_OWNER_TARGETS = [
+    "tests/test_overview_bundle_and_export_contract.py",
+    "tests/test_bridge_refresh_state_and_projection.py",
+    "tests/test_live_display_contract.py",
+    "tests/test_display_model_anti_regression.py",
+    "tests/test_run_affected_tests.py",
+    "tests/webview/test_heartbeat_projection_contract.py",
+    "tests/webview/test_frontend_global_boundaries.py",
+    "tests/test_ui_backend_boundary.py",
+]
+
+
+@pytest.mark.parametrize("changed", [
+    "worktrace/services/activity_display_model_service.py",
+    "worktrace/services/live_display_service.py",
+    "worktrace/services/live_time_service.py",
+])
+def test_live_display_owner_selects_full_live_display_regression_set(runner, changed):
+    """Section 六: changing any of the live-display semantic owner files
+    (``activity_display_model_service.py`` / ``live_display_service.py`` /
+    ``live_time_service.py``) MUST select the full live-display / ViewModel
+    / heartbeat regression set via the A2 and M rules."""
+    sel = runner.select_targets([changed])
+    for expected in _LIVE_DISPLAY_OWNER_TARGETS:
+        assert expected in sel.pytest_targets, (
+            f"{changed} must select live-display regression target: {expected}"
+        )

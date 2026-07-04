@@ -4,19 +4,17 @@ Reads ``current_activity_snapshot`` once and produces a single JSON-safe
 display model. The ONLY place that decides: live-eligibility; the refined
 ``live_state`` (``none`` / ``virtual_pending`` / ``absorbed_pending`` /
 ``persisted_open`` / ``paused`` / ``idle`` / ``excluded`` / ``error``);
-stable live identity (``stable_live_key`` / ``stable_live_key_hash``);
-display span identity (``display_span_id``); live clock anchor
-(``live_started_at_epoch_ms`` / ``carry_seconds`` /
-``duration_seconds_at_sample``); ``<30s`` pending absorption (display-only
-projection onto the previous confirmed normal activity — NEVER writes the
-DB); visibility of live rows in recent / timeline / details.
+stable live identity; display span identity; live clock anchor; ``<30s``
+pending absorption (display-only projection — NEVER writes the DB);
+visibility of live rows in recent / timeline / details.
 
-``<30s`` pending absorption: a normal unpersisted pending resource MUST NOT
-create a new virtual row in Recent / Timeline / Details. If a previous
-confirmed normal activity exists (absorb anchor), pending elapsed is added
-as display-only projection onto that anchor's DB row (DB NEVER written).
-Otherwise no live row is shown; only the current-activity area renders the
-pending resource.
+Short-activity contract (DO NOT collapse these stages): Running
+``absorbed_pending`` display projection (``<30s`` pending RUNNING,
+unpersisted snapshot) projects pending elapsed onto the previous confirmed
+normal activity's DB row — DISPLAY-ONLY, NEVER writes the DB. Finished
+short-activity merge is COLLECTOR-OWNED persistence behavior
+(``_merge_or_pend_short_seconds`` real DB write, ``pending_short_seconds``
+pend, or drop at session boundary) — NOT the display model's responsibility.
 
 Boundary: lives in ``worktrace.services``; imports ``live_display_service``,
 ``activity_service``, ``timeline_service``, ``settings_service``,
@@ -25,6 +23,7 @@ Boundary: lives in ``worktrace.services``; imports ``live_display_service``,
 ``window_title`` / ``file_path_hint`` / ``note`` / ``clipboard`` / SQL /
 tracebacks / paths / passphrases NEVER surfaced.
 """
+
 
 from __future__ import annotations
 
@@ -70,6 +69,36 @@ _VIRTUAL_ACTIVITY_ID = 0
 
 # Disable-reason text for live rows still in progress / pending confirmation.
 _LIVE_EDIT_DISABLE_REASON = "当前活动尚未进入历史，暂不能编辑"
+
+# Sentinel for ``build_activity_display_model(snapshot=...)``: distinguishes
+# "caller did not pass snapshot, read it internally" from "caller explicitly
+# passed ``None`` (no snapshot)". When a snapshot (dict or None) is passed,
+# the function MUST NOT re-read the ``current_activity_snapshot`` setting.
+_UNSET = object()
+
+
+def _build_suppressed_live_clock() -> dict[str, Any]:
+    """Build a fully-suppressed live clock for historical dates.
+
+    On ``report_date != today`` the page-scoped live clock MUST NOT carry
+    any tickable field: no ``display_span_id``, no ``live_started_at_epoch_ms``,
+    no ``carry_seconds``, ``is_live`` / ``is_project_duration_live`` both
+    ``False``. This prevents the frontend ticker from registering an active
+    project-duration live clock on a historical Timeline / Details / Recent
+    page and prevents the current open row's live seconds from polluting
+    the historical total.
+    """
+    return {
+        "display_span_id": "",
+        "stable_live_key": "",
+        "stable_live_key_hash": "",
+        "live_state": "none",
+        "live_started_at_epoch_ms": 0,
+        "carry_seconds": 0,
+        "duration_seconds_at_sample": 0,
+        "is_live": False,
+        "is_project_duration_live": False,
+    }
 
 
 # Snapshot access helpers
@@ -634,28 +663,39 @@ def apply_live_span_to_row(
 def build_activity_display_model(
     report_date: str | None = None,
     today: str | None = None,
+    snapshot: Any = _UNSET,
 ) -> dict[str, Any]:
     """Build the unified Activity Display Model from a single snapshot.
 
-    This is the ONLY function the page ViewModels should call to obtain
-    live-display semantics. It reads the snapshot once, classifies the
-    live state, resolves the absorption anchor, and returns a JSON-safe
-    model with the unified ``live_clock``, ``current_activity``, and
-    ``display_spans``.
-
-    The model NEVER writes the DB. Absorption is display-only.
+    The ONLY function page ViewModels should call for live-display
+    semantics. Returns a JSON-safe model with ``live_clock`` /
+    ``current_activity`` / ``display_spans``. The model NEVER writes the
+    DB — running ``absorbed_pending`` projection is display-only; the
+    finished ``<30s`` short-activity merge is collector-owned persistence
+    in :mod:`worktrace.collector.auto_activity_recorder`.
+    Snapshot injection (single-sample contract): callers that already read
+    ``current_activity_snapshot`` (e.g. refresh-state ViewModel, which also
+    feeds ``compute_refresh_revision``) MUST pass it via ``snapshot``.
+    ``_UNSET`` (default) reads internally; ``None`` / ``dict`` MUST NOT
+    re-read the setting. Historical-date suppression (``report_date !=
+    today``): page-scoped ``live_clock`` is fully suppressed,
+    ``display_spans == []``, and ALL live states collapse to ``"none"``
+    so the ticker cannot register an active project-duration live clock
+    on a historical page.
     """
-    snapshot = _get_current_activity_snapshot()
+    if snapshot is _UNSET:
+        snapshot = _get_current_activity_snapshot()
     today = today or timeline_service.get_default_report_date()
     report_date = report_date or today
     is_today = report_date == today
 
     base_state = classify_live_state(snapshot)
-    # On historical dates, virtual / persisted_open live projection is
-    # suppressed (no live rows injected). The DB rows still appear, but
-    # without live overlay.
+    # On historical dates, ALL live states collapse to "none" so neither
+    # persisted_open nor absorbed_pending can pollute the historical page
+    # with a tickable live clock. The page-scoped ``live_clock`` is fully
+    # suppressed (see below).
     if not is_today:
-        display_live_state = "none" if base_state == "virtual" else base_state
+        display_live_state = "none"
     else:
         display_live_state = classify_display_live_state(snapshot, report_date, today)
 
@@ -666,9 +706,16 @@ def build_activity_display_model(
     summary = build_current_activity_summary(
         snapshot, report_date=report_date, today=today
     )
-    live_clock = _build_live_clock(
-        snapshot, display_live_state, anchor, summary, report_date, today or ""
-    )
+    if not is_today:
+        # Full page-scoped live-clock suppression for historical dates:
+        # no display_span_id / live_started_at_epoch_ms / carry,
+        # is_live / is_project_duration_live both False. current_activity
+        # inherits the same suppressed clock.
+        live_clock = _build_suppressed_live_clock()
+    else:
+        live_clock = _build_live_clock(
+            snapshot, display_live_state, anchor, summary, report_date, today or ""
+        )
 
     display_spans: list[dict[str, Any]] = []
     if is_today and display_live_state in ("absorbed_pending", "persisted_open"):

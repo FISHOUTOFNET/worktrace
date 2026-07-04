@@ -72,22 +72,26 @@ RULES: list[dict] = [
     },
     {
         "id": "A2. ViewModel service / API facade",
-        # The ViewModel service / API are the sole page-display payload
-        # constructors. Any change must trigger the Overview / Timeline /
-        # Details / Refresh State / live display / bridge boundary tests.
+        # The ViewModel service / API + Activity Display Model + live-display /
+        # live-time services are the sole page-display payload constructors.
+        # Any change must trigger the Overview / Timeline / Details /
+        # Refresh State / live display / bridge boundary tests.
         "triggers": [
             "worktrace/services/view_model_service.py",
             "worktrace/api/view_model_api.py",
+            "worktrace/services/activity_display_model_service.py",
+            "worktrace/services/live_display_service.py",
+            "worktrace/services/live_time_service.py",
         ],
         "tests": [
             "tests/test_overview_bundle_and_export_contract.py",
             "tests/test_bridge_refresh_state_and_projection.py",
+            "tests/test_live_display_contract.py",
+            "tests/test_display_model_anti_regression.py",
+            "tests/test_run_affected_tests.py",
             "tests/webview/test_heartbeat_projection_contract.py",
             "tests/webview/test_frontend_global_boundaries.py",
-            "tests/test_webview_bridge.py",
             "tests/test_ui_backend_boundary.py",
-            "tests/test_live_display_contract.py",
-            "tests/test_run_affected_tests.py",
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
         "warnings": [],
@@ -487,12 +491,17 @@ RULES: list[dict] = [
         "triggers": [
             "worktrace/services/live_display_service.py",
             "worktrace/api/live_display_api.py",
+            "worktrace/services/activity_display_model_service.py",
+            "worktrace/services/live_time_service.py",
             "worktrace/services/activity_service.py",
             "worktrace/webview_ui/bridge_overview.py",
             "worktrace/webview_ui/bridge_timeline.py",
         ],
         "tests": [
+            "tests/test_overview_bundle_and_export_contract.py",
             "tests/test_bridge_refresh_state_and_projection.py",
+            "tests/test_live_display_contract.py",
+            "tests/test_display_model_anti_regression.py",
             "tests/webview/test_heartbeat_projection_contract.py",
             "tests/webview/test_frontend_global_boundaries.py",
             "tests/test_statistics_service.py",
@@ -500,7 +509,6 @@ RULES: list[dict] = [
             "tests/test_live_time_service.py",
             "tests/test_webview_bridge.py",
             "tests/test_ui_backend_boundary.py",
-            "tests/test_live_display_contract.py",
             "tests/test_activity_service.py",
             "tests/webview/test_timeline_static_contract.py",
             "tests/test_run_affected_tests.py",

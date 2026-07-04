@@ -120,17 +120,20 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     # totals reflect the same sample as the recent items.
     _apply_live_span_to_rows(all_rows, model)
 
-    # KPI totals computed from the overlaid rows.
+    # KPI totals computed from the overlaid rows. Classification uses the
+    # explicit ``is_classified`` / ``is_uncategorized`` flags propagated by
+    # ``_session_to_overview_row``; a missing field MUST NOT silently fall
+    # back to the classified bucket (no falsy-default behavior).
     today_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in all_rows)
     classified_seconds = sum(
         int(r.get("duration_seconds") or 0)
         for r in all_rows
-        if not r.get("is_uncategorized")
+        if bool(r.get("is_classified"))
     )
     uncategorized_seconds = sum(
         int(r.get("duration_seconds") or 0)
         for r in all_rows
-        if r.get("is_uncategorized")
+        if bool(r.get("is_uncategorized"))
     )
 
     # Recent items are the first N overlaid rows.
@@ -173,12 +176,23 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
 
 
 def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
-    """Project a timeline session dict into an Overview recent-item row."""
+    """Project a timeline session dict into an Overview recent-item row.
+
+    The classification flags (``project_id`` / ``is_uncategorized`` /
+    ``is_classified``) MUST be propagated explicitly from the source
+    session so the Overview KPI ``classified_seconds`` /
+    ``uncategorized_seconds`` split is based on a positive field check
+    rather than relying on a missing field's falsy default.
+    """
     base_seconds = int(session.get("duration_seconds") or 0)
     is_in_progress = bool(session.get("is_in_progress"))
+    is_uncategorized = bool(session.get("is_uncategorized"))
     return {
         "project_name": str(session.get("project_name") or "未归类"),
         "project_description": str(session.get("project_description") or ""),
+        "project_id": int(session.get("project_id") or 0),
+        "is_uncategorized": is_uncategorized,
+        "is_classified": not is_uncategorized,
         "start_time": str(session.get("start_time") or ""),
         "end_time": str(session.get("end_time") or ""),
         "duration": format_duration(base_seconds),
@@ -420,6 +434,14 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
     live identity, and report date scope are all derived from the unified
     display model so the frontend heartbeat can update the live registry
     without a full page-model refresh.
+
+    Single-sample contract: the ``current_activity_snapshot`` is read
+    EXACTLY ONCE in this function and the resulting ``snapshot`` is passed
+    to BOTH :func:`build_activity_display_model` (via ``snapshot=...``)
+    AND :func:`compute_refresh_revision`. This guarantees the returned
+    ``refresh_revision``, ``debug_inputs.current_activity_key``,
+    ``live_clock``, ``current_activity``, and ``activity_display_model``
+    all originate from the same sample — no double-read race.
     """
     snapshot = _get_current_activity_snapshot()
     collector_status = _get_collector_status()
@@ -428,7 +450,12 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
     today = timeline_service.get_default_report_date()
     scoped_report_date = report_date or today
 
-    model = build_activity_display_model(report_date=scoped_report_date, today=today)
+    # Pass the already-read snapshot into the display model so it does
+    # NOT re-read the setting. ``refresh_revision`` and ``live_clock``
+    # share the same sample.
+    model = build_activity_display_model(
+        report_date=scoped_report_date, today=today, snapshot=snapshot
+    )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")

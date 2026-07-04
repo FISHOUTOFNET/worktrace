@@ -214,3 +214,71 @@ def test_activity_service_create_activity_does_not_close_old_rows() -> None:
             "low-level insert. Closing pre-existing open rows is the job "
             "of activity_lifecycle_service.start_activity"
         )
+
+
+# Section 五: production-wide static CRUD boundary scan.
+# Production code under ``worktrace/`` (excluding ``activity_service.py``
+# and ``activity_lifecycle_service.py``) must NOT directly call the
+# forbidden low-level CRUD helpers — route through the lifecycle facade.
+
+
+_FORBIDDEN_CRUD_CALLS = (
+    "activity_service.create_activity(",
+    "activity_service.close_activity(",
+    "activity_service.close_activity_row(",
+    "activity_service.close_all_open_rows(",
+    "activity_service.insert_activity_row(",
+)
+
+_EXCLUDED_FILES = {
+    "activity_service.py",
+    "activity_lifecycle_service.py",
+}
+
+
+def _iter_production_python_files() -> list[Path]:
+    """Yield all ``.py`` files under ``worktrace/`` except the excluded
+    CRUD helper / lifecycle facade files."""
+    worktrace_dir = REPO_ROOT / "worktrace"
+    result: list[Path] = []
+    for path in worktrace_dir.rglob("*.py"):
+        if path.name in _EXCLUDED_FILES:
+            continue
+        result.append(path)
+    return result
+
+
+def test_production_code_does_not_call_forbidden_crud_helpers() -> None:
+    """Section 五: scan all production ``.py`` files under ``worktrace/``
+    (excluding ``activity_service.py`` and ``activity_lifecycle_service.py``)
+    for direct calls to the forbidden low-level CRUD helpers.
+
+    Forbidden patterns::
+
+        activity_service.create_activity(
+        activity_service.close_activity(
+        activity_service.close_activity_row(
+        activity_service.close_all_open_rows(
+        activity_service.insert_activity_row(
+
+    Production callers must route through ``activity_lifecycle_service``
+    (the ActivityLifecycle Command Facade). Tests / fixtures under
+    ``tests/`` are NOT scanned — they are allowed to use the CRUD helpers
+    to construct data directly.
+    """
+    violations: list[str] = []
+    for path in _iter_production_python_files():
+        try:
+            source = _read(path)
+        except (OSError, UnicodeDecodeError):
+            continue
+        for forbidden in _FORBIDDEN_CRUD_CALLS:
+            if forbidden in source:
+                rel = path.relative_to(REPO_ROOT)
+                violations.append(f"{rel}: found '{forbidden}'")
+    assert not violations, (
+        "Production code must NOT call low-level activity_service CRUD "
+        "helpers directly; route through activity_lifecycle_service "
+        "(the ActivityLifecycle Command Facade). Found violations:\n  "
+        + "\n  ".join(violations)
+    )

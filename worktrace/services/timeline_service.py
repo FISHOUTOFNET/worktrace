@@ -671,6 +671,14 @@ def _live_duration_for_row(row: dict) -> int | None:
     elapsed-seconds computation as the rest of the live-display
     pipeline. Returns ``None`` when the row is closed or does not match
     the current snapshot's ``persisted_activity_id``.
+
+    Historical-date suppression (Section 三): when the row's
+    ``report_date`` is not today, the function MUST return ``None`` so
+    the historical Timeline / Details total is NOT polluted by the
+    current open row's live sample seconds. Only today's open row is
+    eligible for the live-duration injection; the page-scoped live clock
+    is fully suppressed by ``activity_display_model_service`` for past
+    dates, and the row-level duration must follow the same rule.
     """
     if row.get("end_time") is not None:
         return None
@@ -679,6 +687,17 @@ def _live_duration_for_row(row: dict) -> int | None:
     except (TypeError, ValueError):
         return None
     if row_id <= 0:
+        return None
+    # Historical-date suppression: a row whose report_date is not today
+    # MUST NOT receive a live-duration injection. Fall back to deriving
+    # report_date from ``start_time`` when absent (defensive).
+    row_report_date = str(row.get("report_date") or "")
+    if not row_report_date:
+        start_dt = _parse_row_time(row.get("start_time"))
+        if start_dt is not None:
+            row_report_date = start_dt.date().isoformat()
+    today_str = get_default_report_date()
+    if row_report_date and row_report_date != today_str:
         return None
     snapshot = _read_current_activity_snapshot()
     if not snapshot:

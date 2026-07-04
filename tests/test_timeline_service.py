@@ -102,19 +102,28 @@ def test_idle_and_uncategorized_split_at_midnight(temp_db):
 
 
 def test_open_activity_duration_uses_current_snapshot_projection(temp_db):
+    """An open activity's display duration MUST use the current snapshot
+    projection (``elapsed_seconds + extra_seconds``) when viewing TODAY.
+    Historical-date live suppression (Section 三) is covered separately in
+    ``test_live_display_contract.py``; this test only locks the today-path
+    projection so a regression that drops the snapshot injection is caught.
+    """
+    from datetime import date
+
+    today_str = date.today().isoformat()
     project = project_service.create_project("A")
-    activity_id = _activity_at("Word", "winword.exe", "A.docx", "2026-06-18 09:00:00", project)
+    activity_id = _activity_at("Word", "winword.exe", "A.docx", f"{today_str} 09:00:00", project)
     settings_service.set_setting(
         "current_activity_snapshot",
         (
             '{"status":"normal","app_name":"Word","process_name":"winword.exe",'
-            '"window_title":"A.docx","start_time":"2026-06-18 09:00:00",'
+            '"window_title":"A.docx","start_time":"' + today_str + ' 09:00:00",'
             f'"elapsed_seconds":90,"extra_seconds":5,"persisted_activity_id":{activity_id},'
             '"is_persisted":true}'
         ),
     )
 
-    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+    sessions = timeline_service.get_project_sessions_by_date(today_str)
 
     assert sessions[0]["duration_seconds"] == 95
 

@@ -1195,6 +1195,57 @@ def test_apply_local_ticker_renders_node_base_plus_delta_for_dom_rows():
     )
 
 
+def test_apply_local_ticker_suppresses_timeline_total_on_historical_date():
+    """Section 七: ``applyLocalTicker`` MUST NOT update the Timeline total
+    element (``#timeline-total``) when the loaded Timeline payload is for
+    a historical (non-today) date. Historical Timeline / Details / Recent
+    lists must not register an active project-duration live clock, so the
+    historical total cannot be polluted by the current live activity's
+    seconds.
+
+    The frontend gating contract:
+
+    - ``applyLocalTicker`` must compute an ``isToday`` flag from the loaded
+      Timeline payload's ``date`` field against ``App.localTodayStr()``.
+    - The ``#timeline-total`` element must ONLY be refreshed when
+      ``isToday`` is true.
+    - A historical date (anything other than today / ``null`` / ``"--"``)
+      must skip the timeline-total write entirely so the current live clock
+      cannot advance a stale historical total.
+    """
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "applyLocalTicker")
+    # The isToday gate must be computed inside applyLocalTicker.
+    assert "isToday" in body, (
+        "applyLocalTicker must compute an isToday flag from the loaded "
+        "Timeline payload's date so historical dates suppress the live delta"
+    )
+    assert "localTodayStr" in body, (
+        "applyLocalTicker must compare tl.date against App.localTodayStr() "
+        "to determine isToday (historical date suppression)"
+    )
+    # The timeline-total write must be gated by isToday. We extract the
+    # region that touches ``#timeline-total`` and confirm ``isToday`` is
+    # part of the gating condition.
+    tl_total_pos = body.find('getElementById("timeline-total")')
+    assert tl_total_pos != -1, (
+        "applyLocalTicker must reference #timeline-total for the Timeline "
+        "total element"
+    )
+    # Walk back to the enclosing ``if (...)`` gate that wraps the
+    # timeline-total write. isToday must appear between that ``if`` and
+    # the timeline-total lookup so the gate suppresses the write.
+    gate_region_start = body.rfind("if (", 0, tl_total_pos)
+    assert gate_region_start != -1, (
+        "applyLocalTicker must wrap the #timeline-total write in an if gate"
+    )
+    gate_region = body[gate_region_start:tl_total_pos]
+    assert "isToday" in gate_region, (
+        "applyLocalTicker must gate the #timeline-total write with isToday "
+        "so historical (non-today) dates never advance the live total"
+    )
+
+
 def test_frontend_js_does_not_read_live_projection_or_live_display():
     """Spec §IV.2 / §VI: the frontend JS bundle must NOT read or
     propagate ``live_projection`` or ``live_display`` as compatibility
