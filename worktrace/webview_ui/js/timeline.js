@@ -8,20 +8,34 @@
 
     function showTimeline(data) {
         if (!data) return;
-        // Register the unified live clock carried by Timeline FIRST so
-        // the 1s ticker renders session row, total, and current-activity
-        // from the same clock. ``page: "timeline"`` keeps it page-scoped
-        // (Section 五 fix) so a hidden Overview refresh cannot overwrite it.
         App.registerLiveClock(data, { source: "page_model", page: "timeline" });
         App.registerCurrentActivityClock(data, { source: "page_model", page: "timeline" });
         App.lastTimelineData = data;
+        var nowMs = Date.now();
+        var clock = App.getActiveLiveClock();
         var dateInput = document.getElementById("timeline-date-input");
         if (dateInput) dateInput.value = data.date || "";
-        document.getElementById("timeline-total").textContent = data.total_duration || "00:00:00";
+        var todayStrForTotal = App.localTodayStr();
+        var isTodayForTotal = !data.date || data.date === todayStrForTotal || data.date === "--";
+        if (isTodayForTotal) {
+            App.renderDurationProjected(
+                document.getElementById("timeline-total"),
+                App.projectLiveBaseSeconds(parseInt(data.today_total_seconds, 10) || 0, clock, nowMs),
+                "timeline-total",
+                { allowDecrease: false }
+            );
+        } else {
+            App.renderDurationProjected(
+                document.getElementById("timeline-total"),
+                parseInt(data.today_total_seconds, 10) || 0,
+                "timeline-total",
+                { allowDecrease: true }
+            );
+        }
         App.renderCurrentActivityElement(
             document.getElementById("timeline-current"),
             data.current_activity || {},
-            data.current_activity_clock || (data.activity_display_model ? data.activity_display_model.current_activity_clock : null),
+            App.getActiveCurrentActivityClock() || data.current_activity_clock || (data.activity_display_model ? data.activity_display_model.current_activity_clock : null),
             "timeline"
         );
 
@@ -44,9 +58,8 @@
 
         // Build the full HTML string before replacing to avoid flicker.
         var html = "";
-        // Collect continuity keys to reset after the innerHTML swap so the
-        // fresh backend snapshot duration replaces any prior ticker
-        // projection without a false "rollback" guard.
+        // Collect continuity keys after projecting to now so the first render
+        // and the ticker share one no-rollback state.
         var sessionContinuityKeys = [];
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
@@ -54,11 +67,7 @@
             // ``edit_disabled=True`` so the edit panel stays disabled.
             var startTimeOnly = App.formatStartTimeOnly(s.start_time);
             var projectLabel = App.formatProjectLabel(s.project_name, s.project_description);
-            // ``duration_seconds`` is already the display value (adjusted when a duration override exists).
             var sDurSec = parseInt(s.duration_seconds, 10);
-            var sDurText = (!isNaN(sDurSec) && sDurSec >= 0)
-                ? App.formatDuration(sDurSec)
-                : (s.duration || "00:00:00");
             var cls = "timeline-item";
             if (s.is_uncategorized) cls += " uncategorized";
             if (s.is_in_progress) cls += " in-progress";
@@ -74,6 +83,18 @@
             var sessSpanId = s.display_span_id || "";
             var sessLiveBaseSec = (sessSpanId && !isNaN(sDurSec)) ? sDurSec : 0;
             var sessContinuityKey = sessSpanId ? App.liveContinuityKey(s, "session") : "";
+            var sessClock = sessSpanId ? App.liveClockBySpanId[sessSpanId] : null;
+            var initialSec = (!isNaN(sDurSec) && sDurSec >= 0) ? sDurSec : 0;
+            if (sessSpanId && sessClock) {
+                initialSec = App.projectLiveBaseSeconds(initialSec, sessClock, nowMs);
+            }
+            var sessPrev = sessContinuityKey ? App._monotonicRenderState[sessContinuityKey] : null;
+            if (sessPrev && typeof sessPrev.lastSeconds === "number" && initialSec < sessPrev.lastSeconds) {
+                initialSec = sessPrev.lastSeconds;
+            }
+            var sDurText = (!isNaN(sDurSec) && sDurSec >= 0)
+                ? App.formatDuration(initialSec)
+                : (s.duration || "00:00:00");
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
                 + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
                 + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
@@ -93,17 +114,13 @@
                 + '</div>';
             // Continuity key MUST use App.liveContinuityKey() so the ticker can locate the seeded state; a
             // "session-" + session_id key would break the virtual_pending / absorbed_pending / persisted_open transition.
-            sessionContinuityKeys.push({ key: sessContinuityKey || App.liveContinuityKey(s, "session"), sec: isNaN(sDurSec) ? 0 : sDurSec });
+            sessionContinuityKeys.push({ key: sessContinuityKey || App.liveContinuityKey(s, "session"), sec: initialSec });
         }
         listEl.innerHTML = html;
-        // Reset + seed the monotonic render state so the fresh backend snapshot replaces prior ticker projection.
         for (var ci = 0; ci < sessionContinuityKeys.length; ci++) {
             var ck = sessionContinuityKeys[ci];
             App._monotonicRenderState[ck.key] = { lastSeconds: ck.sec };
         }
-        // Also reset the timeline-total continuity so the fresh backend total replaces prior ticker projection.
-        var tlTotalSec = parseInt(data.today_total_seconds, 10) || 0;
-        App._monotonicRenderState["timeline-total"] = { lastSeconds: tlTotalSec };
 
         var items = listEl.querySelectorAll(".timeline-item");
         for (var j = 0; j < items.length; j++) {
@@ -247,11 +264,9 @@
     App.loadSessionDetails = loadSessionDetails;
 
     function renderSessionDetails(data) {
-        // Register both clocks before any edit guard returns. Details rows use
-        // the project clock; the Timeline top current area uses the current
-        // activity clock and can update while editors are protected.
         App.registerLiveClock(data, { source: "page_model", page: "timeline" });
         App.registerCurrentActivityClock(data, { source: "page_model", page: "timeline" });
+        var nowMs = Date.now();
         if (App.lastTimelineData) {
             App.lastTimelineData.current_activity = data.current_activity || App.lastTimelineData.current_activity || {};
             App.lastTimelineData.current_activity_clock = data.current_activity_clock || App.lastTimelineData.current_activity_clock || null;
@@ -293,9 +308,6 @@
             var startTimeOnly = App.formatStartTimeOnly(a.start_time);
             var displayName = a.resource_name || a.app_name || "未知";
             var aDurSec = parseInt(a.duration_seconds, 10);
-            var aDurText = (!isNaN(aDurSec) && aDurSec >= 0)
-                ? App.formatDuration(aDurSec)
-                : (a.duration || "00:00:00");
             var cls = "detail-item";
             if (a.is_in_progress) cls += " in-progress";
             if (a.is_virtual === true) cls += " virtual-live";
@@ -309,6 +321,18 @@
             var detailSpanId = a.display_span_id || "";
             var detailLiveBaseSec = (detailSpanId && !isNaN(aDurSec)) ? aDurSec : 0;
             var detailContinuityKey = detailSpanId ? App.liveContinuityKey(a, "detail") : "";
+            var detailClock = detailSpanId ? App.liveClockBySpanId[detailSpanId] : null;
+            var initialSec = (!isNaN(aDurSec) && aDurSec >= 0) ? aDurSec : 0;
+            if (detailSpanId && detailClock) {
+                initialSec = App.projectLiveBaseSeconds(initialSec, detailClock, nowMs);
+            }
+            var detailPrev = detailContinuityKey ? App._monotonicRenderState[detailContinuityKey] : null;
+            if (detailPrev && typeof detailPrev.lastSeconds === "number" && initialSec < detailPrev.lastSeconds) {
+                initialSec = detailPrev.lastSeconds;
+            }
+            var aDurText = (!isNaN(aDurSec) && aDurSec >= 0)
+                ? App.formatDuration(initialSec)
+                : (a.duration || "00:00:00");
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
                 + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
                 + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
@@ -323,7 +347,7 @@
                 + '</div>';
             // Collect this row's continuity key so the monotonic state can
             // be seeded after the innerHTML swap.
-            detailContinuityKeys.push({ index: i, sec: isNaN(aDurSec) ? 0 : aDurSec, key: detailContinuityKey });
+            detailContinuityKeys.push({ index: i, sec: initialSec, key: detailContinuityKey });
         }
         detailsList.innerHTML = html;
         // Detail rows use App.liveContinuityKey() so virtual-to-persisted keys stay stable.

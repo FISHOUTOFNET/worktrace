@@ -54,8 +54,8 @@
     App.lastReconcileAtEpochMs = 0;
     App.reconcileInFlight = false;
 
-    // Maps a continuity key to the last rendered seconds; used by ``renderDurationMonotonic`` to avoid
-    // 1-2s visual rollback when the new projected seconds are less than the DOM value.
+    // Maps a continuity key to the last rendered seconds. Same live continuity never visually rolls
+    // back; closed / historical rows opt into factual backend overwrites.
     App._monotonicRenderState = {};
 
     App.currentPage = "overview";
@@ -398,10 +398,7 @@
     }
     App.formatDuration = formatDuration;
 
-    // Shared monotonic-render contract for every live target. ``renderDurationMonotonic`` avoids 1-2s visual
-    // rollback when the same live target is still running: with ``allowDecrease === false`` and a 1-2s decrease,
-    // the DOM is kept unchanged; larger decreases (real state change) or ``allowDecrease === true`` overwrite.
-    // Backend refresh paths must reset the monotonic state so the real snapshot replaces the projected value.
+    // Shared render contract for every live duration target.
     function readDurationSecondsFromText(el) {
         if (!el) return 0;
         var attr = el.getAttribute("data-duration-seconds");
@@ -418,19 +415,27 @@
     }
     App.readDurationSecondsFromText = readDurationSecondsFromText;
 
-    function renderDurationMonotonic(el, nextSeconds, continuityKey, allowDecrease) {
+    function renderDurationProjected(el, seconds, continuityKey, options) {
         if (!el) return;
-        var next = Math.max(0, parseInt(nextSeconds, 10) || 0);
+        var opts = options || {};
+        var allowDecrease = opts.allowDecrease === true;
+        var key = String(continuityKey || "");
+        var next = Math.max(0, parseInt(seconds, 10) || 0);
         var state = App._monotonicRenderState;
-        var entry = state[continuityKey];
-        if (allowDecrease === false && entry && typeof entry.lastSeconds === "number") {
-            if (next < entry.lastSeconds && (entry.lastSeconds - next) <= 2) {
-                // Same live target still running; avoid 1-2s visual rollback.
-                return;
-            }
+        var entry = key ? state[key] : null;
+        if (!allowDecrease && entry && typeof entry.lastSeconds === "number" && next < entry.lastSeconds) {
+            next = entry.lastSeconds;
         }
         el.textContent = App.formatDuration(next);
-        state[continuityKey] = { lastSeconds: next };
+        el.setAttribute("data-duration-seconds", String(next));
+        if (key) {
+            state[key] = { lastSeconds: next };
+        }
+    }
+    App.renderDurationProjected = renderDurationProjected;
+
+    function renderDurationMonotonic(el, nextSeconds, continuityKey, allowDecrease) {
+        renderDurationProjected(el, nextSeconds, continuityKey, { allowDecrease: allowDecrease === true });
     }
     App.renderDurationMonotonic = renderDurationMonotonic;
 
@@ -456,22 +461,20 @@
 
     // ===== Unified Live Clock =====
     //
-    // The SINGLE source of truth for the live delta. The current-activity area,
-    // KPI totals, recent items, timeline sessions, and detail rows all share
-    // ONE live delta derived from the single registered live clock. Each DOM
-    // row carries its OWN sample base (``data-live-base-seconds``); the ticker
-    // renders ``nodeBaseSeconds + liveDelta`` so a session row whose sample
-    // duration is larger than the live activity's own duration is NOT
-    // overwritten by the live span value.
+    // The single source of truth for live projection. Current activity, KPI
+    // totals, recent items, timeline sessions, and detail rows all normalize
+    // a backend sample clock, project it to browser ``Date.now()``, and render
+    // through the same no-rollback function. Each DOM row carries its own
+    // sample base and resolves its own row clock by ``display_span_id``.
     //
-    // Live-span formula (the live clock's own current seconds):
-    //     liveSeconds(clock) = carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
+    // Live-span formula:
+    //     projectClockSeconds(clock, nowMs) = carry_seconds + floor((nowMs - live_started_at_epoch_ms) / 1000)
     //
-    // Unified live delta (shared by every DOM row):
-    //     liveDelta = max(0, liveSeconds(clock) - clock.duration_seconds_at_sample)
+    // Per-clock live delta:
+    //     delta = max(0, projectClockSeconds(clock, nowMs) - clock.duration_seconds_at_sample)
     //
     // Per-row render:
-    //     rowSeconds = rowBaseSecondsAtSample + liveDelta
+    //     rowSeconds = rowBaseSecondsAtSample + projectLiveDeltaSeconds(rowClock, nowMs)
     //
     // The clock is registered from any payload that carries ``live_clock``
     // (Overview, Recent, Timeline, Details, or the lightweight Refresh State).
@@ -480,159 +483,151 @@
         return Date.now();
     }
 
-    // The unified live-seconds formula. Returns the ``duration_seconds_at_sample`` fallback when
-    // the clock has no valid ``live_started_at_epoch_ms`` (e.g. paused / idle / historical).
-    function liveSeconds(clock) {
-        if (!clock) return 0;
-        var startedAt = parseInt(clock.live_started_at_epoch_ms, 10);
-        var carry = parseInt(clock.carry_seconds, 10) || 0;
-        var atSample = parseInt(clock.duration_seconds_at_sample, 10);
-        if (isNaN(atSample)) atSample = parseInt(clock.duration_seconds, 10) || 0;
-        if (!startedAt || isNaN(startedAt)) return atSample;
-        return carry + Math.floor((tickerNowEpochMs() - startedAt) / 1000);
+    function nonNegativeInt(value, fallback) {
+        var n = parseInt(value, 10);
+        if (isNaN(n) || n < 0) return fallback || 0;
+        return n;
     }
-    App.liveSeconds = liveSeconds;
 
-    // Unified live delta: how many seconds have elapsed since the backend
-    // sample. Shared by every DOM row. Clamped to 0 so a stale clock or a
-    // wall-clock drift never makes the UI count backwards.
-    function liveDeltaSeconds(clock) {
-        if (!clock) return 0;
-        var atSample = parseInt(clock.duration_seconds_at_sample, 10);
-        if (isNaN(atSample)) atSample = 0;
-        var display = liveSeconds(clock);
-        var delta = display - atSample;
+    function normalizeLiveClock(clock) {
+        if (!clock || typeof clock !== "object") return null;
+        var durationAtSample = nonNegativeInt(
+            clock.duration_seconds_at_sample,
+            nonNegativeInt(clock.duration_seconds, 0)
+        );
+        var projectDurationLive = clock.project_duration_live === true
+            || clock.is_project_duration_live === true;
+        var currentDurationLive = clock.current_duration_live === true;
+        return Object.assign({}, clock, {
+            display_span_id: String(clock.display_span_id || ""),
+            stable_live_key: String(clock.stable_live_key || ""),
+            stable_live_key_hash: String(clock.stable_live_key_hash || ""),
+            live_state: String(clock.live_state || "none"),
+            duration_seconds_at_sample: durationAtSample,
+            carry_seconds: nonNegativeInt(clock.carry_seconds, 0),
+            live_started_at_epoch_ms: nonNegativeInt(clock.live_started_at_epoch_ms, 0),
+            is_live: clock.is_live === true,
+            is_project_duration_live: projectDurationLive,
+            project_duration_live: projectDurationLive,
+            current_duration_live: currentDurationLive,
+        });
+    }
+    App.normalizeLiveClock = normalizeLiveClock;
+
+    function projectClockSeconds(clock, nowMs) {
+        var c = normalizeLiveClock(clock);
+        if (!c) return 0;
+        var startedAt = c.live_started_at_epoch_ms;
+        if (!startedAt) return c.duration_seconds_at_sample;
+        var now = nonNegativeInt(nowMs, tickerNowEpochMs());
+        var elapsed = Math.floor((now - startedAt) / 1000);
+        var seconds = c.carry_seconds + elapsed;
+        return seconds > 0 ? seconds : 0;
+    }
+    App.projectClockSeconds = projectClockSeconds;
+
+    function projectLiveDeltaSeconds(clock, nowMs) {
+        var c = normalizeLiveClock(clock);
+        if (!c) return 0;
+        var delta = projectClockSeconds(c, nowMs) - c.duration_seconds_at_sample;
         return delta > 0 ? delta : 0;
     }
-    App.liveDeltaSeconds = liveDeltaSeconds;
+    App.projectLiveDeltaSeconds = projectLiveDeltaSeconds;
 
-    // Register a live clock from ANY payload (Overview / Recent / Timeline /
-    // Details / Refresh State). The payload may carry ``live_clock`` directly
-    // or nested inside ``activity_display_model``.
-    //
-    // The optional second argument is ``{ source: "page_model" | "refresh_state",
-    // preserveSameSpanSample: bool, page: <scope> }``. It distinguishes the
-    // registration paths so the lightweight refresh_state cannot overwrite a
-    // page-model sample clock's ``live_started_at_epoch_ms`` / ``carry_seconds``
-    // / ``duration_seconds_at_sample`` while the user is still on the same live
-    // span.
-    //
-    // Page-scoped registry (Section 五 fix): ``options.page`` MUST be one of
-    // ``"overview"`` / ``"timeline"`` / ``"refresh_state"``. The clock is
-    // stored under ``App.liveClockByPage[page]`` so a hidden page's payload
-    // (e.g. Overview refresh during Timeline view) cannot overwrite the
-    // current page's active live clock. When ``options.page`` is omitted the
-    // clock is registered under the CURRENT page scope (``App.currentPage``)
-    // so historical callers keep working but still respect page isolation.
-    //
-    // Contract:
-    //
-    // - When the payload has NO live clock, NO display_span_id, or the
-    //   clock's project-duration live flag is not true, the registry AND the active span id
-    //   for the TARGET page scope MUST be cleared. This prevents a stale
-    //   clock from continuing to tick after the activity ends, the collector
-    //   pauses, or the user switches pages. Clearing a non-current page's
-    //   scope does NOT touch the current page's active clock.
-    // - When ``source == "refresh_state"`` AND ``preserveSameSpanSample`` is
-    //   true AND the new clock shares the active span id AND the active
-    //   clock's ``stable_live_key_hash`` equals the new clock's, the
-    //   ``live_started_at_epoch_ms`` / ``carry_seconds`` /
-    //   ``duration_seconds_at_sample`` fields of the ACTIVE clock are
-    //   PRESERVED. Only non-sample fields (project_duration_live / live_state
-    //   / live_state / stable_live_key) refresh from the new payload. This is
-    //   the same-span preservation rule: refresh_state is structural-only and
-    //   must NOT reset the liveDelta base that the page-model sample seeded.
-    // - In all other cases (span id changed, stable key changed, project live
-    //   flipped false, live_state structural switch, or source ==
-    //   "page_model"), the new clock fully replaces the active clock for the
-    //   TARGET page scope.
+    function projectLiveBaseSeconds(baseSecondsAtSample, clock, nowMs) {
+        return nonNegativeInt(baseSecondsAtSample, 0) + projectLiveDeltaSeconds(clock, nowMs);
+    }
+    App.projectLiveBaseSeconds = projectLiveBaseSeconds;
+
+    function sameLiveContinuity(previousClock, incomingClock) {
+        var prev = normalizeLiveClock(previousClock);
+        var incoming = normalizeLiveClock(incomingClock);
+        if (!prev || !incoming) return false;
+        if (prev.display_span_id && incoming.display_span_id
+            && prev.display_span_id === incoming.display_span_id) {
+            return true;
+        }
+        return !!(prev.stable_live_key_hash && incoming.stable_live_key_hash
+            && prev.stable_live_key_hash === incoming.stable_live_key_hash);
+    }
+    App.sameLiveContinuity = sameLiveContinuity;
+
+    function rebaseIncomingClockWithoutRollback(previousClock, incomingClock, nowMs) {
+        var incoming = normalizeLiveClock(incomingClock);
+        if (!incoming) return null;
+        var previous = normalizeLiveClock(previousClock);
+        if (!previous || !sameLiveContinuity(previous, incoming)) return incoming;
+        var now = nonNegativeInt(nowMs, tickerNowEpochMs());
+        var previousSeconds = projectClockSeconds(previous, now);
+        var incomingSeconds = projectClockSeconds(incoming, now);
+        if (incomingSeconds >= previousSeconds) return incoming;
+        var rebased = Object.assign({}, incoming);
+        if (rebased.live_started_at_epoch_ms > 0) {
+            var elapsed = Math.floor((now - rebased.live_started_at_epoch_ms) / 1000);
+            if (elapsed < 0) elapsed = 0;
+            rebased.carry_seconds = Math.max(0, previousSeconds - elapsed);
+        } else {
+            rebased.duration_seconds_at_sample = previousSeconds;
+        }
+        return normalizeLiveClock(rebased);
+    }
+    App.rebaseIncomingClockWithoutRollback = rebaseIncomingClockWithoutRollback;
+
+    function findClockInPayload(payload, preferCurrent) {
+        if (!payload) return null;
+        if (preferCurrent && payload.current_activity_clock) return payload.current_activity_clock;
+        if (preferCurrent && payload.activity_display_model && payload.activity_display_model.current_activity_clock) {
+            return payload.activity_display_model.current_activity_clock;
+        }
+        if (preferCurrent && payload.current_activity && payload.current_activity.current_activity_clock) {
+            return payload.current_activity.current_activity_clock;
+        }
+        if (payload.live_clock) return payload.live_clock;
+        if (payload.activity_display_model && payload.activity_display_model.live_clock) {
+            return payload.activity_display_model.live_clock;
+        }
+        if (!preferCurrent && payload.current_activity_clock) return payload.current_activity_clock;
+        return null;
+    }
+
+    function isProjectDurationClock(clock) {
+        var c = normalizeLiveClock(clock);
+        return !!(c && c.display_span_id && c.project_duration_live === true);
+    }
+
+    function isCurrentDurationClock(clock) {
+        var c = normalizeLiveClock(clock);
+        return !!(c && c.display_span_id && (c.current_duration_live === true || c.is_live === true));
+    }
+
+    // Register a live clock from any payload. Fresh backend payloads are projected to now and
+    // rebased when they describe the same visual live continuity, so page models, refresh state,
+    // bootstrap, and revision checks all follow one no-rollback path.
     function registerLiveClock(payload, options) {
         var opts = options || {};
         var pageScope = String(opts.page || App.currentPage || "overview");
-        if (!payload) {
+        var incomingClock = normalizeLiveClock(findClockInPayload(payload, false));
+        if (!isProjectDurationClock(incomingClock)) {
             clearLiveClockRegistry(pageScope);
             return;
         }
-        var clock = payload.live_clock;
-        if (!clock && payload.activity_display_model) {
-            clock = payload.activity_display_model.live_clock;
-        }
-        if (!clock) {
-            clearLiveClockRegistry(pageScope);
-            return;
-        }
-        var spanId = String(clock.display_span_id || "");
-        var projectDurationLive = clock.project_duration_live === true
-            || clock.is_project_duration_live === true;
-        if (!spanId || !projectDurationLive) {
-            clearLiveClockRegistry(pageScope);
-            return;
-        }
-        var source = String(opts.source || "page_model");
-        var preserveSameSpanSample = !!opts.preserveSameSpanSample;
-        // Read the active clock for THIS page scope only so a hidden page's
-        // payload cannot overwrite the current page's clock.
+        var spanId = incomingClock.display_span_id;
         var pageActiveSpanId = App.activeDisplaySpanIdByPage[pageScope] || "";
         var activeClock = pageActiveSpanId
             ? (App.liveClockBySpanId[pageActiveSpanId] || null)
             : null;
-        var sameSpan = activeClock
-            && pageActiveSpanId === spanId
-            && (activeClock.project_duration_live === true
-                || activeClock.is_project_duration_live === true);
-        var sameStableKey = sameSpan
-            && String(activeClock.stable_live_key_hash || "")
-                === String(clock.stable_live_key_hash || "");
-        var sameLiveState = sameSpan
-            && String(activeClock.live_state || "")
-                === String(clock.live_state || "");
-        var canPreserveSample = source === "refresh_state"
-            && preserveSameSpanSample
-            && sameSpan
-            && sameStableKey
-            && sameLiveState;
-        // Sample identity changed (different span id, different stable key,
-        // different live_state, or a page_model refresh) → wipe any prior
-        // monotonic state so the new activity is not poisoned by the previous
-        // activity's rollback-guard. ONLY for the current page scope so a
-        // hidden page refresh does not reset the current page's monotonic
-        // state.
+        var sameContinuity = sameLiveContinuity(activeClock, incomingClock);
         var isCurrentPageScope = (pageScope === App.currentPage);
-        if (isCurrentPageScope) {
-            if (pageActiveSpanId && pageActiveSpanId !== spanId) {
-                App._monotonicRenderState = {};
-            } else if (!canPreserveSample) {
-                App._monotonicRenderState = {};
-            }
+        if (isCurrentPageScope && activeClock && !sameContinuity) {
+            App._monotonicRenderState = {};
         }
-        var storedClock = clock;
-        if (canPreserveSample && activeClock) {
-            // Preserve the page-model sample fields; refresh only the
-            // non-sample identity / status fields from the lightweight
-            // refresh_state payload.
-            storedClock = {
-                display_span_id: clock.display_span_id,
-                stable_live_key: clock.stable_live_key,
-                stable_live_key_hash: clock.stable_live_key_hash,
-                live_state: clock.live_state,
-                is_live: clock.is_live,
-                is_project_duration_live: clock.is_project_duration_live,
-                project_duration_live: clock.project_duration_live,
-                current_duration_live: clock.current_duration_live,
-                // Sample fields preserved from the active page-model clock.
-                live_started_at_epoch_ms: activeClock.live_started_at_epoch_ms,
-                carry_seconds: activeClock.carry_seconds,
-                duration_seconds_at_sample: activeClock.duration_seconds_at_sample,
-            };
+        var storedClock = rebaseIncomingClockWithoutRollback(activeClock, incomingClock, tickerNowEpochMs());
+        if (pageActiveSpanId && pageActiveSpanId !== spanId && App.liveClockBySpanId[pageActiveSpanId]) {
+            delete App.liveClockBySpanId[pageActiveSpanId];
         }
-        // span-id registry is global so DOM rows on any page can look up
-        // their clock; the page scope decides which one is ACTIVE.
         App.liveClockBySpanId[spanId] = storedClock;
         App.liveClockByPage[pageScope] = storedClock;
         App.activeDisplaySpanIdByPage[pageScope] = spanId;
-        // Maintain ``activeDisplaySpanId`` for the current page only so
-        // legacy readers (and tests) keep working. Hidden-page registrations
-        // MUST NOT overwrite this field.
         if (isCurrentPageScope) {
             App.activeDisplaySpanId = spanId;
         }
@@ -647,34 +642,18 @@
     function registerCurrentActivityClock(payload, options) {
         var opts = options || {};
         var pageScope = String(opts.page || App.currentPage || "overview");
-        var clock = null;
-        if (payload) {
-            clock = payload.current_activity_clock || null;
-            if (!clock && payload.activity_display_model) {
-                clock = payload.activity_display_model.current_activity_clock || null;
-            }
-            if (!clock && payload.current_activity) {
-                clock = payload.current_activity.current_activity_clock || null;
-            }
-            if (!clock) {
-                clock = payload.live_clock || null;
-            }
-            if (!clock && payload.activity_display_model) {
-                clock = payload.activity_display_model.live_clock || null;
-            }
-        }
-        if (!clock) {
+        var incomingClock = normalizeLiveClock(findClockInPayload(payload, true));
+        if (!isCurrentDurationClock(incomingClock)) {
             delete App.currentActivityClockByPage[pageScope];
             return;
         }
-        var currentSpanId = String(clock.display_span_id || "");
         var prev = App.currentActivityClockByPage[pageScope] || null;
-        if (pageScope === App.currentPage
-            && prev
-            && String(prev.display_span_id || "") !== currentSpanId) {
+        if (pageScope === App.currentPage && prev && !sameLiveContinuity(prev, incomingClock)) {
             App.resetMonotonicRenderState();
         }
-        App.currentActivityClockByPage[pageScope] = clock;
+        App.currentActivityClockByPage[pageScope] = rebaseIncomingClockWithoutRollback(
+            prev, incomingClock, tickerNowEpochMs()
+        );
         if (payload && payload.activity_display_model) {
             App.liveDisplayModel = payload.activity_display_model;
         }
@@ -778,20 +757,58 @@
         var display = current.display || "";
         var seconds = parseInt(current.elapsed_seconds, 10) || 0;
         if (currentClock && (currentClock.current_duration_live === true || currentClock.is_live === true)) {
-            seconds = liveSeconds(currentClock);
+            seconds = projectClockSeconds(currentClock, tickerNowEpochMs());
+        }
+        var continuity = currentActivityContinuityKey(current, currentClock, prefix);
+        var entry = App._monotonicRenderState[continuity];
+        if (entry && typeof entry.lastSeconds === "number" && seconds < entry.lastSeconds) {
+            seconds = entry.lastSeconds;
         }
         var parts = display.split("\uff5c");
         if (parts.length >= 3) {
             parts[2] = App.formatDuration(seconds);
             el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + parts.join("\uff5c");
-            App._monotonicRenderState[currentActivityContinuityKey(current, currentClock, prefix)] = {
-                lastSeconds: seconds
-            };
+            App._monotonicRenderState[continuity] = { lastSeconds: seconds };
         } else {
             el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + display;
         }
     }
     App.renderCurrentActivityElement = renderCurrentActivityElement;
+
+    function kpiBaseSeconds(snapshot, field) {
+        snapshot = snapshot || {};
+        var base = snapshot.kpi_live_base || {};
+        if (base[field] !== undefined && base[field] !== null) {
+            return nonNegativeInt(base[field], 0);
+        }
+        return nonNegativeInt(snapshot[field], 0);
+    }
+    App.kpiBaseSeconds = kpiBaseSeconds;
+
+    function durationElementForLiveNode(node) {
+        if (!node) return null;
+        var durEl = node.querySelector(
+            ".recent-item-duration, .timeline-item-duration, .detail-item-duration"
+        );
+        if (!durEl && (node.classList.contains("recent-item-duration")
+            || node.classList.contains("timeline-item-duration")
+            || node.classList.contains("detail-item-duration"))) {
+            durEl = node;
+        }
+        return durEl;
+    }
+
+    function renderLiveRowDuration(node, baseSecondsAtSample, rowClock, nowMs) {
+        var clock = normalizeLiveClock(rowClock);
+        if (!node || !clock || clock.project_duration_live !== true) return;
+        var durEl = durationElementForLiveNode(node);
+        if (!durEl) return;
+        var continuity = node.getAttribute("data-live-continuity-key")
+            || liveContinuityKey(clock, "span");
+        var seconds = projectLiveBaseSeconds(baseSecondsAtSample, clock, nowMs);
+        renderDurationProjected(durEl, seconds, continuity, { allowDecrease: false });
+    }
+    App.renderLiveRowDuration = renderLiveRowDuration;
 
     // ``applyLocalTicker`` re-renders fetched durations with a wall-clock delta each second without a
     // bridge round-trip. Ticker invariant: ONLY updates DOM text; never calls a bridge, never writes
@@ -799,22 +816,12 @@
     //
     // Per-row contract: each live DOM node carries its OWN
     // ``data-live-base-seconds`` (the row's sample display duration from the
-    // backend). The ticker renders ``nodeBaseSeconds + liveDelta``. The live
-    // clock's own ``liveSeconds(clock)`` is only used for the current-activity
-    // area (whose base IS the live span duration). KPI totals carry their own
-    // base in the snapshot payload.
+    // backend). The ticker renders the row base plus that row clock's projected
+    // delta. KPI totals carry their own base in the snapshot payload.
     function applyLocalTicker() {
+        var nowMs = tickerNowEpochMs();
         var clock = getActiveLiveClock();
         var currentActivityClock = getActiveCurrentActivityClock();
-        var liveDelta = 0;
-        var projectDurationLive = false;
-        if (clock) {
-            projectDurationLive = clock.project_duration_live === true
-                || clock.is_project_duration_live === true;
-            if (projectDurationLive) {
-                liveDelta = liveDeltaSeconds(clock);
-            }
-        }
 
         // --- Overview KPIs + current activity ---
         var ov = App.lastOverviewSnapshot;
@@ -830,24 +837,26 @@
             }
             var totalEl = document.getElementById("kpi-total");
             if (totalEl) {
-                var totalSec = parseInt(ov.today_total_seconds, 10) || 0;
-                App.renderDurationMonotonic(totalEl, totalSec + liveDelta, "overview-total", false);
+                var totalSec = kpiBaseSeconds(ov, "today_total_seconds");
+                App.renderDurationProjected(
+                    totalEl, projectLiveBaseSeconds(totalSec, clock, nowMs), "overview-total", { allowDecrease: false }
+                );
             }
             var classifiedEl = document.getElementById("kpi-classified");
             if (classifiedEl) {
-                var classifiedSec = parseInt(ov.classified_seconds, 10) || 0;
+                var classifiedSec = kpiBaseSeconds(ov, "classified_seconds");
                 if (currentIsUncategorized === false) {
-                    classifiedSec += liveDelta;
+                    classifiedSec = projectLiveBaseSeconds(classifiedSec, clock, nowMs);
                 }
-                App.renderDurationMonotonic(classifiedEl, classifiedSec, "overview-classified", false);
+                App.renderDurationProjected(classifiedEl, classifiedSec, "overview-classified", { allowDecrease: false });
             }
             var uncategorizedEl = document.getElementById("kpi-uncategorized");
             if (uncategorizedEl) {
-                var uncategorizedSec = parseInt(ov.uncategorized_seconds, 10) || 0;
+                var uncategorizedSec = kpiBaseSeconds(ov, "uncategorized_seconds");
                 if (currentIsUncategorized === true) {
-                    uncategorizedSec += liveDelta;
+                    uncategorizedSec = projectLiveBaseSeconds(uncategorizedSec, clock, nowMs);
                 }
-                App.renderDurationMonotonic(uncategorizedEl, uncategorizedSec, "overview-uncategorized", false);
+                App.renderDurationProjected(uncategorizedEl, uncategorizedSec, "overview-uncategorized", { allowDecrease: false });
             }
             var currentEl = document.getElementById("current-activity");
             if (currentEl) {
@@ -872,7 +881,9 @@
             var tlTotalEl = document.getElementById("timeline-total");
             if (tlTotalEl && isToday) {
                 var tlTotalSec = parseInt(tl.today_total_seconds, 10) || 0;
-                App.renderDurationMonotonic(tlTotalEl, tlTotalSec + liveDelta, "timeline-total", false);
+                App.renderDurationProjected(
+                    tlTotalEl, projectLiveBaseSeconds(tlTotalSec, clock, nowMs), "timeline-total", { allowDecrease: false }
+                );
             }
         }
 
@@ -889,9 +900,6 @@
         // Page-scoped walk: only nodes inside the CURRENT page container
         // (``#page-<currentPage>``) are visited so a hidden page's stale
         // live DOM is never updated with the current page's delta.
-        if (!clock || !(clock.project_duration_live === true || clock.is_project_duration_live === true)) {
-            return;
-        }
         var tickerPage = App.currentPage || "overview";
         var pageRoot = document.getElementById("page-" + tickerPage);
         var liveNodes = pageRoot
@@ -901,33 +909,14 @@
             var node = liveNodes[i];
             var spanId = node.getAttribute("data-display-span-id");
             if (!spanId) continue;
-            var nodeClock = App.liveClockBySpanId[spanId] || clock;
+            var nodeClock = App.liveClockBySpanId[spanId];
             if (!nodeClock) continue;
             if (!(nodeClock.project_duration_live === true || nodeClock.is_project_duration_live === true)) continue;
             var baseAttr = node.getAttribute("data-live-base-seconds");
             if (baseAttr === null || baseAttr === "") continue;
             var nodeBaseSec = parseInt(baseAttr, 10);
             if (isNaN(nodeBaseSec)) continue;
-            var nextSec = nodeBaseSec + liveDelta;
-            var durEl = node.querySelector(
-                ".recent-item-duration, .timeline-item-duration, .detail-item-duration"
-            );
-            if (!durEl) {
-                if (node.classList.contains("recent-item-duration")
-                    || node.classList.contains("timeline-item-duration")
-                    || node.classList.contains("detail-item-duration")) {
-                    durEl = node;
-                }
-            }
-            if (!durEl) continue;
-            // Prefer the DOM-seeded continuity key so render and ticker share
-            // the same monotonic guard. Fall back to ``span:<spanId>`` only
-            // when the renderer did not seed one (defensive).
-            var continuity = node.getAttribute("data-live-continuity-key");
-            if (!continuity) {
-                continuity = "span:" + spanId;
-            }
-            App.renderDurationMonotonic(durEl, nextSec, continuity, false);
+            renderLiveRowDuration(node, nodeBaseSec, nodeClock, nowMs);
         }
     }
     App.applyLocalTicker = applyLocalTicker;

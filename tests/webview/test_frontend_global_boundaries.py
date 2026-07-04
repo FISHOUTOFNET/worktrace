@@ -234,15 +234,15 @@ def test_index_html_overview_page_has_pause_toggle():
     assert 'id="status-display"' in source
 
 
-def test_frontend_js_displays_classified_and_uncategorized_durations():
-    """the frontend must render classified_duration and
-    uncategorized_duration returned by the bridge, not just total
-    duration. (Contract checked across all js/ modules.)"""
+def test_frontend_js_displays_classified_and_uncategorized_kpi_bases():
+    """the frontend must render classified / uncategorized KPIs from
+    numeric live bases, not formatted duration strings."""
     source = read_all_js()
     assert "kpi-classified" in source
     assert "kpi-uncategorized" in source
-    assert "classified_duration" in source
-    assert "uncategorized_duration" in source
+    assert "kpi_live_base" in source
+    assert "classified_seconds" in source
+    assert "uncategorized_seconds" in source
 
 
 def test_frontend_js_surfaces_bridge_errors_in_page():

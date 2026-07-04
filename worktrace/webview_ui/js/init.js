@@ -34,7 +34,6 @@
 
     // refreshOverview pulls the unified Overview ViewModel (KPIs + current
     // activity + recent + live_clock + sample_id) from one backend sample.
-    // Legacy ``live_projection`` / ``live_display`` are not read or propagated.
     function refreshOverview() {
         var token = ++App.overviewRequestToken;
         App.recentRequestToken = token;  // single token for the bundle
@@ -59,6 +58,7 @@
             overview.activity_display_model = bundle.activity_display_model || overview.activity_display_model;
             overview.display_span_id = bundle.display_span_id || overview.display_span_id;
             overview.sample_id = bundle.sample_id || overview.sample_id;
+            overview.kpi_live_base = bundle.kpi_live_base || overview.kpi_live_base;
             if (overview.today_total_seconds === undefined) {
                 overview.today_total_seconds = bundle.today_total_seconds || 0;
             }
@@ -411,52 +411,16 @@
             var newRevision = state.refresh_revision;
             var isFirstCheck = prevRevision === null || prevRevision === undefined;
             App.lastRefreshState = state;
-            // Refresh-state registration: first check registers;
-            // revision-changed skips (heavy refresh registers); unchanged
-            // registers with ``preserveSameSpanSample`` to protect the sample.
-            if (isFirstCheck) {
-                App.registerCurrentActivityClock(state, {
-                    source: "refresh_state",
-                    page: App.currentPage || "overview"
-                });
-                App.registerLiveClock(state, {
-                    source: "refresh_state",
-                    preserveSameSpanSample: false,
-                    page: App.currentPage || "overview"
-                });
-            } else if (prevRevision === newRevision) {
-                App.registerCurrentActivityClock(state, {
-                    source: "refresh_state",
-                    page: App.currentPage || "overview"
-                });
-                App.registerLiveClock(state, {
-                    source: "refresh_state",
-                    preserveSameSpanSample: true,
-                    page: App.currentPage || "overview"
-                });
+            App.registerCurrentActivityClock(state, {
+                source: "refresh_state",
+                page: App.currentPage || "overview"
+            });
+            App.registerLiveClock(state, {
+                source: "refresh_state",
+                page: App.currentPage || "overview"
+            });
+            if (!isFirstCheck && prevRevision === newRevision) {
                 patchCurrentActivityFromRefreshState(state);
-            }
-            if (!isFirstCheck && prevRevision !== newRevision) {
-                App.registerCurrentActivityClock(state, {
-                    source: "refresh_state",
-                    page: App.currentPage || "overview"
-                });
-                patchCurrentActivityFromRefreshState(state);
-                var stateClock = state.live_clock || (
-                    state.activity_display_model ? state.activity_display_model.live_clock : null
-                );
-                var stateSpanId = stateClock ? String(stateClock.display_span_id || "") : "";
-                var page = App.currentPage || "overview";
-                if (stateSpanId
-                    && App.activeDisplaySpanIdByPage[page] === stateSpanId
-                    && document.getElementById("page-" + page)
-                    && document.getElementById("page-" + page).querySelector('[data-display-span-id="' + stateSpanId + '"]')) {
-                    App.registerLiveClock(state, {
-                        source: "refresh_state",
-                        preserveSameSpanSample: true,
-                        page: page
-                    });
-                }
             }
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision
@@ -512,12 +476,8 @@
                 var state = App.handleResult(result, function () { return null; });
                 if (state) {
                     App.lastRefreshState = state;
-                    // Bootstrap: seed clock from initial refresh_state so
-                    // the first heartbeat tick can render. ``false`` here
-                    // because no prior page-model sample exists yet.
                     App.registerLiveClock(state, {
                         source: "refresh_state",
-                        preserveSameSpanSample: false,
                         page: App.currentPage || "overview"
                     });
                     App.registerCurrentActivityClock(state, {

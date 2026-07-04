@@ -7,39 +7,57 @@
 
     function showOverview(overview) {
         if (!overview) return;
-        // ``source: "page_model"``: authoritative Overview sample; replaces
-        // any refresh_state clock seeded during bootstrap / heartbeat.
-        // ``page: "overview"`` keeps the clock page-scoped (Section 五 fix).
         App.registerLiveClock(overview, { source: "page_model", page: "overview" });
         App.registerCurrentActivityClock(overview, { source: "page_model", page: "overview" });
         App.lastOverviewSnapshot = overview;
+        var nowMs = Date.now();
+        var clock = App.getActiveLiveClock();
         document.getElementById("kpi-date").textContent = overview.date || "--";
-        document.getElementById("kpi-total").textContent = overview.total_duration || "00:00:00";
-        document.getElementById("kpi-classified").textContent = overview.classified_duration || "00:00:00";
-        document.getElementById("kpi-uncategorized").textContent = overview.uncategorized_duration || "00:00:00";
         document.getElementById("kpi-projects").textContent = String(overview.project_count || 0);
         var current = overview.current_activity || {};
-        var currentEl = document.getElementById("current-activity");
-        if (current.active) {
-            currentEl.textContent = "当前活动：" + current.display;
-        } else {
-            currentEl.textContent = "当前活动：无";
-        }
         var currentClock = overview.current_activity_clock || (
             overview.activity_display_model ? overview.activity_display_model.current_activity_clock : null
         );
-        App._monotonicRenderState[App.currentActivityContinuityKey(current, currentClock, "overview")] = {
-            lastSeconds: parseInt(current.elapsed_seconds, 10) || 0
-        };
-        App._monotonicRenderState["overview-total"] = {
-            lastSeconds: parseInt(overview.today_total_seconds, 10) || 0
-        };
-        App._monotonicRenderState["overview-classified"] = {
-            lastSeconds: parseInt(overview.classified_seconds, 10) || 0
-        };
-        App._monotonicRenderState["overview-uncategorized"] = {
-            lastSeconds: parseInt(overview.uncategorized_seconds, 10) || 0
-        };
+        var currentIsUncategorized = true;
+        if (current.is_classified === true) {
+            currentIsUncategorized = false;
+        } else if (current.is_uncategorized === true) {
+            currentIsUncategorized = true;
+        } else {
+            currentIsUncategorized = null;
+        }
+        App.renderDurationProjected(
+            document.getElementById("kpi-total"),
+            App.projectLiveBaseSeconds(App.kpiBaseSeconds(overview, "today_total_seconds"), clock, nowMs),
+            "overview-total",
+            { allowDecrease: false }
+        );
+        var classifiedSeconds = App.kpiBaseSeconds(overview, "classified_seconds");
+        if (currentIsUncategorized === false) {
+            classifiedSeconds = App.projectLiveBaseSeconds(classifiedSeconds, clock, nowMs);
+        }
+        App.renderDurationProjected(
+            document.getElementById("kpi-classified"),
+            classifiedSeconds,
+            "overview-classified",
+            { allowDecrease: false }
+        );
+        var uncategorizedSeconds = App.kpiBaseSeconds(overview, "uncategorized_seconds");
+        if (currentIsUncategorized === true) {
+            uncategorizedSeconds = App.projectLiveBaseSeconds(uncategorizedSeconds, clock, nowMs);
+        }
+        App.renderDurationProjected(
+            document.getElementById("kpi-uncategorized"),
+            uncategorizedSeconds,
+            "overview-uncategorized",
+            { allowDecrease: false }
+        );
+        App.renderCurrentActivityElement(
+            document.getElementById("current-activity"),
+            current,
+            App.getActiveCurrentActivityClock() || currentClock,
+            "overview"
+        );
     }
     App.showOverview = showOverview;
 
@@ -56,14 +74,12 @@
             return;
         }
         var html = "";
+        var nowMs = Date.now();
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
             var inProgress = item.is_in_progress === true || (!item.end_time && item.is_in_progress !== false);
             var timeRange = App.formatTimeRange(item.start_time, item.end_time, inProgress);
             var durSec = parseInt(item.duration_seconds, 10);
-            var durText = (!isNaN(durSec) && durSec >= 0)
-                ? App.formatDuration(durSec)
-                : (item.duration || "00:00:00");
             var cls = "recent-item";
             if (inProgress) cls += " in-progress";
             if (item.is_live_projected === true) cls += " live-projected";
@@ -73,6 +89,18 @@
             var spanId = item.display_span_id || "";
             var liveBaseSec = (spanId && !isNaN(durSec)) ? durSec : 0;
             var continuityKey = spanId ? App.liveContinuityKey(item, "recent") : "";
+            var rowClock = spanId ? App.liveClockBySpanId[spanId] : null;
+            var initialSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
+            if (spanId && rowClock) {
+                initialSec = App.projectLiveBaseSeconds(initialSec, rowClock, nowMs);
+            }
+            var prevEntry = continuityKey ? App._monotonicRenderState[continuityKey] : null;
+            if (prevEntry && typeof prevEntry.lastSeconds === "number" && initialSec < prevEntry.lastSeconds) {
+                initialSec = prevEntry.lastSeconds;
+            }
+            var durText = (!isNaN(durSec) && durSec >= 0)
+                ? App.formatDuration(initialSec)
+                : (item.duration || "00:00:00");
             html += '<div class="' + cls + '" data-recent-index="' + i + '"'
                 + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
                 + (spanId ? ' data-live-base-seconds="' + liveBaseSec + '"' : '')
@@ -88,8 +116,7 @@
                 + '</div>';
             // Seed monotonic state by the SAME continuity key the ticker reads.
             if (continuityKey) {
-                App.resetMonotonicRenderState(continuityKey);
-                App._monotonicRenderState[continuityKey] = { lastSeconds: isNaN(durSec) ? 0 : durSec };
+                App._monotonicRenderState[continuityKey] = { lastSeconds: initialSec };
             }
         }
         listEl.innerHTML = html;
