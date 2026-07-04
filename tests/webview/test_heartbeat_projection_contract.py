@@ -291,10 +291,9 @@ def test_overview_js_stores_last_recent_data_as_structural_cache():
     """``showRecent`` must save the recent payload to
     ``App.lastRecentData`` as a STRUCTURAL CACHE only — used for
     re-render on page switch / edit-guard checks. It MUST NOT be read by
-    ``applyLocalTicker`` as a live-seconds source; the unified
-    ``App.liveClockBySpanId`` registry is the single source of truth for
-    live durations. The legacy ``lastRecentSnapshot`` name has been
-    retired to remove the old ticker-source semantics."""
+    ``applyLocalTicker`` as a live-seconds source; live rows use DOM
+    bases/active-elapsed offsets plus the page active span clock. The
+    legacy ``lastRecentSnapshot`` name has been retired."""
     source = read_js("overview.js")
     assert "App.lastRecentData" in source, (
         "overview.js must save App.lastRecentData in showRecent (structural cache)"
@@ -309,8 +308,8 @@ def test_recent_item_renders_data_index_and_progress_flags():
     """each recent item must render a stable ``data-recent-index``
     attribute and use ``is_in_progress || is_live_projected`` to mark
     in-progress / live-projected rows with CSS classes. Live rows must
-    carry the unified ``data-display-span-id`` attribute so the ticker
-    can render them from the single registered live clock.
+    carry display identity plus active elapsed offset attributes so the
+    ticker can project them from the single page active span clock.
 
     The ``virtual-live`` CSS class is only styling; live ticking is keyed
     by ``data-display-span-id`` for DB-overlay rows and display-only
@@ -331,11 +330,14 @@ def test_recent_item_renders_data_index_and_progress_flags():
     assert "live-projected" in source, (
         "overview.js must add the live-projected CSS class to projected rows"
     )
-    # Live recent rows must carry the unified display-span-id so the ticker
-    # renders them from the registered live clock.
+    # Live recent rows must carry display-span-id for identity; duration
+    # projection comes from data-active-elapsed-at-render.
     assert "data-display-span-id" in source, (
         "overview.js must render data-display-span-id on live recent rows so "
-        "the ticker can render them via the unified live clock"
+        "the ticker can keep stable identity"
+    )
+    assert "data-active-elapsed-at-render" in source, (
+        "overview.js must render data-active-elapsed-at-render on live rows"
     )
 
 
@@ -356,8 +358,8 @@ def test_timeline_js_stores_last_session_details_view_model_as_structural_cache(
     """``renderSessionDetails`` must save the details payload to
     ``App.lastSessionDetailsViewModel`` as a STRUCTURAL CACHE only — used
     for re-render on page switch / edit-guard checks. It MUST NOT be read
-    by ``applyLocalTicker`` as a live-seconds source; the unified
-    ``App.liveClockBySpanId`` registry is the single source of truth for
+    by ``applyLocalTicker`` as a live-seconds source; DOM anchors plus
+    the Timeline page active span clock are the single projection path for
     live durations. The legacy ``lastSessionDetailsData`` name has been
     retired to remove the old ticker-source semantics."""
     source = read_js("timeline.js")
@@ -484,8 +486,8 @@ def test_ticker_does_not_use_browser_storage():
 def test_ticker_locates_live_spans_via_data_display_span_id():
     """the ticker must walk every DOM node carrying
     ``data-display-span-id`` (via ``querySelectorAll``) and render it
-    with that node's registered row clock. This is the single DOM-walk
-    path for every live row (recent / session / detail) — the old
+    from that node's base/active-elapsed offset plus the page active
+    span clock. This is the single DOM-walk path for every live row — the old
     per-region ``[data-session-id="..."]`` selectors are gone."""
     source = read_js("core.js")
     body = func_body(source, "applyLocalTicker")
@@ -497,7 +499,7 @@ def test_ticker_locates_live_spans_via_data_display_span_id():
         "applyLocalTicker must walk DOM nodes via querySelectorAll"
     )
     assert 'renderLiveRowDuration' in body, (
-        "applyLocalTicker must render live rows via row base + projectLiveDeltaSeconds(rowClock)"
+        "applyLocalTicker must render live rows via row base + active elapsed offset"
     )
 
 
@@ -589,27 +591,44 @@ def test_statistics_page_has_closed_only_hint_css():
 
 
 
-def test_project_live_delta_seconds_replaces_removed_ticker_helpers():
-    """``projectLiveDeltaSeconds(clock, nowMs)`` is the unified per-clock
-    delta. It computes
-    ``max(0, projectClockSeconds(clock, nowMs) - duration_seconds_at_sample)`` so a
-    stale clock or wall-clock drift never makes the UI count backwards.
-    The old ``tickerLiveEligible`` / ``tickerDeltaSeconds`` helpers have
-    been removed."""
+def test_active_elapsed_projection_helpers_replace_removed_ticker_helpers():
+    """``activeElapsedNow`` is the only dynamic active-span time source,
+    and ``projectFromActiveElapsed`` applies the anchored projection formula.
+    The old per-region ticker helpers are gone."""
     source = read_js("core.js")
-    assert "function projectLiveDeltaSeconds" in source, (
-        "core.js must define function projectLiveDeltaSeconds (replaces the removed "
-        "tickerDeltaSeconds / tickerLiveEligible helpers)"
+    assert "function activeElapsedNow" in source, (
+        "core.js must define activeElapsedNow for the canonical active span clock"
     )
-    assert "App.projectLiveDeltaSeconds" in source, (
-        "core.js must expose App.projectLiveDeltaSeconds"
+    assert "function projectFromActiveElapsed" in source, (
+        "core.js must define projectFromActiveElapsed for row/KPI projection"
     )
-    body = func_body(source, "projectLiveDeltaSeconds")
-    assert "projectClockSeconds" in body, (
-        "projectLiveDeltaSeconds must delegate to projectClockSeconds(clock, nowMs)"
+    elapsed_body = func_body(source, "activeElapsedNow")
+    project_body = func_body(source, "projectFromActiveElapsed")
+    assert "projectClockSeconds" in elapsed_body, (
+        "activeElapsedNow must use the canonical active span clock projection"
     )
-    assert "duration_seconds_at_sample" in body, (
-        "projectLiveDeltaSeconds must subtract duration_seconds_at_sample"
+    assert "activeElapsedNow" in project_body, (
+        "projectFromActiveElapsed must compute from active elapsed now"
+    )
+    assert "activeElapsedAtRender" in project_body, (
+        "projectFromActiveElapsed must subtract the render-time active offset"
+    )
+    row_body = func_body(source, "renderLiveRowDuration")
+    assert "projectLiveDeltaSeconds" not in row_body, (
+        "row rendering must not use projectLiveDeltaSeconds as the core contract"
+    )
+    assert "duration_seconds_at_sample" not in row_body, (
+        "row rendering must not subtract a row clock duration_seconds_at_sample"
+    )
+    # Compatibility helpers may exist, but the ticker/row path must not use them.
+    ticker_body = func_body(source, "applyLocalTicker")
+    assert "projectLiveDeltaSeconds" not in ticker_body
+    assert "projectLiveBaseSeconds" not in ticker_body
+    assert "function projectLiveDeltaSeconds" not in source, (
+        "core.js must not retain the old projectLiveDeltaSeconds projection path"
+    )
+    assert "function projectLiveBaseSeconds" not in source, (
+        "core.js must not retain the old projectLiveBaseSeconds projection path"
     )
     # The removed helpers must NOT be re-introduced.
     assert "function tickerLiveEligible" not in source, (
@@ -619,12 +638,10 @@ def test_project_live_delta_seconds_replaces_removed_ticker_helpers():
         "core.js must not re-introduce the removed tickerDeltaSeconds helper"
     )
 
-
 def test_ticker_uses_unified_clock_not_cached_snapshot():
     """the ticker must NOT read from page-level cached snapshots
-    (``rItem.duration_seconds``). It reads from the unified live-clock
-    registry and renders rows through ``renderLiveRowDuration`` so each
-    node uses its own clock and sample base."""
+    (``rItem.duration_seconds``). It reads DOM anchors and renders rows
+    through ``renderLiveRowDuration`` using the page active span clock."""
     source = read_js("core.js")
     body = func_body(source, "applyLocalTicker")
     assert "rItem.duration_seconds" not in body, (
@@ -644,8 +661,8 @@ def test_ticker_uses_unified_clock_not_cached_snapshot():
 
 def test_ticker_locates_live_rows_via_display_span_id():
     """the ticker locates every live row via the unified
-    ``data-display-span-id`` DOM walk and only renders rows whose clock
-    has a project-duration live flag. The old ``is_virtual_live`` /
+    ``data-display-span-id`` DOM walk and only renders rows when the
+    page active span clock has a project-duration live flag. The old ``is_virtual_live`` /
     ``is_in_progress`` flag checks are no longer used by the ticker —
     the project clock flag is the project-row eligibility signal."""
     source = read_js("core.js")
@@ -667,14 +684,14 @@ def test_ticker_does_not_read_structural_caches_as_live_seconds_source():
     retired legacy names (``lastRecentSnapshot`` /
     ``lastSessionDetailsData``) NOR the old per-region delta
     accumulators (``recentDelta`` / ``tlDelta`` / ``detailDelta``) as a
-    live-row seconds computation source. The unified
-    ``App.liveClockBySpanId`` registry + ``projectClockSeconds(clock, nowMs)`` is the
-    single source of truth for every live ROW duration.
+    live-row seconds computation source. DOM row anchors plus
+    ``activeElapsedNow(getActiveLiveClock())`` are the single source of
+    truth for every live ROW duration.
 
     ``lastTimelineData`` / ``lastOverviewSnapshot`` may be read by the
     ticker for KPI TOTALS and current-activity display (which are NOT
     live-row seconds); the live-row seconds come exclusively from the
-    ``[data-display-span-id]`` DOM walk + ``projectLiveBaseSeconds`` (covered
+    ``[data-display-span-id]`` DOM walk + ``projectFromActiveElapsed`` (covered
     by ``test_ticker_locates_live_rows_via_display_span_id``). The
     recent / details structural caches, the retired names, and the old
     delta accumulators must NEVER appear in the ticker body at all.
@@ -759,16 +776,10 @@ def test_render_session_details_skips_rerender_when_editing():
 
 
 def test_ticker_renders_per_row_base_plus_live_delta():
-    """the unified live clock formula
-    (``carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)``)
-    lives in ``projectClockSeconds(clock, nowMs)``. ``projectLiveDeltaSeconds(clock, nowMs)``
-    is the per-clock delta
-    (``max(0, projectClockSeconds(clock, nowMs) - duration_seconds_at_sample)``).
-    Each live DOM node carries its OWN ``data-live-base-seconds`` (the
-    row's sample display duration); the ticker renders
-    through ``renderLiveRowDuration`` so every row advances from its own
-    clock without reading page-level caches. The removed ``tickerDeltaSeconds``
-    helper is no longer referenced."""
+    """Rows use Active Span Anchored Projection:
+    ``base + max(0, activeElapsedNow(clock) - active_elapsed_at_render)``.
+    The row stores only a static base and active elapsed offset; it does
+    not own ``live_started_at_epoch_ms`` / ``carry_seconds``."""
     source = read_js("core.js")
     project_body = func_body(source, "projectClockSeconds")
     assert "live_started_at_epoch_ms" in project_body, (
@@ -783,9 +794,15 @@ def test_ticker_renders_per_row_base_plus_live_delta():
         "applyLocalTicker must read each row's base seconds from the "
         "data-live-base-seconds DOM attribute (per-row base, not page-level cache)"
     )
+    assert "data-active-elapsed-at-render" in ticker_body, (
+        "applyLocalTicker must read each row's active elapsed offset"
+    )
     row_body = func_body(source, "renderLiveRowDuration")
-    assert "projectLiveBaseSeconds" in row_body and "projectLiveDeltaSeconds" in source, (
-        "renderLiveRowDuration must compute row base + projectLiveDeltaSeconds(rowClock, nowMs)"
+    assert "projectFromActiveElapsed" in row_body, (
+        "renderLiveRowDuration must compute row base + active elapsed delta"
+    )
+    assert "projectLiveDeltaSeconds" not in row_body, (
+        "renderLiveRowDuration must not use per-row clock delta ownership"
     )
     # The removed helper must NOT be re-introduced.
     assert "function tickerDeltaSeconds" not in source, (
@@ -1101,34 +1118,28 @@ def test_live_continuity_key_is_single_source_of_truth():
 
 
 def test_register_live_clock_clears_registry_on_no_clock():
-    """``registerLiveClock`` must clear the registry AND the active
-    span id when the payload has NO live clock, NO display_span_id, or
-    the clock's project-duration live flag is not true. This prevents a stale clock
-    from continuing to tick after the activity ends / collector pauses
-    / user switches pages.
-
-    Spec §IV.1.3: registry must be cleared when payload is null, clock
-    is null, spanId is empty, or project-duration live is not true.
-    """
+    """Only page_model clears the page active span on non-live payloads.
+    refresh_state observation must not clear still-rendered page_model
+    anchors when pause/idle is observed before the heavy page refresh."""
     src = _strip_js_comments(read_js("core.js"))
-    body = func_body(src, "registerLiveClock")
-    # Must explicitly clear on null payload.
-    assert "clearLiveClockRegistry" in body, (
-        "registerLiveClock must call clearLiveClockRegistry on null/empty "
-        "payload so the registry does not retain a stale clock"
+    commit_body = func_body(src, "commitPageActiveSpanClock")
+    observe_body = func_body(src, "observeRefreshStateActiveSpan")
+    assert "clearPageActiveSpanClockFromPageModel" in commit_body, (
+        "page_model commits must clear the page active span when the full "
+        "page model has no project-duration live clock"
     )
-    # The clearLiveClockRegistry helper must reset all three: registry,
-    # display model, and active span id.
+    assert "clearLiveClockRegistry" not in observe_body, (
+        "refresh_state observation must not clear page_model anchors"
+    )
     clear_body = func_body(src, "clearLiveClockRegistry")
     assert "liveClockBySpanId" in clear_body, (
         "clearLiveClockRegistry must reset App.liveClockBySpanId"
     )
-    assert "activeDisplaySpanId" in clear_body, (
-        "clearLiveClockRegistry must reset App.activeDisplaySpanId so a stale "
-        "clock cannot win after the activity ends"
+    assert "activeSpanClockByPage" in clear_body, (
+        "clearLiveClockRegistry must reset App.activeSpanClockByPage"
     )
-    assert "isProjectDurationClock" in body, (
-        "registerLiveClock must check the normalized project-duration live flag before registering"
+    assert "isProjectDurationClock" in commit_body, (
+        "page_model commits must check the normalized project-duration live flag"
     )
 
 
@@ -1146,9 +1157,9 @@ def test_get_active_live_clock_uses_explicit_span_id():
     """
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "getActiveLiveClock")
-    assert "liveClockByPage" in body, (
-        "getActiveLiveClock must read from App.liveClockByPage (page-scoped "
-        "registry) rather than relying on object insertion order"
+    assert "activeSpanClockByPage" in body, (
+        "getActiveLiveClock must read from App.activeSpanClockByPage "
+        "rather than relying on object insertion order"
     )
     assert "currentPage" in body, (
         "getActiveLiveClock must read App.currentPage to scope the lookup"
@@ -1184,10 +1195,8 @@ def test_ticker_reads_dom_continuity_key_for_monotonic_guard():
 
 
 def test_apply_local_ticker_renders_node_base_plus_delta_for_dom_rows():
-    """Spec §IV.1.1: the unified live-span DOM walk must render
-    ``projectLiveBaseSeconds(nodeBaseSeconds, rowClock, nowMs)`` for each row.
-    This is the regression guard against the old contract that overwrote every
-    ``[data-display-span-id]`` row with the active page clock."""
+    """Spec §IV.1.1: live rows render from DOM base + active elapsed
+    offset using the one current page active span clock."""
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "applyLocalTicker")
     # Must read the per-node base from the DOM.
@@ -1195,8 +1204,11 @@ def test_apply_local_ticker_renders_node_base_plus_delta_for_dom_rows():
         "applyLocalTicker must read data-live-base-seconds from each live "
         "DOM node (per-row base, not the live clock's duration)"
     )
-    assert "App.liveClockBySpanId[spanId]" in body, (
-        "applyLocalTicker must resolve each node's own clock by span id"
+    assert "data-active-elapsed-at-render" in body, (
+        "applyLocalTicker must read each node's active elapsed offset"
+    )
+    assert "liveClockBySpanId[spanId]" not in body, (
+        "applyLocalTicker must not resolve row-owned clocks by span id"
     )
     assert "renderLiveRowDuration" in body, (
         "applyLocalTicker must delegate row projection to renderLiveRowDuration"
@@ -1306,7 +1318,7 @@ def test_init_refresh_overview_does_not_propagate_live_projection_or_live_displa
 
 
 def test_apply_local_ticker_records_missing_node_clock_contract_violation():
-    """When a row's span id is not registered, ``applyLocalTicker`` must
+    """When the page active span clock is missing, ``applyLocalTicker`` must
     record diagnostics instead of silently hiding the contract break."""
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "applyLocalTicker")
@@ -1320,10 +1332,10 @@ def test_apply_local_ticker_records_missing_node_clock_contract_violation():
         "applyLocalTicker must not silently continue when a row clock is missing"
     )
     assert "recordLiveClockContractViolation" in body, (
-        "applyLocalTicker must record diagnostics for a missing row clock"
+        "applyLocalTicker must record diagnostics for a missing active span clock"
     )
-    assert "missing_node_clock" in body, (
-        "missing node clock diagnostics must use a display-safe reason"
+    assert "missing_active_span_clock" in body, (
+        "missing active span clock diagnostics must use a display-safe reason"
     )
 
 
@@ -1364,19 +1376,22 @@ def test_renderers_diagnose_live_rows_missing_span_id():
 
 
 def test_register_live_clock_accepts_page_option_and_uses_rebase():
-    """``registerLiveClock`` accepts options for page scope, but every
-    source follows the same normalize + no-rollback rebase path."""
+    """Source-specific active span helpers accept page scope and rebase
+    same-continuity clocks without making row clocks authoritative."""
     src = _strip_js_comments(read_js("core.js"))
-    body = func_body(src, "registerLiveClock")
-    # The function signature must accept a second parameter.
-    assert re.search(r"function\s+registerLiveClock\s*\(\s*\w+\s*,\s*\w+", body), (
-        "registerLiveClock must accept a second options parameter"
+    commit_body = func_body(src, "commitPageActiveSpanClock")
+    observe_body = func_body(src, "observeRefreshStateActiveSpan")
+    assert re.search(r"function\s+commitPageActiveSpanClock\s*\(\s*\w+\s*,\s*\w+", commit_body), (
+        "commitPageActiveSpanClock must accept a page parameter"
     )
-    assert "opts.page" in body, (
-        "registerLiveClock must read options.page to scope the registration"
+    assert "pageScope" in commit_body and "pageScope" in observe_body, (
+        "active span helpers must scope by page"
     )
-    assert "rebaseIncomingClockWithoutRollback" in body, (
-        "registerLiveClock must rebase incoming clocks through the unified no-rollback path"
+    assert "rebaseIncomingClockWithoutRollback" in commit_body, (
+        "page_model commits must rebase through the no-rollback path"
+    )
+    assert "rebaseIncomingClockWithoutRollback" in observe_body, (
+        "refresh_state observation must rebase same-continuity clocks"
     )
 
 
@@ -1384,7 +1399,8 @@ def test_register_live_clock_rebases_same_continuity_without_live_state_gate():
     """Same continuity is determined by display span or stable hash. A
     live-state transition must not force a visual reset."""
     src = _strip_js_comments(read_js("core.js"))
-    body = func_body(src, "registerLiveClock")
+    commit_body = func_body(src, "commitPageActiveSpanClock")
+    observe_body = func_body(src, "observeRefreshStateActiveSpan")
     continuity_body = func_body(src, "sameLiveContinuity")
     assert "display_span_id" in continuity_body, (
         "sameLiveContinuity must treat matching display_span_id as continuous"
@@ -1395,8 +1411,11 @@ def test_register_live_clock_rebases_same_continuity_without_live_state_gate():
     assert "live_state" not in continuity_body, (
         "sameLiveContinuity must not use live_state as a negative continuity condition"
     )
-    assert "sameContinuity" in body and "rebaseIncomingClockWithoutRollback" in body, (
-        "registerLiveClock must detect continuity and rebase without rollback"
+    assert "sameContinuity" in commit_body and "rebaseIncomingClockWithoutRollback" in commit_body, (
+        "page_model commit must detect continuity and rebase without rollback"
+    )
+    assert "!sameLiveContinuity" in observe_body and "return activeClock" in observe_body, (
+        "refresh_state must not replace the page clock on different continuity"
     )
     rebase_body = func_body(src, "rebaseIncomingClockWithoutRollback")
     for field in (
@@ -1409,14 +1428,17 @@ def test_register_live_clock_rebases_same_continuity_without_live_state_gate():
         )
 
 
-def test_run_revision_check_uses_unified_refresh_state_rebase():
-    """Revision checks must register refresh_state through the same rebase
-    path and must not use source-specific sample preservation flags."""
+def test_run_revision_check_observes_refresh_state_without_row_clock_commit():
+    """Unchanged revision checks may observe the current active span, but
+    must not call the compatibility registerLiveClock path or rewrite row
+    projection anchors."""
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
-    assert '"refresh_state"' in body or "'refresh_state'" in body, (
-        "runRevisionCheck must register refresh_state with source "
-        "'refresh_state'"
+    assert "observeRefreshStateActiveSpan" in body, (
+        "runRevisionCheck must observe same-continuity refresh_state active span"
+    )
+    assert "registerLiveClock" not in body, (
+        "runRevisionCheck must not use registerLiveClock for refresh_state"
     )
     assert "preserveSameSpanSample" not in body, (
         "runRevisionCheck must not use legacy source-specific preservation flags"
@@ -1428,23 +1450,18 @@ def test_run_revision_check_uses_unified_refresh_state_rebase():
 
 
 def test_page_model_render_uses_page_model_source():
-    """The page-model render flows (``showOverview`` / ``showRecent`` /
-    ``showTimeline`` / ``renderSessionDetails`` / ``refreshOverview``)
-    MUST register with ``{ source: 'page_model' }`` so they replace the
-    active sample. ``refresh_state`` must NOT use ``page_model`` source.
-    """
+    """Page-model render flows commit page active span clocks directly.
+    Partial Timeline details must not commit/replace the Timeline page
+    active span clock."""
     for fname in ("overview.js", "timeline.js"):
         src = _strip_js_comments(read_js(fname))
-        # Every registerLiveClock call in these files must use page_model.
-        calls = re.findall(r"registerLiveClock\s*\([^)]*\)", src)
-        assert calls, (
-            fname + " must call registerLiveClock at least once"
+        assert "commitPageActiveSpanClock" in src, (
+            fname + " must commit page_model active span clocks"
         )
-        for call in calls:
-            assert '"page_model"' in call or "'page_model'" in call, (
-                fname + " registerLiveClock call must use source 'page_model'; "
-                "found: " + call
-            )
+    details_body = func_body(_strip_js_comments(read_js("timeline.js")), "renderSessionDetails")
+    assert "commitPageActiveSpanClock" not in details_body, (
+        "renderSessionDetails partial payload must not replace Timeline page active span clock"
+    )
 
 
 def test_run_revision_check_registers_current_clock_on_revision_change():
@@ -1499,20 +1516,15 @@ def test_run_revision_check_patches_current_activity_when_revision_unchanged():
 
 
 def test_register_live_clock_accepts_page_scope_option():
-    """Section 五: ``registerLiveClock`` MUST accept a ``page`` / ``scope``
-    option so the clock is registered under a page-scoped registry
-    (``App.liveClockByPage``) instead of a single global active span.
-    """
+    """Section 五: active span clocks are page scoped under
+    ``App.activeSpanClockByPage``."""
     src = _strip_js_comments(read_js("core.js"))
-    body = func_body(src, "registerLiveClock")
-    # Must read opts.page (or options.page).
-    assert re.search(r"opts\.page|options\.page", body), (
-        "registerLiveClock must read options.page to scope the registration"
+    body = func_body(src, "commitPageActiveSpanClock")
+    assert re.search(r"function\s+commitPageActiveSpanClock\s*\(\s*\w+\s*,\s*\w+", body), (
+        "commitPageActiveSpanClock must accept a page scope"
     )
-    # Must store under App.liveClockByPage (page-scoped registry).
-    assert "liveClockByPage" in body, (
-        "registerLiveClock must store the clock under App.liveClockByPage "
-        "(page-scoped registry)"
+    assert "activeSpanClockByPage" in body, (
+        "commitPageActiveSpanClock must store under App.activeSpanClockByPage"
     )
 
 
@@ -1552,19 +1564,22 @@ def test_renderers_register_project_and_current_clocks():
     overview = _strip_js_comments(read_js("overview.js"))
     timeline = _strip_js_comments(read_js("timeline.js"))
     for src, name in ((overview, "overview.js"), (timeline, "timeline.js")):
-        assert "registerLiveClock" in src, name + " must register project live clock"
+        assert "commitPageActiveSpanClock" in src, name + " must commit page active span clock"
         assert "registerCurrentActivityClock" in src, name + " must register current activity clock"
 
 
-def test_timeline_details_edit_guard_keeps_dom_but_registers_clocks():
+def test_timeline_details_edit_guard_keeps_dom_and_does_not_register_clocks():
     src = _strip_js_comments(read_js("timeline.js"))
     body = func_body(src, "renderSessionDetails")
     reg_pos = body.find("registerCurrentActivityClock")
     guard_pos = body.find("_timelineEditingActive")
     render_pos = body.find("detailsList.innerHTML")
     assert reg_pos != -1 and guard_pos != -1
-    assert reg_pos < guard_pos, "Details must register clocks before edit guard returns"
+    assert guard_pos < reg_pos, "Details must not register clocks before edit guard returns"
     assert guard_pos < render_pos, "Details edit guard must run before DOM redraw"
+    assert "commitPageActiveSpanClock" not in body, (
+        "Details partial render must not replace the Timeline page active span clock"
+    )
 
 
 def test_get_active_live_clock_reads_page_scope():
@@ -1579,8 +1594,8 @@ def test_get_active_live_clock_reads_page_scope():
     assert "currentPage" in body, (
         "getActiveLiveClock must read App.currentPage to scope the lookup"
     )
-    assert "liveClockByPage" in body, (
-        "getActiveLiveClock must read from App.liveClockByPage (page-scoped)"
+    assert "activeSpanClockByPage" in body, (
+        "getActiveLiveClock must read from App.activeSpanClockByPage (page-scoped)"
     )
     assert "activeDisplaySpanId" not in body, (
         "getActiveLiveClock must NOT fall back to App.activeDisplaySpanId; "
@@ -1665,7 +1680,7 @@ def test_clear_live_clock_registry_supports_page_scope():
 
 
 def test_get_active_live_clock_reads_page_scoped_registry_only():
-    """``getActiveLiveClock`` MUST read ``App.liveClockByPage[App.currentPage]``
+    """``getActiveLiveClock`` MUST read ``App.activeSpanClockByPage[App.currentPage]``
     and MUST NOT read ``App.activeDisplaySpanId`` or
     ``App.liveClockBySpanId[App.activeDisplaySpanId]``. The legacy global
     fallback was removed so a hidden page's stale registration cannot
@@ -1673,8 +1688,8 @@ def test_get_active_live_clock_reads_page_scoped_registry_only():
     """
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "getActiveLiveClock")
-    assert "App.liveClockByPage[page]" in body, (
-        "getActiveLiveClock must read App.liveClockByPage[page] where "
+    assert "App.activeSpanClockByPage[page]" in body, (
+        "getActiveLiveClock must read App.activeSpanClockByPage[page] where "
         "page = App.currentPage"
     )
     assert "App.currentPage" in body, (

@@ -43,11 +43,9 @@
                 throw new Error(msg);
             });
             if (!bundle) return;
-            // Register the bundle's unified live clock BEFORE rendering so
-            // the 1s ticker renders KPIs/current/recent from one clock.
-            // ``page: "overview"`` keeps it page-scoped (Section 五 fix)
-            // so a hidden Overview refresh cannot overwrite Timeline's clock.
-            App.registerLiveClock(bundle, { source: "page_model", page: "overview" });
+            // Commit the page-model active span BEFORE rendering so KPI and
+            // Recent anchors are seeded from the same sample.
+            App.commitPageActiveSpanClock(bundle, "overview");
             App.registerCurrentActivityClock(bundle, { source: "page_model", page: "overview" });
             var overview = bundle.overview || {};
             // Augment the overview sub-payload with the bundle-level
@@ -411,15 +409,13 @@
             var newRevision = state.refresh_revision;
             var isFirstCheck = prevRevision === null || prevRevision === undefined;
             App.lastRefreshState = state;
-            App.registerCurrentActivityClock(state, {
-                source: "refresh_state",
-                page: App.currentPage || "overview"
-            });
-            App.registerLiveClock(state, {
-                source: "refresh_state",
-                page: App.currentPage || "overview"
-            });
-            if (!isFirstCheck && prevRevision === newRevision) {
+            var revisionUnchanged = !isFirstCheck && prevRevision === newRevision;
+            if (revisionUnchanged) {
+                App.observeRefreshStateActiveSpan(state, App.currentPage || "overview");
+                App.registerCurrentActivityClock(state, {
+                    source: "refresh_state",
+                    page: App.currentPage || "overview"
+                });
                 patchCurrentActivityFromRefreshState(state);
             }
             var triggeredHeavyRefresh = false;
@@ -481,10 +477,6 @@
                 var state = App.handleResult(result, function () { return null; });
                 if (state) {
                     App.lastRefreshState = state;
-                    App.registerLiveClock(state, {
-                        source: "refresh_state",
-                        page: App.currentPage || "overview"
-                    });
                     App.registerCurrentActivityClock(state, {
                         source: "refresh_state",
                         page: App.currentPage || "overview"

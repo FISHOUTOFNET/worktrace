@@ -8,23 +8,44 @@
 
     function showTimeline(data) {
         if (!data) return;
-        App.registerLiveClock(data, { source: "page_model", page: "timeline" });
+        App.commitPageActiveSpanClock(data, "timeline");
         App.registerCurrentActivityClock(data, { source: "page_model", page: "timeline" });
         App.lastTimelineData = data;
         var nowMs = Date.now();
         var clock = App.getActiveLiveClock();
+        var activeElapsedAtSample = App.activeElapsedAtRenderFromPayload(data, "timeline", nowMs);
+        var activeElapsedAtRender = App.activeElapsedNow(clock, nowMs);
         var dateInput = document.getElementById("timeline-date-input");
         if (dateInput) dateInput.value = data.date || "";
         var todayStrForTotal = App.localTodayStr();
         var isTodayForTotal = !data.date || data.date === todayStrForTotal || data.date === "--";
         if (isTodayForTotal) {
+            var totalProjection = clock
+                ? App.anchoredSecondsAtRender(
+                    parseInt(data.today_total_seconds, 10) || 0,
+                    activeElapsedAtSample,
+                    clock,
+                    nowMs
+                )
+                : { seconds: parseInt(data.today_total_seconds, 10) || 0 };
+            if (clock) {
+                App.setLiveProjectionAnchor(
+                    document.getElementById("timeline-total"),
+                    totalProjection.seconds,
+                    activeElapsedAtRender,
+                    "timeline-total"
+                );
+            } else {
+                App.clearLiveProjectionAnchor(document.getElementById("timeline-total"));
+            }
             App.renderDurationProjected(
                 document.getElementById("timeline-total"),
-                App.projectLiveBaseSeconds(parseInt(data.today_total_seconds, 10) || 0, clock, nowMs),
+                totalProjection.seconds,
                 "timeline-total",
                 { allowDecrease: false }
             );
         } else {
+            App.clearLiveProjectionAnchor(document.getElementById("timeline-total"));
             App.renderDurationProjected(
                 document.getElementById("timeline-total"),
                 parseInt(data.today_total_seconds, 10) || 0,
@@ -82,16 +103,19 @@
             // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
             // the virtual_pending / absorbed_pending / persisted_open transition (stable_live_key_hash stays the same when session_id changes).
             var stableKeyHash = s.stable_live_key_hash || "";
-            // Unified live-span DOM attributes: ``data-display-span-id`` makes the
-            // ticker render this row from the registered live clock; ``data-live-base-seconds``
-            // carries the row's OWN sample base. Ticker renders ``base + liveDelta``.
+            // Active-span anchored DOM attributes: the row stores a static
+            // base plus active elapsed offset; the ticker supplies the one
+            // Timeline page active elapsed sample.
             var sessSpanId = s.display_span_id || "";
-            var sessLiveBaseSec = (sessSpanId && !isNaN(sDurSec)) ? sDurSec : 0;
             var sessContinuityKey = sessSpanId ? App.liveContinuityKey(s, "session") : "";
-            var sessClock = sessSpanId ? App.liveClockBySpanId[sessSpanId] : null;
             var initialSec = (!isNaN(sDurSec) && sDurSec >= 0) ? sDurSec : 0;
-            if (sessSpanId && sessClock) {
-                initialSec = App.projectLiveBaseSeconds(initialSec, sessClock, nowMs);
+            if (sessSpanId && clock) {
+                initialSec = App.projectFromActiveElapsed(
+                    initialSec,
+                    activeElapsedAtSample,
+                    clock,
+                    nowMs
+                );
             }
             var sessPrev = sessContinuityKey ? App._monotonicRenderState[sessContinuityKey] : null;
             if (sessPrev && typeof sessPrev.lastSeconds === "number" && initialSec < sessPrev.lastSeconds) {
@@ -103,7 +127,8 @@
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
                 + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
                 + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
-                + (sessSpanId ? ' data-live-base-seconds="' + sessLiveBaseSec + '"' : '')
+                + (sessSpanId ? ' data-live-base-seconds="' + initialSec + '"' : '')
+                + (sessSpanId ? ' data-active-elapsed-at-render="' + activeElapsedAtRender + '"' : '')
                 + (sessContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(sessContinuityKey) + '"' : '')
                 + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startTimeOnly) + '｜' + App.escapeHtml(sDurText) + '"'
                 + '>'
@@ -269,19 +294,6 @@
     App.loadSessionDetails = loadSessionDetails;
 
     function renderSessionDetails(data) {
-        App.registerLiveClock(data, { source: "page_model", page: "timeline" });
-        App.registerCurrentActivityClock(data, { source: "page_model", page: "timeline" });
-        var nowMs = Date.now();
-        if (App.lastTimelineData) {
-            App.lastTimelineData.current_activity = data.current_activity || App.lastTimelineData.current_activity || {};
-            App.lastTimelineData.current_activity_clock = data.current_activity_clock || App.lastTimelineData.current_activity_clock || null;
-            App.renderCurrentActivityElement(
-                document.getElementById("timeline-current"),
-                App.lastTimelineData.current_activity,
-                App.getActiveCurrentActivityClock(),
-                "timeline"
-            );
-        }
         if (typeof App._timelineEditingActive === "function" && App._timelineEditingActive()) {
             return;
         }
@@ -292,9 +304,24 @@
         if (App.activityTimeSaving || App.activitySplitSaving) {
             return;
         }
+        App.registerCurrentActivityClock(data, { source: "partial_details", page: "timeline" });
+        var nowMs = Date.now();
+        var activeClock = App.getActiveLiveClock("timeline");
+        var activeElapsedAtSample = App.activeElapsedAtRenderFromPayload(data, "timeline", nowMs);
+        var activeElapsedAtRender = App.activeElapsedNow(activeClock, nowMs);
+        if (App.lastTimelineData) {
+            App.lastTimelineData.current_activity = data.current_activity || App.lastTimelineData.current_activity || {};
+            App.lastTimelineData.current_activity_clock = data.current_activity_clock || App.lastTimelineData.current_activity_clock || null;
+            App.renderCurrentActivityElement(
+                document.getElementById("timeline-current"),
+                App.lastTimelineData.current_activity,
+                App.getActiveCurrentActivityClock(),
+                "timeline"
+            );
+        }
         // Structural cache only — used for re-render on page switch /
-        // edit-guard checks. Live seconds come from the registered live
-        // clock; this cache MUST NOT be read as a live-seconds source.
+        // edit-guard checks. Live seconds come from DOM anchors plus the
+        // Timeline page active span clock; this cache MUST NOT be read as a live-seconds source.
         App.lastSessionDetailsViewModel = data;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
@@ -325,16 +352,18 @@
             // Stable live key data attribute so the detail ticker locates the row across the virtual_pending / absorbed_pending / persisted_open
             // transition (stable_live_key_hash stays the same when activity_id changes; ticker falls back to activity_id).
             var detailStableKey = a.stable_live_key_hash || "";
-            // Unified live-span DOM attributes: ``data-display-span-id`` makes the ticker
-            // render this row from the registered live clock; ``data-live-base-seconds``
-            // carries the row's OWN sample base. Ticker renders ``base + liveDelta``.
+            // Active-span anchored DOM attributes: detail rows keep their
+            // own offset but do not replace the Timeline page active clock.
             var detailSpanId = a.display_span_id || "";
-            var detailLiveBaseSec = (detailSpanId && !isNaN(aDurSec)) ? aDurSec : 0;
             var detailContinuityKey = detailSpanId ? App.liveContinuityKey(a, "detail") : "";
-            var detailClock = detailSpanId ? App.liveClockBySpanId[detailSpanId] : null;
             var initialSec = (!isNaN(aDurSec) && aDurSec >= 0) ? aDurSec : 0;
-            if (detailSpanId && detailClock) {
-                initialSec = App.projectLiveBaseSeconds(initialSec, detailClock, nowMs);
+            if (detailSpanId && activeClock) {
+                initialSec = App.projectFromActiveElapsed(
+                    initialSec,
+                    activeElapsedAtSample,
+                    activeClock,
+                    nowMs
+                );
             }
             var detailPrev = detailContinuityKey ? App._monotonicRenderState[detailContinuityKey] : null;
             if (detailPrev && typeof detailPrev.lastSeconds === "number" && initialSec < detailPrev.lastSeconds) {
@@ -346,7 +375,8 @@
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
                 + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
                 + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
-                + (detailSpanId ? ' data-live-base-seconds="' + detailLiveBaseSec + '"' : '')
+                + (detailSpanId ? ' data-live-base-seconds="' + initialSec + '"' : '')
+                + (detailSpanId ? ' data-active-elapsed-at-render="' + activeElapsedAtRender + '"' : '')
                 + (detailContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(detailContinuityKey) + '"' : '')
                 + ' data-detail-index="' + i + '"'
                 + '>'

@@ -7,11 +7,13 @@
 
     function showOverview(overview) {
         if (!overview) return;
-        App.registerLiveClock(overview, { source: "page_model", page: "overview" });
+        App.commitPageActiveSpanClock(overview, "overview");
         App.registerCurrentActivityClock(overview, { source: "page_model", page: "overview" });
         App.lastOverviewSnapshot = overview;
         var nowMs = Date.now();
         var clock = App.getActiveLiveClock();
+        var activeElapsedAtSample = App.activeElapsedAtRenderFromPayload(overview, "overview", nowMs);
+        var activeElapsedAtRender = App.activeElapsedNow(clock, nowMs);
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-projects").textContent = String(overview.project_count || 0);
         var current = overview.current_activity || {};
@@ -26,15 +28,43 @@
         } else {
             currentIsUncategorized = null;
         }
+        var totalEl = document.getElementById("kpi-total");
+        var totalProjection = clock
+            ? App.anchoredSecondsAtRender(
+                App.kpiBaseSeconds(overview, "today_total_seconds"),
+                activeElapsedAtSample,
+                clock,
+                nowMs
+            )
+            : { seconds: App.kpiBaseSeconds(overview, "today_total_seconds") };
+        if (clock) {
+            App.setLiveProjectionAnchor(totalEl, totalProjection.seconds, activeElapsedAtRender, "overview-total");
+        } else {
+            App.clearLiveProjectionAnchor(totalEl);
+        }
         App.renderDurationProjected(
-            document.getElementById("kpi-total"),
-            App.projectLiveBaseSeconds(App.kpiBaseSeconds(overview, "today_total_seconds"), clock, nowMs),
+            totalEl,
+            totalProjection.seconds,
             "overview-total",
             { allowDecrease: false }
         );
         var classifiedSeconds = App.kpiBaseSeconds(overview, "classified_seconds");
-        if (currentIsUncategorized === false) {
-            classifiedSeconds = App.projectLiveBaseSeconds(classifiedSeconds, clock, nowMs);
+        if (currentIsUncategorized === false && clock) {
+            var classifiedProjection = App.anchoredSecondsAtRender(
+                classifiedSeconds,
+                activeElapsedAtSample,
+                clock,
+                nowMs
+            );
+            classifiedSeconds = classifiedProjection.seconds;
+            App.setLiveProjectionAnchor(
+                document.getElementById("kpi-classified"),
+                classifiedProjection.seconds,
+                activeElapsedAtRender,
+                "overview-classified"
+            );
+        } else {
+            App.clearLiveProjectionAnchor(document.getElementById("kpi-classified"));
         }
         App.renderDurationProjected(
             document.getElementById("kpi-classified"),
@@ -43,8 +73,22 @@
             { allowDecrease: false }
         );
         var uncategorizedSeconds = App.kpiBaseSeconds(overview, "uncategorized_seconds");
-        if (currentIsUncategorized === true) {
-            uncategorizedSeconds = App.projectLiveBaseSeconds(uncategorizedSeconds, clock, nowMs);
+        if (currentIsUncategorized === true && clock) {
+            var uncategorizedProjection = App.anchoredSecondsAtRender(
+                uncategorizedSeconds,
+                activeElapsedAtSample,
+                clock,
+                nowMs
+            );
+            uncategorizedSeconds = uncategorizedProjection.seconds;
+            App.setLiveProjectionAnchor(
+                document.getElementById("kpi-uncategorized"),
+                uncategorizedProjection.seconds,
+                activeElapsedAtRender,
+                "overview-uncategorized"
+            );
+        } else {
+            App.clearLiveProjectionAnchor(document.getElementById("kpi-uncategorized"));
         }
         App.renderDurationProjected(
             document.getElementById("kpi-uncategorized"),
@@ -62,9 +106,9 @@
     App.showOverview = showOverview;
 
     function showRecent(recentResult) {
-        // ``source: "page_model"``: defensive re-registration of the same sample.
-        // ``page: "overview"`` keeps the clock page-scoped (Section 五 fix).
-        App.registerLiveClock(recentResult, { source: "page_model", page: "overview" });
+        // Defensive page-model commit of the same sample keeps the Overview
+        // active span page-scoped while rows store only projection offsets.
+        App.commitPageActiveSpanClock(recentResult, "overview");
         App.registerCurrentActivityClock(recentResult, { source: "page_model", page: "overview" });
         // Structural cache only — never a live-seconds source.
         App.lastRecentData = recentResult;
@@ -75,6 +119,9 @@
         }
         var html = "";
         var nowMs = Date.now();
+        var activeClock = App.getActiveLiveClock("overview");
+        var activeElapsedAtSample = App.activeElapsedAtRenderFromPayload(recentResult, "overview", nowMs);
+        var activeElapsedAtRender = App.activeElapsedNow(activeClock, nowMs);
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
             var inProgress = item.is_in_progress === true || (!item.end_time && item.is_in_progress !== false);
@@ -89,15 +136,18 @@
             if (inProgress) cls += " in-progress";
             if (item.is_live_projected === true) cls += " live-projected";
             if (item.is_virtual === true) cls += " virtual-live";
-            // Unified live-span DOM attributes: ticker reads each row's
-            // OWN sample base from [data-live-base-seconds].
+            // Active-span anchored DOM attributes: ticker reads each row's
+            // own base + active elapsed offset, not a row-owned clock.
             var spanId = item.display_span_id || "";
-            var liveBaseSec = (spanId && !isNaN(durSec)) ? durSec : 0;
             var continuityKey = spanId ? App.liveContinuityKey(item, "recent") : "";
-            var rowClock = spanId ? App.liveClockBySpanId[spanId] : null;
             var initialSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
-            if (spanId && rowClock) {
-                initialSec = App.projectLiveBaseSeconds(initialSec, rowClock, nowMs);
+            if (spanId && activeClock) {
+                initialSec = App.projectFromActiveElapsed(
+                    initialSec,
+                    activeElapsedAtSample,
+                    activeClock,
+                    nowMs
+                );
             }
             var prevEntry = continuityKey ? App._monotonicRenderState[continuityKey] : null;
             if (prevEntry && typeof prevEntry.lastSeconds === "number" && initialSec < prevEntry.lastSeconds) {
@@ -108,7 +158,8 @@
                 : (item.duration || "00:00:00");
             html += '<div class="' + cls + '" data-recent-index="' + i + '"'
                 + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
-                + (spanId ? ' data-live-base-seconds="' + liveBaseSec + '"' : '')
+                + (spanId ? ' data-live-base-seconds="' + initialSec + '"' : '')
+                + (spanId ? ' data-active-elapsed-at-render="' + activeElapsedAtRender + '"' : '')
                 + (continuityKey ? ' data-live-continuity-key="' + App.escapeHtml(continuityKey) + '"' : '')
                 + ' data-duration-seconds="' + (isNaN(durSec) ? 0 : durSec) + '"'
                 + '>'
