@@ -1,4 +1,6 @@
+from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import STATUS_ERROR
+from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service, project_service, recovery_service, session_boundary_service, settings_service
 
 
@@ -59,3 +61,25 @@ def test_recovery_splits_unclosed_cross_midnight_record(temp_db):
     assert ("2026-06-19 00:00:00", "midnight") in [
         (row["occurred_at"], row["reason"]) for row in boundaries
     ]
+
+
+def test_recovery_clears_stale_runtime_state_without_open_row(temp_db):
+    settings_service.set_setting("last_collector_heartbeat", "2000-01-01 09:09:00")
+    settings_service.set_setting("last_shutdown_at", "2000-01-01 09:10:00")
+    settings_service.set_setting("pending_short_seconds", "12")
+    settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
+
+    recovery_service.recover_unclosed_records()
+
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+    assert settings_service.get_setting("current_activity_snapshot", "") == ""
+
+    machine = CollectorStateMachine()
+    window = ActiveWindow("A", "a.exe", "A")
+    machine.transition_to("recording", window, at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", window, at_time="2026-06-18 09:00:30")
+    machine.transition_to("stopped", at_time="2026-06-18 09:00:30")
+
+    rows = activity_service.get_activities_by_date("2026-06-18")
+    assert len(rows) == 1
+    assert rows[0]["duration_seconds"] == 30

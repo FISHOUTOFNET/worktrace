@@ -49,7 +49,6 @@ from .live_display_service import (
     _read_pending_short_seconds,
     _snapshot_display_project_fields,
     _snapshot_total_seconds,
-    _start_time_epoch_ms,
     _stable_live_key,
     _stable_live_key_hash,
     build_current_activity_summary,
@@ -231,34 +230,17 @@ def classify_display_live_state(
 
 def _build_current_activity_clock(
     snapshot: dict[str, Any] | None,
-    display_live_state: str,
+    live_clock: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build the current-resource clock used only by current activity UI.
+    """Return the user-visible current activity clock.
 
-    This clock is intentionally current-only: no anchor duration, no
-    ``extra_seconds``, no ``pending_short_seconds``, and no DB row duration.
+    When a live span exists, Current / Recent / Timeline / Details all use
+    the same display clock. Resource-only elapsed is exposed separately on
+    ``current_activity.resource_elapsed_seconds``.
     """
-    stable_key = _stable_live_key(snapshot)
-    stable_hash = _stable_live_key_hash(snapshot)
-    elapsed = snapshot_elapsed_seconds(snapshot)
-    current_duration_live = bool(
-        snapshot
-        and display_live_state not in ("none", "paused")
-        and _start_time_epoch_ms(snapshot) > 0
-    )
-    return {
-        "display_span_id": ("current:" + stable_hash) if stable_hash else "",
-        "stable_live_key": stable_key,
-        "stable_live_key_hash": stable_hash,
-        "live_state": display_live_state if snapshot else "none",
-        "live_started_at_epoch_ms": _start_time_epoch_ms(snapshot),
-        "carry_seconds": 0,
-        "duration_seconds_at_sample": int(elapsed),
-        "current_duration_live": bool(current_duration_live),
-        "project_duration_live": False,
-        "is_live": bool(current_duration_live),
-        "is_project_duration_live": False,
-    }
+    if not snapshot:
+        return _build_suppressed_live_clock()
+    return dict(live_clock)
 
 
 def _build_project_live_clock(
@@ -279,12 +261,10 @@ def _build_project_live_clock(
     duration_seconds_at_sample``; ``live_span_seconds(T0 + 5s) ==
     duration_seconds_at_sample + 5``.
 
-    Carry per state: ``absorbed_pending`` → anchor's
-    ``duration_seconds`` (legacy structured carry add-on removed — no
-    production writer); ``persisted_open`` → ``snapshot_extra_seconds``
-    (preserves sub-30s pending folded into ``extra_seconds``);
-    ``virtual_pending`` → ``pending_short_seconds`` (production
-    collector-maintained accumulator; legacy structured carry removed).
+    Carry per state is the display span's seconds before the snapshot
+    start: ``absorbed_pending`` → anchor duration + snapshot extra,
+    ``persisted_open`` → snapshot extra, ``virtual_pending`` → pending
+    carry + snapshot extra.
     """
     stable_key = _stable_live_key(snapshot)
     stable_hash = _stable_live_key_hash(snapshot)
@@ -294,11 +274,11 @@ def _build_project_live_clock(
     duration_at_sample = int(summary.get("elapsed_seconds") or 0)
 
     if display_live_state == "absorbed_pending" and anchor:
-        carry_seconds = safe_int(anchor.get("duration_seconds"))
-        duration_at_sample = carry_seconds + _snapshot_total_seconds(snapshot)
+        carry_seconds = safe_int(anchor.get("duration_seconds")) + snapshot_extra_seconds(snapshot)
+        duration_at_sample = carry_seconds + snapshot_elapsed_seconds(snapshot)
     elif display_live_state == "virtual_pending":
-        carry_seconds = _read_pending_short_seconds()
-        duration_at_sample = _snapshot_total_seconds(snapshot) + carry_seconds
+        carry_seconds = _read_pending_short_seconds() + snapshot_extra_seconds(snapshot)
+        duration_at_sample = carry_seconds + snapshot_elapsed_seconds(snapshot)
     elif display_live_state == "persisted_open":
         # carry_seconds MUST equal snapshot_extra_seconds so the frontend
         # formula matches duration_seconds_at_sample at sample time.
@@ -310,6 +290,11 @@ def _build_project_live_clock(
         "absorbed_pending",
         "persisted_open",
     )
+    is_current_duration_live = bool(
+        snapshot
+        and display_live_state not in ("none", "paused")
+        and live_started_at > 0
+    )
 
     return {
         "display_span_id": display_span_id,
@@ -320,8 +305,8 @@ def _build_project_live_clock(
         "carry_seconds": int(carry_seconds),
         "duration_seconds_at_sample": int(duration_at_sample),
         "project_duration_live": bool(is_project_duration_live),
-        "current_duration_live": False,
-        "is_live": bool(is_project_duration_live),
+        "current_duration_live": bool(is_current_duration_live),
+        "is_live": bool(is_project_duration_live or is_current_duration_live),
         "is_project_duration_live": bool(is_project_duration_live),
     }
 
@@ -340,14 +325,16 @@ def _build_current_activity_display(
     """Build the current-activity display block.
 
     The current-activity area always renders the pending resource / window
-    so the user knows what they are currently looking at. Duration comes
-    from ``current_activity_clock`` only; project rows use ``live_clock``.
+    so the user knows what they are currently looking at. Its primary
+    duration is the same display-span duration used by Recent / Timeline /
+    Details; resource-only elapsed is a separate field.
     """
     if not snapshot:
         return {
             "active": False,
             "display": "无",
             "elapsed_seconds": 0,
+            "resource_elapsed_seconds": 0,
             "is_paused": False,
             "status": "",
             "is_persisted": False,
@@ -397,11 +384,12 @@ def _build_current_activity_display(
     )
     display["live_state"] = display_live_state
     display["live_started_at_epoch_ms"] = int(
-        current_activity_clock.get("live_started_at_epoch_ms") or 0
+        live_clock.get("live_started_at_epoch_ms") or 0
     )
-    display["carry_seconds"] = 0
+    display["carry_seconds"] = int(live_clock.get("carry_seconds") or 0)
+    display["resource_elapsed_seconds"] = int(snapshot_elapsed_seconds(snapshot))
     display["elapsed_seconds"] = int(
-        current_activity_clock.get("duration_seconds_at_sample") or 0
+        live_clock.get("duration_seconds_at_sample") or 0
     )
     display["duration_seconds_at_sample"] = display["elapsed_seconds"]
 
@@ -410,7 +398,6 @@ def _build_current_activity_display(
     display["is_absorbed_pending"] = display_live_state == "absorbed_pending"
     display["source"] = _source_for_state(display_live_state, snapshot)
 
-    # Current activity display duration always uses current-resource elapsed.
     from ..formatters import format_duration
 
     display_seconds = int(display.get("elapsed_seconds") or 0)
@@ -604,10 +591,7 @@ def _build_display_span(
         project_description = str(anchor.get("project_description") or "")
         project_id = int(anchor.get("project_id") or 0)
         start_time = str(anchor.get("start_time") or start_time)
-        # absorbed_pending anchor is a closed DB row; sample seconds already
-        # exclude its DB duration, so anchor base = 0 and the unified
-        # formula collapses to ``row_raw + duration_at_sample``.
-        live_anchor_base_seconds = 0
+        live_anchor_base_seconds = safe_int(anchor.get("duration_seconds"))
     else:
         source = "snapshot"
         is_virtual = True
@@ -724,9 +708,9 @@ def apply_live_span_to_row(
     from ..formatters import format_duration
 
     if state == "absorbed_pending":
-        # Pending projection at sample time = duration_at_sample - carry.
-        pending_at_sample = max(0, duration_at_sample - carry)
-        projected = row_raw + pending_at_sample
+        anchor_base = int(span.get("live_anchor_base_seconds") or 0)
+        live_delta_at_sample = max(0, duration_at_sample - anchor_base)
+        projected = row_raw + live_delta_at_sample
         row["duration_seconds"] = int(projected)
         row["duration"] = format_duration(projected)
         row["live_base_seconds"] = int(projected)
@@ -835,7 +819,7 @@ def build_activity_display_model(
         live_clock = _build_project_live_clock(
             snapshot, display_live_state, anchor, summary, report_date, today or ""
         )
-    current_activity_clock = _build_current_activity_clock(snapshot, display_live_state)
+    current_activity_clock = _build_current_activity_clock(snapshot, live_clock)
 
     display_spans: list[dict[str, Any]] = []
     if is_today and display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"):

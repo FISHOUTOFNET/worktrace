@@ -245,6 +245,7 @@ def test_export_payload_excludes_runtime_state_settings(temp_db):
     from worktrace.services.settings_service import set_setting
 
     set_setting("current_activity_snapshot", '{"app":"runtime-state-marker"}')
+    set_setting("pending_short_seconds", "12")
     set_setting("collector_status", "running")
 
     payload = secure_backup_service._build_export_payload()
@@ -252,9 +253,20 @@ def test_export_payload_excludes_runtime_state_settings(temp_db):
 
     settings_rows = {row["key"] for row in data["tables"]["settings"]}
     assert "current_activity_snapshot" not in settings_rows
+    assert "pending_short_seconds" not in settings_rows
     assert "collector_status" not in settings_rows
     assert "last_collector_heartbeat" not in settings_rows
     assert "user_paused" not in settings_rows
+
+
+def test_secure_import_guard_clears_runtime_pending_on_boundary(temp_db):
+    _reset_guard_and_pause_state()
+    set_setting("current_activity_snapshot", '{"status":"normal"}')
+    set_setting("pending_short_seconds", "12")
+
+    with secure_backup_service._secure_import_guard():
+        assert get_setting("current_activity_snapshot", "") == ""
+        assert get_setting("pending_short_seconds", "") == "0"
 
 
 def test_export_payload_is_valid_utf8_json(temp_db):
@@ -764,12 +776,14 @@ def test_current_activity_snapshot_cleared_during_import(temp_db, tmp_path, monk
     out = _make_backup(tmp_path)
     _reset_guard_and_pause_state()
     set_setting("current_activity_snapshot", '{"app":"snapshot-before-import"}')
+    set_setting("pending_short_seconds", "12")
 
     captured = {}
     original_replace = secure_backup_service._replace_import
 
     def spy_replace(data):
         captured["snapshot_during"] = get_setting("current_activity_snapshot", "")
+        captured["pending_during"] = get_setting("pending_short_seconds", "")
         return original_replace(data)
 
     monkeypatch.setattr(secure_backup_service, "_replace_import", spy_replace)
@@ -777,6 +791,7 @@ def test_current_activity_snapshot_cleared_during_import(temp_db, tmp_path, monk
     secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
 
     assert captured["snapshot_during"] == ""
+    assert captured["pending_during"] == "0"
 
 
 

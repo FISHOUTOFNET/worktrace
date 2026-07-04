@@ -105,6 +105,7 @@ def test_clear_all_success_sets_pause_guard_and_clears_after(temp_db) -> None:
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
     set_setting("current_activity_snapshot", '{"app":"Word"}')
+    set_setting("pending_short_seconds", "12")
     set_setting("secure_import_in_progress", "false")
 
     export_service.clear_all_local_data(confirm=True)
@@ -113,6 +114,7 @@ def test_clear_all_success_sets_pause_guard_and_clears_after(temp_db) -> None:
     assert get_bool_setting("user_paused", False) is True
     assert get_setting("collector_status", "") == "paused"
     assert (get_setting("current_activity_snapshot", "") or "") == ""
+    assert get_setting("pending_short_seconds", "") == "0"
     from worktrace.services import activity_service as act_svc
     activities = act_svc.get_activities_by_range(
         "2026-06-18", "2026-06-18"
@@ -162,6 +164,7 @@ def test_clear_all_failure_restores_prior_state_and_clears_guard(
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
     set_setting("current_activity_snapshot", '{"app":"Word"}')
+    set_setting("pending_short_seconds", "12")
     set_setting("secure_import_in_progress", "false")
 
     def _boom() -> None:
@@ -183,6 +186,17 @@ def test_clear_all_failure_restores_prior_state_and_clears_guard(
     assert get_bool_setting("user_paused", False) is False
     assert get_setting("collector_status", "") == "running"
     assert (get_setting("current_activity_snapshot", "") or "") == '{"app":"Word"}'
+    assert get_setting("pending_short_seconds", "") == "0"
+
+
+def test_clear_all_guard_clears_runtime_pending_on_boundary(temp_db) -> None:
+    set_setting("pending_short_seconds", "12")
+    set_setting("current_activity_snapshot", '{"status":"normal"}')
+    set_setting("secure_import_in_progress", "false")
+
+    with export_service._destructive_reset_guard():
+        assert get_setting("pending_short_seconds", "") == "0"
+        assert get_setting("current_activity_snapshot", "") == ""
 
 
 def test_clear_all_success_invalidates_context_recompute_cache(temp_db) -> None:

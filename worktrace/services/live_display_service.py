@@ -17,7 +17,8 @@ classification, and the persisted-open live-seconds helper.
 
 The legacy structured ``short_activity_carry`` JSON mechanism was
 REMOVED — no production writer existed. The production collector
-maintains ``pending_short_seconds``, the only carry source consulted.
+maintains ``pending_short_seconds`` within a continuous recording session;
+hard runtime boundaries clear it.
 
 Display projection is purely a UI overlay. It NEVER writes the DB,
 NEVER changes the 30-second collector persistence threshold, and NEVER
@@ -349,9 +350,8 @@ def _read_pending_short_seconds() -> int:
 
     The unified live-display carry seconds include this value so the UI
     does not lose seconds between short activities and then suddenly jump
-    when the next activity persists. Because the collector resets the
-    accumulator on every persistence, this carry never crosses a session
-    boundary.
+    when the next activity persists. Runtime boundary cleanup owns clearing
+    stale carry on restart / pause / stop / midnight / import / reset.
     """
     raw = get_setting("pending_short_seconds", "") or ""
     if not raw:
@@ -382,6 +382,7 @@ def build_current_activity_summary(
             "active": False,
             "display": "无",
             "elapsed_seconds": 0,
+            "resource_elapsed_seconds": 0,
             "is_paused": False,
             "status": "",
             "is_persisted": False,
@@ -496,6 +497,7 @@ def build_current_activity_summary(
         "active": True,
         "display": display,
         "elapsed_seconds": int(display_seconds),
+        "resource_elapsed_seconds": int(snapshot_elapsed_seconds(snapshot)),
         "is_paused": bool(is_paused),
         "status": status,
         "is_persisted": is_persisted,

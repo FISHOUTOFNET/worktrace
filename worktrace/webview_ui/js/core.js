@@ -23,9 +23,9 @@
     App.lastSessionDetailsViewModel = null;
     App.lastTimelineData = null;
 
-    // Project live-clock registry. Keyed by ``display_span_id``. Populated from any payload that
-    // carries project ``live_clock`` (Overview / Recent / Timeline / Details / Refresh State).
-    // Current-activity UI has its own registry below and never reads this as a fallback.
+    // Live-clock registry. Keyed by ``display_span_id``. Populated from any payload that
+    // carries ``live_clock`` (Overview / Recent / Timeline / Details / Refresh State).
+    // Current-activity UI stores the same display clock by page for convenient lookup.
     App.liveClockBySpanId = {};
     App.liveDisplayModel = null;
     // Explicit active span id — the single live span currently eligible to tick
@@ -655,6 +655,12 @@
             }
             if (!clock && payload.current_activity) {
                 clock = payload.current_activity.current_activity_clock || null;
+            }
+            if (!clock) {
+                clock = payload.live_clock || null;
+            }
+            if (!clock && payload.activity_display_model) {
+                clock = payload.activity_display_model.live_clock || null;
             }
         }
         if (!clock) {

@@ -11,6 +11,7 @@ from ..db import get_connection, now_str, reset_database
 from ..exports.excel_exporter import export_excel_file
 from ..formatters import format_duration, format_resource_type, format_safe_display_name
 from . import statistics_service, timeline_service
+from .runtime_activity_state_service import clear_runtime_activity_state
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,7 @@ def _destructive_reset_guard() -> Iterator[None]:
 
     set_setting("user_paused", "true")
     set_setting("collector_status", "paused")
-    set_setting("current_activity_snapshot", "")
+    clear_runtime_activity_state("clear_all_guard_enter")
     set_setting("secure_import_in_progress", "true")
     clear_settings_cache()
 
@@ -243,7 +244,7 @@ def _destructive_reset_guard() -> Iterator[None]:
         # re-assert the paused state here, matching secure-import semantics.
         set_setting("user_paused", "true")
         set_setting("collector_status", "paused")
-        set_setting("current_activity_snapshot", "")
+        clear_runtime_activity_state("clear_all_success")
         set_setting("secure_import_in_progress", "false")
         clear_settings_cache()
         logging.info("clear-all destructive reset guard completed paused=true")

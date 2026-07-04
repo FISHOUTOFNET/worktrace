@@ -395,6 +395,28 @@ def test_absorbed_pending_apply_live_span_to_row_projects_onto_anchor():
     assert int(overlaid["duration_seconds"]) >= raw_duration
 
 
+def test_absorbed_pending_current_and_anchor_row_share_display_seconds():
+    anchor_id, _ = _create_closed_anchor_activity(
+        elapsed_seconds=300, project_name="ProjectA"
+    )
+    snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
+    snap["start_time"] = _pending_start_time_today()
+    _set_snapshot(snap)
+    today = _today_report_date()
+
+    model = build_activity_display_model(report_date=today, today=today)
+    span = get_live_span(model)
+    anchor_row = activity_service.get_activity(anchor_id)
+    overlaid = apply_live_span_to_row(dict(anchor_row), span)
+
+    current = model["current_activity"]
+    assert current["elapsed_seconds"] == 312
+    assert current["resource_elapsed_seconds"] == 12
+    assert model["current_activity_clock"]["duration_seconds_at_sample"] == 312
+    assert model["live_clock"]["duration_seconds_at_sample"] == 312
+    assert int(overlaid["duration_seconds"]) == 312
+
+
 def test_absorbed_pending_does_not_write_db():
     """Case (b) invariant: absorbed_pending projection is display-only.
     Building the model and applying the span MUST NOT call any DB write

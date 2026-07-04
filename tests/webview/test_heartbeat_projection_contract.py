@@ -1532,6 +1532,8 @@ def test_current_activity_clock_registry_is_page_scoped():
     get_body = func_body(src, "getActiveCurrentActivityClock")
     assert "current_activity_clock" in reg_body
     assert "activity_display_model.current_activity_clock" in reg_body
+    assert "payload.live_clock" in reg_body
+    assert "activity_display_model.live_clock" in reg_body
     assert "App.currentPage" in get_body
     assert "currentActivityClockByPage" in get_body
 

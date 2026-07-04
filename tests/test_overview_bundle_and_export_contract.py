@@ -257,7 +257,7 @@ def test_overview_view_model_pending_recent_uses_display_project_not_candidate(b
 
 def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     """Fresh ``virtual_pending`` uses one display sample for KPI and
-    Recent while current activity keeps its current-only elapsed clock."""
+    Recent and current activity."""
     _set_snapshot(_snapshot(elapsed_seconds=12, extra_seconds=3))
     bundle = bridge.get_overview()
     assert bundle["ok"] is True
@@ -265,8 +265,9 @@ def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     current = bundle["current_activity"]
     live_clock = bundle["live_clock"]
     assert current["live_state"] == "virtual_pending"
-    assert int(current["elapsed_seconds"]) == 12
-    assert int(bundle["current_activity_clock"]["duration_seconds_at_sample"]) == 12
+    assert int(current["elapsed_seconds"]) == 15
+    assert int(current["resource_elapsed_seconds"]) == 12
+    assert int(bundle["current_activity_clock"]["duration_seconds_at_sample"]) == 15
 
     sample = int(live_clock["duration_seconds_at_sample"])
     assert sample == 15
@@ -516,13 +517,12 @@ def test_overview_kpi_classified_uncategorized_split_explicit_fields(bridge):
 def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(bridge):
     """Section 一: under a ``persisted_open`` overlay, the Overview KPI
     base, the Recent row's display duration, and the current-activity
-    area's elapsed seconds MUST use separate clocks. The project sample
-    includes ``extra_seconds``; the current-activity sample is current-only.
+    area's elapsed seconds MUST use the same display clock.
 
     With a persisted_open snapshot (elapsed=210, extra=30 → sample=240),
     the KPI ``classified_seconds`` base, the Recent row's
-    ``live_base_seconds`` must equal 240, while
-    ``current_activity.elapsed_seconds`` must equal 210.
+    ``live_base_seconds`` and ``current_activity.elapsed_seconds`` must
+    equal 240. Resource-only elapsed remains available separately.
     """
     from worktrace.services import activity_service, project_service
 
@@ -592,15 +592,18 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
     )
     assert recent_row["stable_live_key_hash"] == sample_hash
 
-    # current_activity.elapsed_seconds must be current-only (no extra_seconds).
+    # current_activity elapsed uses the same display sample; resource-only
+    # elapsed remains separate.
     current = bundle["current_activity"]
-    assert int(current["elapsed_seconds"]) == 210, (
+    assert int(current["elapsed_seconds"]) == sample_duration, (
         f"current_activity.elapsed_seconds ({current['elapsed_seconds']}) "
-        "must equal current snapshot elapsed only"
+        "must equal the live display sample"
     )
+    assert int(current["resource_elapsed_seconds"]) == 210
     assert current["stable_live_key_hash"] == sample_hash
-    assert bundle["current_activity_clock"]["duration_seconds_at_sample"] == 210
-    assert bundle["current_activity_clock"]["carry_seconds"] == 0
+    assert bundle["current_activity_clock"]["duration_seconds_at_sample"] == sample_duration
+    assert bundle["current_activity_clock"]["carry_seconds"] == 30
+    assert bundle["current_activity_clock"]["display_span_id"] == live_clock["display_span_id"]
 
 
 def _create_real_open_activity_helper(

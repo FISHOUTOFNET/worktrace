@@ -39,6 +39,7 @@ from ..services.project_ownership_service import (
     uncategorized_label,
 )
 from ..services.settings_service import get_setting, set_setting
+from ..services.runtime_activity_state_service import clear_runtime_activity_state
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
 
@@ -147,7 +148,17 @@ class AutoActivityRecorder:
         self._set_pending_short_seconds(0)
 
     def clear_snapshot(self) -> None:
-        set_setting("current_activity_snapshot", "")
+        clear_runtime_activity_state(
+            "recorder_snapshot_clear",
+            clear_snapshot=True,
+            clear_pending=False,
+            clear_ownership=False,
+        )
+
+    def clear_runtime_state(self, reason: str) -> None:
+        self.resume_after_short_activity = None
+        self.project_ownership_state = clear_ownership_state()
+        clear_runtime_activity_state(reason)
 
     def _start(self, payload: dict, signature: tuple[str, ...], at_time: str) -> None:
         self.current_payload = dict(payload)
@@ -334,7 +345,16 @@ class AutoActivityRecorder:
             return 0
 
     def _set_pending_short_seconds(self, seconds: int) -> None:
-        set_setting("pending_short_seconds", str(max(0, int(seconds))))
+        normalized = max(0, int(seconds))
+        if normalized == 0:
+            clear_runtime_activity_state(
+                "recorder_pending_clear",
+                clear_snapshot=False,
+                clear_pending=True,
+                clear_ownership=False,
+            )
+            return
+        set_setting("pending_short_seconds", str(normalized))
 
     def _write_snapshot(self, at_time: str) -> None:
         if self.current_payload is None or self.current_start_time is None:

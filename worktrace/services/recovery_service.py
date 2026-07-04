@@ -7,7 +7,8 @@ from ..constants import STATUS_ERROR, STATUS_NORMAL, TIME_FORMAT
 from ..db import get_connection, now_str
 from . import project_service, session_boundary_service
 from .activity_lifecycle_service import recover_close_activity, recover_cross_midnight_segment, recover_first_half_close
-from .settings_service import get_setting, set_setting
+from .runtime_activity_state_service import clear_runtime_activity_state
+from .settings_service import get_setting
 
 
 def recover_unclosed_records() -> None:
@@ -52,9 +53,8 @@ def recover_unclosed_records() -> None:
         logging.info("recovered unclosed record id=%s status=%s", row["id"], status)
     if recovered_boundary_at:
         session_boundary_service.record_boundary(recovered_boundary_at, "recovered")
-        set_setting("current_activity_snapshot", "")
-        set_setting("pending_short_seconds", "0")
     record_restart_boundary_if_needed()
+    clear_runtime_activity_state("recovery_startup_boundary")
 
 
 def _recover_cross_midnight_row(row, end_dt: datetime) -> str:

@@ -335,3 +335,36 @@ def test_short_activity_after_stopped_does_not_merge_into_pre_boundary_activity(
     b_rows = [r for r in rows if r["window_title"] == "B"]
     assert b_rows == [], "B must NOT be persisted as a separate row"
     assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+
+
+def test_stopped_boundary_clears_stale_pending_runtime_state(temp_db):
+    settings_service.set_setting("pending_short_seconds", "12")
+    settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
+
+    machine = CollectorStateMachine()
+    machine.transition_to("stopped", at_time="2026-06-18 09:00:00")
+
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+    assert settings_service.get_setting("current_activity_snapshot", "") == ""
+
+
+def test_paused_boundary_clears_stale_pending_runtime_state(temp_db):
+    settings_service.set_setting("pending_short_seconds", "12")
+    settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
+
+    machine = CollectorStateMachine()
+    machine.pause(at_time="2026-06-18 09:00:00")
+
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+    assert settings_service.get_setting("current_activity_snapshot", "") == ""
+
+
+def test_midnight_boundary_clears_stale_pending_runtime_state(temp_db):
+    settings_service.set_setting("pending_short_seconds", "12")
+    settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
+
+    machine = CollectorStateMachine()
+    machine.split_at_midnight("2026-06-19 00:00:00")
+
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+    assert settings_service.get_setting("current_activity_snapshot", "") == ""

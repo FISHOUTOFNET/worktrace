@@ -47,6 +47,7 @@ from ..services.settings_service import (
     get_setting,
     set_setting,
 )
+from .runtime_activity_state_service import clear_runtime_activity_state
 
 
 PAYLOAD_FORMAT = "worktrace-local-data"
@@ -264,7 +265,7 @@ def _secure_import_guard() -> Iterator[_ImportGuardState]:
 
     set_setting("user_paused", "true")
     set_setting("collector_status", "paused")
-    set_setting("current_activity_snapshot", "")
+    clear_runtime_activity_state("secure_import_guard_enter")
     set_setting(SECURE_IMPORT_GUARD_KEY, "true")
     clear_settings_cache()
 
@@ -293,6 +294,7 @@ def _secure_import_guard() -> Iterator[_ImportGuardState]:
         # explicitly re-assert the paused state here.
         set_setting("user_paused", "true")
         set_setting("collector_status", "paused")
+        clear_runtime_activity_state("secure_import_success")
         logging.info("encrypted backup import guard completed paused=true")
     finally:
         set_setting(SECURE_IMPORT_GUARD_KEY, "false")

@@ -14,6 +14,7 @@ from typing import Any
 from . import backup_api, view_model_api
 from ..constants import PRIVACY_NOTICE_TEXT
 from ..services import export_service
+from ..services.runtime_activity_state_service import clear_runtime_activity_state as _clear_runtime_activity_state
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -72,6 +73,10 @@ def get_current_activity_snapshot() -> dict[str, Any] | None:
 
 def set_current_activity_snapshot(value: str) -> None:
     set_setting("current_activity_snapshot", value)
+
+
+def clear_runtime_activity_state(reason: str) -> None:
+    _clear_runtime_activity_state(reason)
 
 
 
@@ -412,6 +417,7 @@ __all__ = [
     "accept_first_run_notice_for_webview",
     "clear_all_local_data",
     "clear_all_local_data_for_webview",
+    "clear_runtime_activity_state",
     "export_encrypted_backup_for_webview",
     "first_run_notice_accepted",
     "get_bool_setting_value",

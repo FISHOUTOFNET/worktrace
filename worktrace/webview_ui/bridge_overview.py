@@ -89,7 +89,7 @@ class OverviewBridgeMixin:
             else:
                 settings_api.set_user_paused(True)
                 settings_api.set_collector_status("paused")
-                settings_api.set_current_activity_snapshot("")
+                settings_api.clear_runtime_activity_state("ui_toggle_pause")
             return self.get_status()
         except Exception:
             logger.exception("webview bridge toggle_pause failed")
