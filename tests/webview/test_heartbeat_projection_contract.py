@@ -832,6 +832,33 @@ def test_ticker_renders_per_row_base_plus_live_delta():
     )
 
 
+def test_live_duration_targets_publish_duration_semantic_contract():
+    core = read_js("core.js")
+    overview = read_js("overview.js")
+    timeline = read_js("timeline.js")
+
+    current_body = func_body(core, "renderCurrentActivityElement")
+    assert 'data-duration-semantic="current-live"' in current_body
+    assert 'data-display-base-seconds="0"' in current_body
+
+    anchor_body = func_body(core, "setLiveProjectionAnchor")
+    assert 'data-duration-semantic", "aggregate-live"' in anchor_body
+
+    assert "duration_semantic" in overview
+    assert "data-duration-semantic" in overview
+    assert "duration_semantic" in timeline
+    assert "data-duration-semantic" in timeline
+
+
+def test_ticker_rejects_current_live_targets_with_nonzero_base():
+    source = read_js("core.js")
+    ticker_body = func_body(source, "applyLocalTicker")
+    assert "data-duration-semantic" in ticker_body
+    assert "current-live" in ticker_body
+    assert "current_live_target_nonzero_base" in ticker_body
+    assert "recordLiveClockContractViolation" in ticker_body
+
+
 def test_frontend_js_does_not_contain_removed_live_clock_fields():
     """Static boundary test (spec §VIII Live clock boundary): the entire
     frontend JS bundle must NOT contain the removed live-clock

@@ -113,6 +113,7 @@
             // own base + active elapsed offset, not a row-owned clock.
             var spanId = item.display_span_id || "";
             var continuityKey = spanId ? App.liveContinuityKey(item, "recent") : "";
+            var durationSemantic = String(item.duration_semantic || "current_live").replace(/_/g, "-");
             var displayBaseSec = parseInt(item.display_base_seconds, 10);
             if (isNaN(displayBaseSec)) displayBaseSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
             var initialSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
@@ -137,6 +138,7 @@
                 + '</div>'
                 + '<div class="recent-item-duration"'
                 + (spanId ? ' data-live-duration-target="1"' : '')
+                + (spanId ? ' data-duration-semantic="' + App.escapeHtml(durationSemantic) + '"' : '')
                 + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
                 + (item.stable_live_key_hash ? ' data-stable-live-key-hash="' + App.escapeHtml(item.stable_live_key_hash) + '"' : '')
                 + (spanId ? ' data-display-base-seconds="' + displayBaseSec + '"' : '')

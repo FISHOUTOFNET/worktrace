@@ -66,6 +66,10 @@ _VIRTUAL_ACTIVITY_ID = 0
 # Disable-reason text for live rows still in progress / pending confirmation.
 _LIVE_EDIT_DISABLE_REASON = "当前活动尚未进入历史，暂不能编辑"
 
+CURRENT_LIVE = "current_live"
+AGGREGATE_LIVE = "aggregate_live"
+STATIC_CLOSED = "static_closed"
+
 # Sentinel for ``build_activity_display_model(snapshot=...)``: distinguishes
 # "not passed" from "explicitly passed ``None``". A passed snapshot MUST
 # NOT trigger an internal re-read of ``current_activity_snapshot``.
@@ -90,7 +94,15 @@ def _build_suppressed_live_clock() -> dict[str, Any]:
         "live_state": "none",
         "live_started_at_epoch_ms": 0,
         "carry_seconds": 0,
+        "duration_semantic": STATIC_CLOSED,
+        "current_live_seconds_at_sample": 0,
+        "current_live_base_seconds": 0,
+        "aggregate_duration_seconds_at_sample": 0,
+        "aggregate_display_base_seconds": 0,
+        "display_base_seconds": 0,
         "duration_seconds_at_sample": 0,
+        "active_elapsed_at_sample": 0,
+        "current_elapsed_at_sample": 0,
         "is_live": False,
         "is_project_duration_live": False,
         "current_duration_live": False,
@@ -311,6 +323,11 @@ def _build_project_live_clock(
         and live_started_at > 0
     )
 
+    current_live_seconds_at_sample = int(current_elapsed_at_sample)
+    current_live_base_seconds = 0
+    aggregate_display_base_seconds = int(display_base_seconds)
+    aggregate_duration_seconds_at_sample = int(duration_at_sample)
+
     return {
         "display_span_id": display_span_id,
         "stable_live_key": stable_key,
@@ -318,6 +335,11 @@ def _build_project_live_clock(
         "live_state": display_live_state,
         "live_started_at_epoch_ms": live_started_at,
         "carry_seconds": int(carry_seconds),
+        "duration_semantic": AGGREGATE_LIVE if is_project_duration_live else STATIC_CLOSED,
+        "current_live_seconds_at_sample": current_live_seconds_at_sample,
+        "current_live_base_seconds": current_live_base_seconds,
+        "aggregate_duration_seconds_at_sample": aggregate_duration_seconds_at_sample,
+        "aggregate_display_base_seconds": aggregate_display_base_seconds,
         "display_base_seconds": int(display_base_seconds),
         "duration_seconds_at_sample": int(duration_at_sample),
         "active_elapsed_at_sample": int(current_elapsed_at_sample),
@@ -390,6 +412,11 @@ def _build_current_activity_display(
             "live_clock": live_clock,
             "current_activity_display_span_id": "",
             "display_base_seconds": 0,
+            "duration_semantic": CURRENT_LIVE,
+            "current_live_seconds_at_sample": 0,
+            "current_live_base_seconds": 0,
+            "aggregate_duration_seconds_at_sample": 0,
+            "aggregate_display_base_seconds": 0,
         }
 
     # Start from the existing summary and override live clock / elapsed fields.
@@ -405,10 +432,22 @@ def _build_current_activity_display(
     )
     display["carry_seconds"] = 0
     display["display_base_seconds"] = 0
+    display["duration_semantic"] = CURRENT_LIVE
     current_elapsed = int(snapshot_elapsed_seconds(snapshot))
     display["resource_elapsed_seconds"] = current_elapsed
     display["elapsed_seconds"] = current_elapsed
     display["duration_seconds_at_sample"] = display["elapsed_seconds"]
+    display["current_live_seconds_at_sample"] = current_elapsed
+    display["current_live_base_seconds"] = 0
+    display["aggregate_duration_seconds_at_sample"] = int(
+        live_clock.get("aggregate_duration_seconds_at_sample")
+        or current_elapsed
+    )
+    display["aggregate_display_base_seconds"] = int(
+        live_clock.get("aggregate_display_base_seconds")
+        or live_clock.get("display_base_seconds")
+        or 0
+    )
 
     display["is_virtual_live"] = display_live_state == "virtual_pending"
     display["is_in_progress"] = display_live_state == "persisted_open"
@@ -555,7 +594,21 @@ def _build_display_span(
     activity_id = 0
     start_time = str(snapshot.get("start_time") or "") if snapshot else ""
     project_fields = _snapshot_display_project_fields(snapshot)
-    duration_at_sample = int(live_clock.get("duration_seconds_at_sample") or 0)
+    current_live_seconds = int(
+        live_clock.get("current_live_seconds_at_sample")
+        or live_clock.get("current_elapsed_at_sample")
+        or 0
+    )
+    aggregate_duration = int(
+        live_clock.get("aggregate_duration_seconds_at_sample")
+        or live_clock.get("duration_seconds_at_sample")
+        or current_live_seconds
+    )
+    aggregate_base = int(
+        live_clock.get("aggregate_display_base_seconds")
+        or live_clock.get("display_base_seconds")
+        or 0
+    )
     # Anchor base seconds exists only for absorbed_pending, where the display
     # projection is explicitly anchored to a closed row. Persisted-open rows
     # derive static bases from row structural fields in ``apply_live_span_to_row``.
@@ -602,9 +655,15 @@ def _build_display_span(
         "live_state": display_live_state,
         "start_time": start_time,
         "end_time": "",
-        "duration": format_duration(duration_at_sample),
-        "duration_seconds": duration_at_sample,
-        "duration_seconds_at_sample": duration_at_sample,
+        "duration_semantic": CURRENT_LIVE,
+        "duration": format_duration(current_live_seconds),
+        "duration_seconds": current_live_seconds,
+        "duration_seconds_at_sample": current_live_seconds,
+        "current_live_seconds_at_sample": current_live_seconds,
+        "current_live_base_seconds": 0,
+        "aggregate_duration_seconds_at_sample": aggregate_duration,
+        "aggregate_display_base_seconds": aggregate_base,
+        "display_base_seconds": 0,
         "live_clock": live_clock,
         "project_id": int(project_id),
         "project_name": project_name,
@@ -650,6 +709,11 @@ def _live_clock_fields(live_clock: dict[str, Any]) -> dict[str, Any]:
         "live_state": str(live_clock.get("live_state") or ""),
         "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),
         "carry_seconds": int(live_clock.get("carry_seconds") or 0),
+        "duration_semantic": str(live_clock.get("duration_semantic") or ""),
+        "current_live_seconds_at_sample": int(live_clock.get("current_live_seconds_at_sample") or 0),
+        "current_live_base_seconds": int(live_clock.get("current_live_base_seconds") or 0),
+        "aggregate_duration_seconds_at_sample": int(live_clock.get("aggregate_duration_seconds_at_sample") or 0),
+        "aggregate_display_base_seconds": int(live_clock.get("aggregate_display_base_seconds") or 0),
         "display_base_seconds": int(live_clock.get("display_base_seconds") or 0),
         "duration_seconds_at_sample": int(live_clock.get("duration_seconds_at_sample") or 0),
         "active_elapsed_at_sample": int(live_clock.get("active_elapsed_at_sample") or 0),
@@ -708,15 +772,19 @@ def _static_base_for_live_row(
 def apply_live_span_to_row(
     row: dict[str, Any],
     span: dict[str, Any] | None,
+    *,
+    duration_semantic: str = CURRENT_LIVE,
 ) -> dict[str, Any]:
     """Merge the unified live-span overlay into a DB row payload.
 
     Row matches when its ``activity_id`` / ``id`` / ``first_activity_id`` /
     ``activity_ids`` contains ``span.anchor_activity_id``.
 
-    Row projection formula: ``static display base + current active
-    elapsed``. Open DB row duration is persistence-only for live UI and
-    must not be reverse-engineered into a display base.
+    ``current_live`` rows display only the current resource/window elapsed
+    and always use ``display_base_seconds == 0``. ``aggregate_live`` rows
+    display project/session/KPI totals as ``aggregate base + current elapsed``.
+    Open DB row duration is persistence-only for current-live UI and must
+    not be reverse-engineered into a current-live display base.
 
     Mutates and returns ``row``; unchanged when ``span`` is ``None`` or no match.
     """
@@ -737,7 +805,22 @@ def apply_live_span_to_row(
     live_clock = span.get("live_clock") or {}
     row.update(_live_clock_fields(live_clock))
     state = str(span.get("live_state") or "")
-    duration_at_sample = int(live_clock.get("duration_seconds_at_sample") or 0)
+    semantic = duration_semantic if duration_semantic in (CURRENT_LIVE, AGGREGATE_LIVE) else CURRENT_LIVE
+    current_live_seconds = int(
+        live_clock.get("current_live_seconds_at_sample")
+        or live_clock.get("current_elapsed_at_sample")
+        or 0
+    )
+    aggregate_duration = int(
+        live_clock.get("aggregate_duration_seconds_at_sample")
+        or live_clock.get("duration_seconds_at_sample")
+        or current_live_seconds
+    )
+    aggregate_base = int(
+        live_clock.get("aggregate_display_base_seconds")
+        or live_clock.get("display_base_seconds")
+        or 0
+    )
     # Preserve the row's raw duration before any live projection.
     if "raw_duration_seconds" not in row:
         row["raw_duration_seconds"] = int(row.get("duration_seconds") or 0)
@@ -746,31 +829,46 @@ def apply_live_span_to_row(
 
     if state == "absorbed_pending":
         anchor_base = int(span.get("live_anchor_base_seconds") or 0)
-        current_elapsed_at_sample = _current_active_elapsed_at_sample(live_clock)
         pending_extra_base = max(
             0,
-            int(live_clock.get("display_base_seconds") or 0) - anchor_base,
+            int(
+                live_clock.get("aggregate_display_base_seconds")
+                or live_clock.get("display_base_seconds")
+                or 0
+            ) - anchor_base,
         )
-        display_base_seconds = row_raw + pending_extra_base
-        projected = display_base_seconds + current_elapsed_at_sample
-        row["duration_seconds"] = int(projected)
-        row["duration"] = format_duration(projected)
-        row["display_base_seconds"] = int(display_base_seconds)
-        row["live_base_seconds"] = int(display_base_seconds)
+        aggregate_base = row_raw + pending_extra_base
+        aggregate_duration = aggregate_base + current_live_seconds
     elif state == "persisted_open":
-        current_elapsed_at_sample = _current_active_elapsed_at_sample(live_clock)
-        display_base_seconds = _static_base_for_live_row(row, span, live_clock, state)
-        projected = display_base_seconds + current_elapsed_at_sample
-        row["duration_seconds"] = int(projected)
-        row["duration"] = format_duration(projected)
-        row["display_base_seconds"] = int(display_base_seconds)
-        row["live_base_seconds"] = int(display_base_seconds)
+        aggregate_base = _static_base_for_live_row(row, span, live_clock, state)
+        aggregate_duration = aggregate_base + current_live_seconds
     else:
-        display_base_seconds = int(live_clock.get("display_base_seconds") or 0)
-        row["duration_seconds"] = duration_at_sample
-        row["duration"] = format_duration(duration_at_sample)
-        row["display_base_seconds"] = display_base_seconds
-        row["live_base_seconds"] = display_base_seconds
+        aggregate_base = int(
+            live_clock.get("aggregate_display_base_seconds")
+            or live_clock.get("display_base_seconds")
+            or 0
+        )
+        aggregate_duration = aggregate_base + current_live_seconds
+
+    row["current_live_seconds_at_sample"] = int(current_live_seconds)
+    row["current_live_base_seconds"] = 0
+    row["aggregate_duration_seconds_at_sample"] = int(aggregate_duration)
+    row["aggregate_display_base_seconds"] = int(aggregate_base)
+
+    if semantic == CURRENT_LIVE:
+        row["duration_semantic"] = CURRENT_LIVE
+        row["duration_seconds"] = int(current_live_seconds)
+        row["duration"] = format_duration(current_live_seconds)
+        row["display_base_seconds"] = 0
+        row["live_base_seconds"] = 0
+        row["duration_seconds_at_sample"] = int(current_live_seconds)
+    else:
+        row["duration_semantic"] = AGGREGATE_LIVE
+        row["duration_seconds"] = int(aggregate_duration)
+        row["duration"] = format_duration(aggregate_duration)
+        row["display_base_seconds"] = int(aggregate_base)
+        row["live_base_seconds"] = int(aggregate_base)
+        row["duration_seconds_at_sample"] = int(aggregate_duration)
     row["live_delta_eligible"] = True
     row["is_live_projected"] = True
     row["is_in_progress"] = True
@@ -922,6 +1020,9 @@ def get_live_span(model: dict[str, Any]) -> dict[str, Any] | None:
 
 
 __all__ = [
+    "AGGREGATE_LIVE",
+    "CURRENT_LIVE",
+    "STATIC_CLOSED",
     "apply_live_span_to_row",
     "build_activity_display_model",
     "build_live_runtime_model",

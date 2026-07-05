@@ -102,6 +102,7 @@
             // Timeline page active elapsed sample.
             var sessSpanId = s.display_span_id || "";
             var sessContinuityKey = sessSpanId ? App.liveContinuityKey(s, "session") : "";
+            var sessionDurationSemantic = String(s.duration_semantic || "current_live").replace(/_/g, "-");
             var sessionDisplayBase = parseInt(s.display_base_seconds, 10);
             if (isNaN(sessionDisplayBase)) sessionDisplayBase = (!isNaN(sDurSec) && sDurSec >= 0) ? sDurSec : 0;
             var initialSec = (!isNaN(sDurSec) && sDurSec >= 0) ? sDurSec : 0;
@@ -128,6 +129,7 @@
                 + '<div class="timeline-item-side">'
                 + '<div class="timeline-item-duration"'
                 + (sessSpanId ? ' data-live-duration-target="1"' : '')
+                + (sessSpanId ? ' data-duration-semantic="' + App.escapeHtml(sessionDurationSemantic) + '"' : '')
                 + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
                 + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
                 + (sessSpanId ? ' data-display-base-seconds="' + sessionDisplayBase + '"' : '')
@@ -358,6 +360,7 @@
             // own offset but do not replace the Timeline page active clock.
             var detailSpanId = a.display_span_id || "";
             var detailContinuityKey = detailSpanId ? App.liveContinuityKey(a, "detail") : "";
+            var detailDurationSemantic = String(a.duration_semantic || "current_live").replace(/_/g, "-");
             var detailDisplayBase = parseInt(a.display_base_seconds, 10);
             if (isNaN(detailDisplayBase)) detailDisplayBase = (!isNaN(aDurSec) && aDurSec >= 0) ? aDurSec : 0;
             var initialSec = (!isNaN(aDurSec) && aDurSec >= 0) ? aDurSec : 0;
@@ -381,6 +384,7 @@
                 + '<div class="detail-item-project" title="' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '">' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '</div>'
                 + '<div class="detail-item-duration"'
                 + (detailSpanId ? ' data-live-duration-target="1"' : '')
+                + (detailSpanId ? ' data-duration-semantic="' + App.escapeHtml(detailDurationSemantic) + '"' : '')
                 + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
                 + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
                 + (detailSpanId ? ' data-display-base-seconds="' + detailDisplayBase + '"' : '')

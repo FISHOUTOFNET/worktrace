@@ -897,6 +897,7 @@
                 + "\uff5c"
                 + '<span class="current-activity-duration"'
                 + ' data-live-duration-target="1"'
+                + ' data-duration-semantic="current-live"'
                 + ' data-display-base-seconds="0"'
                 + ' data-live-base-seconds="0"'
                 + ' data-live-role="' + App.escapeHtml(prefix || "current") + '-current"'
@@ -932,6 +933,7 @@
         if (!el) return;
         var base = String(nonNegativeInt(displayBaseSeconds, 0));
         el.setAttribute("data-live-duration-target", "1");
+        el.setAttribute("data-duration-semantic", "aggregate-live");
         el.setAttribute("data-display-base-seconds", base);
         el.setAttribute("data-live-base-seconds", base);
         if (role) {
@@ -953,6 +955,7 @@
     function clearLiveProjectionAnchor(el) {
         if (!el) return;
         el.removeAttribute("data-live-duration-target");
+        el.removeAttribute("data-duration-semantic");
         el.removeAttribute("data-display-base-seconds");
         el.removeAttribute("data-live-base-seconds");
         el.removeAttribute("data-live-role");
@@ -1064,6 +1067,15 @@
             if (baseAttr === null || baseAttr === "") continue;
             var displayBaseSeconds = parseInt(baseAttr, 10);
             if (isNaN(displayBaseSeconds)) continue;
+            var semantic = target.getAttribute("data-duration-semantic") || "";
+            if (semantic === "current-live" && displayBaseSeconds !== 0) {
+                recordLiveClockContractViolation(
+                    target.getAttribute("data-display-span-id") || "",
+                    tickerPage,
+                    "current_live_target_nonzero_base"
+                );
+                continue;
+            }
             renderLiveDurationTarget(target, displayBaseSeconds, activeElapsedNowValue);
         }
     }

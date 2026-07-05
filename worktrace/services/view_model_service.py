@@ -35,6 +35,8 @@ from typing import Any
 from ..formatters import format_duration, format_resource_type, format_safe_display_name
 from . import activity_display_model_service, live_display_service, project_service, statistics_service, timeline_service
 from .activity_display_model_service import (
+    AGGREGATE_LIVE,
+    CURRENT_LIVE,
     apply_live_span_to_row,
     build_live_runtime_model,
     get_live_span,
@@ -68,7 +70,12 @@ def _is_user_paused() -> bool:
     return get_bool_setting("user_paused", False)
 
 
-def _apply_live_span_to_rows(rows: list[dict[str, Any]], model: dict[str, Any]) -> None:
+def _apply_live_span_to_rows(
+    rows: list[dict[str, Any]],
+    model: dict[str, Any],
+    *,
+    duration_semantic: str = CURRENT_LIVE,
+) -> None:
     """Apply the unified live-span overlay to every matching DB row.
 
     Mutates rows in place. Rows that do not match the live span's anchor
@@ -80,7 +87,7 @@ def _apply_live_span_to_rows(rows: list[dict[str, Any]], model: dict[str, Any]) 
     if not span:
         return
     for row in rows:
-        apply_live_span_to_row(row, span)
+        apply_live_span_to_row(row, span, duration_semantic=duration_semantic)
 
 
 def _get_visible_live_span(model: dict[str, Any], surface: str) -> dict[str, Any] | None:
@@ -169,11 +176,36 @@ def _live_identity_fields(model: dict[str, Any]) -> dict[str, Any]:
 def _display_only_common_fields(
     span: dict[str, Any],
     *,
+    duration_semantic: str = CURRENT_LIVE,
     live_contract_reason: str = "",
 ) -> dict[str, Any]:
     live_clock = span.get("live_clock") or {}
-    duration_seconds = int(span.get("duration_seconds") or 0)
-    display_base_seconds = int(live_clock.get("display_base_seconds") or 0)
+    semantic = duration_semantic if duration_semantic in (CURRENT_LIVE, AGGREGATE_LIVE) else CURRENT_LIVE
+    current_live_seconds = int(
+        span.get("current_live_seconds_at_sample")
+        or live_clock.get("current_live_seconds_at_sample")
+        or live_clock.get("current_elapsed_at_sample")
+        or span.get("duration_seconds")
+        or 0
+    )
+    aggregate_duration_seconds = int(
+        span.get("aggregate_duration_seconds_at_sample")
+        or live_clock.get("aggregate_duration_seconds_at_sample")
+        or live_clock.get("duration_seconds_at_sample")
+        or current_live_seconds
+    )
+    aggregate_base_seconds = int(
+        span.get("aggregate_display_base_seconds")
+        or live_clock.get("aggregate_display_base_seconds")
+        or live_clock.get("display_base_seconds")
+        or 0
+    )
+    if semantic == CURRENT_LIVE:
+        duration_seconds = current_live_seconds
+        display_base_seconds = 0
+    else:
+        duration_seconds = aggregate_duration_seconds
+        display_base_seconds = aggregate_base_seconds
     is_contract_fallback = bool(live_contract_reason)
     return {
         "activity_id": int(span.get("activity_id") or 0),
@@ -182,6 +214,11 @@ def _display_only_common_fields(
         "duration": format_duration(duration_seconds),
         "duration_seconds": duration_seconds,
         "raw_duration_seconds": 0,
+        "duration_semantic": semantic,
+        "current_live_seconds_at_sample": current_live_seconds,
+        "current_live_base_seconds": 0,
+        "aggregate_duration_seconds_at_sample": aggregate_duration_seconds,
+        "aggregate_display_base_seconds": aggregate_base_seconds,
         "display_base_seconds": display_base_seconds,
         "live_base_seconds": display_base_seconds,
         "live_delta_eligible": True,
@@ -224,10 +261,12 @@ def _display_only_common_fields(
 def _materialize_display_only_recent_row(
     span: dict[str, Any],
     *,
+    duration_semantic: str = CURRENT_LIVE,
     live_contract_reason: str = "",
 ) -> dict[str, Any]:
     row = _display_only_common_fields(
         span,
+        duration_semantic=duration_semantic,
         live_contract_reason=live_contract_reason,
     )
     row.update(
@@ -245,10 +284,12 @@ def _materialize_display_only_recent_row(
 def _materialize_display_only_timeline_session(
     span: dict[str, Any],
     *,
+    duration_semantic: str = CURRENT_LIVE,
     live_contract_reason: str = "",
 ) -> dict[str, Any]:
     row = _display_only_common_fields(
         span,
+        duration_semantic=duration_semantic,
         live_contract_reason=live_contract_reason,
     )
     stable_hash = str(row.get("stable_live_key_hash") or "")
@@ -272,10 +313,12 @@ def _materialize_display_only_detail_row(
     span: dict[str, Any],
     current_activity: dict[str, Any],
     *,
+    duration_semantic: str = CURRENT_LIVE,
     live_contract_reason: str = "",
 ) -> dict[str, Any]:
     row = _display_only_common_fields(
         span,
+        duration_semantic=duration_semantic,
         live_contract_reason=live_contract_reason,
     )
     row.update(
@@ -332,20 +375,32 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         scoped_today, include_hidden=False, ensure_context=True
     )
 
-    # Build row dicts for ALL sessions (used for KPI computation).
-    all_rows: list[dict[str, Any]] = []
+    # Recent display rows and KPI aggregate rows share the same live runtime
+    # sample, but deliberately use different duration semantics.
+    display_rows: list[dict[str, Any]] = []
+    aggregate_rows: list[dict[str, Any]] = []
     for session in sessions:
-        all_rows.append(_session_to_overview_row(session))
-    # Apply the unified live-span overlay to ALL session rows so the KPI
-    # totals reflect the same sample as the recent items.
-    _apply_live_span_to_rows(all_rows, model)
+        display_rows.append(_session_to_overview_row(session))
+        aggregate_rows.append(_session_to_overview_row(session))
+    _apply_live_span_to_rows(display_rows, model, duration_semantic=CURRENT_LIVE)
+    _apply_live_span_to_rows(aggregate_rows, model, duration_semantic=AGGREGATE_LIVE)
     recent_live_span = _get_visible_live_span(model, "recent")
-    if recent_live_span and not _rows_have_live_span(all_rows, recent_live_span):
-        all_rows.insert(
+    if recent_live_span and not _rows_have_live_span(display_rows, recent_live_span):
+        display_rows.insert(
             0,
             _materialize_display_only_recent_row(
                 recent_live_span,
-                live_contract_reason=_live_contract_reason(recent_live_span, all_rows),
+                duration_semantic=CURRENT_LIVE,
+                live_contract_reason=_live_contract_reason(recent_live_span, display_rows),
+            ),
+        )
+    if recent_live_span and not _rows_have_live_span(aggregate_rows, recent_live_span):
+        aggregate_rows.insert(
+            0,
+            _materialize_display_only_recent_row(
+                recent_live_span,
+                duration_semantic=AGGREGATE_LIVE,
+                live_contract_reason=_live_contract_reason(recent_live_span, aggregate_rows),
             ),
         )
 
@@ -353,15 +408,15 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     # explicit ``is_classified`` / ``is_uncategorized`` flags propagated by
     # ``_session_to_overview_row``; a missing field MUST NOT silently fall
     # back to the classified bucket (no falsy-default behavior).
-    today_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in all_rows)
+    today_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in aggregate_rows)
     classified_seconds = sum(
         int(r.get("duration_seconds") or 0)
-        for r in all_rows
+        for r in aggregate_rows
         if bool(r.get("is_classified"))
     )
     uncategorized_seconds = sum(
         int(r.get("duration_seconds") or 0)
-        for r in all_rows
+        for r in aggregate_rows
         if bool(r.get("is_uncategorized"))
     )
     active_elapsed = _current_elapsed_at_sample(live_clock)
@@ -378,8 +433,9 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     if live_projects and bool(current_activity.get("is_uncategorized")):
         uncategorized_base_seconds = max(0, uncategorized_seconds - active_elapsed)
 
-    # Recent items are the first N overlaid rows.
-    items = all_rows[:_RECENT_LIMIT]
+    # Recent items are display rows: current-live rows show the current
+    # resource elapsed and never reuse aggregate bases.
+    items = display_rows[:_RECENT_LIMIT]
 
     elapsed = int(current_activity.get("elapsed_seconds") or 0)
 
@@ -569,16 +625,26 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "project_transition_pending": False,
         }
         sessions.append(row)
-    # Apply the unified live-span overlay to matching sessions BEFORE
-    # computing the display total so the total matches the sum of rows.
-    _apply_live_span_to_rows(sessions, model)
+    aggregate_sessions = [dict(row) for row in sessions]
+    _apply_live_span_to_rows(sessions, model, duration_semantic=CURRENT_LIVE)
+    _apply_live_span_to_rows(aggregate_sessions, model, duration_semantic=AGGREGATE_LIVE)
     timeline_live_span = _get_visible_live_span(model, "timeline")
     if timeline_live_span and not _rows_have_live_span(sessions, timeline_live_span):
         sessions.insert(
             0,
             _materialize_display_only_timeline_session(
                 timeline_live_span,
+                duration_semantic=CURRENT_LIVE,
                 live_contract_reason=_live_contract_reason(timeline_live_span, sessions),
+            ),
+        )
+    if timeline_live_span and not _rows_have_live_span(aggregate_sessions, timeline_live_span):
+        aggregate_sessions.insert(
+            0,
+            _materialize_display_only_timeline_session(
+                timeline_live_span,
+                duration_semantic=AGGREGATE_LIVE,
+                live_contract_reason=_live_contract_reason(timeline_live_span, aggregate_sessions),
             ),
         )
     # In-progress sessions that received no live overlay still need
@@ -588,8 +654,9 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             row["edit_disabled"] = True
             row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
 
-    # display_total_seconds is the sum of display durations AFTER overlay.
-    display_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in sessions)
+    # Totals are aggregate-live projections; visible session rows may be
+    # current-live rows so the current item matches the Current header.
+    display_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in aggregate_sessions)
     active_elapsed = _current_elapsed_at_sample(live_clock)
     today_total_base_seconds = (
         max(0, display_total_seconds - active_elapsed)
@@ -730,7 +797,7 @@ def get_session_details_view_model(
         }
         activities.append(detail_row)
     # Apply the unified live-span overlay to matching detail rows only.
-    _apply_live_span_to_rows(activities, model)
+    _apply_live_span_to_rows(activities, model, duration_semantic=CURRENT_LIVE)
     if (
         details_live_span
         and request_matches_live

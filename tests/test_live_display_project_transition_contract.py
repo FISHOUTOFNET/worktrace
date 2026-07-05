@@ -386,7 +386,7 @@ def test_absorbed_pending_apply_live_span_to_row_projects_onto_anchor():
     anchor_row = activity_service.get_activity(anchor_id)
     raw_duration = int(anchor_row.get("duration_seconds") or 0)
 
-    overlaid = apply_live_span_to_row(dict(anchor_row), span)
+    overlaid = apply_live_span_to_row(dict(anchor_row), span, duration_semantic="aggregate_live")
     assert overlaid["live_state"] == "absorbed_pending"
     assert overlaid["is_live_projected"] is True
     assert overlaid["is_absorbed_pending"] is True
@@ -409,7 +409,7 @@ def test_current_activity_uses_resource_elapsed_project_rows_use_projection():
     model = build_activity_display_model(report_date=today, today=today)
     span = get_live_span(model)
     anchor_row = activity_service.get_activity(anchor_id)
-    overlaid = apply_live_span_to_row(dict(anchor_row), span)
+    overlaid = apply_live_span_to_row(dict(anchor_row), span, duration_semantic="aggregate_live")
 
     current = model["current_activity"]
     assert current["elapsed_seconds"] == 12
@@ -442,7 +442,7 @@ def test_persisted_open_current_elapsed_and_project_projection_no_double_count()
     model = build_activity_display_model(report_date=today, today=today)
     span = get_live_span(model)
     row = activity_service.get_activity(anchor_id)
-    overlaid = apply_live_span_to_row(dict(row), span)
+    overlaid = apply_live_span_to_row(dict(row), span, duration_semantic="aggregate_live")
 
     assert model["live_clock"]["live_state"] == "persisted_open"
     assert model["current_activity"]["elapsed_seconds"] == 12

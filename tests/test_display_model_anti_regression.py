@@ -410,6 +410,28 @@ def test_persisted_open_overlay_does_not_reverse_engineer_base_from_db_duration(
         assert token not in source
 
 
+def test_current_live_projection_branch_never_uses_aggregate_base_fields():
+    source = (
+        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r"if semantic == CURRENT_LIVE:(?P<body>.*?)(?=\n    else:)",
+        source,
+        re.S,
+    )
+    assert match is not None
+    branch = match.group("body")
+    assert 'row["display_base_seconds"] = 0' in branch
+    assert 'row["live_base_seconds"] = 0' in branch
+    for token in (
+        "closed_duration_seconds",
+        "snapshot_extra_seconds",
+        "aggregate_display_base_seconds",
+        "aggregate_base",
+    ):
+        assert token not in branch
+
+
 def test_viewmodel_and_bridge_do_not_reintroduce_independent_live_clock_fields():
     forbidden = (
         "baseline_epoch_ms",
