@@ -2445,21 +2445,18 @@ def test_absorbed_pending_current_activity_uses_anchor_project_for_kpi(bridge):
     assert "PendingProject" not in current["display"]
 
 
-def test_pending_short_seconds_does_not_cross_session_boundary(bridge):
-    """The ``pending_short_seconds`` accumulator (production-maintained)
-    is the only carry source for ``virtual_pending``. The collector
-    resets it whenever a normal short activity merges into a persisted
-    row, so it never crosses a session boundary in production. This
-    test verifies the display model's ``virtual_pending`` carry is
-    sourced purely from ``pending_short_seconds`` (the legacy
-    ``short_activity_carry`` JSON is gone).
+def test_bare_pending_short_seconds_is_not_a_valid_virtual_base(bridge):
+    """A bare ``pending_short_seconds`` integer is not enough provenance
+    to become aggregate-live base. The display boundary policy must
+    fail safe to ``fresh_virtual`` unless the pending carry validates as
+    the same continuous normal recording session.
     """
     from worktrace.services import settings_service
     from worktrace.services.activity_display_model_service import (
         build_activity_display_model,
     )
 
-    # Set pending_short_seconds to a known value.
+    # Set bare pending_short_seconds without provenance.
     settings_service.set_setting("pending_short_seconds", "20")
     settings_service.clear_settings_cache()
 
@@ -2474,14 +2471,11 @@ def test_pending_short_seconds_does_not_cross_session_boundary(bridge):
 
     model = build_activity_display_model()
     assert model["live_clock"]["live_state"] == "virtual_pending"
-    # carry_seconds MUST equal pending_short_seconds (20).
-    assert int(model["live_clock"]["carry_seconds"]) == 20, (
-        "virtual_pending carry_seconds MUST come from pending_short_seconds "
-        "(the production-maintained accumulator); the legacy structured "
-        "short_activity_carry JSON was removed"
-    )
-    # duration_at_sample = snapshot_total (10) + carry (20) = 30.
-    assert int(model["live_clock"]["duration_seconds_at_sample"]) == 30
+    assert model["live_clock"]["display_session_kind"] == "fresh_virtual"
+    assert model["live_clock"]["base_policy"] == "zero"
+    assert int(model["live_clock"]["carry_seconds"]) == 0
+    assert int(model["live_clock"]["display_base_seconds"]) == 0
+    assert int(model["live_clock"]["duration_seconds_at_sample"]) == 10
 
     # Cleanup.
     settings_service.set_setting("pending_short_seconds", "0")

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from ..constants import (
@@ -44,7 +45,6 @@ from . import activity_service, timeline_service
 from .activity_continuity_service import can_absorb_short_pending
 from .live_display_service import (
     _display_resource_name,
-    _read_pending_short_seconds,
     _snapshot_display_project_fields,
     _stable_live_key,
     _stable_live_key_hash,
@@ -57,6 +57,7 @@ from .live_time_service import (
     snapshot_extra_seconds,
     snapshot_persisted_id,
 )
+from .runtime_activity_state_service import validate_pending_short_carry
 from .settings_service import get_setting
 
 
@@ -95,6 +96,25 @@ _DISPLAY_ROW_KINDS = (
     ROW_KIND_HISTORICAL_CLOSED_ROW,
 )
 
+
+@dataclass(frozen=True)
+class DisplaySessionPolicy:
+    display_session_kind: str
+    base_policy: str
+    aggregate_base_seconds: int
+    current_base_seconds: int
+    project_duration_live: bool
+    current_duration_live: bool
+    materialize_recent: bool
+    materialize_timeline: bool
+    materialize_details: bool
+    status_only_reason: str
+    base_policy_reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 # Sentinel for ``build_activity_display_model(snapshot=...)``: distinguishes
 # "not passed" from "explicitly passed ``None``". A passed snapshot MUST
 # NOT trigger an internal re-read of ``current_activity_snapshot``.
@@ -132,6 +152,23 @@ def _build_suppressed_live_clock() -> dict[str, Any]:
         "is_project_duration_live": False,
         "current_duration_live": False,
         "project_duration_live": False,
+        "display_session_kind": "suppressed",
+        "base_policy": "suppressed",
+        "status_only_reason": "historical_date",
+        "base_policy_reason": "historical_date",
+        "display_policy": DisplaySessionPolicy(
+            display_session_kind="suppressed",
+            base_policy="suppressed",
+            aggregate_base_seconds=0,
+            current_base_seconds=0,
+            project_duration_live=False,
+            current_duration_live=False,
+            materialize_recent=False,
+            materialize_timeline=False,
+            materialize_details=False,
+            status_only_reason="historical_date",
+            base_policy_reason="historical_date",
+        ).to_dict(),
     }
 
 
@@ -291,11 +328,160 @@ def _current_resource_identity_hash(snapshot: dict[str, Any] | None) -> str:
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
 
 
+def _status_only_reason_for_state(display_live_state: str) -> str:
+    if display_live_state in ("paused", "idle", "excluded", "error"):
+        return display_live_state
+    return ""
+
+
+def _build_display_session_policy(
+    snapshot: dict[str, Any] | None,
+    report_date: str,
+    today: str,
+    base_state: str,
+    anchor: dict[str, Any] | None,
+    display_live_state: str,
+    summary: dict[str, Any],
+) -> DisplaySessionPolicy:
+    """Central Display Session Boundary Policy.
+
+    This is the only place that decides whether aggregate live duration can
+    use a static base. Natural elapsed seconds are intentionally excluded
+    from the policy identity; only structural base eligibility belongs here.
+    """
+    if not snapshot:
+        return DisplaySessionPolicy(
+            display_session_kind="none",
+            base_policy="suppressed",
+            aggregate_base_seconds=0,
+            current_base_seconds=0,
+            project_duration_live=False,
+            current_duration_live=False,
+            materialize_recent=False,
+            materialize_timeline=False,
+            materialize_details=False,
+            status_only_reason="",
+            base_policy_reason="no_snapshot",
+        )
+
+    if report_date != today:
+        return DisplaySessionPolicy(
+            display_session_kind="suppressed",
+            base_policy="suppressed",
+            aggregate_base_seconds=0,
+            current_base_seconds=0,
+            project_duration_live=False,
+            current_duration_live=False,
+            materialize_recent=False,
+            materialize_timeline=False,
+            materialize_details=False,
+            status_only_reason="historical_date",
+            base_policy_reason="historical_date",
+        )
+
+    status = _snapshot_status_safe(snapshot)
+    live_started_at = int(summary.get("live_started_at_epoch_ms") or 0)
+    if display_live_state in ("paused", "idle", "excluded", "error") or status != STATUS_NORMAL:
+        reason = _status_only_reason_for_state(display_live_state) or status or display_live_state
+        current_duration_live = display_live_state != "paused" and live_started_at > 0
+        return DisplaySessionPolicy(
+            display_session_kind="status_only",
+            base_policy="suppressed",
+            aggregate_base_seconds=0,
+            current_base_seconds=0,
+            project_duration_live=False,
+            current_duration_live=current_duration_live,
+            materialize_recent=False,
+            materialize_timeline=False,
+            materialize_details=False,
+            status_only_reason=reason,
+            base_policy_reason="status_not_project_live",
+        )
+
+    if display_live_state == "absorbed_pending" and anchor:
+        return DisplaySessionPolicy(
+            display_session_kind="absorbed_pending",
+            base_policy="absorbed_anchor",
+            aggregate_base_seconds=safe_int(anchor.get("duration_seconds")) + snapshot_extra_seconds(snapshot),
+            current_base_seconds=0,
+            project_duration_live=True,
+            current_duration_live=live_started_at > 0,
+            materialize_recent=True,
+            materialize_timeline=True,
+            materialize_details=True,
+            status_only_reason="",
+            base_policy_reason="valid_absorbed_anchor",
+        )
+
+    if display_live_state == "persisted_open":
+        return DisplaySessionPolicy(
+            display_session_kind="persisted_open",
+            base_policy="persisted_extra",
+            aggregate_base_seconds=snapshot_extra_seconds(snapshot),
+            current_base_seconds=0,
+            project_duration_live=True,
+            current_duration_live=live_started_at > 0,
+            materialize_recent=True,
+            materialize_timeline=True,
+            materialize_details=True,
+            status_only_reason="",
+            base_policy_reason="persisted_open_extra",
+        )
+
+    if display_live_state == "virtual_pending":
+        carry = validate_pending_short_carry(
+            current_start_time=str(snapshot.get("start_time") or ""),
+            current_status=status,
+        )
+        if carry.get("valid"):
+            return DisplaySessionPolicy(
+                display_session_kind="continuous_virtual",
+                base_policy="validated_pending_carry",
+                aggregate_base_seconds=int(carry.get("seconds") or 0),
+                current_base_seconds=0,
+                project_duration_live=True,
+                current_duration_live=live_started_at > 0,
+                materialize_recent=True,
+                materialize_timeline=True,
+                materialize_details=True,
+                status_only_reason="",
+                base_policy_reason="validated_pending_carry",
+            )
+        return DisplaySessionPolicy(
+            display_session_kind="fresh_virtual",
+            base_policy="zero",
+            aggregate_base_seconds=0,
+            current_base_seconds=0,
+            project_duration_live=True,
+            current_duration_live=live_started_at > 0,
+            materialize_recent=True,
+            materialize_timeline=True,
+            materialize_details=True,
+            status_only_reason="",
+            base_policy_reason=str(carry.get("reason") or "no_valid_pending_carry"),
+        )
+
+    return DisplaySessionPolicy(
+        display_session_kind="none" if base_state == "none" else "suppressed",
+        base_policy="suppressed",
+        aggregate_base_seconds=0,
+        current_base_seconds=0,
+        project_duration_live=False,
+        current_duration_live=False,
+        materialize_recent=False,
+        materialize_timeline=False,
+        materialize_details=False,
+        status_only_reason="",
+        base_policy_reason="not_live_projectable",
+    )
+
+
 def _build_project_live_clock(
     snapshot: dict[str, Any] | None,
     display_live_state: str,
     anchor: dict[str, Any] | None,
     summary: dict[str, Any],
+    policy: DisplaySessionPolicy,
     report_date: str,
     today: str,
 ) -> dict[str, Any]:
@@ -310,43 +496,18 @@ def _build_project_live_clock(
     display_base_seconds + current_elapsed_at_sample``; rows/KPIs add only
     the heartbeat delta after render.
 
-    Carry per state is the display span's seconds before the snapshot
-    start: ``absorbed_pending`` → anchor duration + snapshot extra,
-    ``persisted_open`` → snapshot extra, ``virtual_pending`` → pending
-    carry + snapshot extra.
+    Carry per state is decided only by ``DisplaySessionPolicy``.
     """
     stable_key = _stable_live_key(snapshot)
     stable_hash = _stable_live_key_hash(snapshot)
     display_span_id = ("span:" + stable_hash) if stable_hash else ""
     live_started_at = int(summary.get("live_started_at_epoch_ms") or 0)
-    carry_seconds = int(summary.get("carry_seconds") or 0)
-    duration_at_sample = int(summary.get("elapsed_seconds") or 0)
     current_elapsed_at_sample = int(snapshot_elapsed_seconds(snapshot))
-    display_base_seconds = max(0, int(duration_at_sample) - current_elapsed_at_sample)
-
-    if display_live_state == "absorbed_pending" and anchor:
-        carry_seconds = safe_int(anchor.get("duration_seconds")) + snapshot_extra_seconds(snapshot)
-        display_base_seconds = carry_seconds
-        duration_at_sample = display_base_seconds + current_elapsed_at_sample
-    elif display_live_state == "virtual_pending":
-        carry_seconds = _read_pending_short_seconds() + snapshot_extra_seconds(snapshot)
-        display_base_seconds = carry_seconds
-        duration_at_sample = display_base_seconds + current_elapsed_at_sample
-    elif display_live_state == "persisted_open":
-        carry_seconds = snapshot_extra_seconds(snapshot)
-        display_base_seconds = carry_seconds
-        duration_at_sample = display_base_seconds + current_elapsed_at_sample
-
-    is_project_duration_live = display_live_state in (
-        "virtual_pending",
-        "absorbed_pending",
-        "persisted_open",
-    )
-    is_current_duration_live = bool(
-        snapshot
-        and display_live_state not in ("none", "paused")
-        and live_started_at > 0
-    )
+    display_base_seconds = int(policy.aggregate_base_seconds)
+    carry_seconds = int(policy.aggregate_base_seconds)
+    duration_at_sample = display_base_seconds + current_elapsed_at_sample
+    is_project_duration_live = bool(policy.project_duration_live)
+    is_current_duration_live = bool(policy.current_duration_live and live_started_at > 0)
 
     current_live_seconds_at_sample = int(current_elapsed_at_sample)
     current_live_base_seconds = 0
@@ -373,6 +534,11 @@ def _build_project_live_clock(
         "current_duration_live": bool(is_current_duration_live),
         "is_live": bool(is_project_duration_live or is_current_duration_live),
         "is_project_duration_live": bool(is_project_duration_live),
+        "display_session_kind": policy.display_session_kind,
+        "base_policy": policy.base_policy,
+        "status_only_reason": policy.status_only_reason,
+        "base_policy_reason": policy.base_policy_reason,
+        "display_policy": policy.to_dict(),
     }
 
 
@@ -442,6 +608,10 @@ def _build_current_activity_display(
             "current_live_base_seconds": 0,
             "aggregate_duration_seconds_at_sample": 0,
             "aggregate_display_base_seconds": 0,
+            "display_session_kind": "none",
+            "base_policy": "suppressed",
+            "status_only_reason": "",
+            "base_policy_reason": "no_snapshot",
         }
 
     # Start from the existing summary and override live clock / elapsed fields.
@@ -473,6 +643,10 @@ def _build_current_activity_display(
         or live_clock.get("display_base_seconds")
         or 0
     )
+    display["display_session_kind"] = str(live_clock.get("display_session_kind") or "")
+    display["base_policy"] = str(live_clock.get("base_policy") or "")
+    display["status_only_reason"] = str(live_clock.get("status_only_reason") or "")
+    display["base_policy_reason"] = str(live_clock.get("base_policy_reason") or "")
 
     display["is_virtual_live"] = display_live_state == "virtual_pending"
     display["is_in_progress"] = display_live_state == "persisted_open"
@@ -570,6 +744,21 @@ def _build_display_structural_signature(
         "project_live_span": {
             "display_span_id": str(live_clock.get("display_span_id") or ""),
             "anchor_activity_id": int(anchor.get("id") or 0) if anchor else 0,
+            "materialize_recent": bool(
+                (live_clock.get("display_policy") or {}).get("materialize_recent")
+            ),
+            "materialize_timeline": bool(
+                (live_clock.get("display_policy") or {}).get("materialize_timeline")
+            ),
+            "materialize_details": bool(
+                (live_clock.get("display_policy") or {}).get("materialize_details")
+            ),
+        },
+        "base_policy": {
+            "display_session_kind": str(live_clock.get("display_session_kind") or ""),
+            "base_policy": str(live_clock.get("base_policy") or ""),
+            "status_only_reason": str(live_clock.get("status_only_reason") or ""),
+            "base_policy_reason": str(live_clock.get("base_policy_reason") or ""),
         },
         "current_activity_display_span_id": str(
             current_activity.get("current_activity_display_span_id") or ""
@@ -634,6 +823,7 @@ def _build_display_span(
         or live_clock.get("display_base_seconds")
         or 0
     )
+    policy = live_clock.get("display_policy") or {}
     # Anchor base seconds exists only for absorbed_pending, where the display
     # projection is explicitly anchored to a closed row. Persisted-open rows
     # derive static bases from row structural fields during row-kind projection.
@@ -698,13 +888,17 @@ def _build_display_span(
         "is_live": bool(live_clock.get("is_live")),
         "project_duration_live": bool(live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))),
         "current_duration_live": bool(live_clock.get("current_duration_live")),
+        "display_session_kind": str(live_clock.get("display_session_kind") or ""),
+        "base_policy": str(live_clock.get("base_policy") or ""),
+        "status_only_reason": str(live_clock.get("status_only_reason") or ""),
+        "base_policy_reason": str(live_clock.get("base_policy_reason") or ""),
         "is_virtual": bool(is_virtual),
         "is_persisted": bool(is_persisted),
         "is_absorbed_pending": bool(is_absorbed),
         "is_visible_in_current": True,
-        "is_visible_in_recent": display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"),
-        "is_visible_in_timeline": display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"),
-        "is_visible_in_details": display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"),
+        "is_visible_in_recent": bool(policy.get("materialize_recent")),
+        "is_visible_in_timeline": bool(policy.get("materialize_timeline")),
+        "is_visible_in_details": bool(policy.get("materialize_details")),
         "is_display_only": display_live_state in ("virtual_pending", "absorbed_pending"),
         "display_only": display_live_state in ("virtual_pending", "absorbed_pending"),
         "editable": False,
@@ -747,6 +941,10 @@ def _live_clock_fields(live_clock: dict[str, Any]) -> dict[str, Any]:
         "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
         "project_duration_live": bool(live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))),
         "current_duration_live": bool(live_clock.get("current_duration_live")),
+        "display_session_kind": str(live_clock.get("display_session_kind") or ""),
+        "base_policy": str(live_clock.get("base_policy") or ""),
+        "status_only_reason": str(live_clock.get("status_only_reason") or ""),
+        "base_policy_reason": str(live_clock.get("base_policy_reason") or ""),
     }
 
 
@@ -1004,14 +1202,27 @@ def build_activity_display_model(
     summary = build_current_activity_summary(
         snapshot, report_date=report_date, today=today
     )
+    policy = _build_display_session_policy(
+        snapshot,
+        report_date,
+        today or "",
+        base_state,
+        anchor,
+        display_live_state,
+        summary,
+    )
     if not is_today:
         live_clock = _build_suppressed_live_clock()
     else:
         live_clock = _build_project_live_clock(
-            snapshot, display_live_state, anchor, summary, report_date, today or ""
+            snapshot, display_live_state, anchor, summary, policy, report_date, today or ""
         )
     display_spans: list[dict[str, Any]] = []
-    if is_today and display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"):
+    if is_today and (
+        policy.materialize_recent
+        or policy.materialize_timeline
+        or policy.materialize_details
+    ):
         display_spans.append(
             _build_display_span(
                 snapshot, display_live_state, anchor, live_clock, summary, report_date, today or ""
@@ -1043,6 +1254,7 @@ def build_activity_display_model(
         "current_activity": current_activity,
         "display_spans": display_spans,
         "display_structural_signature": display_structural_signature,
+        "display_policy": policy.to_dict(),
     }
 
 

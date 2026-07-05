@@ -32,6 +32,7 @@ pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pyt
 from worktrace import db
 from worktrace.constants import STATUS_NORMAL, TIME_FORMAT
 from worktrace.services import settings_service
+from worktrace.services.runtime_activity_state_service import write_pending_short_carry
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
@@ -136,8 +137,8 @@ def test_get_refresh_state_live_clock_carries_current_elapsed_source(bridge):
     assert result["current_activity"]["elapsed_seconds"] == 35
     assert result["current_activity"]["resource_elapsed_seconds"] == 35
     assert "current_activity_clock" not in result
-    assert result["live_clock"]["duration_seconds_at_sample"] == 45
-    assert result["live_clock"]["display_base_seconds"] == 10
+    assert result["live_clock"]["duration_seconds_at_sample"] == 35
+    assert result["live_clock"]["display_base_seconds"] == 0
     assert result["live_clock"]["current_elapsed_at_sample"] == 35
 
 
@@ -686,17 +687,26 @@ def test_virtual_items_do_not_leak_sensitive_fields(bridge):
     )
 
 
-def test_refresh_revision_unchanged_on_pending_short_seconds_only(bridge):
-    """``pending_short_seconds`` is projection carry, not structure."""
-    _set_snapshot(_normal_snapshot(elapsed_seconds=120))
-    settings_service.set_setting("pending_short_seconds", "0")
+def test_refresh_revision_unchanged_on_valid_pending_seconds_only(bridge):
+    """Validated pending carry can grow without changing structure."""
+    start_time = "2026-06-18 09:00:20"
+    _set_snapshot(_normal_snapshot(elapsed_seconds=120, start_time=start_time))
+    write_pending_short_carry(
+        45,
+        source_start_time="2026-06-18 09:00:00",
+        source_end_time=start_time,
+    )
     settings_service.clear_settings_cache()
     r1 = bridge.get_refresh_state()
-    settings_service.set_setting("pending_short_seconds", "45")
+    write_pending_short_carry(
+        46,
+        source_start_time="2026-06-18 09:00:00",
+        source_end_time=start_time,
+    )
     settings_service.clear_settings_cache()
     r2 = bridge.get_refresh_state()
     assert r1["refresh_revision"] == r2["refresh_revision"], (
-        "refresh_revision must not change on pending_short_seconds only"
+        "refresh_revision must not change on valid pending seconds growth only"
     )
 
 

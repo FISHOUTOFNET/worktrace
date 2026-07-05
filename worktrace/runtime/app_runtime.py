@@ -20,6 +20,7 @@ from .. import db
 from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import activity_lifecycle_service, folder_index_service, recovery_service
+from ..services.runtime_activity_state_service import record_runtime_boundary
 from ..services.settings_service import set_setting
 
 if TYPE_CHECKING:
@@ -142,6 +143,8 @@ class AppRuntime:
             or not self._collector_thread.is_alive()
         ):
             set_setting("user_paused", "true")
+            if self.owns_collector:
+                record_runtime_boundary("pause_fallback")
             return {"ok": False, "pause_pending": True}
         return self.collector_control.request_pause(timeout_seconds=timeout_seconds)
 

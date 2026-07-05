@@ -27,6 +27,7 @@ EXPECTED_DEFAULT_SETTINGS = {
     "idle_threshold_seconds",
     "current_activity_snapshot",
     "pending_short_seconds",
+    "pending_short_carry_provenance",
     "collector_status",
     "last_collector_heartbeat",
     "last_shutdown_at",

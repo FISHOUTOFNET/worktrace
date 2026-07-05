@@ -79,6 +79,7 @@ NON_MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
     {
         "current_activity_snapshot",
         "pending_short_seconds",
+        "pending_short_carry_provenance",
         "collector_status",
         "last_collector_heartbeat",
         "last_shutdown_at",

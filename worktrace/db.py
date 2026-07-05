@@ -81,6 +81,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "idle_threshold_seconds": str(DEFAULT_IDLE_THRESHOLD_SECONDS),
         "current_activity_snapshot": "",
         "pending_short_seconds": "0",
+        "pending_short_carry_provenance": "",
         "collector_status": "stopped",
         "last_collector_heartbeat": "",
         "last_shutdown_at": "",

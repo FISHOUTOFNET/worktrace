@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..services.runtime_activity_state_service import record_runtime_boundary
 from . import settings_api
 
 if TYPE_CHECKING:
@@ -78,11 +79,13 @@ def pause_collection_now() -> dict[str, Any]:
         if _runtime is not None:
             return dict(_runtime.pause_collection_now())
         settings_api.set_user_paused(True)
+        record_runtime_boundary("pause_api_fallback")
         return {"ok": False, "pause_pending": True}
     except Exception:
         logging.exception("app_api.pause_collection_now failed")
         try:
             settings_api.set_user_paused(True)
+            record_runtime_boundary("pause_api_exception_fallback")
         except Exception:
             logging.exception("app_api.pause_collection_now fallback failed")
         return {"ok": False, "pause_pending": True}

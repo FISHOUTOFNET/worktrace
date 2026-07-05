@@ -39,7 +39,11 @@ from ..services.project_ownership_service import (
     uncategorized_label,
 )
 from ..services.settings_service import get_setting, set_setting
-from ..services.runtime_activity_state_service import clear_runtime_activity_state
+from ..services.runtime_activity_state_service import (
+    clear_runtime_activity_state,
+    validate_pending_short_carry,
+    write_pending_short_carry,
+)
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
 
@@ -238,8 +242,15 @@ class AutoActivityRecorder:
 
         if status == STATUS_NORMAL:
             pending = self._get_pending_short_seconds()
-            if pending > 0:
-                self.current_extra_seconds += pending
+            carry = validate_pending_short_carry(
+                current_start_time=self.current_start_time,
+                current_status=str(status or ""),
+                pending_seconds=pending,
+            )
+            if carry.get("valid") and pending > 0:
+                self.current_extra_seconds += int(carry.get("seconds") or 0)
+                self._set_pending_short_seconds(0)
+            elif pending > 0:
                 self._set_pending_short_seconds(0)
 
     def _persist_midnight_anchor(self, project_id: int, at_time: str) -> None:
@@ -295,7 +306,11 @@ class AutoActivityRecorder:
             self.resume_after_short_activity = target
             return
         self.resume_after_short_activity = None
-        self._set_pending_short_seconds(self._get_pending_short_seconds() + seconds)
+        self._set_pending_short_seconds(
+            self._get_pending_short_seconds() + seconds,
+            source_start_time=start_time,
+            source_end_time=end_time,
+        )
 
     def _resume_if_absorbed_activity_matches(
         self,
@@ -344,7 +359,13 @@ class AutoActivityRecorder:
         except ValueError:
             return 0
 
-    def _set_pending_short_seconds(self, seconds: int) -> None:
+    def _set_pending_short_seconds(
+        self,
+        seconds: int,
+        *,
+        source_start_time: str = "",
+        source_end_time: str = "",
+    ) -> None:
         normalized = max(0, int(seconds))
         if normalized == 0:
             clear_runtime_activity_state(
@@ -354,7 +375,11 @@ class AutoActivityRecorder:
                 clear_ownership=False,
             )
             return
-        set_setting("pending_short_seconds", str(normalized))
+        write_pending_short_carry(
+            normalized,
+            source_start_time=source_start_time,
+            source_end_time=source_end_time,
+        )
 
     def _write_snapshot(self, at_time: str) -> None:
         if self.current_payload is None or self.current_start_time is None:

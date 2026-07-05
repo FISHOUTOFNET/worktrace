@@ -271,8 +271,8 @@ def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     assert "current_activity_clock" not in bundle
 
     sample = int(live_clock["duration_seconds_at_sample"])
-    assert sample == 15
-    assert int(live_clock["display_base_seconds"]) == 3
+    assert sample == 12
+    assert int(live_clock["display_base_seconds"]) == 0
     assert int(live_clock["current_elapsed_at_sample"]) == 12
     assert live_clock["is_project_duration_live"] is True
     assert int(bundle["today_total_seconds"]) == sample
@@ -280,18 +280,18 @@ def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     assert int(bundle["uncategorized_seconds"]) == 0
 
     kpi_base = bundle["kpi_live_base"]
-    assert int(kpi_base["today_total_seconds"]) == 3
-    assert int(kpi_base["classified_seconds"]) == 3
+    assert int(kpi_base["today_total_seconds"]) == 0
+    assert int(kpi_base["classified_seconds"]) == 0
 
     recent = bundle["activities"][0]
     assert recent["source"] == "snapshot"
     assert int(recent["activity_id"]) == 0
     assert recent["duration_semantic"] == "aggregate_live"
     assert int(recent["duration_seconds"]) == sample
-    assert int(recent["live_base_seconds"]) == 3
-    assert int(recent["display_base_seconds"]) == 3
+    assert int(recent["live_base_seconds"]) == 0
+    assert int(recent["display_base_seconds"]) == 0
     assert int(recent["aggregate_duration_seconds_at_sample"]) == sample
-    assert int(recent["aggregate_display_base_seconds"]) == 3
+    assert int(recent["aggregate_display_base_seconds"]) == 0
     assert recent["display_span_id"] == live_clock["display_span_id"]
     assert recent["edit_disabled"] is True
     assert recent["exportable"] is False
