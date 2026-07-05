@@ -12,30 +12,28 @@
     App.heartbeatTimer = null;
 
     // Ticker invariant: ONLY updates DOM text; never calls a bridge method, never writes the DB,
-    // never starts / stops the collector. Render flows seed static bases and active-elapsed
-    // offsets; the heartbeat may only advance the page-scoped active span clock.
+    // never starts / stops the collector. Render flows seed static display bases; the heartbeat
+    // may only advance the page-scoped active live time.
     App.lastOverviewSnapshot = null;
     // Structural caches only — used to re-render lists on page switch / edit-guard checks. They
     // MUST NOT participate in live-row seconds computation. ``applyLocalTicker`` reads static
-    // bases / active-elapsed offsets from the DOM and the one page-scoped active span clock.
+    // display bases from the DOM and the one page-scoped active live time.
     App.lastRecentData = null;
     App.lastSessionDetailsViewModel = null;
     App.lastTimelineData = null;
 
-    // Canonical active span clocks. There is one dynamic project-duration clock per visible page
-    // scope; rows and KPIs never own their own complete clock. ``liveClockBySpanId`` is retained
-    // only as a compatibility mirror for diagnostics/tests and is not used by the ticker to
-    // compute row durations.
+    // Canonical active live time. There is one dynamic elapsed source per visible page
+    // scope; current activity, rows and KPIs never own their own complete clock.
+    // ``liveClockBySpanId`` is retained only as a compatibility mirror for diagnostics/tests
+    // and is not used by the ticker to compute row durations.
     App.liveClockBySpanId = {};
     App.liveDisplayModel = null;
     App.activeDisplaySpanId = "";
     App.activeSpanClockByPage = {};
-    App.activeElapsedAnchorByPage = {};
+    App.activeLiveTimeByPage = App.activeSpanClockByPage;
     // Compatibility alias for older callers; do not use this as a row clock registry.
     App.liveClockByPage = App.activeSpanClockByPage;
     App.activeDisplaySpanIdByPage = {};
-    App.currentActivityClockByPage = {};
-    App.currentActivityContinuityKeyByPage = {};
     App.liveClockContractViolation = null;
     App.liveClockContractRefreshRequested = false;
 
@@ -528,7 +526,7 @@
     }
     App.projectClockSeconds = projectClockSeconds;
 
-    function activeElapsedNow(clock, nowMs) {
+    function computeActiveElapsedNow(clock, nowMs) {
         var c = normalizeLiveClock(clock);
         if (!c) return 0;
         var activeSample = null;
@@ -547,6 +545,11 @@
             return elapsed > activeSample ? elapsed : activeSample;
         }
         return projectClockSeconds(c, nowMs);
+    }
+    App.computeActiveElapsedNow = computeActiveElapsedNow;
+
+    function activeElapsedNow(clock, nowMs) {
+        return computeActiveElapsedNow(clock, nowMs);
     }
     App.activeElapsedNow = activeElapsedNow;
 
@@ -569,15 +572,11 @@
     }
     App.activeElapsedAtSample = activeElapsedAtSample;
 
-    function projectFromActiveElapsed(baseSecondsAtRender, activeElapsedAtRender, activeClock, nowMs, activeElapsedNowSample) {
-        var nowElapsed = (typeof activeElapsedNowSample === "number")
-            ? activeElapsedNowSample
-            : activeElapsedNow(activeClock, nowMs);
-        var delta = nowElapsed - nonNegativeInt(activeElapsedAtRender, 0);
-        if (delta < 0) delta = 0;
-        return nonNegativeInt(baseSecondsAtRender, 0) + delta;
+    function projectFromDisplayBase(displayBaseSeconds, activeElapsedNowValue) {
+        return nonNegativeInt(displayBaseSeconds, 0)
+            + nonNegativeInt(activeElapsedNowValue, 0);
     }
-    App.projectFromActiveElapsed = projectFromActiveElapsed;
+    App.projectFromDisplayBase = projectFromDisplayBase;
 
     function sameLiveContinuity(previousClock, incomingClock) {
         var prev = normalizeLiveClock(previousClock);
@@ -615,33 +614,16 @@
 
     function findClockInPayload(payload, preferCurrent) {
         if (!payload) return null;
-        if (preferCurrent && payload.current_activity_clock) return payload.current_activity_clock;
-        if (preferCurrent && payload.activity_display_model && payload.activity_display_model.current_activity_clock) {
-            return payload.activity_display_model.current_activity_clock;
-        }
-        if (preferCurrent && payload.current_activity && payload.current_activity.current_activity_clock) {
-            return payload.current_activity.current_activity_clock;
-        }
         if (payload.live_clock) return payload.live_clock;
         if (payload.activity_display_model && payload.activity_display_model.live_clock) {
             return payload.activity_display_model.live_clock;
         }
-        if (!preferCurrent && payload.current_activity_clock) return payload.current_activity_clock;
         return null;
     }
 
-    function isProjectDurationClock(clock) {
+    function isActiveLiveTime(clock) {
         var c = normalizeLiveClock(clock);
-        return !!(c && c.display_span_id && c.project_duration_live === true);
-    }
-
-    function isCurrentDurationClock(clock) {
-        var c = normalizeLiveClock(clock);
-        return !!(c && (
-            c.current_duration_live === true
-            || clock.current_elapsed_at_sample !== undefined
-            || clock.active_elapsed_at_sample !== undefined
-        ));
+        return !!(c && c.display_span_id && c.is_live === true);
     }
 
     function mirrorActiveSpanClockForCompatibility(pageScope, clock) {
@@ -662,7 +644,7 @@
     function commitPageActiveSpanClock(payload, page) {
         var pageScope = String(page || App.currentPage || "overview");
         var incomingClock = normalizeLiveClock(findClockInPayload(payload, false));
-        if (!isProjectDurationClock(incomingClock)) {
+        if (!isActiveLiveTime(incomingClock)) {
             clearPageActiveSpanClockFromPageModel(payload, pageScope);
             return null;
         }
@@ -674,7 +656,6 @@
         }
         var storedClock = rebaseIncomingClockWithoutRollback(activeClock, incomingClock, tickerNowEpochMs());
         App.activeSpanClockByPage[pageScope] = storedClock;
-        App.activeElapsedAnchorByPage[pageScope] = activeElapsedNow(storedClock, tickerNowEpochMs());
         mirrorActiveSpanClockForCompatibility(pageScope, storedClock);
         if (payload.activity_display_model) {
             App.liveDisplayModel = payload.activity_display_model;
@@ -688,7 +669,7 @@
     function observeRefreshStateActiveSpan(payload, page) {
         var pageScope = String(page || App.currentPage || "overview");
         var incomingClock = normalizeLiveClock(findClockInPayload(payload, false));
-        if (!isProjectDurationClock(incomingClock)) {
+        if (!isActiveLiveTime(incomingClock)) {
             return App.activeSpanClockByPage[pageScope] || null;
         }
         var activeClock = App.activeSpanClockByPage[pageScope] || null;
@@ -697,7 +678,6 @@
         }
         var storedClock = rebaseIncomingClockWithoutRollback(activeClock, incomingClock, tickerNowEpochMs());
         App.activeSpanClockByPage[pageScope] = storedClock;
-        App.activeElapsedAnchorByPage[pageScope] = activeElapsedNow(storedClock, tickerNowEpochMs());
         mirrorActiveSpanClockForCompatibility(pageScope, storedClock);
         if (payload && payload.activity_display_model) {
             App.liveDisplayModel = payload.activity_display_model;
@@ -735,38 +715,6 @@
     }
     App.registerLiveClock = registerLiveClock;
 
-    function registerCurrentActivityClock(payload, options) {
-        var opts = options || {};
-        var pageScope = String(opts.page || App.currentPage || "overview");
-        var incomingClock = normalizeLiveClock(findClockInPayload(payload, true));
-        if (!isCurrentDurationClock(incomingClock)) {
-            delete App.currentActivityClockByPage[pageScope];
-            delete App.currentActivityContinuityKeyByPage[pageScope];
-            return;
-        }
-        var prev = App.currentActivityClockByPage[pageScope] || null;
-        var prevKey = App.currentActivityContinuityKeyByPage[pageScope] || currentActivityContinuityKey(null, prev, pageScope);
-        var incomingKey = currentActivityContinuityKey(null, incomingClock, pageScope);
-        var sameCurrentContinuity = !!(prev && prevKey && incomingKey && prevKey === incomingKey);
-        if (pageScope === App.currentPage && prev && !sameCurrentContinuity && prevKey) {
-            App.resetMonotonicRenderState(prevKey);
-        }
-        App.currentActivityClockByPage[pageScope] = sameCurrentContinuity
-            ? rebaseIncomingClockWithoutRollback(prev, incomingClock, tickerNowEpochMs())
-            : incomingClock;
-        App.currentActivityContinuityKeyByPage[pageScope] = incomingKey;
-        if (payload && payload.activity_display_model) {
-            App.liveDisplayModel = payload.activity_display_model;
-        }
-    }
-    App.registerCurrentActivityClock = registerCurrentActivityClock;
-
-    function getActiveCurrentActivityClock() {
-        var page = App.currentPage || "overview";
-        return App.currentActivityClockByPage[page] || null;
-    }
-    App.getActiveCurrentActivityClock = getActiveCurrentActivityClock;
-
     // Return the canonical active span clock for a page scope, or ``null``.
     // Rows never look up their own clocks by span id; they project their
     // static base from this one page active elapsed source.
@@ -787,7 +735,6 @@
                 delete App.liveClockBySpanId[spanId];
             }
             delete App.activeSpanClockByPage[pageScope];
-            delete App.activeElapsedAnchorByPage[pageScope];
             delete App.activeDisplaySpanIdByPage[pageScope];
             // Only clear the global active fields when the cleared scope is
             // the current page; a hidden-page clear MUST NOT touch the
@@ -800,10 +747,8 @@
         }
         App.liveClockBySpanId = {};
         App.activeSpanClockByPage = {};
+        App.activeLiveTimeByPage = App.activeSpanClockByPage;
         App.liveClockByPage = App.activeSpanClockByPage;
-        App.activeElapsedAnchorByPage = {};
-        App.currentActivityClockByPage = {};
-        App.currentActivityContinuityKeyByPage = {};
         App.activeDisplaySpanIdByPage = {};
         App.liveDisplayModel = null;
         App.activeDisplaySpanId = "";
@@ -857,7 +802,7 @@
     }
     App.currentActivityContinuityKey = currentActivityContinuityKey;
 
-    function renderCurrentActivityElement(el, current, currentClock, prefix) {
+    function renderCurrentActivityElement(el, current, prefix) {
         if (!el) return;
         current = current || {};
         if (!current.active) {
@@ -866,10 +811,7 @@
         }
         var display = current.display || "";
         var seconds = parseInt(current.elapsed_seconds, 10) || 0;
-        if (currentClock && (currentClock.current_duration_live === true || currentClock.is_live === true)) {
-            seconds = projectClockSeconds(currentClock, tickerNowEpochMs());
-        }
-        var continuity = currentActivityContinuityKey(current, currentClock, prefix);
+        var continuity = currentActivityContinuityKey(current, null, prefix);
         var previousContinuity = el.getAttribute("data-current-continuity-key") || "";
         if (previousContinuity && previousContinuity !== continuity) {
             App.resetMonotonicRenderState(previousContinuity);
@@ -881,8 +823,23 @@
         }
         var parts = display.split("\uff5c");
         if (parts.length >= 3) {
-            parts[2] = App.formatDuration(seconds);
-            el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + parts.join("\uff5c");
+            var html = "\u5f53\u524d\u6d3b\u52a8\uff1a"
+                + App.escapeHtml(parts[0] || "")
+                + "\uff5c"
+                + App.escapeHtml(parts[1] || "")
+                + "\uff5c"
+                + '<span class="current-activity-duration"'
+                + ' data-live-duration-target="1"'
+                + ' data-display-base-seconds="0"'
+                + ' data-live-base-seconds="0"'
+                + ' data-live-role="' + App.escapeHtml(prefix || "current") + '-current"'
+                + ' data-live-continuity-key="' + App.escapeHtml(continuity) + '"'
+                + ' data-duration-seconds="' + String(seconds) + '"'
+                + '>' + App.escapeHtml(App.formatDuration(seconds)) + '</span>';
+            for (var i = 3; i < parts.length; i++) {
+                html += "\uff5c" + App.escapeHtml(parts[i] || "");
+            }
+            el.innerHTML = html;
             App._monotonicRenderState[continuity] = { lastSeconds: seconds };
         } else {
             el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + display;
@@ -900,18 +857,15 @@
     }
     App.kpiBaseSeconds = kpiBaseSeconds;
 
-    function activeElapsedAtRenderFromPayload(payload, pageScope, nowMs) {
-        var payloadClock = normalizeLiveClock(findClockInPayload(payload, false));
-        if (payloadClock) return activeElapsedAtSample(payloadClock);
-        var pageClock = getActiveLiveClock(pageScope);
-        return activeElapsedNow(pageClock, nowMs);
-    }
-    App.activeElapsedAtRenderFromPayload = activeElapsedAtRenderFromPayload;
-
-    function setLiveProjectionAnchor(el, baseSecondsAtRender, activeElapsedAtRender, continuityKey) {
+    function setLiveProjectionAnchor(el, displayBaseSeconds, continuityKey, role) {
         if (!el) return;
-        el.setAttribute("data-live-base-seconds", String(nonNegativeInt(baseSecondsAtRender, 0)));
-        el.setAttribute("data-active-elapsed-at-render", String(nonNegativeInt(activeElapsedAtRender, 0)));
+        var base = String(nonNegativeInt(displayBaseSeconds, 0));
+        el.setAttribute("data-live-duration-target", "1");
+        el.setAttribute("data-display-base-seconds", base);
+        el.setAttribute("data-live-base-seconds", base);
+        if (role) {
+            el.setAttribute("data-live-role", String(role));
+        }
         if (continuityKey) {
             el.setAttribute("data-live-continuity-key", String(continuityKey));
         }
@@ -920,26 +874,13 @@
 
     function clearLiveProjectionAnchor(el) {
         if (!el) return;
+        el.removeAttribute("data-live-duration-target");
+        el.removeAttribute("data-display-base-seconds");
         el.removeAttribute("data-live-base-seconds");
-        el.removeAttribute("data-active-elapsed-at-render");
+        el.removeAttribute("data-live-role");
         el.removeAttribute("data-live-continuity-key");
     }
     App.clearLiveProjectionAnchor = clearLiveProjectionAnchor;
-
-    function anchoredSecondsAtRender(baseSecondsAtSample, activeElapsedAtSampleValue, activeClock, nowMs) {
-        var seconds = projectFromActiveElapsed(
-            baseSecondsAtSample,
-            activeElapsedAtSampleValue,
-            activeClock,
-            nowMs
-        );
-        var activeAtRender = activeElapsedNow(activeClock, nowMs);
-        return {
-            seconds: seconds,
-            activeElapsedAtRender: activeAtRender
-        };
-    }
-    App.anchoredSecondsAtRender = anchoredSecondsAtRender;
 
     function durationElementForLiveNode(node) {
         if (!node) return null;
@@ -954,151 +895,50 @@
         return durEl;
     }
 
-    function renderLiveRowDuration(node, baseSecondsAtRender, activeElapsedAtRender, activeClock, nowMs, activeElapsedNowSample) {
-        var clock = normalizeLiveClock(activeClock);
-        if (!node || !clock || clock.project_duration_live !== true) return;
-        var durEl = durationElementForLiveNode(node);
-        if (!durEl) return;
-        var continuity = node.getAttribute("data-live-continuity-key")
-            || liveContinuityKey(clock, "span");
-        var seconds = projectFromActiveElapsed(
-            baseSecondsAtRender,
-            activeElapsedAtRender,
-            clock,
-            nowMs,
-            activeElapsedNowSample
-        );
-        renderDurationProjected(durEl, seconds, continuity, { allowDecrease: false });
+    function renderLiveDurationTarget(target, displayBaseSeconds, activeElapsedNowValue) {
+        if (!target) return;
+        var continuity = target.getAttribute("data-live-continuity-key") || "";
+        var seconds = projectFromDisplayBase(displayBaseSeconds, activeElapsedNowValue);
+        renderDurationProjected(target, seconds, continuity, { allowDecrease: false });
     }
-    App.renderLiveRowDuration = renderLiveRowDuration;
+    App.renderLiveDurationTarget = renderLiveDurationTarget;
 
     // ``applyLocalTicker`` re-renders fetched durations with a wall-clock delta each second without a
     // bridge round-trip. Ticker invariant: ONLY updates DOM text; never calls a bridge, never writes
     // the DB, never starts / stops the collector.
     //
-    // Per-row contract: each live DOM node carries its OWN
-    // ``data-live-base-seconds`` plus ``data-active-elapsed-at-render``.
-    // The ticker applies the current page's single active elapsed sample to
-    // every row/KPI/total without consulting per-row clocks.
+    // Live target contract: each duration target carries its OWN static
+    // ``data-display-base-seconds``. The ticker applies the current page's
+    // single active elapsed sample to every current/recent/timeline/detail/KPI
+    // target without consulting per-region clocks.
     function applyLocalTicker() {
         var nowMs = tickerNowEpochMs();
         var clock = getActiveLiveClock();
-        var activeElapsedNowValue = activeElapsedNow(clock, nowMs);
-        var currentActivityClock = getActiveCurrentActivityClock();
-
-        // --- Overview KPIs + current activity ---
-        var ov = App.lastOverviewSnapshot;
-        if (ov && App.currentPage === "overview") {
-            var currentIsUncategorized = true;
-            var current = ov.current_activity || {};
-            if (current.is_classified === true) {
-                currentIsUncategorized = false;
-            } else if (current.is_uncategorized === true) {
-                currentIsUncategorized = true;
-            } else {
-                currentIsUncategorized = null;
-            }
-            var totalEl = document.getElementById("kpi-total");
-            if (totalEl) {
-                var totalBaseAttr = totalEl.getAttribute("data-live-base-seconds");
-                var totalActiveAttr = totalEl.getAttribute("data-active-elapsed-at-render");
-                var totalSec = totalBaseAttr !== null
-                    ? projectFromActiveElapsed(totalBaseAttr, totalActiveAttr, clock, nowMs, activeElapsedNowValue)
-                    : kpiBaseSeconds(ov, "today_total_seconds");
-                App.renderDurationProjected(
-                    totalEl, totalSec, "overview-total", { allowDecrease: false }
-                );
-            }
-            var classifiedEl = document.getElementById("kpi-classified");
-            if (classifiedEl) {
-                var classifiedSec = kpiBaseSeconds(ov, "classified_seconds");
-                if (currentIsUncategorized === false) {
-                    var classifiedBaseAttr = classifiedEl.getAttribute("data-live-base-seconds");
-                    var classifiedActiveAttr = classifiedEl.getAttribute("data-active-elapsed-at-render");
-                    if (classifiedBaseAttr !== null) {
-                        classifiedSec = projectFromActiveElapsed(classifiedBaseAttr, classifiedActiveAttr, clock, nowMs, activeElapsedNowValue);
-                    }
-                }
-                App.renderDurationProjected(classifiedEl, classifiedSec, "overview-classified", { allowDecrease: false });
-            }
-            var uncategorizedEl = document.getElementById("kpi-uncategorized");
-            if (uncategorizedEl) {
-                var uncategorizedSec = kpiBaseSeconds(ov, "uncategorized_seconds");
-                if (currentIsUncategorized === true) {
-                    var uncategorizedBaseAttr = uncategorizedEl.getAttribute("data-live-base-seconds");
-                    var uncategorizedActiveAttr = uncategorizedEl.getAttribute("data-active-elapsed-at-render");
-                    if (uncategorizedBaseAttr !== null) {
-                        uncategorizedSec = projectFromActiveElapsed(uncategorizedBaseAttr, uncategorizedActiveAttr, clock, nowMs, activeElapsedNowValue);
-                    }
-                }
-                App.renderDurationProjected(uncategorizedEl, uncategorizedSec, "overview-uncategorized", { allowDecrease: false });
-            }
-            var currentEl = document.getElementById("current-activity");
-            if (currentEl) {
-                App.renderCurrentActivityElement(
-                    currentEl, current, currentActivityClock, "overview"
-                );
-            }
-        }
-
-        // --- Timeline current-activity area + total ---
-        var tl = App.lastTimelineData;
-        if (tl && App.currentPage === "timeline") {
-            var tlCurrentEl = document.getElementById("timeline-current");
-            if (tlCurrentEl) {
-                var tlCurrent = tl.current_activity || {};
-                App.renderCurrentActivityElement(
-                    tlCurrentEl, tlCurrent, currentActivityClock, "timeline"
-                );
-            }
-            var todayStr = App.localTodayStr();
-            var isToday = !tl.date || tl.date === todayStr || tl.date === "--";
-            var tlTotalEl = document.getElementById("timeline-total");
-            if (tlTotalEl && isToday) {
-                var tlTotalBaseAttr = tlTotalEl.getAttribute("data-live-base-seconds");
-                var tlTotalActiveAttr = tlTotalEl.getAttribute("data-active-elapsed-at-render");
-                var tlTotalSec = tlTotalBaseAttr !== null
-                    ? projectFromActiveElapsed(tlTotalBaseAttr, tlTotalActiveAttr, clock, nowMs, activeElapsedNowValue)
-                    : (parseInt(tl.today_total_seconds, 10) || 0);
-                App.renderDurationProjected(
-                    tlTotalEl, tlTotalSec, "timeline-total", { allowDecrease: false }
-                );
-            }
-        }
-
-        // --- Unified live-span DOM walk (page-scoped) ---
-        // Every live row (recent / session / detail) carries:
-        //   - ``data-display-span-id``: display identity only, not a row clock lookup
-        //   - ``data-live-base-seconds``: the row's OWN sample display duration
-        //   - ``data-active-elapsed-at-render``: active elapsed when that base was rendered
-        //   - ``data-live-continuity-key``: the same key the renderer seeded
-        // The ticker renders ``base + (active_elapsed_now - active_elapsed_at_render)``.
-        //
-        // Page-scoped walk: only nodes inside the CURRENT page container
-        // (``#page-<currentPage>``) are visited so a hidden page's stale
-        // live DOM is never updated with the current page's delta.
+        var activeElapsedNowValue = computeActiveElapsedNow(clock, nowMs);
         var tickerPage = App.currentPage || "overview";
         var pageRoot = document.getElementById("page-" + tickerPage);
-        var liveNodes = pageRoot
-            ? pageRoot.querySelectorAll("[data-display-span-id]")
+        var liveTargets = pageRoot
+            ? pageRoot.querySelectorAll('[data-live-duration-target="1"]')
             : [];
-        for (var i = 0; i < liveNodes.length; i++) {
-            var node = liveNodes[i];
-            var spanId = node.getAttribute("data-display-span-id");
-            if (!spanId) continue;
+        for (var i = 0; i < liveTargets.length; i++) {
+            var target = liveTargets[i];
             if (!clock) {
-                recordLiveClockContractViolation(spanId, tickerPage, "missing_active_span_clock");
+                recordLiveClockContractViolation(
+                    target.getAttribute("data-display-span-id") || "",
+                    tickerPage,
+                    "missing_active_span_clock"
+                );
                 continue;
             }
-            if (!(clock.project_duration_live === true || clock.is_project_duration_live === true)) continue;
-            var baseAttr = node.getAttribute("data-live-base-seconds");
+            if (!(clock.is_live === true || clock.current_duration_live === true || clock.project_duration_live === true || clock.is_project_duration_live === true)) continue;
+            var baseAttr = target.getAttribute("data-display-base-seconds");
+            if (baseAttr === null || baseAttr === "") {
+                baseAttr = target.getAttribute("data-live-base-seconds");
+            }
             if (baseAttr === null || baseAttr === "") continue;
-            var nodeBaseSec = parseInt(baseAttr, 10);
-            if (isNaN(nodeBaseSec)) continue;
-            var activeAttr = node.getAttribute("data-active-elapsed-at-render");
-            var nodeActiveAtRender = parseInt(activeAttr, 10);
-            if (isNaN(nodeActiveAtRender)) continue;
-            renderLiveRowDuration(node, nodeBaseSec, nodeActiveAtRender, clock, nowMs, activeElapsedNowValue);
+            var displayBaseSeconds = parseInt(baseAttr, 10);
+            if (isNaN(displayBaseSeconds)) continue;
+            renderLiveDurationTarget(target, displayBaseSeconds, activeElapsedNowValue);
         }
     }
     App.applyLocalTicker = applyLocalTicker;

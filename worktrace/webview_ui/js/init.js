@@ -46,13 +46,11 @@
             // Commit the page-model active span BEFORE rendering so KPI and
             // Recent anchors are seeded from the same sample.
             App.commitPageActiveSpanClock(bundle, "overview");
-            App.registerCurrentActivityClock(bundle, { source: "page_model", page: "overview" });
             var overview = bundle.overview || {};
             // Augment the overview sub-payload with the bundle-level
             overview.date = bundle.date || overview.date;
             overview.current_activity = bundle.current_activity || overview.current_activity;
             overview.live_clock = bundle.live_clock || overview.live_clock;
-            overview.current_activity_clock = bundle.current_activity_clock || overview.current_activity_clock;
             overview.activity_display_model = bundle.activity_display_model || overview.activity_display_model;
             overview.display_span_id = bundle.display_span_id || overview.display_span_id;
             overview.sample_id = bundle.sample_id || overview.sample_id;
@@ -73,7 +71,6 @@
             App.showRecent({
                 activities: bundle.activities || [],
                 live_clock: bundle.live_clock || null,
-                current_activity_clock: bundle.current_activity_clock || null,
                 activity_display_model: bundle.activity_display_model || null,
                 display_span_id: bundle.display_span_id || "",
                 sample_id: bundle.sample_id || ""
@@ -370,26 +367,12 @@
     }
     App.initButtons = initButtons;
 
-    function patchCurrentActivityFromRefreshState(state) {
+    function updateCurrentActivityCacheFromRefreshState(state) {
         if (!state) return;
         if (App.currentPage === "overview" && App.lastOverviewSnapshot) {
             App.lastOverviewSnapshot.current_activity = state.current_activity || {};
-            App.lastOverviewSnapshot.current_activity_clock = state.current_activity_clock || null;
-            App.renderCurrentActivityElement(
-                document.getElementById("current-activity"),
-                App.lastOverviewSnapshot.current_activity,
-                App.getActiveCurrentActivityClock(),
-                "overview"
-            );
         } else if (App.currentPage === "timeline" && App.lastTimelineData) {
             App.lastTimelineData.current_activity = state.current_activity || {};
-            App.lastTimelineData.current_activity_clock = state.current_activity_clock || null;
-            App.renderCurrentActivityElement(
-                document.getElementById("timeline-current"),
-                App.lastTimelineData.current_activity,
-                App.getActiveCurrentActivityClock(),
-                "timeline"
-            );
         }
     }
 
@@ -412,11 +395,7 @@
             var revisionUnchanged = !isFirstCheck && prevRevision === newRevision;
             if (revisionUnchanged) {
                 App.observeRefreshStateActiveSpan(state, App.currentPage || "overview");
-                App.registerCurrentActivityClock(state, {
-                    source: "refresh_state",
-                    page: App.currentPage || "overview"
-                });
-                patchCurrentActivityFromRefreshState(state);
+                updateCurrentActivityCacheFromRefreshState(state);
             }
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision
@@ -477,10 +456,7 @@
                 var state = App.handleResult(result, function () { return null; });
                 if (state) {
                     App.lastRefreshState = state;
-                    App.registerCurrentActivityClock(state, {
-                        source: "refresh_state",
-                        page: App.currentPage || "overview"
-                    });
+                    App.observeRefreshStateActiveSpan(state, App.currentPage || "overview");
                 }
                 startHeartbeat();
             }, function () {

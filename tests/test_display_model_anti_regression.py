@@ -340,24 +340,15 @@ def test_frontend_js_ticker_only_reads_registered_live_clock():
     )
 
 
-def test_current_activity_clock_is_not_project_live_clock_copy():
+def test_current_activity_clock_builder_is_removed():
     source = (
         REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
     ).read_text(encoding="utf-8")
     assert "return dict(live_clock)" not in source, (
-        "_build_current_activity_clock must build the current resource elapsed "
-        "source from the snapshot, not copy the project display live_clock"
+        "the removed current activity clock path must not copy live_clock"
     )
-    match = re.search(
-        r"def\s+_build_current_activity_clock\b(?P<body>.*?)(?=\ndef\s+_build_project_live_clock\b)",
-        source,
-        re.S,
-    )
-    assert match is not None
-    body = match.group("body")
-    assert "snapshot_elapsed_seconds(snapshot)" in body
-    assert '"carry_seconds": 0' in body
-    assert '"project_duration_live": False' in body
+    assert "def _build_current_activity_clock" not in source
+    assert '"current_activity_clock"' not in source
 
 
 def test_current_activity_elapsed_does_not_read_project_duration_sample():

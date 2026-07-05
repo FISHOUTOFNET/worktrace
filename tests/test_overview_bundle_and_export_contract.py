@@ -268,8 +268,7 @@ def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     assert current["live_state"] == "virtual_pending"
     assert int(current["elapsed_seconds"]) == 12
     assert int(current["resource_elapsed_seconds"]) == 12
-    assert int(bundle["current_activity_clock"]["duration_seconds_at_sample"]) == 12
-    assert int(bundle["current_activity_clock"]["carry_seconds"]) == 0
+    assert "current_activity_clock" not in bundle
 
     sample = int(live_clock["duration_seconds_at_sample"])
     assert sample == 15
@@ -281,14 +280,15 @@ def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     assert int(bundle["uncategorized_seconds"]) == 0
 
     kpi_base = bundle["kpi_live_base"]
-    assert int(kpi_base["today_total_seconds"]) == sample
-    assert int(kpi_base["classified_seconds"]) == sample
+    assert int(kpi_base["today_total_seconds"]) == 3
+    assert int(kpi_base["classified_seconds"]) == 3
 
     recent = bundle["activities"][0]
     assert recent["source"] == "snapshot"
     assert int(recent["activity_id"]) == 0
     assert int(recent["duration_seconds"]) == sample
-    assert int(recent["live_base_seconds"]) == sample
+    assert int(recent["live_base_seconds"]) == 0
+    assert int(recent["display_base_seconds"]) == 0
     assert recent["display_span_id"] == live_clock["display_span_id"]
     assert recent["edit_disabled"] is True
     assert recent["exportable"] is False
@@ -524,9 +524,8 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
     area's elapsed seconds MUST use the same display clock.
 
     With a persisted_open snapshot (elapsed=210, extra=30 → sample=240),
-    the KPI ``classified_seconds`` base, the Recent row's
-    ``live_base_seconds`` and ``current_activity.elapsed_seconds`` must
-    equal 240. Resource-only elapsed remains available separately.
+    the KPI ``classified_seconds`` sample remains 240, while live bases are
+    static: KPI base is 30 and the Recent current item base is 0.
     """
     from worktrace.services import activity_service, project_service
 
@@ -578,11 +577,11 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
     assert int(bundle["uncategorized_seconds"]) == 0
     assert int(bundle["today_total_seconds"]) == sample_duration
 
-    # kpi_live_base must match the sample so the frontend ticker only
-    # adds the live delta.
+    # kpi_live_base is the static display base; the frontend ticker adds
+    # the single current elapsed value.
     kpi_base = bundle["kpi_live_base"]
-    assert int(kpi_base["classified_seconds"]) == sample_duration
-    assert int(kpi_base["today_total_seconds"]) == sample_duration
+    assert int(kpi_base["classified_seconds"]) == 30
+    assert int(kpi_base["today_total_seconds"]) == 30
 
     # The Recent row must carry the same sample duration and hash.
     recent_row = next(
@@ -590,9 +589,9 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
         None,
     )
     assert recent_row is not None, "persisted_open row not found in activities"
-    assert int(recent_row["live_base_seconds"]) == sample_duration, (
+    assert int(recent_row["live_base_seconds"]) == 0, (
         f"Recent row live_base_seconds ({recent_row['live_base_seconds']}) "
-        f"must equal the sample duration ({sample_duration})"
+        "must be current-activity base 0"
     )
     assert recent_row["stable_live_key_hash"] == sample_hash
 
@@ -605,9 +604,7 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
     )
     assert int(current["resource_elapsed_seconds"]) == 210
     assert current["stable_live_key_hash"] == sample_hash
-    assert bundle["current_activity_clock"]["duration_seconds_at_sample"] == 210
-    assert bundle["current_activity_clock"]["carry_seconds"] == 0
-    assert bundle["current_activity_clock"]["display_span_id"] != live_clock["display_span_id"]
+    assert "current_activity_clock" not in bundle
     assert int(live_clock["display_base_seconds"]) == 30
     assert int(live_clock["current_elapsed_at_sample"]) == 210
 
@@ -658,7 +655,7 @@ def test_overview_recent_session_with_closed_then_open_activity_gets_live_overla
 
     Asserts: recent row ``activity_ids == [closed_id, open_id]`` /
     ``first_activity_id == closed_id``; ``duration_seconds == 160`` /
-    ``live_base_seconds == 160``; ``today_total_seconds == 160`` /
+    ``live_base_seconds == 0`` for the Recent current item; ``today_total_seconds == 160`` /
     ``classified_seconds == 160`` / ``uncategorized_seconds == 0``;
     ``current_activity.elapsed_seconds == 100`` (open OWN sample);
     Timeline same session 160 (Overview ↔ Timeline agree)."""
@@ -748,8 +745,8 @@ def test_overview_recent_session_with_closed_then_open_activity_gets_live_overla
         f"Overview recent row duration_seconds must equal 160 (60 closed DB "
         f"+ 100 live delta); got {recent_row['duration_seconds']}"
     )
-    assert int(recent_row["live_base_seconds"]) == 160, (
-        f"Overview recent row live_base_seconds must equal 160; got "
+    assert int(recent_row["live_base_seconds"]) == 0, (
+        f"Overview recent row live_base_seconds must equal current base 0; got "
         f"{recent_row['live_base_seconds']}"
     )
 

@@ -115,6 +115,24 @@ def _live_contract_reason(span: dict[str, Any], rows: list[dict[str, Any]]) -> s
     return "live_overlay_mismatch"
 
 
+def _current_elapsed_at_sample(live_clock: dict[str, Any]) -> int:
+    return int(
+        live_clock.get("current_elapsed_at_sample")
+        or live_clock.get("active_elapsed_at_sample")
+        or 0
+    )
+
+
+def _clock_projects_live_duration(live_clock: dict[str, Any]) -> bool:
+    return bool(
+        live_clock.get("is_live")
+        and (
+            live_clock.get("project_duration_live") is True
+            or live_clock.get("is_project_duration_live") is True
+        )
+    )
+
+
 def _display_only_common_fields(
     span: dict[str, Any],
     *,
@@ -122,6 +140,7 @@ def _display_only_common_fields(
 ) -> dict[str, Any]:
     live_clock = span.get("live_clock") or {}
     duration_seconds = int(span.get("duration_seconds") or 0)
+    display_base_seconds = int(live_clock.get("display_base_seconds") or 0)
     is_contract_fallback = bool(live_contract_reason)
     return {
         "activity_id": int(span.get("activity_id") or 0),
@@ -130,7 +149,8 @@ def _display_only_common_fields(
         "duration": format_duration(duration_seconds),
         "duration_seconds": duration_seconds,
         "raw_duration_seconds": 0,
-        "live_base_seconds": duration_seconds,
+        "display_base_seconds": display_base_seconds,
+        "live_base_seconds": display_base_seconds,
         "live_delta_eligible": True,
         "is_in_progress": True,
         "is_live_projected": True,
@@ -265,7 +285,6 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         report_date=scoped_today, today=scoped_today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
-    current_activity_clock = model.get("current_activity_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
@@ -306,9 +325,26 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         for r in all_rows
         if bool(r.get("is_uncategorized"))
     )
+    active_elapsed = _current_elapsed_at_sample(live_clock)
+    live_projects = _clock_projects_live_duration(live_clock)
+    today_total_base_seconds = (
+        max(0, today_total_seconds - active_elapsed)
+        if live_projects
+        else today_total_seconds
+    )
+    classified_base_seconds = classified_seconds
+    uncategorized_base_seconds = uncategorized_seconds
+    if live_projects and bool(current_activity.get("is_classified")):
+        classified_base_seconds = max(0, classified_seconds - active_elapsed)
+    if live_projects and bool(current_activity.get("is_uncategorized")):
+        uncategorized_base_seconds = max(0, uncategorized_seconds - active_elapsed)
 
     # Recent items are the first N overlaid rows.
     items = all_rows[:_RECENT_LIMIT]
+    for item in items:
+        if str(item.get("display_span_id") or ""):
+            item["display_base_seconds"] = 0
+            item["live_base_seconds"] = 0
 
     sample_id = str(model.get("sample_id") or "")
     elapsed = int(current_activity.get("elapsed_seconds") or 0)
@@ -319,7 +355,6 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         "sample_id": sample_id,
         "display_span_id": display_span_id,
         "live_clock": live_clock,
-        "current_activity_clock": current_activity_clock,
         "activity_display_model": model,
         "overview": {
             "total_duration": format_duration(today_total_seconds),
@@ -335,14 +370,16 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         "today_total_seconds": today_total_seconds,
         "classified_seconds": classified_seconds,
         "uncategorized_seconds": uncategorized_seconds,
+        "today_total_base_seconds": today_total_base_seconds,
+        "classified_base_seconds": classified_base_seconds,
+        "uncategorized_base_seconds": uncategorized_base_seconds,
         "current_activity_elapsed_seconds": elapsed,
         # KPI live-base fields for the frontend ticker: the ticker renders
-        # ``live_base_seconds + live_delta`` so the KPI ticks from the same
-        # sample as the recent items.
+        # ``display_base_seconds + current_elapsed_now``.
         "kpi_live_base": {
-            "today_total_seconds": today_total_seconds,
-            "classified_seconds": classified_seconds,
-            "uncategorized_seconds": uncategorized_seconds,
+            "today_total_seconds": today_total_base_seconds,
+            "classified_seconds": classified_base_seconds,
+            "uncategorized_seconds": uncategorized_base_seconds,
         },
     }
 
@@ -426,7 +463,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         report_date=scoped_report_date, today=today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
-    current_activity_clock = model.get("current_activity_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
@@ -508,6 +544,12 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
 
     # display_total_seconds is the sum of display durations AFTER overlay.
     display_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in sessions)
+    active_elapsed = _current_elapsed_at_sample(live_clock)
+    today_total_base_seconds = (
+        max(0, display_total_seconds - active_elapsed)
+        if _clock_projects_live_duration(live_clock)
+        else display_total_seconds
+    )
 
     elapsed = int(current_activity.get("elapsed_seconds") or 0)
     sample_id = str(model.get("sample_id") or "")
@@ -521,12 +563,12 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         "raw_total_seconds": raw_total_seconds,
         "current_activity": current_activity,
         "live_clock": live_clock,
-        "current_activity_clock": current_activity_clock,
         "display_span_id": display_span_id,
         "activity_display_model": model,
         "sample_id": sample_id,
         "sessions": sessions,
         "today_total_seconds": display_total_seconds,
+        "today_total_base_seconds": today_total_base_seconds,
         "current_activity_elapsed_seconds": elapsed,
     }
 
@@ -558,7 +600,6 @@ def get_session_details_view_model(
         report_date=date, today=today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
-    current_activity_clock = model.get("current_activity_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
     sample_id = str(model.get("sample_id") or "")
@@ -581,7 +622,6 @@ def get_session_details_view_model(
                 ],
                 "current_activity": current_activity,
                 "live_clock": live_clock,
-                "current_activity_clock": current_activity_clock,
                 "display_span_id": display_span_id,
                 "activity_display_model": model,
                 "sample_id": sample_id,
@@ -593,7 +633,6 @@ def get_session_details_view_model(
             "activities": [],
             "current_activity": current_activity,
             "live_clock": live_clock,
-            "current_activity_clock": current_activity_clock,
             "display_span_id": display_span_id,
             "activity_display_model": model,
             "sample_id": sample_id,
@@ -663,7 +702,6 @@ def get_session_details_view_model(
         "activities": activities,
         "current_activity": current_activity,
         "live_clock": live_clock,
-        "current_activity_clock": current_activity_clock,
         "display_span_id": display_span_id,
         "activity_display_model": model,
         "sample_id": sample_id,
@@ -703,7 +741,6 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
         report_date=scoped_report_date, today=today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
-    current_activity_clock = model.get("current_activity_clock") or {}
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
@@ -747,7 +784,6 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
         "latest_activity_id": latest_activity_id,
         # Unified live clock (single source of truth for the frontend).
         "live_clock": live_clock,
-        "current_activity_clock": current_activity_clock,
         "display_span_id": display_span_id,
         "activity_display_model": model,
         "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),

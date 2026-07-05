@@ -673,72 +673,69 @@ def test_core_js_ticker_does_not_call_bridge_methods() -> None:
     )
 
 
-def test_core_js_ticker_uses_raw_seconds_not_string_parsing() -> None:
-    """The ticker must use numeric ``classified_seconds`` /
-    ``uncategorized_seconds`` baseline fields. It must NOT parse
+def test_overview_kpi_targets_use_raw_seconds_not_string_parsing() -> None:
+    """Overview KPI seeding must use numeric base fields. It must NOT parse
     ``classified_duration`` / ``uncategorized_duration`` HH:MM:SS strings
-    to compute the ticker delta."""
-    source = read_js("core.js")
-    pos = source.find("function applyLocalTicker")
-    assert pos != -1, "core.js must define function applyLocalTicker"
+    to compute live bases."""
+    source = read_js("overview.js")
+    pos = source.find("function showOverview")
+    assert pos != -1, "overview.js must define function showOverview"
     end_func = source.find("\n    function ", pos + 1)
-    if end_func == -1:
-        end_func = source.find("\n    App.applyLocalTicker", pos + 1)
     body = source[pos:end_func] if end_func != -1 else source[pos:]
     # Must use the raw numeric fields.
     assert "classified_seconds" in body, (
-        "applyLocalTicker must read classified_seconds (numeric baseline)"
+        "showOverview must read classified_seconds (numeric baseline)"
     )
     assert "uncategorized_seconds" in body, (
-        "applyLocalTicker must read uncategorized_seconds (numeric baseline)"
+        "showOverview must read uncategorized_seconds (numeric baseline)"
     )
     # Must NOT parse the string duration fields to compute the ticker.
     assert "classified_duration" not in body, (
-        "applyLocalTicker must NOT parse classified_duration strings"
+        "showOverview must NOT parse classified_duration strings"
     )
     assert "uncategorized_duration" not in body, (
-        "applyLocalTicker must NOT parse uncategorized_duration strings"
+        "showOverview must NOT parse uncategorized_duration strings"
     )
 
 
-def test_core_js_ticker_updates_classified_and_uncategorized_kpis() -> None:
-    """The ticker must update kpi-classified and kpi-uncategorized DOM
-    elements along with kpi-total, so all three KPIs stay on the same
-   口径 (same basis)."""
-    source = read_js("core.js")
-    pos = source.find("function applyLocalTicker")
-    assert pos != -1, "core.js must define function applyLocalTicker"
+def test_overview_seeds_classified_and_uncategorized_kpi_targets() -> None:
+    """Overview must seed kpi-classified and kpi-uncategorized duration
+    targets along with kpi-total, so the generic ticker updates all three
+    on the same basis."""
+    source = read_js("overview.js")
+    pos = source.find("function showOverview")
+    assert pos != -1, "overview.js must define function showOverview"
     end_func = source.find("\n    function ", pos + 1)
     if end_func == -1:
         end_func = source.find("\n    App.applyLocalTicker", pos + 1)
     body = source[pos:end_func] if end_func != -1 else source[pos:]
     assert "kpi-classified" in body, (
-        "applyLocalTicker must update kpi-classified DOM element"
+        "showOverview must seed kpi-classified DOM element"
     )
     assert "kpi-uncategorized" in body, (
-        "applyLocalTicker must update kpi-uncategorized DOM element"
+        "showOverview must seed kpi-uncategorized DOM element"
     )
     assert "kpi-total" in body, (
-        "applyLocalTicker must update kpi-total DOM element"
+        "showOverview must seed kpi-total DOM element"
     )
 
 
-def test_core_js_ticker_uses_is_classified_is_uncategorized_flags() -> None:
-    """The ticker must use ``is_classified`` / ``is_uncategorized`` flags
-    from ``current_activity`` to decide which KPI gets the delta. Only
-    one of the two may be incremented (never both)."""
-    source = read_js("core.js")
-    pos = source.find("function applyLocalTicker")
-    assert pos != -1, "core.js must define function applyLocalTicker"
+def test_overview_uses_is_classified_is_uncategorized_flags_for_kpi_targets() -> None:
+    """Overview must use ``is_classified`` / ``is_uncategorized`` flags
+    from ``current_activity`` to decide which KPI target gets current elapsed.
+    Only one of the two may be live-targeted."""
+    source = read_js("overview.js")
+    pos = source.find("function showOverview")
+    assert pos != -1, "overview.js must define function showOverview"
     end_func = source.find("\n    function ", pos + 1)
     if end_func == -1:
         end_func = source.find("\n    App.applyLocalTicker", pos + 1)
     body = source[pos:end_func] if end_func != -1 else source[pos:]
     assert "is_classified" in body, (
-        "applyLocalTicker must check current.is_classified to decide "
-        "whether to increment kpi-classified"
+        "showOverview must check current.is_classified to decide "
+        "whether to live-target kpi-classified"
     )
     assert "is_uncategorized" in body, (
-        "applyLocalTicker must check current.is_uncategorized to decide "
-        "whether to increment kpi-uncategorized"
+        "showOverview must check current.is_uncategorized to decide "
+        "whether to live-target kpi-uncategorized"
     )

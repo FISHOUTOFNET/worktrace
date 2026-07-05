@@ -8,18 +8,14 @@
     function showOverview(overview) {
         if (!overview) return;
         App.commitPageActiveSpanClock(overview, "overview");
-        App.registerCurrentActivityClock(overview, { source: "page_model", page: "overview" });
         App.lastOverviewSnapshot = overview;
         var nowMs = Date.now();
-        var clock = App.getActiveLiveClock();
-        var activeElapsedAtSample = App.activeElapsedAtRenderFromPayload(overview, "overview", nowMs);
-        var activeElapsedAtRender = App.activeElapsedNow(clock, nowMs);
+        var clock = App.getActiveLiveClock("overview");
+        var projectClock = clock && (clock.project_duration_live === true || clock.is_project_duration_live === true);
+        var activeElapsedNowValue = App.computeActiveElapsedNow(clock, nowMs);
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-projects").textContent = String(overview.project_count || 0);
         var current = overview.current_activity || {};
-        var currentClock = overview.current_activity_clock || (
-            overview.activity_display_model ? overview.activity_display_model.current_activity_clock : null
-        );
         var currentIsUncategorized = true;
         if (current.is_classified === true) {
             currentIsUncategorized = false;
@@ -29,38 +25,28 @@
             currentIsUncategorized = null;
         }
         var totalEl = document.getElementById("kpi-total");
-        var totalProjection = clock
-            ? App.anchoredSecondsAtRender(
-                App.kpiBaseSeconds(overview, "today_total_seconds"),
-                activeElapsedAtSample,
-                clock,
-                nowMs
-            )
-            : { seconds: App.kpiBaseSeconds(overview, "today_total_seconds") };
-        if (clock) {
-            App.setLiveProjectionAnchor(totalEl, totalProjection.seconds, activeElapsedAtRender, "overview-total");
+        var totalBase = App.kpiBaseSeconds(overview, "today_total_seconds");
+        var totalSeconds = projectClock
+            ? App.projectFromDisplayBase(totalBase, activeElapsedNowValue)
+            : (parseInt(overview.today_total_seconds, 10) || totalBase);
+        if (projectClock) {
+            App.setLiveProjectionAnchor(totalEl, totalBase, "overview-total", "overview-total");
         } else {
             App.clearLiveProjectionAnchor(totalEl);
         }
         App.renderDurationProjected(
             totalEl,
-            totalProjection.seconds,
+            totalSeconds,
             "overview-total",
             { allowDecrease: false }
         );
         var classifiedSeconds = App.kpiBaseSeconds(overview, "classified_seconds");
-        if (currentIsUncategorized === false && clock) {
-            var classifiedProjection = App.anchoredSecondsAtRender(
-                classifiedSeconds,
-                activeElapsedAtSample,
-                clock,
-                nowMs
-            );
-            classifiedSeconds = classifiedProjection.seconds;
+        if (currentIsUncategorized === false && projectClock) {
+            classifiedSeconds = App.projectFromDisplayBase(classifiedSeconds, activeElapsedNowValue);
             App.setLiveProjectionAnchor(
                 document.getElementById("kpi-classified"),
-                classifiedProjection.seconds,
-                activeElapsedAtRender,
+                App.kpiBaseSeconds(overview, "classified_seconds"),
+                "overview-classified",
                 "overview-classified"
             );
         } else {
@@ -73,18 +59,12 @@
             { allowDecrease: false }
         );
         var uncategorizedSeconds = App.kpiBaseSeconds(overview, "uncategorized_seconds");
-        if (currentIsUncategorized === true && clock) {
-            var uncategorizedProjection = App.anchoredSecondsAtRender(
-                uncategorizedSeconds,
-                activeElapsedAtSample,
-                clock,
-                nowMs
-            );
-            uncategorizedSeconds = uncategorizedProjection.seconds;
+        if (currentIsUncategorized === true && projectClock) {
+            uncategorizedSeconds = App.projectFromDisplayBase(uncategorizedSeconds, activeElapsedNowValue);
             App.setLiveProjectionAnchor(
                 document.getElementById("kpi-uncategorized"),
-                uncategorizedProjection.seconds,
-                activeElapsedAtRender,
+                App.kpiBaseSeconds(overview, "uncategorized_seconds"),
+                "overview-uncategorized",
                 "overview-uncategorized"
             );
         } else {
@@ -99,9 +79,9 @@
         App.renderCurrentActivityElement(
             document.getElementById("current-activity"),
             current,
-            App.getActiveCurrentActivityClock() || currentClock,
             "overview"
         );
+        App.applyLocalTicker();
     }
     App.showOverview = showOverview;
 
@@ -109,7 +89,6 @@
         // Defensive page-model commit of the same sample keeps the Overview
         // active span page-scoped while rows store only projection offsets.
         App.commitPageActiveSpanClock(recentResult, "overview");
-        App.registerCurrentActivityClock(recentResult, { source: "page_model", page: "overview" });
         // Structural cache only — never a live-seconds source.
         App.lastRecentData = recentResult;
         var listEl = document.getElementById("recent-list");
@@ -120,8 +99,7 @@
         var html = "";
         var nowMs = Date.now();
         var activeClock = App.getActiveLiveClock("overview");
-        var activeElapsedAtSample = App.activeElapsedAtRenderFromPayload(recentResult, "overview", nowMs);
-        var activeElapsedAtRender = App.activeElapsedNow(activeClock, nowMs);
+        var activeElapsedNowValue = App.computeActiveElapsedNow(activeClock, nowMs);
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
             var inProgress = item.is_in_progress === true || (!item.end_time && item.is_in_progress !== false);
@@ -140,14 +118,10 @@
             // own base + active elapsed offset, not a row-owned clock.
             var spanId = item.display_span_id || "";
             var continuityKey = spanId ? App.liveContinuityKey(item, "recent") : "";
+            var displayBaseSec = 0;
             var initialSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
             if (spanId && activeClock) {
-                initialSec = App.projectFromActiveElapsed(
-                    initialSec,
-                    activeElapsedAtSample,
-                    activeClock,
-                    nowMs
-                );
+                initialSec = App.projectFromDisplayBase(displayBaseSec, activeElapsedNowValue);
             }
             var prevEntry = continuityKey ? App._monotonicRenderState[continuityKey] : null;
             if (prevEntry && typeof prevEntry.lastSeconds === "number" && initialSec < prevEntry.lastSeconds) {
@@ -158,9 +132,6 @@
                 : (item.duration || "00:00:00");
             html += '<div class="' + cls + '" data-recent-index="' + i + '"'
                 + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
-                + (spanId ? ' data-live-base-seconds="' + initialSec + '"' : '')
-                + (spanId ? ' data-active-elapsed-at-render="' + activeElapsedAtRender + '"' : '')
-                + (continuityKey ? ' data-live-continuity-key="' + App.escapeHtml(continuityKey) + '"' : '')
                 + ' data-duration-seconds="' + (isNaN(durSec) ? 0 : durSec) + '"'
                 + '>'
                 + '<div>'
@@ -168,7 +139,15 @@
                 + '<div class="recent-item-time">' + App.escapeHtml(timeRange) + '</div>'
                 + '<div class="recent-item-status">' + App.escapeHtml(item.status || "") + '</div>'
                 + '</div>'
-                + '<div class="recent-item-duration">' + App.escapeHtml(durText) + '</div>'
+                + '<div class="recent-item-duration"'
+                + (spanId ? ' data-live-duration-target="1"' : '')
+                + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
+                + (spanId ? ' data-display-base-seconds="' + displayBaseSec + '"' : '')
+                + (spanId ? ' data-live-base-seconds="' + displayBaseSec + '"' : '')
+                + (spanId ? ' data-live-role="recent"' : '')
+                + (continuityKey ? ' data-live-continuity-key="' + App.escapeHtml(continuityKey) + '"' : '')
+                + ' data-duration-seconds="' + initialSec + '">'
+                + App.escapeHtml(durText) + '</div>'
                 + '</div>';
             // Seed monotonic state by the SAME continuity key the ticker reads.
             if (continuityKey) {
@@ -176,6 +155,7 @@
             }
         }
         listEl.innerHTML = html;
+        App.applyLocalTicker();
     }
     App.showRecent = showRecent;
 

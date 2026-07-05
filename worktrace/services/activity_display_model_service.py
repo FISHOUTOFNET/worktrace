@@ -224,47 +224,6 @@ def classify_display_live_state(
 # Live-clock construction
 
 
-def _build_current_activity_clock(
-    snapshot: dict[str, Any] | None,
-    display_live_state: str,
-    summary: dict[str, Any],
-) -> dict[str, Any]:
-    """Return the current resource elapsed source.
-
-    This is not a second project clock. It is the single active resource
-    elapsed sample used by the Current Activity area. Project/history rows
-    receive their own display-base projection via ``live_clock``.
-    """
-    if not snapshot:
-        return _build_suppressed_live_clock()
-    elapsed_at_sample = int(snapshot_elapsed_seconds(snapshot))
-    live_started_at = int(summary.get("live_started_at_epoch_ms") or 0)
-    current_live = bool(
-        display_live_state not in ("none", "paused")
-        and live_started_at > 0
-    )
-    identity_hash = _current_resource_identity_hash(snapshot)
-    display_span_id = ("current:" + identity_hash) if identity_hash else ""
-    stable_key = "current|" + _stable_live_key(snapshot)
-    return {
-        "display_span_id": display_span_id,
-        "current_activity_display_span_id": display_span_id,
-        "stable_live_key": stable_key,
-        "stable_live_key_hash": identity_hash,
-        "current_resource_identity_hash": identity_hash,
-        "live_state": display_live_state,
-        "live_started_at_epoch_ms": live_started_at,
-        "carry_seconds": 0,
-        "duration_seconds_at_sample": elapsed_at_sample,
-        "active_elapsed_at_sample": elapsed_at_sample,
-        "current_elapsed_at_sample": elapsed_at_sample,
-        "project_duration_live": False,
-        "current_duration_live": current_live,
-        "is_live": current_live,
-        "is_project_duration_live": False,
-    }
-
-
 def _current_resource_identity_hash(snapshot: dict[str, Any] | None) -> str:
     """Hash current resource identity + start_time for UI continuity.
 
@@ -379,7 +338,6 @@ def _build_current_activity_display(
     anchor: dict[str, Any] | None,
     summary: dict[str, Any],
     live_clock: dict[str, Any],
-    current_activity_clock: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the current-activity display block.
 
@@ -430,22 +388,23 @@ def _build_current_activity_display(
             "project_transition_pending": False,
             "display_span_id": "",
             "live_clock": live_clock,
-            "current_activity_clock": current_activity_clock,
+            "current_activity_display_span_id": "",
+            "display_base_seconds": 0,
         }
 
     # Start from the existing summary and override live clock / elapsed fields.
     display = dict(summary)
     display["live_clock"] = live_clock
-    display["current_activity_clock"] = current_activity_clock
     display["display_span_id"] = live_clock.get("display_span_id") or ""
-    display["current_activity_display_span_id"] = (
-        current_activity_clock.get("display_span_id") or ""
-    )
+    identity_hash = _current_resource_identity_hash(snapshot)
+    display["current_activity_display_span_id"] = ("current:" + identity_hash) if identity_hash else ""
+    display["current_resource_identity_hash"] = identity_hash
     display["live_state"] = display_live_state
     display["live_started_at_epoch_ms"] = int(
-        current_activity_clock.get("live_started_at_epoch_ms") or 0
+        live_clock.get("live_started_at_epoch_ms") or 0
     )
-    display["carry_seconds"] = int(current_activity_clock.get("carry_seconds") or 0)
+    display["carry_seconds"] = 0
+    display["display_base_seconds"] = 0
     current_elapsed = int(snapshot_elapsed_seconds(snapshot))
     display["resource_elapsed_seconds"] = current_elapsed
     display["elapsed_seconds"] = current_elapsed
@@ -780,22 +739,33 @@ def apply_live_span_to_row(
         )
         live_delta_at_sample = max(0, active_elapsed_at_sample)
         projected = row_raw + live_delta_at_sample
+        display_base_seconds = max(0, int(projected) - active_elapsed_at_sample)
         row["duration_seconds"] = int(projected)
         row["duration"] = format_duration(projected)
-        row["live_base_seconds"] = int(projected)
+        row["display_base_seconds"] = int(display_base_seconds)
+        row["live_base_seconds"] = int(display_base_seconds)
     elif state == "persisted_open":
         # Subtract anchor's DB duration so session / recent rows do not
         # double-count the open activity already written to the DB.
         anchor_base = int(span.get("live_anchor_base_seconds") or 0)
         live_delta_at_sample = max(0, duration_at_sample - anchor_base)
         projected = row_raw + live_delta_at_sample
+        current_elapsed_at_sample = int(
+            live_clock.get("current_elapsed_at_sample")
+            or live_clock.get("active_elapsed_at_sample")
+            or 0
+        )
+        display_base_seconds = max(0, int(projected) - current_elapsed_at_sample)
         row["duration_seconds"] = int(projected)
         row["duration"] = format_duration(projected)
-        row["live_base_seconds"] = int(projected)
+        row["display_base_seconds"] = int(display_base_seconds)
+        row["live_base_seconds"] = int(display_base_seconds)
     else:
+        display_base_seconds = int(live_clock.get("display_base_seconds") or 0)
         row["duration_seconds"] = duration_at_sample
         row["duration"] = format_duration(duration_at_sample)
-        row["live_base_seconds"] = int(duration_at_sample)
+        row["display_base_seconds"] = display_base_seconds
+        row["live_base_seconds"] = display_base_seconds
     row["live_delta_eligible"] = True
     row["is_live_projected"] = True
     row["is_in_progress"] = True
@@ -888,10 +858,6 @@ def build_activity_display_model(
         live_clock = _build_project_live_clock(
             snapshot, display_live_state, anchor, summary, report_date, today or ""
         )
-    current_activity_clock = _build_current_activity_clock(
-        snapshot, display_live_state, summary
-    )
-
     display_spans: list[dict[str, Any]] = []
     if is_today and display_live_state in ("virtual_pending", "absorbed_pending", "persisted_open"):
         display_spans.append(
@@ -901,7 +867,7 @@ def build_activity_display_model(
         )
 
     current_activity = _build_current_activity_display(
-        snapshot, display_live_state, anchor, summary, live_clock, current_activity_clock
+        snapshot, display_live_state, anchor, summary, live_clock
     )
     display_structural_signature = _build_display_structural_signature(
         snapshot,
@@ -922,7 +888,6 @@ def build_activity_display_model(
         "is_today": bool(is_today),
         "sample_id": sample_id,
         "live_clock": live_clock,
-        "current_activity_clock": current_activity_clock,
         "current_activity": current_activity,
         "display_spans": display_spans,
         "display_structural_signature": display_structural_signature,

@@ -1484,19 +1484,19 @@ def test_core_js_full_reconcile_does_not_unconditionally_refresh_overview() -> N
     )
 
 
-def test_overview_js_registers_with_page_scope() -> None:
-    """Section 七: ``overview.js`` MUST register live clocks with
-    ``page: "overview"`` so the clock is scoped to the Overview page."""
+def test_overview_js_commits_with_page_scope() -> None:
+    """Section 七: ``overview.js`` MUST commit live clocks with
+    explicit Overview page scope."""
     source = (_JS_DIR / "overview.js").read_text(encoding="utf-8")
-    assert 'page: "overview"' in source, (
-        "overview.js must register live clocks with page: \"overview\""
+    assert 'commitPageActiveSpanClock(overview, "overview")' in source, (
+        "overview.js must commit live clocks with page scope \"overview\""
     )
 
 
-def test_timeline_js_registers_with_page_scope() -> None:
-    """Section 七: ``timeline.js`` MUST register live clocks with
-    ``page: "timeline"`` so the clock is scoped to the Timeline page."""
+def test_timeline_js_commits_with_page_scope() -> None:
+    """Section 七: ``timeline.js`` MUST commit live clocks with
+    explicit Timeline page scope."""
     source = (_JS_DIR / "timeline.js").read_text(encoding="utf-8")
-    assert 'page: "timeline"' in source, (
-        "timeline.js must register live clocks with page: \"timeline\""
+    assert 'commitPageActiveSpanClock(data, "timeline")' in source, (
+        "timeline.js must commit live clocks with page scope \"timeline\""
     )

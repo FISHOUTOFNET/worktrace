@@ -9,30 +9,26 @@
     function showTimeline(data) {
         if (!data) return;
         App.commitPageActiveSpanClock(data, "timeline");
-        App.registerCurrentActivityClock(data, { source: "page_model", page: "timeline" });
         App.lastTimelineData = data;
         var nowMs = Date.now();
-        var clock = App.getActiveLiveClock();
-        var activeElapsedAtSample = App.activeElapsedAtRenderFromPayload(data, "timeline", nowMs);
-        var activeElapsedAtRender = App.activeElapsedNow(clock, nowMs);
+        var clock = App.getActiveLiveClock("timeline");
+        var projectClock = clock && (clock.project_duration_live === true || clock.is_project_duration_live === true);
+        var activeElapsedNowValue = App.computeActiveElapsedNow(clock, nowMs);
         var dateInput = document.getElementById("timeline-date-input");
         if (dateInput) dateInput.value = data.date || "";
         var todayStrForTotal = App.localTodayStr();
         var isTodayForTotal = !data.date || data.date === todayStrForTotal || data.date === "--";
         if (isTodayForTotal) {
-            var totalProjection = clock
-                ? App.anchoredSecondsAtRender(
-                    parseInt(data.today_total_seconds, 10) || 0,
-                    activeElapsedAtSample,
-                    clock,
-                    nowMs
-                )
-                : { seconds: parseInt(data.today_total_seconds, 10) || 0 };
-            if (clock) {
+            var totalBase = parseInt(data.today_total_base_seconds, 10);
+            if (isNaN(totalBase)) totalBase = parseInt(data.today_total_seconds, 10) || 0;
+            var totalSeconds = projectClock
+                ? App.projectFromDisplayBase(totalBase, activeElapsedNowValue)
+                : (parseInt(data.today_total_seconds, 10) || totalBase);
+            if (projectClock) {
                 App.setLiveProjectionAnchor(
                     document.getElementById("timeline-total"),
-                    totalProjection.seconds,
-                    activeElapsedAtRender,
+                    totalBase,
+                    "timeline-total",
                     "timeline-total"
                 );
             } else {
@@ -40,7 +36,7 @@
             }
             App.renderDurationProjected(
                 document.getElementById("timeline-total"),
-                totalProjection.seconds,
+                totalSeconds,
                 "timeline-total",
                 { allowDecrease: false }
             );
@@ -56,7 +52,6 @@
         App.renderCurrentActivityElement(
             document.getElementById("timeline-current"),
             data.current_activity || {},
-            App.getActiveCurrentActivityClock() || data.current_activity_clock || (data.activity_display_model ? data.activity_display_model.current_activity_clock : null),
             "timeline"
         );
 
@@ -74,6 +69,7 @@
             App.selectedSessionId = null;
             App.selectedSessionLiveKey = null;
             clearEditPanel();
+            App.applyLocalTicker();
             return;
         }
 
@@ -108,14 +104,11 @@
             // Timeline page active elapsed sample.
             var sessSpanId = s.display_span_id || "";
             var sessContinuityKey = sessSpanId ? App.liveContinuityKey(s, "session") : "";
+            var sessionDisplayBase = parseInt(s.display_base_seconds, 10);
+            if (isNaN(sessionDisplayBase)) sessionDisplayBase = (!isNaN(sDurSec) && sDurSec >= 0) ? sDurSec : 0;
             var initialSec = (!isNaN(sDurSec) && sDurSec >= 0) ? sDurSec : 0;
-            if (sessSpanId && clock) {
-                initialSec = App.projectFromActiveElapsed(
-                    initialSec,
-                    activeElapsedAtSample,
-                    clock,
-                    nowMs
-                );
+            if (sessSpanId && projectClock) {
+                initialSec = App.projectFromDisplayBase(sessionDisplayBase, activeElapsedNowValue);
             }
             var sessPrev = sessContinuityKey ? App._monotonicRenderState[sessContinuityKey] : null;
             if (sessPrev && typeof sessPrev.lastSeconds === "number" && initialSec < sessPrev.lastSeconds) {
@@ -127,9 +120,6 @@
             html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
                 + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
                 + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
-                + (sessSpanId ? ' data-live-base-seconds="' + initialSec + '"' : '')
-                + (sessSpanId ? ' data-active-elapsed-at-render="' + activeElapsedAtRender + '"' : '')
-                + (sessContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(sessContinuityKey) + '"' : '')
                 + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startTimeOnly) + '｜' + App.escapeHtml(sDurText) + '"'
                 + '>'
                 + '<div class="timeline-item-main">'
@@ -138,7 +128,14 @@
                 + (s.has_duration_override ? '<div class="timeline-item-adjusted">已修正</div>' : '')
                 + '</div>'
                 + '<div class="timeline-item-side">'
-                + '<div class="timeline-item-duration" data-duration-seconds="' + (isNaN(sDurSec) ? 0 : sDurSec) + '">' + App.escapeHtml(sDurText) + '</div>'
+                + '<div class="timeline-item-duration"'
+                + (sessSpanId ? ' data-live-duration-target="1"' : '')
+                + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
+                + (sessSpanId ? ' data-display-base-seconds="' + sessionDisplayBase + '"' : '')
+                + (sessSpanId ? ' data-live-base-seconds="' + sessionDisplayBase + '"' : '')
+                + (sessSpanId ? ' data-live-role="timeline-session"' : '')
+                + (sessContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(sessContinuityKey) + '"' : '')
+                + ' data-duration-seconds="' + initialSec + '">' + App.escapeHtml(sDurText) + '</div>'
                 + '<div class="timeline-item-count">' + App.escapeHtml(String(s.event_count || 0) + " 条") + '</div>'
                 + '</div>'
                 + '</div>';
@@ -151,6 +148,7 @@
             var ck = sessionContinuityKeys[ci];
             App._monotonicRenderState[ck.key] = { lastSeconds: ck.sec };
         }
+        App.applyLocalTicker();
 
         var items = listEl.querySelectorAll(".timeline-item");
         for (var j = 0; j < items.length; j++) {
@@ -304,20 +302,12 @@
         if (App.activityTimeSaving || App.activitySplitSaving) {
             return;
         }
-        App.registerCurrentActivityClock(data, { source: "partial_details", page: "timeline" });
         var nowMs = Date.now();
         var activeClock = App.getActiveLiveClock("timeline");
-        var activeElapsedAtSample = App.activeElapsedAtRenderFromPayload(data, "timeline", nowMs);
-        var activeElapsedAtRender = App.activeElapsedNow(activeClock, nowMs);
+        var projectClock = activeClock && (activeClock.project_duration_live === true || activeClock.is_project_duration_live === true);
+        var activeElapsedNowValue = App.computeActiveElapsedNow(activeClock, nowMs);
         if (App.lastTimelineData) {
             App.lastTimelineData.current_activity = data.current_activity || App.lastTimelineData.current_activity || {};
-            App.lastTimelineData.current_activity_clock = data.current_activity_clock || App.lastTimelineData.current_activity_clock || null;
-            App.renderCurrentActivityElement(
-                document.getElementById("timeline-current"),
-                App.lastTimelineData.current_activity,
-                App.getActiveCurrentActivityClock(),
-                "timeline"
-            );
         }
         // Structural cache only — used for re-render on page switch /
         // edit-guard checks. Live seconds come from DOM anchors plus the
@@ -356,14 +346,11 @@
             // own offset but do not replace the Timeline page active clock.
             var detailSpanId = a.display_span_id || "";
             var detailContinuityKey = detailSpanId ? App.liveContinuityKey(a, "detail") : "";
+            var detailDisplayBase = parseInt(a.display_base_seconds, 10);
+            if (isNaN(detailDisplayBase)) detailDisplayBase = (!isNaN(aDurSec) && aDurSec >= 0) ? aDurSec : 0;
             var initialSec = (!isNaN(aDurSec) && aDurSec >= 0) ? aDurSec : 0;
-            if (detailSpanId && activeClock) {
-                initialSec = App.projectFromActiveElapsed(
-                    initialSec,
-                    activeElapsedAtSample,
-                    activeClock,
-                    nowMs
-                );
+            if (detailSpanId && projectClock) {
+                initialSec = App.projectFromDisplayBase(detailDisplayBase, activeElapsedNowValue);
             }
             var detailPrev = detailContinuityKey ? App._monotonicRenderState[detailContinuityKey] : null;
             if (detailPrev && typeof detailPrev.lastSeconds === "number" && initialSec < detailPrev.lastSeconds) {
@@ -375,15 +362,19 @@
             html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
                 + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
                 + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
-                + (detailSpanId ? ' data-live-base-seconds="' + initialSec + '"' : '')
-                + (detailSpanId ? ' data-active-elapsed-at-render="' + activeElapsedAtRender + '"' : '')
-                + (detailContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(detailContinuityKey) + '"' : '')
                 + ' data-detail-index="' + i + '"'
                 + '>'
                 + '<div class="detail-item-time">' + App.escapeHtml(startTimeOnly) + '</div>'
                 + '<div class="detail-item-name" title="' + App.escapeHtml(displayName) + '">' + App.escapeHtml(displayName) + '</div>'
                 + '<div class="detail-item-project" title="' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '">' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '</div>'
-                + '<div class="detail-item-duration" data-duration-seconds="' + (isNaN(aDurSec) ? 0 : aDurSec) + '">' + App.escapeHtml(aDurText) + '</div>'
+                + '<div class="detail-item-duration"'
+                + (detailSpanId ? ' data-live-duration-target="1"' : '')
+                + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
+                + (detailSpanId ? ' data-display-base-seconds="' + detailDisplayBase + '"' : '')
+                + (detailSpanId ? ' data-live-base-seconds="' + detailDisplayBase + '"' : '')
+                + (detailSpanId ? ' data-live-role="timeline-detail"' : '')
+                + (detailContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(detailContinuityKey) + '"' : '')
+                + ' data-duration-seconds="' + initialSec + '">' + App.escapeHtml(aDurText) + '</div>'
                 + '</div>';
             // Collect this row's continuity key so the monotonic state can
             // be seeded after the innerHTML swap.
@@ -399,6 +390,7 @@
             if (!detailKey) continue;
             App._monotonicRenderState[detailKey] = { lastSeconds: dk.sec };
         }
+        App.applyLocalTicker();
     }
     App.renderSessionDetails = renderSessionDetails;
 

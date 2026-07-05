@@ -414,10 +414,7 @@ def test_current_activity_uses_resource_elapsed_project_rows_use_projection():
     current = model["current_activity"]
     assert current["elapsed_seconds"] == 12
     assert current["resource_elapsed_seconds"] == 12
-    assert model["current_activity_clock"]["duration_seconds_at_sample"] == 12
-    assert model["current_activity_clock"]["carry_seconds"] == 0
-    assert model["current_activity_clock"]["project_duration_live"] is False
-    assert model["current_activity_clock"]["display_span_id"] != model["live_clock"]["display_span_id"]
+    assert "current_activity_clock" not in model
     assert model["live_clock"]["duration_seconds_at_sample"] == 312
     assert model["live_clock"]["display_base_seconds"] == 300
     assert model["live_clock"]["current_elapsed_at_sample"] == 12
@@ -446,8 +443,7 @@ def test_persisted_open_current_elapsed_and_project_projection_no_double_count()
     assert model["live_clock"]["live_state"] == "persisted_open"
     assert model["current_activity"]["elapsed_seconds"] == 12
     assert model["current_activity"]["resource_elapsed_seconds"] == 12
-    assert model["current_activity_clock"]["duration_seconds_at_sample"] == 12
-    assert model["current_activity_clock"]["carry_seconds"] == 0
+    assert "current_activity_clock" not in model
     assert model["live_clock"]["duration_seconds_at_sample"] == 312
     assert model["live_clock"]["display_base_seconds"] == 300
     assert int(overlaid["duration_seconds"]) == 312
@@ -472,12 +468,10 @@ def test_virtual_pending_to_persisted_open_same_resource_current_clock_continuit
     persisted_model = build_activity_display_model(report_date=today, today=today)
 
     assert (
-        persisted_model["current_activity_clock"]["display_span_id"]
-        == virtual_model["current_activity_clock"]["display_span_id"]
+        persisted_model["current_activity"]["current_activity_display_span_id"]
+        == virtual_model["current_activity"]["current_activity_display_span_id"]
     )
     assert persisted_model["current_activity"]["elapsed_seconds"] == 30
-    assert persisted_model["current_activity_clock"]["duration_seconds_at_sample"] == 30
-    assert persisted_model["current_activity_clock"]["carry_seconds"] == 0
     assert persisted_model["live_clock"]["duration_seconds_at_sample"] == 30
 
 
@@ -508,10 +502,9 @@ def test_window_switch_resets_current_activity_elapsed_not_project_projection():
     assert old_model["current_activity"]["elapsed_seconds"] == 300
     assert new_model["current_activity"]["elapsed_seconds"] == 1
     assert new_model["current_activity"]["resource_elapsed_seconds"] == 1
-    assert new_model["current_activity_clock"]["duration_seconds_at_sample"] == 1
     assert (
-        new_model["current_activity_clock"]["display_span_id"]
-        != old_model["current_activity_clock"]["display_span_id"]
+        new_model["current_activity"]["current_activity_display_span_id"]
+        != old_model["current_activity"]["current_activity_display_span_id"]
     )
     assert new_model["live_clock"]["duration_seconds_at_sample"] == 1
 

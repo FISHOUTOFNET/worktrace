@@ -1203,7 +1203,8 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
     )
     assert detail_row is not None
     assert detail_row["duration_seconds_at_sample"] == 240
-    assert detail_row["live_base_seconds"] == 240
+    assert detail_row["live_base_seconds"] == 30
+    assert detail_row["live_base_seconds"] + overview["live_clock"]["current_elapsed_at_sample"] == 240
     assert detail_row["display_span_id"] == expected_span_id
 
     # Recent matching row must also carry the same span id and a live base.
@@ -1213,7 +1214,7 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
     )
     assert recent_row is not None
     assert recent_row["display_span_id"] == expected_span_id
-    assert recent_row["live_base_seconds"] == 240
+    assert recent_row["live_base_seconds"] == 0
 
     # Timeline matching session row must also carry the same span id.
     timeline_session = next(
@@ -1239,9 +1240,9 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
 def test_session_base_differs_from_live_activity_duration(bridge):
     """A session row with a closed activity (100s DB) AND a
     ``persisted_open`` activity (DB duration 0, live sample 240s) must
-    have ``live_base_seconds`` = 340 (session's full sample), NOT 240.
+    have ``live_base_seconds`` = 130 (session static base), NOT 240.
     The detail row for the open activity must have
-    ``live_base_seconds == 240``. Both share the same live delta, so
+    ``live_base_seconds == 30``. Both add the same current elapsed, so
     after +5s: session reads 345, detail reads 245. Session must NEVER
     be overwritten to 245.
 
@@ -1303,13 +1304,13 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     apply_live_span_to_row(session_row, span)
     apply_live_span_to_row(detail_row, span)
 
-    assert detail_row["live_base_seconds"] == 240, (
+    assert detail_row["live_base_seconds"] == 30, (
         "detail row live_base_seconds must equal the open activity's "
-        "sample duration (240)"
+        "static base (extra_seconds=30)"
     )
-    assert session_row["live_base_seconds"] == 340, (
-        "session row live_base_seconds must equal the session's full sample "
-        "duration (340 = 100 closed DB + 240 live delta), NOT the live "
+    assert session_row["live_base_seconds"] == 130, (
+        "session row live_base_seconds must equal the session's static base "
+        "(130 = 100 closed DB + 30 live base), NOT the live "
         "activity's own duration (240). This is the regression guard against "
         "the old contract that overwrote session durations with "
         "liveSeconds(clock)."
@@ -1319,13 +1320,13 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     assert session_row["stable_live_key_hash"] == detail_row["stable_live_key_hash"]
     assert session_row["duration_seconds_at_sample"] == 240
 
-    # Ticker: delta = max(0, live_span_now - 240). At sample time delta=0;
-    # at +5s delta=5. Session renders 340→345, detail renders 240→245.
-    delta_at_sample = 0
+    # Ticker: both rows add the same current elapsed. At sample time
+    # current_elapsed=210; at +5s it is 215.
+    delta_at_sample = 210
     assert session_row["live_base_seconds"] + delta_at_sample == 340
     assert detail_row["live_base_seconds"] + delta_at_sample == 240
 
-    delta_plus_5 = 5
+    delta_plus_5 = 215
     assert session_row["live_base_seconds"] + delta_plus_5 == 345, (
         "session row after +5s must be 345, NOT 245 — the session must not "
         "be overwritten to the live activity's own duration"
@@ -1444,10 +1445,11 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
         "absorbed_pending must keep the anchor row's project identity"
     )
 
-    # live_base = anchor_raw(60) + pending_at_sample(10) = 70.
-    assert recent_row["live_base_seconds"] == 70, (
-        f"absorbed_pending live_base_seconds must equal anchor_raw (60) + "
-        f"pending_at_sample (10) = 70, got {recent_row['live_base_seconds']}"
+    # live_base = anchor_raw(60); pending/current elapsed is added by the
+    # single live delta.
+    assert recent_row["live_base_seconds"] == 0, (
+        f"Overview recent live_base_seconds must be current base 0; got "
+        f"{recent_row['live_base_seconds']}"
     )
 
     # DB must NOT be written: the anchor row's stored duration is still 60.
@@ -1498,17 +1500,13 @@ def test_absorbed_pending_current_clock_uses_resource_elapsed(bridge):
 
     model = build_activity_display_model()
     current = model["current_activity"]
-    current_clock = model["current_activity_clock"]
     project_clock = model["live_clock"]
     span = get_live_span(model)
     assert span is not None
 
     assert current["elapsed_seconds"] == 5
     assert current["resource_elapsed_seconds"] == 5
-    assert current_clock["duration_seconds_at_sample"] == 5
-    assert current_clock["carry_seconds"] == 0
-    assert current_clock["display_span_id"] != project_clock["display_span_id"]
-    assert current_clock["project_duration_live"] is False
+    assert "current_activity_clock" not in model
     assert project_clock["duration_seconds_at_sample"] == 125
     assert project_clock["display_base_seconds"] == 120
     assert project_clock["current_elapsed_at_sample"] == 5
@@ -1520,7 +1518,7 @@ def test_absorbed_pending_current_clock_uses_resource_elapsed(bridge):
     assert activity_service.get_activity(anchor_aid)["duration_seconds"] == 120
 
 
-def test_persisted_open_current_clock_uses_resource_elapsed_and_project_extra(bridge):
+def test_persisted_open_live_clock_uses_resource_elapsed_and_project_extra(bridge):
     from worktrace.services.activity_display_model_service import (
         apply_live_span_to_row,
         build_activity_display_model,
@@ -1540,17 +1538,13 @@ def test_persisted_open_current_clock_uses_resource_elapsed_and_project_extra(br
 
     model = build_activity_display_model()
     current = model["current_activity"]
-    current_clock = model["current_activity_clock"]
     project_clock = model["live_clock"]
     span = get_live_span(model)
     assert span is not None
 
     assert current["elapsed_seconds"] == 35
     assert current["resource_elapsed_seconds"] == 35
-    assert current_clock["duration_seconds_at_sample"] == 35
-    assert current_clock["carry_seconds"] == 0
-    assert current_clock["display_span_id"] != project_clock["display_span_id"]
-    assert current_clock["project_duration_live"] is False
+    assert "current_activity_clock" not in model
     assert project_clock["duration_seconds_at_sample"] == 45
     assert project_clock["display_base_seconds"] == 10
     assert project_clock["current_elapsed_at_sample"] == 35
@@ -1561,7 +1555,7 @@ def test_persisted_open_current_clock_uses_resource_elapsed_and_project_extra(br
 
 
 @pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR])
-def test_system_current_activity_clock_contract_and_display_safe(bridge, status):
+def test_system_current_activity_live_clock_contract_and_display_safe(bridge, status):
     from worktrace.services.activity_display_model_service import build_activity_display_model
 
     _set_snapshot(
@@ -1575,8 +1569,9 @@ def test_system_current_activity_clock_contract_and_display_safe(bridge, status)
     )
     model = build_activity_display_model()
     expected_current_live = status != STATUS_PAUSED
-    assert model["current_activity_clock"]["current_duration_live"] is expected_current_live
-    assert model["current_activity_clock"]["is_live"] is expected_current_live
+    assert "current_activity_clock" not in model
+    assert model["live_clock"]["current_duration_live"] is expected_current_live
+    assert model["live_clock"]["is_live"] is expected_current_live
     assert model["live_clock"]["is_project_duration_live"] is False
     assert model["live_clock"]["project_duration_live"] is False
     assert model["display_spans"] == []
@@ -1625,7 +1620,7 @@ def test_idle_blocks_display_absorbed_pending(bridge):
     assert model["display_spans"][0]["anchor_activity_id"] == 0
 
 
-def test_new_activity_first_frame_registers_current_clock(bridge):
+def test_new_activity_first_frame_uses_unified_live_clock(bridge):
     from worktrace.services.activity_display_model_service import build_activity_display_model
 
     today = timeline_service.get_default_report_date()
@@ -1640,9 +1635,10 @@ def test_new_activity_first_frame_registers_current_clock(bridge):
     model = build_activity_display_model(report_date=today, today=today)
 
     assert model["current_activity"]["live_state"] == "virtual_pending"
-    assert model["current_activity_clock"]["current_duration_live"] is True
-    assert model["current_activity_clock"]["duration_seconds_at_sample"] == 0
-    assert model["current_activity_clock"]["live_started_at_epoch_ms"] > 0
+    assert "current_activity_clock" not in model
+    assert model["live_clock"]["current_duration_live"] is True
+    assert model["live_clock"]["current_elapsed_at_sample"] == 0
+    assert model["live_clock"]["live_started_at_epoch_ms"] > 0
 
 
 # Boundary-aware absorption contract: a ``<30s`` pending snapshot MUST
@@ -1721,6 +1717,8 @@ def test_absorbed_pending_does_not_cross_restart_boundary(bridge):
         # ``duration_seconds`` (no inflation by pending projection).
         live_base = item.get("live_base_seconds")
         if live_base is not None:
+            if item.get("display_span_id") == overview["live_clock"]["display_span_id"]:
+                continue
             assert int(live_base) == int(item.get("duration_seconds") or 0), (
                 "anchor row duration must NOT be inflated by pending "
                 "projection when a boundary blocks absorption"
@@ -2388,7 +2386,7 @@ def test_overview_materializes_display_only_fallback_when_live_overlay_missing(b
     assert row["editable"] is False
     assert row["live_contract_fallback"] is True
     assert row["live_contract_reason"] in ("db_row_missing", "live_overlay_mismatch")
-    assert row["live_base_seconds"] == row["duration_seconds"]
+    assert row["live_base_seconds"] + overview["live_clock"]["current_elapsed_at_sample"] == row["duration_seconds"]
 
 
 def test_timeline_and_details_materialize_live_fallback_when_overlay_missing(bridge):
@@ -2420,7 +2418,7 @@ def test_timeline_and_details_materialize_live_fallback_when_overlay_missing(bri
         assert row["exportable"] is False
         assert row["editable"] is False
         assert row["live_contract_fallback"] is True
-        assert row["live_base_seconds"] == row["duration_seconds"]
+        assert row["live_base_seconds"] + timeline["live_clock"]["current_elapsed_at_sample"] == row["duration_seconds"]
 
 
 def test_today_live_payloads_do_not_return_live_rows_without_span_fields(bridge):
