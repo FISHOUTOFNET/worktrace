@@ -236,6 +236,68 @@ def test_short_idle_does_not_merge_into_previous_normal(temp_db):
     assert settings_service.get_setting("pending_short_seconds") == "0"
 
 
+def test_cross_boundary_stale_pending_not_used_as_display_base(temp_db, monkeypatch):
+    """``pending_short_seconds`` may carry only inside one continuous
+    recording session. Startup recovery clears stale pending before the
+    next live display sample, while new post-boundary short activities may
+    pend normally."""
+    from worktrace.services import recovery_service, timeline_service
+
+    monkeypatch.setattr(
+        timeline_service, "get_default_report_date", lambda: "2026-06-18"
+    )
+    settings_service.set_setting("current_activity_snapshot", '{"old": true}')
+    settings_service.set_setting("pending_short_seconds", "5")
+
+    recovery_service.recover_unclosed_records()
+
+    assert settings_service.get_setting("current_activity_snapshot") == ""
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+
+    machine = CollectorStateMachine()
+    bridge = WebViewBridge()
+    machine.transition_to("recording", _normal("Fresh"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("Fresh"), at_time="2026-06-18 09:00:10")
+
+    overview = bridge.get_overview()
+    current = overview["current_activity"]
+    recent = overview["activities"][0]
+    assert current["elapsed_seconds"] == 10
+    assert recent["duration_seconds"] == 10
+    assert recent["display_base_seconds"] == 0
+
+    machine.transition_to("recording", _normal("Short"), at_time="2026-06-18 09:00:10")
+    machine.transition_to("recording", _normal("Next"), at_time="2026-06-18 09:00:20")
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+
+
+def test_pause_resume_virtual_pending_materializes_recent_row(temp_db, monkeypatch):
+    """After pause/resume, a fresh unpersisted activity must appear in the
+    full Overview ViewModel so Recent is refreshed along with Current."""
+    from worktrace.services import timeline_service
+
+    monkeypatch.setattr(
+        timeline_service, "get_default_report_date", lambda: "2026-06-18"
+    )
+    machine = CollectorStateMachine()
+    bridge = WebViewBridge()
+
+    machine.transition_to("recording", _normal("Before"), at_time="2026-06-18 09:00:00")
+    machine.pause(at_time="2026-06-18 09:00:10")
+    machine.transition_to("recording", _normal("After"), at_time="2026-06-18 09:01:00")
+    machine.transition_to("recording", _normal("After"), at_time="2026-06-18 09:01:09")
+
+    state = bridge.get_refresh_state("2026-06-18")
+    overview = bridge.get_overview()
+
+    assert state["current_activity"]["active"] is True
+    assert state["live_clock"]["live_state"] == "virtual_pending"
+    assert overview["current_activity"]["elapsed_seconds"] == 9
+    assert overview["activities"], "Recent must include the display-only live row"
+    assert overview["activities"][0]["live_state"] == "virtual_pending"
+    assert overview["activities"][0]["duration_seconds"] == 9
+
+
 # Section 四: short-activity boundary tests. Running ``absorbed_pending``
 # display projection is display-only (verified in
 # ``test_live_display_project_transition_contract.py``). Finished merge

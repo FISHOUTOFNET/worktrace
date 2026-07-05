@@ -669,11 +669,12 @@
     }
     App.runtimeContinuityKey = runtimeContinuityKey;
 
-    function acceptRefreshStateRuntime(state) {
-        if (!state || !state.ok) return false;
-        var page = App.currentPage || "overview";
-        var reportDate = payloadReportDate(state, page);
-        var identity = runtimeIdentityFromPayload(state);
+    function acceptLiveRuntimePayload(payload, page, reportDate, options) {
+        if (!payload || !payload.ok) return false;
+        options = options || {};
+        var runtimePage = String(page || App.currentPage || "overview");
+        var runtimeDate = payloadReportDate(payload, runtimePage, reportDate);
+        var identity = runtimeIdentityFromPayload(payload);
         var previous = App.liveRuntime || null;
         var previousKey = runtimeContinuityKey(previous);
         var incomingClock = identity.liveClock;
@@ -686,8 +687,8 @@
             );
         }
         App.liveRuntime = {
-            page: page,
-            reportDate: reportDate,
+            page: runtimePage,
+            reportDate: runtimeDate,
             liveClock: incomingClock,
             displaySpanId: identity.displaySpanId,
             stableLiveKeyHash: identity.stableLiveKeyHash,
@@ -698,14 +699,37 @@
             currentActivityDisplaySpanId: identity.currentActivityDisplaySpanId,
             currentResourceIdentityHash: identity.currentResourceIdentityHash
         };
-        App.liveDisplayModel = state.activity_display_model || null;
+        App.liveDisplayModel = payload.activity_display_model || null;
         if (previousKey && previousKey !== runtimeContinuityKey(App.liveRuntime)) {
             App._monotonicRenderState = {};
         }
-        App.lastRefreshState = state;
+        if (options.source === "refresh_state") {
+            App.lastRefreshState = payload;
+        }
         return true;
     }
+    App.acceptLiveRuntimePayload = acceptLiveRuntimePayload;
+
+    function acceptRefreshStateRuntime(state) {
+        if (!state || !state.ok) return false;
+        var page = App.currentPage || "overview";
+        var reportDate = payloadReportDate(state, page);
+        return acceptLiveRuntimePayload(state, page, reportDate, {
+            source: "refresh_state"
+        });
+    }
     App.acceptRefreshStateRuntime = acceptRefreshStateRuntime;
+
+    function acceptPagePayloadRuntime(payload, page, reportDate) {
+        if (!isPagePayloadCompatibleWithRuntime(payload, page, reportDate)) {
+            noteRejectedPagePayload(payload, page, reportDate);
+            return false;
+        }
+        return acceptLiveRuntimePayload(payload, page, reportDate, {
+            source: "page_model"
+        });
+    }
+    App.acceptPagePayloadRuntime = acceptPagePayloadRuntime;
 
     function setLiveRuntimeScope(page, reportDate) {
         App.liveRuntime = {
@@ -737,25 +761,17 @@
     }
     App.getActiveLiveClock = getActiveLiveClock;
 
-    function liveFieldMatches(runtimeValue, payloadValue) {
-        if (!runtimeValue || !payloadValue) return true;
-        return String(runtimeValue) === String(payloadValue);
-    }
-
     function isPagePayloadCompatibleWithRuntime(payload, page, reportDate) {
         if (!payload || !payload.ok) return false;
-        var runtime = App.liveRuntime || null;
-        if (!runtime) return false;
         var expectedPage = String(page || App.currentPage || "overview");
         var expectedDate = payloadReportDate(payload, expectedPage, reportDate);
-        if (runtime.page !== expectedPage) return false;
-        if (runtime.reportDate && expectedDate && runtime.reportDate !== expectedDate) return false;
-        if (!liveFieldMatches(runtime.liveStateRevision, payload.live_state_revision)) return false;
-        if (!liveFieldMatches(runtime.refreshRevision, payload.refresh_revision)) return false;
-        if (!liveFieldMatches(runtime.pageStructureRevision, payload.page_structure_revision)) return false;
-        var identity = runtimeIdentityFromPayload(payload);
-        if (!liveFieldMatches(runtime.displaySpanId, identity.displaySpanId)) return false;
-        if (!liveFieldMatches(runtime.stableLiveKeyHash, identity.stableLiveKeyHash)) return false;
+        if (expectedPage !== String(App.currentPage || "overview")) return false;
+        if (expectedPage === "timeline") {
+            var currentDate = runtimeReportDateForPage("timeline", reportDate);
+            if (expectedDate && currentDate && expectedDate !== currentDate) return false;
+        } else if (expectedDate && expectedDate !== App.localTodayStr()) {
+            return false;
+        }
         return true;
     }
     App.isPagePayloadCompatibleWithRuntime = isPagePayloadCompatibleWithRuntime;

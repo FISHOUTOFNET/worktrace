@@ -43,10 +43,7 @@
                 throw new Error(msg);
             });
             if (!bundle) return;
-            if (!App.isPagePayloadCompatibleWithRuntime(bundle, "overview", bundle.date)) {
-                App.noteRejectedPagePayload(bundle, "overview", bundle.date);
-                return;
-            }
+            if (!App.acceptPagePayloadRuntime(bundle, "overview", bundle.date)) return;
             var overview = bundle.overview || {};
             // Augment the overview sub-payload with the bundle-level
             overview.date = bundle.date || overview.date;
@@ -96,8 +93,7 @@
                     throw new Error(msg);
                 });
                 if (data) {
-                    if (!App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
-                        App.noteRejectedPagePayload(data, "timeline", date);
+                    if (!App.acceptPagePayloadRuntime(data, "timeline", date)) {
                         resolve();
                         return;
                     }
@@ -465,6 +461,7 @@
             var newLiveRevision = state.live_state_revision || state.refresh_revision;
             var prevPageRevision = previousState && (previousState.page_structure_revision || previousState.refresh_revision);
             var newPageRevision = state.page_structure_revision || state.refresh_revision;
+            var liveStateChanged = isFirstCheck || prevLiveRevision !== newLiveRevision;
             var pageStructureChanged = isFirstCheck || prevPageRevision !== newPageRevision;
             var accepted = App.acceptRefreshStateRuntime(state);
             if (!accepted) return;
@@ -472,11 +469,7 @@
             refreshStatusFromRefreshState(state);
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision
-            if (pageStructureChanged) {
-                triggeredHeavyRefresh = true;
-                App.liveClockContractRefreshRequested = false;
-                refreshCurrentPageData(state);
-            } else if (App.liveClockContractRefreshRequested && !App.activePageRefreshInFlight) {
+            if (liveStateChanged || pageStructureChanged || App.liveClockContractRefreshRequested) {
                 triggeredHeavyRefresh = true;
                 App.liveClockContractRefreshRequested = false;
                 refreshCurrentPageData(state);

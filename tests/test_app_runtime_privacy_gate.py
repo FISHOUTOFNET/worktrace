@@ -13,6 +13,7 @@ they route through the unified entry so the gate is enforced once.
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -25,7 +26,9 @@ pytestmark = [
 ]
 
 from worktrace.runtime.app_runtime import AppRuntime
+from worktrace.collector.collector import run_collector
 from worktrace.services import folder_index_service
+from worktrace.services import runtime_activity_state_service, settings_service
 
 
 def _make_paths(temp_db, tmp_path):
@@ -261,6 +264,36 @@ def test_start_collection_after_privacy_gate_fails_closed_when_notice_not_accept
     assert calls == []
 
 
+def test_start_collection_after_privacy_gate_does_not_bypass_runtime_boundary(monkeypatch):
+    """The privacy gate must not start collection or clear live runtime
+    state before notice acceptance; after acceptance it preserves the
+    runtime-owned start ordering."""
+    from worktrace.api import app_api
+
+    fake_runtime, calls = _make_recording_runtime()
+    monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
+    settings_service.set_setting("current_activity_snapshot", '{"active": true}')
+    settings_service.set_setting("pending_short_seconds", "7")
+    monkeypatch.setattr(
+        "worktrace.api.settings_api.first_run_notice_accepted", lambda: False
+    )
+
+    result = app_api.start_collection_after_privacy_gate()
+
+    assert result["ok"] is False
+    assert calls == []
+    assert settings_service.get_setting("current_activity_snapshot") == '{"active": true}'
+    assert settings_service.get_setting("pending_short_seconds") == "7"
+
+    monkeypatch.setattr(
+        "worktrace.api.settings_api.first_run_notice_accepted", lambda: True
+    )
+    result = app_api.start_collection_after_privacy_gate()
+
+    assert result["ok"] is True
+    assert calls == ["background_workers", "collector"]
+
+
 def test_start_collection_after_privacy_gate_fails_closed_when_notice_read_raises(monkeypatch):
     """When ``first_run_notice_accepted`` raises, the unified gate must
     fail closed and must NOT call ``runtime.start_background_workers`` or
@@ -353,3 +386,83 @@ def test_start_collection_after_privacy_gate_swallows_start_failures(monkeypatch
     result = app_api.start_collection_after_privacy_gate()
 
     assert result["ok"] is True
+
+
+def test_startup_recovery_runtime_cleanup_is_single_owner(temp_db, tmp_path, monkeypatch):
+    """Startup recovery and transient cleanup are owned by AppRuntime after
+    acquiring the single-instance collector lock. Collector start must not
+    repeat recovery."""
+    calls: list[str] = []
+
+    def _recover_once():
+        calls.append("runtime")
+        runtime_activity_state_service.clear_runtime_activity_state("test_startup")
+
+    monkeypatch.setattr(
+        "worktrace.runtime.app_runtime.acquire_single_instance", lambda: True
+    )
+    monkeypatch.setattr(
+        "worktrace.runtime.app_runtime.release_single_instance", lambda: None
+    )
+    monkeypatch.setattr(
+        "worktrace.services.recovery_service.recover_unclosed_records",
+        _recover_once,
+    )
+    monkeypatch.setattr(
+        "worktrace.collector.collector.clipboard_service.prune_old_events",
+        lambda: None,
+    )
+
+    settings_service.set_setting("current_activity_snapshot", '{"old": true}')
+    settings_service.set_setting("pending_short_seconds", "9")
+    paths = _make_paths(temp_db, tmp_path)
+    runtime = AppRuntime(paths)
+    try:
+        runtime.initialize()
+        assert calls == ["runtime"]
+        assert settings_service.get_setting("current_activity_snapshot") == ""
+        assert settings_service.get_setting("pending_short_seconds") == "0"
+
+        stop_event = threading.Event()
+        stop_event.set()
+        run_collector(type("Adapter", (), {})(), stop_event)
+        assert calls == ["runtime"]
+    finally:
+        runtime.shutdown()
+
+
+def test_non_owner_runtime_does_not_clear_owner_live_state(temp_db, tmp_path, monkeypatch):
+    """A UI-only process that fails the collector lock must not recover,
+    clear transient owner state, or close owner open rows during shutdown."""
+    calls: list[str] = []
+    close_calls: list[str] = []
+
+    monkeypatch.setattr(
+        "worktrace.runtime.app_runtime.acquire_single_instance", lambda: False
+    )
+    monkeypatch.setattr(
+        "worktrace.runtime.app_runtime.release_single_instance",
+        lambda: calls.append("release"),
+    )
+    monkeypatch.setattr(
+        "worktrace.services.recovery_service.recover_unclosed_records",
+        lambda: calls.append("recovery"),
+    )
+    monkeypatch.setattr(
+        "worktrace.services.activity_lifecycle_service.close_all_open_activities",
+        lambda *args, **kwargs: close_calls.append("close"),
+    )
+
+    settings_service.set_setting("current_activity_snapshot", '{"owner": true}')
+    settings_service.set_setting("pending_short_seconds", "11")
+    paths = _make_paths(temp_db, tmp_path)
+    runtime = AppRuntime(paths)
+
+    runtime.initialize()
+    runtime.shutdown()
+
+    assert runtime.owns_collector is False
+    assert calls == []
+    assert close_calls == []
+    assert settings_service.get_setting("current_activity_snapshot") == '{"owner": true}'
+    assert settings_service.get_setting("pending_short_seconds") == "11"

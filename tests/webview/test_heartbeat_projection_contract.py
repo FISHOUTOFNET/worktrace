@@ -1133,16 +1133,19 @@ def test_live_continuity_key_is_single_source_of_truth():
 # no legacy ``live_projection`` / ``live_display`` propagation.
 
 
-def test_accept_refresh_state_runtime_is_the_only_live_identity_writer():
-    """refresh_state acceptance owns live runtime identity; page payloads are
-    render-only and can only pass/fail compatibility."""
+def test_live_runtime_acceptance_has_refresh_state_and_page_model_sources():
+    """refresh_state and full page ViewModels share one runtime accept path."""
     src = _strip_js_comments(read_js("core.js"))
+    common_body = func_body(src, "acceptLiveRuntimePayload")
     accept_body = func_body(src, "acceptRefreshStateRuntime")
-    gate_body = func_body(src, "isPagePayloadCompatibleWithRuntime")
-    assert "App.liveRuntime" in accept_body
-    assert "rebaseIncomingClockWithoutRollback" in accept_body
-    assert "liveStateRevision" in accept_body
-    assert "pageStructureRevision" in gate_body
+    page_body = func_body(src, "acceptPagePayloadRuntime")
+    assert "App.liveRuntime" in common_body
+    assert "rebaseIncomingClockWithoutRollback" in common_body
+    assert "liveStateRevision" in common_body
+    assert 'source: "refresh_state"' in accept_body
+    assert 'source: "page_model"' in page_body
+    assert "App.lastRefreshState = payload" in common_body
+    assert 'options.source === "refresh_state"' in common_body
     for removed in (
         "commitPageActiveSpanClock",
         "observeRefreshStateActiveSpan",
@@ -1325,9 +1328,9 @@ def test_renderers_diagnose_live_rows_missing_span_id():
 
 def test_accept_refresh_state_runtime_uses_rebase():
     """The accepted runtime rebases same-continuity refresh_state clocks
-    without making page rows authoritative."""
+    through the shared runtime accept path."""
     src = _strip_js_comments(read_js("core.js"))
-    body = func_body(src, "acceptRefreshStateRuntime")
+    body = func_body(src, "acceptLiveRuntimePayload")
     assert "rebaseIncomingClockWithoutRollback" in body
     assert "sameLiveContinuity" in body
     assert "App.liveRuntime" in body
@@ -1337,7 +1340,7 @@ def test_runtime_rebases_same_continuity_without_live_state_gate():
     """Same continuity is determined by display span or stable hash. A
     live-state transition must not force a visual reset."""
     src = _strip_js_comments(read_js("core.js"))
-    accept_body = func_body(src, "acceptRefreshStateRuntime")
+    accept_body = func_body(src, "acceptLiveRuntimePayload")
     continuity_body = func_body(src, "sameLiveContinuity")
     assert "display_span_id" in continuity_body, (
         "sameLiveContinuity must treat matching display_span_id as continuous"
@@ -1376,15 +1379,22 @@ def test_run_revision_check_accepts_refresh_state_without_row_clock_commit():
     )
 
 
-def test_page_model_render_does_not_write_live_runtime():
-    """Page-model render flows are pure render paths for live identity."""
+def test_page_model_runtime_acceptance_is_full_payload_only():
+    """Full page payloads may accept runtime; renderers and Details may not."""
+    core = _strip_js_comments(read_js("core.js"))
+    page_body = func_body(core, "acceptPagePayloadRuntime")
+    assert "acceptLiveRuntimePayload" in page_body
     for fname in ("overview.js", "timeline.js"):
         src = _strip_js_comments(read_js(fname))
         assert "commitPageActiveSpanClock" not in src
         assert "registerLiveClock" not in src
     details_body = func_body(_strip_js_comments(read_js("timeline.js")), "renderSessionDetails")
+    details_accept_body = func_body(_strip_js_comments(read_js("timeline.js")), "acceptTimelineDetailsPayload")
     assert "commitPageActiveSpanClock" not in details_body, (
         "renderSessionDetails partial payload must not replace the accepted live runtime"
+    )
+    assert "acceptPagePayloadRuntime" not in details_accept_body, (
+        "Details partial payloads must reuse the Timeline runtime, not write a new runtime"
     )
 
 
@@ -1482,10 +1492,12 @@ def test_fast_path_requires_accepted_runtime_before_render():
     core = _strip_js_comments(read_js("core.js"))
     init = _strip_js_comments(read_js("init.js"))
     accept_body = func_body(core, "acceptRefreshStateRuntime")
+    common_body = func_body(core, "acceptLiveRuntimePayload")
     fast_body = func_body(init, "refreshCurrentActivityFromState")
 
-    assert "App.liveRuntime" in accept_body
-    assert "rebaseIncomingClockWithoutRollback" in accept_body
+    assert "App.liveRuntime" in common_body
+    assert "rebaseIncomingClockWithoutRollback" in common_body
+    assert "acceptLiveRuntimePayload" in accept_body
     assert "App.liveRuntime.refreshRevision" in fast_body
     assert "App.currentPage" in fast_body
 
@@ -1498,9 +1510,10 @@ def test_fast_path_requires_accepted_runtime_before_render():
 def test_refresh_state_runtime_acceptor_records_page_scope_and_revisions():
     """Section 五: accepted runtime records page/date and backend revisions."""
     src = _strip_js_comments(read_js("core.js"))
-    body = func_body(src, "acceptRefreshStateRuntime")
-    assert "App.currentPage" in body
-    assert "reportDate" in body
+    refresh_body = func_body(src, "acceptRefreshStateRuntime")
+    body = func_body(src, "acceptLiveRuntimePayload")
+    assert "App.currentPage" in refresh_body
+    assert "reportDate" in refresh_body
     assert "refreshRevision" in body
     assert "liveStateRevision" in body
     assert "pageStructureRevision" in body
@@ -1615,26 +1628,80 @@ def test_full_reconcile_does_not_unconditionally_call_refresh_overview():
 
 
 def test_overview_js_uses_runtime_gate_not_runtime_write():
-    """Section 五: Overview page payloads are gated before render."""
+    """Section 五: Overview page payloads are accepted before render."""
     src = _strip_js_comments(read_js("overview.js"))
     init = _strip_js_comments(read_js("init.js"))
     assert "commitPageActiveSpanClock" not in src
-    assert 'isPagePayloadCompatibleWithRuntime(bundle, "overview"' in init
+    assert 'acceptPagePayloadRuntime(bundle, "overview"' in init
 
 
 def test_timeline_js_uses_runtime_gate_not_runtime_write():
-    """Section 五: Timeline page payloads are gated before render."""
+    """Section 五: Timeline page payloads are accepted before render."""
     src = _strip_js_comments(read_js("timeline.js"))
     assert "commitPageActiveSpanClock" not in src
     assert "acceptTimelinePayload" in src
+    assert 'acceptPagePayloadRuntime(data, "timeline", date)' in src
 
 
 def test_init_refresh_overview_gates_with_runtime():
-    """Section 五: ``refreshOverview`` in ``init.js`` gates page payloads."""
+    """Section 五: ``refreshOverview`` in ``init.js`` accepts page runtime."""
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "refreshOverview")
-    assert 'isPagePayloadCompatibleWithRuntime(bundle, "overview"' in body
-    assert "noteRejectedPagePayload" in body
+    assert 'acceptPagePayloadRuntime(bundle, "overview", bundle.date)' in body
+
+
+def test_run_revision_check_refreshes_on_live_state_revision_change_without_page_structure_change():
+    """A live-state transition is structural for live rows even when the
+    page-structure revision string is unchanged."""
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "runRevisionCheck")
+    live_pos = body.find("liveStateChanged")
+    page_pos = body.find("pageStructureChanged")
+    refresh_pos = body.find("refreshCurrentPageData(state")
+    assert live_pos != -1, "runRevisionCheck must compute liveStateChanged"
+    assert page_pos != -1, "runRevisionCheck must still compute pageStructureChanged"
+    assert refresh_pos != -1, "runRevisionCheck must trigger a heavy refresh"
+    condition = body[body.rfind("if", 0, refresh_pos):refresh_pos]
+    assert "liveStateChanged" in condition
+    assert "pageStructureChanged" in condition
+    assert "liveClockContractRefreshRequested" in condition
+
+
+def test_refresh_overview_accepts_page_payload_runtime_before_render():
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "refreshOverview")
+    accept_pos = body.find('acceptPagePayloadRuntime(bundle, "overview", bundle.date)')
+    overview_pos = body.find("App.showOverview", accept_pos)
+    recent_pos = body.find("App.showRecent", accept_pos)
+    assert accept_pos != -1
+    assert overview_pos != -1 and accept_pos < overview_pos
+    assert recent_pos != -1 and accept_pos < recent_pos
+
+
+def test_refresh_timeline_accepts_page_payload_runtime_before_render():
+    init_body = func_body(_strip_js_comments(read_js("init.js")), "refreshTimeline")
+    timeline = _strip_js_comments(read_js("timeline.js"))
+    accept_body = func_body(timeline, "acceptTimelinePayload")
+    details_body = func_body(timeline, "acceptTimelineDetailsPayload")
+    assert 'acceptPagePayloadRuntime(data, "timeline", date)' in accept_body
+    accept_pos = init_body.find('acceptPagePayloadRuntime(data, "timeline", date)')
+    show_pos = init_body.find("App.showTimeline(data)", accept_pos)
+    assert accept_pos != -1 and show_pos != -1 and accept_pos < show_pos
+    assert "acceptPagePayloadRuntime" not in details_body
+
+
+def test_hidden_or_stale_page_payload_cannot_overwrite_runtime():
+    core = _strip_js_comments(read_js("core.js"))
+    gate_body = func_body(core, "isPagePayloadCompatibleWithRuntime")
+    assert "payload.ok" in gate_body
+    assert 'expectedPage !== String(App.currentPage || "overview")' in gate_body
+    assert 'expectedPage === "timeline"' in gate_body
+    assert "runtimeReportDateForPage" in gate_body
+    assert "App.localTodayStr()" in gate_body
+    init_body = func_body(_strip_js_comments(read_js("init.js")), "refreshOverview")
+    timeline_body = func_body(_strip_js_comments(read_js("timeline.js")), "refreshTimeline")
+    assert "token !== App.overviewRequestToken" in init_body
+    assert "token !== App.timelineRequestToken" in timeline_body
 
 
 def test_run_revision_check_registers_with_current_page_scope():

@@ -534,32 +534,6 @@ def _source_for_state(state: str, snapshot: dict[str, Any] | None) -> str:
 # Display-span construction
 
 
-def _persisted_anchor_base_seconds(activity_id: int) -> int:
-    """Return the stored DB ``duration_seconds`` for a persisted open activity.
-
-    This is the anchor's own base duration at the last persist point. The
-    unified live-span formula uses it to compute
-    ``live_delta_at_sample = max(0, duration_seconds_at_sample - live_anchor_base_seconds)``
-    so a session / recent row containing the open activity can project
-    ``row_raw + live_delta_at_sample`` without double-counting the open
-    activity's DB duration.
-
-    Returns ``0`` when the activity cannot be loaded (defensive); callers
-    MUST treat ``0`` as "no anchor base known" which collapses the
-    unified formula to ``row_raw + duration_seconds_at_sample`` — still
-    safe (no negative projection).
-    """
-    if activity_id <= 0:
-        return 0
-    try:
-        row = activity_service.get_activity(int(activity_id))
-    except Exception:
-        return 0
-    if not row:
-        return 0
-    return int(row.get("duration_seconds") or 0)
-
-
 def _build_display_span(
     snapshot: dict[str, Any] | None,
     display_live_state: str,
@@ -582,9 +556,10 @@ def _build_display_span(
     start_time = str(snapshot.get("start_time") or "") if snapshot else ""
     project_fields = _snapshot_display_project_fields(snapshot)
     duration_at_sample = int(live_clock.get("duration_seconds_at_sample") or 0)
-    # Anchor base seconds is the static row/display base already represented
-    # in DB or an anchor row. ``apply_live_span_to_row`` adds only the current
-    # active elapsed delta, preventing persisted_open double-counting.
+    # Anchor base seconds exists only for absorbed_pending, where the display
+    # projection is explicitly anchored to a closed row. Persisted-open rows
+    # use the current page row sample in ``apply_live_span_to_row`` instead of
+    # doing a second DB read here.
     live_anchor_base_seconds = 0
 
     if display_live_state == "persisted_open":
@@ -598,7 +573,6 @@ def _build_display_span(
         project_name = project_fields["project_name"]
         project_description = project_fields["project_description"]
         project_id = project_fields["project_id"]
-        live_anchor_base_seconds = _persisted_anchor_base_seconds(anchor_id)
     elif display_live_state == "absorbed_pending" and anchor:
         anchor_id = int(anchor.get("id") or 0)
         activity_id = anchor_id
@@ -698,11 +672,9 @@ def apply_live_span_to_row(
     ``activity_ids`` contains ``span.anchor_activity_id``.
 
     Row projection formula: ``row/static display base + current active
-    elapsed delta``. At sample time the backend materializes the row's
-    display duration; the frontend heartbeat adds
-    the same ``current_elapsed_now`` projection. For persisted_open,
-    ``live_anchor_base_seconds`` prevents the already-written DB open
-    duration from being counted twice.
+    elapsed delta``. Persisted-open rows use the row duration from the
+    current page ViewModel sample as the single static source, so the
+    handoff never mixes a refresh-state clock with a second DB sample.
 
     Mutates and returns ``row``; unchanged when ``span`` is ``None`` or no match.
     """
@@ -745,19 +717,14 @@ def apply_live_span_to_row(
         row["display_base_seconds"] = int(display_base_seconds)
         row["live_base_seconds"] = int(display_base_seconds)
     elif state == "persisted_open":
-        # Subtract anchor's DB duration so session / recent rows do not
-        # double-count the open activity already written to the DB.
-        anchor_base = int(span.get("live_anchor_base_seconds") or 0)
-        live_delta_at_sample = max(0, duration_at_sample - anchor_base)
-        projected = row_raw + live_delta_at_sample
         current_elapsed_at_sample = int(
             live_clock.get("current_elapsed_at_sample")
             or live_clock.get("active_elapsed_at_sample")
             or 0
         )
-        display_base_seconds = max(0, int(projected) - current_elapsed_at_sample)
-        row["duration_seconds"] = int(projected)
-        row["duration"] = format_duration(projected)
+        display_base_seconds = max(0, int(row_raw) - current_elapsed_at_sample)
+        row["duration_seconds"] = int(row_raw)
+        row["duration"] = format_duration(row_raw)
         row["display_base_seconds"] = int(display_base_seconds)
         row["live_base_seconds"] = int(display_base_seconds)
     else:

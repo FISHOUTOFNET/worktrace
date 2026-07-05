@@ -539,6 +539,7 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
         elapsed_seconds=210,
     )
     activity_service.update_activity_project(aid, pid)
+    activity_service.set_activity_duration(aid, 240)
     assert activity_service.get_activity(aid)["project_name"] == "MyProject"
 
     _set_snapshot(
@@ -690,6 +691,7 @@ def test_overview_recent_session_with_closed_then_open_activity_gets_live_overla
         start_time=open_start.strftime(TIME_FORMAT),
         project_id=pid,
     )
+    activity_service.set_activity_duration(open_id, 100)
     assert activity_service.get_activity(open_id)["project_name"] == "P"
 
     # 3. Snapshot: persisted_open pointing at the open activity.

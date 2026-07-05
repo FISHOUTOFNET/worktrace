@@ -93,7 +93,8 @@ class AppRuntime:
                 "single instance collector lock not acquired; UI will start without collector"
             )
 
-        recovery_service.recover_unclosed_records()
+        if self.owns_collector:
+            recovery_service.recover_unclosed_records()
         self._initialized = True
 
     def start_background_workers(self) -> bool:
@@ -161,9 +162,10 @@ class AppRuntime:
             self._index_thread.join(timeout=5)
         if self._collector_thread:
             self._collector_thread.join(timeout=5)
-        activity_lifecycle_service.close_all_open_activities()
-        set_setting("collector_status", "stopped")
-        release_single_instance()
+        if self.owns_collector:
+            activity_lifecycle_service.close_all_open_activities()
+            set_setting("collector_status", "stopped")
+            release_single_instance()
         logging.info("app shutdown")
 
 

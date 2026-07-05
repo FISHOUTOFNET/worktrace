@@ -433,6 +433,10 @@ def test_persisted_open_current_elapsed_and_project_projection_no_double_count()
     snap["start_time"] = start_time
     snap["extra_seconds"] = 300
     _set_snapshot(snap)
+    # Persisted-open row overlays use the current page row sample as the
+    # single static base. The collector has already folded elapsed + extra
+    # into the open row before the page ViewModel is queried.
+    activity_service.set_activity_duration(anchor_id, 312)
     today = _today_report_date()
 
     model = build_activity_display_model(report_date=today, today=today)
@@ -447,7 +451,8 @@ def test_persisted_open_current_elapsed_and_project_projection_no_double_count()
     assert model["live_clock"]["duration_seconds_at_sample"] == 312
     assert model["live_clock"]["display_base_seconds"] == 300
     assert int(overlaid["duration_seconds"]) == 312
-    assert int(overlaid["raw_duration_seconds"]) == 300
+    assert int(overlaid["raw_duration_seconds"]) == 312
+    assert int(overlaid["display_base_seconds"]) == 300
 
 
 def test_virtual_pending_to_persisted_open_same_resource_current_clock_continuity():

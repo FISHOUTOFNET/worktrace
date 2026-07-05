@@ -73,7 +73,6 @@ def run_collector(
     logging.info("collector start")
     set_setting("collector_status", "running")
     _normalize_poll_interval_setting()
-    recovery_service.recover_unclosed_records()
     clipboard_service.prune_old_events()
     next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
 

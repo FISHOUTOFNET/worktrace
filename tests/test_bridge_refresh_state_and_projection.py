@@ -595,6 +595,57 @@ def test_get_timeline_session_details_injects_display_only_virtual_pending(bridg
         assert forbidden not in row
 
 
+def test_persisted_open_handoff_no_one_second_skew(bridge):
+    """Virtual-to-persisted handoff must not mix refresh-state and page-row
+    samples. Under one page ViewModel sample, Current, Recent, Timeline,
+    and Details expose the same persisted_open seconds."""
+    from worktrace.services import activity_service
+
+    fixed_start = (datetime.now() - timedelta(seconds=31)).strftime(TIME_FORMAT)
+    _set_snapshot(_normal_snapshot(elapsed_seconds=29, start_time=fixed_start))
+
+    virtual_overview = bridge.get_overview()
+    virtual_timeline = bridge.get_timeline()
+    assert virtual_overview["live_clock"]["live_state"] == "virtual_pending"
+    assert virtual_overview["current_activity"]["elapsed_seconds"] == 29
+    assert virtual_overview["activities"][0]["duration_seconds"] == 29
+    assert virtual_timeline["sessions"][0]["duration_seconds"] == 29
+
+    aid = activity_service.create_activity(
+        "AppA",
+        "AppA.exe",
+        "AppA",
+        start_time=fixed_start,
+    )
+    activity_service.set_activity_duration(aid, 31)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=31,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=fixed_start,
+        )
+    )
+
+    overview = bridge.get_overview()
+    timeline = bridge.get_timeline()
+    details = bridge.get_timeline_session_details([aid], None)
+
+    assert overview["live_clock"]["live_state"] == "persisted_open"
+    assert overview["current_activity"]["elapsed_seconds"] == 31
+    recent = next(r for r in overview["activities"] if int(r.get("activity_id") or 0) == aid)
+    session = next(s for s in timeline["sessions"] if aid in [int(x) for x in s.get("activity_ids", [])])
+    detail = next(r for r in details["activities"] if int(r.get("activity_id") or 0) == aid)
+    for row in (recent, session, detail):
+        assert row["live_state"] == "persisted_open"
+        assert int(row["duration_seconds"]) == 31
+        assert int(row["display_base_seconds"]) == 0
+        assert int(row["duration_seconds"]) == (
+            int(row["display_base_seconds"])
+            + int(overview["live_clock"]["current_elapsed_at_sample"])
+        )
+
+
 def test_virtual_items_do_not_leak_sensitive_fields(bridge):
     """virtual items / sessions / detail rows must NOT leak raw
     window_title / file_path_hint / clipboard / note VALUES / SQL /

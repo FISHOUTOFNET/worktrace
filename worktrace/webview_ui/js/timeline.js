@@ -223,11 +223,7 @@
     App.showTimeline = showTimeline;
 
     function acceptTimelinePayload(data, date) {
-        if (!App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
-            App.noteRejectedPagePayload(data, "timeline", date);
-            return false;
-        }
-        return true;
+        return App.acceptPagePayloadRuntime(data, "timeline", date);
     }
     App.acceptTimelinePayload = acceptTimelinePayload;
 

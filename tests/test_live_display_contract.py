@@ -492,6 +492,7 @@ def test_persisted_open_timeline_recent_detail_and_overview_classification_consi
         elapsed_seconds=120,
     )
     sync_persisted_open_activity_project(aid)
+    activity_service.set_activity_duration(aid, 120)
     assert activity_service.get_activity(aid)["project_name"] == "MyProject"
 
     _set_snapshot(
@@ -1173,6 +1174,7 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
     used the Activity Display Model.
     """
     aid, start_time = _create_real_open_activity(elapsed_seconds=210)
+    activity_service.set_activity_duration(aid, 240)
     _set_snapshot(
         _normal_snapshot(
             elapsed_seconds=210,
@@ -1259,17 +1261,17 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
 
 def test_session_base_differs_from_live_activity_duration(bridge):
     """A session row with a closed activity (100s DB) AND a
-    ``persisted_open`` activity (DB duration 0, live sample 240s) must
+    ``persisted_open`` activity (row sample 240s) must
     have ``live_base_seconds`` = 130 (session static base), NOT 240.
     The detail row for the open activity must have
     ``live_base_seconds == 30``. Both add the same current elapsed, so
     after +5s: session reads 345, detail reads 245. Session must NEVER
     be overwritten to 245.
 
-    Under the DB-only contract (Section 一), session row's
-    ``raw_duration_seconds`` is DB-only (100 + 0 = 100). The unified
-    formula adds ``live_delta_at_sample`` (240) to reach 340. The detail
-    row (DB duration 0) reaches 240.
+    The current page ViewModel sample already includes the open row's
+    sampled duration. The unified formula derives bases from those raw
+    row samples: session 340 - active elapsed 210 = 130; detail
+    240 - active elapsed 210 = 30.
     """
     from worktrace.services.activity_display_model_service import (
         apply_live_span_to_row,
@@ -1288,7 +1290,7 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     )
     activity_service.close_activity(closed_aid, closed_end.strftime(TIME_FORMAT), 100)
 
-    # 2. Create a persisted_open activity (DB duration 0; live sample 240s).
+    # 2. Create a persisted_open activity (row sample 240s).
     open_aid, open_start = _create_real_open_activity(elapsed_seconds=240)
     _set_snapshot(
         _normal_snapshot(
@@ -1304,21 +1306,20 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     span = get_live_span(model)
     assert span is not None, "persisted_open display span must exist"
 
-    # Session row aggregates both activities' DB durations: 100 (closed)
-    # + 0 (open, no DB duration) = 100. The unified formula adds
-    # live_delta_at_sample (240) to reach the session's full sample (340).
+    # Session row aggregates both activities at the page sample: 100
+    # (closed) + 240 (open) = 340.
     session_row = {
         "session_id": "sess-1",
         "first_activity_id": open_aid,
         "activity_ids": [closed_aid, open_aid],
-        "duration_seconds": 100,
-        "raw_duration_seconds": 100,
+        "duration_seconds": 340,
+        "raw_duration_seconds": 340,
     }
-    # Detail row for the open activity: DB duration 0.
+    # Detail row for the open activity at the same sample.
     detail_row = {
         "activity_id": open_aid,
-        "duration_seconds": 0,
-        "raw_duration_seconds": 0,
+        "duration_seconds": 240,
+        "raw_duration_seconds": 240,
     }
 
     apply_live_span_to_row(session_row, span)
@@ -1595,6 +1596,7 @@ def test_persisted_open_live_clock_uses_resource_elapsed_and_project_extra(bridg
     )
 
     aid, start_time = _create_real_open_activity(elapsed_seconds=35)
+    activity_service.set_activity_duration(aid, 45)
     _set_snapshot(
         _normal_snapshot(
             elapsed_seconds=35,

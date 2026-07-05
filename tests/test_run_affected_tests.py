@@ -1020,6 +1020,33 @@ def test_app_runtime_py_selects_privacy_gate_tests(runner):
     )
 
 
+def test_runtime_activity_state_service_selects_runtime_boundary_suites(runner):
+    """The transient runtime cleanup owner participates in startup/runtime
+    gate, collector/runtime, and activity lifecycle boundary rules."""
+    sel = runner.select_targets([
+        "worktrace/services/runtime_activity_state_service.py",
+    ])
+    for expected in (
+        "tests/test_app_runtime_privacy_gate.py",
+        "tests/test_short_activity_buffer.py",
+        "tests/test_bridge_refresh_state_and_projection.py",
+        "tests/test_live_display_project_transition_contract.py",
+        "tests/test_display_model_anti_regression.py",
+        "tests/webview/test_heartbeat_projection_contract.py",
+        "tests/webview/test_frontend_global_boundaries.py",
+        "tests/test_activity_lifecycle_service.py",
+        "tests/test_activity_lifecycle_boundary.py",
+        "tests/test_collector.py",
+        "tests/test_state_machine.py",
+        "tests/test_run_affected_tests.py",
+        "tests/test_ui_backend_boundary.py",
+    ):
+        assert expected in sel.pytest_targets, (
+            f"runtime_activity_state_service.py must select: {expected}"
+        )
+    assert "collector_runtime and integration" in sel.marker_exprs
+
+
 def test_k2_does_not_trigger_project_rules_suite(runner):
     """K2 must NOT trigger the Project Rules C-series suite; the
     startup gate is unrelated to Project Rules keyword / folder / lifecycle
@@ -1219,8 +1246,11 @@ def test_live_display_service_py_selects_run_affected_and_timeline_static(runner
 
 _LIVE_DISPLAY_OWNER_TARGETS = [
     "tests/test_overview_bundle_and_export_contract.py",
+    "tests/test_app_runtime_privacy_gate.py",
+    "tests/test_short_activity_buffer.py",
     "tests/test_bridge_refresh_state_and_projection.py",
     "tests/test_live_display_contract.py",
+    "tests/test_live_display_project_transition_contract.py",
     "tests/test_display_model_anti_regression.py",
     "tests/test_run_affected_tests.py",
     "tests/webview/test_heartbeat_projection_contract.py",
