@@ -1261,17 +1261,15 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
 
 def test_session_base_differs_from_live_activity_duration(bridge):
     """A session row with a closed activity (100s DB) AND a
-    ``persisted_open`` activity (row sample 240s) must
-    have ``live_base_seconds`` = 130 (session static base), NOT 240.
+    ``persisted_open`` activity must have ``live_base_seconds`` = 130
+    (session static base), NOT the DB open row duration.
     The detail row for the open activity must have
     ``live_base_seconds == 30``. Both add the same current elapsed, so
     after +5s: session reads 345, detail reads 245. Session must NEVER
     be overwritten to 245.
 
-    The current page ViewModel sample already includes the open row's
-    sampled duration. The unified formula derives bases from those raw
-    row samples: session 340 - active elapsed 210 = 130; detail
-    240 - active elapsed 210 = 30.
+    Persisted-open static bases come from closed_duration_seconds plus
+    snapshot extra/carry. The DB open row duration is persistence-only.
     """
     from worktrace.services.activity_display_model_service import (
         apply_live_span_to_row,
@@ -1312,6 +1310,8 @@ def test_session_base_differs_from_live_activity_duration(bridge):
         "session_id": "sess-1",
         "first_activity_id": open_aid,
         "activity_ids": [closed_aid, open_aid],
+        "open_activity_id": open_aid,
+        "closed_duration_seconds": 100,
         "duration_seconds": 340,
         "raw_duration_seconds": 340,
     }
@@ -1353,6 +1353,159 @@ def test_session_base_differs_from_live_activity_duration(bridge):
         "be overwritten to the live activity's own duration"
     )
     assert detail_row["live_base_seconds"] + delta_plus_5 == 245
+
+
+def test_persisted_open_db_ahead_snapshot_uses_snapshot_elapsed_for_live_rows(bridge):
+    aid, start_time = _create_real_open_activity(elapsed_seconds=30)
+    activity_service.set_activity_duration(aid, 33)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=30,
+            extra_seconds=0,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+
+    overview = bridge.get_overview()
+    timeline = bridge.get_timeline()
+    details = bridge.get_timeline_session_details([aid], None)
+
+    assert overview["current_activity"]["elapsed_seconds"] == 30
+    recent_row = next(r for r in overview["activities"] if int(r.get("activity_id") or 0) == aid)
+    timeline_row = next(s for s in timeline["sessions"] if int(s.get("first_activity_id") or 0) == aid)
+    detail_row = next(a for a in details["activities"] if int(a.get("activity_id") or 0) == aid)
+
+    for row in (recent_row, timeline_row, detail_row):
+        assert int(row["duration_seconds"]) == 30
+        assert int(row["display_base_seconds"]) == 0
+        assert int(row["live_base_seconds"]) == 0
+
+    assert int(overview["today_total_seconds"]) == 30
+    assert int(overview["kpi_live_base"]["today_total_seconds"]) == 0
+
+
+def test_persisted_open_snapshot_ahead_db_uses_snapshot_elapsed_for_live_rows(bridge):
+    aid, start_time = _create_real_open_activity(elapsed_seconds=33)
+    activity_service.set_activity_duration(aid, 30)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=33,
+            extra_seconds=0,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+
+    overview = bridge.get_overview()
+    timeline = bridge.get_timeline()
+    details = bridge.get_timeline_session_details([aid], None)
+    recent_row = next(r for r in overview["activities"] if int(r.get("activity_id") or 0) == aid)
+    timeline_row = next(s for s in timeline["sessions"] if int(s.get("first_activity_id") or 0) == aid)
+    detail_row = next(a for a in details["activities"] if int(a.get("activity_id") or 0) == aid)
+
+    for row in (recent_row, timeline_row, detail_row):
+        assert int(row["duration_seconds"]) == 33
+        assert int(row["display_base_seconds"]) == 0
+
+
+def test_persisted_open_closed_plus_open_session_strips_open_db_duration(bridge):
+    today = datetime.now().strftime("%Y-%m-%d")
+    closed_id = activity_service.create_activity(
+        "AppA",
+        "AppA.exe",
+        "Closed",
+        start_time=f"{today} 09:00:00",
+    )
+    activity_service.close_activity(closed_id, f"{today} 09:05:00", 300)
+    open_start = f"{today} 09:05:00"
+    open_id = activity_service.create_activity(
+        "AppA",
+        "AppA.exe",
+        "Open",
+        start_time=open_start,
+    )
+    activity_service.set_activity_duration(open_id, 33)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=30,
+            extra_seconds=0,
+            is_persisted=True,
+            persisted_activity_id=open_id,
+            start_time=open_start,
+        )
+    )
+
+    overview = bridge.get_overview()
+    timeline = bridge.get_timeline()
+    recent_row = next(r for r in overview["activities"] if open_id in r.get("activity_ids", []))
+    timeline_row = next(s for s in timeline["sessions"] if open_id in s.get("activity_ids", []))
+
+    for row in (recent_row, timeline_row):
+        assert int(row["duration_seconds"]) == 330
+        assert int(row["display_base_seconds"]) == 300
+        assert int(row["closed_duration_seconds"]) == 300
+        assert int(row["open_activity_id"]) == open_id
+
+
+def test_persisted_open_extra_seconds_is_static_base_for_current_open_rows(bridge):
+    aid, start_time = _create_real_open_activity(elapsed_seconds=30)
+    activity_service.set_activity_duration(aid, 33)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=30,
+            extra_seconds=5,
+            is_persisted=True,
+            persisted_activity_id=aid,
+            start_time=start_time,
+        )
+    )
+
+    overview = bridge.get_overview()
+    details = bridge.get_timeline_session_details([aid], None)
+    recent_row = next(r for r in overview["activities"] if int(r.get("activity_id") or 0) == aid)
+    detail_row = next(a for a in details["activities"] if int(a.get("activity_id") or 0) == aid)
+
+    for row in (recent_row, detail_row):
+        assert int(row["duration_seconds"]) == 35
+        assert int(row["display_base_seconds"]) == 5
+
+
+def test_absorbed_pending_extra_seconds_is_added_to_anchor_base(bridge):
+    from worktrace.services.activity_display_model_service import (
+        apply_live_span_to_row,
+        build_activity_display_model,
+        get_live_span,
+    )
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    anchor_id = activity_service.create_activity(
+        "AppA",
+        "AppA.exe",
+        "Anchor",
+        start_time=f"{today} 09:00:00",
+    )
+    activity_service.close_activity(anchor_id, f"{today} 09:05:00", 300)
+    pending_start = f"{today} 09:05:10"
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=12,
+            extra_seconds=5,
+            is_persisted=False,
+            start_time=pending_start,
+        )
+    )
+
+    model = build_activity_display_model(report_date=today, today=today)
+    span = get_live_span(model)
+    row = activity_service.get_activity(anchor_id)
+    overlaid = apply_live_span_to_row(dict(row), span)
+
+    assert span["live_state"] == "absorbed_pending"
+    assert int(overlaid["duration_seconds"]) == 317
+    assert int(overlaid["display_base_seconds"]) == 305
 
 
 def test_virtual_pending_rows_in_lists_and_kpi_tick(bridge):

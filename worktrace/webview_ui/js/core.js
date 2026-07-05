@@ -657,17 +657,19 @@
     }
     App.runtimeIdentityFromPayload = runtimeIdentityFromPayload;
 
-    function runtimeContinuityKey(runtime) {
+    function runtimeVisualContinuityKey(runtime) {
         if (!runtime) return "";
         return [
+            runtime.page || "",
+            runtime.reportDate || "",
             runtime.displaySpanId || "",
             runtime.stableLiveKeyHash || "",
             runtime.currentActivityDisplaySpanId || "",
-            runtime.currentResourceIdentityHash || "",
-            runtime.liveStateRevision || ""
+            runtime.currentResourceIdentityHash || ""
         ].join("|");
     }
-    App.runtimeContinuityKey = runtimeContinuityKey;
+    App.runtimeVisualContinuityKey = runtimeVisualContinuityKey;
+    App.runtimeContinuityKey = runtimeVisualContinuityKey;
 
     function acceptLiveRuntimePayload(payload, page, reportDate, options) {
         if (!payload || !payload.ok) return false;
@@ -676,7 +678,7 @@
         var runtimeDate = payloadReportDate(payload, runtimePage, reportDate);
         var identity = runtimeIdentityFromPayload(payload);
         var previous = App.liveRuntime || null;
-        var previousKey = runtimeContinuityKey(previous);
+        var previousKey = runtimeVisualContinuityKey(previous);
         var incomingClock = identity.liveClock;
         var previousClock = previous && previous.liveClock;
         if (incomingClock && previousClock && sameLiveContinuity(previousClock, incomingClock)) {
@@ -700,7 +702,7 @@
             currentResourceIdentityHash: identity.currentResourceIdentityHash
         };
         App.liveDisplayModel = payload.activity_display_model || null;
-        if (previousKey && previousKey !== runtimeContinuityKey(App.liveRuntime)) {
+        if (previousKey && previousKey !== runtimeVisualContinuityKey(App.liveRuntime)) {
             App._monotonicRenderState = {};
         }
         if (options.source === "refresh_state") {
@@ -770,6 +772,37 @@
             var currentDate = runtimeReportDateForPage("timeline", reportDate);
             if (expectedDate && currentDate && expectedDate !== currentDate) return false;
         } else if (expectedDate && expectedDate !== App.localTodayStr()) {
+            return false;
+        }
+        var currentRuntime = App.liveRuntime || null;
+        var currentClock = currentRuntime && currentRuntime.liveClock;
+        var incomingIdentity = runtimeIdentityFromPayload(payload);
+        var incomingClock = incomingIdentity.liveClock;
+        var currentActivity = payload.current_activity || {};
+        if (isActiveLiveTime(currentClock) && incomingClock && !sameLiveContinuity(currentClock, incomingClock)) {
+            return false;
+        }
+        if (
+            isActiveLiveTime(currentClock)
+            && !incomingClock
+            && (currentActivity.active === true || currentActivity.is_active === true)
+        ) {
+            return false;
+        }
+        if (
+            currentRuntime
+            && currentRuntime.currentActivityDisplaySpanId
+            && incomingIdentity.currentActivityDisplaySpanId
+            && currentRuntime.currentActivityDisplaySpanId !== incomingIdentity.currentActivityDisplaySpanId
+        ) {
+            return false;
+        }
+        if (
+            currentRuntime
+            && currentRuntime.currentResourceIdentityHash
+            && incomingIdentity.currentResourceIdentityHash
+            && currentRuntime.currentResourceIdentityHash !== incomingIdentity.currentResourceIdentityHash
+        ) {
             return false;
         }
         return true;

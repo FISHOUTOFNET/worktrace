@@ -324,6 +324,9 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     project_name = first.get("report_project_name") or first.get("display_project_name") or UNCATEGORIZED_PROJECT
     project_description = first.get("report_project_description") or first.get("display_project_description") or ""
     duration = sum(_display_duration(row) for row in rows)
+    closed_duration_seconds = sum(
+        _display_duration(row) for row in rows if not bool(row.get("is_in_progress"))
+    )
     activity_ids = [int(row["id"]) for row in rows]
     status_summary = _status_summary(rows)
     session_id = f"{first['id']}-{last['id']}"
@@ -331,6 +334,7 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     # set by _split_calendar_report_rows from the original (pre-projection)
     # end_time so it reflects DB state, not the projected display end_time.
     is_in_progress = bool(last.get("is_in_progress"))
+    open_activity_id = int(last.get("id") or 0) if is_in_progress else 0
     return {
         "session_id": session_id,
         "project_id": project_id,
@@ -340,6 +344,8 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "end_time": last.get("end_time"),
         "report_date": first.get("report_date"),
         "duration_seconds": duration,
+        "closed_duration_seconds": int(closed_duration_seconds),
+        "open_activity_id": open_activity_id,
         "activity_ids": activity_ids,
         "first_activity_id": int(activity_ids[0]) if activity_ids else None,
         "session_note": "",

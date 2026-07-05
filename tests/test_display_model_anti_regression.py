@@ -387,3 +387,48 @@ def test_activity_display_model_remains_single_display_semantics_owner():
         "Activity Display Model must remain the display semantics owner; "
         "unexpected live projection services: " + ", ".join(offenders)
     )
+
+
+def test_persisted_open_overlay_does_not_reverse_engineer_base_from_db_duration():
+    source = (
+        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r"elif state == \"persisted_open\":(?P<body>.*?)(?=\n    else:)",
+        source,
+        re.S,
+    )
+    assert match is not None
+    branch = match.group("body")
+    assert "row_raw" not in branch
+    for token in (
+        "row_raw - current_elapsed_at_sample",
+        "row_raw - active_elapsed_at_sample",
+        "int(row_raw) - current_elapsed_at_sample",
+        "int(row_raw) - active_elapsed_at_sample",
+    ):
+        assert token not in source
+
+
+def test_viewmodel_and_bridge_do_not_reintroduce_independent_live_clock_fields():
+    forbidden = (
+        "baseline_epoch_ms",
+        "snapshot_at_epoch_ms",
+        "snapshot_baseline_epoch_ms",
+    )
+    offenders = []
+    for rel_path in (
+        "worktrace/services/view_model_service.py",
+        "worktrace/webview_ui/bridge.py",
+        "worktrace/webview_ui/bridge_common.py",
+        "worktrace/webview_ui/bridge_overview.py",
+        "worktrace/webview_ui/bridge_timeline.py",
+    ):
+        source = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in source:
+                offenders.append(f"{rel_path}: {token}")
+    assert not offenders, (
+        "ViewModel / bridge must not publish an independent live clock; "
+        + "; ".join(offenders)
+    )

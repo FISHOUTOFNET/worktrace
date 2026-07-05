@@ -1363,6 +1363,49 @@ def test_runtime_rebases_same_continuity_without_live_state_gate():
         )
 
 
+def test_runtime_visual_continuity_key_excludes_structural_revisions():
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "runtimeVisualContinuityKey")
+    for required in (
+        "page",
+        "reportDate",
+        "displaySpanId",
+        "stableLiveKeyHash",
+        "currentActivityDisplaySpanId",
+        "currentResourceIdentityHash",
+    ):
+        assert required in body
+    for forbidden in (
+        "liveStateRevision",
+        "refreshRevision",
+        "pageStructureRevision",
+        "is_persisted",
+        "persisted_id",
+    ):
+        assert forbidden not in body
+
+
+def test_accept_runtime_keeps_monotonic_state_when_only_live_state_revision_changes():
+    src = _strip_js_comments(read_js("core.js"))
+    body = func_body(src, "acceptLiveRuntimePayload")
+    reset_pos = body.find("App._monotonicRenderState = {}")
+    key_pos = body.find("runtimeVisualContinuityKey")
+    assert reset_pos != -1
+    assert key_pos != -1 and key_pos < reset_pos
+    assert "previousKey !== runtimeVisualContinuityKey(App.liveRuntime)" in body
+
+
+def test_virtual_to_persisted_same_visual_identity_keeps_no_rollback_guard():
+    src = _strip_js_comments(read_js("core.js"))
+    key_body = func_body(src, "runtimeVisualContinuityKey")
+    render_body = func_body(src, "renderDurationProjected")
+    assert "stableLiveKeyHash" in key_body
+    assert "displaySpanId" in key_body
+    assert "liveStateRevision" not in key_body
+    assert "next < entry.lastSeconds" in render_body
+    assert "next = entry.lastSeconds" in render_body
+
+
 def test_run_revision_check_accepts_refresh_state_without_row_clock_commit():
     """Every revision check accepts refresh_state runtime and must not call
     old compatibility clock paths or rewrite row projection anchors."""
@@ -1698,6 +1741,10 @@ def test_hidden_or_stale_page_payload_cannot_overwrite_runtime():
     assert 'expectedPage === "timeline"' in gate_body
     assert "runtimeReportDateForPage" in gate_body
     assert "App.localTodayStr()" in gate_body
+    assert "sameLiveContinuity(currentClock, incomingClock)" in gate_body
+    assert "currentActivity.active === true" in gate_body
+    assert "currentActivityDisplaySpanId" in gate_body
+    assert "currentResourceIdentityHash" in gate_body
     init_body = func_body(_strip_js_comments(read_js("init.js")), "refreshOverview")
     timeline_body = func_body(_strip_js_comments(read_js("timeline.js")), "refreshTimeline")
     assert "token !== App.overviewRequestToken" in init_body

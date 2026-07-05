@@ -558,8 +558,7 @@ def _build_display_span(
     duration_at_sample = int(live_clock.get("duration_seconds_at_sample") or 0)
     # Anchor base seconds exists only for absorbed_pending, where the display
     # projection is explicitly anchored to a closed row. Persisted-open rows
-    # use the current page row sample in ``apply_live_span_to_row`` instead of
-    # doing a second DB read here.
+    # derive static bases from row structural fields in ``apply_live_span_to_row``.
     live_anchor_base_seconds = 0
 
     if display_live_state == "persisted_open":
@@ -662,6 +661,50 @@ def _live_clock_fields(live_clock: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _current_active_elapsed_at_sample(live_clock: dict[str, Any]) -> int:
+    return int(
+        live_clock.get("current_elapsed_at_sample")
+        or live_clock.get("active_elapsed_at_sample")
+        or 0
+    )
+
+
+def _snapshot_extra_base_for_span(span: dict[str, Any], live_clock: dict[str, Any]) -> int:
+    return int(
+        live_clock.get("display_base_seconds")
+        or span.get("display_base_seconds")
+        or 0
+    )
+
+
+def _static_base_for_live_row(
+    row: dict[str, Any],
+    span: dict[str, Any],
+    live_clock: dict[str, Any],
+    state: str,
+) -> int:
+    if state != "persisted_open":
+        return int(live_clock.get("display_base_seconds") or 0)
+
+    anchor_id = int(span.get("anchor_activity_id") or 0)
+    snapshot_extra_base = _snapshot_extra_base_for_span(span, live_clock)
+    row_id = int(row.get("activity_id") or row.get("id") or 0)
+    open_activity_id = int(row.get("open_activity_id") or 0)
+    activity_ids = row.get("activity_ids")
+
+    if row_id == anchor_id:
+        return snapshot_extra_base
+
+    if open_activity_id == anchor_id and "closed_duration_seconds" in row:
+        return int(row.get("closed_duration_seconds") or 0) + snapshot_extra_base
+
+    if isinstance(activity_ids, list) and anchor_id in {int(aid) for aid in activity_ids if aid}:
+        row["live_contract_reason"] = "missing_closed_static_base"
+        return snapshot_extra_base
+
+    return snapshot_extra_base
+
+
 def apply_live_span_to_row(
     row: dict[str, Any],
     span: dict[str, Any] | None,
@@ -671,10 +714,9 @@ def apply_live_span_to_row(
     Row matches when its ``activity_id`` / ``id`` / ``first_activity_id`` /
     ``activity_ids`` contains ``span.anchor_activity_id``.
 
-    Row projection formula: ``row/static display base + current active
-    elapsed delta``. Persisted-open rows use the row duration from the
-    current page ViewModel sample as the single static source, so the
-    handoff never mixes a refresh-state clock with a second DB sample.
+    Row projection formula: ``static display base + current active
+    elapsed``. Open DB row duration is persistence-only for live UI and
+    must not be reverse-engineered into a display base.
 
     Mutates and returns ``row``; unchanged when ``span`` is ``None`` or no match.
     """
@@ -704,27 +746,23 @@ def apply_live_span_to_row(
 
     if state == "absorbed_pending":
         anchor_base = int(span.get("live_anchor_base_seconds") or 0)
-        active_elapsed_at_sample = int(
-            live_clock.get("active_elapsed_at_sample")
-            or live_clock.get("current_elapsed_at_sample")
-            or max(0, duration_at_sample - anchor_base)
+        current_elapsed_at_sample = _current_active_elapsed_at_sample(live_clock)
+        pending_extra_base = max(
+            0,
+            int(live_clock.get("display_base_seconds") or 0) - anchor_base,
         )
-        live_delta_at_sample = max(0, active_elapsed_at_sample)
-        projected = row_raw + live_delta_at_sample
-        display_base_seconds = max(0, int(projected) - active_elapsed_at_sample)
+        display_base_seconds = row_raw + pending_extra_base
+        projected = display_base_seconds + current_elapsed_at_sample
         row["duration_seconds"] = int(projected)
         row["duration"] = format_duration(projected)
         row["display_base_seconds"] = int(display_base_seconds)
         row["live_base_seconds"] = int(display_base_seconds)
     elif state == "persisted_open":
-        current_elapsed_at_sample = int(
-            live_clock.get("current_elapsed_at_sample")
-            or live_clock.get("active_elapsed_at_sample")
-            or 0
-        )
-        display_base_seconds = max(0, int(row_raw) - current_elapsed_at_sample)
-        row["duration_seconds"] = int(row_raw)
-        row["duration"] = format_duration(row_raw)
+        current_elapsed_at_sample = _current_active_elapsed_at_sample(live_clock)
+        display_base_seconds = _static_base_for_live_row(row, span, live_clock, state)
+        projected = display_base_seconds + current_elapsed_at_sample
+        row["duration_seconds"] = int(projected)
+        row["duration"] = format_duration(projected)
         row["display_base_seconds"] = int(display_base_seconds)
         row["live_base_seconds"] = int(display_base_seconds)
     else:
