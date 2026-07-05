@@ -1435,34 +1435,31 @@ def test_overview_bridge_pause_uses_app_api_facade_only() -> None:
         assert f"import worktrace.{forbidden}" not in source
 
 
-# --- Section 七: page-scoped frontend live clock registry boundary ---
+# --- Section 七: accepted frontend live runtime boundary ---
 
 
 _JS_DIR = WEBVIEW_UI_DIR / "js"
 
 
-def test_core_js_implements_page_scoped_live_clock_registry() -> None:
-    """Section 七: ``core.js`` MUST implement a page-scoped live-clock
-    registry. The page-scoped ``App.activeSpanClockByPage`` is the only
-    active-clock source; legacy compatibility mirrors must stay removed so
-    a hidden page's payload cannot overwrite the current page's active clock.
+def test_core_js_implements_accepted_live_runtime() -> None:
+    """Section 七: ``core.js`` MUST implement one accepted live runtime.
+    Page payloads are render-only and legacy compatibility mirrors must stay
+    removed so a hidden page's payload cannot overwrite the current runtime.
     """
     source = (_JS_DIR / "core.js").read_text(encoding="utf-8")
-    assert "App.activeSpanClockByPage" in source, (
-        "core.js must define App.activeSpanClockByPage (page-scoped registry)"
+    assert "App.liveRuntime" in source, (
+        "core.js must define App.liveRuntime as the accepted runtime"
     )
+    assert "acceptRefreshStateRuntime" in source
+    assert "isPagePayloadCompatibleWithRuntime" in source
+    assert "App.activeSpanClockByPage" not in source
     assert "App.liveClockByPage" not in source
     assert "App.liveClockBySpanId" not in source
     assert "App.activeDisplaySpanIdByPage" not in source
     assert "App.activeDisplaySpanId" not in source
-    # getActiveLiveClock MUST read App.currentPage to scope the lookup.
     assert "App.currentPage" in source, (
-        "core.js getActiveLiveClock must read App.currentPage to scope "
-        "the active clock lookup"
-    )
-    # registerLiveClock MUST accept a page/scope parameter.
-    assert "opts.page" in source or "options.page" in source, (
-        "core.js registerLiveClock must accept a page/scope parameter"
+        "core.js getActiveLiveClock must confirm the accepted runtime still "
+        "matches the visible page"
     )
 
 
@@ -1471,8 +1468,7 @@ def test_core_js_full_reconcile_does_not_unconditionally_refresh_overview() -> N
     NOT unconditionally call ``refreshOverview()``. When the current
     page is NOT Overview (e.g. Timeline historical date), the reconcile
     MUST only refresh status + the current page so a hidden Overview
-    refresh does not register an Overview-scope live clock that
-    overwrites the current page's active clock.
+    refresh does not let a hidden page overwrite the accepted runtime.
     """
     source = (_JS_DIR / "init.js").read_text(encoding="utf-8")
     # The reconcile function MUST gate refreshOverview on the current page.
@@ -1482,19 +1478,15 @@ def test_core_js_full_reconcile_does_not_unconditionally_refresh_overview() -> N
     )
 
 
-def test_overview_js_commits_with_page_scope() -> None:
-    """Section 七: ``overview.js`` MUST commit live clocks with
-    explicit Overview page scope."""
+def test_overview_js_does_not_commit_live_runtime() -> None:
+    """Section 七: ``overview.js`` is render-only for live identity."""
     source = (_JS_DIR / "overview.js").read_text(encoding="utf-8")
-    assert 'commitPageActiveSpanClock(overview, "overview")' in source, (
-        "overview.js must commit live clocks with page scope \"overview\""
-    )
+    assert "commitPageActiveSpanClock" not in source
+    assert "registerLiveClock" not in source
 
 
-def test_timeline_js_commits_with_page_scope() -> None:
-    """Section 七: ``timeline.js`` MUST commit live clocks with
-    explicit Timeline page scope."""
+def test_timeline_js_does_not_commit_live_runtime() -> None:
+    """Section 七: ``timeline.js`` is render-only for live identity."""
     source = (_JS_DIR / "timeline.js").read_text(encoding="utf-8")
-    assert 'commitPageActiveSpanClock(data, "timeline")' in source, (
-        "timeline.js must commit live clocks with page scope \"timeline\""
-    )
+    assert "commitPageActiveSpanClock" not in source
+    assert "registerLiveClock" not in source

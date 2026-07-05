@@ -43,9 +43,10 @@
                 throw new Error(msg);
             });
             if (!bundle) return;
-            // Commit the page-model active span BEFORE rendering so KPI and
-            // Recent anchors are seeded from the same sample.
-            App.commitPageActiveSpanClock(bundle, "overview");
+            if (!App.isPagePayloadCompatibleWithRuntime(bundle, "overview", bundle.date)) {
+                App.noteRejectedPagePayload(bundle, "overview", bundle.date);
+                return;
+            }
             var overview = bundle.overview || {};
             // Augment the overview sub-payload with the bundle-level
             overview.date = bundle.date || overview.date;
@@ -95,6 +96,11 @@
                     throw new Error(msg);
                 });
                 if (data) {
+                    if (!App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
+                        App.noteRejectedPagePayload(data, "timeline", date);
+                        resolve();
+                        return;
+                    }
                     App.showTimeline(data);
                     App.clearTimelineError();
                 }
@@ -108,30 +114,37 @@
     }
 
     function refreshCurrentPageData(state, options) {
-        var opts = options || {};
-        // When a refresh is already in-flight, record a pending request
         if (App.activePageRefreshInFlight) {
-            App.pendingPageRefresh = true;
             return Promise.resolve();
         }
         App.activePageRefreshInFlight = true;
-        App.pendingPageRefresh = false;
-        var promises = [
-            state && state.ok ? refreshStatusFromRefreshState(state) : refreshStatus()
-        ];
-        if (App.currentPage === "overview") {
-            promises.push(refreshOverview());
-        } else if (App.currentPage === "timeline" && App.timelineLoaded) {
-            // revision-change refresh and manual refresh do not overwrite
-            if (typeof App._timelineEditingActive !== "function" || !App._timelineEditingActive()) {
-                promises.push(refreshTimeline());
-            } else {
-                refreshCurrentActivityFromState(state || App.lastRefreshState, {
-                    allowContinuityChange: !!opts.allowContinuityChange
-                });
+        var reportDate = (App.currentPage === "timeline" && App.timelineLoaded && App.timelineDate)
+            ? App.timelineDate
+            : null;
+        var statePromise = state && state.ok
+            ? Promise.resolve(state)
+            : App.callBridge("get_refresh_state", reportDate).then(function (result) {
+                return App.handleResult(result, function () { return null; });
+            });
+        return statePromise.then(function (acceptedState) {
+            if (acceptedState && acceptedState.ok) {
+                App.acceptRefreshStateRuntime(acceptedState);
             }
-        }
-        return Promise.allSettled(promises).then(function (results) {
+            var promises = [
+                acceptedState && acceptedState.ok ? refreshStatusFromRefreshState(acceptedState) : refreshStatus()
+            ];
+            if (App.currentPage === "overview") {
+                promises.push(refreshOverview());
+            } else if (App.currentPage === "timeline" && App.timelineLoaded) {
+                // revision-change refresh and manual refresh do not overwrite
+                if (typeof App._timelineEditingActive !== "function" || !App._timelineEditingActive()) {
+                    promises.push(refreshTimeline());
+                } else {
+                    refreshCurrentActivityFromState(acceptedState || App.lastRefreshState);
+                }
+            }
+            return Promise.allSettled(promises);
+        }).then(function (results) {
             App.activePageRefreshInFlight = false;
             App.lastFullRefreshAtEpochMs = Date.now();
             var anyError = false;
@@ -144,11 +157,9 @@
             if (!anyError) {
                 App.clearError();
             }
-            // while this one was in-flight, trigger a new refresh now for
-            if (App.pendingPageRefresh) {
-                App.pendingPageRefresh = false;
-                refreshCurrentPageData();
-            }
+        }).catch(function (err) {
+            App.activePageRefreshInFlight = false;
+            throw err;
         });
     }
 
@@ -208,9 +219,16 @@
         if (pageTarget) pageTarget.classList.add("active");
 
         App.currentPage = pageId;
+        if (typeof App.setLiveRuntimeScope === "function") {
+            App.setLiveRuntimeScope(pageId, pageId === "timeline" ? App.timelineDate : null);
+        }
 
         if (pageId === "timeline" && !App.timelineLoaded && !App.timelineLoading) {
-            App.loadTimeline(App.timelineDate);
+            refreshCurrentPageData().then(function () {
+                if (App.liveRuntime && App.liveRuntime.page === "timeline") {
+                    App.loadTimeline(App.timelineDate);
+                }
+            });
         }
         // No write / file / dialog action is triggered.
         if (pageId === "statistics" && !App.statisticsLoaded && !App.statisticsLoading) {
@@ -260,7 +278,14 @@
                 App.detailsRequestToken++;
                 App.lastSessionDetailsViewModel = null;
                 App.resetCorrectionShellState();
-                App.loadTimeline(App.timelineDate);
+                if (typeof App.setLiveRuntimeScope === "function") {
+                    App.setLiveRuntimeScope("timeline", App.timelineDate);
+                }
+                refreshCurrentPageData().then(function () {
+                    if (App.liveRuntime && App.liveRuntime.page === "timeline") {
+                        App.loadTimeline(App.timelineDate);
+                    }
+                });
             });
         }
         document.getElementById("edit-save-btn").addEventListener("click", App.saveEdit);
@@ -387,12 +412,7 @@
 
     function refreshCurrentActivityFromState(state, options) {
         if (!state || !state.current_activity) return;
-        var opts = options || {};
-        if (opts.allowContinuityChange) {
-            App.commitPageActiveSpanClock(state, App.currentPage || "overview");
-        } else {
-            App.observeRefreshStateActiveSpan(state, App.currentPage || "overview");
-        }
+        if (!App.liveRuntime || App.liveRuntime.refreshRevision !== String(state.refresh_revision || "")) return;
         if (App.currentPage === "overview") {
             if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
             App.lastOverviewSnapshot.current_activity = state.current_activity || {};
@@ -410,28 +430,18 @@
                 "timeline"
             );
         }
-        App.applyLocalTicker();
     }
     App.refreshCurrentActivityFromState = refreshCurrentActivityFromState;
 
     function refreshTimelineCurrentActivityFromState(state) {
         if (App.currentPage !== "timeline" || !state || !state.current_activity) return;
-        var incomingClock = state.live_clock || (state.activity_display_model && state.activity_display_model.live_clock);
-        var currentClock = typeof App.getActiveLiveClock === "function"
-            ? App.getActiveLiveClock("timeline")
-            : null;
-        if (currentClock && incomingClock
-            && typeof App.sameLiveContinuity === "function"
-            && !App.sameLiveContinuity(currentClock, incomingClock)) {
-            return;
-        }
+        if (!App.liveRuntime || App.liveRuntime.refreshRevision !== String(state.refresh_revision || "")) return;
         updateCurrentActivityCacheFromRefreshState(state);
         App.renderCurrentActivityElement(
             document.getElementById("timeline-current"),
             state.current_activity || {},
             "timeline"
         );
-        App.applyLocalTicker();
     }
     App.refreshTimelineCurrentActivityFromState = refreshTimelineCurrentActivityFromState;
 
@@ -455,28 +465,21 @@
             var newLiveRevision = state.live_state_revision || state.refresh_revision;
             var prevPageRevision = previousState && (previousState.page_structure_revision || previousState.refresh_revision);
             var newPageRevision = state.page_structure_revision || state.refresh_revision;
-            var liveStateChanged = isFirstCheck || prevLiveRevision !== newLiveRevision || prevRevision !== newRevision;
             var pageStructureChanged = isFirstCheck || prevPageRevision !== newPageRevision;
-            App.lastRefreshState = state;
-            var revisionUnchanged = !isFirstCheck && prevRevision === newRevision;
-            refreshCurrentActivityFromState(state, {
-                allowContinuityChange: !!liveStateChanged
-            });
+            var accepted = App.acceptRefreshStateRuntime(state);
+            if (!accepted) return;
+            refreshCurrentActivityFromState(state);
             refreshStatusFromRefreshState(state);
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision
             if (pageStructureChanged) {
                 triggeredHeavyRefresh = true;
                 App.liveClockContractRefreshRequested = false;
-                refreshCurrentPageData(state, {
-                    allowContinuityChange: !!liveStateChanged
-                });
+                refreshCurrentPageData(state);
             } else if (App.liveClockContractRefreshRequested && !App.activePageRefreshInFlight) {
                 triggeredHeavyRefresh = true;
                 App.liveClockContractRefreshRequested = false;
-                refreshCurrentPageData(state, {
-                    allowContinuityChange: !!liveStateChanged
-                });
+                refreshCurrentPageData(state);
             }
             // and could race the in-flight refresh.
             var now = Date.now();
@@ -517,15 +520,14 @@
         // Load the first-run privacy notice BEFORE refreshing the main UI
         App.loadFirstRunNotice().then(function (noticeConfirmed) {
             if (!noticeConfirmed) return;
-            refreshCurrentPageData().then(function () {
-                App.lastReconcileAtEpochMs = Date.now();
-                return App.callBridge("get_refresh_state");
-            }).then(function (result) {
+            App.callBridge("get_refresh_state").then(function (result) {
                 var state = App.handleResult(result, function () { return null; });
                 if (state) {
-                    App.lastRefreshState = state;
-                    App.observeRefreshStateActiveSpan(state, App.currentPage || "overview");
+                    App.acceptRefreshStateRuntime(state);
                 }
+                return refreshCurrentPageData(state);
+            }).then(function () {
+                App.lastReconcileAtEpochMs = Date.now();
                 startHeartbeat();
             }, function () {
                 startHeartbeat();

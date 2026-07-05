@@ -13,19 +13,19 @@
 
     // Ticker invariant: ONLY updates DOM text; never calls a bridge method, never writes the DB,
     // never starts / stops the collector. Render flows seed static display bases; the heartbeat
-    // may only advance the page-scoped active live time.
+    // may only advance the accepted live runtime.
     App.lastOverviewSnapshot = null;
     // Structural caches only — used to re-render lists on page switch / edit-guard checks. They
     // MUST NOT participate in live-row seconds computation. ``applyLocalTicker`` reads static
-    // display bases from the DOM and the one page-scoped active live time.
+    // display bases from the DOM and the one accepted live runtime.
     App.lastRecentData = null;
     App.lastSessionDetailsViewModel = null;
     App.lastTimelineData = null;
 
-    // Canonical active live time. There is one dynamic elapsed source per visible page
-    // scope; current activity, rows and KPIs never own their own complete clock.
+    // Canonical accepted live runtime. ``get_refresh_state`` is the only writer;
+    // page payloads may render only after proving compatibility with this runtime.
     App.liveDisplayModel = null;
-    App.activeSpanClockByPage = {};
+    App.liveRuntime = null;
     App.liveClockContractViolation = null;
     App.liveClockContractRefreshRequested = false;
 
@@ -34,9 +34,6 @@
     App.lastRefreshState = null;
     App.refreshCheckInFlight = false;
     App.activePageRefreshInFlight = false;
-    // Pending page refresh: records a request made while a refresh is in-flight; after completion a new
-    // refresh is triggered if true so a page-switch refresh is never silently skipped by the in-flight guard.
-    App.pendingPageRefresh = false;
     App.lastFullRefreshAtEpochMs = 0;
     App.RECONCILE_INTERVAL_MS = 180000;
     App.lastReconcileAtEpochMs = 0;
@@ -458,7 +455,7 @@
     //     carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
     //
     // Live display:
-    //     base_seconds_at_render + max(0, active_elapsed_now - active_elapsed_at_render)
+    //     display_base_seconds + active_elapsed_now
 
     function tickerNowEpochMs() {
         return Date.now();
@@ -618,106 +615,161 @@
         return !!(c && c.display_span_id && c.is_live === true);
     }
 
-    function commitPageActiveSpanClock(payload, page) {
-        var pageScope = String(page || App.currentPage || "overview");
-        var incomingClock = normalizeLiveClock(findClockInPayload(payload, false));
-        if (!isActiveLiveTime(incomingClock)) {
-            clearPageActiveSpanClockFromPageModel(payload, pageScope);
-            return null;
+    function runtimeReportDateForPage(page, fallbackDate) {
+        if (page === "timeline") {
+            return fallbackDate || App.timelineDate || App.localTodayStr();
         }
-        var activeClock = App.activeSpanClockByPage[pageScope] || null;
-        var sameContinuity = sameLiveContinuity(activeClock, incomingClock);
-        var isCurrentPageScope = (pageScope === App.currentPage);
-        if (isCurrentPageScope && activeClock && !sameContinuity) {
+        return fallbackDate || App.localTodayStr();
+    }
+    App.runtimeReportDateForPage = runtimeReportDateForPage;
+
+    function payloadReportDate(payload, page, fallbackDate) {
+        if (payload && (payload.report_date || payload.date)) {
+            return String(payload.report_date || payload.date);
+        }
+        return runtimeReportDateForPage(page, fallbackDate);
+    }
+    App.payloadReportDate = payloadReportDate;
+
+    function runtimeIdentityFromPayload(payload) {
+        payload = payload || {};
+        var clock = normalizeLiveClock(findClockInPayload(payload, false));
+        var current = payload.current_activity || {};
+        return {
+            liveClock: isActiveLiveTime(clock) ? clock : null,
+            displaySpanId: String(
+                payload.display_span_id
+                || (clock && clock.display_span_id)
+                || ""
+            ),
+            stableLiveKeyHash: String(
+                payload.stable_live_key_hash
+                || (clock && clock.stable_live_key_hash)
+                || ""
+            ),
+            refreshRevision: String(payload.refresh_revision || ""),
+            liveStateRevision: String(payload.live_state_revision || ""),
+            pageStructureRevision: String(payload.page_structure_revision || ""),
+            sampleId: String(payload.sample_id || ""),
+            currentActivityDisplaySpanId: String(current.current_activity_display_span_id || ""),
+            currentResourceIdentityHash: String(current.current_resource_identity_hash || "")
+        };
+    }
+    App.runtimeIdentityFromPayload = runtimeIdentityFromPayload;
+
+    function runtimeContinuityKey(runtime) {
+        if (!runtime) return "";
+        return [
+            runtime.displaySpanId || "",
+            runtime.stableLiveKeyHash || "",
+            runtime.currentActivityDisplaySpanId || "",
+            runtime.currentResourceIdentityHash || "",
+            runtime.liveStateRevision || ""
+        ].join("|");
+    }
+    App.runtimeContinuityKey = runtimeContinuityKey;
+
+    function acceptRefreshStateRuntime(state) {
+        if (!state || !state.ok) return false;
+        var page = App.currentPage || "overview";
+        var reportDate = payloadReportDate(state, page);
+        var identity = runtimeIdentityFromPayload(state);
+        var previous = App.liveRuntime || null;
+        var previousKey = runtimeContinuityKey(previous);
+        var incomingClock = identity.liveClock;
+        var previousClock = previous && previous.liveClock;
+        if (incomingClock && previousClock && sameLiveContinuity(previousClock, incomingClock)) {
+            incomingClock = rebaseIncomingClockWithoutRollback(
+                previousClock,
+                incomingClock,
+                tickerNowEpochMs()
+            );
+        }
+        App.liveRuntime = {
+            page: page,
+            reportDate: reportDate,
+            liveClock: incomingClock,
+            displaySpanId: identity.displaySpanId,
+            stableLiveKeyHash: identity.stableLiveKeyHash,
+            refreshRevision: identity.refreshRevision,
+            liveStateRevision: identity.liveStateRevision,
+            pageStructureRevision: identity.pageStructureRevision,
+            sampleId: identity.sampleId,
+            currentActivityDisplaySpanId: identity.currentActivityDisplaySpanId,
+            currentResourceIdentityHash: identity.currentResourceIdentityHash
+        };
+        App.liveDisplayModel = state.activity_display_model || null;
+        if (previousKey && previousKey !== runtimeContinuityKey(App.liveRuntime)) {
             App._monotonicRenderState = {};
         }
-        var storedClock = rebaseIncomingClockWithoutRollback(activeClock, incomingClock, tickerNowEpochMs());
-        App.activeSpanClockByPage[pageScope] = storedClock;
-        if (payload.activity_display_model) {
-            App.liveDisplayModel = payload.activity_display_model;
-        } else {
-            App.liveDisplayModel = payload;
-        }
-        return storedClock;
+        App.lastRefreshState = state;
+        return true;
     }
-    App.commitPageActiveSpanClock = commitPageActiveSpanClock;
+    App.acceptRefreshStateRuntime = acceptRefreshStateRuntime;
 
-    function observeRefreshStateActiveSpan(payload, page) {
-        var pageScope = String(page || App.currentPage || "overview");
-        var incomingClock = normalizeLiveClock(findClockInPayload(payload, false));
-        if (!isActiveLiveTime(incomingClock)) {
-            return App.activeSpanClockByPage[pageScope] || null;
-        }
-        var activeClock = App.activeSpanClockByPage[pageScope] || null;
-        if (activeClock && !sameLiveContinuity(activeClock, incomingClock)) {
-            return activeClock;
-        }
-        var storedClock = rebaseIncomingClockWithoutRollback(activeClock, incomingClock, tickerNowEpochMs());
-        App.activeSpanClockByPage[pageScope] = storedClock;
-        if (payload && payload.activity_display_model) {
-            App.liveDisplayModel = payload.activity_display_model;
-        }
-        return storedClock;
+    function setLiveRuntimeScope(page, reportDate) {
+        App.liveRuntime = {
+            page: String(page || App.currentPage || "overview"),
+            reportDate: runtimeReportDateForPage(page || App.currentPage || "overview", reportDate),
+            liveClock: null,
+            displaySpanId: "",
+            stableLiveKeyHash: "",
+            refreshRevision: "",
+            liveStateRevision: "",
+            pageStructureRevision: "",
+            sampleId: "",
+            currentActivityDisplaySpanId: "",
+            currentResourceIdentityHash: ""
+        };
+        App.liveDisplayModel = null;
+        App._monotonicRenderState = {};
     }
-    App.observeRefreshStateActiveSpan = observeRefreshStateActiveSpan;
+    App.setLiveRuntimeScope = setLiveRuntimeScope;
 
-    function commitPartialActiveSpanOffset(payload, page) {
-        var pageScope = String(page || App.currentPage || "overview");
-        var clock = normalizeLiveClock(findClockInPayload(payload, false))
-            || App.activeSpanClockByPage[pageScope] || null;
-        return activeElapsedNow(clock, tickerNowEpochMs());
-    }
-    App.commitPartialActiveSpanOffset = commitPartialActiveSpanOffset;
-
-    function clearPageActiveSpanClockFromPageModel(payload, page) {
-        var pageScope = String(page || App.currentPage || "overview");
-        clearLiveClockRegistry(pageScope);
-    }
-    App.clearPageActiveSpanClockFromPageModel = clearPageActiveSpanClockFromPageModel;
-
-    // Compatibility wrapper. New code should call the source-specific helpers above.
-    function registerLiveClock(payload, options) {
-        var opts = options || {};
-        var source = String(opts.source || "page_model");
-        var pageScope = String(opts.page || App.currentPage || "overview");
-        if (source === "refresh_state") {
-            return observeRefreshStateActiveSpan(payload, pageScope);
+    function getActiveLiveClock() {
+        var runtime = App.liveRuntime || null;
+        if (!runtime || runtime.page !== (App.currentPage || "overview")) return null;
+        if (runtime.page === "timeline") {
+            var currentDate = runtimeReportDateForPage("timeline");
+            if (runtime.reportDate && currentDate && runtime.reportDate !== currentDate) return null;
         }
-        if (source === "partial_details") {
-            return commitPartialActiveSpanOffset(payload, pageScope);
-        }
-        return commitPageActiveSpanClock(payload, pageScope);
-    }
-    App.registerLiveClock = registerLiveClock;
-
-    // Return the canonical active span clock for a page scope, or ``null``.
-    // Rows never look up their own clocks by span id; they project their
-    // static base from this one page active elapsed source.
-    function getActiveLiveClock(pageScope) {
-        var page = pageScope || App.currentPage || "overview";
-        return App.activeSpanClockByPage[page] || null;
+        return runtime.liveClock || null;
     }
     App.getActiveLiveClock = getActiveLiveClock;
 
-    // Clear the live-clock registry. When ``pageScope`` is provided, only
-    // that scope's clock is cleared; the current page's active clock is
-    // untouched when clearing a non-current scope. When ``pageScope`` is
-    // omitted, ALL scopes are cleared (legacy behavior).
-    function clearLiveClockRegistry(pageScope) {
-        if (pageScope) {
-            delete App.activeSpanClockByPage[pageScope];
-            // Only clear the global active fields when the cleared scope is
-            // the current page; a hidden-page clear MUST NOT touch the
-            // current page's active clock.
-            if (pageScope === App.currentPage) {
-                App.liveDisplayModel = null;
-            }
-            return;
-        }
-        App.activeSpanClockByPage = {};
-        App.liveDisplayModel = null;
+    function liveFieldMatches(runtimeValue, payloadValue) {
+        if (!runtimeValue || !payloadValue) return true;
+        return String(runtimeValue) === String(payloadValue);
     }
-    App.clearLiveClockRegistry = clearLiveClockRegistry;
+
+    function isPagePayloadCompatibleWithRuntime(payload, page, reportDate) {
+        if (!payload || !payload.ok) return false;
+        var runtime = App.liveRuntime || null;
+        if (!runtime) return false;
+        var expectedPage = String(page || App.currentPage || "overview");
+        var expectedDate = payloadReportDate(payload, expectedPage, reportDate);
+        if (runtime.page !== expectedPage) return false;
+        if (runtime.reportDate && expectedDate && runtime.reportDate !== expectedDate) return false;
+        if (!liveFieldMatches(runtime.liveStateRevision, payload.live_state_revision)) return false;
+        if (!liveFieldMatches(runtime.refreshRevision, payload.refresh_revision)) return false;
+        if (!liveFieldMatches(runtime.pageStructureRevision, payload.page_structure_revision)) return false;
+        var identity = runtimeIdentityFromPayload(payload);
+        if (!liveFieldMatches(runtime.displaySpanId, identity.displaySpanId)) return false;
+        if (!liveFieldMatches(runtime.stableLiveKeyHash, identity.stableLiveKeyHash)) return false;
+        return true;
+    }
+    App.isPagePayloadCompatibleWithRuntime = isPagePayloadCompatibleWithRuntime;
+
+    function noteRejectedPagePayload(payload, page, reportDate) {
+        App.liveClockContractRefreshRequested = true;
+        App.liveClockContractViolation = {
+            spanId: payload && payload.display_span_id ? String(payload.display_span_id) : "",
+            page: String(page || App.currentPage || "overview"),
+            reason: "page_payload_runtime_mismatch",
+            reportDate: reportDate || (payload && (payload.report_date || payload.date)) || ""
+        };
+    }
+    App.noteRejectedPagePayload = noteRejectedPagePayload;
 
     // SINGLE SOURCE OF TRUTH for live-row continuity keys. Uses ``stable_live_key_hash`` so the key
     // survives the virtual / persisted_open / absorbed_pending transitions (session_id / activity_id
@@ -748,19 +800,21 @@
 
     function currentActivityContinuityKey(current, clock, prefix) {
         var identity = "";
-        if (clock && clock.current_resource_identity_hash) {
+        if (current && current.current_activity_display_span_id) {
+            identity = current.current_activity_display_span_id;
+        } else if (current && current.current_resource_identity_hash) {
+            identity = current.current_resource_identity_hash;
+        } else if (current && current.stable_live_key_hash) {
+            identity = current.stable_live_key_hash;
+        } else if (clock && clock.current_resource_identity_hash) {
             identity = clock.current_resource_identity_hash;
         } else if (clock && clock.current_activity_display_span_id) {
             identity = clock.current_activity_display_span_id;
         } else if (clock && clock.display_span_id) {
             identity = clock.display_span_id;
-        } else if (current && current.current_activity_display_span_id) {
-            identity = current.current_activity_display_span_id;
         } else if (current && current.start_time) {
             identity = String(current.resource_name || current.app_name || "current")
                 + ":" + String(current.start_time || "");
-        } else if (current && current.stable_live_key_hash) {
-            identity = current.stable_live_key_hash;
         }
         return prefix + ":current:" + (identity || "none");
     }
@@ -798,6 +852,10 @@
                 + ' data-live-base-seconds="0"'
                 + ' data-live-role="' + App.escapeHtml(prefix || "current") + '-current"'
                 + ' data-live-continuity-key="' + App.escapeHtml(continuity) + '"'
+                + (current.current_activity_display_span_id ? ' data-current-activity-display-span-id="' + App.escapeHtml(current.current_activity_display_span_id) + '"' : '')
+                + (current.current_resource_identity_hash ? ' data-current-resource-identity-hash="' + App.escapeHtml(current.current_resource_identity_hash) + '"' : '')
+                + (current.display_span_id ? ' data-display-span-id="' + App.escapeHtml(current.display_span_id) + '"' : '')
+                + (current.stable_live_key_hash ? ' data-stable-live-key-hash="' + App.escapeHtml(current.stable_live_key_hash) + '"' : '')
                 + ' data-duration-seconds="' + String(seconds) + '"'
                 + '>' + App.escapeHtml(App.formatDuration(seconds)) + '</span>';
             for (var i = 3; i < parts.length; i++) {
@@ -833,6 +891,13 @@
         if (continuityKey) {
             el.setAttribute("data-live-continuity-key", String(continuityKey));
         }
+        var runtime = App.liveRuntime || {};
+        if (runtime.displaySpanId) {
+            el.setAttribute("data-display-span-id", String(runtime.displaySpanId));
+        }
+        if (runtime.stableLiveKeyHash) {
+            el.setAttribute("data-stable-live-key-hash", String(runtime.stableLiveKeyHash));
+        }
     }
     App.setLiveProjectionAnchor = setLiveProjectionAnchor;
 
@@ -843,6 +908,8 @@
         el.removeAttribute("data-live-base-seconds");
         el.removeAttribute("data-live-role");
         el.removeAttribute("data-live-continuity-key");
+        el.removeAttribute("data-display-span-id");
+        el.removeAttribute("data-stable-live-key-hash");
     }
     App.clearLiveProjectionAnchor = clearLiveProjectionAnchor;
 
@@ -867,6 +934,43 @@
     }
     App.renderLiveDurationTarget = renderLiveDurationTarget;
 
+    function nearestStableHash(target) {
+        if (!target) return "";
+        var value = target.getAttribute("data-stable-live-key-hash") || "";
+        if (value) return value;
+        var node = target.parentElement;
+        while (node) {
+            value = node.getAttribute && node.getAttribute("data-stable-live-key-hash");
+            if (value) return value;
+            node = node.parentElement;
+        }
+        return "";
+    }
+
+    function liveTargetCompatibleWithRuntime(target, runtime) {
+        if (!target || !runtime) return false;
+        var targetCurrentSpan = target.getAttribute("data-current-activity-display-span-id") || "";
+        if (targetCurrentSpan) {
+            return !!runtime.currentActivityDisplaySpanId
+                && targetCurrentSpan === runtime.currentActivityDisplaySpanId;
+        }
+        var targetResourceHash = target.getAttribute("data-current-resource-identity-hash") || "";
+        if (targetResourceHash) {
+            return !!runtime.currentResourceIdentityHash
+                && targetResourceHash === runtime.currentResourceIdentityHash;
+        }
+        var targetSpan = target.getAttribute("data-display-span-id") || "";
+        if (targetSpan) {
+            return !!runtime.displaySpanId && targetSpan === runtime.displaySpanId;
+        }
+        var targetStable = nearestStableHash(target);
+        if (targetStable) {
+            return !!runtime.stableLiveKeyHash && targetStable === runtime.stableLiveKeyHash;
+        }
+        return false;
+    }
+    App.liveTargetCompatibleWithRuntime = liveTargetCompatibleWithRuntime;
+
     // ``applyLocalTicker`` re-renders fetched durations with a wall-clock delta each second without a
     // bridge round-trip. Ticker invariant: ONLY updates DOM text; never calls a bridge, never writes
     // the DB, never starts / stops the collector.
@@ -877,6 +981,7 @@
     // target without consulting per-region clocks.
     function applyLocalTicker() {
         var nowMs = tickerNowEpochMs();
+        var runtime = App.liveRuntime || null;
         var clock = getActiveLiveClock();
         var activeElapsedNowValue = computeActiveElapsedNow(clock, nowMs);
         var tickerPage = App.currentPage || "overview";
@@ -895,6 +1000,14 @@
                 continue;
             }
             if (!(clock.is_live === true || clock.current_duration_live === true || clock.project_duration_live === true || clock.is_project_duration_live === true)) continue;
+            if (!liveTargetCompatibleWithRuntime(target, runtime)) {
+                recordLiveClockContractViolation(
+                    target.getAttribute("data-display-span-id") || "",
+                    tickerPage,
+                    "live_target_runtime_mismatch"
+                );
+                continue;
+            }
             var baseAttr = target.getAttribute("data-display-base-seconds");
             if (baseAttr === null || baseAttr === "") {
                 baseAttr = target.getAttribute("data-live-base-seconds");

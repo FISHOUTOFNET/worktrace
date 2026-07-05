@@ -7,10 +7,9 @@
 
     function showOverview(overview) {
         if (!overview) return;
-        App.commitPageActiveSpanClock(overview, "overview");
         App.lastOverviewSnapshot = overview;
         var nowMs = Date.now();
-        var clock = App.getActiveLiveClock("overview");
+        var clock = App.getActiveLiveClock();
         var projectClock = clock && (clock.project_duration_live === true || clock.is_project_duration_live === true);
         var activeElapsedNowValue = App.computeActiveElapsedNow(clock, nowMs);
         document.getElementById("kpi-date").textContent = overview.date || "--";
@@ -81,14 +80,10 @@
             current,
             "overview"
         );
-        App.applyLocalTicker();
     }
     App.showOverview = showOverview;
 
     function showRecent(recentResult) {
-        // Defensive page-model commit of the same sample keeps the Overview
-        // active span page-scoped while rows store only projection offsets.
-        App.commitPageActiveSpanClock(recentResult, "overview");
         // Structural cache only — never a live-seconds source.
         App.lastRecentData = recentResult;
         var listEl = document.getElementById("recent-list");
@@ -98,7 +93,7 @@
         }
         var html = "";
         var nowMs = Date.now();
-        var activeClock = App.getActiveLiveClock("overview");
+        var activeClock = App.getActiveLiveClock();
         var activeElapsedNowValue = App.computeActiveElapsedNow(activeClock, nowMs);
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
@@ -118,7 +113,8 @@
             // own base + active elapsed offset, not a row-owned clock.
             var spanId = item.display_span_id || "";
             var continuityKey = spanId ? App.liveContinuityKey(item, "recent") : "";
-            var displayBaseSec = 0;
+            var displayBaseSec = parseInt(item.display_base_seconds, 10);
+            if (isNaN(displayBaseSec)) displayBaseSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
             var initialSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
             if (spanId && activeClock) {
                 initialSec = App.projectFromDisplayBase(displayBaseSec, activeElapsedNowValue);
@@ -142,6 +138,7 @@
                 + '<div class="recent-item-duration"'
                 + (spanId ? ' data-live-duration-target="1"' : '')
                 + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
+                + (item.stable_live_key_hash ? ' data-stable-live-key-hash="' + App.escapeHtml(item.stable_live_key_hash) + '"' : '')
                 + (spanId ? ' data-display-base-seconds="' + displayBaseSec + '"' : '')
                 + (spanId ? ' data-live-base-seconds="' + displayBaseSec + '"' : '')
                 + (spanId ? ' data-live-role="recent"' : '')
@@ -155,7 +152,6 @@
             }
         }
         listEl.innerHTML = html;
-        App.applyLocalTicker();
     }
     App.showRecent = showRecent;
 

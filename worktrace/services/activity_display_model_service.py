@@ -700,7 +700,7 @@ def apply_live_span_to_row(
     Row projection formula: ``row/static display base + current active
     elapsed delta``. At sample time the backend materializes the row's
     display duration; the frontend heartbeat adds
-    ``active_elapsed_now - active_elapsed_at_render``. For persisted_open,
+    the same ``current_elapsed_now`` projection. For persisted_open,
     ``live_anchor_base_seconds`` prevents the already-written DB open
     duration from being counted twice.
 
@@ -897,6 +897,19 @@ def build_activity_display_model(
     }
 
 
+def build_live_runtime_model(
+    snapshot: dict[str, Any] | None,
+    report_date: str | None = None,
+    today: str | None = None,
+) -> dict[str, Any]:
+    """Build the sole live runtime/display model from one sampled snapshot."""
+    return build_activity_display_model(
+        report_date=report_date,
+        today=today,
+        snapshot=snapshot,
+    )
+
+
 def get_live_span(model: dict[str, Any]) -> dict[str, Any] | None:
     """Return the single live display span from a display model, or ``None``."""
     spans = model.get("display_spans") or []
@@ -906,6 +919,7 @@ def get_live_span(model: dict[str, Any]) -> dict[str, Any] | None:
 __all__ = [
     "apply_live_span_to_row",
     "build_activity_display_model",
+    "build_live_runtime_model",
     "classify_display_live_state",
     "get_live_span",
 ]

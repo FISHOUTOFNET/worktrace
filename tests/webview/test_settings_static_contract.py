@@ -1167,13 +1167,13 @@ def test_init_js_calls_load_first_run_notice_in_init() -> None:
     body = func_body(source, "init()")
     assert "App.loadFirstRunNotice()" in body
     load_pos = body.find("App.loadFirstRunNotice()")
-    # ``refreshCurrentPageData()`` and
+    # ``refreshCurrentPageData(state)`` and
     # ``startHeartbeat()`` must both be called inside the .then()
     # callback after loadFirstRunNotice resolves.
-    refresh_pos = body.find("refreshCurrentPageData()")
+    refresh_pos = body.find("refreshCurrentPageData(state")
     heartbeat_pos = body.find("startHeartbeat()")
     assert refresh_pos != -1, (
-        "init() must call refreshCurrentPageData() after notice confirmation"
+        "init() must call refreshCurrentPageData(state) after notice confirmation"
     )
     assert heartbeat_pos != -1, (
         "init() must call startHeartbeat() after notice confirmation"
@@ -1352,7 +1352,7 @@ def test_init_js_awaits_load_first_run_notice_before_refresh() -> None:
     load_pos = body.find("App.loadFirstRunNotice()")
     # the two heartbeat-starting calls must appear
     # after loadFirstRunNotice in source order.
-    for call in ("refreshCurrentPageData()", "startHeartbeat()"):
+    for call in ("refreshCurrentPageData(state", "startHeartbeat()"):
         call_pos = body.find(call)
         assert call_pos != -1, "init() must call " + call
         assert load_pos < call_pos, (

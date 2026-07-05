@@ -296,9 +296,9 @@ def test_timeline_edit_guard_does_not_block_current_activity_header_refresh():
 def test_run_revision_check_updates_timeline_header_before_guarded_refresh():
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
-    changed_index = body.find("liveStateChanged")
-    header_index = body.find("refreshCurrentActivityFromState(state", changed_index)
-    refresh_index = body.find("refreshCurrentPageData(state", changed_index)
+    accept_index = body.find("acceptRefreshStateRuntime(state")
+    header_index = body.find("refreshCurrentActivityFromState(state", accept_index)
+    refresh_index = body.find("refreshCurrentPageData(state", accept_index)
     assert header_index != -1 and refresh_index != -1 and header_index < refresh_index, (
         "revision-change handling must update the Timeline current header "
         "from backend refresh-state before any guarded page refresh can skip "
@@ -325,7 +325,7 @@ def test_overview_js_stores_last_recent_data_as_structural_cache():
     ``App.lastRecentData`` as a STRUCTURAL CACHE only — used for
     re-render on page switch / edit-guard checks. It MUST NOT be read by
     ``applyLocalTicker`` as a live-seconds source; live rows use DOM
-    bases/active-elapsed offsets plus the page active span clock. The
+    bases plus the accepted runtime elapsed. The
     legacy ``lastRecentSnapshot`` name has been retired."""
     source = read_js("overview.js")
     assert "App.lastRecentData" in source, (
@@ -342,7 +342,7 @@ def test_recent_item_renders_data_index_and_progress_flags():
     attribute and use ``is_in_progress || is_live_projected`` to mark
     in-progress / live-projected rows with CSS classes. Live rows must
     carry display identity plus active elapsed offset attributes so the
-    ticker can project them from the single page active span clock.
+    ticker can project them from the single accepted runtime.
 
     The ``virtual-live`` CSS class is only styling; live ticking is keyed
     by ``data-display-span-id`` for DB-overlay rows and display-only
@@ -395,7 +395,7 @@ def test_timeline_js_stores_last_session_details_view_model_as_structural_cache(
     ``App.lastSessionDetailsViewModel`` as a STRUCTURAL CACHE only — used
     for re-render on page switch / edit-guard checks. It MUST NOT be read
     by ``applyLocalTicker`` as a live-seconds source; DOM anchors plus
-    the Timeline page active span clock are the single projection path for
+    the accepted live runtime is the single projection path for
     live durations. The legacy ``lastSessionDetailsData`` name has been
     retired to remove the old ticker-source semantics."""
     source = read_js("timeline.js")
@@ -749,21 +749,14 @@ def test_ticker_does_not_read_structural_caches_as_live_seconds_source():
         )
 
 
-def test_page_switch_refresh_uses_pending_token_mechanism():
-    """issue 14: page-switch immediate refresh must NOT be
-    silently skipped by the global in-flight guard. When a refresh is
-    in-flight and a page switch occurs, ``pendingPageRefresh`` must be
-    set so the refresh is re-triggered after the in-flight one completes."""
+def test_page_switch_refresh_does_not_use_boolean_pending_replay():
+    """Page-switch refresh must not replay an unscoped boolean pending
+    request under a new page/date/runtime context."""
     source = read_js("init.js")
-    assert "App.pendingPageRefresh" in source, (
-        "init.js must define App.pendingPageRefresh state for the pending "
-        "page-refresh mechanism"
-    )
+    assert "pendingPageRefresh" not in source
     body = func_body(source, "refreshCurrentPageData")
-    assert "pendingPageRefresh" in body, (
-        "refreshCurrentPageData must use pendingPageRefresh to defer "
-        "page-switch refreshes that arrive while a refresh is in-flight"
-    )
+    assert "get_refresh_state" in body
+    assert "acceptRefreshStateRuntime" in body
 
 
 def test_timeline_editing_guard_covers_open_editors():
@@ -969,11 +962,9 @@ def test_virtual_session_click_does_not_open_edit_panel():
     )
 
 
-def test_init_awaits_first_refresh_before_heartbeat():
-    """``init`` must await the first
-    ``refreshCurrentPageData()`` BEFORE reading ``get_refresh_state`` and
-    starting the heartbeat. This prevents the first heartbeat tick from
-    racing the initial heavy refresh."""
+def test_init_accepts_refresh_state_before_first_page_refresh_and_heartbeat():
+    """``init`` must accept refresh_state before the first page render and
+    before starting the heartbeat."""
     source = read_js("init.js")
     # Use "function init(" to distinguish from "function initNav" / "initButtons".
     init_start = source.find("function init(")
@@ -983,21 +974,17 @@ def test_init_awaits_first_refresh_before_heartbeat():
     if init_end == -1:
         init_end = source.find("\n    function ", init_start + 1)
     body = source[init_start:init_end] if init_end != -1 else source[init_start:]
-    refresh_pos = body.find("refreshCurrentPageData()")
     state_pos = body.find("get_refresh_state")
+    accept_pos = body.find("acceptRefreshStateRuntime")
+    refresh_pos = body.find("refreshCurrentPageData(state")
     heartbeat_pos = body.find("startHeartbeat()")
-    assert refresh_pos != -1, "init must call refreshCurrentPageData"
     assert state_pos != -1, "init must call get_refresh_state"
+    assert accept_pos != -1, "init must accept refresh_state"
+    assert refresh_pos != -1, "init must call refreshCurrentPageData with state"
     assert heartbeat_pos != -1, "init must call startHeartbeat"
-    assert refresh_pos < state_pos, (
-        "init must call refreshCurrentPageData BEFORE get_refresh_state"
-    )
-    assert state_pos < heartbeat_pos, (
-        "init must call get_refresh_state BEFORE startHeartbeat"
-    )
-    # Must use .then() chaining to await the refresh, not fire-and-forget.
+    assert state_pos < accept_pos < refresh_pos < heartbeat_pos
     assert ".then" in body, (
-        "init must chain refreshCurrentPageData().then(...) to await completion"
+        "init must chain get_refresh_state -> accept -> refresh -> heartbeat"
     )
 
 
@@ -1142,67 +1129,41 @@ def test_live_continuity_key_is_single_source_of_truth():
 
 
 # Frontend contract tests for the unified live duration math (spec §IV):
-# per-row base + unified delta, registry clear, monotonic key consistency,
+# per-row base + accepted runtime elapsed, monotonic key consistency,
 # no legacy ``live_projection`` / ``live_display`` propagation.
 
 
-def test_register_live_clock_clears_registry_on_no_clock():
-    """Only page_model clears the page active span on non-live payloads.
-    refresh_state observation must not clear still-rendered page_model
-    anchors when pause/idle is observed before the heavy page refresh."""
+def test_accept_refresh_state_runtime_is_the_only_live_identity_writer():
+    """refresh_state acceptance owns live runtime identity; page payloads are
+    render-only and can only pass/fail compatibility."""
     src = _strip_js_comments(read_js("core.js"))
-    commit_body = func_body(src, "commitPageActiveSpanClock")
-    observe_body = func_body(src, "observeRefreshStateActiveSpan")
-    assert "clearPageActiveSpanClockFromPageModel" in commit_body, (
-        "page_model commits must clear the page active span when the full "
-        "page model has no project-duration live clock"
-    )
-    assert "clearLiveClockRegistry" not in observe_body, (
-        "refresh_state observation must not clear page_model anchors"
-    )
-    clear_body = func_body(src, "clearLiveClockRegistry")
-    assert "liveClockBySpanId" not in clear_body
-    assert "activeSpanClockByPage" in clear_body, (
-        "clearLiveClockRegistry must reset App.activeSpanClockByPage"
-    )
-    assert "isActiveLiveTime" in commit_body, (
-        "page_model commits must check the normalized active live time flag"
-    )
+    accept_body = func_body(src, "acceptRefreshStateRuntime")
+    gate_body = func_body(src, "isPagePayloadCompatibleWithRuntime")
+    assert "App.liveRuntime" in accept_body
+    assert "rebaseIncomingClockWithoutRollback" in accept_body
+    assert "liveStateRevision" in accept_body
+    assert "pageStructureRevision" in gate_body
+    for removed in (
+        "commitPageActiveSpanClock",
+        "observeRefreshStateActiveSpan",
+        "registerLiveClock",
+        "activeSpanClockByPage",
+    ):
+        assert removed not in src
 
 
-def test_get_active_live_clock_uses_explicit_span_id():
-    """``getActiveLiveClock`` must read the active clock from the
-    page-scoped registry (``App.liveClockByPage[App.currentPage]``)
-    instead of relying on object insertion order. Spec §IV.1.3:
-    ``getActiveLiveClock()`` should not depend on insertion order as
-    "last registered wins".
-
-    The legacy global ``activeDisplaySpanId`` lookup is NO LONGER a
-    fallback: page-scoped is the single source of truth so a hidden
-    page's payload cannot become the active clock. The function MUST NOT
-    read ``App.activeDisplaySpanId`` / ``App.liveClockBySpanId[App.activeDisplaySpanId]``.
-    """
+def test_get_active_live_clock_reads_accepted_runtime_only():
+    """``getActiveLiveClock`` must read only the accepted runtime and verify
+    it still belongs to the visible page/date."""
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "getActiveLiveClock")
-    assert "activeSpanClockByPage" in body, (
-        "getActiveLiveClock must read from App.activeSpanClockByPage "
-        "rather than relying on object insertion order"
-    )
+    assert "App.liveRuntime" in body
+    assert "runtime.liveClock" in body
     assert "currentPage" in body, (
-        "getActiveLiveClock must read App.currentPage to scope the lookup"
+        "getActiveLiveClock must confirm the accepted runtime's page"
     )
-    # Must NOT read the legacy global activeDisplaySpanId field.
-    assert "activeDisplaySpanId" not in body, (
-        "getActiveLiveClock must NOT read App.activeDisplaySpanId; the "
-        "legacy global fallback was removed in favor of page-scoped lookup"
-    )
-    assert "liveClockBySpanId[App.activeDisplaySpanId]" not in body, (
-        "getActiveLiveClock must NOT look up App.liveClockBySpanId[App.activeDisplaySpanId]"
-    )
-    # Must NOT iterate the registry to pick the last key.
     assert "Object.keys" not in body, (
-        "getActiveLiveClock must not iterate registry keys to pick the last "
-        "inserted clock"
+        "getActiveLiveClock must not iterate registry keys"
     )
 
 
@@ -1305,7 +1266,7 @@ def test_init_refresh_overview_does_not_propagate_live_projection_or_live_displa
 
 
 def test_apply_local_ticker_records_missing_node_clock_contract_violation():
-    """When the page active span clock is missing, ``applyLocalTicker`` must
+    """When the accepted live runtime clock is missing, ``applyLocalTicker`` must
     record diagnostics instead of silently hiding the contract break."""
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "applyLocalTicker")
@@ -1313,13 +1274,13 @@ def test_apply_local_ticker_records_missing_node_clock_contract_violation():
         "applyLocalTicker must obtain the clock via getActiveLiveClock"
     )
     assert "App.liveClockBySpanId[spanId] || clock" not in body, (
-        "applyLocalTicker must not fall back from a missing row clock to the active page clock"
+        "applyLocalTicker must not fall back from a missing row clock to another clock"
     )
     assert "if (!nodeClock) continue" not in body, (
         "applyLocalTicker must not silently continue when a row clock is missing"
     )
     assert "recordLiveClockContractViolation" in body, (
-        "applyLocalTicker must record diagnostics for a missing active span clock"
+        "applyLocalTicker must record diagnostics for a missing accepted clock"
     )
     assert "missing_active_span_clock" in body, (
         "missing active span clock diagnostics must use a display-safe reason"
@@ -1358,36 +1319,25 @@ def test_renderers_diagnose_live_rows_missing_span_id():
 
 
 # ---------------------------------------------------------------------------
-# Page-model sample clock contract (Section 33.9)
+# Accepted runtime sample contract (Section 33.9)
 # ---------------------------------------------------------------------------
 
 
-def test_register_live_clock_accepts_page_option_and_uses_rebase():
-    """Source-specific active span helpers accept page scope and rebase
-    same-continuity clocks without making row clocks authoritative."""
+def test_accept_refresh_state_runtime_uses_rebase():
+    """The accepted runtime rebases same-continuity refresh_state clocks
+    without making page rows authoritative."""
     src = _strip_js_comments(read_js("core.js"))
-    commit_body = func_body(src, "commitPageActiveSpanClock")
-    observe_body = func_body(src, "observeRefreshStateActiveSpan")
-    assert re.search(r"function\s+commitPageActiveSpanClock\s*\(\s*\w+\s*,\s*\w+", commit_body), (
-        "commitPageActiveSpanClock must accept a page parameter"
-    )
-    assert "pageScope" in commit_body and "pageScope" in observe_body, (
-        "active span helpers must scope by page"
-    )
-    assert "rebaseIncomingClockWithoutRollback" in commit_body, (
-        "page_model commits must rebase through the no-rollback path"
-    )
-    assert "rebaseIncomingClockWithoutRollback" in observe_body, (
-        "refresh_state observation must rebase same-continuity clocks"
-    )
+    body = func_body(src, "acceptRefreshStateRuntime")
+    assert "rebaseIncomingClockWithoutRollback" in body
+    assert "sameLiveContinuity" in body
+    assert "App.liveRuntime" in body
 
 
-def test_register_live_clock_rebases_same_continuity_without_live_state_gate():
+def test_runtime_rebases_same_continuity_without_live_state_gate():
     """Same continuity is determined by display span or stable hash. A
     live-state transition must not force a visual reset."""
     src = _strip_js_comments(read_js("core.js"))
-    commit_body = func_body(src, "commitPageActiveSpanClock")
-    observe_body = func_body(src, "observeRefreshStateActiveSpan")
+    accept_body = func_body(src, "acceptRefreshStateRuntime")
     continuity_body = func_body(src, "sameLiveContinuity")
     assert "display_span_id" in continuity_body, (
         "sameLiveContinuity must treat matching display_span_id as continuous"
@@ -1398,12 +1348,7 @@ def test_register_live_clock_rebases_same_continuity_without_live_state_gate():
     assert "live_state" not in continuity_body, (
         "sameLiveContinuity must not use live_state as a negative continuity condition"
     )
-    assert "sameContinuity" in commit_body and "rebaseIncomingClockWithoutRollback" in commit_body, (
-        "page_model commit must detect continuity and rebase without rollback"
-    )
-    assert "!sameLiveContinuity" in observe_body and "return activeClock" in observe_body, (
-        "refresh_state must not replace the page clock on different continuity"
-    )
+    assert "sameLiveContinuity" in accept_body and "rebaseIncomingClockWithoutRollback" in accept_body
     rebase_body = func_body(src, "rebaseIncomingClockWithoutRollback")
     for field in (
         "live_started_at_epoch_ms",
@@ -1415,41 +1360,31 @@ def test_register_live_clock_rebases_same_continuity_without_live_state_gate():
         )
 
 
-def test_run_revision_check_observes_refresh_state_without_row_clock_commit():
-    """Unchanged revision checks may observe the current active span, but
-    must not call the compatibility registerLiveClock path or rewrite row
-    projection anchors."""
+def test_run_revision_check_accepts_refresh_state_without_row_clock_commit():
+    """Every revision check accepts refresh_state runtime and must not call
+    old compatibility clock paths or rewrite row projection anchors."""
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
     fast_body = func_body(src, "refreshCurrentActivityFromState")
-    assert "observeRefreshStateActiveSpan" in fast_body, (
-        "current activity fast path must observe same-continuity refresh_state "
-        "active span"
-    )
+    assert "acceptRefreshStateRuntime(state)" in body
     assert "registerLiveClock" not in body, (
         "runRevisionCheck must not use registerLiveClock for refresh_state"
     )
+    assert "commitPageActiveSpanClock" not in fast_body
     assert "preserveSameSpanSample" not in body, (
         "runRevisionCheck must not use legacy source-specific preservation flags"
     )
-    bare_call = re.search(r"registerLiveClock\s*\(\s*state\s*\)", body)
-    assert bare_call is None, (
-        "runRevisionCheck must pass page scope options to registerLiveClock"
-    )
 
 
-def test_page_model_render_uses_page_model_source():
-    """Page-model render flows commit page active span clocks directly.
-    Partial Timeline details must not commit/replace the Timeline page
-    active span clock."""
+def test_page_model_render_does_not_write_live_runtime():
+    """Page-model render flows are pure render paths for live identity."""
     for fname in ("overview.js", "timeline.js"):
         src = _strip_js_comments(read_js(fname))
-        assert "commitPageActiveSpanClock" in src, (
-            fname + " must commit page_model active span clocks"
-        )
+        assert "commitPageActiveSpanClock" not in src
+        assert "registerLiveClock" not in src
     details_body = func_body(_strip_js_comments(read_js("timeline.js")), "renderSessionDetails")
     assert "commitPageActiveSpanClock" not in details_body, (
-        "renderSessionDetails partial payload must not replace Timeline page active span clock"
+        "renderSessionDetails partial payload must not replace the accepted live runtime"
     )
 
 
@@ -1470,9 +1405,9 @@ def test_run_revision_check_does_not_register_current_clock_on_revision_change()
     assert "patchCurrentActivityFromRefreshState" not in body, (
         "runRevisionCheck must not patch current activity duration from refresh_state"
     )
-    last_state_index = body.find("App.lastRefreshState = state")
-    fast_index = body.find("refreshCurrentActivityFromState(state", last_state_index)
-    status_index = body.find("refreshStatusFromRefreshState(state)", last_state_index)
+    accept_index = body.find("acceptRefreshStateRuntime(state")
+    fast_index = body.find("refreshCurrentActivityFromState(state", accept_index)
+    status_index = body.find("refreshStatusFromRefreshState(state)", accept_index)
     assert fast_index != -1, (
         "runRevisionCheck must fast-render current activity from refresh_state"
     )
@@ -1491,18 +1426,12 @@ def test_run_revision_check_updates_current_cache_when_revision_unchanged():
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
 
-    assert "prevRevision === newRevision" in body, (
-        "runRevisionCheck must have an explicit revision-unchanged branch"
-    )
-    unchanged_index = body.find("prevRevision === newRevision")
-    fast_index = body.find("refreshCurrentActivityFromState(state", unchanged_index)
-    heavy_index = body.find("refreshCurrentPageData(state", unchanged_index)
-
-    assert fast_index != -1, (
-        "revision-unchanged branch must still use the current activity fast path"
-    )
+    accept_index = body.find("acceptRefreshStateRuntime(state")
+    fast_index = body.find("refreshCurrentActivityFromState(state", accept_index)
+    heavy_index = body.find("refreshCurrentPageData(state", accept_index)
+    assert fast_index != -1
     assert heavy_index == -1 or fast_index < heavy_index, (
-        "revision-unchanged current fast path must not depend on heavy refresh"
+        "current fast path must not depend on heavy refresh"
     )
 
 
@@ -1516,8 +1445,8 @@ def test_refresh_current_activity_from_state_supports_overview_and_timeline():
     assert 'App.currentPage === "timeline"' in body
     assert 'document.getElementById("timeline-current")' in body
     assert "App.lastTimelineData.current_activity" in body
-    assert "App.commitPageActiveSpanClock(state, App.currentPage" in body
-    assert "App.applyLocalTicker()" in body
+    assert "commitPageActiveSpanClock" not in body
+    assert "App.applyLocalTicker()" not in body
     assert "_timelineEditingActive" not in body, (
         "Timeline editing may protect list/detail inputs, not the current header"
     )
@@ -1529,7 +1458,7 @@ def test_revision_change_auto_refresh_reuses_refresh_state_payload():
     revision_body = func_body(src, "runRevisionCheck")
 
     assert "function refreshCurrentPageData(state, options)" in refresh_body
-    assert "refreshStatusFromRefreshState(state)" in refresh_body
+    assert "refreshStatusFromRefreshState(acceptedState)" in refresh_body
     assert "refreshStatus()" in refresh_body
     assert "refreshCurrentPageData(state" in revision_body
 
@@ -1549,34 +1478,32 @@ def test_frontend_does_not_locally_promote_thirty_second_history_state():
         )
 
 
-def test_fast_path_allows_current_page_continuity_change_but_observe_still_guards():
+def test_fast_path_requires_accepted_runtime_before_render():
     core = _strip_js_comments(read_js("core.js"))
     init = _strip_js_comments(read_js("init.js"))
-    observe_body = func_body(core, "observeRefreshStateActiveSpan")
+    accept_body = func_body(core, "acceptRefreshStateRuntime")
     fast_body = func_body(init, "refreshCurrentActivityFromState")
 
-    assert "if (activeClock && !sameLiveContinuity(activeClock, incomingClock))" in observe_body
-    assert "return activeClock" in observe_body
-    assert "commitPageActiveSpanClock(state, App.currentPage" in fast_body
+    assert "App.liveRuntime" in accept_body
+    assert "rebaseIncomingClockWithoutRollback" in accept_body
+    assert "App.liveRuntime.refreshRevision" in fast_body
     assert "App.currentPage" in fast_body
 
 
 # ---------------------------------------------------------------------------
-# Page-scoped live clock registry (Section 五)
+# Accepted live runtime (Section 五)
 # ---------------------------------------------------------------------------
 
 
-def test_register_live_clock_accepts_page_scope_option():
-    """Section 五: active span clocks are page scoped under
-    ``App.activeSpanClockByPage``."""
+def test_refresh_state_runtime_acceptor_records_page_scope_and_revisions():
+    """Section 五: accepted runtime records page/date and backend revisions."""
     src = _strip_js_comments(read_js("core.js"))
-    body = func_body(src, "commitPageActiveSpanClock")
-    assert re.search(r"function\s+commitPageActiveSpanClock\s*\(\s*\w+\s*,\s*\w+", body), (
-        "commitPageActiveSpanClock must accept a page scope"
-    )
-    assert "activeSpanClockByPage" in body, (
-        "commitPageActiveSpanClock must store under App.activeSpanClockByPage"
-    )
+    body = func_body(src, "acceptRefreshStateRuntime")
+    assert "App.currentPage" in body
+    assert "reportDate" in body
+    assert "refreshRevision" in body
+    assert "liveStateRevision" in body
+    assert "pageStructureRevision" in body
 
 
 def test_current_activity_clock_registry_is_removed():
@@ -1632,11 +1559,12 @@ def test_apply_local_ticker_current_activity_does_not_fallback_to_project_clock(
     assert "computeActiveElapsedNow" in body
 
 
-def test_renderers_commit_project_clock_and_do_not_register_current_clock():
+def test_renderers_do_not_write_project_or_current_runtime():
     overview = _strip_js_comments(read_js("overview.js"))
     timeline = _strip_js_comments(read_js("timeline.js"))
     for src, name in ((overview, "overview.js"), (timeline, "timeline.js")):
-        assert "commitPageActiveSpanClock" in src, name + " must commit page active span clock"
+        assert "commitPageActiveSpanClock" not in src
+        assert "registerLiveClock" not in src
         assert "registerCurrentActivityClock" not in src, name + " must not register current activity clock"
 
 
@@ -1649,27 +1577,23 @@ def test_timeline_details_edit_guard_keeps_dom_and_does_not_register_clocks():
     assert reg_pos == -1 and guard_pos != -1
     assert guard_pos < render_pos, "Details edit guard must run before DOM redraw"
     assert "commitPageActiveSpanClock" not in body, (
-        "Details partial render must not replace the Timeline page active span clock"
+        "Details partial render must not replace the accepted live runtime"
     )
 
 
-def test_get_active_live_clock_reads_page_scope():
-    """Section 五: ``getActiveLiveClock`` MUST read the current page scope
-    (``App.currentPage``) and return the page-scoped clock from
-    ``App.activeSpanClockByPage``. Page-scoped lookup is the SINGLE source
-    of truth; legacy compatibility mirrors are removed.
-    """
+def test_get_active_live_clock_reads_runtime_scope():
+    """Section 五: ``getActiveLiveClock`` MUST read the accepted runtime and
+    verify it still matches the current page."""
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "getActiveLiveClock")
     assert "currentPage" in body, (
         "getActiveLiveClock must read App.currentPage to scope the lookup"
     )
-    assert "activeSpanClockByPage" in body, (
-        "getActiveLiveClock must read from App.activeSpanClockByPage (page-scoped)"
-    )
+    assert "App.liveRuntime" in body
+    assert "runtime.liveClock" in body
     assert "activeDisplaySpanId" not in body, (
         "getActiveLiveClock must NOT fall back to App.activeDisplaySpanId; "
-        "page-scoped lookup is the single source of truth"
+        "accepted runtime is the single source of truth"
     )
 
 
@@ -1678,8 +1602,7 @@ def test_full_reconcile_does_not_unconditionally_call_refresh_overview():
     call ``refreshOverview()``. When the current page is NOT Overview
     (e.g. Timeline historical date), the reconcile must only refresh
     status + the current page so a hidden Overview refresh does not
-    register an Overview-scope live clock that overwrites the current
-    page's active clock.
+    overwrite the accepted runtime.
     """
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "fullReconcileCollectionViews")
@@ -1687,36 +1610,31 @@ def test_full_reconcile_does_not_unconditionally_call_refresh_overview():
     assert 'currentPage === "overview"' in body, (
         "fullReconcileCollectionViews must gate refreshOverview on "
         'App.currentPage === "overview" so a hidden Overview refresh '
-        "does not overwrite the current page's active clock"
+        "does not overwrite the accepted runtime"
     )
 
 
-def test_overview_js_registers_with_page_scope():
-    """Section 五: ``overview.js`` MUST commit live clocks with
-    explicit Overview page scope."""
+def test_overview_js_uses_runtime_gate_not_runtime_write():
+    """Section 五: Overview page payloads are gated before render."""
     src = _strip_js_comments(read_js("overview.js"))
-    assert 'commitPageActiveSpanClock(overview, "overview")' in src, (
-        'overview.js must commit live clocks with page scope "overview"'
-    )
+    init = _strip_js_comments(read_js("init.js"))
+    assert "commitPageActiveSpanClock" not in src
+    assert 'isPagePayloadCompatibleWithRuntime(bundle, "overview"' in init
 
 
-def test_timeline_js_registers_with_page_scope():
-    """Section 五: ``timeline.js`` MUST commit live clocks with
-    explicit Timeline page scope."""
+def test_timeline_js_uses_runtime_gate_not_runtime_write():
+    """Section 五: Timeline page payloads are gated before render."""
     src = _strip_js_comments(read_js("timeline.js"))
-    assert 'commitPageActiveSpanClock(data, "timeline")' in src, (
-        'timeline.js must commit live clocks with page scope "timeline"'
-    )
+    assert "commitPageActiveSpanClock" not in src
+    assert "acceptTimelinePayload" in src
 
 
-def test_init_refresh_overview_commits_with_page_scope():
-    """Section 五: ``refreshOverview`` in ``init.js`` MUST commit the
-    Overview live clock with explicit page scope."""
+def test_init_refresh_overview_gates_with_runtime():
+    """Section 五: ``refreshOverview`` in ``init.js`` gates page payloads."""
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "refreshOverview")
-    assert 'commitPageActiveSpanClock(bundle, "overview")' in body, (
-        "refreshOverview must commit with page scope \"overview\""
-    )
+    assert 'isPagePayloadCompatibleWithRuntime(bundle, "overview"' in body
+    assert "noteRejectedPagePayload" in body
 
 
 def test_run_revision_check_registers_with_current_page_scope():
@@ -1731,40 +1649,29 @@ def test_run_revision_check_registers_with_current_page_scope():
     )
 
 
-def test_clear_live_clock_registry_supports_page_scope():
-    """Section 五: ``clearLiveClockRegistry`` MUST accept an optional
-    page scope argument so a non-current page's clock can be cleared
-    without touching the current page's active clock."""
+def test_page_switch_clears_runtime_scope_immediately():
+    """Section 五: page switches clear tickable runtime immediately."""
     src = _strip_js_comments(read_js("core.js"))
-    body = func_body(src, "clearLiveClockRegistry")
-    # Must accept a pageScope parameter.
-    assert re.search(r"function\s+clearLiveClockRegistry\s*\(\s*\w+", body), (
-        "clearLiveClockRegistry must accept a page scope parameter"
-    )
+    switch_body = func_body(_strip_js_comments(read_js("init.js")), "switchPage")
+    body = func_body(src, "setLiveRuntimeScope")
+    assert "liveClock: null" in body
+    assert "App.setLiveRuntimeScope" in switch_body
 
 
 # ---------------------------------------------------------------------------
-# Page-scoped live clock + page-scoped ticker DOM walk hardening.
+# Accepted runtime + scoped ticker DOM walk hardening.
 # ---------------------------------------------------------------------------
 
 
-def test_get_active_live_clock_reads_page_scoped_registry_only():
-    """``getActiveLiveClock`` MUST read ``App.activeSpanClockByPage[App.currentPage]``
-    and MUST NOT read ``App.activeDisplaySpanId`` or
-    ``App.liveClockBySpanId[App.activeDisplaySpanId]``. The legacy global
-    fallback was removed so a hidden page's stale registration cannot
-    become the current page's active clock.
-    """
+def test_get_active_live_clock_reads_accepted_runtime_only_again():
+    """``getActiveLiveClock`` MUST read ``App.liveRuntime`` and MUST NOT
+    read legacy clock mirrors."""
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "getActiveLiveClock")
-    assert "App.activeSpanClockByPage[page]" in body, (
-        "getActiveLiveClock must read App.activeSpanClockByPage[page] where "
-        "page = App.currentPage"
-    )
+    assert "App.liveRuntime" in body
     assert "App.currentPage" in body, (
-        "getActiveLiveClock must read App.currentPage to derive the page scope"
+        "getActiveLiveClock must read App.currentPage to confirm runtime scope"
     )
-    # Forbidden: legacy global fallback paths.
     assert "App.activeDisplaySpanId" not in body, (
         "getActiveLiveClock must NOT read App.activeDisplaySpanId; the "
         "legacy global fallback was removed"

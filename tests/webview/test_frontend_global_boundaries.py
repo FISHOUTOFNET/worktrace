@@ -592,10 +592,10 @@ def test_init_js_does_not_start_refresh_before_notice_loaded() -> None:
     # ``function initNav`` or ``function initButtons``.
     body = func_body(source, "init()")
     load_pos = body.find("App.loadFirstRunNotice()")
-    refresh_pos = body.find("refreshCurrentPageData()")
+    refresh_pos = body.find("refreshCurrentPageData(state")
     heartbeat_pos = body.find("startHeartbeat()")
     assert load_pos != -1, "init() must call App.loadFirstRunNotice()"
-    assert refresh_pos != -1, "init() must call refreshCurrentPageData()"
+    assert refresh_pos != -1, "init() must call refreshCurrentPageData(state)"
     assert heartbeat_pos != -1, "init() must call startHeartbeat()"
     # loadFirstRunNotice must appear before refresh / heartbeat in
     # source order within init.

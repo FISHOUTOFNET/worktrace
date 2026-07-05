@@ -287,8 +287,9 @@ def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     assert recent["source"] == "snapshot"
     assert int(recent["activity_id"]) == 0
     assert int(recent["duration_seconds"]) == sample
-    assert int(recent["live_base_seconds"]) == 0
-    assert int(recent["display_base_seconds"]) == 0
+    assert int(recent["live_base_seconds"]) == 3
+    assert int(recent["display_base_seconds"]) == 3
+    assert int(recent["display_base_seconds"]) + int(live_clock["current_elapsed_at_sample"]) == sample
     assert recent["display_span_id"] == live_clock["display_span_id"]
     assert recent["edit_disabled"] is True
     assert recent["exportable"] is False
@@ -589,9 +590,9 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
         None,
     )
     assert recent_row is not None, "persisted_open row not found in activities"
-    assert int(recent_row["live_base_seconds"]) == 0, (
+    assert int(recent_row["live_base_seconds"]) == 30, (
         f"Recent row live_base_seconds ({recent_row['live_base_seconds']}) "
-        "must be current-activity base 0"
+        "must preserve the runtime display base"
     )
     assert recent_row["stable_live_key_hash"] == sample_hash
 
@@ -655,7 +656,7 @@ def test_overview_recent_session_with_closed_then_open_activity_gets_live_overla
 
     Asserts: recent row ``activity_ids == [closed_id, open_id]`` /
     ``first_activity_id == closed_id``; ``duration_seconds == 160`` /
-    ``live_base_seconds == 0`` for the Recent current item; ``today_total_seconds == 160`` /
+        ``live_base_seconds == 60`` for the Recent session item; ``today_total_seconds == 160`` /
     ``classified_seconds == 160`` / ``uncategorized_seconds == 0``;
     ``current_activity.elapsed_seconds == 100`` (open OWN sample);
     Timeline same session 160 (Overview ↔ Timeline agree)."""
@@ -745,8 +746,8 @@ def test_overview_recent_session_with_closed_then_open_activity_gets_live_overla
         f"Overview recent row duration_seconds must equal 160 (60 closed DB "
         f"+ 100 live delta); got {recent_row['duration_seconds']}"
     )
-    assert int(recent_row["live_base_seconds"]) == 0, (
-        f"Overview recent row live_base_seconds must equal current base 0; got "
+    assert int(recent_row["live_base_seconds"]) == 60, (
+        f"Overview recent row live_base_seconds must equal closed-row base 60; got "
         f"{recent_row['live_base_seconds']}"
     )
 

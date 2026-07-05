@@ -1229,7 +1229,12 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
     )
     assert recent_row is not None
     assert recent_row["display_span_id"] == expected_span_id
-    assert recent_row["live_base_seconds"] == 0
+    assert recent_row["live_base_seconds"] == 30
+    assert (
+        recent_row["live_base_seconds"]
+        + overview["live_clock"]["current_elapsed_at_sample"]
+        == recent_row["duration_seconds"]
+    )
 
     # Timeline matching session row must also carry the same span id.
     timeline_session = next(
@@ -1461,9 +1466,9 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
     )
 
     # live_base = anchor_raw(60); pending/current elapsed is added by the
-    # single live delta.
-    assert recent_row["live_base_seconds"] == 0, (
-        f"Overview recent live_base_seconds must be current base 0; got "
+    # single accepted runtime elapsed.
+    assert recent_row["live_base_seconds"] == 60, (
+        f"Overview recent live_base_seconds must preserve anchor base; got "
         f"{recent_row['live_base_seconds']}"
     )
 
@@ -1484,6 +1489,55 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
     )
     assert anchor_session is not None
     assert anchor_session["live_state"] == "absorbed_pending"
+
+
+def test_live_bearing_viewmodels_share_runtime_and_revisions(bridge):
+    """refresh_state / overview / timeline / details must use the same
+    runtime semantics and expose the same live identity fields."""
+    anchor_start = datetime.now() - timedelta(seconds=120)
+    anchor_end = anchor_start + timedelta(seconds=60)
+    anchor_aid = activity_service.create_activity(
+        "AnchorApp",
+        "AnchorApp.exe",
+        "AnchorWindow",
+        start_time=anchor_start.strftime(TIME_FORMAT),
+    )
+    activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 60)
+
+    pending_start = datetime.now() - timedelta(seconds=10)
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=10,
+            extra_seconds=5,
+            is_persisted=False,
+            start_time=pending_start.strftime(TIME_FORMAT),
+        )
+    )
+
+    refresh_state = bridge.get_refresh_state()
+    overview = bridge.get_overview()
+    timeline = bridge.get_timeline()
+    details = bridge.get_timeline_session_details([anchor_aid], None)
+
+    views = {
+        "refresh_state": refresh_state,
+        "overview": overview,
+        "timeline": timeline,
+        "details": details,
+    }
+    expected = refresh_state["live_clock"]
+    assert expected["live_state"] == "absorbed_pending"
+    for name, view in views.items():
+        clock = view["live_clock"]
+        assert clock["live_state"] == expected["live_state"], name
+        assert clock["display_span_id"] == expected["display_span_id"], name
+        assert clock["stable_live_key_hash"] == expected["stable_live_key_hash"], name
+        assert view["display_span_id"] == expected["display_span_id"], name
+        assert view["stable_live_key_hash"] == expected["stable_live_key_hash"], name
+        assert view["sample_id"] == refresh_state["sample_id"], name
+        assert view["refresh_revision"], name
+        assert view["live_state_revision"] == refresh_state["live_state_revision"], name
+        assert view["page_structure_revision"] == refresh_state["page_structure_revision"], name
 
 
 def test_absorbed_pending_current_clock_uses_resource_elapsed(bridge):
@@ -2163,24 +2217,19 @@ def test_refresh_state_high_frequency_path_does_not_scan_activity_rows(
 ):
     """``get_refresh_state`` must stay lightweight enough for heartbeat use.
 
-    It may build the current live state from the single snapshot, but must
-    not call the page/list row loader or attach resources for every activity
-    on the report date.
+    It may perform the minimal anchor lookup required to preserve the same
+    live semantics as page ViewModels, but must not attach resources for
+    every activity on the report date.
     """
-    from worktrace.services import activity_service, resource_service
+    from worktrace.services import resource_service
 
     _set_snapshot(_normal_snapshot(elapsed_seconds=12, is_persisted=False))
-    calls = {"rows": 0, "attach": 0}
-
-    def boom_rows(date):
-        calls["rows"] += 1
-        raise AssertionError("get_refresh_state must not scan activity rows")
+    calls = {"attach": 0}
 
     def boom_attach(row):
         calls["attach"] += 1
         raise AssertionError("get_refresh_state must not attach resources")
 
-    monkeypatch.setattr(activity_service, "get_activities_by_date", boom_rows)
     monkeypatch.setattr(resource_service, "attach_resource", boom_attach)
 
     state = bridge.get_refresh_state()
@@ -2190,7 +2239,7 @@ def test_refresh_state_high_frequency_path_does_not_scan_activity_rows(
     assert state["live_state_revision"]
     assert state["page_structure_revision"]
     assert state["refresh_revision"]
-    assert calls == {"rows": 0, "attach": 0}
+    assert calls == {"attach": 0}
 
 
 def test_refresh_state_returns_split_revisions_and_compat_revision(bridge):

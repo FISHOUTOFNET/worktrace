@@ -155,8 +155,8 @@ def test_tests_directory_does_not_import_virtual_builders_as_positive_contract()
 
 def test_overview_js_renders_live_rows_with_display_span_id():
     """``overview.js`` must emit ``data-display-span-id``
-    on every live recent row so the unified ticker walks the registered
-    live clock (``App.liveClockBySpanId`` + ``App.liveSeconds()``) instead
+    on every live recent row so the unified ticker can validate the
+    accepted live runtime identity instead
     of reading a structural cache as a live-seconds source."""
     source = (JS_DIR / "overview.js").read_text(encoding="utf-8")
     assert "data-display-span-id" in source, (
@@ -168,7 +168,7 @@ def test_overview_js_renders_live_rows_with_display_span_id():
 def test_timeline_js_renders_live_rows_with_display_span_id():
     """``timeline.js`` must emit ``data-display-span-id``
     on every live timeline session row AND every live detail row so the
-    unified ticker walks the registered live clock for both surfaces."""
+    unified ticker can validate runtime identity for both surfaces."""
     source = (JS_DIR / "timeline.js").read_text(encoding="utf-8")
     assert "data-display-span-id" in source, (
         "timeline.js must render live session / detail rows with the "
@@ -311,10 +311,10 @@ def test_bridge_does_not_derive_live_seconds_independently():
     )
 
 
-def test_frontend_js_ticker_only_reads_registered_live_clock():
+def test_frontend_js_ticker_only_reads_accepted_live_runtime():
     """Section 七: the frontend ticker MUST only read from the
-    page-scoped registered live clock (``getActiveLiveClock`` /
-    ``activeSpanClockByPage``). It MUST NOT derive
+    accepted live runtime (``App.liveRuntime`` via ``getActiveLiveClock``).
+    It MUST NOT derive
     live seconds from ``lastOverviewSnapshot`` / ``lastTimelineData`` /
     ``lastRecentData`` / ``lastSessionDetailsViewModel`` — those are
     structural caches only, never a live-seconds source.
@@ -325,21 +325,15 @@ def test_frontend_js_ticker_only_reads_registered_live_clock():
     source itself.
     """
     source = (JS_DIR / "core.js").read_text(encoding="utf-8")
-    # The ticker MUST call getActiveLiveClock (the page-scoped entry).
     assert "getActiveLiveClock()" in source, (
         "core.js ticker must call getActiveLiveClock() to read the "
-        "page-scoped live clock"
+        "accepted live runtime"
     )
-    # The page-scoped registry MUST exist.
-    assert "App.activeSpanClockByPage" in source, (
-        "core.js must define App.activeSpanClockByPage (page-scoped registry)"
+    assert "App.liveRuntime" in source, (
+        "core.js must define App.liveRuntime as the accepted runtime"
     )
-    assert "App.liveClockByPage" not in source
-    assert "App.liveClockBySpanId" not in source
-    # registerLiveClock MUST accept a page parameter.
-    assert "opts.page" in source or "options.page" in source, (
-        "core.js registerLiveClock must accept a page/scope parameter"
-    )
+    for token in ("App.activeSpanClockByPage", "App.liveClockByPage", "App.liveClockBySpanId"):
+        assert token not in source
 
 
 def test_current_activity_clock_builder_is_removed():

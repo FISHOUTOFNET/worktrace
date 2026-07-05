@@ -36,7 +36,7 @@ from ..formatters import format_duration, format_resource_type, format_safe_disp
 from . import activity_display_model_service, live_display_service, project_service, statistics_service, timeline_service
 from .activity_display_model_service import (
     apply_live_span_to_row,
-    build_activity_display_model,
+    build_live_runtime_model,
     get_live_span,
 )
 from .live_display_service import compute_refresh_revision
@@ -131,6 +131,39 @@ def _clock_projects_live_duration(live_clock: dict[str, Any]) -> bool:
             or live_clock.get("is_project_duration_live") is True
         )
     )
+
+
+def _revision_fields_for_model(
+    snapshot: dict[str, Any] | None,
+    model: dict[str, Any],
+    *,
+    today: str,
+    report_date: str,
+) -> dict[str, str]:
+    collector_status = _get_collector_status()
+    user_paused = _is_user_paused()
+    refresh_revision, debug_inputs = compute_refresh_revision(
+        snapshot,
+        collector_status,
+        user_paused,
+        today,
+        report_date,
+        display_model=model,
+    )
+    return {
+        "refresh_revision": refresh_revision,
+        "live_state_revision": str(debug_inputs.get("live_state_revision") or ""),
+        "page_structure_revision": str(debug_inputs.get("page_structure_revision") or ""),
+    }
+
+
+def _live_identity_fields(model: dict[str, Any]) -> dict[str, Any]:
+    live_clock = model.get("live_clock") or {}
+    return {
+        "display_span_id": str(live_clock.get("display_span_id") or ""),
+        "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
+        "sample_id": str(model.get("sample_id") or ""),
+    }
 
 
 def _display_only_common_fields(
@@ -281,12 +314,18 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     """
     scoped_today = today or timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
-    model = build_activity_display_model(
+    model = build_live_runtime_model(
         report_date=scoped_today, today=scoped_today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
-    display_span_id = str(live_clock.get("display_span_id") or "")
+    identity_fields = _live_identity_fields(model)
+    revision_fields = _revision_fields_for_model(
+        snapshot,
+        model,
+        today=scoped_today,
+        report_date=scoped_today,
+    )
 
     project_count = len(project_service.list_active_projects())
     sessions = timeline_service.get_project_sessions_by_date(
@@ -341,19 +380,14 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
 
     # Recent items are the first N overlaid rows.
     items = all_rows[:_RECENT_LIMIT]
-    for item in items:
-        if str(item.get("display_span_id") or ""):
-            item["display_base_seconds"] = 0
-            item["live_base_seconds"] = 0
 
-    sample_id = str(model.get("sample_id") or "")
     elapsed = int(current_activity.get("elapsed_seconds") or 0)
 
     return {
         "ok": True,
         "date": scoped_today,
-        "sample_id": sample_id,
-        "display_span_id": display_span_id,
+        **identity_fields,
+        **revision_fields,
         "live_clock": live_clock,
         "activity_display_model": model,
         "overview": {
@@ -459,14 +493,20 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     scoped_report_date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
-    model = build_activity_display_model(
+    model = build_live_runtime_model(
         report_date=scoped_report_date,
         today=today,
         snapshot=snapshot,
     )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
-    display_span_id = str(live_clock.get("display_span_id") or "")
+    identity_fields = _live_identity_fields(model)
+    revision_fields = _revision_fields_for_model(
+        snapshot,
+        model,
+        today=today,
+        report_date=scoped_report_date,
+    )
 
     sessions_raw = timeline_service.get_project_sessions_by_date(
         scoped_report_date, include_hidden=False, ensure_context=True
@@ -554,7 +594,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     )
 
     elapsed = int(current_activity.get("elapsed_seconds") or 0)
-    sample_id = str(model.get("sample_id") or "")
 
     return {
         "ok": True,
@@ -565,9 +604,9 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         "raw_total_seconds": raw_total_seconds,
         "current_activity": current_activity,
         "live_clock": live_clock,
-        "display_span_id": display_span_id,
+        **identity_fields,
+        **revision_fields,
         "activity_display_model": model,
-        "sample_id": sample_id,
         "sessions": sessions,
         "today_total_seconds": display_total_seconds,
         "today_total_base_seconds": today_total_base_seconds,
@@ -598,13 +637,18 @@ def get_session_details_view_model(
     date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
-    model = build_activity_display_model(
+    model = build_live_runtime_model(
         report_date=date, today=today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
-    display_span_id = str(live_clock.get("display_span_id") or "")
-    sample_id = str(model.get("sample_id") or "")
+    identity_fields = _live_identity_fields(model)
+    revision_fields = _revision_fields_for_model(
+        snapshot,
+        model,
+        today=today,
+        report_date=date,
+    )
 
     details_live_span = _get_visible_live_span(model, "details")
     if details_live_span:
@@ -619,25 +663,27 @@ def get_session_details_view_model(
         if request_matches_live and live_anchor_id <= 0:
             return {
                 "ok": True,
+                "date": date,
                 "activities": [
                     _materialize_display_only_detail_row(details_live_span, current_activity)
                 ],
                 "current_activity": current_activity,
                 "live_clock": live_clock,
-                "display_span_id": display_span_id,
+                **identity_fields,
+                **revision_fields,
                 "activity_display_model": model,
-                "sample_id": sample_id,
             }
 
     if not ids:
         return {
             "ok": True,
+            "date": date,
             "activities": [],
             "current_activity": current_activity,
             "live_clock": live_clock,
-            "display_span_id": display_span_id,
+            **identity_fields,
+            **revision_fields,
             "activity_display_model": model,
-            "sample_id": sample_id,
         }
 
     rows = timeline_service.get_session_activity_details(
@@ -701,12 +747,13 @@ def get_session_details_view_model(
 
     return {
         "ok": True,
+        "date": date,
         "activities": activities,
         "current_activity": current_activity,
         "live_clock": live_clock,
-        "display_span_id": display_span_id,
+        **identity_fields,
+        **revision_fields,
         "activity_display_model": model,
-        "sample_id": sample_id,
     }
 
 
@@ -739,11 +786,10 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
     # Pass the already-read snapshot into the display model so it does
     # NOT re-read the setting. ``refresh_revision`` and ``live_clock``
     # share the same sample.
-    model = build_activity_display_model(
+    model = build_live_runtime_model(
         report_date=scoped_report_date,
         today=today,
         snapshot=snapshot,
-        include_absorb_anchor=False,
     )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}

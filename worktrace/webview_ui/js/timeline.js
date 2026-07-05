@@ -8,10 +8,9 @@
 
     function showTimeline(data) {
         if (!data) return;
-        App.commitPageActiveSpanClock(data, "timeline");
         App.lastTimelineData = data;
         var nowMs = Date.now();
-        var clock = App.getActiveLiveClock("timeline");
+        var clock = App.getActiveLiveClock();
         var projectClock = clock && (clock.project_duration_live === true || clock.is_project_duration_live === true);
         var activeElapsedNowValue = App.computeActiveElapsedNow(clock, nowMs);
         var dateInput = document.getElementById("timeline-date-input");
@@ -69,7 +68,6 @@
             App.selectedSessionId = null;
             App.selectedSessionLiveKey = null;
             clearEditPanel();
-            App.applyLocalTicker();
             return;
         }
 
@@ -131,6 +129,7 @@
                 + '<div class="timeline-item-duration"'
                 + (sessSpanId ? ' data-live-duration-target="1"' : '')
                 + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
+                + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
                 + (sessSpanId ? ' data-display-base-seconds="' + sessionDisplayBase + '"' : '')
                 + (sessSpanId ? ' data-live-base-seconds="' + sessionDisplayBase + '"' : '')
                 + (sessSpanId ? ' data-live-role="timeline-session"' : '')
@@ -148,8 +147,6 @@
             var ck = sessionContinuityKeys[ci];
             App._monotonicRenderState[ck.key] = { lastSeconds: ck.sec };
         }
-        App.applyLocalTicker();
-
         var items = listEl.querySelectorAll(".timeline-item");
         for (var j = 0; j < items.length; j++) {
             (function (itemEl) {
@@ -225,6 +222,24 @@
     }
     App.showTimeline = showTimeline;
 
+    function acceptTimelinePayload(data, date) {
+        if (!App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
+            App.noteRejectedPagePayload(data, "timeline", date);
+            return false;
+        }
+        return true;
+    }
+    App.acceptTimelinePayload = acceptTimelinePayload;
+
+    function acceptTimelineDetailsPayload(data, date) {
+        if (!App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
+            App.noteRejectedPagePayload(data, "timeline", date);
+            return false;
+        }
+        return true;
+    }
+    App.acceptTimelineDetailsPayload = acceptTimelineDetailsPayload;
+
     function selectTimelineSession(sessionId, sessions) {
         App.selectedSessionId = sessionId;
         // Switching sessions closes the correction shell (per-session workspace).
@@ -282,6 +297,7 @@
                 detailsList.innerHTML = '<div class="timeline-empty">' + App.escapeHtml(msg) + '</div>';
             });
             if (!data) return;
+            if (!acceptTimelineDetailsPayload(data, date)) return;
             renderSessionDetails(data);
         }).catch(function () {
             if (token !== App.detailsRequestToken) return;  // stale response
@@ -303,7 +319,7 @@
             return;
         }
         var nowMs = Date.now();
-        var activeClock = App.getActiveLiveClock("timeline");
+        var activeClock = App.getActiveLiveClock();
         var projectClock = activeClock && (activeClock.project_duration_live === true || activeClock.is_project_duration_live === true);
         var activeElapsedNowValue = App.computeActiveElapsedNow(activeClock, nowMs);
         if (App.lastTimelineData) {
@@ -311,7 +327,7 @@
         }
         // Structural cache only — used for re-render on page switch /
         // edit-guard checks. Live seconds come from DOM anchors plus the
-        // Timeline page active span clock; this cache MUST NOT be read as a live-seconds source.
+        // accepted live runtime; this cache MUST NOT be read as a live-seconds source.
         App.lastSessionDetailsViewModel = data;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
@@ -370,6 +386,7 @@
                 + '<div class="detail-item-duration"'
                 + (detailSpanId ? ' data-live-duration-target="1"' : '')
                 + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
+                + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
                 + (detailSpanId ? ' data-display-base-seconds="' + detailDisplayBase + '"' : '')
                 + (detailSpanId ? ' data-live-base-seconds="' + detailDisplayBase + '"' : '')
                 + (detailSpanId ? ' data-live-role="timeline-detail"' : '')
@@ -390,7 +407,6 @@
             if (!detailKey) continue;
             App._monotonicRenderState[detailKey] = { lastSeconds: dk.sec };
         }
-        App.applyLocalTicker();
     }
     App.renderSessionDetails = renderSessionDetails;
 
@@ -1625,6 +1641,7 @@
                 App.showTimelineError(msg || "刷新失败");
             });
             if (!data) return;
+            if (!acceptTimelinePayload(data, date)) return;
             showTimeline(data);
             App.clearTimelineError();
         }).catch(function () {
@@ -1798,6 +1815,7 @@
             });
             App.setTimelineLoading(false);
             if (!data) return;
+            if (!acceptTimelinePayload(data, date)) return;
             App.timelineLoaded = true;
             showTimeline(data);
         }).catch(function () {
@@ -1824,6 +1842,7 @@
                 App.showTimelineError(msg || "刷新失败");
             });
             if (!data) return;
+            if (!acceptTimelinePayload(data, date)) return;
             showTimeline(data);
             App.clearTimelineError();
         }).catch(function () {
@@ -1834,6 +1853,21 @@
         });
     }
     App.refreshTimeline = refreshTimeline;
+
+    function reloadTimelineAfterRuntimeRefresh(date) {
+        if (typeof App.setLiveRuntimeScope === "function") {
+            App.setLiveRuntimeScope("timeline", date);
+        }
+        if (typeof App.refreshCurrentPageData === "function") {
+            App.refreshCurrentPageData().then(function () {
+                if (App.liveRuntime && App.liveRuntime.page === "timeline") {
+                    loadTimeline(date);
+                }
+            });
+        } else {
+            loadTimeline(date);
+        }
+    }
 
 
     function goPrevDay() {
@@ -1850,7 +1884,7 @@
         // Close the correction shell on date switch so the shell context
         // does not carry over to a different day.
         App.resetCorrectionShellState();
-        loadTimeline(App.timelineDate);
+        reloadTimelineAfterRuntimeRefresh(App.timelineDate);
     }
     App.goPrevDay = goPrevDay;
 
@@ -1866,7 +1900,7 @@
         App.lastSessionDetailsViewModel = null;
         // Close the correction shell on date switch.
         App.resetCorrectionShellState();
-        loadTimeline(App.timelineDate);
+        reloadTimelineAfterRuntimeRefresh(App.timelineDate);
     }
     App.goNextDay = goNextDay;
 
@@ -1880,7 +1914,7 @@
         App.lastSessionDetailsViewModel = null;
         // Close the correction shell on date switch.
         App.resetCorrectionShellState();
-        loadTimeline(null);
+        reloadTimelineAfterRuntimeRefresh(null);
     }
     App.goToday = goToday;
 
