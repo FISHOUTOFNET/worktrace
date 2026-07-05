@@ -314,7 +314,7 @@ def test_bridge_does_not_derive_live_seconds_independently():
 def test_frontend_js_ticker_only_reads_registered_live_clock():
     """Section 七: the frontend ticker MUST only read from the
     page-scoped registered live clock (``getActiveLiveClock`` /
-    ``liveClockBySpanId`` / ``liveClockByPage``). It MUST NOT derive
+    ``activeSpanClockByPage``). It MUST NOT derive
     live seconds from ``lastOverviewSnapshot`` / ``lastTimelineData`` /
     ``lastRecentData`` / ``lastSessionDetailsViewModel`` — those are
     structural caches only, never a live-seconds source.
@@ -331,9 +331,11 @@ def test_frontend_js_ticker_only_reads_registered_live_clock():
         "page-scoped live clock"
     )
     # The page-scoped registry MUST exist.
-    assert "App.liveClockByPage" in source, (
-        "core.js must define App.liveClockByPage (page-scoped registry)"
+    assert "App.activeSpanClockByPage" in source, (
+        "core.js must define App.activeSpanClockByPage (page-scoped registry)"
     )
+    assert "App.liveClockByPage" not in source
+    assert "App.liveClockBySpanId" not in source
     # registerLiveClock MUST accept a page parameter.
     assert "opts.page" in source or "options.page" in source, (
         "core.js registerLiveClock must accept a page/scope parameter"

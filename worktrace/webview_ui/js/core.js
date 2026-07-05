@@ -24,16 +24,8 @@
 
     // Canonical active live time. There is one dynamic elapsed source per visible page
     // scope; current activity, rows and KPIs never own their own complete clock.
-    // ``liveClockBySpanId`` is retained only as a compatibility mirror for diagnostics/tests
-    // and is not used by the ticker to compute row durations.
-    App.liveClockBySpanId = {};
     App.liveDisplayModel = null;
-    App.activeDisplaySpanId = "";
     App.activeSpanClockByPage = {};
-    App.activeLiveTimeByPage = App.activeSpanClockByPage;
-    // Compatibility alias for older callers; do not use this as a row clock registry.
-    App.liveClockByPage = App.activeSpanClockByPage;
-    App.activeDisplaySpanIdByPage = {};
     App.liveClockContractViolation = null;
     App.liveClockContractRefreshRequested = false;
 
@@ -626,21 +618,6 @@
         return !!(c && c.display_span_id && c.is_live === true);
     }
 
-    function mirrorActiveSpanClockForCompatibility(pageScope, clock) {
-        var storedClock = normalizeLiveClock(clock);
-        if (!storedClock || !storedClock.display_span_id) return;
-        var spanId = storedClock.display_span_id;
-        var pageActiveSpanId = App.activeDisplaySpanIdByPage[pageScope] || "";
-        if (pageActiveSpanId && pageActiveSpanId !== spanId && App.liveClockBySpanId[pageActiveSpanId]) {
-            delete App.liveClockBySpanId[pageActiveSpanId];
-        }
-        App.liveClockBySpanId[spanId] = storedClock;
-        App.activeDisplaySpanIdByPage[pageScope] = spanId;
-        if (pageScope === App.currentPage) {
-            App.activeDisplaySpanId = spanId;
-        }
-    }
-
     function commitPageActiveSpanClock(payload, page) {
         var pageScope = String(page || App.currentPage || "overview");
         var incomingClock = normalizeLiveClock(findClockInPayload(payload, false));
@@ -656,7 +633,6 @@
         }
         var storedClock = rebaseIncomingClockWithoutRollback(activeClock, incomingClock, tickerNowEpochMs());
         App.activeSpanClockByPage[pageScope] = storedClock;
-        mirrorActiveSpanClockForCompatibility(pageScope, storedClock);
         if (payload.activity_display_model) {
             App.liveDisplayModel = payload.activity_display_model;
         } else {
@@ -678,7 +654,6 @@
         }
         var storedClock = rebaseIncomingClockWithoutRollback(activeClock, incomingClock, tickerNowEpochMs());
         App.activeSpanClockByPage[pageScope] = storedClock;
-        mirrorActiveSpanClockForCompatibility(pageScope, storedClock);
         if (payload && payload.activity_display_model) {
             App.liveDisplayModel = payload.activity_display_model;
         }
@@ -730,28 +705,17 @@
     // omitted, ALL scopes are cleared (legacy behavior).
     function clearLiveClockRegistry(pageScope) {
         if (pageScope) {
-            var spanId = App.activeDisplaySpanIdByPage[pageScope] || "";
-            if (spanId && App.liveClockBySpanId[spanId]) {
-                delete App.liveClockBySpanId[spanId];
-            }
             delete App.activeSpanClockByPage[pageScope];
-            delete App.activeDisplaySpanIdByPage[pageScope];
             // Only clear the global active fields when the cleared scope is
             // the current page; a hidden-page clear MUST NOT touch the
             // current page's active clock.
             if (pageScope === App.currentPage) {
-                App.activeDisplaySpanId = "";
                 App.liveDisplayModel = null;
             }
             return;
         }
-        App.liveClockBySpanId = {};
         App.activeSpanClockByPage = {};
-        App.activeLiveTimeByPage = App.activeSpanClockByPage;
-        App.liveClockByPage = App.activeSpanClockByPage;
-        App.activeDisplaySpanIdByPage = {};
         App.liveDisplayModel = null;
-        App.activeDisplaySpanId = "";
     }
     App.clearLiveClockRegistry = clearLiveClockRegistry;
 

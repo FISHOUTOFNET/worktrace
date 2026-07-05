@@ -92,6 +92,9 @@ def test_heartbeat_single_timer_replaces_parallel_timers():
         "init.js must not define a startLocalTicker function; the unified "
         "heartbeat owns the single timer"
     )
+    assert read_all_js().count("setInterval") == 1, (
+        "frontend must have exactly one periodic timer: the heartbeat"
+    )
 
 
 def test_heartbeat_interval_is_one_second():
@@ -272,6 +275,34 @@ def test_low_frequency_reconciliation_skips_timeline_when_editing():
     assert "_timelineEditingActive" in body, (
         "fullReconcileCollectionViews must guard Timeline re-render with "
         "App._timelineEditingActive() so input focus is never lost"
+    )
+
+
+def test_timeline_edit_guard_does_not_block_current_activity_header_refresh():
+    """Timeline editing protects editable inputs/details, not the live
+    current-activity header/state text."""
+    src = _strip_js_comments(read_js("init.js"))
+    refresh_body = func_body(src, "refreshCurrentPageData")
+    assert "refreshTimelineCurrentActivityFromState" in refresh_body, (
+        "refreshCurrentPageData must refresh Timeline current activity from "
+        "the latest refresh-state payload even when full Timeline rendering "
+        "is edit-guarded"
+    )
+    assert "if (typeof App._timelineEditingActive" in refresh_body, (
+        "full Timeline rendering may still be protected by the edit guard"
+    )
+
+
+def test_run_revision_check_updates_timeline_header_before_guarded_refresh():
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "runRevisionCheck")
+    changed_index = body.find("prevRevision !== newRevision")
+    header_index = body.find("refreshTimelineCurrentActivityFromState(state)", changed_index)
+    refresh_index = body.find("refreshCurrentPageData()", changed_index)
+    assert header_index != -1 and refresh_index != -1 and header_index < refresh_index, (
+        "revision-change handling must update the Timeline current header "
+        "from backend refresh-state before any guarded page refresh can skip "
+        "the list render"
     )
 
 
@@ -1130,9 +1161,7 @@ def test_register_live_clock_clears_registry_on_no_clock():
         "refresh_state observation must not clear page_model anchors"
     )
     clear_body = func_body(src, "clearLiveClockRegistry")
-    assert "liveClockBySpanId" in clear_body, (
-        "clearLiveClockRegistry must reset App.liveClockBySpanId"
-    )
+    assert "liveClockBySpanId" not in clear_body
     assert "activeSpanClockByPage" in clear_body, (
         "clearLiveClockRegistry must reset App.activeSpanClockByPage"
     )
@@ -1559,9 +1588,8 @@ def test_timeline_details_edit_guard_keeps_dom_and_does_not_register_clocks():
 def test_get_active_live_clock_reads_page_scope():
     """Section 五: ``getActiveLiveClock`` MUST read the current page scope
     (``App.currentPage``) and return the page-scoped clock from
-    ``App.liveClockByPage``. Page-scoped lookup is the SINGLE source of
-    truth — the legacy global ``activeDisplaySpanId`` fallback has been
-    removed so a hidden page's payload cannot become the active clock.
+    ``App.activeSpanClockByPage``. Page-scoped lookup is the SINGLE source
+    of truth; legacy compatibility mirrors are removed.
     """
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "getActiveLiveClock")
@@ -1673,11 +1701,39 @@ def test_get_active_live_clock_reads_page_scoped_registry_only():
         "getActiveLiveClock must NOT read App.activeDisplaySpanId; the "
         "legacy global fallback was removed"
     )
-    assert "liveClockBySpanId[App.activeDisplaySpanId]" not in body, (
-        "getActiveLiveClock must NOT look up "
-        "App.liveClockBySpanId[App.activeDisplaySpanId]; page-scoped is "
-        "the single source of truth"
+    assert "liveClockBySpanId" not in body
+
+
+def test_legacy_live_clock_mirrors_are_removed():
+    src = _strip_js_comments(read_js("core.js"))
+    for removed in (
+        "liveClockBySpanId",
+        "liveClockByPage",
+        "activeLiveTimeByPage",
+        "activeDisplaySpanIdByPage",
+        "activeDisplaySpanId",
+        "mirrorActiveSpanClockForCompatibility",
+    ):
+        assert removed not in src, (
+            "core.js must not retain legacy live-clock mirror: " + removed
+        )
+
+
+def test_frontend_does_not_locally_decide_history_threshold():
+    src = _strip_js_comments(read_all_js())
+    forbidden_patterns = (
+        r"elapsed\s*>?=\s*30",
+        r"30\s*<=\s*elapsed",
+        r"已进入历史",
+        r"暂不入历史",
+        r"thresholdWatcher",
+        r"persistWatcher",
+        r"rowClockRegistry",
     )
+    for pattern in forbidden_patterns:
+        assert re.search(pattern, src) is None, (
+            "frontend must not locally decide persisted/history state: " + pattern
+        )
 
 
 def test_apply_local_ticker_does_not_use_global_live_node_query():

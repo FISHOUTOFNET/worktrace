@@ -122,6 +122,8 @@
             // revision-change refresh and manual refresh do not overwrite
             if (typeof App._timelineEditingActive !== "function" || !App._timelineEditingActive()) {
                 promises.push(refreshTimeline());
+            } else {
+                refreshTimelineCurrentActivityFromState(App.lastRefreshState);
             }
         }
         return Promise.allSettled(promises).then(function (results) {
@@ -376,6 +378,27 @@
         }
     }
 
+    function refreshTimelineCurrentActivityFromState(state) {
+        if (App.currentPage !== "timeline" || !state || !state.current_activity) return;
+        var incomingClock = state.live_clock || (state.activity_display_model && state.activity_display_model.live_clock);
+        var currentClock = typeof App.getActiveLiveClock === "function"
+            ? App.getActiveLiveClock("timeline")
+            : null;
+        if (currentClock && incomingClock
+            && typeof App.sameLiveContinuity === "function"
+            && !App.sameLiveContinuity(currentClock, incomingClock)) {
+            return;
+        }
+        updateCurrentActivityCacheFromRefreshState(state);
+        App.renderCurrentActivityElement(
+            document.getElementById("timeline-current"),
+            state.current_activity || {},
+            "timeline"
+        );
+        App.applyLocalTicker();
+    }
+    App.refreshTimelineCurrentActivityFromState = refreshTimelineCurrentActivityFromState;
+
     // The heartbeat never writes the DB, never starts / stops the
     function runRevisionCheck() {
         if (App.refreshCheckInFlight) return;
@@ -402,6 +425,7 @@
             if (isFirstCheck || prevRevision !== newRevision) {
                 triggeredHeavyRefresh = true;
                 App.liveClockContractRefreshRequested = false;
+                refreshTimelineCurrentActivityFromState(state);
                 refreshCurrentPageData();
             } else if (App.liveClockContractRefreshRequested && !App.activePageRefreshInFlight) {
                 triggeredHeavyRefresh = true;

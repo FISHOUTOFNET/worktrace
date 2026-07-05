@@ -45,6 +45,14 @@ def test_legacy_five_second_poll_interval_is_normalized(temp_db):
     assert settings_service.get_setting("poll_interval_seconds") == "1"
 
 
+def test_legacy_three_second_poll_interval_is_normalized(temp_db):
+    settings_service.set_setting("poll_interval_seconds", "3")
+
+    _normalize_poll_interval_setting()
+
+    assert settings_service.get_setting("poll_interval_seconds") == "1"
+
+
 def test_invalid_poll_interval_is_normalized(temp_db):
     settings_service.set_setting("poll_interval_seconds", "bad")
 
@@ -53,12 +61,12 @@ def test_invalid_poll_interval_is_normalized(temp_db):
     assert settings_service.get_setting("poll_interval_seconds") == "1"
 
 
-def test_custom_non_legacy_poll_interval_is_preserved(temp_db):
+def test_any_non_one_poll_interval_is_normalized(temp_db):
     settings_service.set_setting("poll_interval_seconds", "2")
 
     _normalize_poll_interval_setting()
 
-    assert settings_service.get_setting("poll_interval_seconds") == "2"
+    assert settings_service.get_setting("poll_interval_seconds") == "1"
 
 
 def test_collector_observation_time_is_after_active_window_fast_path():

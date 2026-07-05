@@ -1443,20 +1443,18 @@ _JS_DIR = WEBVIEW_UI_DIR / "js"
 
 def test_core_js_implements_page_scoped_live_clock_registry() -> None:
     """Section 七: ``core.js`` MUST implement a page-scoped live-clock
-    registry. The single global ``App.activeDisplaySpanId`` MUST NOT be
-    the only active-clock source; the page-scoped
-    ``App.liveClockByPage`` / ``App.activeDisplaySpanIdByPage`` MUST be
-    the primary active-clock source so a hidden page's payload cannot
-    overwrite the current page's active clock.
+    registry. The page-scoped ``App.activeSpanClockByPage`` is the only
+    active-clock source; legacy compatibility mirrors must stay removed so
+    a hidden page's payload cannot overwrite the current page's active clock.
     """
     source = (_JS_DIR / "core.js").read_text(encoding="utf-8")
-    # Page-scoped registry MUST exist.
-    assert "App.liveClockByPage" in source, (
-        "core.js must define App.liveClockByPage (page-scoped registry)"
+    assert "App.activeSpanClockByPage" in source, (
+        "core.js must define App.activeSpanClockByPage (page-scoped registry)"
     )
-    assert "App.activeDisplaySpanIdByPage" in source, (
-        "core.js must define App.activeDisplaySpanIdByPage"
-    )
+    assert "App.liveClockByPage" not in source
+    assert "App.liveClockBySpanId" not in source
+    assert "App.activeDisplaySpanIdByPage" not in source
+    assert "App.activeDisplaySpanId" not in source
     # getActiveLiveClock MUST read App.currentPage to scope the lookup.
     assert "App.currentPage" in source, (
         "core.js getActiveLiveClock must read App.currentPage to scope "

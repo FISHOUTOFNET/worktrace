@@ -10,6 +10,7 @@ from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import HISTORY_PERSIST_THRESHOLD_SECONDS
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service, export_service, settings_service, statistics_service
+from worktrace.webview_ui.bridge import WebViewBridge
 
 
 def _rows():
@@ -36,6 +37,45 @@ def test_single_auto_activity_29_seconds_has_snapshot_but_no_history_stats_or_ex
 
     xlsx_path = export_service.export_excel("2026-06-18", "2026-06-18", str(tmp_path / "out.xlsx"))
     assert load_workbook(xlsx_path)["Activity Logs"].max_row == 1
+
+
+def test_29_and_30_second_threshold_updates_snapshot_ui_and_revision_same_tick(temp_db):
+    settings_service.set_setting("collector_status", "running")
+    settings_service.set_setting("user_paused", "false")
+    machine = CollectorStateMachine()
+    bridge = WebViewBridge()
+
+    machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:00:29")
+
+    snap_29 = _snapshot()
+    rows_29 = _rows()
+    state_29 = bridge.get_refresh_state("2026-06-18")
+    overview_29 = bridge.get_overview()
+
+    assert rows_29 == []
+    assert snap_29["is_persisted"] is False
+    assert snap_29["persisted_activity_id"] is None
+    assert state_29["is_persisted"] is False
+    assert state_29["persisted_activity_id"] == 0
+    assert "暂不入历史" in overview_29["current_activity"]["display"]
+
+    machine.transition_to("recording", _normal("Doc"), at_time="2026-06-18 09:00:30")
+
+    snap_30 = _snapshot()
+    rows_30 = _rows()
+    state_30 = bridge.get_refresh_state("2026-06-18")
+    overview_30 = bridge.get_overview()
+
+    assert len(rows_30) == 1
+    assert rows_30[0]["start_time"] == "2026-06-18 09:00:00"
+    assert rows_30[0]["end_time"] is None
+    assert snap_30["is_persisted"] is True
+    assert snap_30["persisted_activity_id"] == rows_30[0]["id"]
+    assert state_30["is_persisted"] is True
+    assert state_30["persisted_activity_id"] == rows_30[0]["id"]
+    assert "已进入历史" in overview_30["current_activity"]["display"]
+    assert state_29["refresh_revision"] != state_30["refresh_revision"]
 
 
 def test_history_persist_threshold_is_shared_constant():

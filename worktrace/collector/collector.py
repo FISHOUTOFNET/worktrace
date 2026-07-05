@@ -155,7 +155,7 @@ def _normalize_poll_interval_setting() -> None:
         value = int(str(raw).strip())
     except ValueError:
         value = 0
-    if value <= 0 or value == 5:
+    if value != 1:
         set_setting("poll_interval_seconds", "1")
 
 
