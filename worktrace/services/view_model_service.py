@@ -397,20 +397,24 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
                 live_contract_reason=_live_contract_reason(recent_live_span, recent_rows),
             ),
         )
+    status_display_item = model.get("status_display_item")
+    if isinstance(status_display_item, dict):
+        recent_rows.insert(0, dict(status_display_item))
 
     # KPI totals computed from the overlaid rows. Classification uses the
     # explicit ``is_classified`` / ``is_uncategorized`` flags propagated by
     # ``_session_to_overview_row``; a missing field MUST NOT silently fall
     # back to the classified bucket (no falsy-default behavior).
-    today_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in recent_rows)
+    total_rows = [r for r in recent_rows if r.get("contributes_to_totals") is not False]
+    today_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in total_rows)
     classified_seconds = sum(
         int(r.get("duration_seconds") or 0)
-        for r in recent_rows
+        for r in total_rows
         if bool(r.get("is_classified"))
     )
     uncategorized_seconds = sum(
         int(r.get("duration_seconds") or 0)
-        for r in recent_rows
+        for r in total_rows
         if bool(r.get("is_uncategorized"))
     )
     active_elapsed = _current_elapsed_at_sample(live_clock)

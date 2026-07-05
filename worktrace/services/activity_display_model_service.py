@@ -1,20 +1,13 @@
 """Unified Activity Display Model — sole owner of live display semantics.
 
 Reads ``current_activity_snapshot`` once and produces a single JSON-safe
-display model. The ONLY place that decides: live-eligibility; the refined
-``live_state`` (``none`` / ``virtual_pending`` / ``absorbed_pending`` /
-``persisted_open`` / ``paused`` / ``idle`` / ``excluded`` / ``error``);
-stable live identity; display span identity; live clock anchor; ``<30s``
-pending absorption (display-only projection — NEVER writes the DB);
-visibility of live rows in recent / timeline / details.
+display model. The ONLY place that decides live eligibility, display span
+identity, live clock fields, and visibility of current live rows in Recent /
+Timeline / Details.
 
-Short-activity contract (DO NOT collapse these stages): Running
-``absorbed_pending`` display projection (``<30s`` pending RUNNING,
-unpersisted snapshot) projects pending elapsed onto the previous confirmed
-normal activity's DB row — DISPLAY-ONLY, NEVER writes the DB. Finished
-short-activity merge is COLLECTOR-OWNED persistence behavior
-(``_merge_or_pend_short_seconds`` real DB write, ``pending_short_seconds``
-pend, or drop at session boundary) — NOT the display model's responsibility.
+Short-activity contract: a running unpersisted normal activity is displayed as
+the current activity itself with base 0. Finished ``<30s`` normal activity
+merge/drop is collector-owned and never inferred by this display layer.
 
 Boundary: lives in ``worktrace.services``; imports low-level helpers from
 ``live_display_service`` plus ``activity_service``, ``timeline_service``,
@@ -33,7 +26,6 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from ..constants import (
-    SOURCE_AUTO,
     STATUS_ERROR,
     STATUS_EXCLUDED,
     STATUS_IDLE,
@@ -42,7 +34,6 @@ from ..constants import (
     UNCATEGORIZED_PROJECT,
 )
 from . import activity_service, timeline_service
-from .activity_continuity_service import can_absorb_short_pending
 from .live_display_service import (
     _display_resource_name,
     _snapshot_display_project_fields,
@@ -52,12 +43,10 @@ from .live_display_service import (
     classify_live_state,
 )
 from .live_time_service import (
-    safe_int,
     snapshot_elapsed_seconds,
     snapshot_extra_seconds,
     snapshot_persisted_id,
 )
-from .runtime_activity_state_service import validate_pending_short_carry
 from .settings_service import get_setting
 
 
@@ -186,81 +175,6 @@ def _get_current_activity_snapshot() -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-# Absorption anchor resolution
-
-
-def _find_absorb_anchor(
-    snapshot: dict[str, Any] | None,
-    today: str,
-) -> dict[str, Any] | None:
-    """Return the latest confirmed normal activity the pending snapshot
-    should absorb into (display-only), or ``None``.
-
-    The anchor is the latest closed, non-deleted, non-hidden, auto,
-    normal activity on ``today`` whose ``start_time`` and ``end_time``
-    are both ``<= pending_start_time`` AND that is NOT separated from
-    the pending snapshot by a session boundary (any recorded reason).
-    The legacy short-activity-carry priority path was removed (no
-    production writer); both paths collapse into a single scan through
-    ``_is_absorbable_anchor()``. The anchor is used ONLY for display
-    projection; the DB is NEVER written.
-    """
-    if not snapshot or not today:
-        return None
-    start_time = str(snapshot.get("start_time") or "")
-    if not start_time:
-        return None
-    try:
-        rows = activity_service.get_activities_by_date(today)
-    except Exception:
-        return None
-    candidates: list[dict[str, Any]] = []
-    for row in rows:
-        if _is_absorbable_anchor(row, start_time):
-            candidates.append(row)
-    if not candidates:
-        return None
-    # Pick the latest by start_time.
-    candidates.sort(key=lambda r: str(r.get("start_time") or ""), reverse=True)
-    return candidates[0]
-
-
-def _is_absorbable_anchor(row: dict[str, Any], pending_start_time: str) -> bool:
-    """Return ``True`` when ``row`` is a valid absorption anchor for a
-    pending snapshot starting at ``pending_start_time``.
-
-    An anchor must satisfy ALL of: ``pending_start_time`` non-empty;
-    row is non-deleted, non-hidden, auto, normal, CLOSED; both
-    ``anchor.start_time`` and ``anchor.end_time`` are
-    ``<= pending_start_time`` (overlap rejected); and no session
-    boundary exists in ``[anchor.end_time, pending_start_time]`` (any
-    recorded reason blocks absorption so a post-restart / post-stop /
-    post-midnight ``<30s`` activity does not leak into the previous
-    project).
-    """
-    if not pending_start_time:
-        return False
-    if int(row.get("is_deleted") or 0) or int(row.get("is_hidden") or 0):
-        return False
-    if str(row.get("source") or "") != SOURCE_AUTO:
-        return False
-    if str(row.get("status") or "") != STATUS_NORMAL:
-        return False
-    end_time = row.get("end_time")
-    if end_time is None or str(end_time) == "":
-        return False
-    anchor_start = str(row.get("start_time") or "")
-    anchor_end = str(end_time)
-    if not anchor_start:
-        return False
-    if anchor_start > pending_start_time:
-        return False
-    if anchor_end > pending_start_time:
-        # Overlap / anomaly: anchor ended after pending start.
-        return False
-    return can_absorb_short_pending(row, pending_start_time)
-
-
 # Display live-state classification
 
 
@@ -271,15 +185,9 @@ def classify_display_live_state(
 ) -> str:
     """Return the refined display live-state label.
 
-    Extends :func:`live_display_service.classify_live_state` by splitting
-    the legacy ``"virtual"`` state into:
-
-    - ``"virtual_pending"`` — normal, unpersisted, ``<30s``, and no
-      previous confirmed normal activity to absorb into. It produces a
-      display-only span for Current / Recent / Timeline / Details.
-    - ``"absorbed_pending"`` — normal, unpersisted, ``<30s``, and a
-      previous confirmed normal activity exists. The pending elapsed is
-      projected (display-only) onto that anchor's DB row.
+    Extends :func:`live_display_service.classify_live_state` by mapping
+    a normal unpersisted live snapshot to ``"virtual_pending"``. It produces
+    a display-only span for the current activity itself with base 0.
 
     The other states (``none`` / ``persisted_open`` / ``paused`` /
     ``idle`` / ``excluded`` / ``error``) are passed through unchanged,
@@ -291,8 +199,7 @@ def classify_display_live_state(
         return base
     if not report_date or not today or report_date != today:
         return "none"
-    anchor = _find_absorb_anchor(snapshot, today)
-    return "absorbed_pending" if anchor else "virtual_pending"
+    return "virtual_pending"
 
 
 # Live-clock construction
@@ -332,6 +239,68 @@ def _status_only_reason_for_state(display_live_state: str) -> str:
     if display_live_state in ("paused", "idle", "excluded", "error"):
         return display_live_state
     return ""
+
+
+def _status_display_label(status: str) -> str:
+    if status == "paused":
+        return "已暂停"
+    if status == "idle":
+        return "空闲"
+    if status == "excluded":
+        return "已排除"
+    if status == "error":
+        return "异常"
+    return ""
+
+
+def _build_status_display_item(
+    snapshot: dict[str, Any] | None,
+    display_live_state: str,
+    report_date: str,
+    today: str,
+) -> dict[str, Any] | None:
+    if report_date != today:
+        return None
+    status = _status_only_reason_for_state(display_live_state)
+    if not status:
+        return None
+    display_status = _status_display_label(status)
+    return {
+        "row_kind": "status_only",
+        "status": status,
+        "display_status": display_status,
+        "project_name": display_status,
+        "project_description": "",
+        "start_time": str(snapshot.get("start_time") or "") if snapshot else "",
+        "end_time": "",
+        "duration": "00:00:00",
+        "duration_seconds": 0,
+        "duration_seconds_at_sample": 0,
+        "display_base_seconds": 0,
+        "aggregate_display_base_seconds": 0,
+        "current_live_base_seconds": 0,
+        "current_live_seconds_at_sample": 0,
+        "contributes_to_totals": False,
+        "project_duration_live": False,
+        "current_duration_live": False,
+        "live_delta_eligible": False,
+        "is_live": False,
+        "is_project_duration_live": False,
+        "is_in_progress": False,
+        "is_live_projected": False,
+        "is_virtual": False,
+        "is_virtual_live": False,
+        "display_span_id": "",
+        "stable_live_key": "",
+        "stable_live_key_hash": "",
+        "live_started_at_epoch_ms": 0,
+        "carry_seconds": 0,
+        "exportable": False,
+        "editable": False,
+        "edit_disabled": True,
+        "disable_reason": "系统状态行不可编辑",
+        "source": "status_only",
+    }
 
 
 def _build_display_session_policy(
@@ -383,34 +352,18 @@ def _build_display_session_policy(
     live_started_at = int(summary.get("live_started_at_epoch_ms") or 0)
     if display_live_state in ("paused", "idle", "excluded", "error") or status != STATUS_NORMAL:
         reason = _status_only_reason_for_state(display_live_state) or status or display_live_state
-        current_duration_live = display_live_state != "paused" and live_started_at > 0
         return DisplaySessionPolicy(
             display_session_kind="status_only",
             base_policy="suppressed",
             aggregate_base_seconds=0,
             current_base_seconds=0,
             project_duration_live=False,
-            current_duration_live=current_duration_live,
+            current_duration_live=False,
             materialize_recent=False,
             materialize_timeline=False,
             materialize_details=False,
             status_only_reason=reason,
             base_policy_reason="status_not_project_live",
-        )
-
-    if display_live_state == "absorbed_pending" and anchor:
-        return DisplaySessionPolicy(
-            display_session_kind="absorbed_pending",
-            base_policy="absorbed_anchor",
-            aggregate_base_seconds=safe_int(anchor.get("duration_seconds")) + snapshot_extra_seconds(snapshot),
-            current_base_seconds=0,
-            project_duration_live=True,
-            current_duration_live=live_started_at > 0,
-            materialize_recent=True,
-            materialize_timeline=True,
-            materialize_details=True,
-            status_only_reason="",
-            base_policy_reason="valid_absorbed_anchor",
         )
 
     if display_live_state == "persisted_open":
@@ -429,24 +382,6 @@ def _build_display_session_policy(
         )
 
     if display_live_state == "virtual_pending":
-        carry = validate_pending_short_carry(
-            current_start_time=str(snapshot.get("start_time") or ""),
-            current_status=status,
-        )
-        if carry.get("valid"):
-            return DisplaySessionPolicy(
-                display_session_kind="continuous_virtual",
-                base_policy="validated_pending_carry",
-                aggregate_base_seconds=int(carry.get("seconds") or 0),
-                current_base_seconds=0,
-                project_duration_live=True,
-                current_duration_live=live_started_at > 0,
-                materialize_recent=True,
-                materialize_timeline=True,
-                materialize_details=True,
-                status_only_reason="",
-                base_policy_reason="validated_pending_carry",
-            )
         return DisplaySessionPolicy(
             display_session_kind="fresh_virtual",
             base_policy="zero",
@@ -458,7 +393,7 @@ def _build_display_session_policy(
             materialize_timeline=True,
             materialize_details=True,
             status_only_reason="",
-            base_policy_reason=str(carry.get("reason") or "no_valid_pending_carry"),
+            base_policy_reason="running_virtual_base_zero",
         )
 
     return DisplaySessionPolicy(
@@ -556,8 +491,8 @@ def _build_current_activity_display(
 
     The current-activity area always renders the pending resource / window
     so the user knows what they are currently looking at. Its primary
-    duration is the current resource elapsed source. Absorbed/project display
-    projection remains in ``live_clock`` for Recent / Timeline / Details.
+    duration is the current resource elapsed source. Aggregate projection
+    remains in ``live_clock`` for Recent / Timeline / Details.
     """
     if not snapshot:
         return {
@@ -650,59 +585,7 @@ def _build_current_activity_display(
 
     display["is_virtual_live"] = display_live_state == "virtual_pending"
     display["is_in_progress"] = display_live_state == "persisted_open"
-    display["is_absorbed_pending"] = display_live_state == "absorbed_pending"
     display["source"] = _source_for_state(display_live_state, snapshot)
-
-    from ..formatters import format_duration
-
-    display_seconds = int(display.get("elapsed_seconds") or 0)
-    if display.get("display"):
-        parts = str(display.get("display") or "").split("｜")
-        if len(parts) >= 3:
-            parts[2] = format_duration(display_seconds)
-            display["display"] = "｜".join(parts)
-
-    # Absorbed_pending: KPI project attribution MUST come from the anchor DB row.
-    if display_live_state == "absorbed_pending" and anchor:
-        anchor_project_id = int(anchor.get("project_id") or 0)
-        anchor_project_name = str(anchor.get("project_name") or "未归类")
-        anchor_project_description = str(anchor.get("project_description") or "")
-        anchor_is_uncategorized = (
-            not anchor_project_id or anchor_project_name == UNCATEGORIZED_PROJECT
-        )
-        display["project_id"] = anchor_project_id
-        display["project_name"] = anchor_project_name
-        display["project_description"] = anchor_project_description
-        display["is_uncategorized"] = bool(anchor_is_uncategorized)
-        display["is_classified"] = not bool(anchor_is_uncategorized)
-        display["display_project"] = None
-        display["candidate_project"] = None
-        display["project_transition"] = {
-            "pending": False,
-            "started_at": "",
-            "elapsed_seconds": 0,
-            "threshold_seconds": 30,
-            "from_project_id": None,
-            "to_project_id": None,
-        }
-        display["project_transition_pending"] = False
-        from .live_display_service import _display_resource_name as _resource_name
-        resource_name = _resource_name(snapshot)
-        state_label = "暂不入历史"
-        status = _snapshot_status_safe(snapshot)
-        if status == STATUS_IDLE:
-            resource_name = "空闲中"
-            state_label = "空闲"
-        elif status == STATUS_PAUSED:
-            state_label = "已暂停"
-        elif status == STATUS_EXCLUDED:
-            state_label = "已排除"
-        elif status == STATUS_ERROR:
-            state_label = "异常"
-        display["display"] = (
-            f"{resource_name}｜{anchor_project_name}｜"
-            f"{format_duration(display_seconds)}｜{state_label}"
-        )
     return display
 
 
@@ -779,7 +662,7 @@ def _snapshot_status_safe(snapshot: dict[str, Any] | None) -> str:
 def _source_for_state(state: str, snapshot: dict[str, Any] | None) -> str:
     if state == "persisted_open":
         return "db"
-    if state in ("virtual_pending", "absorbed_pending"):
+    if state == "virtual_pending":
         return "snapshot"
     return "none"
 
@@ -824,9 +707,6 @@ def _build_display_span(
         or 0
     )
     policy = live_clock.get("display_policy") or {}
-    # Anchor base seconds exists only for absorbed_pending, where the display
-    # projection is explicitly anchored to a closed row. Persisted-open rows
-    # derive static bases from row structural fields during row-kind projection.
     live_anchor_base_seconds = 0
 
     if display_live_state == "persisted_open":
@@ -840,19 +720,6 @@ def _build_display_span(
         project_name = project_fields["project_name"]
         project_description = project_fields["project_description"]
         project_id = project_fields["project_id"]
-    elif display_live_state == "absorbed_pending" and anchor:
-        anchor_id = int(anchor.get("id") or 0)
-        activity_id = anchor_id
-        source = "absorbed_pending"
-        is_virtual = False
-        is_persisted = False
-        is_absorbed = True
-        # absorbed_pending keeps the anchor DB row's identity.
-        project_name = str(anchor.get("project_name") or "未归类")
-        project_description = str(anchor.get("project_description") or "")
-        project_id = int(anchor.get("project_id") or 0)
-        start_time = str(anchor.get("start_time") or start_time)
-        live_anchor_base_seconds = safe_int(anchor.get("duration_seconds"))
     else:
         source = "snapshot"
         is_virtual = True
@@ -894,21 +761,20 @@ def _build_display_span(
         "base_policy_reason": str(live_clock.get("base_policy_reason") or ""),
         "is_virtual": bool(is_virtual),
         "is_persisted": bool(is_persisted),
-        "is_absorbed_pending": bool(is_absorbed),
         "is_visible_in_current": True,
         "is_visible_in_recent": bool(policy.get("materialize_recent")),
         "is_visible_in_timeline": bool(policy.get("materialize_timeline")),
         "is_visible_in_details": bool(policy.get("materialize_details")),
-        "is_display_only": display_live_state in ("virtual_pending", "absorbed_pending"),
-        "display_only": display_live_state in ("virtual_pending", "absorbed_pending"),
+        "is_display_only": display_live_state == "virtual_pending",
+        "display_only": display_live_state == "virtual_pending",
         "editable": False,
         "exportable": False,
         "edit_disabled": True,
         "disable_reason": _LIVE_EDIT_DISABLE_REASON,
-        "display_project": project_fields["display_project"] if display_live_state != "absorbed_pending" else None,
-        "candidate_project": project_fields["candidate_project"] if display_live_state != "absorbed_pending" else None,
-        "project_transition": project_fields["project_transition"] if display_live_state != "absorbed_pending" else None,
-        "project_transition_pending": bool(project_fields["project_transition_pending"]) if display_live_state != "absorbed_pending" else False,
+        "display_project": project_fields["display_project"],
+        "candidate_project": project_fields["candidate_project"],
+        "project_transition": project_fields["project_transition"],
+        "project_transition_pending": bool(project_fields["project_transition_pending"]),
         "live_anchor_activity_id": int(anchor_id),
         "live_anchor_base_seconds": int(live_anchor_base_seconds),
         "is_uncategorized": bool(project_fields["is_uncategorized"]),
@@ -1043,9 +909,6 @@ def apply_live_span_to_row(
 
     live_clock = span.get("live_clock") or {}
     state = str(span.get("live_state") or "")
-    if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW and state == "absorbed_pending":
-        return row
-
     row.update(_live_clock_fields(live_clock))
     current_live_seconds = int(
         live_clock.get("current_live_seconds_at_sample")
@@ -1068,19 +931,7 @@ def apply_live_span_to_row(
     row_raw = int(row.get("raw_duration_seconds") or 0)
     from ..formatters import format_duration
 
-    if state == "absorbed_pending":
-        anchor_base = int(span.get("live_anchor_base_seconds") or 0)
-        pending_extra_base = max(
-            0,
-            int(
-                live_clock.get("aggregate_display_base_seconds")
-                or live_clock.get("display_base_seconds")
-                or 0
-            ) - anchor_base,
-        )
-        aggregate_base = row_raw + pending_extra_base
-        aggregate_duration = aggregate_base + current_live_seconds
-    elif state == "persisted_open":
+    if state == "persisted_open":
         aggregate_base = _static_base_for_live_row(row, span, live_clock, state)
         aggregate_duration = aggregate_base + current_live_seconds
     else:
@@ -1116,7 +967,6 @@ def apply_live_span_to_row(
     row["is_live_projected"] = True
     row["is_in_progress"] = True
     row["is_virtual_live"] = False
-    row["is_absorbed_pending"] = state == "absorbed_pending"
     row["edit_disabled"] = True
     row["disable_reason"] = _LIVE_EDIT_DISABLE_REASON
 
@@ -1147,8 +997,6 @@ def apply_live_span_to_row(
             row["start_time"] = str(span.get("start_time") or row.get("start_time") or "")
         row["live_anchor_activity_id"] = int(span.get("live_anchor_activity_id") or 0)
         row["live_anchor_base_seconds"] = int(span.get("live_anchor_base_seconds") or 0)
-    elif state == "absorbed_pending":
-        row["source"] = "absorbed_pending"
     return row
 
 
@@ -1166,8 +1014,8 @@ def build_activity_display_model(
     The ONLY function page ViewModels should call for live-display
     semantics. Returns a JSON-safe model with ``live_clock`` /
     ``current_activity`` / ``display_spans``. The model NEVER writes the
-    DB — running ``absorbed_pending`` projection is display-only; the
-    finished ``<30s`` short-activity merge is collector-owned persistence
+    DB — running virtual projection is display-only; the finished ``<30s``
+    short-activity merge/drop is collector-owned persistence
     in :mod:`worktrace.collector.auto_activity_recorder`.
     Snapshot injection (single-sample contract): callers that already read
     ``current_activity_snapshot`` (e.g. refresh-state ViewModel, which also
@@ -1190,14 +1038,12 @@ def build_activity_display_model(
     # clock cannot pollute the historical page; ``live_clock`` is suppressed.
     if not is_today:
         display_live_state = "none"
-    elif not include_absorb_anchor and base_state == "virtual":
+    elif base_state == "virtual":
         display_live_state = "virtual_pending"
     else:
         display_live_state = classify_display_live_state(snapshot, report_date, today)
 
     anchor: dict[str, Any] | None = None
-    if include_absorb_anchor and display_live_state == "absorbed_pending":
-        anchor = _find_absorb_anchor(snapshot, today or "")
 
     summary = build_current_activity_summary(
         snapshot, report_date=report_date, today=today
@@ -1232,6 +1078,12 @@ def build_activity_display_model(
     current_activity = _build_current_activity_display(
         snapshot, display_live_state, anchor, summary, live_clock
     )
+    status_display_item = _build_status_display_item(
+        snapshot,
+        display_live_state,
+        report_date,
+        today or "",
+    )
     display_structural_signature = _build_display_structural_signature(
         snapshot,
         display_live_state,
@@ -1252,6 +1104,7 @@ def build_activity_display_model(
         "sample_id": sample_id,
         "live_clock": live_clock,
         "current_activity": current_activity,
+        "status_display_item": status_display_item,
         "display_spans": display_spans,
         "display_structural_signature": display_structural_signature,
         "display_policy": policy.to_dict(),

@@ -1657,7 +1657,7 @@ def test_startup_recovered_closed_row_does_not_become_current_live_base(bridge):
     assert int(recent_row["aggregate_display_base_seconds"]) >= 8
 
 
-def test_absorbed_pending_current_vs_aggregate_semantics_are_explicit(bridge):
+def test_virtual_pending_current_vs_aggregate_semantics_are_explicit(bridge):
     today = datetime.now().strftime("%Y-%m-%d")
     anchor_id = activity_service.create_activity(
         "AnchorApp", "Anchor.exe", "Anchor", start_time=f"{today} 09:00:00"
@@ -1675,30 +1675,28 @@ def test_absorbed_pending_current_vs_aggregate_semantics_are_explicit(bridge):
     overview = bridge.get_overview()
     recent_row = bridge.get_recent_activities()["activities"][0]
     timeline_row = bridge.get_timeline()["sessions"][0]
-    details = bridge.get_timeline_session_details([anchor_id], None)
-    detail_live_row = next(
-        row for row in details["activities"] if row.get("display_span_id")
-    )
+    details = bridge.get_timeline_session_details([0], None)
+    detail_live_row = details["activities"][0]
 
     assert overview["current_activity"]["elapsed_seconds"] == 5
-    assert overview["live_clock"]["live_state"] == "absorbed_pending"
+    assert overview["live_clock"]["live_state"] == "virtual_pending"
     for row in (recent_row, timeline_row):
         _assert_aggregate_live_row(
             row,
-            expected_seconds=25,
-            expected_base=20,
+            expected_seconds=5,
+            expected_base=0,
             expected_current_seconds=5,
         )
-        assert int(row.get("activity_id") or row.get("first_activity_id") or 0) == anchor_id
-        assert int(row["aggregate_duration_seconds_at_sample"]) == 25
-        assert int(row["aggregate_display_base_seconds"]) == 20
+        assert int(row.get("activity_id") or row.get("first_activity_id") or 0) == 0
+        assert int(row["aggregate_duration_seconds_at_sample"]) == 5
+        assert int(row["aggregate_display_base_seconds"]) == 0
     _assert_current_live_row(detail_live_row, 5)
     assert detail_live_row["is_display_only"] is True
     assert detail_live_row["exportable"] is False
     assert int(overview["today_total_seconds"]) == 25
 
 
-def test_absorbed_pending_extra_seconds_is_added_to_anchor_base(bridge):
+def test_virtual_pending_extra_seconds_is_not_added_to_anchor_base(bridge):
     from worktrace.services.activity_display_model_service import (
         apply_live_span_to_row,
         build_activity_display_model,
@@ -1737,11 +1735,12 @@ def test_absorbed_pending_extra_seconds_is_added_to_anchor_base(bridge):
         row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     )
 
-    assert span["live_state"] == "absorbed_pending"
+    assert span["live_state"] == "virtual_pending"
+    assert int(span["anchor_activity_id"]) == 0
     assert "duration_semantic" not in detail_projection or detail_projection["duration_semantic"] != "current_live"
-    assert aggregate["duration_semantic"] == "aggregate_live"
-    assert int(aggregate["duration_seconds"]) == 317
-    assert int(aggregate["display_base_seconds"]) == 305
+    assert "duration_semantic" not in aggregate or aggregate["duration_semantic"] != "aggregate_live"
+    assert int(aggregate["duration_seconds"]) == 300
+    assert int(activity_service.get_activity(anchor_id)["duration_seconds"]) == 300
 
 
 def test_virtual_pending_rows_in_lists_and_kpi_tick(bridge):
@@ -1788,25 +1787,7 @@ def test_virtual_pending_rows_in_lists_and_kpi_tick(bridge):
     assert int(overview["uncategorized_seconds"]) == 0
 
 
-def test_absorbed_pending_overlays_anchor_row_only(bridge):
-    """An ``absorbed_pending`` snapshot (normal, unpersisted, <30s, WITH
-    absorb anchor in the SAME session) must:
-
-    * overlay ONLY the anchor DB row's live clock fields (no virtual row
-      injection);
-    * set the anchor row's ``live_base_seconds`` = ``anchor_raw +
-      pending_at_sample`` so the frontend ticker lands on the right value;
-    * NOT write the DB (anchor row's stored duration is unchanged in DB);
-    * keep the anchor row's project / resource identity (the pending
-      snapshot's inferred project is NOT overlaid).
-
-    Absorption no longer relies on the legacy structured
-    ``short_activity_carry`` JSON (it was removed — no production
-    writer). The anchor is resolved purely from today's DB rows that
-    pass the boundary-aware ``_is_absorbable_anchor`` gate: closed,
-    auto, normal, ``end_time <= pending_start_time``, no session
-    boundary in ``[anchor.end_time, pending_start_time]``.
-    """
+def test_virtual_pending_materializes_current_row_and_leaves_anchor_static(bridge):
     # 1. Create a closed anchor activity of 60s.
     anchor_start = datetime.now() - timedelta(seconds=120)
     anchor_end = anchor_start + timedelta(seconds=60)
@@ -1836,40 +1817,29 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
     recent = bridge.get_recent_activities()
     timeline = bridge.get_timeline()
 
-    assert overview["live_clock"]["live_state"] == "absorbed_pending"
+    assert overview["live_clock"]["live_state"] == "virtual_pending"
     assert overview["live_clock"]["is_live"] is True
     assert overview["live_clock"]["is_project_duration_live"] is True
 
-    # No virtual row injection: only the anchor DB row appears.
-    assert len(recent["activities"]) == 1, (
-        "absorbed_pending must NOT inject a virtual row; only the anchor DB "
-        "row appears"
-    )
     recent_row = recent["activities"][0]
-    assert int(recent_row["activity_id"]) == anchor_aid
-    assert recent_row["live_state"] == "absorbed_pending"
-    assert recent_row["source"] == "absorbed_pending"
-
-    # Anchor row keeps its OWN project identity, not the pending snapshot's.
-    assert recent_row["project_name"] == "未归类", (
-        "absorbed_pending must keep the anchor row's project identity"
-    )
-
-    # Recent is a project/session row: it shows anchor base + current elapsed.
+    assert int(recent_row["activity_id"]) == 0
+    assert recent_row["live_state"] == "virtual_pending"
+    assert recent_row["source"] == "snapshot"
     assert recent_row["duration_semantic"] == "aggregate_live"
-    assert recent_row["duration_seconds"] == 70
-    assert recent_row["live_base_seconds"] == 60
-    assert recent_row["display_base_seconds"] == 60
-    assert recent_row["aggregate_display_base_seconds"] == 60
-    assert recent_row["aggregate_duration_seconds_at_sample"] == 70
+    assert recent_row["duration_seconds"] == 10
+    assert recent_row["live_base_seconds"] == 0
+    assert recent_row["display_base_seconds"] == 0
+    assert recent_row["aggregate_display_base_seconds"] == 0
+    assert recent_row["aggregate_duration_seconds_at_sample"] == 10
 
-    # DB must NOT be written: the anchor row's stored duration is still 60.
     anchor_db = activity_service.get_activity(anchor_aid)
-    assert int(anchor_db["duration_seconds"]) == 60, (
-        "absorbed_pending display projection must NOT write the DB"
-    )
+    assert int(anchor_db["duration_seconds"]) == 60
 
-    # Timeline session for the anchor also uses the overlay path.
+    assert len(recent["activities"]) == 2
+    anchor_recent = next(r for r in recent["activities"] if int(r.get("activity_id") or 0) == anchor_aid)
+    assert anchor_recent.get("live_state") != "virtual_pending"
+    assert int(anchor_recent["duration_seconds"]) == 60
+
     anchor_session = next(
         (
             s
@@ -1879,12 +1849,10 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
         None,
     )
     assert anchor_session is not None
-    assert anchor_session["live_state"] == "absorbed_pending"
-    assert anchor_session["duration_semantic"] == "aggregate_live"
-    assert anchor_session["duration_seconds"] == 70
-    assert anchor_session["display_base_seconds"] == 60
-    assert anchor_session["aggregate_display_base_seconds"] == 60
-    assert anchor_session["aggregate_duration_seconds_at_sample"] == 70
+    assert anchor_session.get("live_state") != "virtual_pending"
+    assert anchor_session["duration_seconds"] == 60
+    assert timeline["sessions"][0]["live_state"] == "virtual_pending"
+    assert timeline["sessions"][0]["duration_seconds"] == 10
 
 
 def test_live_bearing_viewmodels_share_runtime_and_revisions(bridge):
@@ -1913,7 +1881,7 @@ def test_live_bearing_viewmodels_share_runtime_and_revisions(bridge):
     refresh_state = bridge.get_refresh_state()
     overview = bridge.get_overview()
     timeline = bridge.get_timeline()
-    details = bridge.get_timeline_session_details([anchor_aid], None)
+    details = bridge.get_timeline_session_details([0], None)
 
     views = {
         "refresh_state": refresh_state,
@@ -1922,7 +1890,7 @@ def test_live_bearing_viewmodels_share_runtime_and_revisions(bridge):
         "details": details,
     }
     expected = refresh_state["live_clock"]
-    assert expected["live_state"] == "absorbed_pending"
+    assert expected["live_state"] == "virtual_pending"
     for name, view in views.items():
         clock = view["live_clock"]
         assert clock["live_state"] == expected["live_state"], name
@@ -1936,7 +1904,7 @@ def test_live_bearing_viewmodels_share_runtime_and_revisions(bridge):
         assert view["page_structure_revision"] == refresh_state["page_structure_revision"], name
 
 
-def test_absorbed_pending_current_clock_uses_resource_elapsed(bridge):
+def test_virtual_pending_current_clock_uses_resource_elapsed(bridge):
     from worktrace.services.activity_display_model_service import (
         apply_live_span_to_row,
         build_activity_display_model,
@@ -1972,18 +1940,15 @@ def test_absorbed_pending_current_clock_uses_resource_elapsed(bridge):
     assert current["elapsed_seconds"] == 5
     assert current["resource_elapsed_seconds"] == 5
     assert "current_activity_clock" not in model
-    assert project_clock["duration_seconds_at_sample"] == 125
-    assert project_clock["display_base_seconds"] == 120
+    assert project_clock["duration_seconds_at_sample"] == 5
+    assert project_clock["display_base_seconds"] == 0
     assert project_clock["current_elapsed_at_sample"] == 5
 
     anchor_row = activity_service.get_activity(anchor_aid)
     projected = dict(anchor_row)
     apply_live_span_to_row(projected, span, row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW)
-    assert projected["duration_semantic"] == "aggregate_live"
-    assert projected["duration_seconds"] == 125
-    assert projected["display_base_seconds"] == 120
-    assert projected["aggregate_duration_seconds_at_sample"] == 125
-    assert projected["aggregate_display_base_seconds"] == 120
+    assert projected.get("duration_semantic") != "aggregate_live"
+    assert projected["duration_seconds"] == 120
     assert activity_service.get_activity(anchor_aid)["duration_seconds"] == 120
 
 
@@ -2042,13 +2007,13 @@ def test_system_current_activity_live_clock_contract_and_display_safe(bridge, st
         }
     )
     model = build_activity_display_model()
-    expected_current_live = status != STATUS_PAUSED
     assert "current_activity_clock" not in model
-    assert model["live_clock"]["current_duration_live"] is expected_current_live
-    assert model["live_clock"]["is_live"] is expected_current_live
+    assert model["live_clock"]["current_duration_live"] is False
+    assert model["live_clock"]["is_live"] is False
     assert model["live_clock"]["is_project_duration_live"] is False
     assert model["live_clock"]["project_duration_live"] is False
     assert model["display_spans"] == []
+    assert model["status_display_item"]["row_kind"] == "status_only"
     serialized = json.dumps(model, ensure_ascii=False)
     for forbidden in ("secret.docx", "C:\\secret", "secret clipboard", "secret note"):
         assert forbidden not in serialized
@@ -2090,7 +2055,7 @@ def test_idle_blocks_display_absorbed_pending(bridge):
     model = build_activity_display_model(report_date=today, today=today)
 
     assert model["current_activity"]["live_state"] == "virtual_pending"
-    assert model["current_activity"]["is_absorbed_pending"] is False
+    assert "is_absorbed_pending" not in model["current_activity"]
     assert model["display_spans"][0]["anchor_activity_id"] == 0
 
 
@@ -2243,16 +2208,7 @@ def test_absorbed_pending_does_not_cross_stopped_boundary(bridge):
     assert int(model["display_spans"][0]["anchor_activity_id"]) == 0
 
 
-def test_absorbed_pending_same_session_allows_absorption(bridge):
-    """When NO session boundary was recorded between the anchor's
-    ``end_time`` and the pending snapshot's ``start_time``, the
-    ``<30s`` pending snapshot MUST absorb into the anchor. The display
-    state is ``absorbed_pending`` and the span's ``anchor_activity_id``
-    equals the anchor DB row's id.
-
-    This test also verifies display-only projection: the anchor row's
-    stored DB duration is unchanged after the display model is built.
-    """
+def test_virtual_pending_same_session_does_not_absorb_into_anchor(bridge):
     from worktrace.services.activity_display_model_service import (
         build_activity_display_model,
     )
@@ -2278,12 +2234,11 @@ def test_absorbed_pending_same_session_allows_absorption(bridge):
     )
 
     model = build_activity_display_model()
-    assert model["live_clock"]["live_state"] == "absorbed_pending"
+    assert model["live_clock"]["live_state"] == "virtual_pending"
     assert len(model["display_spans"]) == 1
     span = model["display_spans"][0]
-    assert int(span["anchor_activity_id"]) == anchor_aid
+    assert int(span["anchor_activity_id"]) == 0
 
-    # Display-only projection MUST NOT write the DB.
     anchor_db = activity_service.get_activity(anchor_aid)
     assert int(anchor_db["duration_seconds"]) == 60
 
@@ -2375,16 +2330,7 @@ def test_absorbed_pending_rejects_pending_without_start_time(bridge):
     assert int(model["display_spans"][0]["anchor_activity_id"]) == 0
 
 
-def test_absorbed_pending_current_activity_uses_anchor_project_for_kpi(bridge):
-    """Under ``absorbed_pending``, the current-activity area shows the
-    pending RESOURCE name (what the user is looking at) BUT the project
-    attribution fields (``project_name``, ``project_id``,
-    ``is_classified``, ``is_uncategorized``) MUST come from the ANCHOR
-    DB row so KPI classified / uncategorized increments match the
-    Recent / Timeline overlay row (which also uses the anchor's
-    project). This forbids the same live span being classified as
-    PendingProject in KPI and AnchorProject in Recent / Timeline.
-    """
+def test_virtual_pending_current_activity_uses_current_project_for_kpi(bridge):
     from worktrace.services import project_service
 
     # 1. Create a classified project "AnchorProject".
@@ -2418,31 +2364,16 @@ def test_absorbed_pending_current_activity_uses_anchor_project_for_kpi(bridge):
     overview = bridge.get_overview()
     recent = bridge.get_recent_activities()
 
-    # current_activity's project fields MUST come from the anchor.
     current = overview["current_activity"]
-    assert current["live_state"] == "absorbed_pending"
-    assert current["project_name"] == "AnchorProject", (
-        "current_activity.project_name must come from the anchor DB row, "
-        "NOT the pending snapshot's inferred project, so KPI classification "
-        "matches the Recent / Timeline overlay row"
-    )
-    assert int(current["project_id"]) == proj_id
-    assert current["is_classified"] is True
-    assert current["is_uncategorized"] is False
+    assert current["live_state"] == "virtual_pending"
+    assert current["project_name"] == "PendingProject"
 
-    # The Recent overlay row also uses the anchor's project — same span,
-    # same project attribution. The overview recent-item row exposes
-    # ``project_name`` (not ``project_id``); the project name match is
-    # the cross-ViewModel consistency check.
     recent_row = recent["activities"][0]
-    assert int(recent_row["activity_id"]) == anchor_aid
-    assert recent_row["project_name"] == "AnchorProject"
+    assert int(recent_row["activity_id"]) == 0
+    assert recent_row["project_name"] == "PendingProject"
 
-    # The current-activity display text MUST contain the anchor's project
-    # name (so the user sees the same project label as the Recent row),
-    # while the resource name (first part) is the pending snapshot's.
-    assert "AnchorProject" in current["display"]
-    assert "PendingProject" not in current["display"]
+    assert "PendingProject" in current["display"]
+    assert activity_service.get_activity(anchor_aid)["duration_seconds"] == 60
 
 
 def test_bare_pending_short_seconds_is_not_a_valid_virtual_base(bridge):

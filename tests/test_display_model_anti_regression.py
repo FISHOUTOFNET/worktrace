@@ -394,7 +394,7 @@ def test_persisted_open_overlay_does_not_reverse_engineer_base_from_db_duration(
         REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
     ).read_text(encoding="utf-8")
     match = re.search(
-        r"elif state == \"persisted_open\":(?P<body>.*?)(?=\n    else:)",
+        r"if state == \"persisted_open\":(?P<body>.*?)(?=\n    else:)",
         source,
         re.S,
     )
@@ -452,7 +452,7 @@ def test_session_projection_branch_does_not_overwrite_session_start_time():
         REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
     ).read_text(encoding="utf-8")
     match = re.search(
-        r"if state == \"persisted_open\":(?P<body>.*?)(?=\n    elif state == \"absorbed_pending\":)",
+        r"if state == \"persisted_open\":(?P<body>.*?)(?=\n    return row)",
         source,
         re.S,
     )

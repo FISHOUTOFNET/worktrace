@@ -9,7 +9,7 @@ from openpyxl import load_workbook
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import HISTORY_PERSIST_THRESHOLD_SECONDS
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import activity_service, export_service, settings_service, statistics_service
+from worktrace.services import activity_service, export_service, session_boundary_service, settings_service, statistics_service
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
@@ -147,8 +147,12 @@ def test_multiple_short_activities_merge_into_previous_formal_activity(temp_db):
     assert rows[0]["duration_seconds"] == 329
 
 
-def test_initial_short_activity_merges_into_first_formal_normal_activity(temp_db):
+def test_initial_under_30_without_anchor_drops_no_pending_no_kpi_base(temp_db, monkeypatch):
+    from worktrace.services import timeline_service
+
+    monkeypatch.setattr(timeline_service, "get_default_report_date", lambda: "2026-06-18")
     machine = CollectorStateMachine()
+    bridge = WebViewBridge()
     machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:00:00")
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:20")
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:20")
@@ -157,11 +161,12 @@ def test_initial_short_activity_merges_into_first_formal_normal_activity(temp_db
     rows = _rows()
     assert len(rows) == 1
     assert rows[0]["window_title"] == "A"
-    assert rows[0]["duration_seconds"] == 80
+    assert rows[0]["duration_seconds"] == 60
     assert settings_service.get_setting("pending_short_seconds") == "0"
+    assert bridge.get_overview()["today_total_seconds"] == 60
 
 
-def test_pending_short_seconds_are_not_added_twice_when_formal_activity_closes(temp_db):
+def test_initial_dropped_seconds_are_not_added_when_formal_activity_closes(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:00:00")
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:20")
@@ -171,7 +176,8 @@ def test_pending_short_seconds_are_not_added_twice_when_formal_activity_closes(t
     rows = _rows()
     assert len(rows) == 1
     assert rows[0]["window_title"] == "A"
-    assert rows[0]["duration_seconds"] == 90
+    assert rows[0]["duration_seconds"] == 70
+    assert settings_service.get_setting("pending_short_seconds") == "0"
 
 
 def test_persisted_current_activity_continues_to_90_seconds_without_duplicate_insert(temp_db):
@@ -268,7 +274,7 @@ def test_cross_boundary_stale_pending_not_used_as_display_base(temp_db, monkeypa
 
     machine.transition_to("recording", _normal("Short"), at_time="2026-06-18 09:00:10")
     machine.transition_to("recording", _normal("Next"), at_time="2026-06-18 09:00:20")
-    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 0
 
 
 def test_pause_resume_virtual_pending_materializes_recent_row(temp_db, monkeypatch):
@@ -345,8 +351,7 @@ def test_short_activity_after_restart_does_not_merge_into_pre_boundary_activity(
     # B is not persisted and does not appear as a separate row.
     b_rows = [r for r in rows if r["window_title"] == "B"]
     assert b_rows == [], "B must NOT be persisted as a separate row"
-    # B's 20s pend into pending_short_seconds (no post-boundary absorbable anchor).
-    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 0
 
 
 def test_short_activity_after_pause_does_not_merge_into_pre_boundary_activity(temp_db):
@@ -373,7 +378,7 @@ def test_short_activity_after_pause_does_not_merge_into_pre_boundary_activity(te
     assert int(a_rows[0]["duration_seconds"]) == 120
     b_rows = [r for r in rows if r["window_title"] == "B"]
     assert b_rows == [], "B must NOT be persisted as a separate row"
-    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 0
 
 
 def test_short_activity_after_midnight_does_not_merge_into_pre_boundary_activity(temp_db):
@@ -412,7 +417,7 @@ def test_short_activity_after_midnight_does_not_merge_into_pre_boundary_activity
     rows_day2 = activity_service.get_activities_by_date("2026-06-19")
     b_rows_day2 = [r for r in rows_day2 if r["window_title"] == "B"]
     assert b_rows_day1 == [] and b_rows_day2 == [], "B must NOT be persisted as a separate row"
-    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 0
 
 
 def test_short_activity_after_stopped_does_not_merge_into_pre_boundary_activity(temp_db):
@@ -440,7 +445,104 @@ def test_short_activity_after_stopped_does_not_merge_into_pre_boundary_activity(
     assert int(a_rows[0]["duration_seconds"]) == 120
     b_rows = [r for r in rows if r["window_title"] == "B"]
     assert b_rows == [], "B must NOT be persisted as a separate row"
-    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 20
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 0
+
+
+def test_switch_under_30_with_anchor_merges_to_previous_anchor(temp_db):
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:02:00")
+    machine.transition_to("recording", _normal("C"), at_time="2026-06-18 09:02:20")
+
+    rows = _rows()
+    assert [r["window_title"] for r in rows] == ["A"]
+    assert rows[0]["duration_seconds"] == 140
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+
+
+def test_switch_under_30_without_anchor_drops(temp_db):
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("C"), at_time="2026-06-18 09:00:20")
+
+    assert _rows() == []
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+
+
+def test_pause_under_30_with_anchor_merges_before_boundary(temp_db):
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:02:00")
+    machine.pause(at_time="2026-06-18 09:02:20")
+
+    rows = _rows()
+    assert [r["window_title"] for r in rows] == ["A"]
+    assert rows[0]["duration_seconds"] == 140
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+    boundaries = session_boundary_service.list_boundaries(
+        "2026-06-18 09:02:20",
+        "2026-06-18 09:02:20",
+    )
+    assert boundaries and boundaries[-1]["reason"] == "paused"
+
+
+def test_pause_under_30_without_anchor_drops_no_pending(temp_db, monkeypatch):
+    from worktrace.services import timeline_service
+
+    monkeypatch.setattr(timeline_service, "get_default_report_date", lambda: "2026-06-18")
+    machine = CollectorStateMachine()
+    bridge = WebViewBridge()
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:00:00")
+    machine.pause(at_time="2026-06-18 09:00:20")
+
+    assert _rows() == []
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+    overview = bridge.get_overview()
+    assert overview["today_total_seconds"] == 0
+    assert overview["activities"][0]["row_kind"] == "status_only"
+    assert overview["activities"][0]["display_status"] == "已暂停"
+    assert overview["activities"][0]["contributes_to_totals"] is False
+
+
+def test_stop_shutdown_time_jump_under_30_share_same_finalizer(temp_db):
+    scenarios = [
+        ("StopA", "09:00:00", "09:01:00", "09:02:00", "09:02:20", lambda m, t: m.transition_to("stopped", at_time=t)),
+        ("ShutdownA", "09:10:00", "09:11:00", "09:12:00", "09:12:20", lambda m, t: m._stop_recording_at_boundary(t, "shutdown")),
+        ("JumpA", "09:20:00", "09:21:00", "09:22:00", "09:22:20", lambda m, t: m.reset_for_time_jump(t)),
+    ]
+    for title, start, persist_at, short_start, finish_at, finish in scenarios:
+        settings_service.set_setting("pending_short_seconds", "0")
+        machine = CollectorStateMachine()
+        machine.transition_to("recording", _normal(title), at_time=f"2026-06-18 {start}")
+        machine.transition_to("recording", _normal(title), at_time=f"2026-06-18 {persist_at}")
+        machine.transition_to("recording", _normal(title + 'B'), at_time=f"2026-06-18 {short_start}")
+        finish(machine, f"2026-06-18 {finish_at}")
+        rows = _rows()
+        anchor = [r for r in rows if r["window_title"] == title][-1]
+        assert anchor["duration_seconds"] == 140
+        assert settings_service.get_setting("pending_short_seconds") == "0"
+
+
+@pytest.mark.parametrize("state", ["idle", "excluded", "error"])
+def test_normal_to_idle_excluded_error_under_30_finalize_before_boundary(temp_db, state):
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
+    machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
+    machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:02:00")
+    machine.transition_to(state, at_time="2026-06-18 09:02:20")
+
+    rows = _rows()
+    a_rows = [r for r in rows if r["window_title"] == "A"]
+    assert len(a_rows) == 1
+    assert a_rows[0]["duration_seconds"] == 140
+    assert settings_service.get_setting("pending_short_seconds") == "0"
+    boundaries = session_boundary_service.list_boundaries(
+        "2026-06-18 09:02:20",
+        "2026-06-18 09:02:20",
+    )
+    assert boundaries and boundaries[-1]["reason"] == state
 
 
 def test_stopped_boundary_clears_stale_pending_runtime_state(temp_db):
@@ -462,7 +564,7 @@ def test_paused_boundary_clears_stale_pending_runtime_state(temp_db):
     machine.pause(at_time="2026-06-18 09:00:00")
 
     assert settings_service.get_setting("pending_short_seconds") == "0"
-    assert settings_service.get_setting("current_activity_snapshot", "") == ""
+    assert _snapshot()["status"] == "paused"
 
 
 def test_midnight_boundary_clears_stale_pending_runtime_state(temp_db):

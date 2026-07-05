@@ -18,7 +18,7 @@ from ..resources.resource_identity import infer_resource_from_active_window
 from ..resources.types import DetectedResource
 from ..services import activity_service, activity_lifecycle_service, clipboard_service, privacy_service, session_boundary_service
 from ..services.activity_continuity_service import is_hard_boundary_status
-from .auto_activity_recorder import AutoActivityRecorder
+from .auto_activity_recorder import ActivityEndReason, AutoActivityRecorder
 
 STATE_TO_STATUS = {
     "recording": STATUS_NORMAL,
@@ -72,12 +72,19 @@ class CollectorStateMachine:
         previous_status = ""
         if self.recorder.current_payload is not None:
             previous_status = str(self.recorder.current_payload.get("status") or "")
-        if is_hard_boundary_status(status) and previous_status != status:
-            session_boundary_service.record_boundary(transition_time, status)
-
-        self.recorder.observe(payload, signature, transition_time)
+        end_reason = (
+            _end_reason_for_boundary(_boundary_reason_for_status(status))
+            if is_hard_boundary_status(status)
+            else ActivityEndReason.RESOURCE_SWITCH
+        )
+        self.recorder.observe(payload, signature, transition_time, end_reason=end_reason)
         if is_hard_boundary_status(status):
             self.recorder.clear_short_buffers()
+            if previous_status != status:
+                session_boundary_service.record_boundary(
+                    transition_time,
+                    _boundary_reason_for_status(status),
+                )
         self.state = state
         self.active_signature = signature
         if status == STATUS_EXCLUDED:
@@ -124,11 +131,14 @@ class CollectorStateMachine:
         if self.state != "paused" or self.recorder.current_payload is not None:
             self._stop_recording_at_boundary(transition_time, "paused")
             activity_lifecycle_service.close_all_open_activities(transition_time)
+            payload = self._payload_for(STATUS_PAUSED, None)
+            signature = self._signature_for_payload(payload)
+            self.recorder.observe(payload, signature, transition_time, end_reason=ActivityEndReason.PAUSE_BOUNDARY)
+            self.active_signature = signature
         self.state = "paused"
-        self.active_signature = None
 
     def _stop_recording_at_boundary(self, at_time: str, reason: str) -> None:
-        self.recorder.stop(at_time, merge_transient=False)
+        self.recorder.stop(at_time, reason=_end_reason_for_boundary(reason))
         self.recorder.clear_short_buffers()
         session_boundary_service.record_boundary(at_time, reason)
 
@@ -339,3 +349,39 @@ class CollectorStateMachine:
             "status": STATUS_NORMAL,
             "resource": resource,
         }
+
+
+def _end_reason_for_boundary(reason: str) -> ActivityEndReason:
+    if reason == "paused":
+        return ActivityEndReason.PAUSE_BOUNDARY
+    if reason == "stopped":
+        return ActivityEndReason.STOP_BOUNDARY
+    if reason == "shutdown":
+        return ActivityEndReason.SHUTDOWN_BOUNDARY
+    if reason == "time_jump":
+        return ActivityEndReason.TIME_JUMP_BOUNDARY
+    if reason == "midnight":
+        return ActivityEndReason.MIDNIGHT_BOUNDARY
+    if reason == "excluded":
+        return ActivityEndReason.EXCLUDED_BOUNDARY
+    if reason == "error":
+        return ActivityEndReason.ERROR_BOUNDARY
+    if reason == "privacy":
+        return ActivityEndReason.PRIVACY_BOUNDARY
+    if reason == "secure_import":
+        return ActivityEndReason.SECURE_IMPORT_BOUNDARY
+    if reason == "first_run_gate":
+        return ActivityEndReason.FIRST_RUN_GATE_BOUNDARY
+    return ActivityEndReason.STOP_BOUNDARY
+
+
+def _boundary_reason_for_status(status: str) -> str:
+    if status == STATUS_IDLE:
+        return "idle"
+    if status == STATUS_EXCLUDED:
+        return "excluded"
+    if status == STATUS_ERROR:
+        return "error"
+    if status == STATUS_PAUSED:
+        return "paused"
+    return status or "unknown"

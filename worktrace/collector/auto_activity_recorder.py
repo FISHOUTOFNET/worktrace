@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 
 from ..constants import (
     SOURCE_AUTO,
@@ -38,14 +39,27 @@ from ..services.project_ownership_service import (
     serialize_project_ownership,
     uncategorized_label,
 )
-from ..services.settings_service import get_setting, set_setting
+from ..services.settings_service import set_setting
 from ..services.runtime_activity_state_service import (
     clear_runtime_activity_state,
-    validate_pending_short_carry,
-    write_pending_short_carry,
 )
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
+
+
+class ActivityEndReason(str, Enum):
+    RESOURCE_SWITCH = "resource_switch"
+    PAUSE_BOUNDARY = "pause_boundary"
+    STOP_BOUNDARY = "stop_boundary"
+    SHUTDOWN_BOUNDARY = "shutdown_boundary"
+    TIME_JUMP_BOUNDARY = "time_jump_boundary"
+    MIDNIGHT_BOUNDARY = "midnight_boundary"
+    IDLE_BOUNDARY = "idle_boundary"
+    EXCLUDED_BOUNDARY = "excluded_boundary"
+    ERROR_BOUNDARY = "error_boundary"
+    PRIVACY_BOUNDARY = "privacy_boundary"
+    SECURE_IMPORT_BOUNDARY = "secure_import_boundary"
+    FIRST_RUN_GATE_BOUNDARY = "first_run_gate_boundary"
 
 
 def _parse_time(value: str) -> datetime:
@@ -72,6 +86,7 @@ class AutoActivityRecorder:
         payload: dict,
         signature: tuple[str, ...],
         at_time: str,
+        end_reason: ActivityEndReason = ActivityEndReason.RESOURCE_SWITCH,
     ) -> None:
         if self.current_payload is None:
             self._start(payload, signature, at_time)
@@ -92,12 +107,16 @@ class AutoActivityRecorder:
             self._write_snapshot(at_time)
             return
 
-        self.finish_current(at_time)
+        self.finish_current_activity(at_time, end_reason)
         if self._resume_if_absorbed_activity_matches(payload, signature, at_time):
             return
         self._start(payload, signature, at_time)
 
-    def finish_current(self, at_time: str, merge_transient: bool = True) -> None:
+    def finish_current_activity(
+        self,
+        at_time: str,
+        reason: ActivityEndReason,
+    ) -> None:
         if self.current_payload is None or self.current_start_time is None:
             self.clear_snapshot()
             return
@@ -115,8 +134,13 @@ class AutoActivityRecorder:
                 end_time,
                 duration_seconds=elapsed + self.current_extra_seconds,
             )
-        elif merge_transient and elapsed > 0 and status == STATUS_NORMAL:
-            self._merge_or_pend_short_seconds(status, self.current_start_time, end_time, elapsed)
+        else:
+            self._merge_or_drop_finished_short_activity(
+                status,
+                self.current_start_time,
+                end_time,
+                elapsed,
+            )
 
         self.current_payload = None
         self.current_signature = None
@@ -124,10 +148,11 @@ class AutoActivityRecorder:
         self.current_last_seen_time = None
         self.persisted_activity_id = None
         self.current_extra_seconds = 0
+        self._set_pending_short_seconds(0)
         self.clear_snapshot()
 
-    def stop(self, at_time: str, merge_transient: bool = True) -> None:
-        self.finish_current(at_time, merge_transient=merge_transient)
+    def stop(self, at_time: str, reason: ActivityEndReason = ActivityEndReason.STOP_BOUNDARY) -> None:
+        self.finish_current_activity(at_time, reason)
         # Session boundary: clear the ownership state so the previous
         # session's display project is NOT inherited into a new session.
         self.project_ownership_state = clear_ownership_state()
@@ -140,7 +165,7 @@ class AutoActivityRecorder:
         payload = dict(self.current_payload)
         signature = self.current_signature or _activity_signature(payload)
         project_id = self._current_concrete_project_id()
-        self.stop(at_time, merge_transient=False)
+        self.stop(at_time, reason=ActivityEndReason.MIDNIGHT_BOUNDARY)
         self.clear_short_buffers()
         self._start(payload, signature, at_time)
         if payload.get("status") == STATUS_NORMAL and project_id is not None:
@@ -239,19 +264,8 @@ class AutoActivityRecorder:
         if activity_id is None:
             return
         self.persisted_activity_id = activity_id
-
         if status == STATUS_NORMAL:
-            pending = self._get_pending_short_seconds()
-            carry = validate_pending_short_carry(
-                current_start_time=self.current_start_time,
-                current_status=str(status or ""),
-                pending_seconds=pending,
-            )
-            if carry.get("valid") and pending > 0:
-                self.current_extra_seconds += int(carry.get("seconds") or 0)
-                self._set_pending_short_seconds(0)
-            elif pending > 0:
-                self._set_pending_short_seconds(0)
+            self._set_pending_short_seconds(0)
 
     def _persist_midnight_anchor(self, project_id: int, at_time: str) -> None:
         if self.current_payload is None or self.current_start_time is None or self.persisted_activity_id is not None:
@@ -285,14 +299,16 @@ class AutoActivityRecorder:
         elapsed = _seconds_between(self.current_start_time, at_time)
         activity_service.set_activity_duration(self.persisted_activity_id, elapsed + self.current_extra_seconds)
 
-    def _merge_or_pend_short_seconds(
+    def _merge_or_drop_finished_short_activity(
         self,
         status: str,
         start_time: str,
         end_time: str,
         seconds: int,
     ) -> None:
+        self._set_pending_short_seconds(0)
         if seconds <= 0:
+            self.resume_after_short_activity = None
             return
         if not can_merge_finished_short_activity(status, start_time, end_time):
             self.resume_after_short_activity = None
@@ -306,11 +322,6 @@ class AutoActivityRecorder:
             self.resume_after_short_activity = target
             return
         self.resume_after_short_activity = None
-        self._set_pending_short_seconds(
-            self._get_pending_short_seconds() + seconds,
-            source_start_time=start_time,
-            source_end_time=end_time,
-        )
 
     def _resume_if_absorbed_activity_matches(
         self,
@@ -352,13 +363,6 @@ class AutoActivityRecorder:
         enriched["resource"] = resource
         return enriched
 
-    def _get_pending_short_seconds(self) -> int:
-        raw = get_setting("pending_short_seconds", "0") or "0"
-        try:
-            return max(0, int(raw))
-        except ValueError:
-            return 0
-
     def _set_pending_short_seconds(
         self,
         seconds: int,
@@ -366,19 +370,11 @@ class AutoActivityRecorder:
         source_start_time: str = "",
         source_end_time: str = "",
     ) -> None:
-        normalized = max(0, int(seconds))
-        if normalized == 0:
-            clear_runtime_activity_state(
-                "recorder_pending_clear",
-                clear_snapshot=False,
-                clear_pending=True,
-                clear_ownership=False,
-            )
-            return
-        write_pending_short_carry(
-            normalized,
-            source_start_time=source_start_time,
-            source_end_time=source_end_time,
+        clear_runtime_activity_state(
+            "recorder_pending_clear",
+            clear_snapshot=False,
+            clear_pending=True,
+            clear_ownership=False,
         )
 
     def _write_snapshot(self, at_time: str) -> None:

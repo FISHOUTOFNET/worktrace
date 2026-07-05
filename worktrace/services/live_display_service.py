@@ -3,7 +3,7 @@
 This module is NOT the page live-display model owner. The owner is
 :mod:`worktrace.services.activity_display_model_service`, which solely
 decides live-eligibility, ``live_state``
-(``virtual_pending`` / ``absorbed_pending`` / ``persisted_open``),
+(``virtual_pending`` / ``persisted_open``),
 display span identity, and visibility of live rows.
 
 This module retains ONLY the low-level pure helpers used by
@@ -11,14 +11,8 @@ This module retains ONLY the low-level pure helpers used by
 display-safe field extraction, stable live identity
 (``_stable_live_key`` / ``_stable_live_key_hash``), live-clock anchor,
 current-activity summary (``build_current_activity_summary``),
-refresh-revision computation (``compute_refresh_revision``), the
-production-maintained ``pending_short_seconds`` accumulator,
-classification, and the persisted-open live-seconds helper.
-
-The legacy structured ``short_activity_carry`` JSON mechanism was
-REMOVED — no production writer existed. The production collector
-maintains ``pending_short_seconds`` within a continuous recording session;
-hard runtime boundaries clear it.
+refresh-revision computation (``compute_refresh_revision``), classification,
+and the persisted-open live-seconds helper.
 
 Display projection is purely a UI overlay. It NEVER writes the DB,
 NEVER changes the 30-second collector persistence threshold, and NEVER
@@ -335,35 +329,6 @@ def _live_display_key(snapshot: dict[str, Any] | None) -> str:
     return "|".join(parts)
 
 
-# Short-activity carry integration
-
-
-def _read_pending_short_seconds() -> int:
-    """Read the ``pending_short_seconds`` setting (carry-over from
-    sub-30s short activities that have not yet been persisted).
-
-    The COLLECTOR writes this value whenever a normal short activity ends
-    without crossing the 30-second persistence threshold, and resets it
-    whenever a normal short activity merges into a persisted row. It is
-    therefore the ONLY production-maintained carry source the display
-    model should consult; the legacy structured ``short_activity_carry``
-    JSON had no production writer and was removed.
-
-    The unified live-display carry seconds include this value so the UI
-    does not lose seconds between short activities and then suddenly jump
-    when the next activity persists. Runtime boundary cleanup owns clearing
-    stale carry on restart / pause / stop / midnight / import / reset.
-    """
-    raw = get_setting("pending_short_seconds", "") or ""
-    if not raw:
-        return 0
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return 0
-    return max(0, value)
-
-
 # Unified live-display payload builders
 
 
@@ -443,13 +408,7 @@ def build_current_activity_summary(
     is_uncategorized = (
         not project_name or project_name == UNCATEGORIZED_PROJECT
     )
-    # Carry seconds added to elapsed so the UI does not lose seconds
-    # between consecutive short activities. Only applies to virtual
-    # (unpersisted) snapshots; persisted_open rows already have carry
-    # folded into their stored duration. Source: ``pending_short_seconds``.
     carry_seconds = 0
-    if is_virtual_live:
-        carry_seconds = _read_pending_short_seconds()
     display_seconds = elapsed_seconds + carry_seconds
     # Project ownership fields surfaced verbatim (display-safe) from the
     # snapshot's structured display_project / candidate_project block.
@@ -706,7 +665,6 @@ def compute_refresh_revision(
         "collector_status": collector_status,
         "user_paused": user_paused,
         "today": today,
-        "pending_short_seconds": _read_pending_short_seconds(),
         "display_structural_signature": display_structural_signature,
         "structural_signature": page_structure_revision,
         "live_state_revision": live_state_revision,

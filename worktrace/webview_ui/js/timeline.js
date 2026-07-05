@@ -95,7 +95,7 @@
             if (s.is_virtual_live === true) cls += " virtual-live";
             if (s.session_id === App.selectedSessionId) cls += " selected";
             // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
-            // the virtual_pending / absorbed_pending / persisted_open transition (stable_live_key_hash stays the same when session_id changes).
+            // the virtual_pending / persisted_open transition (stable_live_key_hash stays the same when session_id changes).
             var stableKeyHash = s.stable_live_key_hash || "";
             // Active-span anchored DOM attributes: the row stores a static
             // base plus active elapsed offset; the ticker supplies the one
@@ -153,7 +153,7 @@
                 + '</div>'
                 + '</div>';
             // Continuity key MUST use App.liveContinuityKey() so the ticker can locate the seeded state; a
-            // "session-" + session_id key would break the virtual_pending / absorbed_pending / persisted_open transition.
+            // "session-" + session_id key would break the virtual_pending / persisted_open transition.
             if (sessContinuityKey) {
                 sessionContinuityKeys.push({ key: sessContinuityKey, sec: initialSec });
             }
@@ -175,7 +175,7 @@
 
         if (App.selectedSessionId !== null || App.selectedSessionLiveKey) {
             var found = null;
-            // First try to match by stable_live_key_hash (handles virtual_pending / absorbed_pending / persisted_open transition).
+            // First try to match by stable_live_key_hash (handles virtual_pending / persisted_open transition).
             if (App.selectedSessionLiveKey) {
                 for (var sk = 0; sk < sessions.length; sk++) {
                     if (sessions[sk].stable_live_key_hash
@@ -259,7 +259,7 @@
             App.resetCorrectionShellState();
         }
         // Update selected class without full re-render. Match by session_id AND stable_live_key_hash so the
-        // virtual_pending / absorbed_pending / persisted_open transition keeps the visual selection.
+        // virtual_pending / persisted_open transition keeps the visual selection.
         var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
         var newSelected = null;
         for (var j0 = 0; j0 < sessions.length; j0++) {
@@ -367,7 +367,7 @@
             if (a.is_in_progress) cls += " in-progress";
             if (a.is_virtual === true) cls += " virtual-live";
             var aid = a.activity_id || 0;
-            // Stable live key data attribute so the detail ticker locates the row across the virtual_pending / absorbed_pending / persisted_open
+            // Stable live key data attribute so the detail ticker locates the row across the virtual_pending / persisted_open
             // transition (stable_live_key_hash stays the same when activity_id changes; ticker falls back to activity_id).
             var detailStableKey = a.stable_live_key_hash || "";
             // Active-span anchored DOM attributes: detail rows keep their

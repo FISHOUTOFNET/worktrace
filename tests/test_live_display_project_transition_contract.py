@@ -329,13 +329,10 @@ def test_virtual_pending_no_anchor_no_db_write():
     )
 
 
-# Case b: absorbed_pending (with anchor)
+# Case b: virtual_pending with an existing anchor
 
 
-def test_absorbed_pending_with_anchor_live_state_and_span():
-    """Case (b): a pending unpersisted snapshot WITH a previous confirmed
-    normal anchor resolves to ``absorbed_pending``. A display span is
-    produced and projects onto the anchor DB row (display-only)."""
+def test_virtual_pending_with_anchor_live_state_and_span():
     anchor_id, _ = _create_closed_anchor_activity(
         elapsed_seconds=300, project_name="ProjectA"
     )
@@ -345,35 +342,22 @@ def test_absorbed_pending_with_anchor_live_state_and_span():
     today = _today_report_date()
 
     state = classify_display_live_state(snap, today, today)
-    assert state == "absorbed_pending", (
-        "pending unpersisted snapshot with a confirmed normal anchor must classify "
-        "as absorbed_pending"
-    )
+    assert state == "virtual_pending"
 
     model = build_activity_display_model(report_date=today, today=today)
     span = get_live_span(model)
-    assert span is not None, (
-        "absorbed_pending must produce a display span that projects onto the anchor"
-    )
-    assert span["live_state"] == "absorbed_pending"
-    assert span["anchor_activity_id"] == anchor_id, (
-        "absorbed_pending span must anchor onto the previous confirmed normal activity"
-    )
+    assert span is not None
+    assert span["live_state"] == "virtual_pending"
+    assert span["anchor_activity_id"] == 0
     assert span["is_visible_in_recent"] is True
     assert span["is_visible_in_timeline"] is True
     assert span["is_visible_in_details"] is True
-    assert span["is_absorbed_pending"] is True
-    # Absorbed_pending is NOT virtual_live and NOT in_progress in the
-    # legacy sense — it is a display-only projection.
-    assert span["is_virtual"] is False
+    assert "is_absorbed_pending" not in span
+    assert span["is_virtual"] is True
     assert span["is_persisted"] is False
 
 
-def test_absorbed_pending_apply_live_span_to_row_projects_onto_anchor():
-    """Case (b): ``apply_live_span_to_row`` overlays the absorbed_pending
-    live clock onto the anchor DB row. The anchor row's raw duration is
-    preserved (``raw_duration_seconds``) and the projected duration is
-    raw + pending_elapsed_at_sample."""
+def test_virtual_pending_apply_live_span_to_row_does_not_project_onto_anchor():
     anchor_id, _ = _create_closed_anchor_activity(
         elapsed_seconds=300, project_name="ProjectA"
     )
@@ -393,17 +377,12 @@ def test_absorbed_pending_apply_live_span_to_row_projects_onto_anchor():
         span,
         row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     )
-    assert overlaid["live_state"] == "absorbed_pending"
-    assert overlaid["is_live_projected"] is True
-    assert overlaid["is_absorbed_pending"] is True
-    assert overlaid["edit_disabled"] is True
-    # The raw duration is preserved.
-    assert overlaid["raw_duration_seconds"] == raw_duration
-    # The projected duration is raw + pending_at_sample (>= raw).
-    assert int(overlaid["duration_seconds"]) >= raw_duration
+    assert "live_state" not in overlaid or overlaid["live_state"] != "virtual_pending"
+    assert overlaid.get("is_live_projected") is not True
+    assert int(overlaid["duration_seconds"]) == raw_duration
 
 
-def test_current_activity_uses_resource_elapsed_project_rows_use_projection():
+def test_current_activity_uses_resource_elapsed_project_rows_stay_static_for_virtual():
     anchor_id, _ = _create_closed_anchor_activity(
         elapsed_seconds=300, project_name="ProjectA"
     )
@@ -425,10 +404,10 @@ def test_current_activity_uses_resource_elapsed_project_rows_use_projection():
     assert current["elapsed_seconds"] == 12
     assert current["resource_elapsed_seconds"] == 12
     assert "current_activity_clock" not in model
-    assert model["live_clock"]["duration_seconds_at_sample"] == 312
-    assert model["live_clock"]["display_base_seconds"] == 300
+    assert model["live_clock"]["duration_seconds_at_sample"] == 12
+    assert model["live_clock"]["display_base_seconds"] == 0
     assert model["live_clock"]["current_elapsed_at_sample"] == 12
-    assert int(overlaid["duration_seconds"]) == 312
+    assert int(overlaid["duration_seconds"]) == 300
 
 
 def test_persisted_open_current_elapsed_and_project_projection_no_double_count():

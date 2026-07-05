@@ -1304,10 +1304,8 @@ def test_short_activity_carry_helpers_removed_from_live_display_service() -> Non
         assert removed not in live_display_service.__all__, (
             f"live_display_service.__all__ must not include the removed carry helper {removed}"
         )
-    # The production-maintained accumulator reader is retained.
-    assert hasattr(live_display_service, "_read_pending_short_seconds"), (
-        "live_display_service must retain _read_pending_short_seconds "
-        "(production-maintained carry source)"
+    assert not hasattr(live_display_service, "_read_pending_short_seconds"), (
+        "live_display_service must not read pending_short_seconds as a duration/base source"
     )
 
 
@@ -1379,11 +1377,41 @@ def test_compute_refresh_revision_does_not_include_carry_signature() -> None:
     assert "carry_signature" not in debug_inputs, (
         "compute_refresh_revision debug_inputs must not include carry_signature"
     )
-    # ``pending_short_seconds`` IS retained (production-maintained).
-    assert "pending_short_seconds" in debug_inputs, (
-        "compute_refresh_revision debug_inputs must include pending_short_seconds "
-        "(production-maintained accumulator)"
+    assert "pending_short_seconds" not in debug_inputs, (
+        "compute_refresh_revision debug_inputs must not include pending_short_seconds "
+        "because it is no longer a production duration/base source"
     )
+
+
+def test_no_production_pending_short_carry_duration_readers() -> None:
+    import inspect
+
+    from worktrace.collector.auto_activity_recorder import AutoActivityRecorder
+    from worktrace.services import activity_display_model_service, live_display_service, view_model_service
+
+    forbidden_modules = {
+        "activity_display_model_service": inspect.getsource(activity_display_model_service),
+        "live_display_service": inspect.getsource(live_display_service),
+        "view_model_service": inspect.getsource(view_model_service),
+    }
+    for name, source in forbidden_modules.items():
+        assert "pending_short_seconds" not in source
+        assert "validate_pending_short_carry" not in source
+
+    ensure_source = inspect.getsource(AutoActivityRecorder._ensure_persisted_if_ready)
+    assert "_get_pending_short_seconds" not in ensure_source
+    assert "validate_pending_short_carry" not in ensure_source
+    assert "current_extra_seconds +=" not in ensure_source
+
+
+def test_absorbed_pending_and_continuous_virtual_removed_from_display_contract() -> None:
+    import inspect
+
+    from worktrace.services import activity_display_model_service
+
+    source = inspect.getsource(activity_display_model_service)
+    for removed in ("absorbed_pending", "continuous_virtual", "validated_pending_carry"):
+        assert removed not in source
 
 
 def test_view_model_api_does_not_export_carry_helpers() -> None:

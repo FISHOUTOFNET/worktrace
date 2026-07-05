@@ -152,7 +152,7 @@ def validate_pending_short_carry(
     return {
         "valid": True,
         "seconds": seconds,
-        "reason": "validated_pending_carry",
+        "reason": "legacy_pending_carry_valid",
         "source_start_time": source_start,
         "source_end_time": source_end,
         "latest_boundary_at_write": latest_at_write,

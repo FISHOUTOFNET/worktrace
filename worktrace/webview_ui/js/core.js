@@ -49,7 +49,7 @@
     App.timelineLoading = false;
     App.selectedSessionId = null;
     // Stable live key for the selected session. Selection continuity: stable_live_key_hash stays the same
-    // when session_id changes across the virtual / persisted_open / absorbed_pending transitions.
+    // when session_id changes across the virtual / persisted_open transitions.
     App.selectedSessionLiveKey = null;
 
     // races a manual refresh.
@@ -821,7 +821,7 @@
     App.noteRejectedPagePayload = noteRejectedPagePayload;
 
     // SINGLE SOURCE OF TRUTH for live-row continuity keys. Uses ``stable_live_key_hash`` so the key
-    // survives the virtual / persisted_open / absorbed_pending transitions (session_id / activity_id
+    // survives the virtual / persisted_open transitions (session_id / activity_id
     // change across the transition; stable_live_key_hash does not).
     //
     // The same key MUST be used for both render seeding and ticker updates —
