@@ -432,6 +432,49 @@ def test_current_live_projection_branch_never_uses_aggregate_base_fields():
         assert token not in branch
 
 
+def test_live_projection_function_requires_row_kind_contract():
+    source = (
+        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+    ).read_text(encoding="utf-8")
+    signature = re.search(
+        r"def\s+apply_live_span_to_row\((?P<body>.*?)\)\s*->\s*dict\[str,\s*Any\]:",
+        source,
+        re.S,
+    )
+    assert signature is not None
+    assert "row_kind: str" in signature.group("body")
+    assert "duration_semantic:" not in signature.group("body")
+    assert "def _duration_semantic_for_row_kind" in source
+
+
+def test_session_projection_branch_does_not_overwrite_session_start_time():
+    source = (
+        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r"if state == \"persisted_open\":(?P<body>.*?)(?=\n    elif state == \"absorbed_pending\":)",
+        source,
+        re.S,
+    )
+    assert match is not None
+    branch = match.group("body")
+    assert 'if row_kind in _CURRENT_LIVE_ROW_KINDS:' in branch
+    assert 'row["start_time"] = str(span.get("start_time")' in branch
+
+
+def test_viewmodel_no_visible_hidden_live_projection_dual_track():
+    source = (
+        REPO_ROOT / "worktrace" / "services" / "view_model_service.py"
+    ).read_text(encoding="utf-8")
+    for token in (
+        "display_rows",
+        "aggregate_rows",
+        "duration_semantic=CURRENT_LIVE",
+        "duration_semantic=AGGREGATE_LIVE",
+    ):
+        assert token not in source
+
+
 def test_viewmodel_and_bridge_do_not_reintroduce_independent_live_clock_fields():
     forbidden = (
         "baseline_epoch_ms",

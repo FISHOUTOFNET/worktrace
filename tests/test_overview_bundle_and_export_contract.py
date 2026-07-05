@@ -286,10 +286,10 @@ def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     recent = bundle["activities"][0]
     assert recent["source"] == "snapshot"
     assert int(recent["activity_id"]) == 0
-    assert recent["duration_semantic"] == "current_live"
-    assert int(recent["duration_seconds"]) == 12
-    assert int(recent["live_base_seconds"]) == 0
-    assert int(recent["display_base_seconds"]) == 0
+    assert recent["duration_semantic"] == "aggregate_live"
+    assert int(recent["duration_seconds"]) == sample
+    assert int(recent["live_base_seconds"]) == 3
+    assert int(recent["display_base_seconds"]) == 3
     assert int(recent["aggregate_duration_seconds_at_sample"]) == sample
     assert int(recent["aggregate_display_base_seconds"]) == 3
     assert recent["display_span_id"] == live_clock["display_span_id"]
@@ -587,16 +587,16 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
     assert int(kpi_base["classified_seconds"]) == 30
     assert int(kpi_base["today_total_seconds"]) == 30
 
-    # The Recent row is current-live but carries aggregate fields for the KPI sample.
+    # The Recent row is a project/session row and shares KPI aggregate semantics.
     recent_row = next(
         (a for a in bundle["activities"] if int(a.get("activity_id") or 0) == aid),
         None,
     )
     assert recent_row is not None, "persisted_open row not found in activities"
-    assert recent_row["duration_semantic"] == "current_live"
-    assert int(recent_row["live_base_seconds"]) == 0
-    assert int(recent_row["display_base_seconds"]) == 0
-    assert int(recent_row["duration_seconds"]) == 210
+    assert recent_row["duration_semantic"] == "aggregate_live"
+    assert int(recent_row["live_base_seconds"]) == 30
+    assert int(recent_row["display_base_seconds"]) == 30
+    assert int(recent_row["duration_seconds"]) == 240
     assert int(recent_row["aggregate_duration_seconds_at_sample"]) == 240
     assert int(recent_row["aggregate_display_base_seconds"]) == 30
     assert recent_row["stable_live_key_hash"] == sample_hash
@@ -748,13 +748,13 @@ def test_overview_recent_session_with_closed_then_open_activity_gets_live_overla
         "Overview recent row display_span_id must equal the payload live "
         "clock's display_span_id"
     )
-    assert recent_row["duration_semantic"] == "current_live"
-    assert int(recent_row["duration_seconds"]) == 100, (
-        f"Overview recent row duration_seconds must equal current elapsed 100; "
+    assert recent_row["duration_semantic"] == "aggregate_live"
+    assert int(recent_row["duration_seconds"]) == 160, (
+        f"Overview recent row duration_seconds must equal aggregate 160; "
         f"got {recent_row['duration_seconds']}"
     )
-    assert int(recent_row["live_base_seconds"]) == 0
-    assert int(recent_row["display_base_seconds"]) == 0
+    assert int(recent_row["live_base_seconds"]) == 60
+    assert int(recent_row["display_base_seconds"]) == 60
     assert int(recent_row["aggregate_duration_seconds_at_sample"]) == 160
     assert int(recent_row["aggregate_display_base_seconds"]) == 60
 
@@ -782,8 +782,8 @@ def test_overview_recent_session_with_closed_then_open_activity_gets_live_overla
         f"{current['elapsed_seconds']}"
     )
 
-    # 8. Timeline visible row for the same activity_ids is current-live,
-    #    while aggregate fields and totals preserve the 160s session sample.
+    # 8. Timeline visible row for the same activity_ids is aggregate-live,
+    #    matching totals and preserving the 160s session sample.
     timeline = bridge.get_timeline(today)
     tl_session = None
     for s in timeline["sessions"]:
@@ -794,9 +794,9 @@ def test_overview_recent_session_with_closed_then_open_activity_gets_live_overla
     assert tl_session is not None, (
         "Timeline session for the merged session must exist"
     )
-    assert tl_session["duration_semantic"] == "current_live"
-    assert int(tl_session["duration_seconds"]) == 100
-    assert int(tl_session["display_base_seconds"]) == 0
+    assert tl_session["duration_semantic"] == "aggregate_live"
+    assert int(tl_session["duration_seconds"]) == 160
+    assert int(tl_session["display_base_seconds"]) == 60
     assert int(tl_session["aggregate_duration_seconds_at_sample"]) == 160
     assert int(tl_session["aggregate_display_base_seconds"]) == 60
     assert int(timeline["today_total_seconds"]) == 160

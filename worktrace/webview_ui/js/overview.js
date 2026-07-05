@@ -112,8 +112,20 @@
             // Active-span anchored DOM attributes: ticker reads each row's
             // own base + active elapsed offset, not a row-owned clock.
             var spanId = item.display_span_id || "";
+            var rawDurationSemantic = item.duration_semantic;
+            var durationSemantic = String(rawDurationSemantic || "").replace(/_/g, "-");
+            if (spanId && durationSemantic !== "aggregate-live") {
+                if (typeof App.recordLiveClockContractViolation === "function") {
+                    App.recordLiveClockContractViolation(
+                        spanId,
+                        "overview",
+                        durationSemantic ? "recent_session_non_aggregate_live" : "recent_session_missing_duration_semantic"
+                    );
+                }
+                spanId = "";
+                durationSemantic = "aggregate-live";
+            }
             var continuityKey = spanId ? App.liveContinuityKey(item, "recent") : "";
-            var durationSemantic = String(item.duration_semantic || "current_live").replace(/_/g, "-");
             var displayBaseSec = parseInt(item.display_base_seconds, 10);
             if (isNaN(displayBaseSec)) displayBaseSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
             var initialSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;

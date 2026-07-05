@@ -40,6 +40,11 @@ from worktrace.constants import (
     UNCATEGORIZED_PROJECT,
 )
 from worktrace.services import activity_service, folder_rule_service, project_service, settings_service
+from worktrace.services.activity_display_model_service import (
+    ROW_KIND_ACTIVITY_DETAIL_ROW,
+    ROW_KIND_PROJECT_SESSION_ROW,
+    ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+)
 from worktrace.services.live_display_service import (
     _live_display_key,
     _stable_live_key,
@@ -1233,17 +1238,18 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
     assert detail_row["aggregate_display_base_seconds"] == 30
     assert detail_row["display_span_id"] == expected_span_id
 
-    # Recent matching row must also carry the same span id and current-live semantic.
+    # Recent matching row is a project/session row: aggregate-live with the
+    # same span id and static base used by KPI/timeline totals.
     recent_row = next(
         (r for r in recent["activities"] if int(r.get("activity_id") or 0) == aid),
         None,
     )
     assert recent_row is not None
     assert recent_row["display_span_id"] == expected_span_id
-    assert recent_row["duration_semantic"] == "current_live"
-    assert recent_row["duration_seconds"] == 210
-    assert recent_row["live_base_seconds"] == 0
-    assert recent_row["display_base_seconds"] == 0
+    assert recent_row["duration_semantic"] == "aggregate_live"
+    assert recent_row["duration_seconds"] == 240
+    assert recent_row["live_base_seconds"] == 30
+    assert recent_row["display_base_seconds"] == 30
     assert recent_row["aggregate_duration_seconds_at_sample"] == 240
     assert recent_row["aggregate_display_base_seconds"] == 30
 
@@ -1258,13 +1264,13 @@ def test_persisted_open_viewmodel_same_sample_consistency(bridge):
     )
     assert timeline_session is not None
     assert timeline_session["display_span_id"] == expected_span_id
-    assert timeline_session["duration_semantic"] == "current_live"
-    assert timeline_session["duration_seconds"] == 210
-    assert timeline_session["display_base_seconds"] == 0
+    assert timeline_session["duration_semantic"] == "aggregate_live"
+    assert timeline_session["duration_seconds"] == 240
+    assert timeline_session["display_base_seconds"] == 30
     assert timeline_session["aggregate_duration_seconds_at_sample"] == 240
     assert timeline_session["aggregate_display_base_seconds"] == 30
 
-    # Timeline totals are aggregate-live and may exceed the visible current-live row.
+    # Timeline totals and visible session rows share aggregate-live semantics.
     assert timeline["today_total_seconds"] == 240
     assert timeline["today_total_base_seconds"] == 30
 
@@ -1332,8 +1338,8 @@ def test_session_base_differs_from_live_activity_duration(bridge):
         "raw_duration_seconds": 240,
     }
 
-    apply_live_span_to_row(session_row, span, duration_semantic="aggregate_live")
-    apply_live_span_to_row(detail_row, span)
+    apply_live_span_to_row(session_row, span, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
+    apply_live_span_to_row(detail_row, span, row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW)
 
     assert detail_row["duration_semantic"] == "current_live"
     assert detail_row["duration_seconds"] == 210
@@ -1456,9 +1462,9 @@ def test_persisted_open_closed_plus_open_session_strips_open_db_duration(bridge)
     timeline_row = next(s for s in timeline["sessions"] if open_id in s.get("activity_ids", []))
 
     for row in (recent_row, timeline_row):
-        assert row["duration_semantic"] == "current_live"
-        assert int(row["duration_seconds"]) == 30
-        assert int(row["display_base_seconds"]) == 0
+        assert row["duration_semantic"] == "aggregate_live"
+        assert int(row["duration_seconds"]) == 330
+        assert int(row["display_base_seconds"]) == 300
         assert int(row["aggregate_duration_seconds_at_sample"]) == 330
         assert int(row["aggregate_display_base_seconds"]) == 300
         assert int(row["closed_duration_seconds"]) == 300
@@ -1485,12 +1491,17 @@ def test_persisted_open_extra_seconds_is_static_base_for_current_open_rows(bridg
     recent_row = next(r for r in overview["activities"] if int(r.get("activity_id") or 0) == aid)
     detail_row = next(a for a in details["activities"] if int(a.get("activity_id") or 0) == aid)
 
-    for row in (recent_row, detail_row):
-        assert row["duration_semantic"] == "current_live"
-        assert int(row["duration_seconds"]) == 30
-        assert int(row["display_base_seconds"]) == 0
-        assert int(row["aggregate_duration_seconds_at_sample"]) == 35
-        assert int(row["aggregate_display_base_seconds"]) == 5
+    assert recent_row["duration_semantic"] == "aggregate_live"
+    assert int(recent_row["duration_seconds"]) == 35
+    assert int(recent_row["display_base_seconds"]) == 5
+    assert int(recent_row["aggregate_duration_seconds_at_sample"]) == 35
+    assert int(recent_row["aggregate_display_base_seconds"]) == 5
+
+    assert detail_row["duration_semantic"] == "current_live"
+    assert int(detail_row["duration_seconds"]) == 30
+    assert int(detail_row["display_base_seconds"]) == 0
+    assert int(detail_row["aggregate_duration_seconds_at_sample"]) == 35
+    assert int(detail_row["aggregate_display_base_seconds"]) == 5
 
 
 def _find_live_rows_for_activity(bridge, aid: int) -> tuple[dict, dict, dict, dict]:
@@ -1521,6 +1532,22 @@ def _assert_current_live_row(row: dict, expected_seconds: int) -> None:
     assert int(row["current_live_base_seconds"]) == 0
 
 
+def _assert_aggregate_live_row(
+    row: dict,
+    *,
+    expected_seconds: int,
+    expected_base: int,
+    expected_current_seconds: int,
+) -> None:
+    assert row["duration_semantic"] == "aggregate_live"
+    assert int(row["duration_seconds"]) == expected_seconds
+    assert int(row["duration_seconds_at_sample"]) == expected_seconds
+    assert int(row["display_base_seconds"]) == expected_base
+    assert int(row["live_base_seconds"]) == expected_base
+    assert int(row["current_live_seconds_at_sample"]) == expected_current_seconds
+    assert int(row["current_live_base_seconds"]) == 0
+
+
 def test_persisted_open_extra_seconds_current_live_surfaces_equal(bridge):
     aid, start_time = _create_real_open_activity(elapsed_seconds=35)
     activity_service.set_activity_duration(aid, 45)
@@ -1541,10 +1568,18 @@ def test_persisted_open_extra_seconds_current_live_surfaces_equal(bridge):
     assert overview["live_clock"]["current_live_base_seconds"] == 0
     assert overview["live_clock"]["aggregate_duration_seconds_at_sample"] == 45
     assert overview["live_clock"]["aggregate_display_base_seconds"] == 10
-    for row in (recent_row, timeline_row, detail_row):
-        _assert_current_live_row(row, 35)
+    for row in (recent_row, timeline_row):
+        _assert_aggregate_live_row(
+            row,
+            expected_seconds=45,
+            expected_base=10,
+            expected_current_seconds=35,
+        )
         assert int(row["aggregate_duration_seconds_at_sample"]) == 45
         assert int(row["aggregate_display_base_seconds"]) == 10
+    _assert_current_live_row(detail_row, 35)
+    assert int(detail_row["aggregate_duration_seconds_at_sample"]) == 45
+    assert int(detail_row["aggregate_display_base_seconds"]) == 10
     assert int(overview["today_total_seconds"]) == 45
 
 
@@ -1572,11 +1607,16 @@ def test_persisted_open_session_closed_base_does_not_pollute_current_live_rows(b
     overview, recent_row, timeline_row, detail_row = _find_live_rows_for_activity(bridge, open_id)
 
     assert overview["current_activity"]["elapsed_seconds"] == 35
-    for row in (recent_row, timeline_row, detail_row):
-        _assert_current_live_row(row, 35)
     for row in (recent_row, timeline_row):
+        _assert_aggregate_live_row(
+            row,
+            expected_seconds=42,
+            expected_base=7,
+            expected_current_seconds=35,
+        )
         assert int(row["aggregate_duration_seconds_at_sample"]) == 42
         assert int(row["aggregate_display_base_seconds"]) == 7
+    _assert_current_live_row(detail_row, 35)
     assert int(overview["today_total_seconds"]) == 42
     timeline = bridge.get_timeline()
     assert int(timeline["today_total_seconds"]) == 42
@@ -1607,8 +1647,12 @@ def test_startup_recovered_closed_row_does_not_become_current_live_base(bridge):
     overview, recent_row, timeline_row, detail_row = _find_live_rows_for_activity(bridge, open_id)
 
     assert overview["current_activity"]["elapsed_seconds"] == 6
-    for row in (recent_row, timeline_row, detail_row):
-        _assert_current_live_row(row, 6)
+    for row in (recent_row, timeline_row):
+        assert row["duration_semantic"] == "aggregate_live"
+        assert int(row["current_live_seconds_at_sample"]) == 6
+        assert int(row["display_base_seconds"]) >= 8
+        assert int(row["duration_seconds"]) == int(row["display_base_seconds"]) + 6
+    _assert_current_live_row(detail_row, 6)
     assert int(overview["today_total_seconds"]) >= 14
     assert int(recent_row["aggregate_display_base_seconds"]) >= 8
 
@@ -1631,14 +1675,26 @@ def test_absorbed_pending_current_vs_aggregate_semantics_are_explicit(bridge):
     overview = bridge.get_overview()
     recent_row = bridge.get_recent_activities()["activities"][0]
     timeline_row = bridge.get_timeline()["sessions"][0]
+    details = bridge.get_timeline_session_details([anchor_id], None)
+    detail_live_row = next(
+        row for row in details["activities"] if row.get("display_span_id")
+    )
 
     assert overview["current_activity"]["elapsed_seconds"] == 5
     assert overview["live_clock"]["live_state"] == "absorbed_pending"
     for row in (recent_row, timeline_row):
-        _assert_current_live_row(row, 5)
+        _assert_aggregate_live_row(
+            row,
+            expected_seconds=25,
+            expected_base=20,
+            expected_current_seconds=5,
+        )
         assert int(row.get("activity_id") or row.get("first_activity_id") or 0) == anchor_id
         assert int(row["aggregate_duration_seconds_at_sample"]) == 25
         assert int(row["aggregate_display_base_seconds"]) == 20
+    _assert_current_live_row(detail_live_row, 5)
+    assert detail_live_row["is_display_only"] is True
+    assert detail_live_row["exportable"] is False
     assert int(overview["today_total_seconds"]) == 25
 
 
@@ -1670,15 +1726,19 @@ def test_absorbed_pending_extra_seconds_is_added_to_anchor_base(bridge):
     model = build_activity_display_model(report_date=today, today=today)
     span = get_live_span(model)
     row = activity_service.get_activity(anchor_id)
-    overlaid = apply_live_span_to_row(dict(row), span)
-    aggregate = apply_live_span_to_row(dict(row), span, duration_semantic="aggregate_live")
+    detail_projection = apply_live_span_to_row(
+        dict(row),
+        span,
+        row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW,
+    )
+    aggregate = apply_live_span_to_row(
+        dict(row),
+        span,
+        row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+    )
 
     assert span["live_state"] == "absorbed_pending"
-    assert overlaid["duration_semantic"] == "current_live"
-    assert int(overlaid["duration_seconds"]) == 12
-    assert int(overlaid["display_base_seconds"]) == 0
-    assert int(overlaid["aggregate_duration_seconds_at_sample"]) == 317
-    assert int(overlaid["aggregate_display_base_seconds"]) == 305
+    assert "duration_semantic" not in detail_projection or detail_projection["duration_semantic"] != "current_live"
     assert aggregate["duration_semantic"] == "aggregate_live"
     assert int(aggregate["duration_seconds"]) == 317
     assert int(aggregate["display_base_seconds"]) == 305
@@ -1795,12 +1855,11 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
         "absorbed_pending must keep the anchor row's project identity"
     )
 
-    # The visible row is current-live: anchor base remains available only
-    # through aggregate fields and must not pollute the current display.
-    assert recent_row["duration_semantic"] == "current_live"
-    assert recent_row["duration_seconds"] == 10
-    assert recent_row["live_base_seconds"] == 0
-    assert recent_row["display_base_seconds"] == 0
+    # Recent is a project/session row: it shows anchor base + current elapsed.
+    assert recent_row["duration_semantic"] == "aggregate_live"
+    assert recent_row["duration_seconds"] == 70
+    assert recent_row["live_base_seconds"] == 60
+    assert recent_row["display_base_seconds"] == 60
     assert recent_row["aggregate_display_base_seconds"] == 60
     assert recent_row["aggregate_duration_seconds_at_sample"] == 70
 
@@ -1821,9 +1880,9 @@ def test_absorbed_pending_overlays_anchor_row_only(bridge):
     )
     assert anchor_session is not None
     assert anchor_session["live_state"] == "absorbed_pending"
-    assert anchor_session["duration_semantic"] == "current_live"
-    assert anchor_session["duration_seconds"] == 10
-    assert anchor_session["display_base_seconds"] == 0
+    assert anchor_session["duration_semantic"] == "aggregate_live"
+    assert anchor_session["duration_seconds"] == 70
+    assert anchor_session["display_base_seconds"] == 60
     assert anchor_session["aggregate_display_base_seconds"] == 60
     assert anchor_session["aggregate_duration_seconds_at_sample"] == 70
 
@@ -1919,10 +1978,10 @@ def test_absorbed_pending_current_clock_uses_resource_elapsed(bridge):
 
     anchor_row = activity_service.get_activity(anchor_aid)
     projected = dict(anchor_row)
-    apply_live_span_to_row(projected, span)
-    assert projected["duration_semantic"] == "current_live"
-    assert projected["duration_seconds"] == 5
-    assert projected["display_base_seconds"] == 0
+    apply_live_span_to_row(projected, span, row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW)
+    assert projected["duration_semantic"] == "aggregate_live"
+    assert projected["duration_seconds"] == 125
+    assert projected["display_base_seconds"] == 120
     assert projected["aggregate_duration_seconds_at_sample"] == 125
     assert projected["aggregate_display_base_seconds"] == 120
     assert activity_service.get_activity(anchor_aid)["duration_seconds"] == 120
@@ -1961,7 +2020,7 @@ def test_persisted_open_live_clock_uses_resource_elapsed_and_project_extra(bridg
     assert project_clock["current_elapsed_at_sample"] == 35
 
     row = activity_service.get_activity(aid)
-    apply_live_span_to_row(row, span)
+    apply_live_span_to_row(row, span, row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW)
     assert row["duration_semantic"] == "current_live"
     assert row["duration_seconds"] == 35
     assert row["display_base_seconds"] == 0

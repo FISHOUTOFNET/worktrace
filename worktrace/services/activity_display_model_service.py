@@ -70,6 +70,31 @@ CURRENT_LIVE = "current_live"
 AGGREGATE_LIVE = "aggregate_live"
 STATIC_CLOSED = "static_closed"
 
+ROW_KIND_CURRENT_ACTIVITY_HEADER = "current_activity_header"
+ROW_KIND_ACTIVITY_DETAIL_ROW = "activity_detail_row"
+ROW_KIND_PROJECT_SESSION_ROW = "project_session_row"
+ROW_KIND_RECENT_PROJECT_SESSION_ROW = "recent_project_session_row"
+ROW_KIND_KPI_TOTAL = "kpi_total"
+ROW_KIND_HISTORICAL_CLOSED_ROW = "historical_closed_row"
+
+_CURRENT_LIVE_ROW_KINDS = {
+    ROW_KIND_CURRENT_ACTIVITY_HEADER,
+    ROW_KIND_ACTIVITY_DETAIL_ROW,
+}
+_AGGREGATE_LIVE_ROW_KINDS = {
+    ROW_KIND_PROJECT_SESSION_ROW,
+    ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+    ROW_KIND_KPI_TOTAL,
+}
+_DISPLAY_ROW_KINDS = (
+    ROW_KIND_CURRENT_ACTIVITY_HEADER,
+    ROW_KIND_ACTIVITY_DETAIL_ROW,
+    ROW_KIND_PROJECT_SESSION_ROW,
+    ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+    ROW_KIND_KPI_TOTAL,
+    ROW_KIND_HISTORICAL_CLOSED_ROW,
+)
+
 # Sentinel for ``build_activity_display_model(snapshot=...)``: distinguishes
 # "not passed" from "explicitly passed ``None``". A passed snapshot MUST
 # NOT trigger an internal re-read of ``current_activity_snapshot``.
@@ -611,7 +636,7 @@ def _build_display_span(
     )
     # Anchor base seconds exists only for absorbed_pending, where the display
     # projection is explicitly anchored to a closed row. Persisted-open rows
-    # derive static bases from row structural fields in ``apply_live_span_to_row``.
+    # derive static bases from row structural fields during row-kind projection.
     live_anchor_base_seconds = 0
 
     if display_live_state == "persisted_open":
@@ -655,15 +680,15 @@ def _build_display_span(
         "live_state": display_live_state,
         "start_time": start_time,
         "end_time": "",
-        "duration_semantic": CURRENT_LIVE,
-        "duration": format_duration(current_live_seconds),
-        "duration_seconds": current_live_seconds,
-        "duration_seconds_at_sample": current_live_seconds,
+        "duration_semantic": "",
+        "duration": format_duration(aggregate_duration),
+        "duration_seconds": aggregate_duration,
+        "duration_seconds_at_sample": aggregate_duration,
         "current_live_seconds_at_sample": current_live_seconds,
         "current_live_base_seconds": 0,
         "aggregate_duration_seconds_at_sample": aggregate_duration,
         "aggregate_display_base_seconds": aggregate_base,
-        "display_base_seconds": 0,
+        "display_base_seconds": aggregate_base,
         "live_clock": live_clock,
         "project_id": int(project_id),
         "project_name": project_name,
@@ -769,25 +794,41 @@ def _static_base_for_live_row(
     return snapshot_extra_base
 
 
+def _duration_semantic_for_row_kind(row_kind: str) -> str:
+    if row_kind in _CURRENT_LIVE_ROW_KINDS:
+        return CURRENT_LIVE
+    if row_kind in _AGGREGATE_LIVE_ROW_KINDS:
+        return AGGREGATE_LIVE
+    if row_kind == ROW_KIND_HISTORICAL_CLOSED_ROW:
+        return STATIC_CLOSED
+    raise ValueError(f"unknown live display row_kind: {row_kind!r}")
+
+
 def apply_live_span_to_row(
     row: dict[str, Any],
     span: dict[str, Any] | None,
     *,
-    duration_semantic: str = CURRENT_LIVE,
+    row_kind: str,
 ) -> dict[str, Any]:
-    """Merge the unified live-span overlay into a DB row payload.
+    """Project the unified live span onto a DB row payload by display row kind.
 
     Row matches when its ``activity_id`` / ``id`` / ``first_activity_id`` /
     ``activity_ids`` contains ``span.anchor_activity_id``.
 
-    ``current_live`` rows display only the current resource/window elapsed
-    and always use ``display_base_seconds == 0``. ``aggregate_live`` rows
-    display project/session/KPI totals as ``aggregate base + current elapsed``.
-    Open DB row duration is persistence-only for current-live UI and must
-    not be reverse-engineered into a current-live display base.
+    ``row_kind`` is the Projection Surface Contract. Current header/detail
+    rows display only the current resource/window elapsed with base 0.
+    Recent/Timeline/KPI rows display aggregate totals as
+    ``static base + current elapsed``. Session rows keep their session
+    ``start_time``; only current/detail surfaces may use the current activity
+    start as their display ``start_time``.
 
     Mutates and returns ``row``; unchanged when ``span`` is ``None`` or no match.
     """
+    semantic = _duration_semantic_for_row_kind(row_kind)
+    if semantic == STATIC_CLOSED:
+        row["duration_semantic"] = STATIC_CLOSED
+        row["live_delta_eligible"] = False
+        return row
     if not span:
         return row
     anchor_id = int(span.get("anchor_activity_id") or 0)
@@ -803,9 +844,11 @@ def apply_live_span_to_row(
         return row
 
     live_clock = span.get("live_clock") or {}
-    row.update(_live_clock_fields(live_clock))
     state = str(span.get("live_state") or "")
-    semantic = duration_semantic if duration_semantic in (CURRENT_LIVE, AGGREGATE_LIVE) else CURRENT_LIVE
+    if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW and state == "absorbed_pending":
+        return row
+
+    row.update(_live_clock_fields(live_clock))
     current_live_seconds = int(
         live_clock.get("current_live_seconds_at_sample")
         or live_clock.get("current_elapsed_at_sample")
@@ -854,6 +897,8 @@ def apply_live_span_to_row(
     row["current_live_base_seconds"] = 0
     row["aggregate_duration_seconds_at_sample"] = int(aggregate_duration)
     row["aggregate_display_base_seconds"] = int(aggregate_base)
+    row["current_activity_start_time"] = str(span.get("start_time") or "")
+    row["open_activity_start_time"] = str(span.get("start_time") or "")
 
     if semantic == CURRENT_LIVE:
         row["duration_semantic"] = CURRENT_LIVE
@@ -900,7 +945,8 @@ def apply_live_span_to_row(
                 row["is_uncategorized"] = not bool(row.get("project_id"))
                 row["is_classified"] = bool(row.get("project_id"))
         row["source"] = "db"
-        row["start_time"] = str(span.get("start_time") or row.get("start_time") or "")
+        if row_kind in _CURRENT_LIVE_ROW_KINDS:
+            row["start_time"] = str(span.get("start_time") or row.get("start_time") or "")
         row["live_anchor_activity_id"] = int(span.get("live_anchor_activity_id") or 0)
         row["live_anchor_base_seconds"] = int(span.get("live_anchor_base_seconds") or 0)
     elif state == "absorbed_pending":
@@ -1022,6 +1068,12 @@ def get_live_span(model: dict[str, Any]) -> dict[str, Any] | None:
 __all__ = [
     "AGGREGATE_LIVE",
     "CURRENT_LIVE",
+    "ROW_KIND_ACTIVITY_DETAIL_ROW",
+    "ROW_KIND_CURRENT_ACTIVITY_HEADER",
+    "ROW_KIND_HISTORICAL_CLOSED_ROW",
+    "ROW_KIND_KPI_TOTAL",
+    "ROW_KIND_PROJECT_SESSION_ROW",
+    "ROW_KIND_RECENT_PROJECT_SESSION_ROW",
     "STATIC_CLOSED",
     "apply_live_span_to_row",
     "build_activity_display_model",

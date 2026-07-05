@@ -101,8 +101,20 @@
             // base plus active elapsed offset; the ticker supplies the one
             // Timeline page active elapsed sample.
             var sessSpanId = s.display_span_id || "";
+            var rawSessionDurationSemantic = s.duration_semantic;
+            var sessionDurationSemantic = String(rawSessionDurationSemantic || "").replace(/_/g, "-");
+            if (sessSpanId && sessionDurationSemantic !== "aggregate-live") {
+                if (typeof App.recordLiveClockContractViolation === "function") {
+                    App.recordLiveClockContractViolation(
+                        sessSpanId,
+                        "timeline",
+                        sessionDurationSemantic ? "timeline_session_non_aggregate_live" : "timeline_session_missing_duration_semantic"
+                    );
+                }
+                sessSpanId = "";
+                sessionDurationSemantic = "aggregate-live";
+            }
             var sessContinuityKey = sessSpanId ? App.liveContinuityKey(s, "session") : "";
-            var sessionDurationSemantic = String(s.duration_semantic || "current_live").replace(/_/g, "-");
             var sessionDisplayBase = parseInt(s.display_base_seconds, 10);
             if (isNaN(sessionDisplayBase)) sessionDisplayBase = (!isNaN(sDurSec) && sDurSec >= 0) ? sDurSec : 0;
             var initialSec = (!isNaN(sDurSec) && sDurSec >= 0) ? sDurSec : 0;
@@ -142,7 +154,9 @@
                 + '</div>';
             // Continuity key MUST use App.liveContinuityKey() so the ticker can locate the seeded state; a
             // "session-" + session_id key would break the virtual_pending / absorbed_pending / persisted_open transition.
-            sessionContinuityKeys.push({ key: sessContinuityKey || App.liveContinuityKey(s, "session"), sec: initialSec });
+            if (sessContinuityKey) {
+                sessionContinuityKeys.push({ key: sessContinuityKey, sec: initialSec });
+            }
         }
         listEl.innerHTML = html;
         for (var ci = 0; ci < sessionContinuityKeys.length; ci++) {

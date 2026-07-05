@@ -850,6 +850,20 @@ def test_live_duration_targets_publish_duration_semantic_contract():
     assert "data-duration-semantic" in timeline
 
 
+def test_recent_and_timeline_sessions_do_not_fallback_to_current_live():
+    overview_body = func_body(read_js("overview.js"), "showRecent")
+    timeline_body = func_body(read_js("timeline.js"), "showTimeline")
+
+    assert 'item.duration_semantic || "current_live"' not in overview_body
+    assert 's.duration_semantic || "current_live"' not in timeline_body
+    assert "recent_session_missing_duration_semantic" in overview_body
+    assert "recent_session_non_aggregate_live" in overview_body
+    assert "timeline_session_missing_duration_semantic" in timeline_body
+    assert "timeline_session_non_aggregate_live" in timeline_body
+    assert 'durationSemantic !== "aggregate-live"' in overview_body
+    assert 'sessionDurationSemantic !== "aggregate-live"' in timeline_body
+
+
 def test_ticker_rejects_current_live_targets_with_nonzero_base():
     source = read_js("core.js")
     ticker_body = func_body(source, "applyLocalTicker")

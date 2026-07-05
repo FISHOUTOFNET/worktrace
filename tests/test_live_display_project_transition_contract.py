@@ -35,6 +35,8 @@ pytestmark = [pytest.mark.contract, pytest.mark.db, pytest.mark.live_display]
 from worktrace.constants import STATUS_NORMAL, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from worktrace.services import activity_service, settings_service, timeline_service
 from worktrace.services.activity_display_model_service import (
+    ROW_KIND_ACTIVITY_DETAIL_ROW,
+    ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     apply_live_span_to_row,
     build_activity_display_model,
     classify_display_live_state,
@@ -386,7 +388,11 @@ def test_absorbed_pending_apply_live_span_to_row_projects_onto_anchor():
     anchor_row = activity_service.get_activity(anchor_id)
     raw_duration = int(anchor_row.get("duration_seconds") or 0)
 
-    overlaid = apply_live_span_to_row(dict(anchor_row), span, duration_semantic="aggregate_live")
+    overlaid = apply_live_span_to_row(
+        dict(anchor_row),
+        span,
+        row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+    )
     assert overlaid["live_state"] == "absorbed_pending"
     assert overlaid["is_live_projected"] is True
     assert overlaid["is_absorbed_pending"] is True
@@ -409,7 +415,11 @@ def test_current_activity_uses_resource_elapsed_project_rows_use_projection():
     model = build_activity_display_model(report_date=today, today=today)
     span = get_live_span(model)
     anchor_row = activity_service.get_activity(anchor_id)
-    overlaid = apply_live_span_to_row(dict(anchor_row), span, duration_semantic="aggregate_live")
+    overlaid = apply_live_span_to_row(
+        dict(anchor_row),
+        span,
+        row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+    )
 
     current = model["current_activity"]
     assert current["elapsed_seconds"] == 12
@@ -442,7 +452,11 @@ def test_persisted_open_current_elapsed_and_project_projection_no_double_count()
     model = build_activity_display_model(report_date=today, today=today)
     span = get_live_span(model)
     row = activity_service.get_activity(anchor_id)
-    overlaid = apply_live_span_to_row(dict(row), span, duration_semantic="aggregate_live")
+    overlaid = apply_live_span_to_row(
+        dict(row),
+        span,
+        row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+    )
 
     assert model["live_clock"]["live_state"] == "persisted_open"
     assert model["current_activity"]["elapsed_seconds"] == 12
@@ -558,7 +572,11 @@ def test_absorbed_pending_does_not_write_db():
         model = build_activity_display_model(report_date=today, today=today)
         span = get_live_span(model)
         anchor_row = activity_service.get_activity(anchor_id)
-        apply_live_span_to_row(dict(anchor_row), span)
+        apply_live_span_to_row(
+            dict(anchor_row),
+            span,
+            row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+        )
         assert called["count"] == 0, (
             "absorbed_pending must not call any DB write path"
         )
@@ -602,7 +620,11 @@ def test_persisted_open_live_state_and_overlay():
 
     # apply_live_span_to_row overlays the real DB row.
     db_row = activity_service.get_activity(aid)
-    overlaid = apply_live_span_to_row(dict(db_row), span)
+    overlaid = apply_live_span_to_row(
+        dict(db_row),
+        span,
+        row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW,
+    )
     assert overlaid["live_state"] == "persisted_open"
     assert overlaid["is_live_projected"] is True
     assert overlaid["is_in_progress"] is True
