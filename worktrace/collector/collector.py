@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime, time as datetime_time
-from typing import Any
+from typing import Any, Callable
 
 from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
@@ -13,6 +14,8 @@ from ..services.secure_backup_service import is_secure_import_in_progress
 from ..services.settings_service import get_bool_setting, get_int_setting, get_setting, set_setting
 from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
+
+POLL_CADENCE_SECONDS = 1.0
 
 
 class CollectorControl:
@@ -72,6 +75,7 @@ def run_collector(
     _normalize_poll_interval_setting()
     recovery_service.recover_unclosed_records()
     clipboard_service.prune_old_events()
+    next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
 
     while not stop_event.is_set():
         try:
@@ -92,25 +96,33 @@ def run_collector(
             if control is not None and control.take_pause_request():
                 _pause_machine_then_expose(machine, now, set_user_paused=True)
                 control.complete_pause({"ok": True, "pause_pending": False})
-                _sleep_poll(stop_event, control)
+                next_poll_deadline = _sleep_until_next_poll(
+                    stop_event, control, next_poll_deadline
+                )
                 last_loop_time = now
                 continue
 
             if not get_bool_setting("first_run_notice_accepted", False):
                 _pause_machine_then_expose(machine, now)
-                _sleep_poll(stop_event, control)
+                next_poll_deadline = _sleep_until_next_poll(
+                    stop_event, control, next_poll_deadline
+                )
                 last_loop_time = now
                 continue
 
             if get_bool_setting("user_paused", False):
                 _pause_machine_then_expose(machine, now)
-                _sleep_poll(stop_event, control)
+                next_poll_deadline = _sleep_until_next_poll(
+                    stop_event, control, next_poll_deadline
+                )
                 last_loop_time = now
                 continue
 
             if is_secure_import_in_progress():
                 _pause_machine_then_expose(machine, now)
-                _sleep_poll(stop_event, control)
+                next_poll_deadline = _sleep_until_next_poll(
+                    stop_event, control, next_poll_deadline
+                )
                 last_loop_time = now
                 continue
 
@@ -133,7 +145,9 @@ def run_collector(
                 clipboard_service.prune_old_events()
                 prune_counter = 0
             last_loop_time = observation_time
-            _sleep_poll(stop_event, control)
+            next_poll_deadline = _sleep_until_next_poll(
+                stop_event, control, next_poll_deadline
+            )
         except Exception:
             logging.exception("collector unexpected exception")
             set_setting("collector_status", "error")
@@ -141,7 +155,9 @@ def run_collector(
                 machine.transition_to("error", at_time=now_str())
             except Exception:
                 logging.exception("failed to persist collector error state")
-            _sleep_poll(stop_event, control)
+            next_poll_deadline = _sleep_until_next_poll(
+                stop_event, control, next_poll_deadline
+            )
 
     machine.transition_to("stopped", at_time=now_str())
     set_setting("collector_status", "stopped")
@@ -172,12 +188,37 @@ def _pause_machine_then_expose(
     update_heartbeat("paused")
 
 
+def _wait_for_poll_delay(
+    stop_event: threading.Event,
+    control: CollectorControl | None,
+    timeout_seconds: float,
+) -> None:
+    if control is not None:
+        control.wait(stop_event, timeout_seconds)
+        return
+    stop_event.wait(timeout_seconds)
+
+
+def _sleep_until_next_poll(
+    stop_event: threading.Event,
+    control: CollectorControl | None,
+    next_poll_deadline: float,
+    *,
+    monotonic_func: Callable[[], float] = time.monotonic,
+    wait_func: Callable[[threading.Event, CollectorControl | None, float], None] = _wait_for_poll_delay,
+) -> float:
+    now = monotonic_func()
+    delay = float(next_poll_deadline) - now
+    if delay > 0:
+        wait_func(stop_event, control, delay)
+    else:
+        logging.debug("collector loop exceeded 1s cadence by %.3fs", abs(delay))
+    return float(next_poll_deadline) + POLL_CADENCE_SECONDS
+
+
 def _sleep_poll(stop_event: threading.Event, control: CollectorControl | None = None) -> None:
     interval = max(1, get_int_setting("poll_interval_seconds", 1))
-    if control is not None:
-        control.wait(stop_event, interval)
-        return
-    stop_event.wait(interval)
+    _wait_for_poll_delay(stop_event, control, float(interval))
 
 
 def _clipboard_events(adapter: PlatformAdapter):

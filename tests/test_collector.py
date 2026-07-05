@@ -10,6 +10,7 @@ from worktrace.collector.collector import (
     CollectorControl,
     _midnight_crossed_between,
     _normalize_poll_interval_setting,
+    _sleep_until_next_poll,
     run_collector,
 )
 from worktrace.platforms.base import ActiveWindow
@@ -67,6 +68,80 @@ def test_any_non_one_poll_interval_is_normalized(temp_db):
     _normalize_poll_interval_setting()
 
     assert settings_service.get_setting("poll_interval_seconds") == "1"
+
+
+def test_fixed_rate_poll_sleep_does_not_add_work_time_to_interval():
+    stop_event = threading.Event()
+    waits: list[float] = []
+    times = iter([0.7])
+
+    next_deadline = _sleep_until_next_poll(
+        stop_event,
+        None,
+        1.0,
+        monotonic_func=lambda: next(times),
+        wait_func=lambda stop, control, timeout: waits.append(timeout),
+    )
+
+    assert waits == pytest.approx([0.3])
+    assert next_deadline == pytest.approx(2.0)
+
+
+def test_fixed_rate_poll_skips_extra_sleep_when_work_exceeds_interval():
+    stop_event = threading.Event()
+    waits: list[float] = []
+
+    next_deadline = _sleep_until_next_poll(
+        stop_event,
+        None,
+        1.0,
+        monotonic_func=lambda: 1.2,
+        wait_func=lambda stop, control, timeout: waits.append(timeout),
+    )
+
+    assert waits == []
+    assert next_deadline == pytest.approx(2.0)
+
+
+def test_fixed_rate_poll_wait_can_be_interrupted_by_pause_request():
+    stop_event = threading.Event()
+    control = CollectorControl()
+    waits: list[float] = []
+
+    def fake_control_wait(stop, timeout):
+        waits.append(timeout)
+
+    control.wait = fake_control_wait  # type: ignore[method-assign]
+
+    _sleep_until_next_poll(
+        stop_event,
+        control,
+        5.0,
+        monotonic_func=lambda: 4.25,
+    )
+
+    assert waits == pytest.approx([0.75])
+
+
+def test_fixed_rate_poll_wait_can_be_interrupted_by_stop_event():
+    stop_event = threading.Event()
+    waits: list[float] = []
+
+    def fake_stop_wait(timeout):
+        waits.append(timeout)
+        stop_event.set()
+
+    stop_event.wait = fake_stop_wait  # type: ignore[method-assign]
+
+    _sleep_until_next_poll(
+        stop_event,
+        None,
+        5.0,
+        monotonic_func=lambda: 4.25,
+    )
+
+    assert waits == pytest.approx([0.75])
+    assert stop_event.is_set()
 
 
 def test_collector_observation_time_is_after_active_window_fast_path():

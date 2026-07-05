@@ -107,7 +107,8 @@
         });
     }
 
-    function refreshCurrentPageData() {
+    function refreshCurrentPageData(state, options) {
+        var opts = options || {};
         // When a refresh is already in-flight, record a pending request
         if (App.activePageRefreshInFlight) {
             App.pendingPageRefresh = true;
@@ -115,7 +116,9 @@
         }
         App.activePageRefreshInFlight = true;
         App.pendingPageRefresh = false;
-        var promises = [refreshStatus()];
+        var promises = [
+            state && state.ok ? refreshStatusFromRefreshState(state) : refreshStatus()
+        ];
         if (App.currentPage === "overview") {
             promises.push(refreshOverview());
         } else if (App.currentPage === "timeline" && App.timelineLoaded) {
@@ -123,7 +126,9 @@
             if (typeof App._timelineEditingActive !== "function" || !App._timelineEditingActive()) {
                 promises.push(refreshTimeline());
             } else {
-                refreshTimelineCurrentActivityFromState(App.lastRefreshState);
+                refreshCurrentActivityFromState(state || App.lastRefreshState, {
+                    allowContinuityChange: !!opts.allowContinuityChange
+                });
             }
         }
         return Promise.allSettled(promises).then(function (results) {
@@ -371,12 +376,43 @@
 
     function updateCurrentActivityCacheFromRefreshState(state) {
         if (!state) return;
-        if (App.currentPage === "overview" && App.lastOverviewSnapshot) {
+        if (App.currentPage === "overview") {
+            if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
             App.lastOverviewSnapshot.current_activity = state.current_activity || {};
-        } else if (App.currentPage === "timeline" && App.lastTimelineData) {
+        } else if (App.currentPage === "timeline") {
+            if (!App.lastTimelineData) App.lastTimelineData = {};
             App.lastTimelineData.current_activity = state.current_activity || {};
         }
     }
+
+    function refreshCurrentActivityFromState(state, options) {
+        if (!state || !state.current_activity) return;
+        var opts = options || {};
+        if (opts.allowContinuityChange) {
+            App.commitPageActiveSpanClock(state, App.currentPage || "overview");
+        } else {
+            App.observeRefreshStateActiveSpan(state, App.currentPage || "overview");
+        }
+        if (App.currentPage === "overview") {
+            if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
+            App.lastOverviewSnapshot.current_activity = state.current_activity || {};
+            App.renderCurrentActivityElement(
+                document.getElementById("current-activity"),
+                state.current_activity || {},
+                "overview"
+            );
+        } else if (App.currentPage === "timeline") {
+            if (!App.lastTimelineData) App.lastTimelineData = {};
+            App.lastTimelineData.current_activity = state.current_activity || {};
+            App.renderCurrentActivityElement(
+                document.getElementById("timeline-current"),
+                state.current_activity || {},
+                "timeline"
+            );
+        }
+        App.applyLocalTicker();
+    }
+    App.refreshCurrentActivityFromState = refreshCurrentActivityFromState;
 
     function refreshTimelineCurrentActivityFromState(state) {
         if (App.currentPage !== "timeline" || !state || !state.current_activity) return;
@@ -411,28 +447,36 @@
                 return null;
             });
             if (!state) return;
-            var prevRevision = App.lastRefreshState && App.lastRefreshState.refresh_revision;
+            var previousState = App.lastRefreshState;
+            var prevRevision = previousState && previousState.refresh_revision;
             var newRevision = state.refresh_revision;
             var isFirstCheck = prevRevision === null || prevRevision === undefined;
+            var prevLiveRevision = previousState && (previousState.live_state_revision || previousState.refresh_revision);
+            var newLiveRevision = state.live_state_revision || state.refresh_revision;
+            var prevPageRevision = previousState && (previousState.page_structure_revision || previousState.refresh_revision);
+            var newPageRevision = state.page_structure_revision || state.refresh_revision;
+            var liveStateChanged = isFirstCheck || prevLiveRevision !== newLiveRevision || prevRevision !== newRevision;
+            var pageStructureChanged = isFirstCheck || prevPageRevision !== newPageRevision;
             App.lastRefreshState = state;
             var revisionUnchanged = !isFirstCheck && prevRevision === newRevision;
-            if (revisionUnchanged) {
-                App.observeRefreshStateActiveSpan(state, App.currentPage || "overview");
-                updateCurrentActivityCacheFromRefreshState(state);
-            }
+            refreshCurrentActivityFromState(state, {
+                allowContinuityChange: !!liveStateChanged
+            });
+            refreshStatusFromRefreshState(state);
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision
-            if (isFirstCheck || prevRevision !== newRevision) {
+            if (pageStructureChanged) {
                 triggeredHeavyRefresh = true;
                 App.liveClockContractRefreshRequested = false;
-                refreshTimelineCurrentActivityFromState(state);
-                refreshCurrentPageData();
+                refreshCurrentPageData(state, {
+                    allowContinuityChange: !!liveStateChanged
+                });
             } else if (App.liveClockContractRefreshRequested && !App.activePageRefreshInFlight) {
                 triggeredHeavyRefresh = true;
                 App.liveClockContractRefreshRequested = false;
-                refreshCurrentPageData();
-            } else {
-                refreshStatusFromRefreshState(state);
+                refreshCurrentPageData(state, {
+                    allowContinuityChange: !!liveStateChanged
+                });
             }
             // and could race the in-flight refresh.
             var now = Date.now();

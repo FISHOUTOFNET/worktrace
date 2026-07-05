@@ -460,7 +460,9 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
     model = build_activity_display_model(
-        report_date=scoped_report_date, today=today, snapshot=snapshot
+        report_date=scoped_report_date,
+        today=today,
+        snapshot=snapshot,
     )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
@@ -738,7 +740,10 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
     # NOT re-read the setting. ``refresh_revision`` and ``live_clock``
     # share the same sample.
     model = build_activity_display_model(
-        report_date=scoped_report_date, today=today, snapshot=snapshot
+        report_date=scoped_report_date,
+        today=today,
+        snapshot=snapshot,
+        include_absorb_anchor=False,
     )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
@@ -758,6 +763,8 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
     persisted_activity_id = int(debug_inputs.get("persisted_id") or 0)
     inferred_project_name = str(debug_inputs.get("inferred_project") or "")
     latest_activity_id = int(debug_inputs.get("latest_id") or 0)
+    live_state_revision = str(debug_inputs.get("live_state_revision") or "")
+    page_structure_revision = str(debug_inputs.get("page_structure_revision") or "")
 
     if paused or collector_status == "paused":
         status_display = "已暂停"
@@ -778,6 +785,8 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
         "is_persisted": is_persisted,
         "persisted_activity_id": persisted_activity_id,
         "inferred_project_name": inferred_project_name,
+        "live_state_revision": live_state_revision,
+        "page_structure_revision": page_structure_revision,
         "refresh_revision": refresh_revision,
         "today": today,
         "report_date": scoped_report_date,

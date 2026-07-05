@@ -202,7 +202,7 @@ def test_revision_unchanged_does_not_trigger_heavy_refresh():
     # The unchanged branch must NOT call the heavy refresh helpers.
     # We check that refreshCurrentPageData is only called from the
     # revision-CHANGED branch (inside the if-block), not unconditionally.
-    rcp_pos = body.find("refreshCurrentPageData()")
+    rcp_pos = body.find("refreshCurrentPageData(state")
     assert rcp_pos != -1, (
         "runRevisionCheck must call refreshCurrentPageData on revision change"
     )
@@ -283,7 +283,7 @@ def test_timeline_edit_guard_does_not_block_current_activity_header_refresh():
     current-activity header/state text."""
     src = _strip_js_comments(read_js("init.js"))
     refresh_body = func_body(src, "refreshCurrentPageData")
-    assert "refreshTimelineCurrentActivityFromState" in refresh_body, (
+    assert "refreshCurrentActivityFromState" in refresh_body, (
         "refreshCurrentPageData must refresh Timeline current activity from "
         "the latest refresh-state payload even when full Timeline rendering "
         "is edit-guarded"
@@ -296,9 +296,9 @@ def test_timeline_edit_guard_does_not_block_current_activity_header_refresh():
 def test_run_revision_check_updates_timeline_header_before_guarded_refresh():
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
-    changed_index = body.find("prevRevision !== newRevision")
-    header_index = body.find("refreshTimelineCurrentActivityFromState(state)", changed_index)
-    refresh_index = body.find("refreshCurrentPageData()", changed_index)
+    changed_index = body.find("liveStateChanged")
+    header_index = body.find("refreshCurrentActivityFromState(state", changed_index)
+    refresh_index = body.find("refreshCurrentPageData(state", changed_index)
     assert header_index != -1 and refresh_index != -1 and header_index < refresh_index, (
         "revision-change handling must update the Timeline current header "
         "from backend refresh-state before any guarded page refresh can skip "
@@ -1421,8 +1421,10 @@ def test_run_revision_check_observes_refresh_state_without_row_clock_commit():
     projection anchors."""
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
-    assert "observeRefreshStateActiveSpan" in body, (
-        "runRevisionCheck must observe same-continuity refresh_state active span"
+    fast_body = func_body(src, "refreshCurrentActivityFromState")
+    assert "observeRefreshStateActiveSpan" in fast_body, (
+        "current activity fast path must observe same-continuity refresh_state "
+        "active span"
     )
     assert "registerLiveClock" not in body, (
         "runRevisionCheck must not use registerLiveClock for refresh_state"
@@ -1452,12 +1454,13 @@ def test_page_model_render_uses_page_model_source():
 
 
 def test_run_revision_check_does_not_register_current_clock_on_revision_change():
-    """When ``refresh_revision`` changes, refresh_state may update caches
-    and registries, but DOM patching waits for the heavy page refresh so
-    current/recent/timeline do not briefly show mixed samples."""
+    """Revision changes must fast-render current activity from refresh_state.
+
+    Heavy page refreshes still backfill KPI/recent/timeline rows, but the
+    current activity card/header must not wait for them.
+    """
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
-    # Must have a revision-change branch that triggers heavy refresh.
     assert "revision" in body.lower(), (
         "runRevisionCheck must compare refresh_revision"
     )
@@ -1467,10 +1470,20 @@ def test_run_revision_check_does_not_register_current_clock_on_revision_change()
     assert "patchCurrentActivityFromRefreshState" not in body, (
         "runRevisionCheck must not patch current activity duration from refresh_state"
     )
-    changed_index = body.find("prevRevision !== newRevision")
-    refresh_index = body.find("refreshCurrentPageData()", changed_index)
+    last_state_index = body.find("App.lastRefreshState = state")
+    fast_index = body.find("refreshCurrentActivityFromState(state", last_state_index)
+    status_index = body.find("refreshStatusFromRefreshState(state)", last_state_index)
+    assert fast_index != -1, (
+        "runRevisionCheck must fast-render current activity from refresh_state"
+    )
+    assert status_index != -1 and fast_index < status_index, (
+        "current activity fast-render must happen before status/heavy refresh work"
+    )
+    changed_index = body.find("pageStructureChanged")
+    refresh_index = body.find("refreshCurrentPageData(state", changed_index)
     assert refresh_index != -1, (
-        "revision-changed branch must trigger heavy refresh"
+        "page-structure changed branch must trigger heavy refresh with the "
+        "existing refresh_state payload"
     )
 
 
@@ -1481,16 +1494,71 @@ def test_run_revision_check_updates_current_cache_when_revision_unchanged():
     assert "prevRevision === newRevision" in body, (
         "runRevisionCheck must have an explicit revision-unchanged branch"
     )
-    unchanged_branch_index = body.find("prevRevision === newRevision")
-    patch_index = body.find("updateCurrentActivityCacheFromRefreshState(state)", unchanged_branch_index)
-    heavy_index = body.find("refreshCurrentPageData()", unchanged_branch_index)
+    unchanged_index = body.find("prevRevision === newRevision")
+    fast_index = body.find("refreshCurrentActivityFromState(state", unchanged_index)
+    heavy_index = body.find("refreshCurrentPageData(state", unchanged_index)
 
-    assert patch_index != -1, (
-        "revision-unchanged branch may update current activity structural cache"
+    assert fast_index != -1, (
+        "revision-unchanged branch must still use the current activity fast path"
     )
-    assert heavy_index == -1 or patch_index < heavy_index, (
-        "revision-unchanged current patch must not depend on the heavy refresh path"
+    assert heavy_index == -1 or fast_index < heavy_index, (
+        "revision-unchanged current fast path must not depend on heavy refresh"
     )
+
+
+def test_refresh_current_activity_from_state_supports_overview_and_timeline():
+    src = _strip_js_comments(read_js("init.js"))
+    body = func_body(src, "refreshCurrentActivityFromState")
+
+    assert 'App.currentPage === "overview"' in body
+    assert 'document.getElementById("current-activity")' in body
+    assert "App.lastOverviewSnapshot.current_activity" in body
+    assert 'App.currentPage === "timeline"' in body
+    assert 'document.getElementById("timeline-current")' in body
+    assert "App.lastTimelineData.current_activity" in body
+    assert "App.commitPageActiveSpanClock(state, App.currentPage" in body
+    assert "App.applyLocalTicker()" in body
+    assert "_timelineEditingActive" not in body, (
+        "Timeline editing may protect list/detail inputs, not the current header"
+    )
+
+
+def test_revision_change_auto_refresh_reuses_refresh_state_payload():
+    src = _strip_js_comments(read_js("init.js"))
+    refresh_body = func_body(src, "refreshCurrentPageData")
+    revision_body = func_body(src, "runRevisionCheck")
+
+    assert "function refreshCurrentPageData(state, options)" in refresh_body
+    assert "refreshStatusFromRefreshState(state)" in refresh_body
+    assert "refreshStatus()" in refresh_body
+    assert "refreshCurrentPageData(state" in revision_body
+
+
+def test_frontend_does_not_locally_promote_thirty_second_history_state():
+    src = _strip_js_comments(read_all_js())
+
+    forbidden_patterns = [
+        r"elapsed\s*>=\s*30",
+        r"elapsedSeconds\s*>=\s*30",
+        r"durationSeconds\s*>=\s*30",
+        r"已进入历史",
+    ]
+    for pattern in forbidden_patterns:
+        assert not re.search(pattern, src), (
+            "frontend must not locally infer the 30s persisted/history label"
+        )
+
+
+def test_fast_path_allows_current_page_continuity_change_but_observe_still_guards():
+    core = _strip_js_comments(read_js("core.js"))
+    init = _strip_js_comments(read_js("init.js"))
+    observe_body = func_body(core, "observeRefreshStateActiveSpan")
+    fast_body = func_body(init, "refreshCurrentActivityFromState")
+
+    assert "if (activeClock && !sameLiveContinuity(activeClock, incomingClock))" in observe_body
+    assert "return activeClock" in observe_body
+    assert "commitPageActiveSpanClock(state, App.currentPage" in fast_body
+    assert "App.currentPage" in fast_body
 
 
 # ---------------------------------------------------------------------------

@@ -769,16 +769,24 @@ def test_persisted_open_natural_duration_does_not_change_revision(bridge):
         "App", "App.exe", "Spec", start_time=f"{today} 09:00:00"
     )
     activity_service.close_activity(aid, f"{today} 09:30:00")
-    r1 = bridge.get_refresh_state()["refresh_revision"]
+    state1 = bridge.get_refresh_state()
+    r1 = state1["refresh_revision"]
+    page1 = state1["page_structure_revision"]
 
     # Update the duration (natural growth) — this should NOT change the
     # revision because duration_seconds is excluded from the structural
     # signature.
     activity_service.set_activity_duration(aid, 1801)
-    r2 = bridge.get_refresh_state()["refresh_revision"]
+    state2 = bridge.get_refresh_state()
+    r2 = state2["refresh_revision"]
+    page2 = state2["page_structure_revision"]
     assert r1 == r2, (
         "refresh_revision must not change when only duration_seconds / "
         "updated_at change (natural growth)"
+    )
+    assert page1 == page2, (
+        "page_structure_revision must not change when only duration_seconds "
+        "changes on an open/live row"
     )
 
 
@@ -792,14 +800,21 @@ def test_manual_project_edit_changes_revision(bridge):
         "App", "App.exe", "Spec", start_time=f"{today} 09:00:00"
     )
     activity_service.close_activity(aid, f"{today} 09:30:00")
-    r1 = bridge.get_refresh_state()["refresh_revision"]
+    state1 = bridge.get_refresh_state()
+    r1 = state1["refresh_revision"]
+    page1 = state1["page_structure_revision"]
 
     # Assign a project — a structural change.
     pid = project_service.create_project("MyProject")
     activity_service.update_activity_project(aid, pid)
-    r2 = bridge.get_refresh_state()["refresh_revision"]
+    state2 = bridge.get_refresh_state()
+    r2 = state2["refresh_revision"]
+    page2 = state2["page_structure_revision"]
     assert r1 != r2, (
         "refresh_revision must change when project assignment is added"
+    )
+    assert page1 != page2, (
+        "page_structure_revision must change when project assignment is added"
     )
 
 
@@ -2141,6 +2156,90 @@ def test_refresh_state_view_model_revision_and_live_clock_share_same_sample(
     assert state["live_clock"]["stable_live_key_hash"] == expected_hash_a
     # current_activity must also carry snapshot A's identity.
     assert state["current_activity"]["stable_live_key_hash"] == expected_hash_a
+
+
+def test_refresh_state_high_frequency_path_does_not_scan_activity_rows(
+    bridge, monkeypatch
+):
+    """``get_refresh_state`` must stay lightweight enough for heartbeat use.
+
+    It may build the current live state from the single snapshot, but must
+    not call the page/list row loader or attach resources for every activity
+    on the report date.
+    """
+    from worktrace.services import activity_service, resource_service
+
+    _set_snapshot(_normal_snapshot(elapsed_seconds=12, is_persisted=False))
+    calls = {"rows": 0, "attach": 0}
+
+    def boom_rows(date):
+        calls["rows"] += 1
+        raise AssertionError("get_refresh_state must not scan activity rows")
+
+    def boom_attach(row):
+        calls["attach"] += 1
+        raise AssertionError("get_refresh_state must not attach resources")
+
+    monkeypatch.setattr(activity_service, "get_activities_by_date", boom_rows)
+    monkeypatch.setattr(resource_service, "attach_resource", boom_attach)
+
+    state = bridge.get_refresh_state()
+
+    assert state["ok"] is True
+    assert state["current_activity"]
+    assert state["live_state_revision"]
+    assert state["page_structure_revision"]
+    assert state["refresh_revision"]
+    assert calls == {"rows": 0, "attach": 0}
+
+
+def test_refresh_state_returns_split_revisions_and_compat_revision(bridge):
+    _set_snapshot(_normal_snapshot(elapsed_seconds=12, is_persisted=False))
+
+    state = bridge.get_refresh_state()
+
+    assert state["ok"] is True
+    assert state["live_state_revision"]
+    assert state["page_structure_revision"]
+    assert state["refresh_revision"]
+    assert state["refresh_revision"] == (
+        state["live_state_revision"] + ":" + state["page_structure_revision"]
+    )
+
+
+def test_live_state_revision_changes_for_live_state_transitions(bridge):
+    _set_snapshot(_normal_snapshot(elapsed_seconds=29, is_persisted=False))
+    pending = bridge.get_refresh_state()["live_state_revision"]
+
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=31,
+            is_persisted=True,
+            persisted_activity_id=123,
+        )
+    )
+    persisted = bridge.get_refresh_state()["live_state_revision"]
+
+    _set_snapshot(
+        _normal_snapshot(
+            elapsed_seconds=31,
+            is_persisted=True,
+            persisted_activity_id=123,
+            start_time="2026-07-05 10:01:00",
+        )
+    )
+    switched = bridge.get_refresh_state()["live_state_revision"]
+
+    _set_snapshot(_normal_snapshot(status=STATUS_PAUSED, elapsed_seconds=31))
+    paused = bridge.get_refresh_state()["live_state_revision"]
+
+    _set_snapshot(_normal_snapshot(status=STATUS_IDLE, elapsed_seconds=31))
+    idle = bridge.get_refresh_state()["live_state_revision"]
+
+    _set_snapshot(_normal_snapshot(status=STATUS_EXCLUDED, elapsed_seconds=31))
+    excluded = bridge.get_refresh_state()["live_state_revision"]
+
+    assert len({pending, persisted, switched, paused, idle, excluded}) == 6
 
 
 # =============================================================================

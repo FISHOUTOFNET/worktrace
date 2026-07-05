@@ -812,6 +812,7 @@ def build_activity_display_model(
     report_date: str | None = None,
     today: str | None = None,
     snapshot: Any = _UNSET,
+    include_absorb_anchor: bool = True,
 ) -> dict[str, Any]:
     """Build the unified Activity Display Model from a single snapshot.
 
@@ -842,11 +843,13 @@ def build_activity_display_model(
     # clock cannot pollute the historical page; ``live_clock`` is suppressed.
     if not is_today:
         display_live_state = "none"
+    elif not include_absorb_anchor and base_state == "virtual":
+        display_live_state = "virtual_pending"
     else:
         display_live_state = classify_display_live_state(snapshot, report_date, today)
 
     anchor: dict[str, Any] | None = None
-    if display_live_state == "absorbed_pending":
+    if include_absorb_anchor and display_live_state == "absorbed_pending":
         anchor = _find_absorb_anchor(snapshot, today or "")
 
     summary = build_current_activity_summary(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 from datetime import datetime
 from typing import Any
 
@@ -401,6 +402,92 @@ def _activity_select_sql(where: str) -> str:
 
 def get_activities_by_date(date: str) -> list[dict]:
     return get_activities_by_range(date, date)
+
+
+def get_activity_structure_marker_by_date(date: str) -> dict:
+    """Return a lightweight structural marker for a report date.
+
+    This helper is intentionally SQL-only and does not attach activity
+    resources. It is suitable for heartbeat revision checks where duration
+    growth should not force the heavy page ViewModel to reload.
+    """
+    start = f"{date} 00:00:00"
+    end = f"{date} 23:59:59"
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS row_count,
+                SUM(CASE WHEN is_deleted = 0 THEN 1 ELSE 0 END) AS visible_row_count,
+                COALESCE(MAX(id), 0) AS max_id,
+                COALESCE(MAX(CASE WHEN end_time IS NOT NULL THEN updated_at ELSE '' END), '') AS closed_max_updated_at,
+                COALESCE(MAX(updated_at), '') AS max_updated_at,
+                SUM(CASE WHEN end_time IS NULL AND is_deleted = 0 THEN 1 ELSE 0 END) AS open_row_count,
+                COALESCE(MAX(CASE WHEN end_time IS NULL AND is_deleted = 0 THEN id ELSE 0 END), 0) AS open_max_id,
+                COALESCE(MAX(CASE WHEN end_time IS NULL AND is_deleted = 0 THEN updated_at ELSE '' END), '') AS open_max_updated_at,
+                COALESCE(MAX(CASE WHEN end_time IS NULL AND is_deleted = 0 THEN COALESCE(end_time, '') ELSE '' END), '') AS open_end_time_presence,
+                SUM(CASE WHEN is_hidden != 0 THEN 1 ELSE 0 END) AS hidden_count,
+                SUM(CASE WHEN is_deleted != 0 THEN 1 ELSE 0 END) AS deleted_count
+            FROM activity_log
+            WHERE start_time BETWEEN ? AND ?
+            """,
+            (start, end),
+        ).fetchone()
+        signature_row = conn.execute(
+            """
+            SELECT COALESCE(GROUP_CONCAT(sig, '#'), '') AS structural_signature
+            FROM (
+                SELECT
+                    id || '|' ||
+                    COALESCE(start_time, '') || '|' ||
+                    CASE WHEN end_time IS NULL THEN '1' ELSE '0' END || '|' ||
+                    COALESCE(end_time, '') || '|' ||
+                    COALESCE(status, '') || '|' ||
+                    COALESCE(project_id, 0) || '|' ||
+                    COALESCE(source, '') || '|' ||
+                    COALESCE(is_deleted, 0) || '|' ||
+                    COALESCE(is_hidden, 0) || '|' ||
+                    COALESCE(manual_override, 0) || '|' ||
+                    COALESCE(auto_classified, 0) || '|' ||
+                    LENGTH(COALESCE(note, '')) AS sig
+                FROM activity_log
+                WHERE start_time BETWEEN ? AND ?
+                ORDER BY id
+            )
+            """,
+            (start, end),
+        ).fetchone()
+    if not row:
+        return {
+            "row_count": 0,
+            "visible_row_count": 0,
+            "max_id": 0,
+            "closed_max_updated_at": "",
+            "max_updated_at": "",
+            "open_row_count": 0,
+            "open_max_id": 0,
+            "open_max_updated_at": "",
+            "open_end_time_presence": "",
+            "hidden_count": 0,
+            "deleted_count": 0,
+            "structural_signature": "",
+        }
+    return {
+        "row_count": int(row["row_count"] or 0),
+        "visible_row_count": int(row["visible_row_count"] or 0),
+        "max_id": int(row["max_id"] or 0),
+        "closed_max_updated_at": str(row["closed_max_updated_at"] or ""),
+        "max_updated_at": str(row["max_updated_at"] or ""),
+        "open_row_count": int(row["open_row_count"] or 0),
+        "open_max_id": int(row["open_max_id"] or 0),
+        "open_max_updated_at": str(row["open_max_updated_at"] or ""),
+        "open_end_time_presence": str(row["open_end_time_presence"] or ""),
+        "hidden_count": int(row["hidden_count"] or 0),
+        "deleted_count": int(row["deleted_count"] or 0),
+        "structural_signature": hashlib.sha1(
+            str(signature_row["structural_signature"] if signature_row else "").encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def get_activities_by_range(start_date: str, end_date: str) -> list[dict]:
