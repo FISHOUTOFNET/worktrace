@@ -10,10 +10,13 @@ Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 - Methods catch exceptions and return ``{"ok": false, "error": "操作失败"}``
   style payloads without tracebacks.
 - Methods do not log window titles, file paths, notes, or copied text.
-- Page display ViewModels (Overview / Recent / Refresh State) are built
-  solely by ``worktrace.api.view_model_api``; this mixin never constructs
-  live display / virtual live / persisted_open / project transition /
-  duration override / stable live key / live clock fields.
+- Page display ViewModels (Overview / Recent / Refresh State) are retrieved
+  solely through ``worktrace.api.view_model_api``. This mixin never
+  constructs live display / virtual live / persisted_open / project
+  transition / duration override / stable live key / live clock fields.
+  Activity Display Model semantics are owned by
+  ``worktrace.services.activity_display_model_service`` and enter bridge
+  payloads only through the ViewModel API facade.
 
 ``WebViewBridge`` in ``bridge.py`` inherits ``OverviewBridgeMixin`` so the
 Overview page method names (``get_status`` / ``toggle_pause`` /
@@ -95,12 +98,12 @@ class OverviewBridgeMixin:
     def get_overview(self) -> dict[str, Any]:
         """Return today's Overview page ViewModel.
 
-        The complete Overview ViewModel (KPIs, current activity, recent
+        The complete Overview payload (KPIs, current activity, recent
         activities, live_clock, sample_id, Activity Display Model fields)
-        is built by ``view_model_service`` from a single snapshot sample.
-        The legacy ``live_projection`` / ``live_display`` aliases are no
-        longer surfaced; the Activity Display Model is the sole live
-        semantics owner.
+        is assembled by ``view_model_service`` from a single snapshot
+        sample and the Activity Display Model owned by
+        ``activity_display_model_service``. The legacy ``live_projection`` /
+        ``live_display`` aliases are no longer surfaced.
         """
         try:
             return view_model_api.get_overview_view_model()
