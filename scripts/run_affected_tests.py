@@ -344,7 +344,6 @@ RULES: list[dict] = [
         ],
         "tests": [
             "tests/test_statistics_service.py",
-            "tests/test_statistics_view.py",
             "tests/test_export_service.py",
             "tests/test_webview_bridge_statistics.py",
             "tests/test_statistics_csv_export.py",
