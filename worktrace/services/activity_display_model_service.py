@@ -2,12 +2,15 @@
 
 Reads ``current_activity_snapshot`` once and produces a single JSON-safe
 display model. The ONLY place that decides live eligibility, display span
-identity, live clock fields, and visibility of current live rows in Recent /
-Timeline / Details.
+identity, live clock fields, and visibility of live aggregate rows in Recent /
+Timeline / KPI.
 
-Short-activity contract: a running unpersisted normal activity is displayed as
-the current activity itself with base 0. Finished ``<30s`` normal activity
-merge/drop is collector-owned and never inferred by this display layer.
+Short-activity contract: a running unpersisted normal activity is always shown
+truthfully in Current Activity with base 0. Aggregate surfaces either borrow the
+latest legal closed normal anchor as a display-only row or remain suppressed
+until lifecycle persistence creates a real open row. Finished ``<30s`` normal
+activity merge/drop is collector-owned and never inferred by this display
+layer.
 
 Boundary: lives in ``worktrace.services``; imports low-level helpers from
 ``live_display_service`` plus ``activity_service``, ``timeline_service``,
@@ -33,7 +36,7 @@ from ..constants import (
     STATUS_PAUSED,
     UNCATEGORIZED_PROJECT,
 )
-from . import activity_service, timeline_service
+from . import activity_continuity_service, activity_service, project_service, session_boundary_service, timeline_service
 from .live_display_service import (
     _display_resource_name,
     _snapshot_display_project_fields,
@@ -99,6 +102,11 @@ class DisplaySessionPolicy:
     materialize_details: bool
     status_only_reason: str
     base_policy_reason: str
+    borrowed_anchor_activity_id: int = 0
+    borrowed_anchor_base_seconds: int = 0
+    borrowed_anchor_project_id: int = 0
+    borrowed_anchor_project_name: str = ""
+    borrowed_anchor_project_description: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -186,8 +194,9 @@ def classify_display_live_state(
     """Return the refined display live-state label.
 
     Extends :func:`live_display_service.classify_live_state` by mapping
-    a normal unpersisted live snapshot to ``"virtual_pending"``. It produces
-    a display-only span for the current activity itself with base 0.
+    a normal unpersisted live snapshot to ``"current_only_pending"``. Anchor
+    resolution in :func:`build_activity_display_model` may refine that state
+    to ``"borrowed_anchor_pending"`` for aggregate surfaces.
 
     The other states (``none`` / ``persisted_open`` / ``paused`` /
     ``idle`` / ``excluded`` / ``error``) are passed through unchanged,
@@ -199,7 +208,7 @@ def classify_display_live_state(
         return base
     if not report_date or not today or report_date != today:
         return "none"
-    return "virtual_pending"
+    return "current_only_pending"
 
 
 # Live-clock construction
@@ -210,8 +219,8 @@ def _current_resource_identity_hash(snapshot: dict[str, Any] | None) -> str:
 
     The raw resource identity may contain a path, so only the digest is
     surfaced. Including start_time lets a window/resource switch reset the
-    current activity display while virtual_pending -> persisted_open for the
-    same resource remains continuous.
+    current activity display while current_only_pending -> persisted_open for
+    the same resource remains continuous.
     """
     if not snapshot:
         return ""
@@ -303,6 +312,78 @@ def _build_status_display_item(
     }
 
 
+def _anchor_project_fields(anchor: dict[str, Any] | None) -> dict[str, Any]:
+    if not anchor:
+        return {
+            "project_id": 0,
+            "project_name": UNCATEGORIZED_PROJECT,
+            "project_description": "",
+            "display_project": {
+                "id": None,
+                "name": UNCATEGORIZED_PROJECT,
+                "description": "",
+                "source": "uncategorized",
+                "is_uncategorized": True,
+                "is_suggested_project": False,
+            },
+            "is_uncategorized": True,
+            "is_classified": False,
+        }
+    project_id = int(anchor.get("project_id") or 0)
+    project_name = UNCATEGORIZED_PROJECT
+    project_description = ""
+    if project_id > 0:
+        try:
+            project = project_service.get_project(project_id)
+        except Exception:
+            project = None
+        if project:
+            project_name = str(project.get("name") or UNCATEGORIZED_PROJECT)
+            project_description = str(project.get("description") or "")
+    is_uncategorized = project_id <= 0 or project_name == UNCATEGORIZED_PROJECT
+    return {
+        "project_id": project_id,
+        "project_name": project_name,
+        "project_description": project_description,
+        "display_project": {
+            "id": project_id if project_id > 0 else None,
+            "name": project_name,
+            "description": project_description,
+            "source": "anchor",
+            "is_uncategorized": bool(is_uncategorized),
+            "is_suggested_project": False,
+        },
+        "is_uncategorized": bool(is_uncategorized),
+        "is_classified": not bool(is_uncategorized),
+    }
+
+
+def resolve_borrowed_display_anchor(
+    snapshot: dict[str, Any] | None,
+    report_date: str | None,
+    today: str | None,
+) -> dict[str, Any] | None:
+    """Return the legal closed normal anchor for a running pending snapshot.
+
+    This helper centralizes the display-only borrowed aggregate decision. It
+    reuses the continuity helpers that own hard-boundary checks; it never
+    decides persistence readiness and never writes the DB.
+    """
+    if not snapshot or not report_date or not today or report_date != today:
+        return None
+    if classify_live_state(snapshot) != "virtual":
+        return None
+    if _snapshot_status_safe(snapshot) != STATUS_NORMAL:
+        return None
+    latest_boundary = session_boundary_service.latest_boundary_time() or None
+    anchor = activity_service.get_latest_closed_auto_normal_activity(
+        after_time=latest_boundary
+    )
+    if not activity_continuity_service.can_absorb_short_pending(anchor, snapshot):
+        return None
+    return anchor
+
+
 def _build_display_session_policy(
     snapshot: dict[str, Any] | None,
     report_date: str,
@@ -381,19 +462,40 @@ def _build_display_session_policy(
             base_policy_reason="persisted_open_extra",
         )
 
-    if display_live_state == "virtual_pending":
+    if display_live_state in ("virtual_pending", "borrowed_anchor_pending", "current_only_pending"):
+        if anchor:
+            anchor_base = int(anchor.get("duration_seconds") or 0)
+            anchor_project = _anchor_project_fields(anchor)
+            return DisplaySessionPolicy(
+                display_session_kind="borrowed_anchor_pending",
+                base_policy="borrowed_anchor_static",
+                aggregate_base_seconds=anchor_base,
+                current_base_seconds=0,
+                project_duration_live=True,
+                current_duration_live=live_started_at > 0,
+                materialize_recent=True,
+                materialize_timeline=True,
+                materialize_details=False,
+                status_only_reason="",
+                base_policy_reason="borrowed_anchor_pending",
+                borrowed_anchor_activity_id=int(anchor.get("id") or 0),
+                borrowed_anchor_base_seconds=anchor_base,
+                borrowed_anchor_project_id=int(anchor_project["project_id"] or 0),
+                borrowed_anchor_project_name=str(anchor_project["project_name"] or ""),
+                borrowed_anchor_project_description=str(anchor_project["project_description"] or ""),
+            )
         return DisplaySessionPolicy(
-            display_session_kind="fresh_virtual",
-            base_policy="zero",
+            display_session_kind="current_only_pending",
+            base_policy="current_only_zero",
             aggregate_base_seconds=0,
             current_base_seconds=0,
-            project_duration_live=True,
+            project_duration_live=False,
             current_duration_live=live_started_at > 0,
-            materialize_recent=True,
-            materialize_timeline=True,
-            materialize_details=True,
+            materialize_recent=False,
+            materialize_timeline=False,
+            materialize_details=False,
             status_only_reason="",
-            base_policy_reason="running_virtual_base_zero",
+            base_policy_reason="unanchored_pending_current_only",
         )
 
     return DisplaySessionPolicy(
@@ -583,7 +685,11 @@ def _build_current_activity_display(
     display["status_only_reason"] = str(live_clock.get("status_only_reason") or "")
     display["base_policy_reason"] = str(live_clock.get("base_policy_reason") or "")
 
-    display["is_virtual_live"] = display_live_state == "virtual_pending"
+    display["is_virtual_live"] = display_live_state in (
+        "virtual_pending",
+        "borrowed_anchor_pending",
+        "current_only_pending",
+    )
     display["is_in_progress"] = display_live_state == "persisted_open"
     display["source"] = _source_for_state(display_live_state, snapshot)
     return display
@@ -610,6 +716,7 @@ def _build_display_structural_signature(
     is_today: bool,
 ) -> str:
     project_transition = current_activity.get("project_transition") or {}
+    display_policy = live_clock.get("display_policy") or {}
     signature_payload = {
         "current_activity_stable_key": str(
             current_activity.get("stable_live_key") or _stable_live_key(snapshot)
@@ -627,15 +734,11 @@ def _build_display_structural_signature(
         "project_live_span": {
             "display_span_id": str(live_clock.get("display_span_id") or ""),
             "anchor_activity_id": int(anchor.get("id") or 0) if anchor else 0,
-            "materialize_recent": bool(
-                (live_clock.get("display_policy") or {}).get("materialize_recent")
-            ),
-            "materialize_timeline": bool(
-                (live_clock.get("display_policy") or {}).get("materialize_timeline")
-            ),
-            "materialize_details": bool(
-                (live_clock.get("display_policy") or {}).get("materialize_details")
-            ),
+            "anchor_project_id": int(display_policy.get("borrowed_anchor_project_id") or 0),
+            "anchor_project_name": str(display_policy.get("borrowed_anchor_project_name") or ""),
+            "materialize_recent": bool(display_policy.get("materialize_recent")),
+            "materialize_timeline": bool(display_policy.get("materialize_timeline")),
+            "materialize_details": bool(display_policy.get("materialize_details")),
         },
         "base_policy": {
             "display_session_kind": str(live_clock.get("display_session_kind") or ""),
@@ -662,7 +765,7 @@ def _snapshot_status_safe(snapshot: dict[str, Any] | None) -> str:
 def _source_for_state(state: str, snapshot: dict[str, Any] | None) -> str:
     if state == "persisted_open":
         return "db"
-    if state == "virtual_pending":
+    if state in ("virtual_pending", "borrowed_anchor_pending", "current_only_pending"):
         return "snapshot"
     return "none"
 
@@ -720,6 +823,25 @@ def _build_display_span(
         project_name = project_fields["project_name"]
         project_description = project_fields["project_description"]
         project_id = project_fields["project_id"]
+        display_project = project_fields["display_project"]
+        is_uncategorized = bool(project_fields["is_uncategorized"])
+        is_classified = bool(project_fields["is_classified"])
+    elif display_live_state == "borrowed_anchor_pending" and anchor:
+        anchor_id = int(anchor.get("id") or 0)
+        activity_id = anchor_id
+        start_time = str(anchor.get("start_time") or start_time)
+        source = "borrowed_anchor_pending"
+        is_virtual = True
+        is_persisted = False
+        is_absorbed = True
+        live_anchor_base_seconds = int(anchor.get("duration_seconds") or 0)
+        anchor_project = _anchor_project_fields(anchor)
+        project_name = str(anchor_project["project_name"] or UNCATEGORIZED_PROJECT)
+        project_description = str(anchor_project["project_description"] or "")
+        project_id = int(anchor_project["project_id"] or 0)
+        display_project = anchor_project["display_project"]
+        is_uncategorized = bool(anchor_project["is_uncategorized"])
+        is_classified = bool(anchor_project["is_classified"])
     else:
         source = "snapshot"
         is_virtual = True
@@ -728,6 +850,9 @@ def _build_display_span(
         project_name = project_fields["project_name"]
         project_description = project_fields["project_description"]
         project_id = project_fields["project_id"]
+        display_project = project_fields["display_project"]
+        is_uncategorized = bool(project_fields["is_uncategorized"])
+        is_classified = bool(project_fields["is_classified"])
 
     return {
         "display_span_id": live_clock.get("display_span_id") or "",
@@ -765,20 +890,21 @@ def _build_display_span(
         "is_visible_in_recent": bool(policy.get("materialize_recent")),
         "is_visible_in_timeline": bool(policy.get("materialize_timeline")),
         "is_visible_in_details": bool(policy.get("materialize_details")),
-        "is_display_only": display_live_state == "virtual_pending",
-        "display_only": display_live_state == "virtual_pending",
+        "is_absorbed": bool(is_absorbed),
+        "is_display_only": display_live_state in ("virtual_pending", "borrowed_anchor_pending"),
+        "display_only": display_live_state in ("virtual_pending", "borrowed_anchor_pending"),
         "editable": False,
         "exportable": False,
         "edit_disabled": True,
         "disable_reason": _LIVE_EDIT_DISABLE_REASON,
-        "display_project": project_fields["display_project"],
+        "display_project": display_project,
         "candidate_project": project_fields["candidate_project"],
         "project_transition": project_fields["project_transition"],
         "project_transition_pending": bool(project_fields["project_transition_pending"]),
         "live_anchor_activity_id": int(anchor_id),
         "live_anchor_base_seconds": int(live_anchor_base_seconds),
-        "is_uncategorized": bool(project_fields["is_uncategorized"]),
-        "is_classified": bool(project_fields["is_classified"]),
+        "is_uncategorized": bool(is_uncategorized),
+        "is_classified": bool(is_classified),
     }
 
 
@@ -895,6 +1021,12 @@ def apply_live_span_to_row(
         return row
     if not span:
         return row
+    if row_kind == ROW_KIND_RECENT_PROJECT_SESSION_ROW and not span.get("is_visible_in_recent"):
+        return row
+    if row_kind == ROW_KIND_PROJECT_SESSION_ROW and not span.get("is_visible_in_timeline"):
+        return row
+    if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW and not span.get("is_visible_in_details"):
+        return row
     anchor_id = int(span.get("anchor_activity_id") or 0)
     if anchor_id <= 0:
         return row
@@ -966,11 +1098,28 @@ def apply_live_span_to_row(
     row["live_delta_eligible"] = True
     row["is_live_projected"] = True
     row["is_in_progress"] = True
-    row["is_virtual_live"] = False
+    row["is_virtual_live"] = state == "borrowed_anchor_pending"
     row["edit_disabled"] = True
     row["disable_reason"] = _LIVE_EDIT_DISABLE_REASON
 
-    if state == "persisted_open":
+    if state == "borrowed_anchor_pending":
+        row["source"] = "borrowed_anchor_pending"
+        row["display_only"] = True
+        row["is_display_only"] = True
+        row["editable"] = False
+        row["exportable"] = False
+        row["live_anchor_activity_id"] = int(span.get("live_anchor_activity_id") or anchor_id)
+        row["live_anchor_base_seconds"] = int(span.get("live_anchor_base_seconds") or aggregate_base)
+        row["display_project"] = span.get("display_project")
+        row["candidate_project"] = span.get("candidate_project")
+        row["project_transition"] = span.get("project_transition")
+        row["project_transition_pending"] = bool(span.get("project_transition_pending"))
+        span_uncategorized = span.get("is_uncategorized")
+        span_classified = span.get("is_classified")
+        if span_uncategorized is not None:
+            row["is_uncategorized"] = bool(span_uncategorized)
+            row["is_classified"] = bool(span_classified) if span_classified is not None else (not bool(span_uncategorized))
+    elif state == "persisted_open":
         row["project_id"] = int(span.get("project_id") or 0)
         row["project_name"] = str(span.get("project_name") or "未归类")
         row["project_description"] = str(span.get("project_description") or "")
@@ -1034,16 +1183,16 @@ def build_activity_display_model(
     is_today = report_date == today
 
     base_state = classify_live_state(snapshot)
+    anchor: dict[str, Any] | None = None
     # On historical dates, ALL live states collapse to "none" so a tickable
     # clock cannot pollute the historical page; ``live_clock`` is suppressed.
     if not is_today:
         display_live_state = "none"
     elif base_state == "virtual":
-        display_live_state = "virtual_pending"
+        anchor = resolve_borrowed_display_anchor(snapshot, report_date, today)
+        display_live_state = "borrowed_anchor_pending" if anchor else "current_only_pending"
     else:
         display_live_state = classify_display_live_state(snapshot, report_date, today)
-
-    anchor: dict[str, Any] | None = None
 
     summary = build_current_activity_summary(
         snapshot, report_date=report_date, today=today

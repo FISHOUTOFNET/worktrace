@@ -10,11 +10,11 @@ display-model owner (``activity_display_model_service``):
   ``elapsed_seconds`` / ``extra_seconds`` advance, but DOES change on
   status / persisted / inferred_project_name / latest activity / carry
   state / collector status / user_paused changes.
-- ``virtual_pending`` participates in the display projection as
-  display-only Recent / Timeline / Details rows while staying out of DB,
-  export, and edit paths.
+- ``current_only_pending`` stays in Current Activity only; borrowed anchor
+  pending participates in Recent / Timeline as display-only aggregate rows
+  while staying out of DB, export, and edit paths.
 - Projection is purely a display-only UI overlay: paused / idle / excluded
-  / error snapshots never produce live rows; ``absorbed_pending`` /
+  / error snapshots never produce live rows; ``borrowed_anchor_pending`` /
   ``persisted_open`` only overlay real DB rows; the DB / collector are
   never touched by the display model.
 """
@@ -530,70 +530,39 @@ def test_get_refresh_state_is_json_serializable_with_snapshot(bridge):
 
 
 
-def test_get_recent_activities_injects_display_only_virtual_pending(bridge):
-    """A fresh ``virtual_pending`` snapshot appears in Recent as a
-    display-only row sourced from the display model, not from the DB."""
+def test_get_recent_activities_suppresses_unanchored_pending(bridge):
+    """A fresh unanchored pending snapshot updates Current only and does
+    not appear in Recent."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     result = bridge.get_recent_activities()
     assert result["ok"] is True
-    assert result["live_clock"]["live_state"] == "virtual_pending"
+    assert result["live_clock"]["live_state"] == "current_only_pending"
     assert result["live_clock"]["display_span_id"]
-    assert result["live_clock"]["is_project_duration_live"] is True
-    assert result["activities"], "virtual_pending must materialize a Recent row"
-    item = result["activities"][0]
-    assert item["source"] == "snapshot"
-    assert int(item["activity_id"]) == 0
-    assert item["is_virtual"] is True
-    assert item["is_display_only"] is True
-    assert item["edit_disabled"] is True
-    assert item["exportable"] is False
-    assert item["display_span_id"] == result["live_clock"]["display_span_id"]
-    assert item["stable_live_key_hash"] == result["live_clock"]["stable_live_key_hash"]
-    for forbidden in ("window_title", "file_path_hint", "clipboard", "note", "sql", "traceback"):
-        assert forbidden not in item
+    assert result["live_clock"]["is_project_duration_live"] is False
+    assert result["activities"] == []
 
 
-def test_get_timeline_injects_display_only_virtual_pending_session(bridge):
-    """A fresh ``virtual_pending`` snapshot appears in Timeline as a
-    display-only session and contributes to the display total."""
+def test_get_timeline_suppresses_unanchored_pending_session(bridge):
+    """A fresh unanchored pending snapshot does not appear in Timeline or
+    contribute to the display total."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     result = bridge.get_timeline()
     assert result["ok"] is True
-    assert result["live_clock"]["live_state"] == "virtual_pending"
+    assert result["live_clock"]["live_state"] == "current_only_pending"
     assert result["live_clock"]["display_span_id"]
-    assert result["sessions"], "virtual_pending must materialize a Timeline session"
-    session = result["sessions"][0]
-    assert session["source"] == "snapshot"
-    assert int(session["activity_id"]) == 0
-    assert session["activity_ids"] == [0]
-    assert session["is_virtual"] is True
-    assert session["is_display_only"] is True
-    assert session["edit_disabled"] is True
-    assert session["exportable"] is False
-    assert session["display_span_id"] == result["live_clock"]["display_span_id"]
-    assert int(result["total_seconds"]) == int(session["duration_seconds"])
-    assert int(result["today_total_seconds"]) == int(session["duration_seconds"])
+    assert result["sessions"] == []
+    assert int(result["total_seconds"]) == 0
+    assert int(result["today_total_seconds"]) == 0
 
 
-def test_get_timeline_session_details_injects_display_only_virtual_pending(bridge):
-    """A selected ``virtual_pending`` Timeline session has a display-only
-    Details row and remains edit-disabled."""
+def test_get_timeline_session_details_suppresses_unanchored_pending(bridge):
+    """A selected unanchored pending snapshot has no Details row."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     result = bridge.get_timeline_session_details([0], None)
     assert result["ok"] is True
-    assert result["live_clock"]["live_state"] == "virtual_pending"
+    assert result["live_clock"]["live_state"] == "current_only_pending"
     assert result["display_span_id"]
-    assert len(result["activities"]) == 1
-    row = result["activities"][0]
-    assert row["source"] == "snapshot"
-    assert int(row["activity_id"]) == 0
-    assert row["is_virtual"] is True
-    assert row["is_display_only"] is True
-    assert row["edit_disabled"] is True
-    assert row["exportable"] is False
-    assert row["display_span_id"] == result["display_span_id"]
-    for forbidden in ("window_title", "file_path_hint", "clipboard", "note", "sql", "traceback"):
-        assert forbidden not in row
+    assert result["activities"] == []
 
 
 def test_persisted_open_handoff_no_one_second_skew(bridge):
@@ -607,10 +576,10 @@ def test_persisted_open_handoff_no_one_second_skew(bridge):
 
     virtual_overview = bridge.get_overview()
     virtual_timeline = bridge.get_timeline()
-    assert virtual_overview["live_clock"]["live_state"] == "virtual_pending"
+    assert virtual_overview["live_clock"]["live_state"] == "current_only_pending"
     assert virtual_overview["current_activity"]["elapsed_seconds"] == 29
-    assert virtual_overview["activities"][0]["duration_seconds"] == 29
-    assert virtual_timeline["sessions"][0]["duration_seconds"] == 29
+    assert virtual_overview["activities"] == []
+    assert virtual_timeline["sessions"] == []
 
     aid = activity_service.create_activity(
         "AppA",
@@ -999,34 +968,26 @@ def test_get_timeline_total_seconds_does_not_double_count_persisted_open(bridge)
     )
 
 
-def test_get_timeline_total_seconds_includes_virtual_duration_once(bridge):
-    """A ``virtual_pending`` session contributes once to Timeline display
-    totals while staying display-only."""
+def test_get_timeline_total_seconds_excludes_unanchored_pending(bridge):
+    """An unanchored pending snapshot does not contribute to Timeline
+    display totals."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=120))
     result = bridge.get_timeline()
     assert result["ok"] is True
-    assert len(result["sessions"]) == 1
-    session = result["sessions"][0]
-    assert session["source"] == "snapshot"
-    assert int(session["duration_seconds"]) == 120
-    assert int(result["total_seconds"]) == 120
-    assert int(result["today_total_seconds"]) == 120
+    assert result["sessions"] == []
+    assert int(result["total_seconds"]) == 0
+    assert int(result["today_total_seconds"]) == 0
     assert "live_clock" in result
-    assert result["live_clock"]["is_project_duration_live"] is True
+    assert result["live_clock"]["is_project_duration_live"] is False
 
 
-def test_get_timeline_today_virtual_live_session_is_edit_disabled(bridge):
-    """The ``virtual_pending`` Timeline session is display-only and
-    edit-disabled."""
+def test_get_timeline_today_unanchored_pending_has_no_session(bridge):
+    """An unanchored pending snapshot has no Timeline session."""
     _set_snapshot(_normal_snapshot(elapsed_seconds=60))
     result = bridge.get_timeline()
     assert result["ok"] is True
-    virtual_session = result["sessions"][0]
-    assert virtual_session["source"] == "snapshot"
-    assert virtual_session["edit_disabled"] is True
-    assert virtual_session["disable_reason"]
-    assert virtual_session["live_state"] == "virtual_pending"
-    assert virtual_session["is_live_projected"] is True
+    assert result["sessions"] == []
+    assert result["live_clock"]["live_state"] == "current_only_pending"
 
 
 def test_get_timeline_persisted_open_session_is_edit_disabled(bridge):

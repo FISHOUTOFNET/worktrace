@@ -203,69 +203,51 @@ def test_overview_view_model_returns_all_required_payloads(bridge):
 
 
 def test_overview_view_model_current_and_recent_share_same_sample_id(bridge):
-    """The current activity and the recent live row must share the same
-    ``sample_id`` / ``stable_live_key_hash`` — they came from the SAME
-    snapshot sample, not two parallel bridge calls."""
+    """The current activity and live clock share the same sample identity
+    even when unanchored pending is suppressed from Recent."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     bundle = bridge.get_overview()
     sample_id = bundle["sample_id"]
     assert sample_id, "bundle must carry a non-empty sample_id"
     live_clock = bundle["live_clock"]
     assert live_clock["stable_live_key_hash"] == sample_id
-    activities = bundle["activities"]
-    assert activities, "virtual_pending must materialize a Recent row"
-    virtual_live_row = activities[0]
-    assert virtual_live_row["source"] == "snapshot"
-    assert virtual_live_row["is_virtual_live"] is True
-    assert virtual_live_row["stable_live_key_hash"] == sample_id
+    assert live_clock["live_state"] == "current_only_pending"
+    assert bundle["activities"] == []
 
 
 def test_overview_view_model_current_and_recent_first_frame_seconds_consistent(bridge):
-    """the current activity and the recent live row must
-    NOT have a 1-2 second drift on the first frame when the display base
-    is zero. Both derive from the same snapshot elapsed source."""
+    """current activity and live clock must not drift on the first frame
+    when unanchored pending has no aggregate base."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     bundle = bridge.get_overview()
     current_seconds = int(bundle["current_activity"].get("elapsed_seconds") or 0)
     live_clock_seconds = int(bundle["live_clock"].get("duration_seconds_at_sample") or 0)
-    # With no display base, current elapsed and project display seconds match.
+    # With no display base, current elapsed and live clock seconds match.
     assert current_seconds == live_clock_seconds
-    activities = bundle["activities"]
-    assert activities and activities[0].get("is_virtual_live")
-    recent_live_seconds = int(activities[0].get("duration_seconds") or 0)
-    assert recent_live_seconds == current_seconds
+    assert bundle["activities"] == []
 
 
 def test_overview_view_model_pending_recent_uses_display_project_not_candidate(bridge):
-    """during a pending project transition the recent live
-    row uses the display project (ProjectA), NOT the candidate (ProjectB).
-    The candidate must NOT appear as a separate independent project row."""
+    """during a no-anchor pending project transition, Current exposes
+    display/candidate projects but Recent stays empty."""
     _set_snapshot(_pending_snapshot())
     bundle = bridge.get_overview()
     current_activity = bundle["current_activity"]
     assert current_activity["display_project"]["name"] == "ProjectA"
     assert current_activity["candidate_project"]["name"] == "ProjectB"
     assert current_activity["project_transition_pending"] is True
-    activities = bundle["activities"]
-    assert activities and activities[0].get("is_virtual_live")
-    recent_live = activities[0]
-    assert recent_live["project_name"] == "ProjectA"
-    assert recent_live["display_project"]["name"] == "ProjectA"
-    assert recent_live["candidate_project"]["name"] == "ProjectB"
-    project_names = [a.get("project_name") for a in activities]
-    assert "ProjectB" not in project_names
+    assert bundle["activities"] == []
 
 
-def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
-    """Fresh ``virtual_pending`` uses one project display sample for KPI /
-    Recent while current activity keeps resource elapsed."""
+def test_overview_kpi_and_recent_exclude_unanchored_pending_sample(bridge):
+    """Fresh unanchored pending updates Current but not KPI / Recent."""
     _set_snapshot(_snapshot(elapsed_seconds=12, extra_seconds=3))
     bundle = bridge.get_overview()
     assert bundle["ok"] is True
 
     current = bundle["current_activity"]
     live_clock = bundle["live_clock"]
-    assert current["live_state"] == "virtual_pending"
+    assert current["live_state"] == "current_only_pending"
     assert int(current["elapsed_seconds"]) == 12
     assert int(current["resource_elapsed_seconds"]) == 12
     assert "current_activity_clock" not in bundle
@@ -274,27 +256,16 @@ def test_overview_kpi_and_recent_include_fresh_virtual_pending_sample(bridge):
     assert sample == 12
     assert int(live_clock["display_base_seconds"]) == 0
     assert int(live_clock["current_elapsed_at_sample"]) == 12
-    assert live_clock["is_project_duration_live"] is True
-    assert int(bundle["today_total_seconds"]) == sample
-    assert int(bundle["classified_seconds"]) == sample
+    assert live_clock["is_project_duration_live"] is False
+    assert int(bundle["today_total_seconds"]) == 0
+    assert int(bundle["classified_seconds"]) == 0
     assert int(bundle["uncategorized_seconds"]) == 0
 
     kpi_base = bundle["kpi_live_base"]
     assert int(kpi_base["today_total_seconds"]) == 0
     assert int(kpi_base["classified_seconds"]) == 0
 
-    recent = bundle["activities"][0]
-    assert recent["source"] == "snapshot"
-    assert int(recent["activity_id"]) == 0
-    assert recent["duration_semantic"] == "aggregate_live"
-    assert int(recent["duration_seconds"]) == sample
-    assert int(recent["live_base_seconds"]) == 0
-    assert int(recent["display_base_seconds"]) == 0
-    assert int(recent["aggregate_duration_seconds_at_sample"]) == sample
-    assert int(recent["aggregate_display_base_seconds"]) == 0
-    assert recent["display_span_id"] == live_clock["display_span_id"]
-    assert recent["edit_disabled"] is True
-    assert recent["exportable"] is False
+    assert bundle["activities"] == []
 
 
 def test_overview_view_model_is_display_safe(bridge):
@@ -318,40 +289,27 @@ def test_overview_view_model_is_display_safe(bridge):
 def test_timeline_returns_live_clock(bridge):
     """Timeline payload must carry a ``live_clock`` from the same
     snapshot sample. Under the unified Activity Display Model the legacy
-    ``"virtual"`` state is split into ``"virtual_pending"`` (no absorb
-    anchor) / ``"absorbed_pending"`` (absorb anchor exists); a fresh
-    unpersisted normal snapshot with no prior confirmed activity yields
-    ``"virtual_pending"``."""
+    ``"virtual"`` state is split into ``"current_only_pending"`` (no
+    anchor) / ``"borrowed_anchor_pending"`` (anchor exists)."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     timeline = bridge.get_timeline()
     assert "live_clock" in timeline
-    assert timeline["live_clock"]["live_state"] == "virtual_pending"
+    assert timeline["live_clock"]["live_state"] == "current_only_pending"
 
 
-def test_timeline_session_uses_display_project_and_description(bridge):
-    """Timeline session uses the display project name +
-    description (not hardcoded empty)."""
+def test_unanchored_pending_has_no_timeline_session(bridge):
+    """Unanchored pending does not materialize a Timeline session."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     timeline = bridge.get_timeline()
-    sessions = timeline["sessions"]
-    virtual_sessions = [s for s in sessions if s.get("is_virtual_live")]
-    assert virtual_sessions
-    vs = virtual_sessions[0]
-    assert vs["project_name"] == "ProjectA"
-    assert vs["project_description"] == "Project A description"
+    assert timeline["sessions"] == []
 
 
 def test_timeline_pending_candidate_does_not_preempt_session_project(bridge):
-    """during pending the Timeline session project is the
-    display project (ProjectA), NOT the candidate (ProjectB)."""
+    """during no-anchor pending, neither display nor candidate project
+    materializes a Timeline session."""
     _set_snapshot(_pending_snapshot())
     timeline = bridge.get_timeline()
-    sessions = timeline["sessions"]
-    virtual_sessions = [s for s in sessions if s.get("is_virtual_live")]
-    assert virtual_sessions
-    vs = virtual_sessions[0]
-    assert vs["project_name"] == "ProjectA"
-    assert vs["project_name"] != "ProjectB"
+    assert timeline["sessions"] == []
 
 
 def test_timeline_detail_carries_own_live_clock(bridge):
@@ -359,43 +317,28 @@ def test_timeline_detail_carries_own_live_clock(bridge):
     OWN ``live_clock`` — the detail ticker must NOT reuse the
     Timeline main payload's clock. Under the unified Activity
     Display Model the legacy ``"virtual"`` state is split into
-    ``"virtual_pending"`` / ``"absorbed_pending"``; a fresh unpersisted
-    normal snapshot with no prior confirmed activity yields
-    ``"virtual_pending"``."""
+    ``"current_only_pending"`` / ``"borrowed_anchor_pending"``."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
-    timeline = bridge.get_timeline()
-    # Find the virtual session id (or use empty for virtual detail).
     details = bridge.get_timeline_session_details([], None)
     assert "live_clock" in details
-    assert details["live_clock"]["live_state"] == "virtual_pending"
+    assert details["live_clock"]["live_state"] == "current_only_pending"
     # The detail's live_clock sample_id must be present.
     assert "sample_id" in details
 
 
-def test_timeline_detail_uses_display_project_and_description(bridge):
-    """detail row uses the current resource + display
-    project + description (not hardcoded empty)."""
+def test_unanchored_pending_has_no_detail_row(bridge):
+    """Unanchored pending does not materialize a Details row."""
     _set_snapshot(_snapshot(elapsed_seconds=120))
     details = bridge.get_timeline_session_details([], None)
-    activities = details.get("activities", [])
-    assert activities
-    detail_row = activities[0]
-    assert detail_row.get("is_virtual_live")
-    assert detail_row["project_name"] == "ProjectA"
-    assert detail_row["project_description"] == "Project A description"
+    assert details.get("activities", []) == []
 
 
 def test_timeline_detail_pending_uses_display_project_not_candidate(bridge):
-    """during pending the detail row uses the display
-    project (ProjectA), NOT the candidate (ProjectB)."""
+    """during no-anchor pending, Details does not materialize candidate
+    or display project rows."""
     _set_snapshot(_pending_snapshot())
     details = bridge.get_timeline_session_details([], None)
-    activities = details.get("activities", [])
-    assert activities
-    detail_row = activities[0]
-    assert detail_row.get("is_virtual_live")
-    assert detail_row["project_name"] == "ProjectA"
-    assert detail_row["project_name"] != "ProjectB"
+    assert details.get("activities", []) == []
 
 
 # 3. Statistics / Export (section 九.6)

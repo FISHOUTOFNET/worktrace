@@ -266,19 +266,18 @@ def test_cross_boundary_stale_pending_not_used_as_display_base(temp_db, monkeypa
 
     overview = bridge.get_overview()
     current = overview["current_activity"]
-    recent = overview["activities"][0]
     assert current["elapsed_seconds"] == 10
-    assert recent["duration_seconds"] == 10
-    assert recent["display_base_seconds"] == 0
+    assert overview["live_clock"]["live_state"] == "current_only_pending"
+    assert overview["activities"] == []
 
     machine.transition_to("recording", _normal("Short"), at_time="2026-06-18 09:00:10")
     machine.transition_to("recording", _normal("Next"), at_time="2026-06-18 09:00:20")
     assert int(settings_service.get_setting("pending_short_seconds") or 0) == 0
 
 
-def test_pause_resume_virtual_pending_materializes_recent_row(temp_db, monkeypatch):
-    """After pause/resume, a fresh unpersisted activity must appear in the
-    full Overview ViewModel so Recent is refreshed along with Current."""
+def test_pause_resume_pending_is_current_only_without_anchor(temp_db, monkeypatch):
+    """After pause/resume, a fresh unpersisted activity updates Current
+    without creating a new Recent row."""
     from worktrace.services import timeline_service
 
     monkeypatch.setattr(
@@ -296,11 +295,10 @@ def test_pause_resume_virtual_pending_materializes_recent_row(temp_db, monkeypat
     overview = bridge.get_overview()
 
     assert state["current_activity"]["active"] is True
-    assert state["live_clock"]["live_state"] == "virtual_pending"
+    assert state["live_clock"]["live_state"] == "current_only_pending"
     assert overview["current_activity"]["elapsed_seconds"] == 9
-    assert overview["activities"], "Recent must include the display-only live row"
-    assert overview["activities"][0]["live_state"] == "virtual_pending"
-    assert overview["activities"][0]["duration_seconds"] == 9
+    assert all(row.get("live_state") != "current_only_pending" for row in overview["activities"])
+    assert all(row.get("source") != "snapshot" for row in overview["activities"])
 
 
 # Section 四: short-activity boundary tests. Running ``absorbed_pending``

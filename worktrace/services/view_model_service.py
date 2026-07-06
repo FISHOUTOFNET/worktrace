@@ -9,9 +9,10 @@ persisted_open overlay, project transition) is decided by
 1. Calls :func:`build_activity_display_model` once per request.
 2. Projects page payloads from that model.
 3. Builds ordinary DB list payloads (sessions, activity details).
-4. Applies ``apply_live_span_to_row`` to matching DB rows.
-5. Materializes an unanchored ``virtual_pending`` span as display-only
-   Recent / Timeline / Detail rows.
+4. Applies ``apply_live_span_to_row`` to matching DB rows when the display
+   model marks that surface materializable.
+5. Materializes only borrowed-anchor aggregate fallbacks for Recent /
+   Timeline. Current-only pending never appears outside Current Activity.
 
 Boundary:
 
@@ -86,6 +87,16 @@ def _apply_live_span_to_rows(
     """
     span = get_live_span(model)
     if not span:
+        return
+    if row_kind == ROW_KIND_RECENT_PROJECT_SESSION_ROW:
+        surface = "recent"
+    elif row_kind == ROW_KIND_PROJECT_SESSION_ROW:
+        surface = "timeline"
+    elif row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW:
+        surface = "details"
+    else:
+        surface = ""
+    if surface and not span.get("is_visible_in_" + surface):
         return
     for row in rows:
         apply_live_span_to_row(row, span, row_kind=row_kind)
@@ -238,7 +249,7 @@ def _display_only_common_fields(
         "display_only": True,
         "editable": False,
         "exportable": False,
-        "source": "live_contract_fallback" if is_contract_fallback else "snapshot",
+        "source": "live_contract_fallback" if is_contract_fallback else str(span.get("source") or "snapshot"),
         "edit_disabled": True,
         "disable_reason": str(span.get("disable_reason") or ""),
         "live_contract_fallback": is_contract_fallback,
@@ -298,12 +309,12 @@ def _materialize_display_only_timeline_session(
         row_kind=ROW_KIND_PROJECT_SESSION_ROW,
         live_contract_reason=live_contract_reason,
     )
-    stable_hash = str(row.get("stable_live_key_hash") or "")
+    anchor_id = int(span.get("anchor_activity_id") or span.get("activity_id") or 0)
     row.update(
         {
-            "session_id": "live:" + stable_hash if stable_hash else "live:pending",
-            "activity_ids": [int(span.get("activity_id") or 0)],
-            "first_activity_id": int(span.get("activity_id") or 0),
+            "session_id": f"borrowed:{anchor_id}" if anchor_id > 0 else "borrowed:pending",
+            "activity_ids": [anchor_id] if anchor_id > 0 else [],
+            "first_activity_id": anchor_id or None,
             "raw_duration": format_duration(0),
             "adjusted_duration_seconds": None,
             "has_duration_override": False,
@@ -346,10 +357,9 @@ def _materialize_display_only_detail_row(
 def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     """Build the Overview page ViewModel from a single display model.
 
-    Recent rows come from DB sessions plus any display-only
-    ``virtual_pending`` row materialized from the Activity Display Model.
-    Anchored spans overlay matching DB rows; an unanchored
-    ``virtual_pending`` span materializes a display-only recent row.
+    Recent rows come from DB sessions plus optional display-only borrowed
+    anchor rows from the Activity Display Model. Unanchored pending snapshots
+    are Current-only and never materialize Recent rows.
 
     KPI totals (``today_total_seconds`` / ``classified_seconds`` /
     ``uncategorized_seconds``) are computed from the same overlay +
@@ -426,9 +436,19 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     )
     classified_base_seconds = classified_seconds
     uncategorized_base_seconds = uncategorized_seconds
-    if live_projects and bool(current_activity.get("is_classified")):
+    live_span_id = str(live_clock.get("display_span_id") or "")
+    live_total_rows = [
+        r
+        for r in total_rows
+        if live_span_id
+        and str(r.get("display_span_id") or "") == live_span_id
+        and r.get("live_delta_eligible") is True
+    ]
+    live_row_is_classified = any(bool(r.get("is_classified")) for r in live_total_rows)
+    live_row_is_uncategorized = any(bool(r.get("is_uncategorized")) for r in live_total_rows)
+    if live_projects and live_row_is_classified:
         classified_base_seconds = max(0, classified_seconds - active_elapsed)
-    if live_projects and bool(current_activity.get("is_uncategorized")):
+    if live_projects and live_row_is_uncategorized:
         uncategorized_base_seconds = max(0, uncategorized_seconds - active_elapsed)
 
     items = recent_rows[:_RECENT_LIMIT]
@@ -530,10 +550,9 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
 def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     """Build the Timeline page ViewModel from a single display model.
 
-    Timeline sessions come from DB rows plus any display-only
-    ``virtual_pending`` session materialized from the Activity Display
-    Model. Anchored spans overlay matching DB sessions before computing
-    the display total so the total matches the sum of the session rows.
+    Timeline sessions come from DB rows plus optional display-only borrowed
+    anchor sessions from the Activity Display Model. Unanchored pending
+    snapshots are Current-only and never materialize Timeline sessions.
 
     ``raw_total_seconds`` is the sum of raw DB durations (unaffected by
     the display-only live overlay or adjusted overrides). ``total_seconds``
@@ -676,10 +695,9 @@ def get_session_details_view_model(
 ) -> dict[str, Any]:
     """Build the Timeline Details ViewModel from a single display model.
 
-    When details are visible for ``virtual_pending``, an unanchored span
-    materializes a display-only detail row. Otherwise, DB activity ids are
-    listed and any matching Activity Display Model span overlays the DB
-    row. Display-only detail rows are not editable, exported, or stored.
+    Details list only real DB activity rows. Borrowed pending affects session
+    aggregates only; it never inserts the current pending resource as a detail
+    row.
 
     Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
     ONCE here and the resulting ``snapshot`` is passed to

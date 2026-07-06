@@ -10,10 +10,10 @@ contract (the bridge-facing facade is now ``worktrace.api.view_model_api``).
 
 Covered cases (spec 一.4 a–f):
 
-a. pending unpersisted snapshot with NO absorb anchor → ``virtual_pending``,
+a. pending unpersisted snapshot with NO absorb anchor → ``current_only_pending``,
    ``is_visible_in_recent/timeline/details`` all ``False``.
 b. pending unpersisted snapshot WITH a previous confirmed normal anchor →
-   ``absorbed_pending``, span projects onto the anchor DB row, but the DB
+   ``borrowed_anchor_pending``, span projects onto the anchor DB row, but the DB
    is NEVER written.
 c. persisted_open → ``persisted_open``, the real DB row is overlaid.
 d. pending project transition: ``display_project`` is the inherited
@@ -272,43 +272,37 @@ def _isolate_snapshot(temp_db):
     settings_service.clear_settings_cache()
 
 
-# Case a: virtual_pending (no anchor)
+# Case a: current_only_pending (no anchor)
 
 
 def test_virtual_pending_no_anchor_live_state_and_visibility():
     """Case (a): a pending unpersisted snapshot with NO previous
-    confirmed normal anchor resolves to ``virtual_pending``. The span is
-    display-only and visible in current / recent / timeline / details,
-    but never exportable or editable.
+    confirmed normal anchor resolves to ``current_only_pending``. Current
+    Activity remains live, but aggregate surfaces do not materialize a row.
     """
     snap = _pending_snapshot(is_persisted=False, elapsed_seconds=12)
     _set_snapshot(snap)
     today = _today_report_date()
 
     state = classify_display_live_state(snap, today, today)
-    assert state == "virtual_pending", (
-        "pending unpersisted snapshot with no anchor must classify as virtual_pending"
-    )
+    assert state == "current_only_pending"
 
     model = build_activity_display_model(report_date=today, today=today)
     assert model["ok"] is True
-    assert model["live_clock"]["live_state"] == "virtual_pending"
+    assert model["live_clock"]["live_state"] == "current_only_pending"
+    assert model["live_clock"]["project_duration_live"] is False
+    assert model["live_clock"]["current_duration_live"] is True
+    assert model["display_spans"] == []
+    policy = model["display_policy"]
+    assert policy["display_session_kind"] == "current_only_pending"
+    assert policy["materialize_recent"] is False
+    assert policy["materialize_timeline"] is False
+    assert policy["materialize_details"] is False
 
     span = get_live_span(model)
-    assert span is not None
-    assert span["source"] == "snapshot"
-    assert int(span["activity_id"]) == 0
-    assert int(span["anchor_activity_id"]) == 0
-    assert span["is_visible_in_current"] is True
-    assert span["is_visible_in_recent"] is True
-    assert span["is_visible_in_timeline"] is True
-    assert span["is_visible_in_details"] is True
-    assert span["exportable"] is False
-    assert span["editable"] is False
-    assert span["edit_disabled"] is True
-    assert span["is_display_only"] is True
+    assert span is None
     current = model["current_activity"]
-    assert current["live_state"] == "virtual_pending"
+    assert current["live_state"] == "current_only_pending"
     assert current["is_virtual_live"] is True
     assert current["is_in_progress"] is False
 
@@ -329,7 +323,7 @@ def test_virtual_pending_no_anchor_no_db_write():
     )
 
 
-# Case b: virtual_pending with an existing anchor
+# Case b: borrowed_anchor_pending with an existing anchor
 
 
 def test_virtual_pending_with_anchor_live_state_and_span():
@@ -342,22 +336,25 @@ def test_virtual_pending_with_anchor_live_state_and_span():
     today = _today_report_date()
 
     state = classify_display_live_state(snap, today, today)
-    assert state == "virtual_pending"
+    assert state == "current_only_pending"
 
     model = build_activity_display_model(report_date=today, today=today)
     span = get_live_span(model)
     assert span is not None
-    assert span["live_state"] == "virtual_pending"
-    assert span["anchor_activity_id"] == 0
+    assert span["live_state"] == "borrowed_anchor_pending"
+    assert span["source"] == "borrowed_anchor_pending"
+    assert span["activity_id"] == anchor_id
+    assert span["anchor_activity_id"] == anchor_id
     assert span["is_visible_in_recent"] is True
     assert span["is_visible_in_timeline"] is True
-    assert span["is_visible_in_details"] is True
-    assert "is_absorbed_pending" not in span
+    assert span["is_visible_in_details"] is False
+    assert span["aggregate_display_base_seconds"] == 300
+    assert span["aggregate_duration_seconds_at_sample"] == 312
     assert span["is_virtual"] is True
     assert span["is_persisted"] is False
 
 
-def test_virtual_pending_apply_live_span_to_row_does_not_project_onto_anchor():
+def test_borrowed_anchor_pending_projects_onto_anchor_display_only():
     anchor_id, _ = _create_closed_anchor_activity(
         elapsed_seconds=300, project_name="ProjectA"
     )
@@ -377,9 +374,13 @@ def test_virtual_pending_apply_live_span_to_row_does_not_project_onto_anchor():
         span,
         row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     )
-    assert "live_state" not in overlaid or overlaid["live_state"] != "virtual_pending"
-    assert overlaid.get("is_live_projected") is not True
-    assert int(overlaid["duration_seconds"]) == raw_duration
+    assert overlaid["live_state"] == "borrowed_anchor_pending"
+    assert overlaid.get("is_live_projected") is True
+    assert overlaid["display_only"] is True
+    assert overlaid["editable"] is False
+    assert overlaid["exportable"] is False
+    assert int(overlaid["duration_seconds"]) == raw_duration + 12
+    assert int(activity_service.get_activity(anchor_id)["duration_seconds"]) == raw_duration
 
 
 def test_current_activity_uses_resource_elapsed_project_rows_stay_static_for_virtual():
@@ -404,10 +405,11 @@ def test_current_activity_uses_resource_elapsed_project_rows_stay_static_for_vir
     assert current["elapsed_seconds"] == 12
     assert current["resource_elapsed_seconds"] == 12
     assert "current_activity_clock" not in model
-    assert model["live_clock"]["duration_seconds_at_sample"] == 12
-    assert model["live_clock"]["display_base_seconds"] == 0
+    assert model["live_clock"]["duration_seconds_at_sample"] == 312
+    assert model["live_clock"]["display_base_seconds"] == 300
     assert model["live_clock"]["current_elapsed_at_sample"] == 12
-    assert int(overlaid["duration_seconds"]) == 300
+    assert int(overlaid["duration_seconds"]) == 312
+    assert int(activity_service.get_activity(anchor_id)["duration_seconds"]) == 300
 
 
 def test_persisted_open_current_elapsed_and_project_projection_no_double_count():
@@ -835,8 +837,8 @@ def test_display_model_carries_unified_live_clock_and_span_id():
     )
     assert clock["stable_live_key_hash"]
     assert clock["live_state"] in (
-        "virtual_pending",
-        "absorbed_pending",
+        "current_only_pending",
+        "borrowed_anchor_pending",
         "persisted_open",
     )
     assert "live_started_at_epoch_ms" in clock

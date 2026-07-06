@@ -3,7 +3,7 @@
 These tests keep live display semantics owned by
 ``worktrace.services.activity_display_model_service``. Page ViewModels
 consume Activity Display Model spans: anchored spans overlay DB rows, and
-unanchored ``virtual_pending`` spans may materialize display-only rows.
+unanchored pending snapshots stay Current-only.
 Bridge and frontend code must not own live semantics or derive live
 seconds from structural caches.
 
@@ -19,12 +19,12 @@ Covered invariants:
    ``applyLocalTicker()`` must not read structural caches as live-seconds
    source.)
 5. ``overview.js`` / ``timeline.js`` render live rows with ``data-display-span-id``.
-6. Page ViewModels consume Activity Display Model spans: anchored spans
-   overlay DB rows; unanchored ``virtual_pending`` spans may materialize
-   display-only rows.
+6. Page ViewModels consume Activity Display Model spans: borrowed anchor
+   spans overlay/materialize aggregate rows; unanchored pending does not
+   materialize Recent / Timeline / Details rows.
 7. (Covered in ``test_live_display_project_transition_contract.py``:
    ``build_activity_display_model()`` visibility flags for the 3 states;
-   ``absorbed_pending`` projection never writes DB.)
+   borrowed-anchor projection never writes DB.)
 """
 
 from __future__ import annotations

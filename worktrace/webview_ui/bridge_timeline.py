@@ -163,9 +163,8 @@ class TimelineBridgeMixin:
     ) -> dict[str, Any]:
         """Return the Timeline Details ViewModel for a session.
 
-        The complete Details ViewModel (DB detail rows with live span
-        overlay, display-only ``virtual_pending`` detail rows,
-        display-safe resource/project fields,
+        The complete Details ViewModel (DB detail rows, display-safe
+        resource/project fields,
         edit_disabled / disable_reason, live clock fields, single-sample
         Activity Display Model contract) is built by
         ``view_model_service``. ``live_projection`` / ``live_display``

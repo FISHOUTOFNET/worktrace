@@ -3,7 +3,7 @@
 This module is NOT the page live-display model owner. The owner is
 :mod:`worktrace.services.activity_display_model_service`, which solely
 decides live-eligibility, ``live_state``
-(``virtual_pending`` / ``persisted_open``),
+(``current_only_pending`` / ``borrowed_anchor_pending`` / ``persisted_open``),
 display span identity, and visibility of live rows.
 
 This module retains ONLY the low-level pure helpers used by

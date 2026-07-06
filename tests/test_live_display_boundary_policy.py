@@ -73,30 +73,29 @@ def _normal(title: str) -> ActiveWindow:
     return ActiveWindow(title, f"{title.lower()}.exe", title)
 
 
-def test_fresh_virtual_base_zero_no_stale_carry(bridge):
+def test_current_only_pending_base_zero_no_stale_carry(bridge):
     _set_snapshot(_snapshot(elapsed_seconds=12, extra_seconds=7))
 
     model = build_activity_display_model(report_date=TODAY, today=TODAY)
     clock = model["live_clock"]
-    assert clock["display_session_kind"] == "fresh_virtual"
-    assert clock["base_policy"] == "zero"
+    assert clock["display_session_kind"] == "current_only_pending"
+    assert clock["base_policy"] == "current_only_zero"
     assert clock["display_base_seconds"] == 0
     assert clock["duration_seconds_at_sample"] == 12
     assert model["current_activity"]["elapsed_seconds"] == 12
-    assert model["display_spans"][0]["duration_seconds"] == 12
+    assert model["display_spans"] == []
 
     overview = bridge.get_overview()
     timeline = bridge.get_timeline(TODAY)
     details = bridge.get_timeline_session_details([0], TODAY)
     assert overview["current_activity"]["elapsed_seconds"] == 12
-    assert overview["activities"][0]["display_base_seconds"] == 0
-    assert overview["activities"][0]["duration_seconds"] == 12
-    assert overview["today_total_seconds"] == 12
-    assert timeline["sessions"][0]["duration_seconds"] == 12
-    assert details["activities"][0]["duration_seconds"] == 12
+    assert overview["activities"] == []
+    assert overview["today_total_seconds"] == 0
+    assert timeline["sessions"] == []
+    assert details["activities"] == []
 
 
-def test_fresh_virtual_ignores_stale_pending_after_pause_or_restart(bridge):
+def test_current_only_pending_ignores_stale_pending_after_pause_or_restart(bridge):
     write_pending_short_carry(
         20,
         source_start_time=f"{TODAY} 08:59:00",
@@ -109,19 +108,19 @@ def test_fresh_virtual_ignores_stale_pending_after_pause_or_restart(bridge):
 
     model = build_activity_display_model(report_date=TODAY, today=TODAY)
     clock = model["live_clock"]
-    assert clock["display_session_kind"] == "fresh_virtual"
-    assert clock["base_policy"] == "zero"
+    assert clock["display_session_kind"] == "current_only_pending"
+    assert clock["base_policy"] == "current_only_zero"
     assert clock["display_base_seconds"] == 0
     assert clock["duration_seconds_at_sample"] == 5
 
     overview = bridge.get_overview()
     timeline = bridge.get_timeline(TODAY)
     assert overview["current_activity"]["elapsed_seconds"] == 5
-    assert overview["activities"][0]["duration_seconds"] == 5
-    assert timeline["sessions"][0]["duration_seconds"] == 5
+    assert overview["activities"] == []
+    assert timeline["sessions"] == []
 
 
-def test_virtual_pending_live_row_base_zero_after_dropped_short(bridge):
+def test_current_only_pending_base_zero_after_dropped_short(bridge):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("Short"), at_time=f"{TODAY} 09:00:00")
     machine.transition_to("recording", _normal("Next"), at_time=f"{TODAY} 09:00:20")
@@ -129,16 +128,15 @@ def test_virtual_pending_live_row_base_zero_after_dropped_short(bridge):
 
     model = build_activity_display_model(report_date=TODAY, today=TODAY)
     clock = model["live_clock"]
-    assert clock["display_session_kind"] == "fresh_virtual"
-    assert clock["base_policy"] == "zero"
+    assert clock["display_session_kind"] == "current_only_pending"
+    assert clock["base_policy"] == "current_only_zero"
     assert clock["display_base_seconds"] == 0
     assert clock["duration_seconds_at_sample"] == 5
     assert model["current_activity"]["elapsed_seconds"] == 5
 
     overview = bridge.get_overview()
     assert overview["current_activity"]["elapsed_seconds"] == 5
-    assert overview["activities"][0]["display_base_seconds"] == 0
-    assert overview["activities"][0]["duration_seconds"] == 5
+    assert overview["activities"] == []
 
 
 def test_invalid_pending_never_folded_into_persisted_open_extra(temp_db):
@@ -188,7 +186,7 @@ def test_persisted_open_preserves_aggregate_base(bridge):
     assert recent["duration_seconds"] == 45
 
 
-def test_running_virtual_does_not_project_to_anchor(bridge):
+def test_running_pending_borrows_anchor_without_db_write(bridge):
     anchor_id = activity_service.create_activity(
         "App",
         "app.exe",
@@ -208,19 +206,20 @@ def test_running_virtual_does_not_project_to_anchor(bridge):
 
     model = build_activity_display_model(report_date=TODAY, today=TODAY)
     clock = model["live_clock"]
-    assert clock["live_state"] == "virtual_pending"
-    assert clock["display_session_kind"] == "fresh_virtual"
-    assert clock["base_policy"] == "zero"
-    assert clock["display_base_seconds"] == 0
-    assert clock["duration_seconds_at_sample"] == 7
+    assert clock["live_state"] == "borrowed_anchor_pending"
+    assert clock["display_session_kind"] == "borrowed_anchor_pending"
+    assert clock["base_policy"] == "borrowed_anchor_static"
+    assert clock["display_base_seconds"] == 60
+    assert clock["duration_seconds_at_sample"] == 67
     assert model["current_activity"]["elapsed_seconds"] == 7
     assert activity_service.get_activity(anchor_id)["duration_seconds"] == before
 
     overview = bridge.get_overview()
     recent = overview["activities"][0]
-    assert int(recent.get("activity_id") or 0) == 0
-    assert recent["duration_seconds"] == 7
-    assert recent["display_base_seconds"] == 0
+    assert int(recent.get("activity_id") or 0) == anchor_id
+    assert recent["source"] == "borrowed_anchor_pending"
+    assert recent["duration_seconds"] == 67
+    assert recent["display_base_seconds"] == 60
 
 
 @pytest.mark.parametrize("status", [STATUS_PAUSED, STATUS_IDLE, STATUS_EXCLUDED, STATUS_ERROR])

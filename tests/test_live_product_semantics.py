@@ -11,7 +11,7 @@ eight mandatory scenarios from the maintenance governance spec:
 4. Pause — finalize first; Current and Recent both express paused status.
 5. Idle / excluded / error — hard boundary; status-only row; KPI excluded.
 6. Stop / restart / recovery — no inheritance of stale project / pending.
-7. ``virtual_pending`` -> ``persisted_open`` — stable identity; no rollback.
+7. ``current_only_pending`` -> ``persisted_open`` — stable identity; no rollback.
 8. Frontend ticker — DOM-only; base 0; incompatibility requests refresh.
 """
 
@@ -117,8 +117,8 @@ def test_fresh_start_under_30s_shares_live_identity_across_views(
 ):
     """A running ``<30s`` normal activity MUST surface the same live
     identity (display_span_id / stable_live_key_hash) across Current,
-    Recent, Timeline, Details and the refresh-state payload. There is
-    exactly one backend live runtime; pages must not invent their own."""
+    live_clock and the refresh-state payload. With no anchor, aggregate
+    surfaces stay empty."""
     _patch_today(monkeypatch)
     machine = CollectorStateMachine()
     bridge = WebViewBridge()
@@ -141,36 +141,75 @@ def test_fresh_start_under_30s_shares_live_identity_across_views(
     assert int(current["display_base_seconds"]) == 0
     assert str(current.get("duration_semantic") or "") == "current_live"
 
-    recent_rows = overview.get("activities") or []
-    live_recent = [r for r in recent_rows if r.get("live_state") == "virtual_pending"]
-    assert live_recent, "Recent must include the virtual_pending display-only row"
-    assert int(live_recent[0]["duration_seconds"]) == elapsed
-    assert int(live_recent[0]["display_base_seconds"]) == 0
-    assert live_recent[0].get("editable") is False
-    assert live_recent[0].get("exportable") is False
+    assert overview["live_clock"]["live_state"] == "current_only_pending"
+    assert overview["live_clock"]["is_project_duration_live"] is False
+    assert overview.get("activities") == []
+    assert recent.get("activities") == []
+    assert timeline.get("sessions") == []
+    assert int(overview["today_total_seconds"]) == 0
 
 
 def test_fresh_start_under_30s_not_editable_not_exportable(temp_db, monkeypatch, tmp_path):
-    """A ``<30s`` virtual_pending activity MUST NOT be editable or
-    exportable. It is live display only; it has not entered history."""
+    """A no-anchor ``<30s`` activity has no editable/exportable aggregate
+    row and has not entered history."""
     _patch_today(monkeypatch)
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("Doc"), at_time=f"{_REPORT_DATE} 09:00:00")
     machine.transition_to("recording", _normal("Doc"), at_time=f"{_REPORT_DATE} 09:00:20")
 
     overview = WebViewBridge().get_overview()
-    live_recent = [r for r in overview["activities"] if r.get("live_state") == "virtual_pending"]
-    assert live_recent
-    assert live_recent[0].get("editable") is False
-    assert live_recent[0].get("exportable") is False
+    assert overview["live_clock"]["live_state"] == "current_only_pending"
+    assert overview["activities"] == []
 
     xlsx_path = export_service.export_excel(
         _REPORT_DATE, _REPORT_DATE, str(tmp_path / "out.xlsx")
     )
     assert load_workbook(xlsx_path)["Activity Logs"].max_row == 1, (
-        "virtual_pending activity must NOT appear in export"
+        "current-only pending activity must NOT appear in export"
     )
     assert statistics_service.get_summary(_REPORT_DATE, _REPORT_DATE)["total_duration"] == 0
+
+
+def test_anchor_then_different_project_under_30s_borrows_anchor_display(
+    temp_db, monkeypatch
+):
+    """A confirmed A row followed by B<30s shows B in Current, but
+    Recent/Timeline/KPI borrow A's session display-only."""
+    _patch_today(monkeypatch)
+    machine = CollectorStateMachine()
+    bridge = WebViewBridge()
+    machine.transition_to("recording", _normal("ProjectA"), at_time=f"{_REPORT_DATE} 09:00:00")
+    machine.transition_to("recording", _normal("ProjectA"), at_time=f"{_REPORT_DATE} 09:01:00")
+    machine.transition_to("recording", _normal("ProjectB"), at_time=f"{_REPORT_DATE} 09:01:00")
+    machine.transition_to("recording", _normal("ProjectB"), at_time=f"{_REPORT_DATE} 09:01:10")
+
+    rows = _rows()
+    assert len(rows) == 1
+    anchor_id = int(rows[0]["id"])
+    assert int(rows[0]["duration_seconds"]) == 60
+
+    overview = bridge.get_overview()
+    timeline = bridge.get_timeline(_REPORT_DATE)
+    current = overview["current_activity"]
+    assert "ProjectB" in str(current.get("resource_name") or current.get("display") or "")
+    assert int(current["elapsed_seconds"]) == 10
+    assert overview["live_clock"]["live_state"] == "borrowed_anchor_pending"
+
+    assert len(overview["activities"]) == 1
+    recent_row = overview["activities"][0]
+    assert int(recent_row["activity_id"]) == anchor_id
+    assert recent_row["source"] == "borrowed_anchor_pending"
+    assert recent_row["display_only"] is True
+    assert recent_row["editable"] is False
+    assert recent_row["exportable"] is False
+    assert int(recent_row["duration_seconds"]) == 70
+    assert int(overview["today_total_seconds"]) == 70
+
+    assert len(timeline["sessions"]) == 1
+    assert timeline["sessions"][0]["source"] == "borrowed_anchor_pending"
+    assert int(timeline["sessions"][0]["duration_seconds"]) == 70
+    assert len(_rows()) == 1
+    assert int(activity_service.get_activity(anchor_id)["duration_seconds"]) == 60
 
 
 def test_fresh_start_under_30s_drop_on_end_without_anchor_no_kpi_residue(
@@ -428,7 +467,7 @@ def test_restart_does_not_inherit_previous_session_project_or_pending(
 
     overview = bridge.get_overview()
     current = overview["current_activity"]
-    recent_live = [r for r in overview["activities"] if r.get("live_state") == "virtual_pending"]
+    recent_live = [r for r in overview["activities"] if r.get("live_state") == "current_only_pending"]
 
     current_identity = str(
         current.get("resource_name")
@@ -443,11 +482,10 @@ def test_restart_does_not_inherit_previous_session_project_or_pending(
     assert "OldProject" not in current_identity, (
         "Current resource MUST NOT inherit OldProject from previous session"
     )
-    assert recent_live, "Recent must include the fresh virtual_pending row"
-    assert int(recent_live[0]["display_base_seconds"]) == 0, (
-        "fresh activity display base MUST be 0; must not inherit stale pending"
-    )
-    assert int(recent_live[0]["duration_seconds"]) == 15
+    assert not recent_live, "fresh current-only pending must not materialize Recent"
+    assert overview["live_clock"]["display_base_seconds"] == 0
+    stored_total = sum(int(row.get("duration_seconds") or 0) for row in _rows())
+    assert int(overview["today_total_seconds"]) == stored_total
 
     assert int(settings_service.get_setting("pending_short_seconds") or 0) == 0
 
@@ -505,7 +543,7 @@ def test_virtual_to_persisted_handoff_preserves_stable_live_identity(
     id_29 = _live_identity(state_29)
     id_30 = _live_identity(state_30)
     assert id_29["stable_live_key_hash"] == id_30["stable_live_key_hash"], (
-        "stable_live_key_hash MUST survive virtual_pending -> persisted_open handoff"
+        "stable_live_key_hash MUST survive current_only_pending -> persisted_open handoff"
     )
     assert id_29["display_span_id"] == id_30["display_span_id"], (
         "display_span_id MUST survive the handoff for frontend continuity"
@@ -517,7 +555,7 @@ def test_virtual_to_persisted_handoff_preserves_stable_live_identity(
 
     live_recent = [
         r for r in overview_30.get("activities") or []
-        if r.get("live_state") in ("virtual_pending", "persisted_open")
+        if r.get("live_state") in ("current_only_pending", "persisted_open")
     ]
     assert len(live_recent) == 1, (
         "Recent must NOT double-materialize a live row alongside the DB row"
