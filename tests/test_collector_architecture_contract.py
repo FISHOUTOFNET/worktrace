@@ -156,10 +156,17 @@ def test_activity_display_model_remains_live_display_semantics_owner():
         "DisplaySessionPolicy",
         "classify_display_live_state",
     )
+    owner_modules = {
+        "worktrace/services/activity_display_model_service.py",
+        "worktrace/services/activity_display_policy.py",
+        "worktrace/services/activity_live_clock.py",
+        "worktrace/services/activity_display_span.py",
+        "worktrace/services/activity_row_overlay.py",
+    }
     offenders: list[str] = []
     for py_file in _py_sources(SERVICES_DIR):
         rel = py_file.relative_to(REPO_ROOT).as_posix()
-        if rel == "worktrace/services/activity_display_model_service.py":
+        if rel in owner_modules:
             continue
         source = py_file.read_text(encoding="utf-8")
         for symbol in forbidden_outside_owner:

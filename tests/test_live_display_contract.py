@@ -40,10 +40,11 @@ from worktrace.constants import (
     UNCATEGORIZED_PROJECT,
 )
 from worktrace.services import activity_service, folder_rule_service, project_service, settings_service
-from worktrace.services.activity_display_model_service import (
+from worktrace.services.activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
     ROW_KIND_PROJECT_SESSION_ROW,
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+    apply_live_span_to_row,
 )
 from worktrace.services.live_display_service import (
     _live_display_key,
@@ -72,6 +73,11 @@ def bridge(temp_db):
     settings_service.set_setting("user_paused", "false")
     settings_service.clear_settings_cache()
     return WebViewBridge()
+
+
+def _get_live_span(model: dict) -> dict | None:
+    spans = model.get("display_spans") or []
+    return spans[0] if spans else None
 
 
 def _set_snapshot(snapshot: dict | None) -> None:
@@ -1274,11 +1280,7 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     Persisted-open static bases come from closed_duration_seconds plus
     snapshot extra/carry. The DB open row duration is persistence-only.
     """
-    from worktrace.services.activity_display_model_service import (
-        apply_live_span_to_row,
-        build_activity_display_model,
-        get_live_span,
-    )
+    from worktrace.services.activity_display_model_service import build_activity_display_model
 
     # 1. Create a closed activity of 100s in the same project.
     closed_start = datetime.now() - timedelta(seconds=400)
@@ -1304,7 +1306,7 @@ def test_session_base_differs_from_live_activity_duration(bridge):
     )
 
     model = build_activity_display_model()
-    span = get_live_span(model)
+    span = _get_live_span(model)
     assert span is not None, "persisted_open display span must exist"
 
     # Session row aggregates both activities at the page sample: 100
@@ -1684,11 +1686,7 @@ def test_virtual_pending_current_vs_aggregate_semantics_are_explicit(bridge):
 
 
 def test_virtual_pending_extra_seconds_is_not_added_to_anchor_base(bridge):
-    from worktrace.services.activity_display_model_service import (
-        apply_live_span_to_row,
-        build_activity_display_model,
-        get_live_span,
-    )
+    from worktrace.services.activity_display_model_service import build_activity_display_model
 
     today = datetime.now().strftime("%Y-%m-%d")
     anchor_id = activity_service.create_activity(
@@ -1709,7 +1707,7 @@ def test_virtual_pending_extra_seconds_is_not_added_to_anchor_base(bridge):
     )
 
     model = build_activity_display_model(report_date=today, today=today)
-    span = get_live_span(model)
+    span = _get_live_span(model)
     row = activity_service.get_activity(anchor_id)
     detail_projection = apply_live_span_to_row(
         dict(row),
@@ -1883,11 +1881,7 @@ def test_live_bearing_viewmodels_share_runtime_and_revisions(bridge):
 
 
 def test_virtual_pending_current_clock_uses_resource_elapsed(bridge):
-    from worktrace.services.activity_display_model_service import (
-        apply_live_span_to_row,
-        build_activity_display_model,
-        get_live_span,
-    )
+    from worktrace.services.activity_display_model_service import build_activity_display_model
 
     anchor_start = datetime.now() - timedelta(seconds=180)
     anchor_end = anchor_start + timedelta(seconds=120)
@@ -1912,7 +1906,7 @@ def test_virtual_pending_current_clock_uses_resource_elapsed(bridge):
     model = build_activity_display_model()
     current = model["current_activity"]
     project_clock = model["live_clock"]
-    span = get_live_span(model)
+    span = _get_live_span(model)
     assert span is not None
 
     assert current["elapsed_seconds"] == 5
@@ -1931,11 +1925,7 @@ def test_virtual_pending_current_clock_uses_resource_elapsed(bridge):
 
 
 def test_persisted_open_live_clock_uses_resource_elapsed_and_project_extra(bridge):
-    from worktrace.services.activity_display_model_service import (
-        apply_live_span_to_row,
-        build_activity_display_model,
-        get_live_span,
-    )
+    from worktrace.services.activity_display_model_service import build_activity_display_model
 
     aid, start_time = _create_real_open_activity(elapsed_seconds=35)
     activity_service.set_activity_duration(aid, 45)
@@ -1952,7 +1942,7 @@ def test_persisted_open_live_clock_uses_resource_elapsed_and_project_extra(bridg
     model = build_activity_display_model()
     current = model["current_activity"]
     project_clock = model["live_clock"]
-    span = get_live_span(model)
+    span = _get_live_span(model)
     assert span is not None
 
     assert current["elapsed_seconds"] == 35

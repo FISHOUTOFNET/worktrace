@@ -349,10 +349,10 @@ def test_current_activity_clock_builder_is_removed():
 
 def test_current_activity_elapsed_does_not_read_project_duration_sample():
     source = (
-        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+        REPO_ROOT / "worktrace" / "services" / "activity_display_span.py"
     ).read_text(encoding="utf-8")
     match = re.search(
-        r"def\s+_build_current_activity_display\b(?P<body>.*?)(?=\ndef\s+_signature_project_dict\b)",
+        r"def\s+build_current_activity_display\b(?P<body>.*?)(?=\n\ndef\s+build_display_structural_signature\b)",
         source,
         re.S,
     )
@@ -391,7 +391,7 @@ def test_activity_display_model_remains_single_display_semantics_owner():
 
 def test_persisted_open_overlay_does_not_reverse_engineer_base_from_db_duration():
     source = (
-        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+        REPO_ROOT / "worktrace" / "services" / "activity_row_overlay.py"
     ).read_text(encoding="utf-8")
     match = re.search(
         r"if state == \"persisted_open\":(?P<body>.*?)(?=\n    else:)",
@@ -412,7 +412,7 @@ def test_persisted_open_overlay_does_not_reverse_engineer_base_from_db_duration(
 
 def test_current_live_projection_branch_never_uses_aggregate_base_fields():
     source = (
-        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+        REPO_ROOT / "worktrace" / "services" / "activity_row_overlay.py"
     ).read_text(encoding="utf-8")
     match = re.search(
         r"if semantic == CURRENT_LIVE:(?P<body>.*?)(?=\n    else:)",
@@ -434,7 +434,7 @@ def test_current_live_projection_branch_never_uses_aggregate_base_fields():
 
 def test_live_projection_function_requires_row_kind_contract():
     source = (
-        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+        REPO_ROOT / "worktrace" / "services" / "activity_row_overlay.py"
     ).read_text(encoding="utf-8")
     signature = re.search(
         r"def\s+apply_live_span_to_row\((?P<body>.*?)\)\s*->\s*dict\[str,\s*Any\]:",
@@ -449,7 +449,7 @@ def test_live_projection_function_requires_row_kind_contract():
 
 def test_session_projection_branch_does_not_overwrite_session_start_time():
     source = (
-        REPO_ROOT / "worktrace" / "services" / "activity_display_model_service.py"
+        REPO_ROOT / "worktrace" / "services" / "activity_row_overlay.py"
     ).read_text(encoding="utf-8")
     match = re.search(
         r"if state == \"persisted_open\":(?P<body>.*?)(?=\n    return row)",

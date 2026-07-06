@@ -16,7 +16,7 @@ persisted_open overlay, project transition) is decided by
 
 Boundary:
 
-- Lives in ``worktrace.services``; imports ``activity_display_model_service``,
+- Lives in ``worktrace.services``; imports display-model modules,
   ``live_display_service``, ``timeline_service``, ``statistics_service``,
   ``project_service``, ``settings_service`` and stdlib only. MUST NOT be
   imported by ``worktrace.webview_ui.*`` directly — bridge uses
@@ -44,14 +44,14 @@ from ..contracts.live_display_contracts import (
     RefreshStateContract,
     TimelineSessionRowContract,
 )
-from . import activity_display_model_service, live_display_service, project_service, statistics_service, timeline_service
-from .activity_display_model_service import (
+from . import live_display_service, project_service, statistics_service, timeline_service
+from .activity_display_model_service import build_activity_display_model
+from .activity_live_clock import AGGREGATE_LIVE, CURRENT_LIVE
+from .activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
     ROW_KIND_PROJECT_SESSION_ROW,
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     apply_live_span_to_row,
-    build_live_runtime_model,
-    get_live_span,
 )
 from .live_display_service import compute_refresh_revision
 from .settings_service import get_bool_setting, get_setting
@@ -95,7 +95,7 @@ def _apply_live_span_to_rows(
     live overlay enters Recent / Timeline / Details. Display-only rows are
     materialized from the same span when no DB row can be projected.
     """
-    span = get_live_span(model)
+    span = _first_display_span(model)
     if not span:
         return
     if row_kind == ROW_KIND_RECENT_PROJECT_SESSION_ROW:
@@ -116,7 +116,7 @@ def _get_visible_live_span(
     model: dict[str, Any],
     surface: str,
 ) -> DisplaySpanContract | None:
-    span = get_live_span(model)
+    span = _first_display_span(model)
     if not span:
         return None
     live_clock = span.get("live_clock") or model.get("live_clock") or {}
@@ -130,6 +130,11 @@ def _get_visible_live_span(
     if not span.get("is_visible_in_" + surface):
         return None
     return span
+
+
+def _first_display_span(model: dict[str, Any]) -> DisplaySpanContract | None:
+    spans = model.get("display_spans") or []
+    return spans[0] if spans else None
 
 
 def _rows_have_live_span(rows: list[dict[str, Any]], span: DisplaySpanContract) -> bool:
@@ -206,9 +211,9 @@ def _display_only_common_fields(
 ) -> dict[str, Any]:
     live_clock = span.get("live_clock") or {}
     if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW:
-        semantic = activity_display_model_service.CURRENT_LIVE
+        semantic = CURRENT_LIVE
     elif row_kind in (ROW_KIND_PROJECT_SESSION_ROW, ROW_KIND_RECENT_PROJECT_SESSION_ROW):
-        semantic = activity_display_model_service.AGGREGATE_LIVE
+        semantic = AGGREGATE_LIVE
     else:
         raise ValueError(f"unsupported display-only row_kind: {row_kind!r}")
     current_live_seconds = int(
@@ -230,7 +235,7 @@ def _display_only_common_fields(
         or live_clock.get("display_base_seconds")
         or 0
     )
-    if semantic == activity_display_model_service.CURRENT_LIVE:
+    if semantic == CURRENT_LIVE:
         duration_seconds = current_live_seconds
         display_base_seconds = 0
         duration_seconds_at_sample = current_live_seconds
@@ -385,7 +390,7 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     """
     scoped_today = today or timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
-    model = build_live_runtime_model(
+    model = build_activity_display_model(
         report_date=scoped_today, today=scoped_today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
@@ -579,7 +584,7 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     scoped_report_date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
-    model = build_live_runtime_model(
+    model = build_activity_display_model(
         report_date=scoped_report_date,
         today=today,
         snapshot=snapshot,
@@ -721,7 +726,7 @@ def get_session_details_view_model(
     date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
-    model = build_live_runtime_model(
+    model = build_activity_display_model(
         report_date=date, today=today, snapshot=snapshot
     )
     live_clock = model.get("live_clock") or {}
@@ -870,7 +875,7 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     # Pass the already-read snapshot into the display model so it does
     # NOT re-read the setting. ``refresh_revision`` and ``live_clock``
     # share the same sample.
-    model = build_live_runtime_model(
+    model = build_activity_display_model(
         report_date=scoped_report_date,
         today=today,
         snapshot=snapshot,

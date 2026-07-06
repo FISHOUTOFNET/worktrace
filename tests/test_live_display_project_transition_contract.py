@@ -34,13 +34,12 @@ pytestmark = [pytest.mark.contract, pytest.mark.db, pytest.mark.live_display]
 
 from worktrace.constants import STATUS_NORMAL, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from worktrace.services import activity_service, settings_service, timeline_service
-from worktrace.services.activity_display_model_service import (
+from worktrace.services.activity_display_model_service import build_activity_display_model
+from worktrace.services.activity_display_policy import classify_display_live_state
+from worktrace.services.activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     apply_live_span_to_row,
-    build_activity_display_model,
-    classify_display_live_state,
-    get_live_span,
 )
 
 
@@ -52,6 +51,11 @@ def _set_snapshot(snapshot: dict | None) -> None:
         "current_activity_snapshot", json.dumps(snapshot) if snapshot else ""
     )
     settings_service.clear_settings_cache()
+
+
+def _get_live_span(model: dict) -> dict | None:
+    spans = model.get("display_spans") or []
+    return spans[0] if spans else None
 
 
 def _project_dict(
@@ -299,7 +303,7 @@ def test_virtual_pending_no_anchor_live_state_and_visibility():
     assert policy["materialize_timeline"] is False
     assert policy["materialize_details"] is False
 
-    span = get_live_span(model)
+    span = _get_live_span(model)
     assert span is None
     current = model["current_activity"]
     assert current["live_state"] == "current_only_pending"
@@ -339,7 +343,7 @@ def test_virtual_pending_with_anchor_live_state_and_span():
     assert state == "current_only_pending"
 
     model = build_activity_display_model(report_date=today, today=today)
-    span = get_live_span(model)
+    span = _get_live_span(model)
     assert span is not None
     assert span["live_state"] == "borrowed_anchor_pending"
     assert span["source"] == "borrowed_anchor_pending"
@@ -364,7 +368,7 @@ def test_borrowed_anchor_pending_projects_onto_anchor_display_only():
     today = _today_report_date()
 
     model = build_activity_display_model(report_date=today, today=today)
-    span = get_live_span(model)
+    span = _get_live_span(model)
 
     anchor_row = activity_service.get_activity(anchor_id)
     raw_duration = int(anchor_row.get("duration_seconds") or 0)
@@ -393,7 +397,7 @@ def test_current_activity_uses_resource_elapsed_project_rows_stay_static_for_vir
     today = _today_report_date()
 
     model = build_activity_display_model(report_date=today, today=today)
-    span = get_live_span(model)
+    span = _get_live_span(model)
     anchor_row = activity_service.get_activity(anchor_id)
     overlaid = apply_live_span_to_row(
         dict(anchor_row),
@@ -431,7 +435,7 @@ def test_persisted_open_current_elapsed_and_project_projection_no_double_count()
     today = _today_report_date()
 
     model = build_activity_display_model(report_date=today, today=today)
-    span = get_live_span(model)
+    span = _get_live_span(model)
     row = activity_service.get_activity(anchor_id)
     overlaid = apply_live_span_to_row(
         dict(row),
@@ -523,12 +527,12 @@ def test_absorbed_pending_does_not_write_db():
     today = _today_report_date()
 
     write_paths = [
-        "worktrace.services.activity_display_model_service.activity_service.increment_activity_duration",
-        "worktrace.services.activity_display_model_service.activity_service.set_activity_duration",
+        "worktrace.services.activity_display_policy.activity_service.increment_activity_duration",
+        "worktrace.services.activity_display_policy.activity_service.set_activity_duration",
     ]
     try:
         persist_path = (
-            "worktrace.services.activity_display_model_service.activity_service"
+            "worktrace.services.activity_display_policy.activity_service"
             ".persist_open_activity_if_ready"
         )
         write_paths.append(persist_path)
@@ -551,7 +555,7 @@ def test_absorbed_pending_does_not_write_db():
             except (AttributeError, TypeError):
                 pass
         model = build_activity_display_model(report_date=today, today=today)
-        span = get_live_span(model)
+        span = _get_live_span(model)
         anchor_row = activity_service.get_activity(anchor_id)
         apply_live_span_to_row(
             dict(anchor_row),
@@ -589,7 +593,7 @@ def test_persisted_open_live_state_and_overlay():
     assert state == "persisted_open"
 
     model = build_activity_display_model(report_date=today, today=today)
-    span = get_live_span(model)
+    span = _get_live_span(model)
     assert span is not None
     assert span["live_state"] == "persisted_open"
     assert span["anchor_activity_id"] == aid
@@ -854,7 +858,7 @@ def test_empty_snapshot_returns_none_live_state():
     model = build_activity_display_model(report_date=today, today=today)
     assert model["ok"] is True
     assert model["live_clock"]["live_state"] == "none"
-    assert get_live_span(model) is None
+    assert _get_live_span(model) is None
     assert model["current_activity"]["active"] is False
 
 
@@ -870,4 +874,4 @@ def test_historical_date_suppresses_live_projection():
     model = build_activity_display_model(report_date=historical, today=today)
     assert model["is_today"] is False
     assert model["live_clock"]["live_state"] == "none"
-    assert get_live_span(model) is None
+    assert _get_live_span(model) is None
