@@ -1165,7 +1165,7 @@ def test_collector_directory_prefix_matches_lifecycle_boundary(runner):
     facade is the collector's write path, so collector changes must
     run lifecycle + state machine + clipboard tests. The static
     boundary test is included to verify architectural invariants."""
-    sel = runner.select_targets(["worktrace/collector/auto_activity_recorder.py"])
+    sel = runner.select_targets(["worktrace/collector/activity_session_recorder.py"])
     assert "tests/test_activity_lifecycle_service.py" in sel.pytest_targets, (
         "collector changes must select the lifecycle boundary test"
     )

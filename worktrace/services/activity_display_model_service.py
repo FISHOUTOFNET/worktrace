@@ -1165,7 +1165,7 @@ def build_activity_display_model(
     ``current_activity`` / ``display_spans``. The model NEVER writes the
     DB — running virtual projection is display-only; the finished ``<30s``
     short-activity merge/drop is collector-owned persistence
-    in :mod:`worktrace.collector.auto_activity_recorder`.
+    in :mod:`worktrace.collector.short_activity_finalizer`.
     Snapshot injection (single-sample contract): callers that already read
     ``current_activity_snapshot`` (e.g. refresh-state ViewModel, which also
     feeds ``compute_refresh_revision``) MUST pass it via ``snapshot``.

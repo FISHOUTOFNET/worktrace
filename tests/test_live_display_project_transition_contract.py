@@ -112,7 +112,7 @@ def _snapshot(
     start_time: str | None = None,
 ) -> dict:
     """Build a snapshot mirroring the structure written by
-    ``AutoActivityRecorder._write_snapshot``.
+    ``SnapshotPublisher.publish``.
 
     ``window_title`` / ``file_path_hint`` are populated with sentinel
     secret values so display-safety assertions can verify they do NOT

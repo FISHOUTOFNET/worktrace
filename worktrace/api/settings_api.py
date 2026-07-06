@@ -71,10 +71,6 @@ def get_current_activity_snapshot() -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def set_current_activity_snapshot(value: str) -> None:
-    set_setting("current_activity_snapshot", value)
-
-
 def clear_runtime_activity_state(reason: str) -> None:
     _clear_runtime_activity_state(reason)
 
@@ -439,7 +435,6 @@ __all__ = [
     "set_clipboard_capture_enabled",
     "set_clipboard_capture_enabled_for_webview",
     "set_collector_status",
-    "set_current_activity_snapshot",
     "set_list_setting_value",
     "set_setting_value",
     "set_user_paused",

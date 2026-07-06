@@ -1380,7 +1380,7 @@ def test_compute_refresh_revision_does_not_include_carry_signature() -> None:
 def test_no_production_pending_short_carry_duration_readers() -> None:
     import inspect
 
-    from worktrace.collector.auto_activity_recorder import AutoActivityRecorder
+    from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
     from worktrace.services import activity_display_model_service, live_display_service, view_model_service
 
     forbidden_modules = {
@@ -1392,7 +1392,7 @@ def test_no_production_pending_short_carry_duration_readers() -> None:
         assert "pending_short_seconds" not in source
         assert "validate_pending_short_carry" not in source
 
-    ensure_source = inspect.getsource(AutoActivityRecorder._ensure_persisted_if_ready)
+    ensure_source = inspect.getsource(ActivitySessionRecorder._ensure_persisted_if_ready)
     assert "_get_pending_short_seconds" not in ensure_source
     assert "validate_pending_short_carry" not in ensure_source
     assert "current_extra_seconds +=" not in ensure_source

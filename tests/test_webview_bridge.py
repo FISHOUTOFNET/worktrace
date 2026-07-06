@@ -505,10 +505,6 @@ def test_toggle_pause_starts_collection_after_privacy_gate_when_resuming(
         "worktrace.webview_ui.bridge_overview.settings_api.set_collector_status",
         lambda x: None,
     )
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.settings_api.set_current_activity_snapshot",
-        lambda x: None,
-    )
 
     gate_calls: list[bool] = []
     monkeypatch.setattr(
@@ -557,7 +553,6 @@ def test_toggle_pause_does_not_start_collection_when_gate_closed(
     # Caller state mutators must NOT be touched when the gate fails.
     user_paused_calls: list[bool] = []
     status_calls: list[str] = []
-    snapshot_calls: list[str] = []
     monkeypatch.setattr(
         "worktrace.webview_ui.bridge_overview.settings_api.set_user_paused",
         lambda x: user_paused_calls.append(x),
@@ -566,10 +561,6 @@ def test_toggle_pause_does_not_start_collection_when_gate_closed(
         "worktrace.webview_ui.bridge_overview.settings_api.set_collector_status",
         lambda x: status_calls.append(x),
     )
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.settings_api.set_current_activity_snapshot",
-        lambda x: snapshot_calls.append(x),
-    )
 
     result = bridge.toggle_pause()
 
@@ -577,7 +568,6 @@ def test_toggle_pause_does_not_start_collection_when_gate_closed(
     assert result["error"] == "请先确认隐私说明"
     assert user_paused_calls == []
     assert status_calls == []
-    assert snapshot_calls == []
 
 
 def test_toggle_pause_calls_app_api_pause_entry_when_running(bridge, monkeypatch):

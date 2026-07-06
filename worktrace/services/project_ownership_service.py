@@ -88,7 +88,7 @@ class ProjectTransition:
 
 @dataclass(frozen=True)
 class ProjectOwnershipState:
-    """Full ownership state held by ``AutoActivityRecorder``."""
+    """Full ownership state held by ``ActivitySessionRecorder``."""
 
     display_project: ProjectLabel | None = None
     candidate_project: ProjectLabel | None = None
@@ -204,7 +204,7 @@ def begin_ownership_for_new_resource(
 ) -> ProjectOwnershipState:
     """Begin ownership for a brand-new resource signature.
 
-    Called by ``AutoActivityRecorder`` when the resource signature
+    Called by ``ActivitySessionRecorder`` when the resource signature
     changes (immediate resource switch). The candidate is computed from
     the new resource; the display project inherits the last confirmed
     project when the candidate differs (entering a 30-second pending
@@ -255,7 +255,7 @@ def advance_ownership(
 ) -> ProjectOwnershipState | None:
     """Advance the pending timer on an unchanged resource signature.
 
-    Called by ``AutoActivityRecorder`` on every observe where the
+    Called by ``ActivitySessionRecorder`` on every observe where the
     signature has NOT changed. When the pending window has elapsed
     (``>= threshold_seconds``), the candidate is confirmed and becomes
     the new display project. Otherwise the elapsed counter is updated

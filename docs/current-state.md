@@ -2,36 +2,25 @@
 
 > **Default entry point for AI tools and developers.** Read this file first.
 > It is a one-screen snapshot of what WorkTrace ships today. For architecture
-> decisions see [`ui-webview-migration.md`](ui-webview-migration.md); for the
-> full per-phase history see
+> decisions see [`ui-webview-migration.md`](ui-webview-migration.md); history:
 > [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Current Shipped State
 
 - WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the only
-  shipping UI. The legacy `worktrace/ui` package has been deleted; there is
-  no Tkinter fallback. Start with `python -m worktrace.main`. Missing
-  WebView2 Runtime is a blocking error with a clear Chinese install prompt;
-  WorkTrace never auto-downloads it.
+  shipping UI; no Tkinter fallback. Start with `python -m worktrace.main`.
+  Missing WebView2 Runtime is a blocking Chinese prompt; no auto-download.
 - Closing the WebView main window exits WorkTrace and runs runtime shutdown.
   No tray hide-to-background lifecycle is currently shipped.
 - The first-run privacy notice gate is **fail-closed**: the collector and
   folder-index worker must NOT start before the notice is accepted.
 - `AppRuntime.initialize()` only performs DB init, single-instance lock,
-  and recovery — it does NOT start the folder-index worker.
-- The unified entry `app_api.start_collection_after_privacy_gate()` is
-  the ONLY startup path for the folder-index worker AND the collector.
-  It enforces the first-run notice read, the start ordering (background
-  workers before collector), and the fail-closed payload in one place.
-- `start_background_workers()` / `start_collector()` are runtime-internal
-  helpers exported by `app_api` for the unified entry to call; the WebView
-  bridge and `webview_main` MUST NOT call them directly. `toggle_pause` and
-  `accept_first_run_notice` route startup through the unified entry and do
-  NOT duplicate the gate read, start ordering, or fail-closed message.
-- Both API and bridge layers collapse failures to stable Chinese messages
-  and never return full paths, passphrases, salt, ciphertext, payload, SQL,
-  or tracebacks. Full per-phase chronology lives in
-  [`history/webview-phases.md`](history/webview-phases.md).
+  and recovery. `app_api.start_collection_after_privacy_gate()` is the ONLY
+  startup path for folder-index worker + collector and owns notice read,
+  worker-before-collector ordering, and fail-closed payload. Runtime helper
+  starts are not bridge or `webview_main` entry points.
+- API/bridge failures collapse to stable Chinese messages and never return
+  full paths, passphrases, salt, ciphertext, payload, SQL, or tracebacks.
 
 ## Migrated Pages
 
@@ -48,22 +37,16 @@
   description, project enabled state, special `排除规则` marker, folder
   rules, keyword rules, rule enabled state, and folder recursion scope.
   Current write capabilities are listed in the Project Rules matrix below.
-- **Settings / Privacy**: read-only safety-status plus clipboard capture
-  toggle plus encrypted backup export / manifest preview / import
-  (replace-only) / clear-all-local-data plus the first-run privacy notice
-  gate + read-only "view privacy notice" entry. Shows storage model,
-  clipboard-capture on/off, export directory configured yes/no,
-  encrypted-backup import-in-progress flag, first-run notice accepted state.
-  Import + clear-all leave WorkTrace paused; clear-all runs inside a
-  destructive reset guard. The first-run gate is fail-closed (`webview_main`
-  and `toggle_pause` never start the collector until accepted).
+- **Settings / Privacy**: safety status, clipboard capture toggle, encrypted
+  backup export / manifest preview / replace-only import / clear-all, plus
+  privacy notice view/gate. Import + clear-all leave WorkTrace paused; the
+  first-run gate is fail-closed.
 
 ## Supported Timeline Write Operations
 
 - Project reclassification of a session; session-note editing.
-- Single-activity `start_time` / `end_time` correction (incl. session-level);
-  single-activity split into two closed activities; two-activity merge of
-  adjacent same-project / same-resource / same-status / same-source activities.
+- Single-activity time correction (incl. session-level), split, and merge of
+  adjacent same-project / same-resource / same-status / same-source rows.
 - Single-activity hide / soft delete; single-activity restore (un-hide +
   un-soft-delete).
 - Batch project reassignment of multiple closed activities; batch note
@@ -74,14 +57,12 @@
 
 ## Project Rules Capability Matrix
 
-- Read project-grouped folder / keyword rule list; enable / disable existing
-  folder / keyword rules; keyword + folder rule create / edit / delete.
+- Read project-grouped folder / keyword rules; enable / disable existing
+  rules; keyword + folder rule create / edit / delete.
 - user project create / edit / enable-disable / archive.
-- Single-rule impact preview for folder / keyword rules (display-safe counts +
-  up to 20 sample rows; no raw window title / file path / note).
-- Safe single-rule backfill for folder / keyword rules (≤ 100 updates per
-  call; skips manual / hidden / deleted / in-progress / non-normal;
-  `too_many_matches` writes nothing).
+- Single-rule impact preview (display-safe counts + up to 20 rows; no raw
+  title / path / note) and safe backfill (≤ 100 updates; skips manual /
+  hidden / deleted / in-progress / non-normal; `too_many_matches` writes none).
 - Automatic application of enabled rules to eligible activities (skips manual
   / hidden / deleted / in-progress / disabled rules / archived projects).
 - Selected-rule batch preview / apply / enable / disable (≤ 20 rules; batch

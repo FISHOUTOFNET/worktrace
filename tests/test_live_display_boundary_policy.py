@@ -19,7 +19,6 @@ from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service, session_boundary_service, settings_service
 from worktrace.services.activity_display_model_service import build_activity_display_model
 from worktrace.services.live_display_service import compute_refresh_revision
-from worktrace.services.runtime_activity_state_service import write_pending_short_carry
 from worktrace.webview_ui.bridge import WebViewBridge
 from tests.support.snapshot_factory import normal_snapshot
 
@@ -43,6 +42,29 @@ def bridge(temp_db, monkeypatch):
 def _set_snapshot(snapshot: dict | None) -> None:
     settings_service.set_setting(
         "current_activity_snapshot", json.dumps(snapshot) if snapshot else ""
+    )
+    settings_service.clear_settings_cache()
+
+
+def _write_legacy_pending_short_carry(
+    seconds: int,
+    *,
+    source_start_time: str,
+    source_end_time: str,
+) -> None:
+    settings_service.set_setting("pending_short_seconds", str(max(0, int(seconds))))
+    settings_service.set_setting(
+        "pending_short_carry_provenance",
+        json.dumps(
+            {
+                "version": 1,
+                "source_status": STATUS_NORMAL,
+                "source_start_time": source_start_time,
+                "source_end_time": source_end_time,
+                "latest_boundary_at_write": session_boundary_service.latest_boundary_time() or "",
+            },
+            sort_keys=True,
+        ),
     )
     settings_service.clear_settings_cache()
 
@@ -96,7 +118,7 @@ def test_current_only_pending_base_zero_no_stale_carry(bridge):
 
 
 def test_current_only_pending_ignores_stale_pending_after_pause_or_restart(bridge):
-    write_pending_short_carry(
+    _write_legacy_pending_short_carry(
         20,
         source_start_time=f"{TODAY} 08:59:00",
         source_end_time=f"{TODAY} 08:59:20",
@@ -290,7 +312,7 @@ def test_refresh_revision_changes_on_base_policy_change_but_not_natural_seconds(
     )
     assert rev_tick == rev_fresh
 
-    write_pending_short_carry(
+    _write_legacy_pending_short_carry(
         20,
         source_start_time=f"{TODAY} 09:00:00",
         source_end_time=f"{TODAY} 09:00:20",
@@ -308,7 +330,7 @@ def test_refresh_revision_changes_on_base_policy_change_but_not_natural_seconds(
     )
     assert rev_continuous == rev_fresh
 
-    write_pending_short_carry(
+    _write_legacy_pending_short_carry(
         21,
         source_start_time=f"{TODAY} 09:00:00",
         source_end_time=f"{TODAY} 09:00:20",

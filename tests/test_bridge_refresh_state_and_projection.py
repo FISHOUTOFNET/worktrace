@@ -32,7 +32,6 @@ pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pyt
 from worktrace import db
 from worktrace.constants import STATUS_NORMAL, TIME_FORMAT
 from worktrace.services import settings_service
-from worktrace.services.runtime_activity_state_service import write_pending_short_carry
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
@@ -46,6 +45,29 @@ def bridge(temp_db):
     settings_service.set_setting("user_paused", "false")
     settings_service.clear_settings_cache()
     return WebViewBridge()
+
+
+def _write_legacy_pending_short_carry(
+    seconds: int,
+    *,
+    source_start_time: str,
+    source_end_time: str,
+) -> None:
+    settings_service.set_setting("pending_short_seconds", str(max(0, int(seconds))))
+    settings_service.set_setting(
+        "pending_short_carry_provenance",
+        json.dumps(
+            {
+                "version": 1,
+                "source_status": STATUS_NORMAL,
+                "source_start_time": source_start_time,
+                "source_end_time": source_end_time,
+                "latest_boundary_at_write": "",
+            },
+            sort_keys=True,
+        ),
+    )
+    settings_service.clear_settings_cache()
 
 
 def _set_snapshot(snapshot: dict | None) -> None:
@@ -660,14 +682,14 @@ def test_refresh_revision_unchanged_on_valid_pending_seconds_only(bridge):
     """Validated pending carry can grow without changing structure."""
     start_time = "2026-06-18 09:00:20"
     _set_snapshot(_normal_snapshot(elapsed_seconds=120, start_time=start_time))
-    write_pending_short_carry(
+    _write_legacy_pending_short_carry(
         45,
         source_start_time="2026-06-18 09:00:00",
         source_end_time=start_time,
     )
     settings_service.clear_settings_cache()
     r1 = bridge.get_refresh_state()
-    write_pending_short_carry(
+    _write_legacy_pending_short_carry(
         46,
         source_start_time="2026-06-18 09:00:00",
         source_end_time=start_time,

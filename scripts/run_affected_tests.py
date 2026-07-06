@@ -378,6 +378,7 @@ RULES: list[dict] = [
         "id": "G. Security / crypto / backup",
         "triggers": [
             "worktrace/security/",
+            "worktrace/services/secure_backup_service.py",
             "docs/v0.2-local-security-design.md",
             "docs/v0.2-boundary.md",
             "docs/research/v0.2-field-encryption-scan.md",
@@ -398,6 +399,7 @@ RULES: list[dict] = [
         "triggers": [
             "worktrace/collector/",
             "worktrace/services/runtime_activity_state_service.py",
+            "worktrace/services/project_ownership_service.py",
             "worktrace/platforms/",
             "worktrace/resources/",
             "worktrace/path_utils.py",
@@ -412,6 +414,7 @@ RULES: list[dict] = [
             "tests/test_startup_imports.py",
             "tests/test_app_runtime_privacy_gate.py",
             "tests/test_short_activity_buffer.py",
+            "tests/test_project_ownership_pending.py",
             "tests/test_bridge_refresh_state_and_projection.py",
             "tests/test_live_display_project_transition_contract.py",
             "tests/test_display_model_anti_regression.py",

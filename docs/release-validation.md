@@ -168,6 +168,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 
 ### J. CSV Export
 
+CSV export is the current public export capability.
+
 - [ ] A selected date range can be exported to CSV.
 - [ ] Output path is user-selected through the native save dialog or the
       documented export flow.
@@ -239,3 +241,4 @@ the packaged build behaves identically to the source-run build.
 - Date:
 - Commit SHA:
 - Windows version:
+- Release decision: pass / blocked

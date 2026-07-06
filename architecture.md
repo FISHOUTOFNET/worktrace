@@ -81,9 +81,18 @@ collector, recovery, shutdown, and manual lifecycle paths.
 
 ## Collector Boundary
 
-The collector and `CollectorStateMachine` own activity observation and hard
-session boundaries. `AutoActivityRecorder` owns the current runtime activity,
-project ownership pending state, and finalization of the current activity.
+The collector loop owns sampling, gate checks, heartbeat, poll cadence, and
+pause/import/privacy/idle control. `ResourceIdentityResolver` owns
+ActiveWindow-to-resource identity, signatures, path supplement, same-resource
+checks, and privacy-safe identity. `CollectorStateMachine` owns transition and
+hard-boundary decisions only. `ActivitySessionRecorder` coordinates current
+session state, lifecycle commands, short finalization, project ownership, and
+snapshot publication.
+
+`ShortActivityFinalizer` is the sole `<30s` normal activity merge/drop/resume
+policy owner. `SnapshotPublisher` is the sole
+`current_activity_snapshot` construction/publication owner; runtime cleanup
+remains the transient-state clearing owner.
 
 Short-activity persistence is collector/lifecycle-owned:
 

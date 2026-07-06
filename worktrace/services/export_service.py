@@ -215,7 +215,9 @@ def _destructive_reset_guard() -> Iterator[None]:
 
     prior_user_paused = get_bool_setting("user_paused", False)
     prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
-    prior_snapshot = get_setting("current_activity_snapshot", "") or ""
+    from ..collector.snapshot_publisher import DEFAULT_SNAPSHOT_PUBLISHER
+
+    prior_snapshot = DEFAULT_SNAPSHOT_PUBLISHER.read_raw()
 
     set_setting("user_paused", "true")
     set_setting("collector_status", "paused")
@@ -234,7 +236,7 @@ def _destructive_reset_guard() -> Iterator[None]:
         )
         set_setting("user_paused", "true" if prior_user_paused else "false")
         set_setting("collector_status", prior_collector_status)
-        set_setting("current_activity_snapshot", prior_snapshot)
+        DEFAULT_SNAPSHOT_PUBLISHER.restore_raw(prior_snapshot)
         set_setting("secure_import_in_progress", "false")
         clear_settings_cache()
         raise
