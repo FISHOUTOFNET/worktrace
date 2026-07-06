@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 from ..constants import STATUS_NORMAL
+from ..contracts.live_display_contracts import ShortActivityAction
 from ..services import activity_service, session_boundary_service
 from ..services.activity_continuity_service import (
     can_absorb_short_pending,
@@ -31,13 +31,7 @@ class FinishedActivityCandidate:
 
 @dataclass(frozen=True)
 class ShortActivityDecision:
-    action: Literal[
-        "merge_to_anchor",
-        "drop",
-        "close_persisted",
-        "resume_anchor",
-        "none",
-    ]
+    action: ShortActivityAction
     target_activity_id: int | None
     absorbed_seconds: int
     reason: str

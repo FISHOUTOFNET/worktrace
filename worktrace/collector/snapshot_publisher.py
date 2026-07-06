@@ -10,6 +10,7 @@ from ..constants import (
     STATUS_PAUSED,
     UNCATEGORIZED_PROJECT,
 )
+from ..contracts.live_display_contracts import ActivitySnapshotContract
 from ..resources.types import DetectedResource
 from ..services.project_ownership_service import (
     ProjectOwnershipState,
@@ -80,7 +81,7 @@ class SnapshotPublisher:
         project_transition_pending = bool(transition_dict.get("pending"))
         inferred_project_name = display_label.name or UNCATEGORIZED_PROJECT
 
-        snapshot = {
+        snapshot: ActivitySnapshotContract = {
             "app_name": payload.get("app_name") or "",
             "process_name": payload.get("process_name") or "",
             "window_title": payload.get("window_title") or "",

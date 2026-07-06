@@ -1,0 +1,2 @@
+"""Internal WorkTrace dict contracts."""
+

@@ -34,6 +34,16 @@ import json
 from typing import Any
 
 from ..formatters import format_duration, format_resource_type, format_safe_display_name
+from ..contracts.live_display_contracts import (
+    ActivityDetailRowContract,
+    ActivitySnapshotContract,
+    CurrentActivityContract,
+    DisplaySpanContract,
+    LiveClockContract,
+    RecentActivityRowContract,
+    RefreshStateContract,
+    TimelineSessionRowContract,
+)
 from . import activity_display_model_service, live_display_service, project_service, statistics_service, timeline_service
 from .activity_display_model_service import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
@@ -53,7 +63,7 @@ _RECENT_LIMIT = 20
 # Snapshot / status access helpers
 
 
-def _get_current_activity_snapshot() -> dict[str, Any] | None:
+def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
     raw = get_setting("current_activity_snapshot", "") or ""
     if not raw:
         return None
@@ -102,7 +112,10 @@ def _apply_live_span_to_rows(
         apply_live_span_to_row(row, span, row_kind=row_kind)
 
 
-def _get_visible_live_span(model: dict[str, Any], surface: str) -> dict[str, Any] | None:
+def _get_visible_live_span(
+    model: dict[str, Any],
+    surface: str,
+) -> DisplaySpanContract | None:
     span = get_live_span(model)
     if not span:
         return None
@@ -119,14 +132,14 @@ def _get_visible_live_span(model: dict[str, Any], surface: str) -> dict[str, Any
     return span
 
 
-def _rows_have_live_span(rows: list[dict[str, Any]], span: dict[str, Any]) -> bool:
+def _rows_have_live_span(rows: list[dict[str, Any]], span: DisplaySpanContract) -> bool:
     span_id = str(span.get("display_span_id") or "")
     if not span_id:
         return False
     return any(str(row.get("display_span_id") or "") == span_id for row in rows)
 
 
-def _live_contract_reason(span: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+def _live_contract_reason(span: DisplaySpanContract, rows: list[dict[str, Any]]) -> str:
     if int(span.get("anchor_activity_id") or 0) <= 0:
         return ""
     if not rows:
@@ -134,7 +147,7 @@ def _live_contract_reason(span: dict[str, Any], rows: list[dict[str, Any]]) -> s
     return "live_overlay_mismatch"
 
 
-def _current_elapsed_at_sample(live_clock: dict[str, Any]) -> int:
+def _current_elapsed_at_sample(live_clock: LiveClockContract) -> int:
     return int(
         live_clock.get("current_elapsed_at_sample")
         or live_clock.get("active_elapsed_at_sample")
@@ -142,7 +155,7 @@ def _current_elapsed_at_sample(live_clock: dict[str, Any]) -> int:
     )
 
 
-def _clock_projects_live_duration(live_clock: dict[str, Any]) -> bool:
+def _clock_projects_live_duration(live_clock: LiveClockContract) -> bool:
     return bool(
         live_clock.get("is_live")
         and (
@@ -186,7 +199,7 @@ def _live_identity_fields(model: dict[str, Any]) -> dict[str, Any]:
 
 
 def _display_only_common_fields(
-    span: dict[str, Any],
+    span: DisplaySpanContract,
     *,
     row_kind: str,
     live_contract_reason: str = "",
@@ -278,10 +291,10 @@ def _display_only_common_fields(
 
 
 def _materialize_display_only_recent_row(
-    span: dict[str, Any],
+    span: DisplaySpanContract,
     *,
     live_contract_reason: str = "",
-) -> dict[str, Any]:
+) -> RecentActivityRowContract:
     row = _display_only_common_fields(
         span,
         row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
@@ -300,10 +313,10 @@ def _materialize_display_only_recent_row(
 
 
 def _materialize_display_only_timeline_session(
-    span: dict[str, Any],
+    span: DisplaySpanContract,
     *,
     live_contract_reason: str = "",
-) -> dict[str, Any]:
+) -> TimelineSessionRowContract:
     row = _display_only_common_fields(
         span,
         row_kind=ROW_KIND_PROJECT_SESSION_ROW,
@@ -327,11 +340,11 @@ def _materialize_display_only_timeline_session(
 
 
 def _materialize_display_only_detail_row(
-    span: dict[str, Any],
-    current_activity: dict[str, Any],
+    span: DisplaySpanContract,
+    current_activity: CurrentActivityContract,
     *,
     live_contract_reason: str = "",
-) -> dict[str, Any]:
+) -> ActivityDetailRowContract:
     row = _display_only_common_fields(
         span,
         row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW,
@@ -831,7 +844,7 @@ def get_session_details_view_model(
 # Refresh State ViewModel
 
 
-def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, Any]:
+def get_refresh_state_view_model(report_date: str | None = None) -> RefreshStateContract:
     """Build the heartbeat / refresh-state ViewModel from a single display model.
 
     Refresh revision, collector display status, live clock fields, stable

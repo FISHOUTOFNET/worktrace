@@ -36,6 +36,13 @@ from ..constants import (
     STATUS_PAUSED,
     UNCATEGORIZED_PROJECT,
 )
+from ..contracts.live_display_contracts import (
+    ActivitySnapshotContract,
+    CurrentActivityContract,
+    DisplaySessionPolicyContract,
+    DisplaySpanContract,
+    LiveClockContract,
+)
 from . import activity_continuity_service, activity_service, project_service, session_boundary_service, timeline_service
 from .live_display_service import (
     _display_resource_name,
@@ -108,7 +115,7 @@ class DisplaySessionPolicy:
     borrowed_anchor_project_name: str = ""
     borrowed_anchor_project_description: str = ""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> DisplaySessionPolicyContract:
         return asdict(self)
 
 
@@ -118,7 +125,7 @@ class DisplaySessionPolicy:
 _UNSET = object()
 
 
-def _build_suppressed_live_clock() -> dict[str, Any]:
+def _build_suppressed_live_clock() -> LiveClockContract:
     """Build a fully-suppressed live clock for historical dates.
 
     On ``report_date != today`` the page-scoped live clock MUST NOT carry
@@ -172,7 +179,7 @@ def _build_suppressed_live_clock() -> dict[str, Any]:
 # Snapshot access helpers
 
 
-def _get_current_activity_snapshot() -> dict[str, Any] | None:
+def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
     raw = get_setting("current_activity_snapshot", "") or ""
     if not raw:
         return None
@@ -187,7 +194,7 @@ def _get_current_activity_snapshot() -> dict[str, Any] | None:
 
 
 def classify_display_live_state(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     report_date: str | None,
     today: str | None,
 ) -> str:
@@ -214,7 +221,7 @@ def classify_display_live_state(
 # Live-clock construction
 
 
-def _current_resource_identity_hash(snapshot: dict[str, Any] | None) -> str:
+def _current_resource_identity_hash(snapshot: ActivitySnapshotContract | None) -> str:
     """Hash current resource identity + start_time for UI continuity.
 
     The raw resource identity may contain a path, so only the digest is
@@ -263,7 +270,7 @@ def _status_display_label(status: str) -> str:
 
 
 def _build_status_display_item(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     display_live_state: str,
     report_date: str,
     today: str,
@@ -359,7 +366,7 @@ def _anchor_project_fields(anchor: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def resolve_borrowed_display_anchor(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     report_date: str | None,
     today: str | None,
 ) -> dict[str, Any] | None:
@@ -385,13 +392,13 @@ def resolve_borrowed_display_anchor(
 
 
 def _build_display_session_policy(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     report_date: str,
     today: str,
     base_state: str,
     anchor: dict[str, Any] | None,
     display_live_state: str,
-    summary: dict[str, Any],
+    summary: CurrentActivityContract,
 ) -> DisplaySessionPolicy:
     """Central Display Session Boundary Policy.
 
@@ -514,14 +521,14 @@ def _build_display_session_policy(
 
 
 def _build_project_live_clock(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     display_live_state: str,
     anchor: dict[str, Any] | None,
-    summary: dict[str, Any],
+    summary: CurrentActivityContract,
     policy: DisplaySessionPolicy,
     report_date: str,
     today: str,
-) -> dict[str, Any]:
+) -> LiveClockContract:
     """Build the project/history projection live-clock block.
 
     Project/history formula: ``display_base_seconds + current_active_elapsed``.
@@ -583,12 +590,12 @@ def _build_project_live_clock(
 
 
 def _build_current_activity_display(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     display_live_state: str,
     anchor: dict[str, Any] | None,
-    summary: dict[str, Any],
-    live_clock: dict[str, Any],
-) -> dict[str, Any]:
+    summary: CurrentActivityContract,
+    live_clock: LiveClockContract,
+) -> CurrentActivityContract:
     """Build the current-activity display block.
 
     The current-activity area always renders the pending resource / window
@@ -774,14 +781,14 @@ def _source_for_state(state: str, snapshot: dict[str, Any] | None) -> str:
 
 
 def _build_display_span(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     display_live_state: str,
     anchor: dict[str, Any] | None,
-    live_clock: dict[str, Any],
-    summary: dict[str, Any],
+    live_clock: LiveClockContract,
+    summary: CurrentActivityContract,
     report_date: str,
     today: str,
-) -> dict[str, Any]:
+) -> DisplaySpanContract:
     """Build the single live display span (at most one per snapshot).
 
     The span carries the unified live clock plus the visibility flags
@@ -911,7 +918,7 @@ def _build_display_span(
 # Live-span overlay (applied to matching DB rows by the page ViewModels)
 
 
-def _live_clock_fields(live_clock: dict[str, Any]) -> dict[str, Any]:
+def _live_clock_fields(live_clock: LiveClockContract) -> dict[str, Any]:
     """Return the subset of live-clock fields merged into every live row."""
     return {
         "display_span_id": str(live_clock.get("display_span_id") or ""),
@@ -940,7 +947,7 @@ def _live_clock_fields(live_clock: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _current_active_elapsed_at_sample(live_clock: dict[str, Any]) -> int:
+def _current_active_elapsed_at_sample(live_clock: LiveClockContract) -> int:
     return int(
         live_clock.get("current_elapsed_at_sample")
         or live_clock.get("active_elapsed_at_sample")
@@ -948,7 +955,10 @@ def _current_active_elapsed_at_sample(live_clock: dict[str, Any]) -> int:
     )
 
 
-def _snapshot_extra_base_for_span(span: dict[str, Any], live_clock: dict[str, Any]) -> int:
+def _snapshot_extra_base_for_span(
+    span: DisplaySpanContract,
+    live_clock: LiveClockContract,
+) -> int:
     return int(
         live_clock.get("display_base_seconds")
         or span.get("display_base_seconds")
@@ -958,8 +968,8 @@ def _snapshot_extra_base_for_span(span: dict[str, Any], live_clock: dict[str, An
 
 def _static_base_for_live_row(
     row: dict[str, Any],
-    span: dict[str, Any],
-    live_clock: dict[str, Any],
+    span: DisplaySpanContract,
+    live_clock: LiveClockContract,
     state: str,
 ) -> int:
     if state != "persisted_open":
@@ -996,7 +1006,7 @@ def _duration_semantic_for_row_kind(row_kind: str) -> str:
 
 def apply_live_span_to_row(
     row: dict[str, Any],
-    span: dict[str, Any] | None,
+    span: DisplaySpanContract | None,
     *,
     row_kind: str,
 ) -> dict[str, Any]:
@@ -1261,7 +1271,7 @@ def build_activity_display_model(
 
 
 def build_live_runtime_model(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     report_date: str | None = None,
     today: str | None = None,
 ) -> dict[str, Any]:
@@ -1273,7 +1283,7 @@ def build_live_runtime_model(
     )
 
 
-def get_live_span(model: dict[str, Any]) -> dict[str, Any] | None:
+def get_live_span(model: dict[str, Any]) -> DisplaySpanContract | None:
     """Return the single live display span from a display model, or ``None``."""
     spans = model.get("display_spans") or []
     return spans[0] if spans else None

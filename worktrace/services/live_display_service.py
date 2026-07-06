@@ -36,6 +36,10 @@ from ..constants import (
     STATUS_PAUSED,
     UNCATEGORIZED_PROJECT,
 )
+from ..contracts.live_display_contracts import (
+    ActivitySnapshotContract,
+    CurrentActivityContract,
+)
 from . import activity_service, timeline_service
 from .live_time_service import (
     safe_int,
@@ -59,13 +63,13 @@ _MAX_LIVE_DURATION_SECONDS = 36 * 60 * 60
 # Live-state classification
 
 
-def _snapshot_status(snapshot: dict[str, Any] | None) -> str:
+def _snapshot_status(snapshot: ActivitySnapshotContract | None) -> str:
     if not snapshot:
         return ""
     return str(snapshot.get("status") or "")
 
 
-def classify_live_state(snapshot: dict[str, Any] | None) -> str:
+def classify_live_state(snapshot: ActivitySnapshotContract | None) -> str:
     """Return the unified live-state label for a snapshot.
 
     Returns one of:
@@ -103,7 +107,7 @@ def classify_live_state(snapshot: dict[str, Any] | None) -> str:
 
 
 def is_live_eligible_for_normal(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     report_date: str | None,
     today: str | None,
 ) -> bool:
@@ -131,7 +135,7 @@ def is_live_eligible_for_normal(
     return report_date == today
 
 
-def _snapshot_total_seconds(snapshot: dict[str, Any] | None) -> int:
+def _snapshot_total_seconds(snapshot: ActivitySnapshotContract | None) -> int:
     if not snapshot:
         return 0
     return snapshot_elapsed_seconds(snapshot) + snapshot_extra_seconds(snapshot)
@@ -140,7 +144,7 @@ def _snapshot_total_seconds(snapshot: dict[str, Any] | None) -> int:
 # Display-safe field extraction
 
 
-def _display_resource_name(snapshot: dict[str, Any] | None) -> str:
+def _display_resource_name(snapshot: ActivitySnapshotContract | None) -> str:
     """Return a display-safe resource name from the snapshot.
 
     Falls back through ``resource_display_name`` →
@@ -158,13 +162,15 @@ def _display_resource_name(snapshot: dict[str, Any] | None) -> str:
     return str(name or "未知").strip() or "未知"
 
 
-def _display_app_name(snapshot: dict[str, Any] | None) -> str:
+def _display_app_name(snapshot: ActivitySnapshotContract | None) -> str:
     if not snapshot:
         return ""
     return str(snapshot.get("app_name") or "").strip()
 
 
-def _snapshot_display_project_dict(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+def _snapshot_display_project_dict(
+    snapshot: ActivitySnapshotContract | None,
+) -> dict[str, Any] | None:
     """Return the display-safe ``display_project`` dict from a snapshot.
 
     Reads the structured ``display_project`` block written by the
@@ -179,7 +185,7 @@ def _snapshot_display_project_dict(snapshot: dict[str, Any] | None) -> dict[str,
     return None
 
 
-def _display_project_name(snapshot: dict[str, Any] | None) -> str:
+def _display_project_name(snapshot: ActivitySnapshotContract | None) -> str:
     """Return the unified display project name for a snapshot."""
     if not snapshot:
         return UNCATEGORIZED_PROJECT
@@ -211,7 +217,7 @@ def _display_project_name(snapshot: dict[str, Any] | None) -> str:
     return name if name else UNCATEGORIZED_PROJECT
 
 
-def _display_project_description(snapshot: dict[str, Any] | None) -> str:
+def _display_project_description(snapshot: ActivitySnapshotContract | None) -> str:
     """Return the display project description for a snapshot.
 
     Reads the structured ``display_project.description`` block when
@@ -239,7 +245,7 @@ def _display_project_description(snapshot: dict[str, Any] | None) -> str:
     return ""
 
 
-def _stable_live_key(snapshot: dict[str, Any] | None) -> str:
+def _stable_live_key(snapshot: ActivitySnapshotContract | None) -> str:
     """Build a STABLE live identity for the current activity.
 
     Unlike ``_live_display_key``, this key does NOT include
@@ -267,7 +273,7 @@ def _stable_live_key(snapshot: dict[str, Any] | None) -> str:
     return "|".join(parts)
 
 
-def _stable_live_key_hash(snapshot: dict[str, Any] | None) -> str:
+def _stable_live_key_hash(snapshot: ActivitySnapshotContract | None) -> str:
     """Return a short hash of the stable_live_key for use in UI ids."""
     key = _stable_live_key(snapshot)
     if not key:
@@ -275,7 +281,7 @@ def _stable_live_key_hash(snapshot: dict[str, Any] | None) -> str:
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
 
 
-def _start_time_epoch_ms(snapshot: dict[str, Any] | None) -> int:
+def _start_time_epoch_ms(snapshot: ActivitySnapshotContract | None) -> int:
     """Convert the snapshot's ``start_time`` (``YYYY-MM-DD HH:MM:SS``) to
     epoch milliseconds.
 
@@ -297,7 +303,7 @@ def _start_time_epoch_ms(snapshot: dict[str, Any] | None) -> int:
     return int(dt.timestamp() * 1000)
 
 
-def _live_display_key(snapshot: dict[str, Any] | None) -> str:
+def _live_display_key(snapshot: ActivitySnapshotContract | None) -> str:
     """Build a display-safe live-display identity for the current activity.
 
     The key is constructed ONLY from sanitized display fields
@@ -333,10 +339,10 @@ def _live_display_key(snapshot: dict[str, Any] | None) -> str:
 
 
 def build_current_activity_summary(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     report_date: str | None = None,
     today: str | None = None,
-) -> dict[str, Any]:
+) -> CurrentActivityContract:
     """Build the unified current-activity summary consumed by Overview,
     Timeline header, and the heartbeat revision check.
 
@@ -491,7 +497,9 @@ def build_current_activity_summary(
     }
 
 
-def _snapshot_display_project_fields(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+def _snapshot_display_project_fields(
+    snapshot: ActivitySnapshotContract | None,
+) -> dict[str, Any]:
     """Return the full set of display-facing project fields from a snapshot.
 
     Centralizes project-field extraction so the unified Activity Display
@@ -563,7 +571,7 @@ def _snapshot_display_project_fields(snapshot: dict[str, Any] | None) -> dict[st
 
 
 def persisted_open_live_seconds(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     row: dict[str, Any] | None,
 ) -> int:
     """Return the live seconds for a persisted open DB row.
@@ -590,7 +598,7 @@ def persisted_open_live_seconds(
 
 
 def compute_refresh_revision(
-    snapshot: dict[str, Any] | None,
+    snapshot: ActivitySnapshotContract | None,
     collector_status: str,
     user_paused: bool,
     today: str,
