@@ -13,6 +13,8 @@
   no Tkinter fallback. Start with `python -m worktrace.main`. Missing
   WebView2 Runtime is a blocking error with a clear Chinese install prompt;
   WorkTrace never auto-downloads it.
+- Closing the WebView main window exits WorkTrace and runs runtime shutdown.
+  No tray hide-to-background lifecycle is currently shipped.
 - The first-run privacy notice gate is **fail-closed**: the collector and
   folder-index worker must NOT start before the notice is accepted.
 - `AppRuntime.initialize()` only performs DB init, single-instance lock,
@@ -111,6 +113,7 @@
   creation; global overlap detection.
 - AI, server, payment, license, token, subscription, login, cloud sync, OCR,
   screenshots, screen recording, keyboard logging, automatic startup.
+- Tray hide-to-background lifecycle or tray menu operation.
 - Any DB schema change during development; `schema.sql` is the single source
   of truth. No Project Rules phase changed the schema.
 
@@ -118,9 +121,11 @@
 
 ```
 WebView ──> bridge ──> worktrace.api ──> worktrace.services
-  view_model_service (page ViewModel sole constructor)
+  view_model_service (page ViewModel projection/materialization layer)
+  activity_display_model_service (Activity Display Model / live display semantics owner)
+  live_display_service (low-level display-safe helper functions)
   activity_lifecycle_service (open-row command facade)
-  live_display_service (live projection contract) + activity_service (CRUD)
+  activity_service (CRUD)
   collector ──> activity_lifecycle_service
 ```
 
@@ -129,20 +134,32 @@ plain `<script src>` tags. No ES modules, bundler, Node/build step,
 browser storage, or network requests. Bridge imports `worktrace.api` only
 (enforced by `tests/test_ui_backend_boundary.py`).
 
+- **`activity_display_model_service`** is the sole owner of live display
+  semantics: live eligibility, `live_state`, display span identity, live
+  clock fields, `<30s` borrowed-anchor/current-only display policy,
+  `persisted_open` overlay, and the surface visibility flags consumed by
+  page ViewModels. It never writes the DB; finished short-activity
+  merge/drop remains collector/lifecycle-owned persistence.
 - **`view_model_service`** is the sole constructor of Overview / Timeline /
-  Details / Refresh State page ViewModels from a single snapshot sample.
-  All live display, virtual live row, persisted_open overlay, stable live
-  key, and live clock fields are built here; the bridge never constructs
-  them directly.
+  Details / Refresh State page ViewModels from a single snapshot sample. It
+  owns page projection/materialization only: DB list payloads, display-only
+  fallback rows when the Activity Display Model permits them, KPI base
+  fields, and JSON-safe page envelopes. It does not decide live display
+  semantics independently.
 - **`activity_lifecycle_service`** is the sole open-row command facade
   (collector / recovery / clipboard / midnight / shutdown); post-close
   inference is centralised in `finalize_closed_activity_ids`. The 30-second
   persistence threshold and the clipboard force-persist `STATUS_NORMAL`
   restriction are enforced INSIDE the facade; callers cannot bypass them.
-- **`live_display_service`** owns the live projection contract: every live
-  row carries `stable_live_key_hash`, `live_started_at_epoch_ms`,
-  `carry_seconds`, `live_state`. **`App.liveContinuityKey`** is the
-  frontend source of truth for ticker / render / seeding keys.
+- **`live_display_service`** provides low-level display-safe helper functions
+  used by the Activity Display Model and refresh/current-summary paths:
+  stable live identity helpers, current-activity summary helpers,
+  classification helpers, and refresh-revision computation. It is not the
+  page live-display model owner.
+- **`App.liveRuntime`** is the frontend accepted runtime. The local ticker is
+  DOM-only and renders `display_base_seconds + current_elapsed_now`; it must
+  not call the bridge, write the DB, or derive live seconds from structural
+  page caches.
 
 ## Privacy Boundary
 
