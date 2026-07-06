@@ -11,9 +11,14 @@ For any new task, default to this minimal reading order:
 1. [`docs/current-state.md`](current-state.md) — the one-screen "what ships
    today" snapshot. **Start here.** It is the single source of truth for
    current shipped behavior.
-2. [`docs/ui-webview-migration.md`](ui-webview-migration.md) — only the
-   architecture decisions and migration principles (now slim).
-3. The specific source files your task touches.
+2. [`architecture.md`](../architecture.md) — read this for architecture,
+   boundary, live-display ownership, lifecycle, export-surface, startup, or
+   cross-layer cleanup tasks. It is the current architecture contract.
+3. [`docs/ui-webview-migration.md`](ui-webview-migration.md) — only the
+   historical WebView migration decisions and migration principles. The
+   migration is closed; do not treat this file as the current architecture
+   owner when it conflicts with `architecture.md` or `current-state.md`.
+4. The specific source files your task touches.
 
 Do **not** default-read the full README, the phase history, the release
 validation doc, or research docs. Reach for them only when the task actually
@@ -41,9 +46,13 @@ each phase does not require editing the same facts in multiple places:
   Post-WebView migration, it no longer uses UI migration phase labels (Phase
   6F etc.) as the current-state identifier; it describes the shipped state
   directly.
-- **`docs/ui-webview-migration.md`** is **architecture-only**. The WebView
-  migration is closed; this document no longer carries current-status
-  responsibility.
+- **`architecture.md`** is the **current architecture contract**. Use it for
+  live-display ownership, lifecycle boundaries, DB/report boundaries,
+  frontend runtime boundaries, startup/privacy-gate boundaries, and current
+  public export-surface boundaries.
+- **`docs/ui-webview-migration.md`** is **migration-history architecture only**.
+  The WebView migration is closed; this document no longer carries current
+  architecture-owner or current-status responsibility.
 - **`docs/history/webview-phases.md`** is the archive for the Phase 0A →
   Phase 6F history. The migration is closed; ordinary maintenance should NOT
   append new UI migration phase entries.
@@ -51,7 +60,8 @@ each phase does not require editing the same facts in multiple places:
 - Post-migration: ordinary maintenance (docs cleanup, bridge refactoring,
   test hardening) does NOT require updating the migration archive or
   creating new phase labels. Only update `docs/current-state.md` when
-  shipped behavior changes.
+  shipped behavior changes; update `architecture.md` when the architecture
+  contract changes or needs clarification.
 - **`docs/release-checklist.md`** is only a compatibility pointer to
   `docs/release-validation.md`; it is retained as a stub to avoid breaking
   references.
@@ -81,7 +91,8 @@ Each task prompt / plan should state explicitly:
 Expand reading / search beyond the minimal set **only** when:
 
 - A test fails and the cause is not in the touched files.
-- A boundary or contract is unclear from `current-state.md`.
+- A boundary or contract is unclear from `current-state.md` and
+  `architecture.md`.
 - The task explicitly references a past phase's data semantics.
 
 Otherwise stay narrow.
@@ -93,13 +104,16 @@ Every 4–6 feature phases, run a **context diet** pass like Phase R1 / DG1:
 - Ensure `current-state.md` still matches the latest shipped behavior.
   Post-WebView migration, there is no "current phase label" to sync;
   `current-state.md` describes the shipped state directly.
+- Ensure `architecture.md` still matches current owner boundaries and does
+  not conflict with source-file headers.
 - Move any newly-accumulated per-phase prose out of README /
   `ui-webview-migration.md` and into `history/webview-phases.md`. The
   migration archive is closed; do not create new phase entries for ordinary
   maintenance.
 - Split or parametrize test files that have grown past ~1500 lines /
   accumulated duplicated static-contract assertions.
-- Keep the default reading set (current-state + slim migration doc) small.
+- Keep the default reading set (current-state + architecture contract + slim
+  migration doc only when needed) small.
 
 Phase DG1 executed this pass: README and `ui-webview-migration.md` were
 slimmed, `current-state.md` was restored to a one-screen snapshot, release
