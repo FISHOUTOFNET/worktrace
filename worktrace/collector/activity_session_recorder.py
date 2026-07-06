@@ -26,6 +26,12 @@ from ..services.project_ownership_service import (
     clear_ownership_state,
 )
 from ..services.runtime_activity_state_service import clear_runtime_activity_state
+from .decision_trace import (
+    CollectorDecisionTrace,
+    DecisionTraceRecorder,
+    NULL_DECISION_TRACE_RECORDER,
+    signature_hash,
+)
 from .resource_identity_resolver import (
     DEFAULT_RESOURCE_IDENTITY_RESOLVER,
     ResourceIdentityResolver,
@@ -52,6 +58,12 @@ class ActivitySessionRecorder:
     resolver: ResourceIdentityResolver = field(default=DEFAULT_RESOURCE_IDENTITY_RESOLVER)
     short_finalizer: ShortActivityFinalizer = field(default_factory=ShortActivityFinalizer)
     snapshot_publisher: SnapshotPublisher = field(default_factory=SnapshotPublisher)
+    decision_trace_recorder: DecisionTraceRecorder = field(
+        default=NULL_DECISION_TRACE_RECORDER
+    )
+
+    def __post_init__(self) -> None:
+        self.short_finalizer.trace_recorder = self.decision_trace_recorder
 
     def observe(
         self,
@@ -60,11 +72,23 @@ class ActivitySessionRecorder:
         at_time: str,
         end_reason: ActivityEndReason = ActivityEndReason.RESOURCE_SWITCH,
     ) -> None:
+        persisted_before = self.persisted_activity_id
+        previous_signature = self.current_signature
+        same_signature = self.current_signature == signature
         if self.current_payload is None:
             self._start(payload, signature, at_time)
+            self._record_observe_trace(
+                payload,
+                previous_signature,
+                signature,
+                same_signature=False,
+                at_time=at_time,
+                end_reason=end_reason,
+                persisted_before=persisted_before,
+            )
             return
 
-        if self.current_signature == signature:
+        if same_signature:
             self.current_payload = {
                 **self.current_payload,
                 **{k: v for k, v in payload.items() if v is not None},
@@ -77,12 +101,40 @@ class ActivitySessionRecorder:
             self._ensure_persisted_if_ready(at_time)
             self._update_persisted_progress(at_time)
             self._publish_snapshot(at_time)
+            self._record_observe_trace(
+                payload,
+                previous_signature,
+                signature,
+                same_signature=True,
+                at_time=at_time,
+                end_reason=end_reason,
+                persisted_before=persisted_before,
+            )
             return
 
         self.finish_current_activity(at_time, end_reason)
         if self._resume_if_absorbed_activity_matches(payload, signature, at_time):
+            self._record_observe_trace(
+                payload,
+                previous_signature,
+                signature,
+                same_signature=False,
+                at_time=at_time,
+                end_reason=end_reason,
+                persisted_before=persisted_before,
+                project_ownership_action="resume_absorbed_anchor",
+            )
             return
         self._start(payload, signature, at_time)
+        self._record_observe_trace(
+            payload,
+            previous_signature,
+            signature,
+            same_signature=False,
+            at_time=at_time,
+            end_reason=end_reason,
+            persisted_before=persisted_before,
+        )
 
     def finish_current_activity(
         self,
@@ -108,6 +160,21 @@ class ActivitySessionRecorder:
             payload=dict(self.current_payload),
         )
         decision = self.short_finalizer.finalize(candidate)
+        self.decision_trace_recorder.record(
+            CollectorDecisionTrace(
+                observed_at=end_time,
+                previous_signature_hash=signature_hash(self.current_signature),
+                status=status,
+                end_reason=str(reason.value),
+                elapsed_seconds=elapsed,
+                persisted_activity_id_before=self.persisted_activity_id,
+                persisted_activity_id_after=self.persisted_activity_id,
+                short_activity_action=decision.action,
+                short_activity_reason=decision.reason,
+                absorbed_seconds=decision.absorbed_seconds,
+                target_activity_id=decision.target_activity_id,
+            )
+        )
         if decision.action == "close_persisted" and self.persisted_activity_id is not None:
             lifecycle_close_activity(
                 self.persisted_activity_id,
@@ -220,10 +287,31 @@ class ActivitySessionRecorder:
                 elapsed_seconds=elapsed,
             )
         if activity_id is None:
+            self.decision_trace_recorder.record(
+                CollectorDecisionTrace(
+                    observed_at=at_time,
+                    status=str(status or ""),
+                    elapsed_seconds=elapsed,
+                    persisted_activity_id_before=None,
+                    persisted_activity_id_after=None,
+                    snapshot_action="persist_not_ready",
+                )
+            )
             return
+        persisted_before = self.persisted_activity_id
         self.persisted_activity_id = activity_id
         if status == STATUS_NORMAL:
             self.short_finalizer.clear_pending_runtime_state()
+        self.decision_trace_recorder.record(
+            CollectorDecisionTrace(
+                observed_at=at_time,
+                status=str(status or ""),
+                elapsed_seconds=elapsed,
+                persisted_activity_id_before=persisted_before,
+                persisted_activity_id_after=activity_id,
+                snapshot_action="persisted_open",
+            )
+        )
 
     def _persist_midnight_anchor(self, project_id: int, at_time: str) -> None:
         if (
@@ -273,6 +361,16 @@ class ActivitySessionRecorder:
         )
         target = result.target
         if result.decision.action != "resume_anchor" or not target:
+            self.decision_trace_recorder.record(
+                CollectorDecisionTrace(
+                    observed_at=at_time,
+                    incoming_signature_hash=signature_hash(signature),
+                    short_activity_action=result.decision.action,
+                    short_activity_reason=result.decision.reason,
+                    target_activity_id=result.decision.target_activity_id,
+                    project_ownership_action="resume_not_available",
+                )
+            )
             return False
         start_time = str(target.get("start_time") or "")
         if not start_time:
@@ -290,6 +388,17 @@ class ActivitySessionRecorder:
         self._begin_project_ownership(payload, at_time)
         self._update_persisted_progress(at_time)
         self._publish_snapshot(at_time)
+        self.decision_trace_recorder.record(
+            CollectorDecisionTrace(
+                observed_at=at_time,
+                incoming_signature_hash=signature_hash(signature),
+                persisted_activity_id_after=self.persisted_activity_id,
+                short_activity_action=result.decision.action,
+                short_activity_reason=result.decision.reason,
+                target_activity_id=result.decision.target_activity_id,
+                project_ownership_action="resume_absorbed_anchor",
+            )
+        )
         return True
 
     def _publish_snapshot(self, at_time: str) -> None:
@@ -300,4 +409,37 @@ class ActivitySessionRecorder:
             project_ownership_state=self.project_ownership_state,
             persisted_activity_id=self.persisted_activity_id,
             current_extra_seconds=self.current_extra_seconds,
+        )
+        self.decision_trace_recorder.record(
+            CollectorDecisionTrace(
+                observed_at=at_time,
+                persisted_activity_id_after=self.persisted_activity_id,
+                snapshot_action="publish" if self.current_payload else "clear",
+            )
+        )
+
+    def _record_observe_trace(
+        self,
+        payload: dict,
+        previous_signature: ActivitySignature | None,
+        incoming_signature: ActivitySignature,
+        *,
+        same_signature: bool,
+        at_time: str,
+        end_reason: ActivityEndReason,
+        persisted_before: int | None,
+        project_ownership_action: str = "",
+    ) -> None:
+        self.decision_trace_recorder.record(
+            CollectorDecisionTrace(
+                observed_at=at_time,
+                previous_signature_hash=signature_hash(previous_signature),
+                incoming_signature_hash=signature_hash(incoming_signature),
+                same_signature=same_signature,
+                status=str(payload.get("status") or ""),
+                end_reason=str(end_reason.value),
+                persisted_activity_id_before=persisted_before,
+                persisted_activity_id_after=self.persisted_activity_id,
+                project_ownership_action=project_ownership_action,
+            )
         )
