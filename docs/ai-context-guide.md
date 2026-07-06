@@ -20,6 +20,15 @@ For any new task, default to this minimal reading order:
    owner when it conflicts with `architecture.md` or `current-state.md`.
 4. The specific source files your task touches.
 
+For display-model hardening, the default touched-file neighborhood is:
+`worktrace/services/activity_display_model_service.py`,
+`activity_display_policy.py`, `activity_live_clock.py`,
+`activity_display_span.py`, `activity_row_overlay.py`,
+`view_model_service.py`, `live_display_service.py`, `live_time_service.py`,
+the collector lifecycle files involved in the change, affected WebView JS,
+`scripts/run_affected_tests.py`, and the focused live-display tests. Do not
+expand beyond this set unless a test failure or unclear boundary requires it.
+
 Do **not** default-read the full README, the phase history, the release
 validation doc, or research docs. Reach for them only when the task actually
 needs them.
@@ -96,6 +105,11 @@ Expand reading / search beyond the minimal set **only** when:
 - The task explicitly references a past phase's data semantics.
 
 Otherwise stay narrow.
+
+WorkTrace has not shipped a public compatibility surface for internal display
+model modules, payload fields, or tests. Maintenance tasks should remove
+unused aliases, stale import paths, old wrappers, and compatibility shims when
+all current callers and tests can be updated in the same change.
 
 ## 7. Context Diet Cadence
 

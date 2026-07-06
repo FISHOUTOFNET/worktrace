@@ -2,7 +2,7 @@
 
 > **Default entry point for AI tools and developers.** Read this file first.
 > It is a one-screen snapshot of what WorkTrace ships today. For architecture
-> decisions see [`ui-webview-migration.md`](ui-webview-migration.md); history:
+> decisions see [`architecture.md`](../architecture.md); history:
 > [`history/webview-phases.md`](history/webview-phases.md).
 
 ## Current Shipped State
@@ -104,6 +104,7 @@
 WebView ──> bridge ──> worktrace.api ──> worktrace.services
   view_model_service (page ViewModel projection/materialization layer)
   activity_display_model_service (Activity Display Model / live display semantics owner)
+    activity_display_policy / activity_live_clock / activity_display_span / activity_row_overlay
   live_display_service (low-level display-safe helper functions)
   activity_lifecycle_service (open-row command facade)
   activity_service (CRUD)
@@ -116,11 +117,13 @@ browser storage, or network requests. Bridge imports `worktrace.api` only
 (enforced by `tests/test_ui_backend_boundary.py`).
 
 - **`activity_display_model_service`** is the sole owner of live display
-  semantics: live eligibility, `live_state`, display span identity, live
-  clock fields, `<30s` borrowed-anchor/current-only display policy,
-  `persisted_open` overlay, and the surface visibility flags consumed by
-  page ViewModels. It never writes the DB; finished short-activity
-  merge/drop remains collector/lifecycle-owned persistence.
+  semantics. Its focused sibling modules own policy, live clock, display
+  span, and row overlay internals; together they decide live eligibility,
+  `live_state`, display span identity, live clock fields, `<30s`
+  borrowed-anchor/current-only display policy, `persisted_open` overlay,
+  and the surface visibility flags consumed by page ViewModels. They never
+  write the DB; finished short-activity merge/drop remains
+  collector/lifecycle-owned persistence.
 - **`view_model_service`** is the sole constructor of Overview / Timeline /
   Details / Refresh State page ViewModels from a single snapshot sample. It
   owns page projection/materialization only: DB list payloads, display-only

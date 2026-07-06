@@ -102,6 +102,12 @@ Short-activity persistence is collector/lifecycle-owned:
 - If no legal anchor exists, it is dropped.
 - Display-only borrowed-anchor projection must never write the DB.
 
+`worktrace.collector.decision_trace` provides privacy-safe diagnostic
+records for collector decisions. The default recorder is no-op; tests may
+inject an in-memory recorder. Decision traces are not written to the DB, are
+not exposed to WebView, do not contain raw window titles, paths, clipboard
+text, SQL, or tracebacks, and never participate in collector decisions.
+
 Hard boundaries include pause, stop, shutdown, time jump, midnight, idle,
 excluded, error, privacy, secure import, and first-run-gate boundaries. These
 boundaries prevent stale project ownership or pending seconds from crossing
@@ -109,8 +115,18 @@ session semantics.
 
 ## Activity Display Model Boundary
 
-`activity_display_model_service` is the sole owner of live display semantics.
-It decides:
+`activity_display_model_service` remains the sole orchestration entry point
+for live display semantics. Its internals are split by responsibility:
+
+- `activity_display_policy` decides display policy, status-only handling,
+  borrowed-anchor eligibility, and surface materialization flags.
+- `activity_live_clock` builds the single backend live clock consumed by the
+  frontend runtime.
+- `activity_display_span` builds current activity display fields, display
+  span identity, and display structural signatures.
+- `activity_row_overlay` overlays a display span onto DB-backed row payloads.
+
+Together, the Activity Display Model modules decide:
 
 - live eligibility;
 - `live_state` (`current_only_pending`, `borrowed_anchor_pending`,
@@ -122,7 +138,11 @@ It decides:
 - `persisted_open` overlay semantics;
 - surface visibility for Recent, Timeline, Details, and KPI projection.
 
-It never writes the DB. It builds display-safe JSON payloads only.
+They never write the DB. They build display-safe JSON payloads only.
+
+`worktrace.contracts.live_display_contracts` contains internal `TypedDict`
+and `Literal` contracts for these plain dict payloads. They are development
+contracts, not a published API and not a runtime validation layer.
 
 `live_display_service` is not the page live-display model owner. It provides
 low-level display-safe helper functions used by the Activity Display Model and
@@ -182,6 +202,11 @@ accepted live runtime. Incompatible payloads request a refresh instead of
 mixing stale runtime state with new structural payloads.
 
 ## Test Boundary
+
+`tests/support/live_semantics_harness.py` and
+`tests/support/collector_stream.py` are test-only harnesses for driving real
+ViewModel and collector flows with fixed time inputs. They do not copy
+collector lifecycle rules into production runtime paths.
 
 Use these default validation commands for architecture-contract cleanup:
 

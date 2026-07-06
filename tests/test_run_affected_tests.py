@@ -1252,15 +1252,22 @@ _LIVE_DISPLAY_OWNER_TARGETS = [
     "tests/test_live_display_contract.py",
     "tests/test_live_display_project_transition_contract.py",
     "tests/test_display_model_anti_regression.py",
+    "tests/scenarios/live_semantics/",
     "tests/test_run_affected_tests.py",
     "tests/webview/test_heartbeat_projection_contract.py",
     "tests/webview/test_frontend_global_boundaries.py",
+    "tests/webview/test_frontend_pure_render_contract.py",
     "tests/test_ui_backend_boundary.py",
 ]
 
 
 @pytest.mark.parametrize("changed", [
     "worktrace/services/activity_display_model_service.py",
+    "worktrace/services/activity_display_policy.py",
+    "worktrace/services/activity_live_clock.py",
+    "worktrace/services/activity_display_span.py",
+    "worktrace/services/activity_row_overlay.py",
+    "worktrace/contracts/live_display_contracts.py",
     "worktrace/services/live_display_service.py",
     "worktrace/services/live_time_service.py",
 ])
@@ -1274,6 +1281,25 @@ def test_live_display_owner_selects_full_live_display_regression_set(runner, cha
         assert expected in sel.pytest_targets, (
             f"{changed} must select live-display regression target: {expected}"
         )
+
+
+@pytest.mark.parametrize("changed", [
+    "tests/support/live_semantics_harness.py",
+    "tests/support/collector_stream.py",
+])
+def test_live_semantics_support_helpers_select_scenario_matrix(runner, changed):
+    sel = runner.select_targets([changed])
+    assert "tests/scenarios/live_semantics/" in sel.pytest_targets
+    assert "tests/test_live_product_semantics.py" in sel.pytest_targets
+    assert "tests/test_display_model_anti_regression.py" in sel.pytest_targets
+    if changed.endswith("collector_stream.py"):
+        assert "tests/test_collector.py" in sel.pytest_targets
+        assert "tests/test_short_activity_buffer.py" in sel.pytest_targets
+
+
+def test_frontend_pure_render_guard_runs_with_webview_static_suite(runner):
+    sel = runner.select_targets(["worktrace/webview_ui/js/core.js"])
+    assert "tests/webview/test_frontend_pure_render_contract.py" in sel.pytest_targets
 
 
 _DB_ONLY_BOUNDARY_TARGETS = [

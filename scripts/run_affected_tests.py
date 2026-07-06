@@ -61,6 +61,7 @@ RULES: list[dict] = [
             "tests/webview/",
             "tests/webview/test_heartbeat_projection_contract.py",
             "tests/webview/test_frontend_global_boundaries.py",
+            "tests/webview/test_frontend_pure_render_contract.py",
             "tests/test_app_runtime_privacy_gate.py",
             "tests/test_short_activity_buffer.py",
             "tests/test_webview_bridge.py",
@@ -85,7 +86,12 @@ RULES: list[dict] = [
         "triggers": [
             "worktrace/services/view_model_service.py",
             "worktrace/api/view_model_api.py",
+            "worktrace/contracts/",
             "worktrace/services/activity_display_model_service.py",
+            "worktrace/services/activity_display_policy.py",
+            "worktrace/services/activity_live_clock.py",
+            "worktrace/services/activity_display_span.py",
+            "worktrace/services/activity_row_overlay.py",
             "worktrace/services/live_display_service.py",
             "worktrace/services/live_time_service.py",
         ],
@@ -98,9 +104,11 @@ RULES: list[dict] = [
             "tests/test_live_display_project_transition_contract.py",
             "tests/test_display_model_anti_regression.py",
             "tests/test_live_product_semantics.py",
+            "tests/scenarios/live_semantics/",
             "tests/test_run_affected_tests.py",
             "tests/webview/test_heartbeat_projection_contract.py",
             "tests/webview/test_frontend_global_boundaries.py",
+            "tests/webview/test_frontend_pure_render_contract.py",
             "tests/test_ui_backend_boundary.py",
         ],
         "smoke": [IMPORT_SMOKE_ARGV],
@@ -419,8 +427,10 @@ RULES: list[dict] = [
             "tests/test_live_display_project_transition_contract.py",
             "tests/test_display_model_anti_regression.py",
             "tests/test_live_product_semantics.py",
+            "tests/scenarios/live_semantics/",
             "tests/webview/test_heartbeat_projection_contract.py",
             "tests/webview/test_frontend_global_boundaries.py",
+            "tests/webview/test_frontend_pure_render_contract.py",
             "tests/test_ui_backend_boundary.py",
             "tests/test_run_affected_tests.py",
             "tests/test_live_display_contract.py",
@@ -536,6 +546,10 @@ RULES: list[dict] = [
         "triggers": [
             "worktrace/services/live_display_service.py",
             "worktrace/services/activity_display_model_service.py",
+            "worktrace/services/activity_display_policy.py",
+            "worktrace/services/activity_live_clock.py",
+            "worktrace/services/activity_display_span.py",
+            "worktrace/services/activity_row_overlay.py",
             "worktrace/services/live_time_service.py",
             "worktrace/services/activity_service.py",
             "worktrace/webview_ui/bridge_overview.py",
@@ -551,8 +565,10 @@ RULES: list[dict] = [
             "tests/test_live_display_project_transition_contract.py",
             "tests/test_display_model_anti_regression.py",
             "tests/test_live_product_semantics.py",
+            "tests/scenarios/live_semantics/",
             "tests/webview/test_heartbeat_projection_contract.py",
             "tests/webview/test_frontend_global_boundaries.py",
+            "tests/webview/test_frontend_pure_render_contract.py",
             "tests/test_statistics_service.py",
             "tests/test_timeline_service.py",
             "tests/test_live_time_service.py",
@@ -723,6 +739,16 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
         elif c.startswith("tests/webview/"):
             add_target(c)
             add_target("tests/webview/")
+        elif c in (
+            "tests/support/live_semantics_harness.py",
+            "tests/support/collector_stream.py",
+        ):
+            add_target("tests/scenarios/live_semantics/")
+            add_target("tests/test_live_product_semantics.py")
+            add_target("tests/test_display_model_anti_regression.py")
+            if c.endswith("collector_stream.py"):
+                add_target("tests/test_collector.py")
+                add_target("tests/test_short_activity_buffer.py")
         elif c == COMMENT_HYGIENE_TARGET:
             add_target(c)
             add_target("tests/test_run_affected_tests.py")
