@@ -1864,20 +1864,20 @@ finalized-only.
 ### 33.8 Short Activity Blind Merge Preserved
 
 The existing short-activity absorption strategy
-(`_merge_or_pend_short_seconds`) is intentionally **project-blind**.
+(`_merge_or_drop_finished_short_activity`) is intentionally **project-blind**.
 Short activities exist to avoid excessive fragment records; whether
 they belong to the same project is irrelevant. The new display-level
 project ownership pending is a SEPARATE concern and does NOT change
 the short-activity merge policy.
 
-The `pending_short_seconds` accumulator (production-maintained by the
-collector) is the only carry source for `virtual_pending`. The legacy
-structured `short_activity_carry` JSON mechanism was removed — it had
-no production writer. The unified live clock adds carry seconds to the
-virtual snapshot's elapsed seconds so consecutive <30s activities do
-not lose seconds. Absorption across a session boundary
-(`stopped` / `paused` / `restart` / `recovered` / `time_jump` /
-`midnight`) is blocked by `session_boundary_service.has_boundary_between`.
+`pending_short_seconds` is a zeroed cleanup target: the collector and
+every hard boundary set it to 0. It is NOT a carry source for
+`virtual_pending`; `live_display_service` must NOT read it as a
+duration/base source. The unified live clock carries seconds via the
+snapshot's `extra_seconds` field plus `stable_live_key_hash` continuity
+so consecutive <30s activities do not lose seconds. Absorption across a
+session boundary (`stopped` / `paused` / `restart` / `recovered` /
+`time_jump` / `midnight`) is blocked by `session_boundary_service.has_boundary_between`.
 
 ### 33.9 Page-Model Sample Clock Contract
 

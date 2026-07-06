@@ -43,10 +43,9 @@
   project / by app / by status), export preview, CSV export write, and
   hardened save dialog / packaging / static contract.
 - **Project Rules**: project-grouped rule list showing project name /
-  description, project enabled state, special `排除规则` marker, rule
-  counts, folder rules, keyword rules, rule enabled state, and folder
-  recursion scope. Current write capabilities are listed in the Project
-  Rules matrix below.
+  description, project enabled state, special `排除规则` marker, folder
+  rules, keyword rules, rule enabled state, and folder recursion scope.
+  Current write capabilities are listed in the Project Rules matrix below.
 - **Settings / Privacy**: read-only safety-status plus clipboard capture
   toggle plus encrypted backup export / manifest preview / import
   (replace-only) / clear-all-local-data plus the first-run privacy notice

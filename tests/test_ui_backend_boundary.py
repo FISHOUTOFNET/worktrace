@@ -1278,12 +1278,6 @@ def test_bridge_module_all_equals_webview_bridge_only() -> None:
     )
 
 
-# Live-clock carry DELETION contract: the legacy structured
-# ``short_activity_carry`` JSON was REMOVED (no production writer).
-# Production collector maintains ``pending_short_seconds``, the only
-# carry source consulted. Tests enforce the deletion.
-
-
 def test_short_activity_carry_helpers_removed_from_live_display_service() -> None:
     """``live_display_service`` must NOT define the removed carry
     helpers ``short_activity_carry_seconds`` /

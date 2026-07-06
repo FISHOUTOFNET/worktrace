@@ -243,10 +243,9 @@ def test_short_idle_does_not_merge_into_previous_normal(temp_db):
 
 
 def test_cross_boundary_stale_pending_not_used_as_display_base(temp_db, monkeypatch):
-    """``pending_short_seconds`` may carry only inside one continuous
-    recording session. Startup recovery clears stale pending before the
-    next live display sample, while new post-boundary short activities may
-    pend normally."""
+    """``pending_short_seconds`` is a zeroed cleanup target. Startup
+    recovery clears any stale value before the next live display sample;
+    the display base MUST remain 0."""
     from worktrace.services import recovery_service, timeline_service
 
     monkeypatch.setattr(
@@ -317,12 +316,8 @@ def test_short_activity_after_restart_does_not_merge_into_pre_boundary_activity(
     ``activity_service.get_latest_closed_auto_normal_activity(after_time=
     latest_boundary_time())`` so any anchor whose ``end_time`` is before
     or equal to the latest boundary is excluded. With no post-boundary
-    anchor, the short seconds MUST pend into ``pending_short_seconds``.
-
-    B is finished by switching to a new activity C (NOT by stopping),
-    so ``_merge_or_pend_short_seconds`` is invoked. The ``stopped``
-    transition would otherwise drop B via ``merge_transient=False`` +
-    ``clear_short_buffers``.
+    anchor, the short seconds MUST drop and ``pending_short_seconds``
+    MUST remain zero.
     """
     from worktrace.services import session_boundary_service
 
@@ -336,7 +331,7 @@ def test_short_activity_after_restart_does_not_merge_into_pre_boundary_activity(
     session_boundary_service.record_boundary("2026-06-18 09:03:00", "restart")
 
     # After the restart, start a NEW short activity B (<30s) and finish it
-    # by switching to C — this triggers ``_merge_or_pend_short_seconds``.
+    # by switching to C — this triggers the finished-short merge/drop path.
     machine.transition_to("recording", _normal("B"), at_time="2026-06-18 09:04:00")
     machine.transition_to("recording", _normal("C"), at_time="2026-06-18 09:04:20")
 
@@ -359,8 +354,8 @@ def test_short_activity_after_pause_does_not_merge_into_pre_boundary_activity(te
     boundary MUST NOT merge into a pre-boundary confirmed normal activity.
     ``state_machine.pause()`` records a ``"paused"`` boundary so the merge
     target lookup excludes any anchor at or before the pause time. B is
-    finished by switching to C (not by stopping) so the merge/pend logic
-    runs and the seconds pend into ``pending_short_seconds``.
+    finished by switching to C (not by stopping) so the merge/drop logic
+    runs; ``pending_short_seconds`` MUST remain zero.
     """
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
@@ -386,8 +381,8 @@ def test_short_activity_after_midnight_does_not_merge_into_pre_boundary_activity
     boundary MUST NOT merge into a pre-midnight confirmed normal activity.
     A ``"midnight"`` boundary is recorded so the merge target lookup
     excludes any anchor on the previous day. B is finished by switching
-    to C so the merge/pend logic runs and the seconds pend into
-    ``pending_short_seconds``.
+    to C so the merge/drop logic runs; ``pending_short_seconds`` MUST
+    remain zero.
     """
     from worktrace.services import session_boundary_service
 
@@ -426,8 +421,7 @@ def test_short_activity_after_stopped_does_not_merge_into_pre_boundary_activity(
     ``state_machine.transition_to("stopped")`` records a ``"stopped"``
     boundary so the merge target lookup excludes any anchor at or before
     the stop time. B is finished by switching to C (not by stopping) so
-    the merge/pend logic runs and the seconds pend into
-    ``pending_short_seconds``.
+    the merge/drop logic runs; ``pending_short_seconds`` MUST remain zero.
     """
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
