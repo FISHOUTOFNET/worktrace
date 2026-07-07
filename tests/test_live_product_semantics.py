@@ -373,7 +373,8 @@ def test_pause_boundary_current_and_recent_both_express_paused_status(
         "Recent must materialize a status-only row when paused; "
         "Current and Recent status expression must be consistent"
     )
-    assert status_only[0].get("status") == "paused"
+    assert "status" not in status_only[0]
+    assert status_only[0].get("project_name") == "—"
     assert status_only[0].get("status_code") == "paused"
     assert status_only[0].get("display_status") == "已暂停"
     assert status_only[0].get("status_label") == "已暂停"
@@ -430,7 +431,8 @@ def test_idle_excluded_error_boundary_materializes_status_only_row_excluded_from
         assert row.get("editable") is False
         assert row.get("exportable") is False
         assert row.get("row_kind") == "status_only"
-        assert row.get("status") == state
+        assert "status" not in row
+        assert row.get("project_name") == "—"
         assert row.get("status_code") == state
         assert row.get("display_status") == _STATUS_LABELS[state]
         assert row.get("status_label") == _STATUS_LABELS[state]
@@ -458,7 +460,8 @@ def test_status_only_snapshot_has_display_contract_and_no_kpi(
 
     assert len(status_rows) == 1
     row = status_rows[0]
-    assert row.get("status") == status
+    assert "status" not in row
+    assert row.get("project_name") == "—"
     assert row.get("status_code") == status
     assert row.get("display_status") == _STATUS_LABELS[status]
     assert row.get("status_label") == _STATUS_LABELS[status]

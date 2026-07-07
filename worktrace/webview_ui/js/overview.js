@@ -145,12 +145,15 @@
                 ? App.formatDuration(initialSec)
                 : (item.duration || "00:00:00");
             var statusText = App.displayStatusText(item);
+            var titleText = isStatusOnly
+                ? (item.display_status || item.status_label || statusText || "")
+                : App.formatProjectLabel(item.project_name, item.project_description);
             html += '<div class="' + cls + '" data-recent-index="' + i + '"'
                 + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
                 + ' data-duration-seconds="' + (isNaN(durSec) ? 0 : durSec) + '"'
                 + '>'
                 + '<div>'
-                + '<div class="recent-item-project">' + App.escapeHtml(App.formatProjectLabel(item.project_name, item.project_description)) + '</div>'
+                + '<div class="recent-item-project">' + App.escapeHtml(titleText) + '</div>'
                 + '<div class="recent-item-time">' + App.escapeHtml(timeRange) + '</div>'
                 + '<div class="recent-item-status">' + App.escapeHtml(statusText) + '</div>'
                 + '</div>'

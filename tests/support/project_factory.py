@@ -1,7 +1,7 @@
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 from worktrace.services import (
-    activity_service,
     folder_rule_service,
     project_inference_service,
     project_service,
@@ -29,7 +29,7 @@ def create_folder_rule(
 
 
 def assign_activity_manually(activity_id: int, project_id: int) -> None:
-    activity_service.update_activity_project(activity_id, project_id, manual=True)
+    assign_activity_project(activity_id, project_id, manual=True)
 
 
 def assign_activity_automatically(activity_id: int) -> dict | None:

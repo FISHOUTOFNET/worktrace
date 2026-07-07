@@ -21,6 +21,7 @@ Covers sections 九.4 / 九.5 / 九.6:
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 import json
 from datetime import datetime, timedelta
@@ -414,7 +415,7 @@ def test_overview_kpi_classified_uncategorized_split_explicit_fields(bridge):
         start_time=f"{today} 09:02:00",
     )
     activity_service.close_activity(uncategorized_aid, f"{today} 09:02:45", 45)
-    activity_service.update_activity_project(
+    assign_activity_project(
         uncategorized_aid, uncategorized_id, manual=True
     )
 
@@ -483,7 +484,7 @@ def test_overview_kpi_persisted_open_uses_same_sample_as_recent_and_current(brid
         file_path_hint="D:\\MyProject\\main.py",
         elapsed_seconds=210,
     )
-    activity_service.update_activity_project(aid, pid)
+    assign_activity_project(aid, pid)
     activity_service.set_activity_duration(aid, 240)
     assert activity_service.get_activity(aid)["project_name"] == "MyProject"
 

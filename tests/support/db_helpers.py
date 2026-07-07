@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from worktrace.db import dict_rows, get_connection
+from worktrace.db import dict_rows, get_connection, now_str
 
 
 def fetch_one(sql: str, params: tuple[Any, ...] = ()) -> dict | None:
@@ -49,3 +49,50 @@ def resource_row(activity_id: int) -> dict | None:
         "FROM activity_resource WHERE activity_id = ?",
         (activity_id,),
     )
+
+
+def assign_activity_project(activity_id: int, project_id: int, *, manual: bool = True) -> None:
+    ts = now_str()
+    source = "manual" if manual else "anchor_context"
+    confidence = 100 if manual else 60
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET project_id = ?,
+                manual_override = CASE WHEN ? = 1 THEN 1 ELSE manual_override END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (project_id, int(manual), ts, activity_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO activity_project_assignment(
+                activity_id, project_id, confidence, source, is_manual,
+                suggested_project_name, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+            ON CONFLICT(activity_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                confidence = excluded.confidence,
+                source = excluded.source,
+                is_manual = excluded.is_manual,
+                suggested_project_name = excluded.suggested_project_name,
+                updated_at = excluded.updated_at
+            """,
+            (activity_id, project_id, confidence, source, int(manual), ts, ts),
+        )
+
+
+def set_activity_note(activity_id: int, note: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET note = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (note, now_str(), activity_id),
+        )

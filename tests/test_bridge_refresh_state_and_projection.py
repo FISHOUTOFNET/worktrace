@@ -20,6 +20,7 @@ display-model owner (``activity_display_model_service``):
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 import json
 from datetime import datetime, timedelta
@@ -821,7 +822,7 @@ def test_get_timeline_pending_persisted_open_shows_inherited_display_project(bri
     aid, start_time = _create_real_open_activity(elapsed_seconds=60)
     # Assign the DB row to ProjectB (the candidate). The live overlay
     # MUST override this with ProjectA (the inherited display project).
-    activity_service.update_activity_project(aid, project_b_id)
+    assign_activity_project(aid, project_b_id)
     assert activity_service.get_activity(aid)["project_name"] == "ProjectB"
 
     snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
@@ -865,7 +866,7 @@ def test_get_timeline_persisted_open_detail_row_shows_inherited_display_project(
     project_a_id = project_service.create_project("ProjectA")
     project_b_id = project_service.create_project("ProjectB")
     aid, start_time = _create_real_open_activity(elapsed_seconds=60)
-    activity_service.update_activity_project(aid, project_b_id)
+    assign_activity_project(aid, project_b_id)
 
     snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
     _set_snapshot(snapshot)
@@ -958,7 +959,7 @@ def test_get_timeline_total_seconds_does_not_double_count_persisted_open(bridge)
 
     project_b_id = project_service.create_project("ProjectB")
     aid, start_time = _create_real_open_activity(elapsed_seconds=120)
-    activity_service.update_activity_project(aid, project_b_id)
+    assign_activity_project(aid, project_b_id)
     # Store a duration on the open row so the DB session carries 120s.
     activity_service.set_activity_duration(aid, 120)
 

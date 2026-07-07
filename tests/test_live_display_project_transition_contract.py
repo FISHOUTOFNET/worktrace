@@ -24,6 +24,7 @@ f. The legacy virtual session / detail builders are no longer a contract.
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 import json
 from datetime import datetime, timedelta
@@ -247,7 +248,7 @@ def _create_closed_anchor_activity(
 
         row = project_service.get_project_by_name(project_name)
         if row:
-            activity_service.update_activity_project(aid, int(row.get("id") or 0))
+            assign_activity_project(aid, int(row.get("id") or 0))
     except Exception:
         pass
     return aid, start_time

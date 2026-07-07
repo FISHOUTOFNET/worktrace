@@ -17,6 +17,7 @@ Covers ``WebViewBridge.merge_timeline_activities``:
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 import json
 import re
@@ -254,7 +255,7 @@ def test_merge_different_project_returns_clear_message(bridge):
     from worktrace.services import project_service
 
     project = project_service.create_project("OtherProj")
-    activity_service.update_activity_project(ids[1], project, manual=True)
+    assign_activity_project(ids[1], project, manual=True)
     result = bridge.merge_timeline_activities(ids)
     assert result["ok"] is False
     assert result["error"] == "项目不同，暂不支持合并"

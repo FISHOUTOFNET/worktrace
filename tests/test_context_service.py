@@ -1,3 +1,4 @@
+from tests.support.db_helpers import assign_activity_project
 from worktrace.constants import UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection, now_str
 from worktrace.platforms.base import ActiveWindow
@@ -167,7 +168,7 @@ def test_recompute_is_idempotent_and_preserves_manual_auxiliary(temp_db):
     browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
     _activity("Word", "winword.exe", "A_file_2.docx", "09:20:00", project)
     activity_service.close_all_open_rows("2026-06-18 09:30:00")
-    activity_service.update_activity_project(browser, manual_project, manual=True)
+    assign_activity_project(browser, manual_project, manual=True)
 
     recompute_context_assignments_for_date("2026-06-18")
     first = activity_service.get_activity(browser)
@@ -236,7 +237,7 @@ def test_clipboard_transition_context_beats_anchor_context(temp_db):
     target = _activity("Edge", "msedge.exe", "Search", "09:04:08")
     _activity("Word", "winword.exe", "A_file_2.docx", "09:10:00", project_a)
     activity_service.close_all_open_rows("2026-06-18 09:20:00")
-    activity_service.update_activity_project(target, project_a, manual=False)
+    assign_activity_project(target, project_a, manual=False)
     clipboard_service.record_clipboard_event(
         source,
         "copied from B",
@@ -411,7 +412,7 @@ def test_short_gap_does_not_override_manual_assignment(temp_db):
     middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:03:00")
     _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:03:00", "09:05:00", project)
     # Manually assign the middle to a different project.
-    activity_service.update_activity_project(middle, manual_project, manual=True)
+    assign_activity_project(middle, manual_project, manual=True)
 
     recompute_context_assignments_for_date("2026-06-18")
 
@@ -625,7 +626,7 @@ def test_direct_anchor_bridge_does_not_override_manual(temp_db):
     activity_service.close_all_open_rows("2026-06-18 09:30:00")
     _set_direct_assignment_source(a, "keyword_rule", project)
     _set_direct_assignment_source(c, "keyword_rule", project)
-    activity_service.update_activity_project(b, manual_project, manual=True)
+    assign_activity_project(b, manual_project, manual=True)
 
     recompute_context_assignments_for_date("2026-06-18")
 

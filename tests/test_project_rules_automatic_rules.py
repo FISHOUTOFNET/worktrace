@@ -1,6 +1,7 @@
 """Automatic Project Rules application foundation tests."""
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 import json
 import re
@@ -139,7 +140,7 @@ def test_apply_automatic_rules_to_activity_delegates_to_inference(temp_db):
     project = project_service.create_project("AutoProject")
     folder_rule_service.create_or_update_folder_rule("D:\\AutoCase", project)
     aid = _create_closed_activity(file_path_hint="D:\\AutoCase\\Doc.docx")
-    activity_service.update_activity_project(aid, project, manual=False)
+    assign_activity_project(aid, project, manual=False)
     facade_result = rule_automation_service.apply_automatic_rules_to_activity(aid)
     inference_result = project_inference_service.assign_project_for_activity(aid)
     assert facade_result["project_id"] == inference_result["project_id"]
@@ -251,7 +252,7 @@ def test_manual_override_activity_is_not_overwritten(temp_db):
     folder_rule_service.create_or_update_folder_rule("D:\\ManualFolder", project)
     other = project_service.create_project("Other")
     aid = _create_closed_activity(file_path_hint="D:\\ManualFolder\\Doc.docx")
-    activity_service.update_activity_project(aid, other, manual=True)
+    assign_activity_project(aid, other, manual=True)
     _set_manual_override(aid)
     activity_service.finalize_created_activity(aid)
     activity = _activity_row(aid)
@@ -267,7 +268,7 @@ def test_is_manual_activity_is_not_overwritten(temp_db):
     folder_rule_service.create_or_update_folder_rule("D:\\ManualAssignFolder", project)
     other = project_service.create_project("Other2")
     aid = _create_closed_activity(file_path_hint="D:\\ManualAssignFolder\\Doc.docx")
-    activity_service.update_activity_project(aid, other, manual=True)
+    assign_activity_project(aid, other, manual=True)
     activity_service.finalize_created_activity(aid)
     activity = _activity_row(aid)
     assignment = _assignment_row(aid)

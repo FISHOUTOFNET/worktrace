@@ -14,6 +14,7 @@ The bridge must:
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import set_activity_note
 
 import json
 from unittest.mock import patch
@@ -263,7 +264,7 @@ def _seed_activity_with_sensitive_metadata(
     )
     activity_service.finalize_created_activity(aid)
     if note is not None:
-        activity_service.update_activity_note(aid, note)
+        set_activity_note(aid, note)
     activity_service.close_activity(aid, "2026-06-25 09:30:00")
     return aid
 

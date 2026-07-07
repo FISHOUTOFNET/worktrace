@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..db import get_connection, now_str
+from .activity_edit_policy import require_project_editable_activity
 
 
 def session_note_key(session: dict) -> tuple[str, int] | None:
@@ -95,6 +96,7 @@ def set_session_user_fields(
         duration_value = int(adjusted_duration_seconds)
 
     with get_connection() as conn:
+        require_project_editable_activity(first_activity_id, conn=conn)
         if not cleaned_note and duration_value is None:
             conn.execute(
                 "DELETE FROM project_session_note WHERE report_date = ? AND first_activity_id = ?",

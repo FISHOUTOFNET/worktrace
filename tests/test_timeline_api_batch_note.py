@@ -20,6 +20,7 @@ write:
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import set_activity_note
 
 from unittest.mock import patch
 
@@ -323,8 +324,8 @@ def test_batch_in_progress_activity(temp_db):
 def test_batch_system_status_activity_rejected_without_partial_write(temp_db):
     a1 = _seed_closed_activity(end="09:30:00")
     a2 = _seed_closed_status_activity("idle")
-    activity_service.update_activity_note(a1, "original")
-    activity_service.update_activity_note(a2, "system original")
+    set_activity_note(a1, "original")
+    set_activity_note(a2, "system original")
 
     with pytest.raises(TimelineBatchNoteError) as exc:
         timeline_api.batch_update_timeline_activities_note([a1, a2], "new note")
@@ -683,8 +684,8 @@ def test_service_batch_activity_in_progress(temp_db):
 def test_service_batch_activity_note_rejects_non_normal_atomically(temp_db):
     a1 = _seed_closed_activity(end="09:30:00")
     a2 = _seed_closed_status_activity("paused")
-    activity_service.update_activity_note(a1, "original")
-    activity_service.update_activity_note(a2, "system original")
+    set_activity_note(a1, "original")
+    set_activity_note(a2, "system original")
 
     with pytest.raises(ValueError, match="activity_not_project_activity"):
         activity_service.batch_update_activity_note([a1, a2], "new note")
@@ -824,7 +825,7 @@ def test_batch_mixed_valid_and_in_progress_rejects_all(temp_db):
         "Word", "winword.exe", "A2.docx", start_time="2026-06-25 09:30:00"
     )
     activity_service.finalize_created_activity(a2)
-    activity_service.update_activity_note(a1, "original")
+    set_activity_note(a1, "original")
     with pytest.raises(TimelineBatchNoteError):
         timeline_api.batch_update_timeline_activities_note([a1, a2], "new note")
     assert _get_activity_note(a1) == "original"
@@ -833,7 +834,7 @@ def test_batch_mixed_valid_and_in_progress_rejects_all(temp_db):
 def test_batch_mixed_valid_and_nonexistent_rejects_all(temp_db):
     """A batch with one valid + one nonexistent id must reject all."""
     aid = _seed_closed_activity()
-    activity_service.update_activity_note(aid, "original")
+    set_activity_note(aid, "original")
     with pytest.raises(TimelineBatchNoteError):
         timeline_api.batch_update_timeline_activities_note([aid, 999999], "new note")
     assert _get_activity_note(aid) == "original"
@@ -866,17 +867,16 @@ def test_batch_no_new_db_schema(temp_db):
 
 
 # These tests verify the hardening invariants that distinguish batch note
-# overwrite from the single ``update_activity_note`` path: rollback,
+# overwrite from the old single-activity note path: rollback,
 # error-mapping, and leak-prevention behavior must not regress.
 
 
 def test_batch_source_not_changed_to_manual(temp_db):
     """batch note overwrite must NOT set ``source = 'manual'``.
 
-    The single ``update_activity_note`` path sets ``source = 'manual'`` as a
-    side effect. The batch path must NOT do this — it is a pure note-only
-    change. This is the key semantic difference between batch and single
-    note editing and must not regress.
+    The removed single-activity note path used to set ``source = 'manual'``
+    as a side effect. The batch path must NOT do this — it is a pure
+    note-only change.
     """
     from worktrace.constants import SOURCE_AUTO
 

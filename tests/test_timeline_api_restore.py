@@ -24,15 +24,18 @@ Covers ``worktrace.api.timeline_api.restore_timeline_activity``,
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 from unittest.mock import patch
 
 import pytest
 
+from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
 from worktrace.api import timeline_api
 from worktrace.api.timeline_api import TimelineRestoreActivityError
 from worktrace.db import get_connection
-from worktrace.services import activity_service
+from worktrace.formatters import format_activity_project_cell
+from worktrace.services import activity_service, project_service
 
 
 
@@ -47,6 +50,19 @@ def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
     )
     activity_service.finalize_created_activity(aid)
     activity_service.close_activity(aid, f"{day} {end}")
+    return aid
+
+
+def _seed_closed_activity_with_status(status: str, day="2026-06-25"):
+    aid = activity_service.create_activity(
+        "System",
+        "system.exe",
+        "System",
+        status=status,
+        start_time=f"{day} 09:00:00",
+    )
+    activity_service.finalize_created_activity(aid)
+    activity_service.close_activity(aid, f"{day} 09:30:00")
     return aid
 
 
@@ -487,10 +503,11 @@ def test_get_restorable_activities_display_safe_fields_only(temp_db):
     for key in (
         "activity_id", "start_time", "end_time", "duration_seconds",
         "app_name", "resource_kind", "resource_subtype",
-        "resource_display_name", "project_name", "status",
-        "restore_state", "is_hidden", "is_deleted",
+        "resource_display_name", "project_name", "status_code",
+        "display_status", "restore_state", "is_hidden", "is_deleted",
     ):
         assert key in activity, f"recovery list must include '{key}'"
+    assert "status" not in activity
     # Sensitive raw fields must be absent.
     for key in (
         "window_title", "file_path_hint", "full_path", "clipboard",
@@ -499,6 +516,43 @@ def test_get_restorable_activities_display_safe_fields_only(temp_db):
         assert key not in activity, (
             f"recovery list must not expose sensitive field '{key}'"
         )
+
+
+def test_get_restorable_activities_status_fields_are_unambiguous(temp_db):
+    aid = _seed_closed_activity_with_status(STATUS_IDLE)
+    timeline_api.hide_timeline_activity(aid)
+
+    result = timeline_api.get_timeline_restorable_activities("2026-06-25")
+    activity = result["activities"][0]
+
+    assert activity["status_code"] == STATUS_IDLE
+    assert activity["display_status"] == "空闲"
+    assert "status" not in activity
+
+
+@pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_PAUSED, STATUS_ERROR, STATUS_EXCLUDED])
+def test_get_restorable_activities_system_project_cell_is_dash(temp_db, status):
+    project = project_service.create_project("SystemProject")
+    aid = _seed_closed_activity_with_status(status)
+    assign_activity_project(aid, project, manual=False)
+    timeline_api.hide_timeline_activity(aid)
+
+    result = timeline_api.get_timeline_restorable_activities("2026-06-25")
+    activity = result["activities"][0]
+
+    assert activity["project_name"] == "—"
+
+
+def test_get_restorable_activities_normal_project_cell_uses_formatter(temp_db):
+    project = project_service.create_project("Client")
+    aid = _seed_closed_activity()
+    assign_activity_project(aid, project)
+    timeline_api.hide_timeline_activity(aid)
+
+    result = timeline_api.get_timeline_restorable_activities("2026-06-25")
+    activity = result["activities"][0]
+
+    assert activity["project_name"] == format_activity_project_cell(activity_service.get_activity(aid))
 
 
 def test_get_restorable_activities_invalid_date(temp_db):

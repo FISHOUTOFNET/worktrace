@@ -22,6 +22,7 @@ live display clock, refresh cycle, and open-row classification:
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 import json
 from datetime import datetime, timedelta
@@ -558,7 +559,7 @@ def test_open_project_sync_does_not_override_manual_assignment(bridge):
     manual_pid = project_service.create_project("ManualProject")
     aid, start_time = _create_real_open_activity(elapsed_seconds=60)
     # Manually assign to ManualProject.
-    activity_service.update_activity_project(aid, manual_pid, manual=True)
+    assign_activity_project(aid, manual_pid, manual=True)
     assert activity_service.get_activity(aid)["project_name"] == "ManualProject"
 
     _set_snapshot(
@@ -812,7 +813,7 @@ def test_manual_project_edit_changes_revision(bridge):
 
     # Assign a project — a structural change.
     pid = project_service.create_project("MyProject")
-    activity_service.update_activity_project(aid, pid)
+    assign_activity_project(aid, pid)
     state2 = bridge.get_refresh_state()
     r2 = state2["refresh_revision"]
     page2 = state2["page_structure_revision"]

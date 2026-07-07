@@ -21,6 +21,7 @@ Covers ``worktrace.api.timeline_api.split_timeline_activity`` and
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assignment_row, resource_row, table_count, assign_activity_project
 
 from unittest.mock import patch
 
@@ -33,7 +34,6 @@ from worktrace.api.timeline_api import TimelineSplitError
 from worktrace.db import get_connection
 from worktrace.services import activity_service
 from tests.support.activity_factory import create_closed_activity, create_cross_day_activity
-from tests.support.db_helpers import assignment_row, resource_row, table_count
 
 
 
@@ -298,7 +298,7 @@ def test_split_activity_manual_assignment_inherited(temp_db):
     project = project_service.create_project("ManualProj")
     aid = _seed_closed_activity()
     # Apply a manual assignment to the original activity.
-    activity_service.update_activity_project(aid, project, manual=True)
+    assign_activity_project(aid, project, manual=True)
     orig_assignment = _get_assignment(aid)
     assert int(orig_assignment["is_manual"]) == 1
     result = timeline_api.split_timeline_activity(aid, "2026-06-25 09:15:00")

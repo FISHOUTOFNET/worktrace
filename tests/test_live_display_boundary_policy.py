@@ -256,8 +256,16 @@ def test_paused_idle_excluded_error_status_only(temp_db, monkeypatch, status):
     assert model["live_clock"]["project_duration_live"] is False
     assert model["live_clock"]["current_duration_live"] is False
     assert model["display_spans"] == []
-    assert model["status_display_item"]["row_kind"] == "status_only"
-    assert model["status_display_item"]["contributes_to_totals"] is False
+    item = model["status_display_item"]
+    assert item["row_kind"] == "status_only"
+    assert item["project_name"] == "—"
+    assert item["status_code"] == status
+    assert item["display_status"] == item["status_label"]
+    assert item["display_status"]
+    assert item["contributes_to_totals"] is False
+    assert item["editable"] is False
+    assert item["edit_disabled"] is True
+    assert item["exportable"] is False
 
 
 def test_pause_fallback_clears_or_invalidates_pending(temp_db, monkeypatch):

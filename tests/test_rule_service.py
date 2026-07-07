@@ -1,3 +1,4 @@
+from tests.support.db_helpers import assign_activity_project
 from worktrace.services import activity_service, project_service, rule_service
 from worktrace.db import get_connection
 
@@ -30,7 +31,7 @@ def test_manual_override_prevents_rule_overwrite(temp_db):
     aid = activity_service.create_activity(
         "Word", "winword.exe", "Spec", start_time="2026-06-18 09:00:00"
     )
-    activity_service.update_activity_project(aid, manual_project, manual=True)
+    assign_activity_project(aid, manual_project, manual=True)
     rule_service.apply_rules_to_activity(aid)
     row = activity_service.get_activity(aid)
     assert row["project_id"] == manual_project

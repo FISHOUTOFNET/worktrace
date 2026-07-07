@@ -1,3 +1,4 @@
+from tests.support.db_helpers import assign_activity_project
 from worktrace.db import get_connection
 from worktrace.services import (
     activity_service,
@@ -86,7 +87,7 @@ def test_backfill_safe_does_not_overwrite_manual_override(temp_db):
     manual_project = project_service.create_project("Manual")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
     aid = _activity_with_path("D:\\CaseA\\Manual.docx", "Manual.docx - Word")
-    activity_service.update_activity_project(aid, manual_project, manual=True)
+    assign_activity_project(aid, manual_project, manual=True)
     # Close via direct SQL (bypass close_activity's automatic rule
     # re-trigger) so the activity is classified as manual_skipped rather
     # than in_progress_skipped.
@@ -126,7 +127,7 @@ def test_preview_folder_rule_conflicts_counts_folder_scope(temp_db):
     child_project = project_service.create_project("Child")
     folder_rule_service.create_or_update_folder_rule("D:\\CaseA\\Sub", child_project)
     aid = _activity_with_path("D:\\CaseA\\Manual.docx", "Manual.docx - Word")
-    activity_service.update_activity_project(aid, child_project, manual=True)
+    assign_activity_project(aid, child_project, manual=True)
     preview = folder_rule_service.preview_folder_rule_conflicts("D:\\CaseA", parent_project)
     assert preview["child_folder_rule_conflicts"] == 1
     assert preview["other_project_activity_count"] == 1

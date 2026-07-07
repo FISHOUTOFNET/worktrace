@@ -785,7 +785,7 @@ class TimelineBridgeMixin:
 
         Returns ``{"ok": true, "activities": [...]}`` where each item has
         display-safe fields only (time range, duration, app/resource/
-        project name, status, restore_state). No raw ``window_title``,
+        project name, status_code/display_status, restore_state). No raw ``window_title``,
         ``file_path_hint``, ``full_path``, ``clipboard``, ``note``, or
         exception details are surfaced. Only hidden / deleted closed
         activities are returned, sorted by ``start_time``.
@@ -813,8 +813,9 @@ class TimelineBridgeMixin:
                             row.get("resource_subtype"),
                         ),
                         "resource_name": str(row.get("resource_display_name") or "未知"),
-                        "project_name": str(row.get("project_name") or "未归类"),
-                        "status": str(row.get("status") or ""),
+                        "project_name": str(row.get("project_name") or "—"),
+                        "status_code": str(row.get("status_code") or ""),
+                        "display_status": str(row.get("display_status") or ""),
                         "restore_state": str(row.get("restore_state") or ""),
                         "is_hidden": int(row.get("is_hidden") or 0),
                         "is_deleted": int(row.get("is_deleted") or 0),

@@ -1,3 +1,4 @@
+from tests.support.db_helpers import assign_activity_project
 import json
 
 import pytest
@@ -185,7 +186,7 @@ def test_midnight_split_restarts_with_persistent_temporary_anchor(temp_db):
         at_time="2026-06-18 23:59:30",
     )
     previous = activity_service.get_open_activity()
-    activity_service.update_activity_project(int(previous["id"]), project_id, manual=False)
+    assign_activity_project(int(previous["id"]), project_id, manual=False)
 
     machine.split_at_midnight("2026-06-19 00:00:00")
     machine.transition_to(

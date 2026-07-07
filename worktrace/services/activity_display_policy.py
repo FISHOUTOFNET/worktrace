@@ -84,11 +84,10 @@ def build_status_display_item(
     display_status = status_display_label(status)
     return {
         "row_kind": "status_only",
-        "status": status,
         "status_code": status,
         "status_label": display_status,
         "display_status": display_status,
-        "project_name": display_status,
+        "project_name": "—",
         "project_description": "",
         "start_time": str(snapshot.get("start_time") or "") if snapshot else "",
         "end_time": "",

@@ -1,3 +1,4 @@
+from tests.support.db_helpers import assign_activity_project
 import json
 from datetime import date
 
@@ -203,7 +204,7 @@ def test_statistics_export_excludes_in_progress_live_rows(temp_db):
     aid = activity_service.create_activity(
         "AppA", "AppA.exe", "Window", start_time=start_time
     )
-    activity_service.update_activity_project(aid, project_b_id)
+    assign_activity_project(aid, project_b_id)
     activity_service.set_activity_duration(aid, 60)
 
     snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)

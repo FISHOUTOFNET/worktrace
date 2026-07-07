@@ -25,6 +25,7 @@ Locked behavior:
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 import json
 import re
@@ -253,7 +254,7 @@ def test_preview_folder_rule_counts_skips_correctly(temp_db):
 
     # Eligible + matched + already_target
     already_aid = _create_closed_activity(file_path_hint="D:\\CaseA\\Already.docx")
-    activity_service.update_activity_project(already_aid, project, manual=False)
+    assign_activity_project(already_aid, project, manual=False)
 
     # Manual override -> skipped
     manual_aid = _create_closed_activity(file_path_hint="D:\\CaseA\\Manual.docx")
@@ -601,7 +602,7 @@ def test_backfill_does_not_modify_already_target_activity(temp_db):
     project = project_service.create_project("P")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", project)
     aid = _create_closed_activity(file_path_hint="D:\\CaseA\\Doc.docx")
-    activity_service.update_activity_project(aid, project, manual=False)
+    assign_activity_project(aid, project, manual=False)
     result = rule_impact_service.backfill_rule_impact("folder", rule_id)
     assert result["updated_count"] == 0
     assert result["already_target_count"] == 1

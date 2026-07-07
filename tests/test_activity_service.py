@@ -1,3 +1,4 @@
+from tests.support.db_helpers import assign_activity_project, set_activity_note
 from worktrace.services import activity_service, project_service
 
 
@@ -7,8 +8,8 @@ def test_create_close_and_manual_updates(temp_db):
         "Word", "winword.exe", "Spec", start_time="2026-06-18 09:00:00"
     )
     activity_service.close_activity(activity_id, "2026-06-18 09:30:00")
-    activity_service.update_activity_project(activity_id, pid)
-    activity_service.update_activity_note(activity_id, "done")
+    assign_activity_project(activity_id, pid)
+    set_activity_note(activity_id, "done")
     row = activity_service.get_activity(activity_id)
     assert row["duration_seconds"] == 1800
     assert row["project_id"] == pid

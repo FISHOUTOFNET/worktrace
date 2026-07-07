@@ -18,6 +18,7 @@ underlying ``worktrace.services.activity_service.merge_activities`` write:
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 from unittest.mock import patch
 
@@ -329,7 +330,7 @@ def test_merge_different_project_rejected(temp_db):
     from worktrace.services import project_service
 
     project = project_service.create_project("OtherProj")
-    activity_service.update_activity_project(ids[1], project, manual=True)
+    assign_activity_project(ids[1], project, manual=True)
     with pytest.raises(TimelineMergeError) as exc:
         timeline_api.merge_timeline_activities(ids)
     assert exc.value.code == "different_project"
@@ -443,7 +444,7 @@ def test_merge_no_partial_write_on_validation_failure(temp_db):
     from worktrace.services import project_service
 
     project = project_service.create_project("OtherProj")
-    activity_service.update_activity_project(ids[1], project, manual=True)
+    assign_activity_project(ids[1], project, manual=True)
     with pytest.raises(TimelineMergeError):
         timeline_api.merge_timeline_activities(ids)
     for aid in ids:
@@ -727,8 +728,8 @@ def test_service_merge_assignment_resource_not_complex_merged(temp_db):
 
     project = project_service.create_project("MergeProj")
     ids = _seed_two_adjacent_activities()
-    activity_service.update_activity_project(ids[0], project, manual=True)
-    activity_service.update_activity_project(ids[1], project, manual=True)
+    assign_activity_project(ids[0], project, manual=True)
+    assign_activity_project(ids[1], project, manual=True)
     # Count assignment and resource rows before merge.
     with get_connection() as conn:
         before_assignments = conn.execute(
@@ -864,7 +865,7 @@ def test_merge_kept_fields_unchanged_on_validation_failure(temp_db):
     from worktrace.services import project_service
 
     project = project_service.create_project("Blocker")
-    activity_service.update_activity_project(ids[1], project, manual=True)
+    assign_activity_project(ids[1], project, manual=True)
     with pytest.raises(TimelineMergeError):
         timeline_api.merge_timeline_activities(ids)
     kept_after = activity_service.get_activity(ids[0])

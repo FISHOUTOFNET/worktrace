@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 from worktrace.services import activity_service, folder_rule_service, project_inference_service, project_service, rule_service
 from worktrace.services.project_inference_service import (
@@ -112,7 +113,7 @@ class TestManualOverrideNotOverwritten:
             file_path_hint="D:\\ClientA\\合同.docx",
             start_time="2026-06-18 09:00:00",
         )
-        activity_service.update_activity_project(aid, manual_project, manual=True)
+        assign_activity_project(aid, manual_project, manual=True)
         assign_project_for_activity(aid)
         row = activity_service.get_activity(aid)
         assert row["project_id"] == manual_project

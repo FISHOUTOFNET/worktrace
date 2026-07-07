@@ -12,7 +12,7 @@ from typing import Any
 
 from ..constants import TIME_FORMAT
 from ..services import activity_service, project_service, timeline_service
-from ..services.activity_edit_policy import is_project_editable_activity
+from ..services.activity_edit_policy import project_editability_code
 from ..services.live_time_service import (
     snapshot_elapsed_seconds,
     snapshot_extra_seconds,
@@ -211,10 +211,6 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
 
 def update_session_project(session_activity_ids: list[int], project_id: int) -> None:
     timeline_service.update_session_project(session_activity_ids, project_id)
-
-
-def update_session_note(report_date: str, first_activity_id: int, note: str) -> None:
-    timeline_service.update_session_note(report_date, first_activity_id, note)
 
 
 def update_activity_group_project(activity_ids: list[int], project_id: int) -> None:
@@ -1168,15 +1164,16 @@ def _validate_activity_id_for_time_edit(activity_id: int) -> int:
 
 
 def _project_editability_code(activity: dict | None) -> str:
-    if not activity or int(activity.get("is_deleted") or 0):
+    code = project_editability_code(activity)
+    if code in {"", "activity_not_project_activity"}:
+        return NOT_PROJECT_ACTIVITY_CODE if code else ""
+    if code in {"activity_not_found", "activity_deleted"}:
         return "invalid_id"
-    if int(activity.get("is_hidden") or 0):
+    if code == "activity_hidden":
         return "hidden_activity"
-    if activity.get("end_time") is None:
+    if code == "activity_in_progress":
         return "in_progress"
-    if not is_project_editable_activity(activity):
-        return NOT_PROJECT_ACTIVITY_CODE
-    return ""
+    return NOT_PROJECT_ACTIVITY_CODE
 
 
 def _ensure_project_editable_for_value_error(activity: dict | None) -> None:
@@ -1230,10 +1227,6 @@ def _validate_time_order(start_time: str, end_time: str) -> None:
     if end_dt <= start_dt:
         raise TimelineTimeEditError("invalid_time")
 
-
-
-def update_activity_note(activity_id: int, note: str) -> None:
-    activity_service.update_activity_note(activity_id, note)
 
 
 def soft_delete_activity(activity_id: int) -> None:
@@ -1301,8 +1294,6 @@ __all__ = [
     "split_timeline_activity",
     "split_timeline_session",
     "update_activity_group_project",
-    "update_activity_note",
-    "update_session_note",
     "update_session_project",
     "update_timeline_activity_time",
     "update_timeline_session_note",

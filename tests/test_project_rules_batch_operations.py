@@ -1,6 +1,7 @@
 """selected-rule batch operations service / API tests."""
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 import json
 import re
@@ -524,7 +525,7 @@ def test_batch_apply_skips_manual_override(temp_db):
     )
     other = project_service.create_project("OtherManual")
     aid = _create_closed_activity(file_path_hint="D:\\SkipManualFolder\\Doc.docx")
-    activity_service.update_activity_project(aid, other, manual=True)
+    assign_activity_project(aid, other, manual=True)
     _set_manual_override(aid)
     result = rule_api.backfill_project_rules_batch([_folder_rule_entry(folder_rid)])
     assert result["ok"] is True

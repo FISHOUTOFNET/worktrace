@@ -15,10 +15,11 @@ from ..constants import (
     TIME_FORMAT,
 )
 from ..db import dict_rows, get_connection, now_str
+from ..formatters import format_activity_project_cell, format_status_label
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
-from .activity_edit_policy import is_project_editable_activity
+from .activity_edit_policy import is_project_editable_activity, require_project_editable_activity
 from .project_service import get_or_create_uncategorized_project
 from .resource_service import attach_resource, create_or_update_activity_resource
 
@@ -515,10 +516,6 @@ def activity_display_name(activity: dict) -> str:
     return attach_resource(activity)["activity_display_name"]
 
 
-def update_activity_project(activity_id: int, project_id: int, manual: bool = True) -> None:
-    _assign_activities_project([activity_id], project_id, manual=manual)
-
-
 def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> None:
     if not (file_path_hint or "").strip():
         return
@@ -646,72 +643,14 @@ def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_
     )
 
 
-def _assign_activities_project(activity_ids: list[int], project_id: int, manual: bool = True) -> None:
-    if not activity_ids:
-        return
-    ts = now_str()
-    placeholders = ",".join("?" for _ in activity_ids)
-    source = "manual" if manual else "anchor_context"
-    confidence = 100 if manual else 60
-    with get_connection() as conn:
-        conn.execute(
-            f"""
-            UPDATE activity_log
-            SET project_id = ?,
-                manual_override = CASE WHEN ? = 1 THEN 1 ELSE manual_override END,
-                updated_at = ?
-            WHERE id IN ({placeholders})
-            """,
-            [project_id, int(manual), ts, *activity_ids],
-        )
-        for activity_id in activity_ids:
-            conn.execute(
-                """
-                INSERT INTO activity_project_assignment(
-                    activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(activity_id) DO UPDATE SET
-                    project_id = excluded.project_id,
-                    confidence = excluded.confidence,
-                    source = excluded.source,
-                    is_manual = excluded.is_manual,
-                    suggested_project_name = excluded.suggested_project_name,
-                    updated_at = excluded.updated_at
-                """,
-                (activity_id, project_id, confidence, source, int(manual), None, ts, ts),
-            )
-
-
 def update_project_editable_activities_project(activity_ids: list[int], project_id: int) -> None:
     if not activity_ids:
         return
     ts = now_str()
     placeholders = ",".join("?" for _ in activity_ids)
     with get_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT id, is_deleted, is_hidden, end_time, status
-            FROM activity_log
-            WHERE id IN ({placeholders})
-            """,
-            activity_ids,
-        ).fetchall()
-        found_ids = set()
-        for row in rows:
-            aid = int(row["id"])
-            found_ids.add(aid)
-            if int(row["is_deleted"] or 0):
-                raise ValueError("activity_deleted")
-            if int(row["is_hidden"] or 0):
-                raise ValueError("activity_hidden")
-            if row["end_time"] is None:
-                raise ValueError("activity_in_progress")
-            if not is_project_editable_activity(dict(row)):
-                raise ValueError("activity_not_project_activity")
         for aid in activity_ids:
-            if aid not in found_ids:
-                raise ValueError("activity_not_found")
+            require_project_editable_activity(aid, conn=conn)
 
         cur = conn.execute(
             f"""
@@ -799,29 +738,8 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
         if int(project_row["is_archived"] or 0) or not int(project_row["enabled"] or 0):
             raise ValueError("invalid_project")
 
-        rows = conn.execute(
-            f"""
-            SELECT id, is_deleted, is_hidden, end_time, status
-            FROM activity_log
-            WHERE id IN ({placeholders})
-            """,
-            ids,
-        ).fetchall()
-        found_ids = set()
-        for row in rows:
-            found_ids.add(int(row["id"]))
-            if int(row["is_deleted"] or 0):
-                raise ValueError("activity_deleted")
-            if int(row["is_hidden"] or 0):
-                raise ValueError("activity_hidden")
-            if row["end_time"] is None:
-                raise ValueError("activity_in_progress")
-            if not is_project_editable_activity(dict(row)):
-                raise ValueError("activity_not_project_activity")
-        # Any id not found in the DB is a missing activity.
         for aid in ids:
-            if aid not in found_ids:
-                raise ValueError("activity_not_found")
+            require_project_editable_activity(aid, conn=conn)
 
         cur = conn.execute(
             f"""
@@ -911,29 +829,8 @@ def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
     ts = now_str()
     placeholders = ",".join("?" for _ in ids)
     with get_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT id, is_deleted, is_hidden, end_time, status
-            FROM activity_log
-            WHERE id IN ({placeholders})
-            """,
-            ids,
-        ).fetchall()
-        found_ids = set()
-        for row in rows:
-            found_ids.add(int(row["id"]))
-            if int(row["is_deleted"] or 0):
-                raise ValueError("activity_deleted")
-            if int(row["is_hidden"] or 0):
-                raise ValueError("activity_hidden")
-            if row["end_time"] is None:
-                raise ValueError("activity_in_progress")
-            if not is_project_editable_activity(dict(row)):
-                raise ValueError("activity_not_project_activity")
-        # Any id not found in the DB is a missing activity.
         for aid in ids:
-            if aid not in found_ids:
-                raise ValueError("activity_not_found")
+            require_project_editable_activity(aid, conn=conn)
 
         cur = conn.execute(
             f"""
@@ -996,12 +893,24 @@ def finalize_created_activity(activity_id: int) -> None:
     process_new_activity(activity_id)
 
 
-def update_activity_note(activity_id: int, note: str) -> None:
+def update_project_editable_activity_note(activity_id: int, note: str) -> None:
     with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET note = ?, source = 'manual', updated_at = ? WHERE id = ?",
-            (note, now_str(), activity_id),
+        require_project_editable_activity(activity_id, conn=conn)
+        cur = conn.execute(
+            """
+            UPDATE activity_log
+            SET note = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND is_deleted = 0
+              AND is_hidden = 0
+              AND end_time IS NOT NULL
+              AND status = ?
+            """,
+            (note, now_str(), activity_id, STATUS_NORMAL),
         )
+        if cur.rowcount != 1:
+            raise ValueError("activity_note_update_failed")
 
 
 def update_activity_time(activity_id: int, start_time: str, end_time: str) -> None:
@@ -1495,6 +1404,7 @@ def list_restorable_activities_for_date(date: str) -> list[dict]:
                 break
         if not resource_name:
             resource_name = "未知"
+        status_code = str(attached.get("status") or "")
         result.append(
             {
                 "activity_id": int(attached.get("id") or 0),
@@ -1505,8 +1415,9 @@ def list_restorable_activities_for_date(date: str) -> list[dict]:
                 "resource_kind": str(attached.get("resource_kind") or ""),
                 "resource_subtype": str(attached.get("resource_subtype") or ""),
                 "resource_display_name": resource_name,
-                "project_name": str(attached.get("project_name") or "未归类"),
-                "status": str(attached.get("status") or ""),
+                "project_name": format_activity_project_cell(attached),
+                "status_code": status_code,
+                "display_status": format_status_label(status_code),
                 "restore_state": restore_state,
                 "is_hidden": is_hidden,
                 "is_deleted": is_deleted,
@@ -1515,23 +1426,3 @@ def list_restorable_activities_for_date(date: str) -> list[dict]:
     return result
 
 
-def update_activity_fields(activity_id: int, **fields: Any) -> None:
-    if not fields:
-        return
-    allowed = {
-        "status",
-        "source",
-        "is_hidden",
-        "auto_classified",
-        "manual_override",
-        "project_id",
-        "note",
-    }
-    items = [(key, value) for key, value in fields.items() if key in allowed]
-    if not items:
-        return
-    sql = ", ".join(f"{key} = ?" for key, _ in items)
-    values = [value for _, value in items]
-    values.extend([now_str(), activity_id])
-    with get_connection() as conn:
-        conn.execute(f"UPDATE activity_log SET {sql}, updated_at = ? WHERE id = ?", values)

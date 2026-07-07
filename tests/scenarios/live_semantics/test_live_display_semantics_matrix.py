@@ -138,7 +138,9 @@ def test_system_status_is_status_only_and_excluded_from_totals(live, state):
     overview = live.pages()["overview"]
     status_rows = [r for r in overview["activities"] if r.get("row_kind") == "status_only"]
     assert status_rows, f"{state} must be visible as a status-only row"
-    assert status_rows[0]["status"] == state
+    assert "status" not in status_rows[0]
+    assert status_rows[0]["status_code"] == state
+    assert status_rows[0]["project_name"] == "—"
     assert status_rows[0]["contributes_to_totals"] is False
     assert status_rows[0]["editable"] is False
     assert status_rows[0]["exportable"] is False

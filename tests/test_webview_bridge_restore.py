@@ -26,6 +26,7 @@ Covers ``WebViewBridge.restore_timeline_activity`` and
 """
 
 from __future__ import annotations
+from tests.support.db_helpers import assign_activity_project
 
 import re
 from pathlib import Path
@@ -33,10 +34,11 @@ from unittest.mock import patch
 
 import pytest
 
+from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
 from worktrace.api import timeline_api
 from worktrace.api.timeline_api import TimelineRestoreActivityError
 from worktrace.db import get_connection
-from worktrace.services import activity_service, settings_service
+from worktrace.services import activity_service, project_service, settings_service
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
@@ -101,6 +103,19 @@ def _seed_closed_activity_with_resource(
     )
     activity_service.finalize_created_activity(aid)
     activity_service.close_activity(aid, f"{day} {end}")
+    return aid
+
+
+def _seed_closed_activity_with_status(status: str, day="2026-06-25"):
+    aid = activity_service.create_activity(
+        "System",
+        "system.exe",
+        "System",
+        status=status,
+        start_time=f"{day} 09:00:00",
+    )
+    activity_service.finalize_created_activity(aid)
+    activity_service.close_activity(aid, f"{day} 09:30:00")
     return aid
 
 
@@ -408,7 +423,8 @@ def test_get_timeline_restorable_activities_display_safe_fields_only(bridge):
         "resource_type",
         "resource_name",
         "project_name",
-        "status",
+        "status_code",
+        "display_status",
         "restore_state",
         "is_hidden",
         "is_deleted",
@@ -416,7 +432,33 @@ def test_get_timeline_restorable_activities_display_safe_fields_only(bridge):
     assert set(item.keys()) <= allowed_keys, (
         f"unexpected keys: {set(item.keys()) - allowed_keys}"
     )
+    assert "status" not in item
     _assert_no_sensitive_keys(result)
+
+
+def test_get_timeline_restorable_activities_bridge_status_fields(bridge):
+    aid = _seed_closed_activity_with_status(STATUS_PAUSED)
+    activity_service.hide_activity(aid)
+
+    result = bridge.get_timeline_restorable_activities("2026-06-25")
+    item = result["activities"][0]
+
+    assert item["status_code"] == STATUS_PAUSED
+    assert item["display_status"] == "已暂停"
+    assert "status" not in item
+
+
+@pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_PAUSED, STATUS_ERROR, STATUS_EXCLUDED])
+def test_get_timeline_restorable_activities_bridge_system_project_cell_is_dash(bridge, status):
+    project = project_service.create_project("SystemProject")
+    aid = _seed_closed_activity_with_status(status)
+    assign_activity_project(aid, project, manual=False)
+    activity_service.hide_activity(aid)
+
+    result = bridge.get_timeline_restorable_activities("2026-06-25")
+    item = result["activities"][0]
+
+    assert item["project_name"] == "—"
 
 
 def test_get_timeline_restorable_activities_no_raw_keys(bridge):
