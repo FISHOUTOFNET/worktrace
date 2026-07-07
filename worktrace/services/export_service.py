@@ -6,10 +6,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from ..constants import UNCATEGORIZED_PROJECT
 from ..db import get_connection, now_str, reset_database
 from ..exports.excel_exporter import export_excel_file
-from ..formatters import format_duration, format_resource_type, format_safe_display_name
+from ..formatters import (
+    format_activity_project_cell,
+    format_duration,
+    format_resource_type,
+    format_safe_display_name,
+    format_status_label,
+)
 from . import statistics_service, timeline_service
 from .runtime_activity_state_service import clear_runtime_activity_state
 
@@ -73,11 +78,6 @@ def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
             or row.get("duration_seconds")
             or 0
         )
-        project_name = str(
-            row.get("report_project_name")
-            or row.get("display_project_name")
-            or UNCATEGORIZED_PROJECT
-        ).strip() or UNCATEGORIZED_PROJECT
         app_name = str(row.get("app_name") or "").strip() or _UNKNOWN_APP_LABEL
         csv_rows.append(
             {
@@ -86,16 +86,14 @@ def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
                 "end_time": str(row.get("end_time") or ""),
                 "duration": format_duration(duration_seconds),
                 "duration_seconds": duration_seconds,
-                "project": project_name,
+                "project": format_activity_project_cell(row),
                 "app": app_name,
                 "resource_type": format_resource_type(
                     row.get("resource_kind"),
                     row.get("resource_subtype"),
                 ),
                 "resource_name": format_safe_display_name(row),
-                "status": statistics_service.get_status_display_label(
-                    row.get("status")
-                ),
+                "status": format_status_label(row.get("status")),
             }
         )
     return csv_rows

@@ -70,6 +70,22 @@ def _seed_two_adjacent_activities(
     return [a1, a2]
 
 
+def _seed_two_adjacent_status_activities(status="idle"):
+    a1 = activity_service.create_activity(
+        status.title(), status, f"{status} status", status=status,
+        start_time="2026-06-25 09:00:00",
+    )
+    activity_service.finalize_created_activity(a1)
+    activity_service.close_activity(a1, "2026-06-25 09:30:00")
+    a2 = activity_service.create_activity(
+        status.title(), status, f"{status} status", status=status,
+        start_time="2026-06-25 09:30:00",
+    )
+    activity_service.finalize_created_activity(a2)
+    activity_service.close_activity(a2, "2026-06-25 10:00:00")
+    return [a1, a2]
+
+
 def _count_activities() -> int:
     with get_connection() as conn:
         row = conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()
@@ -179,6 +195,17 @@ def test_merge_in_progress_activity(temp_db):
     with pytest.raises(TimelineMergeError) as exc:
         timeline_api.merge_timeline_activities([a1, a2])
     assert exc.value.code == "in_progress"
+
+
+def test_merge_system_status_activities_rejected_without_partial_write(temp_db):
+    ids = _seed_two_adjacent_status_activities("idle")
+
+    with pytest.raises(TimelineMergeError) as exc:
+        timeline_api.merge_timeline_activities(ids)
+
+    assert exc.value.code == "not_project_activity"
+    assert int(activity_service.get_activity(ids[0])["is_deleted"] or 0) == 0
+    assert int(activity_service.get_activity(ids[1])["is_deleted"] or 0) == 0
 
 
 
@@ -335,7 +362,7 @@ def test_merge_different_status_rejected(temp_db):
         )
     with pytest.raises(TimelineMergeError) as exc:
         timeline_api.merge_timeline_activities(ids)
-    assert exc.value.code == "incompatible_activity"
+    assert exc.value.code == "not_project_activity"
 
 
 def test_merge_different_source_rejected(temp_db):
@@ -557,6 +584,16 @@ def test_service_merge_in_progress_raises(temp_db):
         activity_service.merge_activities(a1, a2)
 
 
+def test_service_merge_adjacent_idle_rows_rejected_without_partial_write(temp_db):
+    ids = _seed_two_adjacent_status_activities("idle")
+
+    with pytest.raises(ValueError, match="activity_merge_not_project_activity"):
+        activity_service.merge_activities(ids[0], ids[1])
+
+    assert int(activity_service.get_activity(ids[0])["is_deleted"] or 0) == 0
+    assert int(activity_service.get_activity(ids[1])["is_deleted"] or 0) == 0
+
+
 def test_service_merge_kept_update_zero_rowcount_rolls_back(temp_db):
     """If the UPDATE on the kept activity affects 0 rows (race condition),
     the service must raise ValueError and the later activity must NOT be
@@ -728,13 +765,8 @@ def test_service_merge_assignment_resource_not_complex_merged(temp_db):
 def test_merge_excluded_vs_non_excluded_rejected(temp_db):
     """Excluded vs non-excluded activities must be rejected.
 
-    Excluded activities are always anonymised to the ``system:excluded``
-    resource identity (see ``resource_service._enforce_anonymous_if_excluded``
-    and ``make_system_resource``), which differs from a normal activity's
-    file-based identity_key. The service checks resource identity before
-    status, so this case is rejected with ``different_resource`` — a
-    stronger and earlier guard that also covers the excluded-vs-non-excluded
-    boundary without needing a separate status check.
+    Non-normal system status rows are rejected by the project edit
+    eligibility contract before merge compatibility checks.
     """
     from worktrace.constants import STATUS_EXCLUDED
 
@@ -748,7 +780,7 @@ def test_merge_excluded_vs_non_excluded_rejected(temp_db):
     activity_service.close_activity(a2, "2026-06-25 10:00:00")
     with pytest.raises(TimelineMergeError) as exc:
         timeline_api.merge_timeline_activities([a1, a2])
-    assert exc.value.code == "different_resource"
+    assert exc.value.code == "not_project_activity"
 
 
 def test_merge_no_partial_write_on_different_resource(temp_db):

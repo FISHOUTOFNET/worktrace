@@ -191,12 +191,15 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
         for group in (summary.get("by_status") or [])
     ]
     total_seconds = int(summary.get("total_duration_seconds") or 0)
+    project_seconds = int(summary.get("project_duration_seconds") or 0)
     preview = summary.get("export_preview") or {}
     return {
         "date_from": str(summary.get("date_from") or ""),
         "date_to": str(summary.get("date_to") or ""),
         "total_duration_seconds": total_seconds,
         "total_duration": format_duration(total_seconds),
+        "project_duration_seconds": project_seconds,
+        "project_duration": format_duration(project_seconds),
         "activity_count": int(summary.get("activity_count") or 0),
         "project_count": int(summary.get("project_count") or 0),
         "app_count": int(summary.get("app_count") or 0),

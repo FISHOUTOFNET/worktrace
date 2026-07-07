@@ -48,6 +48,19 @@ def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
     )
 
 
+def _seed_closed_status_activity(status="idle"):
+    aid = activity_service.create_activity(
+        status.title(),
+        status,
+        f"{status} status",
+        status=status,
+        start_time="2026-06-25 09:00:00",
+    )
+    activity_service.finalize_created_activity(aid)
+    activity_service.close_activity(aid, "2026-06-25 09:30:00")
+    return aid
+
+
 def _seed_session():
     """Seed a simple two-activity session on 2026-06-25."""
     a1 = activity_service.create_activity(
@@ -119,6 +132,19 @@ def test_split_activity_in_progress(temp_db):
     with pytest.raises(TimelineSplitError) as exc:
         timeline_api.split_timeline_activity(aid, "2026-06-25 09:15:00")
     assert exc.value.code == "in_progress"
+
+
+def test_split_activity_system_status_rejected_without_insert(temp_db):
+    aid = _seed_closed_status_activity("idle")
+    before_count = _count_activities()
+
+    with pytest.raises(TimelineSplitError) as exc:
+        timeline_api.split_timeline_activity(aid, "2026-06-25 09:15:00")
+
+    assert exc.value.code == "not_project_activity"
+    assert _count_activities() == before_count
+    activity = activity_service.get_activity(aid)
+    assert activity["end_time"] == "2026-06-25 09:30:00"
 
 
 def test_split_activity_non_string_split_time(temp_db):
@@ -491,6 +517,19 @@ def test_split_session_in_progress(temp_db):
     assert exc.value.code == "in_progress"
 
 
+def test_split_session_system_status_rejected_without_insert(temp_db):
+    aid = _seed_closed_status_activity("paused")
+    before_count = _count_activities()
+
+    with pytest.raises(TimelineSplitError) as exc:
+        timeline_api.split_timeline_session([aid], "2026-06-25 09:15:00")
+
+    assert exc.value.code == "not_project_activity"
+    assert _count_activities() == before_count
+    activity = activity_service.get_activity(aid)
+    assert activity["end_time"] == "2026-06-25 09:30:00"
+
+
 def test_split_session_bad_time_format(temp_db):
     aid = _seed_closed_activity()
     with pytest.raises(TimelineSplitError) as exc:
@@ -573,6 +612,18 @@ def test_service_split_activity_raises_on_nonexistent_activity(temp_db):
     does not exist."""
     with pytest.raises(ValueError):
         activity_service.split_activity(999999, "2026-06-25 09:15:00")
+
+
+def test_service_split_activity_rejects_non_normal_without_insert(temp_db):
+    aid = _seed_closed_status_activity("error")
+    before_count = _count_activities()
+
+    with pytest.raises(ValueError, match="activity_not_project_activity"):
+        activity_service.split_activity(aid, "2026-06-25 09:15:00")
+
+    assert _count_activities() == before_count
+    activity = activity_service.get_activity(aid)
+    assert activity["end_time"] == "2026-06-25 09:30:00"
 
 
 def test_service_split_activity_atomic_rollback_on_zero_row_update(temp_db):

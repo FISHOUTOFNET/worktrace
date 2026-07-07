@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from worktrace.api import timeline_api
+from worktrace.db import get_connection
 from worktrace.services import activity_service, project_service
 
 
@@ -40,6 +41,21 @@ def _seed_session(project_id=None):
     a2 = _activity("Word", "winword.exe", "A2.docx", "09:10:00", project_id)
     activity_service.close_activity(a2, "2026-06-25 09:30:00")
     return [a1, a2]
+
+
+def _seed_closed_status_activity(status="idle", project_id=None):
+    aid = _activity(status.title(), status, f"{status} status", "09:00:00", project_id, status=status)
+    activity_service.close_activity(aid, "2026-06-25 09:10:00")
+    return aid
+
+
+def _session_note_count(first_activity_id: int) -> int:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM project_session_note WHERE first_activity_id = ?",
+            (first_activity_id,),
+        ).fetchone()
+    return int(row["c"] or 0)
 
 
 
@@ -113,6 +129,18 @@ def test_reclassify_multi_activity_session_consistent(temp_db):
     assert project_ids == {project}
 
 
+def test_reclassify_system_status_activity_rejected_without_partial_write(temp_db):
+    original_project = project_service.create_project("Original")
+    target_project = project_service.create_project("Target")
+    aid = _seed_closed_status_activity(status="idle", project_id=original_project)
+
+    with pytest.raises(ValueError, match="not_project_activity"):
+        timeline_api.reclassify_timeline_session_project([aid], target_project)
+
+    activity = activity_service.get_activity(aid)
+    assert int(activity["project_id"]) == original_project
+
+
 def test_reclassify_then_reread_timeline_reflects_change(temp_db):
     """After reclassification, re-reading the timeline must show the new
     project in the session list."""
@@ -140,6 +168,15 @@ def test_update_note_success(temp_db):
             note_found = s.get("session_note") or ""
             break
     assert note_found == "test note"
+
+
+def test_update_note_system_status_activity_rejected_without_write(temp_db):
+    aid = _seed_closed_status_activity(status="paused")
+
+    with pytest.raises(ValueError, match="not_project_activity"):
+        timeline_api.update_timeline_session_note("2026-06-25", aid, "test note")
+
+    assert _session_note_count(aid) == 0
 
 
 def test_update_note_preserves_newlines(temp_db):
@@ -237,6 +274,17 @@ def test_update_note_and_duration_success(temp_db):
     fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
     assert fields["note"] == "test note"
     assert fields["adjusted_duration_seconds"] == 3600
+
+
+def test_update_note_and_duration_system_status_activity_rejected_without_write(temp_db):
+    aid = _seed_closed_status_activity(status="excluded")
+
+    with pytest.raises(ValueError, match="not_project_activity"):
+        timeline_api.update_timeline_session_note_and_duration(
+            "2026-06-25", aid, "test note", 3600
+        )
+
+    assert _session_note_count(aid) == 0
 
 
 def test_update_note_and_duration_null_duration_clears_override(temp_db):

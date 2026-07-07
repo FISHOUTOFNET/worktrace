@@ -46,6 +46,19 @@ def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
     return aid
 
 
+def _seed_closed_status_activity(status="idle", start="09:30:00", end="10:00:00", day="2026-06-25"):
+    aid = activity_service.create_activity(
+        status.title(),
+        status,
+        f"{status} status",
+        status=status,
+        start_time=f"{day} {start}",
+    )
+    activity_service.finalize_created_activity(aid)
+    activity_service.close_activity(aid, f"{day} {end}")
+    return aid
+
+
 def _seed_two_closed_activities(
     start1="09:00:00",
     end1="09:30:00",
@@ -307,6 +320,20 @@ def test_batch_in_progress_activity(temp_db):
     assert exc.value.code == "in_progress"
 
 
+def test_batch_system_status_activity_rejected_without_partial_write(temp_db):
+    a1 = _seed_closed_activity(end="09:30:00")
+    a2 = _seed_closed_status_activity("idle")
+    activity_service.update_activity_note(a1, "original")
+    activity_service.update_activity_note(a2, "system original")
+
+    with pytest.raises(TimelineBatchNoteError) as exc:
+        timeline_api.batch_update_timeline_activities_note([a1, a2], "new note")
+
+    assert exc.value.code == "not_project_activity"
+    assert _get_activity_note(a1) == "original"
+    assert _get_activity_note(a2) == "system original"
+
+
 
 
 def test_batch_success(temp_db):
@@ -392,7 +419,7 @@ def test_batch_does_not_modify_project_or_status(temp_db):
     """project_id, status, source, app_name, process_name must not change."""
     project = project_service.create_project("TestProject")
     ids = _seed_two_closed_activities()
-    activity_service.update_activities_project(ids, project)
+    activity_service.update_project_editable_activities_project(ids, project)
     originals = {}
     with get_connection() as conn:
         for aid in ids:
@@ -419,7 +446,7 @@ def test_batch_does_not_modify_assignments(temp_db):
     """activity_project_assignment rows must not change."""
     project = project_service.create_project("TestProject")
     ids = _seed_two_closed_activities()
-    activity_service.update_activities_project(ids, project)
+    activity_service.update_project_editable_activities_project(ids, project)
     originals = {}
     for aid in ids:
         originals[aid] = {
@@ -558,8 +585,8 @@ def test_batch_different_projects_ok(temp_db):
     project2 = project_service.create_project("Project2")
     a1 = _seed_closed_activity(start="09:00:00", end="09:30:00")
     a2 = _seed_closed_activity(start="09:30:00", end="10:00:00")
-    activity_service.update_activities_project([a1], project1)
-    activity_service.update_activities_project([a2], project2)
+    activity_service.update_project_editable_activities_project([a1], project1)
+    activity_service.update_project_editable_activities_project([a2], project2)
     result = timeline_api.batch_update_timeline_activities_note([a1, a2], "note")
     assert result["updated_count"] == 2
     assert _get_activity_note(a1) == "note"
@@ -651,6 +678,19 @@ def test_service_batch_activity_in_progress(temp_db):
     with pytest.raises(ValueError) as exc:
         activity_service.batch_update_activity_note([a1, a2], "note")
     assert str(exc.value) == "activity_in_progress"
+
+
+def test_service_batch_activity_note_rejects_non_normal_atomically(temp_db):
+    a1 = _seed_closed_activity(end="09:30:00")
+    a2 = _seed_closed_status_activity("paused")
+    activity_service.update_activity_note(a1, "original")
+    activity_service.update_activity_note(a2, "system original")
+
+    with pytest.raises(ValueError, match="activity_not_project_activity"):
+        activity_service.batch_update_activity_note([a1, a2], "new note")
+
+    assert _get_activity_note(a1) == "original"
+    assert _get_activity_note(a2) == "system original"
 
 
 def test_service_batch_bool_activity_ids(temp_db):

@@ -185,6 +185,7 @@ def test_build_csv_rows_excludes_deleted(temp_db):
 
 def test_build_csv_rows_all_statuses_exported(temp_db):
     """normal / idle / paused / excluded / error are all included."""
+    pid = project_service.create_project("Client")
     statuses = ("normal", "idle", "paused", "excluded", "error")
     starts = [
         "09:00:00", "09:30:00", "10:00:00", "10:30:00", "11:00:00",
@@ -199,16 +200,20 @@ def test_build_csv_rows_all_statuses_exported(temp_db):
             start=start,
             end=end,
             day="2026-06-25",
+            project_id=pid,
             status=status,
         )
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
     assert len(rows) == 5
-    exported_statuses = sorted(r["status"] for r in rows)
-    # All five statuses must be represented (each with a non-empty Chinese label).
-    assert len(exported_statuses) == 5
-    for status in exported_statuses:
-        assert status != ""
-        assert status != "未知"
+    by_start = {row["start_time"][-8:]: row for row in rows}
+    assert by_start["09:00:00"]["status"] == "正常"
+    assert by_start["09:00:00"]["project"] == "Client"
+    assert by_start["09:30:00"]["status"] == "空闲"
+    assert by_start["10:00:00"]["status"] == "已暂停"
+    assert by_start["10:30:00"]["status"] == "已排除"
+    assert by_start["11:00:00"]["status"] == "异常"
+    for start in ("09:30:00", "10:00:00", "10:30:00", "11:00:00"):
+        assert by_start[start]["project"] == "—"
 
 
 def test_build_csv_rows_multi_day_range(temp_db):

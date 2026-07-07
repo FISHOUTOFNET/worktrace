@@ -12,12 +12,15 @@ from typing import Any
 
 from ..constants import TIME_FORMAT
 from ..services import activity_service, project_service, timeline_service
+from ..services.activity_edit_policy import is_project_editable_activity
 from ..services.live_time_service import (
     snapshot_elapsed_seconds,
     snapshot_extra_seconds,
     snapshot_persisted_id,
     snapshot_seconds_for_date_range,
 )
+
+NOT_PROJECT_ACTIVITY_CODE = "not_project_activity"
 
 
 class TimelineTimeEditError(ValueError):
@@ -244,6 +247,8 @@ def reclassify_timeline_session_project(
     """Validate and apply a project reclassification to a Timeline session."""
     ids = _validate_activity_ids(activity_ids)
     pid = _validate_project_id(project_id)
+    for aid in ids:
+        _ensure_project_editable_for_value_error(activity_service.get_activity(aid))
     timeline_service.update_session_project(ids, pid)
 
 
@@ -272,6 +277,7 @@ def update_timeline_session_note(
     date = _validate_report_date(report_date)
     first_id = _validate_first_activity_id(first_activity_id)
     text = _validate_note(note)
+    _ensure_project_editable_for_value_error(activity_service.get_activity(first_id))
     timeline_service.update_session_note(date, first_id, text)
 
 
@@ -286,6 +292,7 @@ def update_timeline_session_note_and_duration(
     first_id = _validate_first_activity_id(first_activity_id)
     text = _validate_note(note)
     duration = _validate_adjusted_duration(adjusted_duration_seconds)
+    _ensure_project_editable_for_value_error(activity_service.get_activity(first_id))
     timeline_service.update_session_note_and_duration(date, first_id, text, duration)
 
 
@@ -337,8 +344,7 @@ def update_timeline_session_time(
     # by _validate_activity_ids, but the in-progress check is specific to
     # time editing and must not be skipped).
     activity = activity_service.get_activity(ids[0])
-    if activity.get("end_time") is None:
-        raise TimelineTimeEditError("in_progress")
+    _ensure_project_editable_for_time_error(activity)
     try:
         activity_service.update_activity_time(ids[0], start, end)
     except ValueError:
@@ -368,14 +374,15 @@ def split_timeline_activity(activity_id: int, split_time: str) -> dict:
     # Re-check end_time after fetching (the existence/deleted check is done
     # in _validate_activity_id_for_split, but the in-progress check must use
     # the raw DB end_time, not a projected display value).
-    if activity.get("end_time") is None:
-        raise TimelineSplitError("in_progress")
+    _ensure_project_editable_for_split_error(activity)
     start = activity["start_time"]
     end = activity["end_time"]
     _validate_split_range(split, start, end)
     try:
         return activity_service.split_activity(aid, split)
-    except ValueError:
+    except ValueError as exc:
+        if str(exc) == "activity_not_project_activity":
+            raise TimelineSplitError(NOT_PROJECT_ACTIVITY_CODE)
         # Defensive: race condition (deleted/reopened between validation and
         # write) or split_time fell outside the range due to a concurrent
         # time edit. Treat as operation_failed so the bridge returns a clear
@@ -390,12 +397,13 @@ def split_timeline_session(activity_ids: list[int], split_time: str) -> dict:
     if len(ids) > 1:
         raise TimelineSplitError("multi_activity")
     activity = activity_service.get_activity(ids[0])
-    if activity.get("end_time") is None:
-        raise TimelineSplitError("in_progress")
+    _ensure_project_editable_for_split_error(activity)
     _validate_split_range(split, activity["start_time"], activity["end_time"])
     try:
         return activity_service.split_activity(ids[0], split)
-    except ValueError:
+    except ValueError as exc:
+        if str(exc) == "activity_not_project_activity":
+            raise TimelineSplitError(NOT_PROJECT_ACTIVITY_CODE)
         raise TimelineSplitError("operation_failed")
 
 
@@ -423,8 +431,15 @@ def _validate_activity_id_for_split(activity_id: int) -> int:
     if aid <= 0:
         raise TimelineSplitError("invalid_id")
     activity = activity_service.get_activity(aid)
-    if not activity or int(activity.get("is_deleted") or 0):
+    code = _project_editability_code(activity)
+    if code == "invalid_id":
         raise TimelineSplitError("invalid_id")
+    if code == "hidden_activity":
+        raise TimelineSplitError("invalid_id")
+    if code == "in_progress":
+        raise TimelineSplitError("in_progress")
+    if code == NOT_PROJECT_ACTIVITY_CODE:
+        raise TimelineSplitError(NOT_PROJECT_ACTIVITY_CODE)
     return aid
 
 
@@ -491,6 +506,8 @@ def merge_timeline_activities(activity_ids: list[int]) -> dict:
             raise TimelineMergeError("different_resource")
         if code == "activity_merge_incompatible_activity":
             raise TimelineMergeError("incompatible_activity")
+        if code == "activity_merge_not_project_activity":
+            raise TimelineMergeError(NOT_PROJECT_ACTIVITY_CODE)
         # ``activity_merge_update_affected_zero_rows`` or any unexpected
         # ValueError collapses to ``operation_failed`` so the bridge returns
         # a clear generic message without echoing internal details.
@@ -533,8 +550,13 @@ def _validate_merge_activity_ids(activity_ids: list[int]) -> list[int]:
     # any write happens. A missing id fails the whole call (no partial write).
     for aid in ids:
         activity = activity_service.get_activity(aid)
-        if not activity or int(activity.get("is_deleted") or 0):
+        code = _project_editability_code(activity)
+        if code in {"invalid_id", "hidden_activity"}:
             raise TimelineMergeError("invalid_id")
+        if code == "in_progress":
+            raise TimelineMergeError("in_progress")
+        if code == NOT_PROJECT_ACTIVITY_CODE:
+            raise TimelineMergeError(NOT_PROJECT_ACTIVITY_CODE)
     return ids
 
 
@@ -715,6 +737,8 @@ def batch_update_timeline_activities_project(
             raise TimelineBatchProjectError("hidden_activity")
         if code == "activity_in_progress":
             raise TimelineBatchProjectError("in_progress")
+        if code == "activity_not_project_activity":
+            raise TimelineBatchProjectError(NOT_PROJECT_ACTIVITY_CODE)
         # ``project_update_failed`` or any unexpected ValueError collapses
         # to ``operation_failed`` so the bridge returns a clear generic
         # message without echoing internal details.
@@ -833,6 +857,8 @@ def batch_update_timeline_activities_note(
             raise TimelineBatchNoteError("hidden_activity")
         if code == "activity_in_progress":
             raise TimelineBatchNoteError("in_progress")
+        if code == "activity_not_project_activity":
+            raise TimelineBatchNoteError(NOT_PROJECT_ACTIVITY_CODE)
         # ``note_update_failed`` or any unexpected ValueError collapses
         # to ``operation_failed`` so the bridge returns a clear generic
         # message without echoing internal details.
@@ -1129,11 +1155,54 @@ def _validate_activity_id_for_time_edit(activity_id: int) -> int:
     if aid <= 0:
         raise TimelineTimeEditError("invalid_id")
     activity = activity_service.get_activity(aid)
-    if not activity or int(activity.get("is_deleted") or 0):
+    code = _project_editability_code(activity)
+    if code == "invalid_id":
         raise TimelineTimeEditError("invalid_id")
-    if activity.get("end_time") is None:
+    if code == "hidden_activity":
+        raise TimelineTimeEditError("invalid_id")
+    if code == "in_progress":
         raise TimelineTimeEditError("in_progress")
+    if code == NOT_PROJECT_ACTIVITY_CODE:
+        raise TimelineTimeEditError(NOT_PROJECT_ACTIVITY_CODE)
     return aid
+
+
+def _project_editability_code(activity: dict | None) -> str:
+    if not activity or int(activity.get("is_deleted") or 0):
+        return "invalid_id"
+    if int(activity.get("is_hidden") or 0):
+        return "hidden_activity"
+    if activity.get("end_time") is None:
+        return "in_progress"
+    if not is_project_editable_activity(activity):
+        return NOT_PROJECT_ACTIVITY_CODE
+    return ""
+
+
+def _ensure_project_editable_for_value_error(activity: dict | None) -> None:
+    code = _project_editability_code(activity)
+    if code:
+        raise ValueError(code)
+
+
+def _ensure_project_editable_for_time_error(activity: dict | None) -> None:
+    code = _project_editability_code(activity)
+    if code in {"invalid_id", "hidden_activity"}:
+        raise TimelineTimeEditError("invalid_id")
+    if code == "in_progress":
+        raise TimelineTimeEditError("in_progress")
+    if code == NOT_PROJECT_ACTIVITY_CODE:
+        raise TimelineTimeEditError(NOT_PROJECT_ACTIVITY_CODE)
+
+
+def _ensure_project_editable_for_split_error(activity: dict | None) -> None:
+    code = _project_editability_code(activity)
+    if code in {"invalid_id", "hidden_activity"}:
+        raise TimelineSplitError("invalid_id")
+    if code == "in_progress":
+        raise TimelineSplitError("in_progress")
+    if code == NOT_PROJECT_ACTIVITY_CODE:
+        raise TimelineSplitError(NOT_PROJECT_ACTIVITY_CODE)
 
 
 def _validate_time_string(value: str) -> str:

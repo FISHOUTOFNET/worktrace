@@ -27,6 +27,7 @@ import pytest
 from worktrace.api import statistics_api
 from worktrace.api.statistics_api import StatisticsSummaryError
 from worktrace.db import get_connection
+from worktrace.formatters import format_status_label
 from worktrace.services import activity_service, project_service, statistics_service
 
 
@@ -186,22 +187,47 @@ def test_service_summary_by_status_groups_correctly(temp_db):
 
 
 def test_service_summary_unknown_status_falls_back(temp_db):
-    """A status code without a display label falls back to 未知状态.
+    assert format_status_label("weird") == "未知状态"
+    assert format_status_label(None) == "未知状态"
 
-    The DB CHECK constraint only allows known statuses, so we verify the
-    fallback at the mapping level: any status string not in
-    ``_STATUS_DISPLAY_LABELS`` must map to ``_UNKNOWN_STATUS_LABEL``.
-    """
-    # Verify the fallback mapping directly (DB CHECK constraint prevents
-    # inserting an invalid status like 'weird').
-    unknown_label = statistics_service._STATUS_DISPLAY_LABELS.get(
-        "weird", statistics_service._UNKNOWN_STATUS_LABEL
+
+def test_service_summary_project_stats_only_include_normal_status_rows(temp_db):
+    pid = project_service.create_project("A")
+    _seed_closed_activity(
+        app="Word", resource="A.docx", start="09:00:00", end="09:30:00",
+        day="2026-06-25", project_id=pid, status="normal",
     )
-    assert unknown_label == statistics_service._UNKNOWN_STATUS_LABEL
-    assert unknown_label == "未知状态"
-    # Verify all known statuses have display labels.
-    for known_status in ("normal", "idle", "paused", "excluded", "error"):
-        assert known_status in statistics_service._STATUS_DISPLAY_LABELS
+    _seed_closed_activity(
+        app="空闲", process="idle", resource="用户空闲", start="10:00:00", end="10:10:00",
+        day="2026-06-25", project_id=pid, status="idle",
+    )
+    _seed_closed_activity(
+        app="已暂停", process="paused", resource="采集已暂停", start="10:10:00", end="10:15:00",
+        day="2026-06-25", project_id=pid, status="paused",
+    )
+    _seed_closed_activity(
+        app="异常", process="error", resource="采集异常", start="10:15:00", end="10:20:00",
+        day="2026-06-25", project_id=pid, status="error",
+    )
+
+    summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
+    assert summary["total_duration_seconds"] == 3000
+    assert summary["project_duration_seconds"] == 1800
+    assert summary["activity_count"] == 4
+    assert summary["project_count"] == 1
+
+    by_project = {g["display_name"]: g for g in summary["by_project"]}
+    assert list(by_project) == ["A"]
+    assert by_project["A"]["duration_seconds"] == 1800
+    assert by_project["A"]["percentage"] == pytest.approx(100.0)
+
+    by_status = {g["key"]: g for g in summary["by_status"]}
+    assert set(by_status) == {"normal", "idle", "paused", "error"}
+    assert by_status["normal"]["duration_seconds"] == 1800
+    assert by_status["idle"]["duration_seconds"] == 600
+    assert by_status["paused"]["duration_seconds"] == 300
+    assert by_status["error"]["duration_seconds"] == 300
+    assert by_status["normal"]["percentage"] == pytest.approx(60.0)
 
 
 def test_service_summary_empty_range_returns_zero(temp_db):

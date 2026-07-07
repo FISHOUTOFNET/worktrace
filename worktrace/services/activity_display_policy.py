@@ -9,6 +9,7 @@ from ..contracts.live_display_contracts import (
     CurrentActivityContract,
     DisplaySessionPolicyContract,
 )
+from ..formatters import format_status_label
 from . import (
     activity_continuity_service,
     activity_service,
@@ -64,15 +65,7 @@ def status_only_reason_for_state(display_live_state: str) -> str:
 
 
 def status_display_label(status: str) -> str:
-    if status == "paused":
-        return "已暂停"
-    if status == "idle":
-        return "空闲"
-    if status == "excluded":
-        return "已排除"
-    if status == "error":
-        return "异常"
-    return ""
+    return "" if status == STATUS_NORMAL else format_status_label(status)
 
 
 def build_status_display_item(

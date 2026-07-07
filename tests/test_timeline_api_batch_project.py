@@ -44,6 +44,19 @@ def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
     return aid
 
 
+def _seed_closed_status_activity(status="idle", start="09:30:00", end="10:00:00", day="2026-06-25"):
+    aid = activity_service.create_activity(
+        status.title(),
+        status,
+        f"{status} status",
+        status=status,
+        start_time=f"{day} {start}",
+    )
+    activity_service.finalize_created_activity(aid)
+    activity_service.close_activity(aid, f"{day} {end}")
+    return aid
+
+
 def _seed_two_closed_activities(
     start1="09:00:00",
     end1="09:30:00",
@@ -264,6 +277,20 @@ def test_batch_in_progress_activity(temp_db):
     assert exc.value.code == "in_progress"
 
 
+def test_batch_system_status_activity_rejected_without_partial_write(temp_db):
+    project = project_service.create_project("TestProject")
+    a1 = _seed_closed_activity(end="09:30:00")
+    a2 = _seed_closed_status_activity("idle")
+    original_project = _get_activity_project_id(a1)
+
+    with pytest.raises(TimelineBatchProjectError) as exc:
+        timeline_api.batch_update_timeline_activities_project([a1, a2], project)
+
+    assert exc.value.code == "not_project_activity"
+    assert _get_activity_project_id(a1) == original_project
+    assert _get_activity_project_id(a2) != project
+
+
 
 
 def test_batch_success(temp_db):
@@ -297,7 +324,7 @@ def test_batch_updates_existing_assignment(temp_db):
     project2 = project_service.create_project("Project2")
     ids = _seed_two_closed_activities()
     # First, assign to project1 via the single-activity path.
-    activity_service.update_activities_project(ids, project1)
+    activity_service.update_project_editable_activities_project(ids, project1)
     for aid in ids:
         assert _get_assignment_project_id(aid) == project1
     # Now batch reassign to project2.
@@ -444,8 +471,8 @@ def test_batch_different_projects_ok(temp_db):
     target = project_service.create_project("TargetProject")
     a1 = _seed_closed_activity(start="09:00:00", end="09:30:00")
     a2 = _seed_closed_activity(start="09:30:00", end="10:00:00")
-    activity_service.update_activities_project([a1], project1)
-    activity_service.update_activities_project([a2], project2)
+    activity_service.update_project_editable_activities_project([a1], project1)
+    activity_service.update_project_editable_activities_project([a2], project2)
     result = timeline_api.batch_update_timeline_activities_project([a1, a2], target)
     assert result["updated_count"] == 2
     assert _get_activity_project_id(a1) == target
@@ -542,6 +569,19 @@ def test_service_batch_activity_in_progress(temp_db):
     with pytest.raises(ValueError) as exc:
         activity_service.batch_update_activity_project([a1, a2], project)
     assert str(exc.value) == "activity_in_progress"
+
+
+def test_service_batch_activity_project_rejects_non_normal_atomically(temp_db):
+    project = project_service.create_project("TestProject")
+    a1 = _seed_closed_activity(end="09:30:00")
+    a2 = _seed_closed_status_activity("paused")
+    original_project = _get_activity_project_id(a1)
+
+    with pytest.raises(ValueError, match="activity_not_project_activity"):
+        activity_service.batch_update_activity_project([a1, a2], project)
+
+    assert _get_activity_project_id(a1) == original_project
+    assert _get_activity_project_id(a2) != project
 
 
 def test_service_batch_project_update_failed(temp_db):
@@ -705,7 +745,7 @@ def test_batch_exact_max_100_success(temp_db):
 
 def test_batch_confidence_matches_single_edit(temp_db):
     """Batch assignment confidence/source/is_manual must match the single
-    edit path (update_activities_project with manual=True)."""
+    edit path (update_project_editable_activities_project)."""
     project = project_service.create_project("TestProject")
     batch_ids = _seed_two_closed_activities(
         start1="09:00:00", end1="09:30:00",
@@ -715,7 +755,7 @@ def test_batch_confidence_matches_single_edit(temp_db):
         start1="10:00:00", end1="10:30:00",
         start2="10:30:00", end2="11:00:00",
     )
-    activity_service.update_activities_project(single_ids, project, manual=True)
+    activity_service.update_project_editable_activities_project(single_ids, project)
     timeline_api.batch_update_timeline_activities_project(batch_ids, project)
     for i in range(2):
         assert _get_assignment_confidence(batch_ids[i]) == _get_assignment_confidence(single_ids[i])

@@ -49,6 +49,12 @@ def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
     return aid
 
 
+def _seed_closed_status_activity(status="idle"):
+    aid = _activity(status.title(), status, f"{status} status", "09:00:00", status=status)
+    activity_service.close_activity(aid, "2026-06-25 09:30:00")
+    return aid
+
+
 def _seed_session(project_id=None):
     """Seed a simple two-activity session on 2026-06-25."""
     a1 = _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_id)
@@ -140,6 +146,21 @@ def test_update_activity_time_in_progress(temp_db):
     with pytest.raises(TimelineTimeEditError) as exc:
         timeline_api.update_timeline_activity_time(aid, "2026-06-25 09:00:00", "2026-06-25 09:30:00")
     assert exc.value.code == "in_progress"
+
+
+def test_update_activity_time_system_status_rejected_without_write(temp_db):
+    aid = _seed_closed_status_activity("idle")
+    before = activity_service.get_activity(aid)
+
+    with pytest.raises(TimelineTimeEditError) as exc:
+        timeline_api.update_timeline_activity_time(
+            aid, "2026-06-25 08:00:00", "2026-06-25 08:30:00"
+        )
+
+    assert exc.value.code == "not_project_activity"
+    after = activity_service.get_activity(aid)
+    assert after["start_time"] == before["start_time"]
+    assert after["end_time"] == before["end_time"]
 
 
 
@@ -289,6 +310,21 @@ def test_update_session_time_in_progress(temp_db):
     assert exc.value.code == "in_progress"
 
 
+def test_update_session_time_system_status_rejected_without_write(temp_db):
+    aid = _seed_closed_status_activity("paused")
+    before = activity_service.get_activity(aid)
+
+    with pytest.raises(TimelineTimeEditError) as exc:
+        timeline_api.update_timeline_session_time(
+            [aid], "2026-06-25 08:00:00", "2026-06-25 08:30:00"
+        )
+
+    assert exc.value.code == "not_project_activity"
+    after = activity_service.get_activity(aid)
+    assert after["start_time"] == before["start_time"]
+    assert after["end_time"] == before["end_time"]
+
+
 def test_update_session_time_deleted_activity(temp_db):
     aid = _seed_closed_activity()
     activity_service.soft_delete_activity(aid)
@@ -434,6 +470,20 @@ def test_service_update_activity_time_raises_on_in_progress_activity(temp_db):
         activity_service.update_activity_time(
             aid, "2026-06-25 10:00:00", "2026-06-25 10:45:00"
         )
+
+
+def test_service_update_activity_time_rejects_non_normal_activity(temp_db):
+    aid = _seed_closed_status_activity("error")
+    before = activity_service.get_activity(aid)
+
+    with pytest.raises(ValueError, match="activity_time_update_affected_zero_rows"):
+        activity_service.update_activity_time(
+            aid, "2026-06-25 08:00:00", "2026-06-25 08:30:00"
+        )
+
+    after = activity_service.get_activity(aid)
+    assert after["start_time"] == before["start_time"]
+    assert after["end_time"] == before["end_time"]
 
 
 def test_api_update_activity_time_handles_race_condition(temp_db):

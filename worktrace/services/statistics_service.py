@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, UNCATEGORIZED_PROJECT
+from ..formatters import format_status_label
 from .context_service import recompute_context_assignments_for_date
 from . import timeline_service
+from .activity_continuity_service import is_normal_project_status
 
 # Maximum inclusive calendar-day span accepted by the read-only
 # statistics/export summary. A 31-day span (e.g. 2026-06-01..2026-07-01) is
@@ -12,19 +14,7 @@ from . import timeline_service
 # never reads an unbounded amount of data.
 STATISTICS_SUMMARY_MAX_RANGE_DAYS = 31
 
-# Display-safe Chinese labels for the by_status breakdown. The raw status
-# codes (``normal`` / ``idle`` / ``paused`` / ``excluded`` / ``error``) are
-# used as the stable ``key``; these labels are the ``display_name``.
-_STATUS_DISPLAY_LABELS = {
-    STATUS_NORMAL: "正常",
-    STATUS_IDLE: "空闲",
-    STATUS_PAUSED: "已暂停",
-    STATUS_EXCLUDED: "已排除",
-    "error": "异常",
-}
-
 _UNKNOWN_APP_LABEL = "未知应用"
-_UNKNOWN_STATUS_LABEL = "未知状态"
 
 
 def get_summary(start_date: str, end_date: str, ensure_context: bool = True) -> dict:
@@ -160,38 +150,51 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
     # ``end_time``, so this flag is reliable regardless of the projected
     # ``end_time`` value.
     closed_rows = [row for row in rows if not row.get("is_in_progress")]
+    project_rows = [
+        row
+        for row in closed_rows
+        if is_normal_project_status(str(row.get("status") or ""))
+    ]
+    all_rows = closed_rows
 
     total_duration = 0
+    project_duration = 0
     all_activity_ids: set[int] = set()
     by_project: dict[str, dict] = {}
     by_app: dict[str, dict] = {}
     by_status: dict[str, dict] = {}
 
-    for row in closed_rows:
+    for row in all_rows:
         duration = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
         total_duration += duration
         activity_id = int(row.get("id") or 0)
         if activity_id:
             all_activity_ids.add(activity_id)
 
-        project_name = str(row.get("report_project_name") or row.get("display_project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
         app_name = str(row.get("app_name") or "").strip() or _UNKNOWN_APP_LABEL
         status_code = str(row.get("status") or "").strip()
-        status_label = _STATUS_DISPLAY_LABELS.get(status_code, _UNKNOWN_STATUS_LABEL)
+        status_label = format_status_label(status_code)
 
-        _accumulate_summary_group(by_project, project_name, project_name, duration, activity_id)
         _accumulate_summary_group(by_app, app_name, app_name, duration, activity_id)
         _accumulate_summary_group(by_status, status_code or "unknown", status_label, duration, activity_id)
+
+    for row in project_rows:
+        duration = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
+        project_duration += duration
+        activity_id = int(row.get("id") or 0)
+        project_name = str(row.get("report_project_name") or row.get("display_project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
+        _accumulate_summary_group(by_project, project_name, project_name, duration, activity_id)
 
     activity_count = len(all_activity_ids)
     return {
         "date_from": date_from,
         "date_to": date_to,
         "total_duration_seconds": total_duration,
+        "project_duration_seconds": project_duration,
         "activity_count": activity_count,
         "project_count": len(by_project),
         "app_count": len(by_app),
-        "by_project": _build_summary_groups(by_project, total_duration),
+        "by_project": _build_summary_groups(by_project, project_duration),
         "by_app": _build_summary_groups(by_app, total_duration),
         "by_status": _build_summary_groups(by_status, total_duration),
         "export_preview": {
@@ -239,19 +242,6 @@ def validate_statistics_date_range(date_from: str, date_to: str) -> None:
 
 
 _validate_summary_date_range = validate_statistics_date_range
-
-
-def get_status_display_label(status_code: str | None) -> str:
-    """Return the display-safe Chinese label for a status code.
-
-    Shared by the read-only statistics summary and the CSV export so both
-    surface identical status labels. Unknown codes fall back to
-    ``"未知状态"``; raw ``window_title`` / ``file_path_hint`` / ``note`` are
-    never used.
-    """
-    return _STATUS_DISPLAY_LABELS.get(
-        str(status_code or "").strip(), _UNKNOWN_STATUS_LABEL
-    )
 
 
 def _accumulate_summary_group(

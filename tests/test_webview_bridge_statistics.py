@@ -318,6 +318,8 @@ def test_bridge_statistics_summary_display_safe_keys_only(bridge):
         "date_to",
         "total_duration_seconds",
         "total_duration",
+        "project_duration_seconds",
+        "project_duration",
         "activity_count",
         "project_count",
         "app_count",

@@ -18,6 +18,7 @@ from ..db import dict_rows, get_connection, now_str
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
+from .activity_edit_policy import is_project_editable_activity
 from .project_service import get_or_create_uncategorized_project
 from .resource_service import attach_resource, create_or_update_activity_resource
 
@@ -515,7 +516,7 @@ def activity_display_name(activity: dict) -> str:
 
 
 def update_activity_project(activity_id: int, project_id: int, manual: bool = True) -> None:
-    update_activities_project([activity_id], project_id, manual=manual)
+    _assign_activities_project([activity_id], project_id, manual=manual)
 
 
 def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> None:
@@ -645,7 +646,7 @@ def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_
     )
 
 
-def update_activities_project(activity_ids: list[int], project_id: int, manual: bool = True) -> None:
+def _assign_activities_project(activity_ids: list[int], project_id: int, manual: bool = True) -> None:
     if not activity_ids:
         return
     ts = now_str()
@@ -679,6 +680,72 @@ def update_activities_project(activity_ids: list[int], project_id: int, manual: 
                     updated_at = excluded.updated_at
                 """,
                 (activity_id, project_id, confidence, source, int(manual), None, ts, ts),
+            )
+
+
+def update_project_editable_activities_project(activity_ids: list[int], project_id: int) -> None:
+    if not activity_ids:
+        return
+    ts = now_str()
+    placeholders = ",".join("?" for _ in activity_ids)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, is_deleted, is_hidden, end_time, status
+            FROM activity_log
+            WHERE id IN ({placeholders})
+            """,
+            activity_ids,
+        ).fetchall()
+        found_ids = set()
+        for row in rows:
+            aid = int(row["id"])
+            found_ids.add(aid)
+            if int(row["is_deleted"] or 0):
+                raise ValueError("activity_deleted")
+            if int(row["is_hidden"] or 0):
+                raise ValueError("activity_hidden")
+            if row["end_time"] is None:
+                raise ValueError("activity_in_progress")
+            if not is_project_editable_activity(dict(row)):
+                raise ValueError("activity_not_project_activity")
+        for aid in activity_ids:
+            if aid not in found_ids:
+                raise ValueError("activity_not_found")
+
+        cur = conn.execute(
+            f"""
+            UPDATE activity_log
+            SET project_id = ?,
+                manual_override = 1,
+                updated_at = ?
+            WHERE id IN ({placeholders})
+              AND is_deleted = 0
+              AND is_hidden = 0
+              AND end_time IS NOT NULL
+              AND status = ?
+            """,
+            [project_id, ts, *activity_ids, STATUS_NORMAL],
+        )
+        if cur.rowcount != len(activity_ids):
+            raise ValueError("project_update_failed")
+
+        for activity_id in activity_ids:
+            conn.execute(
+                """
+                INSERT INTO activity_project_assignment(
+                    activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
+                )
+                VALUES (?, ?, 100, 'manual', 1, NULL, ?, ?)
+                ON CONFLICT(activity_id) DO UPDATE SET
+                    project_id = excluded.project_id,
+                    confidence = excluded.confidence,
+                    source = excluded.source,
+                    is_manual = excluded.is_manual,
+                    suggested_project_name = excluded.suggested_project_name,
+                    updated_at = excluded.updated_at
+                """,
+                (activity_id, project_id, ts, ts),
             )
 
 
@@ -734,7 +801,7 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
 
         rows = conn.execute(
             f"""
-            SELECT id, is_deleted, is_hidden, end_time
+            SELECT id, is_deleted, is_hidden, end_time, status
             FROM activity_log
             WHERE id IN ({placeholders})
             """,
@@ -749,6 +816,8 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
                 raise ValueError("activity_hidden")
             if row["end_time"] is None:
                 raise ValueError("activity_in_progress")
+            if not is_project_editable_activity(dict(row)):
+                raise ValueError("activity_not_project_activity")
         # Any id not found in the DB is a missing activity.
         for aid in ids:
             if aid not in found_ids:
@@ -764,8 +833,9 @@ def batch_update_activity_project(activity_ids: list[int], project_id: int) -> i
               AND is_deleted = 0
               AND is_hidden = 0
               AND end_time IS NOT NULL
+              AND status = ?
             """,
-            [pid, ts, *ids],
+            [pid, ts, *ids, STATUS_NORMAL],
         )
         if cur.rowcount != len(ids):
             # Race condition: one or more rows were deleted / hidden /
@@ -843,7 +913,7 @@ def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
     with get_connection() as conn:
         rows = conn.execute(
             f"""
-            SELECT id, is_deleted, is_hidden, end_time
+            SELECT id, is_deleted, is_hidden, end_time, status
             FROM activity_log
             WHERE id IN ({placeholders})
             """,
@@ -858,6 +928,8 @@ def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
                 raise ValueError("activity_hidden")
             if row["end_time"] is None:
                 raise ValueError("activity_in_progress")
+            if not is_project_editable_activity(dict(row)):
+                raise ValueError("activity_not_project_activity")
         # Any id not found in the DB is a missing activity.
         for aid in ids:
             if aid not in found_ids:
@@ -872,8 +944,9 @@ def batch_update_activity_note(activity_ids: list[int], note: str) -> int:
               AND is_deleted = 0
               AND is_hidden = 0
               AND end_time IS NOT NULL
+              AND status = ?
             """,
-            [note, ts, *ids],
+            [note, ts, *ids, STATUS_NORMAL],
         )
         if cur.rowcount != len(ids):
             # Race condition: one or more rows were deleted / hidden /
@@ -958,9 +1031,11 @@ def update_activity_time(activity_id: int, start_time: str, end_time: str) -> No
                 updated_at = ?
             WHERE id = ?
               AND is_deleted = 0
+              AND is_hidden = 0
               AND end_time IS NOT NULL
+              AND status = ?
             """,
-            (start_time, end_time, duration, now_str(), activity_id),
+            (start_time, end_time, duration, now_str(), activity_id, STATUS_NORMAL),
         )
         if cur.rowcount == 0:
             # Defensive guard: the row was deleted/reopened between API-layer
@@ -989,6 +1064,8 @@ def split_activity(activity_id: int, split_time: str) -> dict:
             raise ValueError("activity_not_found_or_deleted")
         if row["end_time"] is None:
             raise ValueError("activity_in_progress")
+        if not is_project_editable_activity(dict(row)):
+            raise ValueError("activity_not_project_activity")
         orig_start = row["start_time"]
         orig_end = row["end_time"]
         first_duration = int((split_dt - _parse_time(orig_start)).total_seconds())
@@ -1005,9 +1082,11 @@ def split_activity(activity_id: int, split_time: str) -> dict:
                 updated_at = ?
             WHERE id = ?
               AND is_deleted = 0
+              AND is_hidden = 0
               AND end_time IS NOT NULL
+              AND status = ?
             """,
-            (split_time, first_duration, ts, activity_id),
+            (split_time, first_duration, ts, activity_id, STATUS_NORMAL),
         )
         if cur.rowcount == 0:
             # Race condition: deleted or reopened between the SELECT above and
@@ -1033,7 +1112,7 @@ def split_activity(activity_id: int, split_time: str) -> dict:
                 row["process_name"],
                 row["window_title"],
                 row["file_path_hint"],
-                row["status"],
+                STATUS_NORMAL,
                 row["source"],
                 int(row["is_hidden"] or 0),
                 int(row["auto_classified"] or 0),
@@ -1166,6 +1245,10 @@ def merge_activities(first_activity_id: int, second_activity_id: int) -> dict:
             raise ValueError("activity_merge_not_found_or_deleted")
         if kept_row["end_time"] is None or merged_row["end_time"] is None:
             raise ValueError("activity_merge_in_progress")
+        if int(kept_row["is_hidden"] or 0) or int(merged_row["is_hidden"] or 0):
+            raise ValueError("activity_merge_not_found_or_deleted")
+        if not is_project_editable_activity(dict(kept_row)) or not is_project_editable_activity(dict(merged_row)):
+            raise ValueError("activity_merge_not_project_activity")
 
         kept_start_dt = _parse_time(kept_row["start_time"])
         kept_end_dt = _parse_time(kept_row["end_time"])
@@ -1218,9 +1301,11 @@ def merge_activities(first_activity_id: int, second_activity_id: int) -> dict:
                 updated_at = ?
             WHERE id = ?
               AND is_deleted = 0
+              AND is_hidden = 0
               AND end_time IS NOT NULL
+              AND status = ?
             """,
-            (new_end, new_duration, ts, kept_row["id"]),
+            (new_end, new_duration, ts, kept_row["id"], STATUS_NORMAL),
         )
         if kept_cur.rowcount == 0:
             # Race condition: kept activity was deleted or reopened between
@@ -1238,9 +1323,11 @@ def merge_activities(first_activity_id: int, second_activity_id: int) -> dict:
                 updated_at = ?
             WHERE id = ?
               AND is_deleted = 0
+              AND is_hidden = 0
               AND end_time IS NOT NULL
+              AND status = ?
             """,
-            (ts, merged_row["id"]),
+            (ts, merged_row["id"], STATUS_NORMAL),
         )
         if merged_cur.rowcount == 0:
             # Race condition: merged activity was deleted or reopened.

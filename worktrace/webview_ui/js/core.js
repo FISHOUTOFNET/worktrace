@@ -446,18 +446,9 @@
 
     function displayStatusText(item) {
         item = item || {};
-        var raw = String(item.status_code || item.status || "");
-        var mapped = {
-            idle: "空闲",
-            paused: "已暂停",
-            excluded: "已排除",
-            error: "异常",
-            normal: "正常"
-        };
         return item.display_status
             || item.status_label
             || item.status_summary
-            || mapped[raw]
             || "";
     }
     App.displayStatusText = displayStatusText;

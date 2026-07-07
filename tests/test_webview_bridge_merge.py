@@ -98,6 +98,22 @@ def _seed_two_adjacent_activities(
     return [a1, a2]
 
 
+def _seed_two_adjacent_status_activities(status="idle"):
+    a1 = activity_service.create_activity(
+        status.title(), status, f"{status} status", status=status,
+        start_time="2026-06-25 09:00:00",
+    )
+    activity_service.finalize_created_activity(a1)
+    activity_service.close_activity(a1, "2026-06-25 09:30:00")
+    a2 = activity_service.create_activity(
+        status.title(), status, f"{status} status", status=status,
+        start_time="2026-06-25 09:30:00",
+    )
+    activity_service.finalize_created_activity(a2)
+    activity_service.close_activity(a2, "2026-06-25 10:00:00")
+    return [a1, a2]
+
+
 
 
 def test_merge_success(bridge):
@@ -225,6 +241,14 @@ def test_merge_in_progress_returns_clear_message(bridge):
     assert result["error"] == "进行中记录暂不支持合并"
 
 
+def test_merge_system_status_returns_contract_message(bridge):
+    ids = _seed_two_adjacent_status_activities("idle")
+
+    result = bridge.merge_timeline_activities(ids)
+
+    assert result == {"ok": False, "error": "系统状态记录不支持项目编辑"}
+
+
 def test_merge_different_project_returns_clear_message(bridge):
     ids = _seed_two_adjacent_activities()
     from worktrace.services import project_service
@@ -258,7 +282,7 @@ def test_merge_incompatible_activity_status_returns_clear_message(bridge):
         )
     result = bridge.merge_timeline_activities(ids)
     assert result["ok"] is False
-    assert result["error"] == "活动类型不同，暂不支持合并"
+    assert result["error"] == "系统状态记录不支持项目编辑"
 
 
 def test_merge_incompatible_activity_source_returns_clear_message(bridge):

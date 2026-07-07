@@ -53,6 +53,7 @@ _TIME_ERROR_MESSAGES = {
     "in_progress": "进行中记录暂不支持时间修正",
     "multi_activity": "多活动 session 暂不支持整体时间修改",
     "invalid_time": "时间无效",
+    "not_project_activity": "系统状态记录不支持项目编辑",
     "invalid_id": "操作失败",
 }
 
@@ -64,6 +65,7 @@ _SPLIT_ERROR_MESSAGES = {
     "multi_activity": "多活动 session 暂不支持整体拆分，请在活动详情中拆分单条活动",
     "invalid_time": "拆分时间无效",
     "outside_range": "拆分时间无效",
+    "not_project_activity": "系统状态记录不支持项目编辑",
     "invalid_id": "操作失败",
     "operation_failed": "操作失败",
 }
@@ -78,6 +80,7 @@ _MERGE_ERROR_MESSAGES = {
     "different_project": "项目不同，暂不支持合并",
     "different_resource": "资源不同，暂不支持合并",
     "incompatible_activity": "活动类型不同，暂不支持合并",
+    "not_project_activity": "系统状态记录不支持项目编辑",
     "not_adjacent": "活动时间不连续，暂不支持合并",
     "invalid_time": "时间无效",
     "operation_failed": "操作失败",
@@ -103,6 +106,7 @@ _BATCH_PROJECT_ERROR_MESSAGES = {
     "invalid_project": "请选择有效的项目",
     "in_progress": "进行中记录无法批量修改",
     "hidden_activity": "隐藏记录无法批量修改",
+    "not_project_activity": "系统状态记录不支持项目编辑",
     "operation_failed": "操作失败",
 }
 
@@ -116,6 +120,7 @@ _BATCH_NOTE_ERROR_MESSAGES = {
     "note_too_long": "备注过长",
     "in_progress": "进行中记录无法批量修改",
     "hidden_activity": "隐藏记录无法批量修改",
+    "not_project_activity": "系统状态记录不支持项目编辑",
     "operation_failed": "操作失败",
 }
 
@@ -233,7 +238,9 @@ class TimelineBridgeMixin:
                 return {"ok": False, "error": "请选择有效的项目"}
             timeline_api.reclassify_timeline_session_project(ids, pid)
             return {"ok": True}
-        except ValueError:
+        except ValueError as exc:
+            if str(exc) == "not_project_activity":
+                return {"ok": False, "error": "系统状态记录不支持项目编辑"}
             # Input validation failed. Return a generic message without
             # echoing the underlying ValueError text, which could reveal
             # internal field names or ids.
@@ -278,7 +285,9 @@ class TimelineBridgeMixin:
                 report_date, first_activity_id, note
             )
             return {"ok": True}
-        except ValueError:
+        except ValueError as exc:
+            if str(exc) == "not_project_activity":
+                return {"ok": False, "error": "系统状态记录不支持项目编辑"}
             return {"ok": False, "error": "操作失败"}
         except Exception:
             logger.exception("webview bridge update_timeline_note failed")
@@ -340,7 +349,9 @@ class TimelineBridgeMixin:
                 report_date, first_activity_id, note, duration_value
             )
             return {"ok": True}
-        except ValueError:
+        except ValueError as exc:
+            if str(exc) == "not_project_activity":
+                return {"ok": False, "error": "系统状态记录不支持项目编辑"}
             return {"ok": False, "error": "操作失败"}
         except Exception:
             logger.exception("webview bridge update_timeline_note_and_duration failed")

@@ -7,15 +7,12 @@ from ..constants import (
     DEFAULT_CONTEXT_CARRY_MINUTES,
     DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
     REPORT_CONTEXT_SHORT_MERGE_SECONDS,
-    STATUS_ERROR,
-    STATUS_EXCLUDED,
-    STATUS_IDLE,
     STATUS_NORMAL,
-    STATUS_PAUSED,
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
 from ..db import dict_rows, get_connection
+from ..formatters import format_status_label
 from ..path_utils import split_file_path
 from ..resources.title_parsing import extract_anchor_file_name
 from . import folder_rule_service, session_boundary_service, session_note_service
@@ -24,7 +21,7 @@ from .activity_continuity_service import (
     is_hard_boundary_status,
     is_normal_project_status,
 )
-from .activity_service import update_activities_project
+from .activity_service import update_project_editable_activities_project
 from .anchor_predicates import is_file_context_anchor
 from .context_service import recompute_context_assignments_for_date
 from .project_service import get_or_create_uncategorized_project
@@ -161,7 +158,7 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
 
 
 def update_session_project(session_activity_ids: list[int], project_id: int) -> None:
-    update_activities_project(session_activity_ids, project_id, manual=True)
+    update_project_editable_activities_project(session_activity_ids, project_id)
 
 
 def update_session_note(report_date: str, first_activity_id: int, note: str) -> None:
@@ -186,7 +183,7 @@ def update_activity_group_project(
     ids = [int(activity_id) for activity_id in activity_ids]
     if not ids:
         return
-    update_activities_project(ids, project_id, manual=True)
+    update_project_editable_activities_project(ids, project_id)
 
 
 def preview_session_project_update(session_activity_ids: list[int], project_id: int) -> dict:
@@ -642,14 +639,6 @@ def _session_sort_key(session: dict) -> tuple[str, int]:
     return (str(session.get("sort_time") or session.get("start_time") or ""), start_id)
 
 
-_STATUS_DISPLAY_NAMES = {
-    STATUS_IDLE: "空闲",
-    STATUS_PAUSED: "已暂停",
-    STATUS_EXCLUDED: "已排除",
-    STATUS_ERROR: "异常",
-}
-
-
 def _status_summary(rows: list[dict]) -> str:
     items = []
     for row in rows:
@@ -657,7 +646,7 @@ def _status_summary(rows: list[dict]) -> str:
         if status == STATUS_NORMAL:
             label = _activity_summary_label(row)
         else:
-            label = _STATUS_DISPLAY_NAMES.get(status, str(status or ""))
+            label = format_status_label(status)
         if label and label not in items:
             items.append(label)
         if len(items) >= 3:

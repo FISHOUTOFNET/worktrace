@@ -347,7 +347,9 @@ def test_session_level_project_update_warns_about_unassigned_anchor_files(temp_d
         start_time="2026-06-18 09:05:00",
     )
     activity_service.finalize_created_activity(first)
+    activity_service.close_activity(first, "2026-06-18 09:05:00")
     activity_service.finalize_created_activity(second)
+    activity_service.close_activity(second, "2026-06-18 09:10:00")
 
     preview = timeline_service.preview_session_project_update([first, second], target_project)
     timeline_service.update_session_project([first, second], target_project)

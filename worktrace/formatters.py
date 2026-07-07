@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+from .constants import (
+    STATUS_ERROR,
+    STATUS_EXCLUDED,
+    STATUS_IDLE,
+    STATUS_NORMAL,
+    STATUS_PAUSED,
+    UNCATEGORIZED_PROJECT,
+)
+
 
 def format_duration(seconds: int | None) -> str:
     seconds = max(0, int(seconds or 0))
@@ -18,6 +27,33 @@ def format_project_label(name: str | None, description: str | None = "") -> str:
     if not cleaned_description:
         return cleaned_name
     return f"{cleaned_name} ({cleaned_description})"
+
+
+_STATUS_LABELS: dict[str, str] = {
+    STATUS_NORMAL: "正常",
+    STATUS_IDLE: "空闲",
+    STATUS_PAUSED: "已暂停",
+    STATUS_EXCLUDED: "已排除",
+    STATUS_ERROR: "异常",
+}
+
+
+def format_status_label(status_code: str | None) -> str:
+    return _STATUS_LABELS.get(str(status_code or "").strip(), "未知状态")
+
+
+def format_activity_project_cell(row: dict) -> str:
+    if str(row.get("status") or "").strip() != STATUS_NORMAL:
+        return "—"
+    return (
+        str(
+            row.get("report_project_name")
+            or row.get("display_project_name")
+            or row.get("project_name")
+            or UNCATEGORIZED_PROJECT
+        ).strip()
+        or UNCATEGORIZED_PROJECT
+    )
 
 
 _RESOURCE_TYPE_LABELS: dict[str, str] = {

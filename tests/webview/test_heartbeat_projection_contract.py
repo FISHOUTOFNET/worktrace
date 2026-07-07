@@ -1376,14 +1376,10 @@ def test_frontend_status_display_uses_display_contract_helper():
     assert "display_status" in helper_body
     assert "status_label" in helper_body
     assert "status_summary" in helper_body
-    for raw, label in (
-        ("idle", "空闲"),
-        ("paused", "已暂停"),
-        ("excluded", "已排除"),
-        ("error", "异常"),
-    ):
-        assert raw in helper_body
-        assert label in helper_body
+    for raw in ("idle", "paused", "excluded", "error", "normal"):
+        assert raw not in helper_body
+    for label in ("空闲", "已暂停", "已排除", "异常", "正常"):
+        assert label not in helper_body
 
     assert "App.displayStatusText(item)" in overview_body
     assert "item.status ||" not in overview_body

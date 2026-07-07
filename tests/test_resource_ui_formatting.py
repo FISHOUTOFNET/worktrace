@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from worktrace.formatters import format_activity_display_name, format_resource_type
+import pytest
+
+from worktrace.formatters import (
+    format_activity_display_name,
+    format_resource_type,
+    format_status_label,
+)
 
 
 class TestFormatResourceType:
@@ -59,6 +65,22 @@ class TestFormatResourceType:
 
     def test_none_values(self):
         assert format_resource_type(None, None) == "未知"
+
+
+@pytest.mark.parametrize(
+    ("status", "label"),
+    [
+        ("normal", "正常"),
+        ("idle", "空闲"),
+        ("paused", "已暂停"),
+        ("excluded", "已排除"),
+        ("error", "异常"),
+        ("unknown", "未知状态"),
+        (None, "未知状态"),
+    ],
+)
+def test_format_status_label_contract(status, label):
+    assert format_status_label(status) == label
 
 
 class TestFormatActivityDisplayName:

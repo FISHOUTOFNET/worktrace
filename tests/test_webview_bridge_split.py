@@ -72,6 +72,17 @@ def _seed_closed_activity(start="09:00:00", end="09:30:00", day="2026-06-25"):
     return aid
 
 
+def _seed_closed_status_activity(status="idle"):
+    aid = activity_service.create_activity(
+        status.title(), status, f"{status} status",
+        status=status,
+        start_time="2026-06-25 09:00:00",
+    )
+    activity_service.finalize_created_activity(aid)
+    activity_service.close_activity(aid, "2026-06-25 09:30:00")
+    return aid
+
+
 def _seed_session():
     a1 = activity_service.create_activity(
         "Word", "winword.exe", "A1.docx", start_time="2026-06-25 09:00:00"
@@ -178,6 +189,14 @@ def test_split_activity_in_progress(bridge):
     assert result["error"] == "进行中记录暂不支持拆分"
 
 
+def test_split_activity_system_status_returns_contract_message(bridge):
+    aid = _seed_closed_status_activity("idle")
+
+    result = bridge.split_timeline_activity(aid, "2026-06-25 09:15:00")
+
+    assert result == {"ok": False, "error": "系统状态记录不支持项目编辑"}
+
+
 def test_split_activity_deleted(bridge):
     """Deleted activities must return the generic ``操作失败`` message
     (the ``invalid_id`` code collapses to ``操作失败`` so the user is not
@@ -281,6 +300,14 @@ def test_split_session_in_progress(bridge):
     result = bridge.split_timeline_session([aid], "2026-06-25 09:15:00")
     assert result["ok"] is False
     assert result["error"] == "进行中记录暂不支持拆分"
+
+
+def test_split_session_system_status_returns_contract_message(bridge):
+    aid = _seed_closed_status_activity("paused")
+
+    result = bridge.split_timeline_session([aid], "2026-06-25 09:15:00")
+
+    assert result == {"ok": False, "error": "系统状态记录不支持项目编辑"}
 
 
 def test_split_session_no_traceback_on_error(bridge):

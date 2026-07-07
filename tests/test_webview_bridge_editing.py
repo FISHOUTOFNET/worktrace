@@ -69,9 +69,16 @@ def _activity(app, process, title, start, project_id=None, status="normal"):
 
 def _seed_session(project_id=None):
     a1 = _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_id)
+    activity_service.close_activity(a1, "2026-06-25 09:10:00")
     a2 = _activity("Word", "winword.exe", "A2.docx", "09:10:00", project_id)
     activity_service.close_activity(a2, "2026-06-25 09:30:00")
     return [a1, a2]
+
+
+def _seed_closed_status_activity(status="idle", project_id=None):
+    aid = _activity(status.title(), status, f"{status} status", "09:00:00", project_id, status=status)
+    activity_service.close_activity(aid, "2026-06-25 09:30:00")
+    return aid
 
 
 
@@ -123,6 +130,17 @@ def test_update_timeline_project_success(bridge):
     for aid in ids:
         activity = activity_service.get_activity(aid)
         assert int(activity["project_id"]) == project
+
+
+def test_update_timeline_project_system_status_returns_contract_message(bridge):
+    original = project_service.create_project("Original")
+    target = project_service.create_project("Target")
+    aid = _seed_closed_status_activity("idle", project_id=original)
+
+    result = bridge.update_timeline_project([aid], target)
+
+    assert result == {"ok": False, "error": "系统状态记录不支持项目编辑"}
+    assert int(activity_service.get_activity(aid)["project_id"]) == original
 
 
 def test_update_timeline_project_is_json_serializable(bridge):
@@ -206,6 +224,14 @@ def test_update_timeline_note_success(bridge):
     from worktrace.services import session_note_service
     note = session_note_service.get_session_note("2026-06-25", ids[0])
     assert note == "bridge note"
+
+
+def test_update_timeline_note_system_status_returns_contract_message(bridge):
+    aid = _seed_closed_status_activity("paused")
+
+    result = bridge.update_timeline_note([aid], "bridge note", "2026-06-25")
+
+    assert result == {"ok": False, "error": "系统状态记录不支持项目编辑"}
 
 
 def test_update_timeline_note_is_json_serializable(bridge):
@@ -421,6 +447,16 @@ def test_update_timeline_note_and_duration_success(bridge):
     fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
     assert fields["note"] == "joint note"
     assert fields["adjusted_duration_seconds"] == 3600
+
+
+def test_update_timeline_note_and_duration_system_status_returns_contract_message(bridge):
+    aid = _seed_closed_status_activity("excluded")
+
+    result = bridge.update_timeline_note_and_duration(
+        [aid], "joint note", 3600, "2026-06-25"
+    )
+
+    assert result == {"ok": False, "error": "系统状态记录不支持项目编辑"}
 
 
 def test_update_timeline_note_and_duration_null_clears_override(bridge):
